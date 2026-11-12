@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { hydra, oneListener, BASE, TWO_APPS } from './slack-config.js'
+import { hydra, oneListener, sharedChannel, BASE, TWO_APPS } from './slack-config.js'
 import { slackManifest, SLACK_APP_NEEDS, SLACK_APP_DEFAULTS, appKey } from '../app.js'
 import { scopesNeeded } from '../listener.js'
 
@@ -62,11 +62,15 @@ describe('slackManifest', () => {
 })
 
 describe('several apps in one hydra', () => {
-  test('the startup scope check adds the membership read, and only with more than one app', () => {
+  test('the startup scope check adds the membership read, only with more than one app, and only for an app that reads channels', () => {
     expect(scopesNeeded(hydra(BASE))).not.toContain(SLACK_APP_NEEDS.membership.public)
-    expect(scopesNeeded(hydra(TWO_APPS)).at(-1)).toBe(SLACK_APP_NEEDS.membership.public)
-    expect(scopesNeeded(hydra(TWO_APPS))).not.toContain(SLACK_APP_NEEDS.membership.private)
-    // A private channel is named: the groups scope is checked too.
+    const shared = hydra(sharedChannel('C0FOOD'))
+    expect(scopesNeeded(shared, 'default').at(-1)).toBe(SLACK_APP_NEEDS.membership.public)
+    expect(scopesNeeded(shared, 'sales').at(-1)).toBe(SLACK_APP_NEEDS.membership.public)
+    expect(scopesNeeded(shared)).not.toContain(SLACK_APP_NEEDS.membership.private)
+    // An app that serves no specialist and no rule reads no channel, so it is not asked who is in one.
+    expect(scopesNeeded(hydra(TWO_APPS), 'sales')).not.toContain(SLACK_APP_NEEDS.membership.public)
+    // A private channel is named: the groups scope is checked too, for the app that reaches it.
     const withPrivate = hydra(`${TWO_APPS}\n[specialists.x]\nworkdir = "/w/x"\nlistens = ["slack:G0PRIV"]\nallow = ["anyone"]\n`)
     expect(scopesNeeded(withPrivate).slice(-2)).toEqual([SLACK_APP_NEEDS.membership.public, SLACK_APP_NEEDS.membership.private])
     // Both are scopes the manifest already grants for channel names.

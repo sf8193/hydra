@@ -21,6 +21,7 @@ poll = "3m"                           # how often it looks (default 3m)
 
 # --- slack: one table per Slack app, [slack.apps.<id>]. Tokens stay in .env. `hydra slack manifest [<app>]` prints an app's manifest. ---
 # Every app declared connects, each with its own tokens; an app whose tokens are not set is skipped, and the daemon says which key. A message leaves through the app that heard it.
+# Each app is health-checked and alerted on its own (`hydra health` has a line per app): its scopes are checked against what it does, and its alerts go to the specialists it can reach (pinned to it, or unpinned where none is pinned to it), else main.
 # [connectors.slack] is the app named `default`, with `app_name` and `app_description` for `display_name` and `description`.
 # Each token needs its own variable, one the daemon alone needs (not PATH, HOME, HYDRA_*, ...).
 

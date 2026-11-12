@@ -6,7 +6,7 @@ import { atomicWriteFileSync } from '../../daemon/util.js'
 import { DEFAULT_SLACK_APP, type Address, type HydraConfig, type Place, type PlaceOptions, type SlackApp } from '../../config/types.js'
 import { appKey } from './app.js'
 import { conversationId, appOfEntry, appPrefix, scopeKey, unscopeKey, TOP_LEVEL } from './conversation.js'
-import { route, owningApp, refusal, notServedBy, identify, currentId, isLive, isSessionThread, MAIN } from '../../routing/route.js'
+import { reachableBy, route, owningApp, refusal, notServedBy, identify, currentId, isLive, isSessionThread, MAIN } from '../../routing/route.js'
 
 export { conversationId, appOfEntry, TOP_LEVEL }
 
@@ -151,7 +151,7 @@ export type SlackWatchDeps = {
   /** Runs the guard. Defaults to the real subprocess; tests pass a fake. */
   guard?: (g: Guard, input: GuardInput) => Promise<GuardVerdict>
   /** A plain message to a person (not a session turn): how a drop is surfaced. `to`: the specialist it concerns, whose home should hear it. */
-  alert?: (text: string, to?: string) => void
+  alert?: (text: string, to?: string, app?: string) => void
 }
 
 /** `refused`: `allow` does not admit the sender. `unrouted`: a mention or DM no specialist hears. */
@@ -186,15 +186,12 @@ export function placesOf(cfg: Pick<SlackWatchConfig, 'directory'>, channel: stri
 export const placeName = (cfg: Pick<SlackWatchConfig, 'directory'>, channel: string): Place => placesOf(cfg, channel).at(-1)!
 
 /**
- * The Slack channels hydra.toml names, in `listens` and `[[rules]]`, as written. For one `app`: only those a message through it
- * can reach (a specialist or rule target it can deliver to), so an app is not asked to read a channel it has nothing to do in.
+ * The Slack channels hydra.toml names, in `listens` and `[[rules]]` (those with an `at`), as written. For one `app`: only those it
+ * can deliver to (`reachableBy`), so an app is not asked to read a channel it has nothing to do in.
  */
-function namedChannels(h: HydraConfig, app?: string): Place[] {
-  const reaches = (to: string) => app === undefined || !notServedBy(h, to, app)
-  const all = [
-    ...Object.values(h.specialists).filter(s => reaches(s.id)).flatMap(s => s.listens),
-    ...h.rules.filter(r => reaches(r.to) && (r.app === undefined || app === undefined || r.app === app)).map(r => r.at),
-  ]
+export function namedChannels(h: HydraConfig, app?: string): Place[] {
+  const r = reachableBy(h, app)
+  const all = [...r.specialists.flatMap(s => s.listens), ...r.rules.map(x => x.at)]
   return [...new Set(all.filter((p): p is Place => !!p && p.startsWith('slack:') && p !== 'slack:dm'))]
 }
 
@@ -214,12 +211,20 @@ export function unresolvedPlaces(cfg: Pick<SlackWatchConfig, 'hydra' | 'director
   return namedChannels(cfg.hydra, cfg.app).filter(p => !channelIdOf(cfg, p))
 }
 
-/** Whether DMs are heard: something takes `slack:dm`, or the operator has a Slack address (their DMs reach main). */
-export function hearsDms(cfg: Pick<SlackWatchConfig, 'hydra'> | null | undefined): boolean {
+/** Whether a specialist or a rule that app (none: any) serves names `slack:dm`: DMs someone declared they want, as opposed to the operator's own. */
+export function dmsDeclared(cfg: Pick<SlackWatchConfig, 'hydra' | 'app'>): boolean {
+  const r = reachableBy(cfg.hydra, cfg.app)
+  return r.specialists.some(s => s.listens.includes('slack:dm')) || r.rules.some(x => x.at === 'slack:dm')
+}
+
+/**
+ * Whether DMs are heard: some specialist or rule names `slack:dm` (`dmsDeclared`), or the operator has a Slack address (their DMs
+ * reach `main` through any app: pins don't bind `main`).
+ */
+export function hearsDms(cfg: Pick<SlackWatchConfig, 'hydra' | 'app'> | null | undefined): boolean {
   if (!cfg) return false
   const h = cfg.hydra
-  if (Object.values(h.specialists).some(s => s.listens.includes('slack:dm')) || h.rules.some(r => r.at === 'slack:dm')) return true
-  return !!h.operator && !!h.people[h.operator]?.ids.some(a => a.startsWith('slack:'))
+  return dmsDeclared({ hydra: h, app: cfg.app }) || (!!h.operator && !!h.people[h.operator]?.ids.some(a => a.startsWith('slack:')))
 }
 
 /** A Slack user, as hydra.toml addresses them. */
@@ -663,14 +668,14 @@ export class SlackWatcher {
     const others = !session && channelWide ? ` and any other conversations of yours in ${place}` : ''
     const lostText = lost ? `; ${lost} undelivered message${lost === 1 ? ' is' : 's are'} lost` : ''
     const text = `⚠️ Let go of ${conversationId(e)}${others}${lostText}: ${cantRead(cfg ? cfg.hydra.slackApps[appOfEntry({ app })] : undefined, place, why, cfg?.botUserId, session ? 'bind' : 'tag')}.`
-    if (session) this.deps.alert?.(text, e.specialist)
-    else this.alertOnce(`thread-gone:${e.specialist}:${scoped(app, channel)}:${channelWide ? 'channel' : 'thread'}`, e.specialist, text)
+    if (session) this.deps.alert?.(text, e.specialist, appOfEntry({ app }))
+    else this.alertOnce(`thread-gone:${e.specialist}:${channel}:${channelWide ? 'channel' : 'thread'}`, e.specialist, text, appOfEntry({ app }))
   }
 
   /** The operator's token was refused: the threads read with it are kept, unread until it is replaced. Said once an hour. */
   operatorTokenRefused(why: string, app?: string): void {
     const id = appOfEntry({ app })
-    this.alertOnce(`operator-token:${id}`, undefined, `⚠️ ${why[0].toUpperCase()}${why.slice(1)}: threads read as the operator are not being read. Put a valid user token in the variable the ${appKey(id, 'user_token_env')} names (in \`.env\`), and restart the daemon.`)
+    this.alertOnce('operator-token', undefined, `⚠️ ${why[0].toUpperCase()}${why.slice(1)}: threads read as the operator are not being read. Put a valid user token in the variable the ${appKey(id, 'user_token_env')} names (in \`.env\`), and restart the daemon.`, id)
   }
 
   /** While catching up, live events must not move the cursor past the gap being filled. */
@@ -691,7 +696,7 @@ export class SlackWatcher {
     const line = `catch-up read the newest ${read} messages in ${channel} since ${cursor} and moved on; anything between ${cursor} and ${oldestRead ?? 'them'} was not replayed, so a tag there was not delivered`
     this.deps.log(`daemon: slack-watch: ${line}\n`)
     const to = listenerOf(this.deps.config(app), channel)
-    this.alertOnce(`catch-up-gap:${to ?? '-'}`, to, `⚠️ Slack ${line}.`)
+    this.alertOnce(`catch-up-gap:${to ?? '-'}`, to, `⚠️ Slack ${line}.`, appOfEntry({ app }))
   }
 
   /** A conversation catch-up has read in full and found empty: its cursor can move at once, whatever the rest of the pass does. */
@@ -956,7 +961,7 @@ export class SlackWatcher {
     this.deps.log(`daemon: slack-watch: ${line}\n`)
     // Keyed by kind and by who hears it: one specialist's trouble does not silence another's.
     const to = where.specialist ?? listenerOf(this.deps.config(where.app), where.channel)
-    if (alert) this.alertOnce(`${kind}:${to ?? '-'}`, to, `⚠️ ${line[0].toUpperCase()}${line.slice(1)}. Further ${kind} drops within the hour are logged, not alerted; \`hydra conversations\` counts them.`)
+    if (alert) this.alertOnce(`${kind}:${to ?? '-'}`, to, `⚠️ ${line[0].toUpperCase()}${line.slice(1)}. Further ${kind} drops within the hour are logged, not alerted; \`hydra conversations\` counts them.`, appOfEntry(where))
   }
 
   /**
@@ -964,12 +969,14 @@ export class SlackWatcher {
    * that are its own, and are not sent; the first one after the hour starts a new episode. So a steady trickle is
    * still said once an hour, rather than never again.
    */
-  private alertOnce(key: string, to: string | undefined, text: string): void {
+  private alertOnce(key: string, to: string | undefined, text: string, app?: string): void {
+    // One episode per app: an app's trouble neither silences nor repeats another's.
+    key = `${appOfEntry({ app })}|${key}`
     const now = this.deps.now()
     const began = this.episodeStart.get(key)
     if (began !== undefined && now - began < ALERT_EPISODE_GAP_MS) return
     this.episodeStart.set(key, now)
-    this.deps.alert?.(text, to)
+    this.deps.alert?.(text, to, app)
   }
 
   // -- names ---------------------------------------------------------------
@@ -1100,7 +1107,7 @@ export class SlackWatcher {
       if (to !== home && isSessionThread(to)) {
         // A session's thread is held only by that session's own bind: a guard can't send a conversation's message there.
         this.deps.log(`daemon: slack-watch: the guard redirected ${key} ts ${item.ts} to the session thread ${to}, which only that session's bind may hold; delivering to ${home}\n`)
-        this.alertOnce(`guard-redirect:${to}`, home, `⚠️ The guard redirected a Slack message in ${place} to the session thread ${to}, so it went to ${home} instead: a guard redirects only to a specialist (or main).`)
+        this.alertOnce(`guard-redirect:${to}`, home, `⚠️ The guard redirected a Slack message in ${place} to the session thread ${to}, so it went to ${home} instead: a guard redirects only to a specialist (or main).`, app)
         to = home
       }
       if (to !== home) {
@@ -1111,8 +1118,8 @@ export class SlackWatcher {
           this.deps.log(`daemon: slack-watch: the guard redirected ${key} ts ${item.ts} to ${to}, but ${why}; delivering to ${home}\n`)
           // A redirect to a specialist that doesn't exist, or that this app cannot be served by, is the guard misconfigured: said once per episode, or a typo would quietly send everything to the default forever.
           const apart = notServedBy(h, to, app)
-          if (apart) this.alertOnce(`guard-redirect:${to}`, home, `⚠️ The guard redirected a Slack message in ${place} to "${to}", but ${apart}, so it went to ${home} instead. Fix the guard, or change which apps "${to}" is pinned to in hydra.toml.`)
-          else if (!isLive(h, to)) this.alertOnce(`guard-redirect:${to}`, home, `⚠️ The guard redirected a Slack message in ${place} to "${to}", which is no specialist in hydra.toml, so it went to ${home} instead. Fix the guard, or declare [specialists.${to}].`)
+          if (apart) this.alertOnce(`guard-redirect:${to}`, home, `⚠️ The guard redirected a Slack message in ${place} to "${to}", but ${apart}, so it went to ${home} instead. Fix the guard, or change which apps "${to}" is pinned to in hydra.toml.`, app)
+          else if (!isLive(h, to)) this.alertOnce(`guard-redirect:${to}`, home, `⚠️ The guard redirected a Slack message in ${place} to "${to}", which is no specialist in hydra.toml, so it went to ${home} instead. Fix the guard, or declare [specialists.${to}].`, app)
           to = home
         } else {
           this.deps.log(`daemon: slack-watch: the guard redirected ${key} ts ${item.ts} from ${home} to ${to}\n`)
@@ -1209,7 +1216,7 @@ export class SlackWatcher {
         // Not a failure: a turn. Said once an hour while it lasts, so a specialist stuck at max (no idle) is noticed.
         if (entry.waitingSince === undefined) { entry.waitingSince = this.deps.now(); this.persist() }
         this.deps.log(`daemon: slack-watch: ${key} waits: ${result.error}\n`)
-        this.alertOnce(`max:${target.to}`, target.to, `⏳ ${result.error}. Its messages stay owed until then.`)
+        this.alertOnce(`max:${target.to}`, target.to, `⏳ ${result.error}. Its messages stay owed until then.`, appOfEntry(entry))
         continue
       }
       if (entry.waitingSince !== undefined) { delete entry.waitingSince; this.persist() }
@@ -1218,11 +1225,11 @@ export class SlackWatcher {
         this.deps.log(`daemon: slack-watch: delivery to ${target.to} failed for ${key} (${first}..${last}): ${result.error}\n`)
         if (result.exit === 8 && fallback) {
           this.deps.log(`daemon: slack-watch: the guard redirected ${key} (${first}..${last}) to ${target.to}, which has no session record; delivering to ${fallback}\n`)
-          this.alertOnce(`guard-redirect:${target.to}`, fallback, `⚠️ The guard redirected a Slack message in ${placeName(cfg, entry.channel)} to "${target.to}", which has no session record (${result.error}), so it went to ${fallback} instead.`)
+          this.alertOnce(`guard-redirect:${target.to}`, fallback, `⚠️ The guard redirected a Slack message in ${placeName(cfg, entry.channel)} to "${target.to}", which has no session record (${result.error}), so it went to ${fallback} instead.`, appOfEntry(entry))
           await this.deliverGroup(key, entry, { to: fallback }, batch, cfg)
           continue
         }
-        if (result.exit === 8) this.alertOnce(`no-such-specialist:${target.to}`, undefined, `⚠️ Slack messages in ${placeName(cfg, entry.channel)} are owed but undeliverable: ${result.error}. The conversation is bound to "${target.to}", which has no session record; check [specialists.${target.to}] in hydra.toml. They stay owed for up to a day.`)
+        if (result.exit === 8) this.alertOnce(`no-such-specialist:${target.to}`, undefined, `⚠️ Slack messages in ${placeName(cfg, entry.channel)} are owed but undeliverable: ${result.error}. The conversation is bound to "${target.to}", which has no session record; check [specialists.${target.to}] in hydra.toml. They stay owed for up to a day.`, appOfEntry(entry))
         const cut = batch.map(i => i.ts).filter(ts => !entry.owed?.includes(ts))
         if (cut.length && this.entries.get(key) === entry) this.drop('owed-full', entry, cut, OWED_FULL_WHY)
         continue

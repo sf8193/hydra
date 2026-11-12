@@ -1,16 +1,17 @@
 %% A Slack message's path from event to delivery, derived from the code, with every refusal and drop.
 %% REFUSED / UNROUTED: logged once, counted (by sender / in all), removed from owed, never alerted; a mention or a DM gets 🚫.
 %% Routing itself (binding → rules → listens → the operator's DM to main, then allow) is routing/route.ts: see flow-route.mmd.
-%% DROP: logged, counted by kind, alerted once per episode (an hour from its start), per kind and target. Guard drops are not alerted.
+%% DROP: logged, counted by kind, alerted once per episode (an hour from its start), per app, kind and target. Guard drops are not alerted.
+%% One connection per Slack app (connectors/slack/connections.ts): each has its own listener, catch-up, cursors and alert episodes; a message and its reply go through the same app.
 flowchart TD
   subgraph src["sources"]
-    live["live event<br/>connectors/slack/listener.ts onMessage"]
-    trig["catch-up triggers: boot, reconnect,<br/>every 10 min deep, retry 60s, queued"]
+    live["live event, through the app that heard it<br/>(one listener per app) listener.ts onMessage"]
+    trig["catch-up triggers, for each app on its own: boot, reconnect,<br/>every 10 min deep, retry 60s, queued"]
     c0["0. list bot DMs (im:read; a failure logs once an hour)<br/>senders whose DM would be delivered; a new DM is read back 24h,<br/>and gets its cursor at once only when found empty"]
     c1["1. owedHints: every conversation, wherever its binding<br/>DM top-level → history from just before"]
     c2["3. history: routed channels, then known DMs<br/>least recently read first, in what the budget leaves<br/>after the threads' calls; empty DM → cursor now<br/>a DM not reached stays held: live events cannot move its cursor"]
     c3["2. deep: list every watched thread<br/>(their calls are kept back)"]
-    hold["on connect: auth.test (bot ids, workspace),<br/>conversations.list (#names → ids), then before the socket opens<br/>hold every channel hydra.toml names and known DM"]
+    hold["on connect, per app: auth.test (bot ids, workspace),<br/>scope check against what THIS app does,<br/>conversations.list (#names → ids), then before the socket opens<br/>hold every channel hydra.toml names and known DM"]
     c4["4. replies per thread<br/>(a reply never moves the channel cursor)"]
     cbud{"budget spent?"}
     gap[["DROP catch-up-gap: a channel past 5 pages<br/>moves to its newest read; the rest is surfaced"]]
@@ -32,6 +33,7 @@ flowchart TD
     cown{"bot's own?"}
     csub["own top-level: opens, bound to the listener there,<br/>ts marked delivered"]
     cseen{"already delivered?"}
+    ow{"several apps heard it?<br/>one owns it: a tag outranks the bound app,<br/>then the opener, default_app, default, first<br/>the others stand down"}
     rt{"route(): at = [slack:C…, slack:#name] or [slack:dm]<br/>addressed = DM, tag, or open conversation<br/>bound = the conversation's specialist"}
     react["🚫 reaction, if a mention or a DM"]
     cap{"new conversation, not a DM: tag cap"}
@@ -52,7 +54,9 @@ flowchart TD
   csub -.->|full| dfull[["DROP table-full"]]
   cown -->|person| cseen
   cseen -->|yes| ign
-  cseen -->|no| rt
+  cseen -->|no| ow
+  ow -->|"not the owner"| ign
+  ow -->|"owner, or the only app"| rt
   rt -->|"ignored: not addressed,<br/>no listen = all"| ign
   rt -->|"refused (allow) or unrouted"| ref
   ref --> react
@@ -79,6 +83,7 @@ flowchart TD
     fl["files ≤2 at once: place files, link, ≤20 MB,<br/>connected → .part 0600 → rename,<br/>one download per file however many ask<br/>else listed with why"]
     snd["global send chain → packItems ≤8 KB<br/>envelope: place, conversation, link; per item person, roles, operator<br/>deliverToTarget(to, key incl. target)"]
     ok["ok or exit 2 → place ack reaction → settle<br/>delivered never trimmed past the oldest owed, nor the parent"]
+    rep(["specialist replies: posted through the app that heard<br/>the conversation, never another<br/>(a post with no message uses speaks_as)"])
     big[["DROP too-large, settled"]]
     e8["exit 8 (no session record):<br/>alert, stays owed"]
     err(["other error: stays owed"])
@@ -98,6 +103,7 @@ flowchart TD
   g75o -.->|cut| dofull
   grp --> fl --> snd
   snd --> ok
+  ok -.-> rep
   snd -->|permanent| big
   snd --> e8
   snd --> err
@@ -113,12 +119,12 @@ flowchart TD
   e8 -.->|owedHints| c1
   err -.->|owedHints| c1
 
-  al["alert(text, to)<br/>the specialist it concerns, or every Slack specialist"]
+  al["alert(text, to, app)<br/>to: the specialist it concerns;<br/>else the specialists that app serves and that hear Slack;<br/>else main (also an undeclared app, or no thread yet)"]
   al --> th{"where does it post?"}
   th -->|"a specialist"| post(["its thread"])
   th -->|main| mainch(["main's channel"])
   th -->|"neither yet"| se(["stderr"])
-  la["listener: down ≥5 min, back up,<br/>catch-up stale ≥25 min,<br/>permanent Slack error, missed live events"] --> al
+  la["per app, own episode: listener down ≥5 min, back up,<br/>catch-up stale ≥25 min, permanent Slack error,<br/>missed live events, a declared scope missing (once per episode,<br/>kept across restarts), names unreadable, tokens missing (app skipped)"] --> al
   dfull -.-> al
   dcap -.-> al
   dofull -.-> al

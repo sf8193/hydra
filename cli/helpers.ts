@@ -480,15 +480,7 @@ export function printResponse(response: Record<string, unknown>, json: boolean):
         console.log(`event loop: worst lag ${data.loopLagMaxMs}ms since start${s ? `; last stall ${s.ms}ms${s.callback ? ` (${s.callback} held it ${s.callbackMs}ms)` : ''} at ${s.at}` : ''}`)
       }
       if (data.raindrop) console.log(`raindrop: ${data.raindrop}`)
-      if (data.slack) {
-        const l = data.slack.listener
-        const state = !l ? 'off' : l.state === 'up' ? 'up' : `${l.state}${l.downMin !== null ? ` ${l.downMin} min` : ''}`
-        const catchUp = l?.catchUp ? ` · catch-up ${l.catchUp.ok ? 'ok' : `failing (${l.catchUp.reason ?? 'see log'})`} ${l.catchUp.ageMin} min ago` : ''
-        const s = data.slack
-        const asOperator = s.readAsOperator ? ` (${s.readAsOperator} read as the operator)` : ''
-        const owed = s.owed ? `${s.owed} owed, oldest ${s.oldestOwedAgeMin} min` : '0 owed'
-        console.log(`slack: listener ${state}${catchUp} · ${s.conversations} conversation${s.conversations === 1 ? '' : 's'}${asOperator} · ${owed}`)
-      }
+      if (data.slack) for (const line of slackHealthLines(data.slack)) console.log(line)
       return
     case 'status':
       console.log(`${data.name} (${data.sessionId})`)
@@ -598,4 +590,38 @@ export function pinnedBun(hydraDir: string, io: BunIO = bunIO()): { path: string
       ? `bun ${pin} (.tool-versions) is not installed, so the daemon runs ${onPath}; install it: asdf install bun ${pin}`
       : `.tool-versions pins no bun, so the daemon runs ${onPath}`,
   }
+}
+
+type AppHealthView = { state: string; downMin: number | null; lastActivityAgeMin: number | null; catchUp: { ok: boolean; ageMin: number; reason?: string } | null; missingScopes?: { option: string; any: string[] }[] | null; tokens?: { ok: boolean; why?: string }; probeError?: string }
+type SlackHealthView = { listener?: AppHealthView; apps?: Record<string, AppHealthView>; conversations: number; readAsOperator: number; owed: number; oldestOwedAgeMin: number | null }
+
+/**
+ * `hydra health`'s Slack lines: one for the whole, as it always was, when the only app is `default`; with several (or one that
+ * is not `default`), a header and a line for each app, with its id: connection, last event, catch-up and scope status.
+ */
+export function slackHealthLines(s: SlackHealthView): string[] {
+  const catchUpOf = (l: AppHealthView | undefined) => l?.catchUp ? ` · catch-up ${l.catchUp.ok ? 'ok' : `failing (${l.catchUp.reason ?? 'see log'})`} ${l.catchUp.ageMin} min ago` : ''
+  const stateOf = (l: AppHealthView | undefined) => !l ? 'off' : l.state === 'up' ? 'up' : `${l.state}${l.downMin !== null ? ` ${l.downMin} min` : ''}`
+  const asOperator = s.readAsOperator ? ` (${s.readAsOperator} read as the operator)` : ''
+  const owed = s.owed ? `${s.owed} owed, oldest ${s.oldestOwedAgeMin} min` : '0 owed'
+  const conversations = `${s.conversations} conversation${s.conversations === 1 ? '' : 's'}${asOperator} · ${owed}`
+  const ids = Object.keys(s.apps ?? {})
+  if (ids.length <= 1 && (ids.length === 0 || ids[0] === 'default')) {
+    const l = s.listener
+    const lacks = l?.missingScopes?.length ? ` · missing ${l.missingScopes.map(m => `${m.any.join(' or ')} (${m.option})`).join('; ')}` : ''
+    return [`slack: listener ${stateOf(l)}${catchUpOf(l)} · ${conversations}${lacks}`]
+  }
+  const lines = [`slack: ${ids.length} app${ids.length === 1 ? '' : 's'} · ${conversations}`]
+  for (const id of ids) {
+    const a = s.apps![id]
+    const parts = a.tokens && !a.tokens.ok ? [`off · ${a.tokens.why}`] : [
+      stateOf(a),
+      ...(a.lastActivityAgeMin !== null ? [`last event ${a.lastActivityAgeMin} min ago`] : []),
+      catchUpOf(a).replace(/^ · /, '') || 'catch-up not yet run',
+      a.missingScopes === null || a.missingScopes === undefined ? 'scopes unchecked' : a.missingScopes.length ? `missing ${a.missingScopes.map(m => `${m.any.join(' or ')} (${m.option})`).join('; ')}` : 'scopes ok',
+      ...(a.probeError ? [`membership unreadable (${a.probeError})`] : []),
+    ]
+    lines.push(`  ${id}: ${parts.join(' · ')}`)
+  }
+  return lines
 }

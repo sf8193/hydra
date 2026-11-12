@@ -6,8 +6,9 @@ import { registry } from '../../../daemon/sessions.js'
 import { setSpecialistThread, _reloadSpecialists } from '../../../specialists/specialists.js'
 import { _setHydraConfigForTesting } from '../../../daemon/hydra-config.js'
 import {
-  getSlackWatcher, bindConversation, formatConversations, operatorBind, operatorUnbind, slackRuntimeDeps, replyInConversation, startSlackListener, stopSlackListener,
+  getSlackWatcher, slackWatchHealth, bindConversation, formatConversations, operatorBind, operatorUnbind, slackRuntimeDeps, replyInConversation, startSlackListener, stopSlackListener,
 } from '../runtime.js'
+import { slackSpecialistsOf } from '../../../routing/route.js'
 import { sessionCapabilities } from '../../../daemon/tool-surface.js'
 import { BASE, TWO_APPS, hydra, view, SALES_BOT } from './slack-config.js'
 import { SlackWatcher } from '../watch.js'
@@ -189,10 +190,10 @@ describe('connecting one listener per app', () => {
       await startSlackListener()
       await startSlackListener()
       await Bun.sleep(5)
-      const said = told.filter(([, t]) => t.includes('Slack is not connected for the app named'))
-      // Each Slack-hearing specialist is told, once per app: two apps, two specialists.
-      expect(said.filter(([, t]) => t.includes('`sales`') && t.includes('`bot_token_env` of the app named `sales` (`[slack.apps.sales]`) names SALES_SLACK_BOT_TOKEN'))).toHaveLength(2)
-      expect(said.filter(([, t]) => t.includes('app named `default`') && t.includes('SLOPBOT_SLACK_BOT_TOKEN'))).toHaveLength(2)
+      const said = told.filter(([, t]) => t.includes('is not connected: '))
+      // Each app is told to the specialists it can reach, once: `sales` to `deals` (pinned to it), `default` to `crm` (unpinned).
+      expect(said.filter(([, t]) => t.includes('`sales`') && t.includes('`bot_token_env` of the app named `sales` (`[slack.apps.sales]`) names SALES_SLACK_BOT_TOKEN')).map(([c]) => c)).toEqual([DEALS_THREAD])
+      expect(said.filter(([, t]) => t.includes('app named `default`') && t.includes('SLOPBOT_SLACK_BOT_TOKEN')).map(([c]) => c)).toEqual([CRM_THREAD])
     } finally { (gateway as any).send = realSend }
   })
 })
@@ -205,5 +206,67 @@ describe('the store keeps an app’s conversations apart', () => {
     expect(w.list()).toHaveLength(2)
     expect(w.unwatch('C1', '5.000001', 'sales')).toBe(true)
     expect(w.get('C1', '5.000001')?.specialist).toBe(CRM)
+  })
+})
+
+describe('an alert about one app goes to the specialists that app can reach', () => {
+  test('a pinned specialist is paged by its own app only; an unpinned one by the apps no one is pinned to; an app nobody uses pages no one', () => {
+    const h = hydra(TOML)
+    expect(slackSpecialistsOf(h, 'sales')).toEqual([DEALS])
+    expect(slackSpecialistsOf(h, 'default')).toEqual([CRM])
+    // A third app that every unpinned specialist is shut out of, and no one is pinned to: no specialist, so main hears it.
+    const three = hydra(`${TOML}\n[slack.apps.ops]\nbot_token_env = "OPS_BOT"\napp_token_env = "OPS_APP"\n`)
+    expect(slackSpecialistsOf(three, 'ops')).toEqual([CRM])
+    const lone = hydra(`${BASE}\n[specialists.${CRM}]\nworkdir = "/w"\nlistens = ["slack:C1"]\nallow = ["anyone"]\n[specialists.${DEALS}]\nworkdir = "/w"\nlistens = ["slack:C2"]\nallow = ["anyone"]\n`)
+    // A lone `default` serves every specialist, as the alert always did.
+    expect(slackSpecialistsOf(lone, 'default')).toEqual([CRM, DEALS])
+    // A rule for one app pages that app’s target, not the other app’s.
+    const ruled = hydra(`${TWO_APPS}\n[specialists.${CRM}]\nworkdir = "/w"\nlistens = ["slack:C1"]\nallow = ["anyone"]\n[specialists.${DEALS}]\nworkdir = "/w"\napps = ["sales"]\nallow = ["anyone"]\n[[rules]]\napp = "sales"\nto = "${DEALS}"\n`)
+    expect(slackSpecialistsOf(ruled, 'sales')).toEqual([DEALS])
+    expect(slackSpecialistsOf(ruled, 'default')).toEqual([CRM])
+  })
+
+  test('health lists every declared app, off when it has no connection, with its tokens and connection', () => {
+    configure()
+    const h = slackWatchHealth()!
+    expect(Object.keys(h.apps)).toEqual(['default', 'sales'])
+    expect(h.apps.sales).toMatchObject({ state: 'off', connection: 'down' })
+    expect(h.apps.sales.tokens).toMatchObject({ ok: false })
+    expect(h.listener).toBeUndefined()
+  })
+})
+
+describe('where a watcher alert lands, by app', () => {
+  const sendTo = async (app: string, text: string, say: () => void = () => getSlackWatcher().operatorTokenRefused(text, app)): Promise<{ channels: string[]; logged: string }> => {
+    const told: string[] = []
+    const realSend = gateway.send
+    const realWrite = process.stderr.write
+    let logged = ''
+    ;(gateway as any).send = async (c: string) => { told.push(c); return 'id' }
+    process.stderr.write = ((s: string) => { logged += s; return true }) as any
+    try {
+      say()
+      await Bun.sleep(5)
+    } finally { (gateway as any).send = realSend; process.stderr.write = realWrite }
+    return { channels: told, logged }
+  }
+
+  test('an app’s alert reaches the specialists that app serves: sales to deals, default to crm', async () => {
+    expect((await sendTo('sales', 'a refusal')).channels).toEqual([DEALS_THREAD])
+    expect((await sendTo('default', 'another refusal')).channels).toEqual([CRM_THREAD])
+  })
+
+  test('an app hydra.toml no longer declares is told to main only, never to every specialist', async () => {
+    const r = await sendTo('ghost', 'a ghost refusal')
+    expect(r.channels).not.toContain(CRM_THREAD)
+    expect(r.channels).not.toContain(DEALS_THREAD)
+  })
+
+  test('when the specialists an app serves have no thread yet, main hears it, or it is logged: never dropped', async () => {
+    rmSync(join(STATE_DIR, 'specialist-threads.json'), { force: true })
+    _reloadSpecialists()
+    const r = await sendTo('sales', 'a gap', () => getSlackWatcher().catchUpGap('C0NOWHERE', '1000.000001', '1900.000001', 200, 'sales'))
+    expect(r.channels).not.toContain(CRM_THREAD)
+    expect(r.channels.length > 0 || r.logged.includes('slack alert with no specialist thread')).toBe(true)
   })
 })

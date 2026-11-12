@@ -3,14 +3,15 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { SlackWatcher, appOfEntry, conversationId } from '../watch.js'
-import { SlackListener, type SlackAppLike, type RawEvent } from '../listener.js'
+import { SlackListener, scopesNeeded, DOWN_ALERT_AFTER_MS, CATCH_UP_STALE_AFTER_MS, type SlackAppLike, type RawEvent } from '../listener.js'
 import { ConnectedApps, MEMBER_TTL_MS } from '../apps.js'
 import { parseConversation } from '../conversation.js'
 import { conversationSessionName } from '../../../specialists/targets.js'
 import { createResumeDetector } from '../../../shared/resume.js'
 import type { SlackApi, RawMessage } from '../catchup.js'
 import type { SocketEmitter } from '../../../shared/socket-supervisor.js'
-import { hydra as load, sharedChannel, BOT, SALES_BOT } from './slack-config.js'
+import { hydra as load, sharedChannel, BOT, SALES_BOT, TWO_APPS } from './slack-config.js'
+import { SLACK_APP_NEEDS } from '../app.js'
 
 const CH = 'C0FOOD'
 const OTHER = 'C0OTHER'
@@ -27,10 +28,10 @@ const listeners: SlackListener[] = []
 afterEach(() => { for (const l of listeners.splice(0)) l.stop(); for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
 
 type Sent = { to: string; conversation?: string; key: string; msg: string }
-type Fake = { handler: (e: RawEvent) => void; stopped: boolean; calls: string[]; history: RawMessage[]; threads: Record<string, RawMessage[]>; members: Set<string>; probes: string[]; probeError?: string }
+type Fake = { client?: FakeClient; historyError?: string; scopes?: string[]; handler: (e: RawEvent) => void; stopped: boolean; calls: string[]; history: RawMessage[]; threads: Record<string, RawMessage[]>; members: Set<string>; probes: string[]; probeError?: string }
 
 /** Two real listeners (the app `default` and `sales`) on one watcher, with fake Slack behind each. */
-function setup(toml: string, over: { members?: Record<string, string[]>; probeError?: Record<string, string>; cursors?: Record<string, string>; guard?: (to: string) => { fate: 'deliver'; to: string }; seed?: Record<string, { botUserId: string }>; failStart?: Record<string, number>; firstRetryBaseMs?: number; authGate?: Promise<void>; probeGate?: (channel: string) => Promise<void>; membershipWaitMs?: number; expectJoin?: boolean } = {}) {
+function setup(toml: string, over: { members?: Record<string, string[]>; probeError?: Record<string, string>; cursors?: Record<string, string>; guard?: (to: string) => { fate: 'deliver'; to: string }; seed?: Record<string, { botUserId: string }>; failStart?: Record<string, number>; firstRetryBaseMs?: number; authGate?: Promise<void>; probeGate?: (channel: string) => Promise<void>; membershipWaitMs?: number; expectJoin?: boolean; scopes?: Record<string, string[]>; historyError?: Record<string, string> } = {}) {
   const h = load(toml)
   const dir = mkdtempSync(join(tmpdir(), 'slack-apps-'))
   dirs.push(dir)
@@ -38,6 +39,7 @@ function setup(toml: string, over: { members?: Record<string, string[]>; probeEr
   const sent: Sent[] = []
   const logs: string[] = []
   const alerts: string[] = []
+  const alertApps: (string | undefined)[] = []
   const fakes: Record<string, Fake> = {}
   const fails: Record<string, number> = { default: 0, [SALES]: 0 }
   const resumes = createResumeDetector({ now: () => now, lastSleep: async () => null, log: l => logs.push(l) })
@@ -51,11 +53,11 @@ function setup(toml: string, over: { members?: Record<string, string[]>; probeEr
     ...(over.guard && { guard: async (_g, input) => over.guard!(input.to) }),
     deliver: async (t, msg, key) => { sent.push({ to: t.to, ...(t.conversation && { conversation: t.conversation }), key, msg }); return { ok: true } },
   })
-  const shared = new ConnectedApps({ now: () => now, log: l => logs.push(l), alert: t => alerts.push(t) })
+  const shared = new ConnectedApps({ now: () => now, log: l => logs.push(l), alert: (t, app) => { alerts.push(t); alertApps.push(app) } })
   if (over.seed) shared.seedIdentities(over.seed)
   if (over.expectJoin) shared.expectJoin(['default', SALES])
   for (const id of ['default', SALES]) {
-    const f: Fake = { handler: () => {}, stopped: false, calls: [], history: [], threads: {}, members: new Set(over.members?.[id] ?? []), probes: [], ...(over.probeError?.[id] && { probeError: over.probeError[id] }) }
+    const f: Fake = { handler: () => {}, stopped: false, calls: [], history: [], threads: {}, members: new Set(over.members?.[id] ?? []), probes: [], ...(over.probeError?.[id] && { probeError: over.probeError[id] }), ...(over.scopes?.[id] && { scopes: over.scopes[id] }), ...(over.historyError?.[id] && { historyError: over.historyError[id] }) }
     fakes[id] = f
     const l = new SlackListener({
       app: id, apps: shared, watcher, hydra: () => h, now: () => now, resumes, log: x => logs.push(x), alert: t => alerts.push(t),
@@ -63,8 +65,9 @@ function setup(toml: string, over: { members?: Record<string, string[]>; probeEr
       tokens: () => ({ app: `xapp-${id}`, bot: `xoxb-${id}` }),
       createApp: () => {
         const client = new FakeClient()
+        f.client = client
         const api: SlackApi = {
-          async history(a) { f.calls.push(`history:${a.channel}`); return { messages: f.history.filter(m => parseFloat(m.ts!) > parseFloat(a.oldest)) } },
+          async history(a) { f.calls.push(`history:${a.channel}`); if (f.historyError) throw new Error(f.historyError); return { messages: f.history.filter(m => parseFloat(m.ts!) > parseFloat(a.oldest)) } },
           async replies(a) { f.calls.push(`replies:${a.channel}:${a.ts}`); return { messages: (f.threads[`${a.channel}:${a.ts}`] ?? []).filter(m => parseFloat(m.ts!) >= parseFloat(a.oldest)) } },
         }
         return {
@@ -74,7 +77,7 @@ function setup(toml: string, over: { members?: Record<string, string[]>; probeEr
           start: async () => { if ((over.failStart?.[id] ?? 0) > fails[id]++) throw new Error('invalid_auth'); client.emit('connected') },
           stop: async () => { f.stopped = true },
           emitter: () => client,
-          authTest: async () => { await over.authGate; return { botId: id === 'default' ? 'BDEF' : 'BSAL', userId: id === 'default' ? BOT : SALES_BOT, url: 'https://x.slack.com/' } },
+          authTest: async () => { await over.authGate; return { botId: id === 'default' ? 'BDEF' : 'BSAL', userId: id === 'default' ? BOT : SALES_BOT, url: 'https://x.slack.com/', ...(f.scopes && { scopes: f.scopes }) } },
           isMember: async ch => { f.probes.push(ch); await over.probeGate?.(ch); if (f.probeError) throw new Error(f.probeError); return f.members.has(ch) },
           userName: async () => undefined,
           react: async (c, ts, name) => { f.calls.push(`react:${c}:${ts}:${name}`) },
@@ -88,7 +91,7 @@ function setup(toml: string, over: { members?: Record<string, string[]>; probeEr
     listeners.push(l)
   }
   return {
-    h, watcher, sent, logs, alerts, fakes, listeners: byId, shared, file, dir, tick: (ms: number) => { now += ms },
+    h, watcher, sent, logs, alerts, alertApps, fakes, listeners: byId, shared, file, dir, tick: (ms: number) => { now += ms },
     start: async () => { for (const l of Object.values(byId)) await l.start() },
     /** The same Slack message, delivered to every app whose bot is in its channel, as Slack does. */
     say: (ev: Partial<RawEvent> & { ts: string }, to: string[] = ['default', SALES]) => { for (const id of to) fakes[id].handler({ channel: CH, user: 'UB', text: 'hello', ...ev }) },
@@ -201,7 +204,9 @@ describe('membership', () => {
     expect(said[0]).toContain('`default`')
     expect(said[1]).toContain('`sales`')
     expect(said[0]).toContain('channels:read')
-    expect(said[0]).toContain('bot_token_env')
+    expect(said[0]).toContain('`bot_token_env` of the app named `default`')
+    // The alert names its app to the sink, so only the specialists that app serves hear it.
+    expect(t.alertApps).toEqual(['default', SALES])
     // Each app is alone in what it knows: the one that received it answers, the other has nothing to answer.
     expect(t.sent.length).toBeGreaterThan(0)
   })
@@ -539,5 +544,204 @@ describe('per-channel queues', () => {
     expect(t.sent.map(s => s.conversation)).toEqual([`slack:${CH}:1101.000001`])
     open()
     await t.settle()
+  })
+})
+
+// -- Health is per app ---------------------------------------------------------------------------------------------------
+
+const ALL_SCOPES = ['channels:history', 'channels:read', 'users:read', 'im:history', 'im:read', 'reactions:write', 'chat:write']
+const perApp = (text: string, app: string) => (a: string) => a.includes(text) && a.includes(`app named \`${app}\``)
+
+describe('health is per app: A down while B is fine', () => {
+  test('a down app is alerted once, by name, and its recovery said once; the other app’s state, catch-up and alerts are untouched', async () => {
+    const t = setup(sharedChannel(CH), { members: BOTH })
+    await t.start()
+    t.fakes[SALES].client!.emit('disconnected')
+    t.tick(DOWN_ALERT_AFTER_MS + 60_000)
+    for (const l of Object.values(t.listeners)) { await l.checkAlerts(); await l.checkAlerts() }
+    expect(t.listeners[SALES].health().state).toBe('down')
+    expect(t.listeners.default.health()).toMatchObject({ state: 'up', downMin: null })
+    expect(t.alerts.filter(perApp('has been down', SALES))).toHaveLength(1)
+    expect(t.alerts.filter(a => a.includes('has been down') && a.includes('`default`'))).toHaveLength(0)
+    t.fakes[SALES].client!.emit('connected')
+    for (const l of Object.values(t.listeners)) await l.checkAlerts()
+    expect(t.alerts.filter(perApp('connected again', SALES))).toHaveLength(1)
+    expect(t.alerts.filter(a => a.includes('connected again') && a.includes('`default`'))).toHaveLength(0)
+  })
+
+  test('both down is two alerts, one each: one app’s episode neither hides nor repeats the other’s', async () => {
+    const t = setup(sharedChannel(CH), { members: BOTH })
+    await t.start()
+    t.fakes.default.client!.emit('disconnected')
+    t.tick(DOWN_ALERT_AFTER_MS + 60_000)
+    await t.listeners.default.checkAlerts()
+    t.fakes[SALES].client!.emit('disconnected')
+    t.tick(DOWN_ALERT_AFTER_MS + 60_000)
+    for (const l of Object.values(t.listeners)) { await l.checkAlerts(); await l.checkAlerts() }
+    expect(t.alerts.filter(a => a.includes('has been down'))).toHaveLength(2)
+    expect(t.alerts.filter(perApp('has been down', SALES))).toHaveLength(1)
+    expect(t.alerts.filter(perApp('has been down', 'default'))).toHaveLength(1)
+  })
+})
+
+describe('health is per app: scopes', () => {
+  test('a scope missing for one app alerts that app alone, naming the app, the scope and the fix, once; the other app’s check is its own', async () => {
+    const t = setup(sharedChannel(CH), { members: BOTH, scopes: { default: ALL_SCOPES, [SALES]: ALL_SCOPES.filter(s => s !== 'chat:write') } })
+    await t.start()
+    await t.listeners[SALES].runCatchUp(true, 'again')
+    const said = t.alerts.filter(a => a.includes('bot token'))
+    expect(said).toHaveLength(1)
+    expect(said[0]).toContain('The Slack bot token for the app named `sales` lacks chat:write (replies)')
+    expect(said[0]).toContain('`hydra slack manifest sales`')
+    expect(said[0]).toContain('reinstall')
+    expect(t.listeners[SALES].health().missingScopes).toEqual([{ option: 'replies', any: ['chat:write'] }])
+    expect(t.listeners.default.health().missingScopes).toEqual([])
+  })
+
+  test('a lone `default` says no app, and names the manifest command without one', async () => {
+    const t = setup(`${TWO_APPS}`.split('[slack.apps.sales]')[0] + '[specialists.crm]\nworkdir = "/w/crm"\nlistens = ["slack:C0FOOD"]\nallow = ["anyone"]\n', { scopes: { default: ['channels:history'] } })
+    await t.listeners.default.start()
+    const said = t.alerts.filter(a => a.includes('bot token'))
+    expect(said).toHaveLength(1)
+    expect(said[0]).toMatch(/^⚠️ The Slack bot token lacks /)
+    expect(said[0]).toContain('`hydra slack manifest`')
+    expect(said[0]).not.toContain('for the app named')
+  })
+
+  test('each app is asked only for what it does: no private-channel read without a private place, no im:* without a DM listener', () => {
+    const h = load(`operator = "op"
+[connectors.slack]
+bot_token_env = "A_BOT"
+app_token_env = "A_APP"
+[slack.apps.sales]
+bot_token_env = "S_BOT"
+app_token_env = "S_APP"
+[people.op]
+ids = ["github:op"]
+[specialists.crm]
+workdir = "/w/crm"
+listens = ["slack:G0PRIV"]
+allow = ["anyone"]
+[specialists.deals]
+workdir = "/w/deals"
+apps = ["sales"]
+listens = ["slack:dm", "slack:${CH}"]
+allow = ["anyone"]
+`)
+    const def = scopesNeeded(h, 'default')
+    const sales = scopesNeeded(h, SALES)
+    expect(def).toContain(SLACK_APP_NEEDS.membership.private)
+    expect(sales).not.toContain(SLACK_APP_NEEDS.membership.private)
+    expect(def).not.toContain(SLACK_APP_NEEDS.botScopes.dms)
+    expect(sales).toContain(SLACK_APP_NEEDS.botScopes.dms)
+    expect(sales).toContain(SLACK_APP_NEEDS.botScopes.dmCatchUp)
+    // The channel-name read follows the `#name` places the app reaches.
+    expect(def).not.toContain(SLACK_APP_NEEDS.botScopes.channelNames)
+  })
+
+  test('an app with no listener of its own at all still needs only the basics', () => {
+    const h = load(sharedChannel(CH))
+    expect(scopesNeeded(h, SALES).some(n => n === SLACK_APP_NEEDS.botScopes.channels)).toBe(true)
+    const none = load(`${TWO_APPS}`)
+    expect(scopesNeeded(none, SALES)).not.toContain(SLACK_APP_NEEDS.botScopes.channels)
+  })
+})
+
+describe('health is per app: catch-up', () => {
+  test('one app’s failing catch-up is its own: the other’s pass completes, its health is ok, and only the failing app is alerted once', async () => {
+    const t = setup(sharedChannel(CH), { members: BOTH, historyError: { [SALES]: 'ratelimited' }, cursors: { [CH]: '1000.000001', [`${SALES}:${CH}`]: '1000.000001' } })
+    await t.start()
+    expect(t.listeners.default.health()).toMatchObject({ catchUp: { ok: true }, lastOkCatchUpAgeMin: 0 })
+    expect(t.listeners[SALES].health().catchUp).toMatchObject({ ok: false, reason: 'ratelimited' })
+    expect(t.listeners[SALES].health().lastOkCatchUpAgeMin).toBeNull()
+    t.tick(CATCH_UP_STALE_AFTER_MS + 60_000)
+    for (const l of Object.values(t.listeners)) { await l.checkAlerts(); await l.checkAlerts() }
+    expect(t.alerts.filter(perApp('catch-up pass', SALES))).toHaveLength(1)
+    expect(t.alerts.filter(perApp('catch-up pass', 'default')).length).toBe(1)   // default is overdue too: nothing ran for it since boot
+    // The failing app’s alarm is its own: a complete pass of `default` clears default’s, not sales’s.
+    await t.listeners.default.runCatchUp(true, 'periodic')
+    t.tick(CATCH_UP_STALE_AFTER_MS + 60_000)
+    for (const l of Object.values(t.listeners)) await l.checkAlerts()
+    expect(t.alerts.filter(perApp('catch-up pass', SALES))).toHaveLength(1)
+    expect(t.alerts.filter(perApp('catch-up pass', 'default'))).toHaveLength(2)
+  })
+
+  test('a permanent refusal on one app is alerted for that app alone, and the other app’s cursor still advances', async () => {
+    const t = setup(sharedChannel(CH), { members: BOTH, historyError: { [SALES]: 'missing_scope: the token needs channels:history' }, cursors: { [CH]: '1000.000001', [`${SALES}:${CH}`]: '1000.000001' } })
+    t.fakes.default.history = [{ ts: '1060.000001', user: 'UB', text: 'chatter' }]
+    await t.start()
+    const refused = t.alerts.filter(a => a.includes('Slack refused the catch-up read'))
+    expect(refused).toHaveLength(1)
+    expect(refused[0]).toContain('for the app named `sales`')
+    expect(t.watcher.channelCursor(CH, SALES)).toBe('1000.000001')
+    expect(t.watcher.channelCursor(CH)).toBe('1060.000001')
+  })
+
+  test('a slow pass of one app does not hold the other’s', async () => {
+    const t = setup(sharedChannel(CH), { members: BOTH })
+    await t.start()
+    let release!: () => void
+    const gate = new Promise<void>(r => { release = r })
+    // Hold sales’s next pass inside its directory read: `channels()` is awaited at the start of a pass.
+    const salesListener = t.listeners[SALES] as unknown as { app: { channels: () => Promise<unknown[]> } }
+    const realChannels = salesListener.app.channels
+    salesListener.app.channels = async () => { await gate; return realChannels() }
+    const pending = t.listeners[SALES].runCatchUp(true, 'slow')
+    const quick = await t.listeners.default.runCatchUp(true, 'quick')
+    expect(quick?.complete).toBe(true)
+    release()
+    expect((await pending)?.complete).toBe(true)
+  })
+})
+
+describe('health is per app: what an operator reads', () => {
+  test('each declared app has a record: its tokens, its connection, and why its membership read failed', async () => {
+    const t = setup(sharedChannel(CH), { members: BOTH, probeError: { [SALES]: 'missing_scope: channels:read' } })
+    await t.start()
+    await t.listeners.default.runCatchUp(true, 'periodic')   // asks whether sales is in the channels it reads
+    expect(t.shared.probeError(SALES)).toContain('missing_scope')
+    expect(t.shared.probeError('default')).toBeUndefined()
+  })
+})
+
+// -- Acceptance, from the brief's Done-when -------------------------------------------------------------------------------
+
+describe('a two-app config routes, replies and catches up per app', () => {
+  test('a message through each app is routed by that app, answered through that app, and caught up with that app’s own client and cursor', async () => {
+    const t = setup(sharedChannel(CH), { members: BOTH, cursors: { [CH]: '1000.000001', [`${SALES}:${CH}`]: '1000.000001' } })
+    t.fakes[SALES].history = [{ ts: '1050.000001', user: 'UB', text: `<@${SALES_BOT}> while down` }]
+    await t.start()
+    await t.watcher.flush()
+    t.say({ ts: '1100.000001', text: `<@${BOT}> live, default` })
+    t.say({ ts: '1200.000001', text: `<@${SALES_BOT}> live, sales` })
+    await t.settle()
+    expect(t.sent.map(s => [s.to, s.conversation]).sort()).toEqual([
+      ['crm', `slack:${CH}:1100.000001`],
+      ['deals', `slack:${SALES}:${CH}:1050.000001`],
+      ['deals', `slack:${SALES}:${CH}:1200.000001`],
+    ])
+    // Replies leave through the app that heard the conversation, and no other.
+    await t.listeners[SALES].post(CH, '1200.000001', 'answer')
+    await t.listeners.default.post(CH, '1100.000001', 'answer')
+    expect(t.fakes[SALES].calls.filter(c => c.startsWith('post:'))).toEqual([`post:${CH}:1200.000001:answer`])
+    expect(t.fakes.default.calls.filter(c => c.startsWith('post:'))).toEqual([`post:${CH}:1100.000001:answer`])
+    // Catch-up: each app’s cursor is its own.
+    expect(t.watcher.channelCursor(CH, SALES)).toBe('1200.000001')
+    expect(t.watcher.channelCursor(CH)).toBeDefined()   // `default`’s own, under the bare channel id
+  })
+})
+
+describe('a pinned specialist cannot be reached through any other app', () => {
+  test('where only a specialist pinned to sales listens, a tag of the app `default` reaches no one, and a tag of sales reaches it', async () => {
+    const toml = `${TWO_APPS}\n[specialists.deals]\nworkdir = "/w/deals"\napps = ["sales"]\nlistens = ["slack:${CH}"]\nallow = ["anyone"]\n`
+    const t = setup(toml, { members: BOTH })
+    await t.start()
+    t.say({ ts: '1100.000001', text: `<@${BOT}> hello?` })
+    await t.settle()
+    expect(t.sent).toEqual([])
+    expect(t.watcher.get(CH, '1100.000001')).toBeUndefined()
+    t.say({ ts: '1200.000001', text: `<@${SALES_BOT}> hello?` })
+    await t.settle()
+    expect(t.sent.map(s => [s.to, s.conversation])).toEqual([['deals', `slack:${SALES}:${CH}:1200.000001`]])
   })
 })

@@ -8,7 +8,7 @@ import {
   type SlackWatchConfig, type SlackMessageEvent, type DeliverResult, type Item, type SlackWatchDeps, type SlackActions, type SlackFile,
 } from '../watch.js'
 import type { GuardInput, GuardVerdict } from '../../../routing/guard.js'
-import { BASE, BOT, oneListener, view, directory, type ViewOver } from './slack-config.js'
+import { BASE, BOT, oneListener, view, directory, TWO_APPS, type ViewOver } from './slack-config.js'
 
 const CH = 'C0FOOD'
 const cfg = (over: ViewOver = {}): SlackWatchConfig => view(oneListener(CH), over)
@@ -1523,5 +1523,44 @@ ${place}
     down.w.handle(ev({ ts: '1.000001', text: mention }))
     await down.w.flush()
     expect(d.reactions).toEqual([])
+  })
+})
+
+describe('alert episodes are per app', () => {
+  // Two apps and one unpinned specialist both can deliver to: the same recipient, the same kind of trouble, through each app.
+  const toml = `${TWO_APPS}\n[specialists.crm]\nworkdir = "/w/crm"\nlistens = ["slack:${CH}"]\nallow = ["anyone"]\n`
+  test('a catch-up gap through one app does not silence the same gap through the other, and each is said once; the app rides with the alert', () => {
+    const s = setup({ toml })
+    const apps: (string | undefined)[] = []
+    const w = new SlackWatcher({ now: s.now, file: join(dirs[dirs.length - 1], 'two.json'), log: () => {}, config: app => view(toml, { app }), alert: (t, to, app) => { s.alerts.push(t); apps.push(app) }, deliver: async () => ({ ok: true }) })
+    w.catchUpGap(CH, '1000.000001', '1900.000001', 200, 'default')
+    w.catchUpGap(CH, '1000.000002', '1900.000001', 200, 'default')
+    w.catchUpGap(CH, '1000.000001', '1900.000001', 200, 'sales')
+    expect(apps).toEqual(['default', 'sales'])
+    // After the hour a new episode starts, for each app on its own.
+    s.tick(61 * 60_000)
+    w.catchUpGap(CH, '1000.000003', '1900.000001', 200, 'sales')
+    expect(apps).toEqual(['default', 'sales', 'sales'])
+    w.close()
+  })
+
+  test('a refused operator token is said once an hour per app', () => {
+    const s = setup({ toml })
+    const apps: (string | undefined)[] = []
+    const w = new SlackWatcher({ now: s.now, file: join(dirs[dirs.length - 1], 'two.json'), log: () => {}, config: app => view(toml, { app }), alert: (_t, _to, app) => { apps.push(app) }, deliver: async () => ({ ok: true }) })
+    w.operatorTokenRefused('the operator\'s Slack token was refused', 'default')
+    w.operatorTokenRefused('the operator\'s Slack token was refused', 'sales')
+    w.operatorTokenRefused('the operator\'s Slack token was refused', 'sales')
+    expect(apps).toEqual(['default', 'sales'])
+    w.close()
+  })
+})
+
+describe('what an app hears of DMs and channels is its own', () => {
+  test('hearsDms for an app counts only a specialist or rule that app can deliver to; the operator’s DM counts for every app', () => {
+    const toml = `operator = "op"\n[connectors.slack]\nbot_token_env = "A_BOT"\n[slack.apps.sales]\nbot_token_env = "S_BOT"\n[people.op]\nids = ["github:op"]\n[specialists.deals]\nworkdir = "/w/d"\napps = ["sales"]\nlistens = ["slack:dm"]\nallow = ["anyone"]\n`
+    expect(hearsDms(view(toml, { app: 'sales' }))).toBe(true)
+    expect(hearsDms(view(toml, { app: 'default' }))).toBe(false)
+    expect(hearsDms(view(toml.replace('ids = ["github:op"]', 'ids = ["slack:UOP"]'), { app: 'default' }))).toBe(true)
   })
 })

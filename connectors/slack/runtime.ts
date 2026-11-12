@@ -1,4 +1,4 @@
-import { SlackWatcher, cantRead, cmpTs, slackWatchesPath, unresolvedPlaces, conversationId, placeName, isDm, appOfEntry, TOP_LEVEL, NO_DIRECTORY, SLACK_LIMITS, type SlackWatchConfig, type SlackWatchEntry, type SlackWatchStats } from './watch.js'
+import { SlackWatcher, namedChannels, cantRead, cmpTs, slackWatchesPath, unresolvedPlaces, conversationId, placeName, isDm, appOfEntry, TOP_LEVEL, NO_DIRECTORY, SLACK_LIMITS, type SlackWatchConfig, type SlackWatchEntry, type SlackWatchStats } from './watch.js'
 import { parseConversation } from './conversation.js'
 import { ConnectedApps, type AppIdentity } from './apps.js'
 import { getSpecialist, conversationSpecialistOf, specialistOf, boundAs } from '../../specialists/specialists.js'
@@ -7,7 +7,8 @@ import type { SessionInfo } from '../../daemon/sessions.js'
 import { pushToolSurface } from '../../daemon/tool-surface.js'
 import { deliverToTarget, conversationSessionName, conversationSessionRunning, placesFree, type Target } from '../../specialists/targets.js'
 import { on } from '../../daemon/event-bus.js'
-import { SlackListener, boltApp, POST_TIMEOUT_MS, type ListenerHealth } from './listener.js'
+import { SlackListener, boltApp, POST_TIMEOUT_MS, type ToldScopes } from './listener.js'
+import { SlackConnections, type AppHealth } from './connections.js'
 import { STATE_DIR } from '../../daemon/config.js'
 import { ENV_NAME_RE, capturedSpawnVars, scrubbedSpawnVars, tokenVarRefusal } from '../../shared/spawn-env.js'
 import { join } from 'path'
@@ -15,12 +16,12 @@ import { existsSync, readFileSync } from 'fs'
 import { safeSend, atomicWriteFileSync } from '../../daemon/util.js'
 import { mainChannel } from '../../daemon/main-session.js'
 import { currentHydraConfig, onHydraConfigLoad } from '../../daemon/hydra-config.js'
-import { MAIN, currentId, isSessionThread } from '../../routing/route.js'
+import { MAIN, currentId, isSessionThread, slackSpecialistsOf } from '../../routing/route.js'
 import { chunk } from '../../daemon/util.js'
 import { DEFAULT_SLACK_APP, slackConfigured, type HydraConfig, type SlackApp } from '../../config/types.js'
 import { speaksAsOf, noSuchApp } from '../../config/pins.js'
 import { notServedBy } from '../../routing/route.js'
-import { NO_SLACK_APP, appKey, appSuffix, notConnected } from './app.js'
+import { NO_SLACK_APP, notConnected } from './app.js'
 import { timed } from '../../shared/loop-watch.js'
 
 const log = (line: string) => { process.stderr.write(line) }
@@ -31,11 +32,11 @@ const log = (line: string) => { process.stderr.write(line) }
  * one app. An absent `app` is `default`.
  */
 export const slackRuntimeDeps = {
-  view: (app: string = DEFAULT_SLACK_APP): SlackWatchConfig | null => listeners.get(app)?.view() ?? null,
+  view: (app: string = DEFAULT_SLACK_APP): SlackWatchConfig | null => connections.listener(app)?.view() ?? null,
   /** A place freed under max: catch-up refetches what waits, the oldest waiter first, through the apps that have waiters. */
-  wake: (apps?: string[]): void => { for (const [id, l] of listeners) if (!apps || apps.includes(id)) void l.runCatchUp(false, 'a place freed') },
+  wake: (apps?: string[]): void => { for (const [id, l] of connections.listeners()) if (!apps || apps.includes(id)) void l.runCatchUp(false, 'a place freed') },
   post: (channel: string, threadTs: string | undefined, text: string, app: string = DEFAULT_SLACK_APP): Promise<string> => {
-    const l = listeners.get(app)
+    const l = connections.listener(app)
     if (!l) return Promise.reject(new Error(notConnected(app, Object.keys(hydraConfig().slackApps).length)))
     return l.post(channel, threadTs, text)
   },
@@ -46,7 +47,7 @@ export const slackRuntimeDeps = {
    * that app isn't connected. Throws Slack's refusal when neither token can read it.
    */
   readThread: async (channel: string, threadTs: string, app: string = DEFAULT_SLACK_APP): Promise<'bot' | 'user' | null> => {
-    const api = listeners.get(app)?.api
+    const api = connections.listener(app)?.api
     if (!api) return null
     // A tool call must not wait out the SDK's retries: past the deadline the bind is made unchecked, as when disconnected.
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -67,8 +68,8 @@ function config(app?: string): SlackWatchConfig | null {
 }
 
 /** Without a connection, the tools still name channels by id; `#name` places resolve once the app is up. */
-function offlineView(app?: string): Pick<SlackWatchConfig, 'hydra' | 'directory'> {
-  return config(app) ?? { hydra: hydraConfig(), directory: NO_DIRECTORY }
+function offlineView(app?: string): Pick<SlackWatchConfig, 'hydra' | 'directory' | 'app'> {
+  return config(app) ?? { hydra: hydraConfig(), directory: NO_DIRECTORY, ...(app && { app }) }
 }
 
 const SWEEP_INTERVAL_MS = 60 * 60_000
@@ -83,18 +84,25 @@ function slackSpecialists(h: HydraConfig): string[] {
 }
 
 /**
- * A plain message (not a session turn) to the thread of the specialist it concerns. With none named (listener
- * trouble concerns everyone), each specialist that hears Slack hears it once, and main's channel when nothing does.
+ * A plain message (not a session turn) to the thread of the specialist it concerns. With none named, it goes to the specialists
+ * the app it concerns serves and that hear Slack (`slackSpecialistsOf`); for an app hydra.toml no longer declares, or one no
+ * specialist uses, to main's channel; for trouble that concerns no app (no `app`), to every specialist that hears Slack. Main's
+ * channel also hears it when none of those has a thread to post in yet.
  */
-function alert(text: string, to?: string): void {
-  // A specialist with nowhere to post (removed from hydra.toml, or no thread yet) does not swallow it: everyone hears it.
-  const targets = to && alertChannel(to) ? [to] : slackSpecialists(hydraConfig())
-  let sent = false
-  for (const t of targets.length ? targets : [MAIN]) {
-    const where = alertChannel(t)
-    if (where) { void safeSend(where, text).catch(() => {}); sent = true }
+function alert(text: string, to?: string, app?: string): void {
+  const h = hydraConfig()
+  const audience = app === undefined ? slackSpecialists(h) : Object.hasOwn(h.slackApps, app) ? slackSpecialistsOf(h, app) : []
+  const targets = to && alertChannel(to) ? [to] : audience
+  const post = (ts: string[]): boolean => {
+    let sent = false
+    for (const t of ts) {
+      const where = alertChannel(t)
+      if (where) { void safeSend(where, text).catch(() => {}); sent = true }
+    }
+    return sent
   }
-  if (!sent) log(`daemon: slack alert with no specialist thread to send it to: ${text}\n`)
+  if (post(targets) || post([MAIN])) return
+  log(`daemon: slack alert with no specialist thread to send it to: ${text}\n`)
 }
 
 /** Where a binding's alerts are posted: main's channel for `main`, a session's own thread, else the specialist's thread. */
@@ -143,8 +151,6 @@ export function targetFor(to: string, conversation: string | undefined): Target 
   return s?.sessions === 'per-conversation' && conversation ? { perConversation: to, conversation } : { to }
 }
 
-/** One listener per app hydra.toml declares and has tokens for, by app id. */
-const listeners = new Map<string, SlackListener>()
 /** Where each app's bot ids are kept, so a restart still recognises a tag of an app that has not joined yet. Absent: nothing is known. */
 const identitiesPath = () => join(STATE_DIR, 'slack-apps.json')
 function savedIdentities(): Record<string, AppIdentity> {
@@ -152,14 +158,47 @@ function savedIdentities(): Record<string, AppIdentity> {
 }
 const newSharedApps = () => {
   const apps = new ConnectedApps({
-    alert: text => alert(text), log,
+    alert: (text, app) => alert(text, undefined, app), log,
     persist: ids => { try { atomicWriteFileSync(identitiesPath(), JSON.stringify(ids, null, 2) + '\n') } catch (err) { log(`daemon: slack apps: saving bot ids failed: ${err}\n`) } },
   })
   apps.seedIdentities(savedIdentities())
   return apps
 }
-/** What the listeners share: every app's bot ids, and which apps are in which channel. */
-let sharedApps = newSharedApps()
+
+/** Where the scopes already said to be missing are kept, per app, so a restart does not say them again (an episode lasts until the token is complete). */
+const toldPath = () => join(STATE_DIR, 'slack-scopes-told.json')
+const scopesTold: ToldScopes = {
+  get: app => { try { return existsSync(toldPath()) ? (JSON.parse(readFileSync(toldPath(), 'utf8')) as Record<string, string>)[app] : undefined } catch { return undefined } },
+  set: (app, key) => {
+    try {
+      const all: Record<string, string> = existsSync(toldPath()) ? JSON.parse(readFileSync(toldPath(), 'utf8')) : {}
+      if (key === null) delete all[app]; else all[app] = key
+      atomicWriteFileSync(toldPath(), JSON.stringify(all, null, 2) + '\n')
+    } catch (err) { log(`daemon: slack scopes: saving what was said failed: ${err}\n`) }
+  },
+}
+
+/** The daemon's Slack connections: one listener per declared app, what they share, and each app's record. */
+const connections = new SlackConnections({
+  hydra: hydraConfig,
+  tokens: app => slackTokens(app),
+  newShared: newSharedApps,
+  makeListener: (app, shared) => new SlackListener({
+    app: app.id,
+    apps: shared,
+    watcher: getSlackWatcher(),
+    hydra: hydraConfig,
+    told: scopesTold,
+    tokens: slackTokens,
+    createApp: boltApp,
+    log,
+    alert: text => alert(text, undefined, app.id),
+  }),
+  alert: (text, app) => alert(text, undefined, app),
+  log,
+  onConfigLoad: fn => { onHydraConfigLoad(fn) },
+  oldWatchFileLeft: () => existsSync(join(STATE_DIR, 'slack-watch.json')),
+})
 
 /**
  * One app's tokens, each read from the variable the app names for it. A token is read only from a variable the daemon
@@ -181,78 +220,15 @@ export function slackTokens(app: SlackApp, env: Readonly<Record<string, string>>
   return { bot: read('bot_token_env', app.botTokenEnv), app: read('app_token_env', app.appTokenEnv), ...(user && { user }) }
 }
 
-/** Why an app can't connect for want of tokens, naming the key to fix; undefined when it has both. */
-function missingTokens(app: SlackApp, t: { app?: string; bot?: string }): string | undefined {
-  if (!t.bot) return `${appKey(app.id, 'bot_token_env')} names ${app.botTokenEnv}, which has no value in the daemon's environment`
-  if (!app.appTokenEnv) return `${appKey(app.id, 'app_token_env')} is not set, and Socket Mode needs it`
-  if (!t.app) return `${appKey(app.id, 'app_token_env')} names ${app.appTokenEnv}, which has no value in the daemon's environment`
-  return undefined
-}
-
-let watchingConfig = false
-/** What each skipped app was last told, so a config reload does not say it again. */
-const skipped = new Map<string, string>()
-let reconciling: Promise<void> = Promise.resolve()
-
 /**
  * Connects to Slack, one connection per app hydra.toml declares, and begins feeding the watcher. Called once boot recovery
  * has finished, so a specialist refill never races it. The tokens come from the scrubbed environment: only this module ever
  * sees them, never a session. An app with no tokens is skipped, and said so by name; the others connect. It runs again on every
  * hydra.toml load: an app added there connects, one taken out disconnects, with no restart.
  */
-export function startSlackListener(): Promise<void> {
-  if (!watchingConfig) { watchingConfig = true; onHydraConfigLoad(() => { void startSlackListener().catch(err => log(`daemon: slack listeners: ${err instanceof Error ? err.stack ?? err.message : err}\n`)) }) }
-  // One pass at a time: two overlapping would both start the app they find missing.
-  const run = reconciling.then(connectApps)
-  reconciling = run.catch(() => {})
-  return run
-}
+export function startSlackListener(): Promise<void> { return connections.start() }
 
-async function connectApps(): Promise<void> {
-  const h = hydraConfig()
-  for (const [id, l] of listeners) if (!Object.hasOwn(h.slackApps, id)) { l.stop(); listeners.delete(id); skipped.delete(id) }
-  for (const id of [...skipped.keys()]) if (!Object.hasOwn(h.slackApps, id)) skipped.delete(id)
-  // The old config is no longer read: left behind unmigrated, Slack would go quiet without a word.
-  if (!slackConfigured(h) && existsSync(join(STATE_DIR, 'slack-watch.json'))) {
-    alert('⚠️ <state>/slack-watch.json is no longer read, and hydra.toml declares no Slack app, so Slack is not connected. Run `hydra migrate` to carry its routes into hydra.toml; Slack connects as soon as hydra.toml loads it.')
-  }
-  const starting: Promise<void>[] = []
-  const fresh = Object.values(h.slackApps).filter(a => !listeners.has(a.id) && !missingTokens(a, slackTokens(a))).map(a => a.id)
-  sharedApps.expectJoin(fresh)   // who is in a channel is not settled until each has joined, failed to, or taken too long
-  for (const app of Object.values(h.slackApps)) {
-    if (listeners.has(app.id)) continue
-    const why = missingTokens(app, slackTokens(app))
-    if (why) {
-      log(`daemon: slack listener for the app named ${app.id} off (${why})\n`)
-      if (skipped.get(app.id) !== why) { skipped.set(app.id, why); alert(`⚠️ ${notConnected(app.id, Object.keys(h.slackApps).length)}: ${why}. Put the token in that variable (in \`.env\`) and restart the daemon.`) }
-      continue
-    }
-    skipped.delete(app.id)
-    const l = new SlackListener({
-      app: app.id,
-      apps: sharedApps,
-      watcher: getSlackWatcher(),
-      hydra: hydraConfig,
-      tokens: slackTokens,
-      createApp: boltApp,
-      log,
-      alert: text => alert(text),
-    })
-    listeners.set(app.id, l)
-    // Connected side by side: one app's slow or refused connection does not hold another's.
-    const drop = () => { sharedApps.failedToJoin(app.id); if (listeners.get(app.id) === l) listeners.delete(app.id) }
-    starting.push(l.start().then(ok => { if (!ok) drop() }).catch(err => { log(`daemon: slack listener${appSuffix(app.id, Object.keys(h.slackApps).length)} failed to start: ${err instanceof Error ? err.stack ?? err.message : err}\n`); drop() }))
-  }
-  await Promise.all(starting)
-}
-
-export function stopSlackListener(): void {
-  for (const l of listeners.values()) l.stop()
-  listeners.clear()
-  skipped.clear()
-  reconciling = Promise.resolve()
-  sharedApps = newSharedApps()
-}
+export function stopSlackListener(): void { connections.stop() }
 
 let lastSpecialists: string[] = []
 let lastConnected: boolean | undefined
@@ -304,7 +280,7 @@ export function startSlackWatch(): void {
   const offDeath = on('session:death', freed, 'slack-watch: wake conversations waiting at max')
   const offDead = on('session:marked-dead', freed, 'slack-watch: wake conversations waiting at max (found dead)')
   // After a sleep the socket is likely dead and Slack replays nothing: replace it and catch up now, not when a timer notices.
-  const offResumed = on('clock:resumed', () => { for (const l of listeners.values()) l.onResume() }, 'slack listener: replace the socket and catch up after a resume')
+  const offResumed = on('clock:resumed', () => { for (const l of connections.listeners().values()) l.onResume() }, 'slack listener: replace the socket and catch up after a resume')
   unsubscribe = () => { offConfig(); offRelease(); offReleaseDead(); offDeath(); offDead(); offResumed() }
 }
 
@@ -565,20 +541,31 @@ export function formatConversationsFor(caller: Partial<Pick<SessionInfo, 'thread
   return me ? formatConversations(now, e => !!e.specialist && currentId(h, e.specialist) === me) : []
 }
 
-/** For `hydra health` and `hydra conversations`: null when Slack isn't configured. Refusals and drops count since the daemon started. */
-export function slackWatchHealth(now = Date.now()): ({ places: { place: string; to: string; note?: string }[]; conversations: number; readAsOperator: number; owed: number; oldestOwedAgeMin: number | null; listener?: ListenerHealth; apps?: Record<string, ListenerHealth> } & SlackWatchStats) | null {
+/**
+ * For `hydra health` and `hydra conversations`: null when Slack isn't configured. Refusals and drops count since the daemon started.
+ * `apps` is every declared app's health by id (its listener's, `off` when it has none, with its tokens and connection);
+ * `listener` is the same fact for the app `default` (else the first connected), kept as an alias.
+ */
+export function slackWatchHealth(now = Date.now()): ({ places: { place: string; to: string; note?: string }[]; conversations: number; readAsOperator: number; owed: number; oldestOwedAgeMin: number | null; listener?: AppHealth; apps: Record<string, AppHealth> } & SlackWatchStats) | null {
   const h = hydraConfig()
   if (!slackConfigured(h)) return null
   const entries = getSlackWatcher().list()
   const owed = entries.flatMap(e => e.owed ?? [])
   const oldest = owed.sort(cmpTs)[0]
-  // A name no connected app can resolve: each app reads its own workspace's channel names.
-  const views = [...listeners.keys()].map(a => offlineView(a))
-  const unresolved = new Set((views.length ? views : [offlineView()]).map(v => unresolvedPlaces(v)).reduce((a, b) => a.filter(p => b.includes(p))))
+  // A name no connected app that reaches the place can resolve: each app reads its own workspace's channel names.
+  const views = [...connections.listeners().keys()].map(a => offlineView(a))
+  const unresolved = (place: string): boolean => {
+    if (!views.length) return unresolvedPlaces(offlineView()).includes(place)
+    const reaching = views.filter(v => namedChannels(v.hydra, v.app).includes(place))
+    return reaching.length > 0 && reaching.every(v => unresolvedPlaces(v).includes(place))
+  }
   const places = Object.values(h.specialists).flatMap(s => s.listens.filter(p => p.startsWith('slack:')).map(place => ({
     place, to: s.id,
-    ...(unresolved.has(place) && { note: 'no channel answers to this name (not joined, renamed, or names unreadable without channels:read)' }),
+    ...(unresolved(place) && { note: 'no channel answers to this name (not joined, renamed, or names unreadable without channels:read)' }),
   })))
+  const apps = connections.health()
+  const live = connections.listeners()
+  const alias = live.has(DEFAULT_SLACK_APP) ? DEFAULT_SLACK_APP : [...live.keys()][0]
   return {
     places,
     conversations: entries.length,
@@ -586,9 +573,8 @@ export function slackWatchHealth(now = Date.now()): ({ places: { place: string; 
     owed: owed.length,
     oldestOwedAgeMin: oldest ? Math.max(0, Math.round((now / 1000 - parseFloat(oldest)) / 60)) : null,
     ...getSlackWatcher().stats(),
-    // `apps` has every connected app's health by id; `listener` is the same fact for the app `default` (else the first connected), kept as an alias.
-    ...(listeners.size && { listener: (listeners.get(DEFAULT_SLACK_APP) ?? [...listeners.values()][0]).health() }),
-    ...(listeners.size && { apps: Object.fromEntries([...listeners].map(([id, l]) => [id, l.health()])) }),
+    ...(alias && { listener: apps[alias] }),
+    apps,
   }
 }
 

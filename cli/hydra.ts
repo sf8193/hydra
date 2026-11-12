@@ -118,7 +118,7 @@ Routing (hydra.toml):
                                        What a new message there would do: every candidate, and why the winner won.
                                        --app is the app this check runs for, the one that heard the message (default: the app
                                        named "default"). --heard-by adds the other apps in the channel. --mentioned lists the
-                                       apps the text tags, first tag first. --bound-app is the app that opened the bound conversation.
+                                       apps the text tags, first tag first. --bound-app is the app the bound conversation is bound through.
   hydra conversations [list]           Conversations (one per app, channel and thread), the specialist each is bound to, and health
   hydra conversations bind <conversation> <specialist>
                                        Bind or move a conversation, named as list prints it

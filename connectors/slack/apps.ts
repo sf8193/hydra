@@ -5,6 +5,8 @@
 // connection decides for itself, from the same facts, and the first connection to decide a message fixes its owner for the
 // others (`decideOwner`), so "exactly one" holds by construction, not by the facts staying still between two copies.
 
+import { appKey } from './app.js'
+
 export type AppIdentity = { botUserId: string; botId?: string }
 
 /** How long a read that says an app's bot is in a channel is believed, unless a join or a leave says otherwise. */
@@ -36,7 +38,8 @@ type Fact = {
 
 export type ConnectedAppsDeps = {
   now?: () => number
-  alert?: (text: string) => void
+  /** `app`: the app the trouble is about, so only the specialists it serves hear it. */
+  alert?: (text: string, app?: string) => void
   log?: (line: string) => void
   /** Called when an app's bot ids become known or change: written to the state dir so a restart still recognises a tag of an app that has not joined yet. */
   persist?: (ids: Record<string, AppIdentity>) => void
@@ -49,6 +52,8 @@ export class ConnectedApps {
   private readonly facts = new Map<string, Fact>()   // `<app>\0<channel>`
   private readonly flights = new Map<string, Promise<void>>()
   private readonly said = new Set<string>()
+  /** Why the app's last membership read failed (cleared by the next that works): what health shows as its `probeError`. */
+  private readonly probeErrors = new Map<string, string>()
   private readonly owners = new Map<string, { app: string; at: number }>()   // `<channel>\0<ts>`
   /** Apps that have reported a channel join or leave: they are subscribed to those events. */
   private readonly reporting = new Set<string>()
@@ -75,6 +80,9 @@ export class ConnectedApps {
 
   /** An app's first connection failed. It may still join later; until then it is in no channel. */
   failedToJoin(app: string): void { this.joining.delete(app); this.settleJoined() }
+
+  /** Why the app's last read of whether it is in a channel failed; undefined when it has not, or the last read worked. */
+  probeError(app: string): string | undefined { return this.probeErrors.get(app) }
 
   /** Whether some app is started and has not yet joined or failed to. */
   isJoining(): boolean { return this.joining.size > 0 }
@@ -104,6 +112,7 @@ export class ConnectedApps {
     this.ids.delete(app)
     this.probes.delete(app)
     this.reporting.delete(app)
+    this.probeErrors.delete(app)
     this.forget(app)
     this.settleJoined()
   }
@@ -181,10 +190,12 @@ export class ConnectedApps {
         const member = await probe(channel)
         const was = f?.good
         this.facts.set(key, { good: { member, at: this.now() }, probedAt: this.now() })
+        this.probeErrors.delete(app)
         // Invited, and nothing said so: the app is not reporting joins, so its cached "not in" went stale unseen.
         if (tagged && member && was && !was.member && !this.reporting.has(app)) this.noReports(app)
       } catch (err) {
         const why = err instanceof Error ? err.message : String(err)
+        this.probeErrors.set(app, why)
         // An error is not an answer: the last good one stands, and Slack is asked again later.
         this.facts.set(key, { ...(f?.good && { good: f.good }), retryAt: this.now() + PROBE_RETRY_MS, probedAt: this.now() })
         if (!f?.good) this.cantRead(app, why)
@@ -235,12 +246,12 @@ export class ConnectedApps {
     this.deps.log?.(`daemon: slack apps: can't tell whether the app named ${app} is in a channel: ${why}\n`)
     if (this.said.has(`read:${app}`)) return
     this.said.add(`read:${app}`)
-    this.deps.alert?.(`⚠️ Hydra can't tell which channels the app named \`${app}\` is in (${why}), so in a channel that several apps are in, each may answer. Add the scope channels:read (public channels) and groups:read (private ones) to the app, reinstall it, put the new bot token in the variable its \`bot_token_env\` names, and restart the daemon.`)
+    this.deps.alert?.(`⚠️ Hydra can't tell which channels the app named \`${app}\` is in (${why}), so in a channel that several apps are in, each may answer. Add the scopes channels:read (public channels) and groups:read (private ones) to that app (\`hydra slack manifest ${app}\` lists them), reinstall it, put the new bot token in the variable the ${appKey(app, 'bot_token_env')} names (in \`.env\`), and restart the daemon.`, app)
   }
 
   private noReports(app: string): void {
     if (this.said.has(`events:${app}`)) return
     this.said.add(`events:${app}`)
-    this.deps.alert?.(`⚠️ The app named \`${app}\` was invited to a channel and Hydra was not told: it does not send member_joined_channel and member_left_channel. Add both under Event Subscriptions of every app (\`hydra slack manifest <app>\` lists them once several apps are declared), and reinstall each. Until then a join is noticed only when a tag asks, or within ${MEMBER_TTL_MS / 60_000} minutes.`)
+    this.deps.alert?.(`⚠️ The app named \`${app}\` was invited to a channel and Hydra was not told: it does not send member_joined_channel and member_left_channel. Add both under Event Subscriptions of that app (\`hydra slack manifest ${app}\` lists them) and of every other app that was created while only one app was declared, and reinstall each (docs/slack.md, Adding an app). Until then a join is noticed only when a tag asks, or within ${MEMBER_TTL_MS / 60_000} minutes.`, app)
   }
 }

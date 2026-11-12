@@ -4,8 +4,9 @@ import { SocketSupervisor, START_TIMEOUT_MS, type SocketEmitter } from '../../sh
 import { catchUp, toEvent, type CatchUpResult, type Page, type RawMessage, type SlackApi } from './catchup.js'
 import { mkdirSync, openSync, writeSync, closeSync, renameSync, rmSync } from 'fs'
 import { dirname } from 'path'
-import { routedChannels, hearsDms, unresolvedPlaces, isDm, mentionedApps, NOT_A_MEMBER, OPERATOR_TOKEN_REFUSED, NO_DIRECTORY, SLACK_LIMITS, type AppWatch, type SlackDirectory, type SlackWatchConfig, type SlackWatcher } from './watch.js'
+import { routedChannels, hearsDms, dmsDeclared, namedChannels, unresolvedPlaces, isDm, mentionedApps, NOT_A_MEMBER, OPERATOR_TOKEN_REFUSED, NO_DIRECTORY, SLACK_LIMITS, type AppWatch, type SlackDirectory, type SlackWatchConfig, type SlackWatcher } from './watch.js'
 import { DEFAULT_SLACK_APP, type HydraConfig, type SlackApp } from '../../config/types.js'
+import { reachableBy } from '../../routing/route.js'
 import { SLACK_APP_NEEDS, NO_SLACK_APP, appKey, appSuffix, type ScopeNeed } from './app.js'
 import { ConnectedApps } from './apps.js'
 import { timed } from '../../shared/loop-watch.js'
@@ -35,7 +36,7 @@ import { SLACK_CLIENT_PING_TIMEOUT_MS } from '../../shared/constants.js'
 export const permanentSlackErrors = (app: string): [RegExp, string][] => [
   [/missing_scope/, 'the bot token lacks a scope. Add the scope named above (channels:history for public channels, groups:history for private ones), reinstall the app, put the new bot token in the variable the ' + appKey(app, 'bot_token_env') + ' names (in `.env`), and restart the daemon.'],
   [/invalid_auth|not_authed|token_revoked|token_expired|account_inactive/, 'Slack does not accept the bot token. Put a valid bot token in the variable the ' + appKey(app, 'bot_token_env') + ' names (in `.env`), and restart the daemon.'],
-  [/not_in_channel|channel_not_found/, 'the bot cannot see a channel hydra.toml names. Invite it to the channel, or correct the place.'],
+  [/not_in_channel|channel_not_found/, 'the bot cannot see a channel hydra.toml names. Invite the bot to the channel named above, or correct the place in hydra.toml.'],
 ]
 export const PERMANENT_SLACK_ERRORS = permanentSlackErrors(DEFAULT_SLACK_APP)
 
@@ -106,23 +107,46 @@ export type SlackAppLike = {
   api: SlackApi
 }
 
-/** The scopes each enabled option needs (from `SLACK_APP_NEEDS`), so a missing one is a read at startup rather than a guess later. */
-export function scopesNeeded(h: HydraConfig): ScopeNeed[] {
+/**
+ * The scopes the options of one app need (from `SLACK_APP_NEEDS`), so a missing one is a read at startup rather than a guess later.
+ * Each app is asked only for what it does (`reachableBy`): channel history when it reads a named channel, serves a rule for any
+ * place, or serves a specialist that has no `listens` (it answers only threads bound to it); DMs when something it serves names
+ * `slack:dm`, or the operator has a Slack address; files when a place it reaches has them; the private-channel read only when one of
+ * its places is private. One app's missing scope is never another's.
+ */
+export function scopesNeeded(h: HydraConfig, app: string = DEFAULT_SLACK_APP): ScopeNeed[] {
   const several = Object.keys(h.slackApps).length > 1
-  const places = [...Object.values(h.specialists).flatMap(s => s.listens), ...h.rules.map(r => r.at)].filter((p): p is string => !!p && p.startsWith('slack:'))
-  const slackOpts = Object.entries(h.places).filter(([p]) => p.startsWith('slack:')).map(([, o]) => o)
+  const r = reachableBy(h, app)
+  const places = namedChannels(h, app)
+  const dms = hearsDms({ hydra: h, app })
+  const everyPlace = r.rules.some(x => x.at === undefined)
+  const channels = places.length > 0 || everyPlace || r.specialists.some(sp => sp.listens.length === 0)
+  const slackOpts = Object.entries(h.places).filter(([p]) => p.startsWith('slack:') && (everyPlace || places.includes(p) || (p === 'slack:dm' && dms))).map(([, o]) => o)
   const s = SLACK_APP_NEEDS.botScopes
   return [
-    ...(places.some(p => p !== 'slack:dm') ? [s.channels] : []),
+    ...(channels ? [s.channels] : []),
     ...(places.some(p => p.startsWith('slack:#')) ? [s.channelNames] : []),
     s.senderNames,
-    ...(hearsDms({ hydra: h }) ? [s.dms, s.dmCatchUp] : []),
+    ...(dms ? [s.dms, s.dmCatchUp] : []),
     ...(slackOpts.some(o => o.files) ? [s.files] : []),
     s.reactions,
     s.replies,
-    ...(several ? [SLACK_APP_NEEDS.membership.public, ...(places.some(p => /^slack:G/.test(p)) ? [SLACK_APP_NEEDS.membership.private] : [])] : []),
+    ...(several && channels ? [SLACK_APP_NEEDS.membership.public, ...(places.some(p => /^slack:G/.test(p)) ? [SLACK_APP_NEEDS.membership.private] : [])] : []),
   ]
 }
+
+/**
+ * The options of `scopesNeeded` that only the operator's own Slack address asks for (their DMs to `main`), because nothing
+ * declares `slack:dm`. A token without them still runs everything that was declared, so they are shown in health, never alerted:
+ * a hydra.toml that ran before must not start paging for an option nobody asked for.
+ */
+export function implicitScopeOptions(h: HydraConfig, app: string = DEFAULT_SLACK_APP): string[] {
+  const view = { hydra: h, app }
+  return hearsDms(view) && !dmsDeclared(view) ? [SLACK_APP_NEEDS.botScopes.dms.option, SLACK_APP_NEEDS.botScopes.dmCatchUp.option] : []
+}
+
+/** What a listener remembers across daemon restarts about what it has told the operator: per app, the scopes it said were missing. */
+export type ToldScopes = { get(app: string): string | undefined; set(app: string, key: string | null): void }
 
 /** Channel names by id and back, from conversations.list. Replaced whole on each refresh; a rename updates one. */
 class Directory implements SlackDirectory {
@@ -153,6 +177,8 @@ export type ListenerHealth = {
   lastActivityAgeMin: number | null
   catchUp: { ageMin: number; ok: boolean; accepted: number; reason?: string } | null
   lastOkCatchUpAgeMin: number | null
+  /** The scopes this app's bot token lacks for what hydra.toml has it do, by option; empty when it has them all. Null when Slack did not say what the token holds (or it has not connected yet). */
+  missingScopes: { option: string; any: string[] }[] | null
 }
 
 export type ListenerDeps = {
@@ -163,6 +189,8 @@ export type ListenerDeps = {
   apps?: ConnectedApps
   /** hydra.toml as loaded now. */
   hydra: () => HydraConfig
+  /** The scopes already said to be missing, kept across restarts so a boot does not say them again. Absent: remembered for this listener's life only. */
+  told?: ToldScopes
   /** The tokens of one app, read from the variables it names. */
   tokens: (app: SlackApp) => { app?: string; bot?: string; user?: string }
   createApp: (tokens: { app: string; bot: string; user?: string }) => SlackAppLike
@@ -204,6 +232,8 @@ export class SlackListener {
   private firstAttempts = 0
   private timers: ReturnType<typeof setInterval>[] = []
   private alerted: { down: boolean; catchUp: boolean; permanent: string | null } = { down: false, catchUp: false, permanent: null }
+  private readonly told: ToldScopes
+  private missingScopes: { option: string; any: string[] }[] | null = null
   private lastMissedLiveAlertAt = 0
   private identity: { botUserId: string; botId?: string; workspaceUrl?: string } | null = null
   private readonly directory = new Directory()
@@ -221,6 +251,8 @@ export class SlackListener {
     this.id = d.app ?? DEFAULT_SLACK_APP
     this.apps = d.apps ?? new ConnectedApps({ now: this.now, log: d.log, alert: t => d.alert(t) })
     this.w = d.watcher.forApp(this.id)
+    const mine = new Map<string, string>()
+    this.told = d.told ?? { get: app => mine.get(app), set: (app, key) => { if (key === null) mine.delete(app); else mine.set(app, key) } }
   }
 
   /** This app as hydra.toml declares it. */
@@ -228,6 +260,9 @@ export class SlackListener {
 
   /** ` for the app named `x``: said in alerts only when there is more than one app to tell apart. */
   private appSuffix(): string { return appSuffix(this.id, Object.keys(this.d.hydra().slackApps).length) }
+
+  /** The command that prints this app's manifest: a lone `default` needs no name. */
+  private manifestCommand(): string { return this.id === DEFAULT_SLACK_APP && Object.keys(this.d.hydra().slackApps).length <= 1 ? 'hydra slack manifest' : `hydra slack manifest ${this.id}` }
 
   /** What the watcher routes with: hydra.toml joined with what this connection learned. Null until connected once. */
   view(): SlackWatchConfig | null {
@@ -258,11 +293,15 @@ export class SlackListener {
     try {
       this.directory.replace(await app.channels())
       this.directoryRead = true
+      this.namesWarned = false   // read again: a later failure is a new episode
     } catch (err) {
       if (this.namesWarned) return
       this.namesWarned = true
-      const needed = unresolvedPlaces({ hydra: this.d.hydra(), directory: this.directoryRead ? this.directory : NO_DIRECTORY })
-      this.d.log(`daemon: slack listener: WARN channel names can't be read (${err instanceof Error ? err.message : err}): add channels:read and groups:read and reinstall the app, or name channels by id (slack:C…)${needed.length ? `; ${needed.join(', ')} ${needed.length === 1 ? 'hears' : 'hear'} nothing until then` : ''}\n`)
+      const needed = unresolvedPlaces({ hydra: this.d.hydra(), directory: this.directoryRead ? this.directory : NO_DIRECTORY, app: this.id })
+      const why = err instanceof Error ? err.message : String(err)
+      this.d.log(`daemon: slack listener: WARN channel names can't be read (${why}): add channels:read and groups:read and reinstall the app, or name channels by id (slack:C…)${needed.length ? `; ${needed.join(', ')} ${needed.length === 1 ? 'hears' : 'hear'} nothing until then` : ''}\n`)
+      // Said to the specialists this app serves only when a `#name` it needs is unresolved: otherwise the ids work without names.
+      if (needed.length) this.d.alert(`⚠️ Hydra can't read channel names${this.appSuffix()} (${why}), so ${needed.join(', ')} ${needed.length === 1 ? 'hears' : 'hear'} nothing. Add channels:read and groups:read to the app (\`${this.manifestCommand()}\` prints them), reinstall it, put the new bot token in the variable the ${appKey(this.id, 'bot_token_env')} names (in \`.env\`), and restart the daemon; or name the channels by id (slack:C…).`)
     }
   }
 
@@ -391,16 +430,16 @@ export class SlackListener {
     this.w.beginCatchUp([...routedChannels(view), ...(hearsDms(view) ? this.w.dmChannels() : [])])
     await app.start()
     await stale(app)
-    const needed = scopesNeeded(h)
+    const needed = scopesNeeded(h, this.id)
     this.d.log(`daemon: slack listener: enabled options need: ${needed.map(n => `${n.option} → ${n.any.join(' or ')}`).join('; ')}\n`)
     if (auth.scopes) {
       // Scopes are not secret; the token is. Logging them turns "missing_scope" from a guess into a read.
       this.d.log(`daemon: slack listener: bot token scopes: ${auth.scopes.join(', ') || '(none)'}\n`)
-      for (const n of needed) {
-        if (!n.any.some(sc => auth.scopes!.includes(sc))) {
-          this.d.log(`daemon: slack listener: WARN ${n.option} needs ${n.any.join(' or ')}, which the bot token lacks; add it and reinstall the app\n`)
-        }
-      }
+      const missing = needed.filter(n => !n.any.some(sc => auth.scopes!.includes(sc)))
+      for (const n of missing) this.d.log(`daemon: slack listener: WARN ${n.option} needs ${n.any.join(' or ')}, which the bot token lacks; add it and reinstall the app\n`)
+      this.missingScopes = missing.map(n => ({ option: n.option, any: [...n.any] }))
+      const implicit = implicitScopeOptions(h, this.id)
+      this.alertMissingScopes(missing.filter(n => !implicit.includes(n.option)))
     }
     this.w.setNameResolver(id => app.userName(id))
     this.w.setSlackActions({ react: (c, ts, name) => app.react(c, ts, name), download: (url, dest, max) => app.download(url, dest, max) })
@@ -526,7 +565,7 @@ export class SlackListener {
       // now, at the end, so a gap that lands while this pass runs counts.
       if (why === 'periodic' && this.streamHeldSince(windowStart) && result.accepted > 0 && this.now() - this.lastMissedLiveAlertAt > MISSED_LIVE_ALERT_EVERY_MS) {
         this.lastMissedLiveAlertAt = this.now()
-        this.d.alert(`⚠️ The Slack catch-up pass${this.appSuffix()} found ${result.accepted} message(s) the live stream never delivered, though the connection stayed up since the previous complete pass began. Is another process connected to this Slack app (another Bolt server, for instance)? Slack splits events across connections; nothing is lost, but it arrives up to ${CATCH_UP_INTERVAL_MS / 60_000} minutes late.`)
+        this.d.alert(`⚠️ The Slack catch-up pass${this.appSuffix()} found ${result.accepted} message(s) the live stream never delivered, though the connection stayed up since the previous complete pass began. Another process is probably connected to this Slack app (another Bolt server, for instance): stop it, since Slack splits events across connections. Nothing is lost, but it arrives up to ${CATCH_UP_INTERVAL_MS / 60_000} minutes late.`)
       }
     } catch (err) {
       this.d.log(`daemon: slack catch-up crashed: ${err instanceof Error ? err.stack ?? err.message : err}\n`)
@@ -539,6 +578,18 @@ export class SlackListener {
     }
     if (this.rerun !== null) { const again = this.rerun; this.rerun = null; void this.runCatchUp(again, 'queued') }
     return result
+  }
+
+  /**
+   * What this app's token lacks of what hydra.toml declared, said once per episode, in this app's name alone. An episode runs from
+   * the first time a set of scopes is missing until the token is complete again: a restart or a reconnect inside it says nothing.
+   */
+  private alertMissingScopes(missing: ScopeNeed[]): void {
+    const key = missing.length ? missing.map(n => n.option).sort().join('|') : null
+    if (key === (this.told.get(this.id) ?? null)) return
+    this.told.set(this.id, key)
+    if (!missing.length) return
+    this.d.alert(`⚠️ The Slack bot token${this.appSuffix()} lacks ${missing.map(n => `${n.any.join(' or ')} (${n.option})`).join('; ')}. Add ${missing.length === 1 ? 'it' : 'them'} to the app (\`${this.manifestCommand()}\` prints the full list), reinstall it, put the new bot token in the variable the ${appKey(this.id, 'bot_token_env')} names (in \`.env\`), and restart the daemon.`)
   }
 
   /** A refusal that retrying cannot fix is said once, at once, in the specialist's thread, with what to do. */
@@ -563,6 +614,7 @@ export class SlackListener {
       lastActivityAgeMin: s ? min(now - s.lastActivityAt) : null,
       catchUp: this.lastCatchUp ? { ageMin: min(now - this.lastCatchUp.at), ok: this.lastCatchUp.result.complete, accepted: this.lastCatchUp.result.accepted, ...(this.lastCatchUp.result.reason && { reason: this.lastCatchUp.result.reason }) } : null,
       lastOkCatchUpAgeMin: this.lastOkCatchUpAt === null ? null : min(now - this.lastOkCatchUpAt),
+      missingScopes: this.missingScopes,
     }
   }
 
@@ -573,7 +625,7 @@ export class SlackListener {
     const now = this.now()
     if (h.state !== 'up' && h.downMin !== null && h.downMin * 60_000 >= DOWN_ALERT_AFTER_MS && !this.alerted.down) {
       this.alerted.down = true
-      this.d.alert(`⚠️ The Slack listener${this.appSuffix()} has been ${h.state} for ${h.downMin} min awake. Mentions are not arriving live; the catch-up pass replays them once it reconnects.`)
+      this.d.alert(`⚠️ The Slack listener${this.appSuffix()} has been ${h.state} for ${h.downMin} min awake. Mentions are not arriving live; the catch-up pass replays them once it reconnects. Check the tokens and the app's Socket Mode setting at api.slack.com/apps; \`hydra health\` shows its state.`)
     } else if (h.state === 'up' && this.alerted.down) {
       this.alerted.down = false
       this.d.alert(`✅ The Slack listener${this.appSuffix()} is connected again.`)
@@ -585,7 +637,7 @@ export class SlackListener {
       this.alerted.catchUp = true
       const away = this.resumes.suspendedSince(since, now)
       const notes = [...(away ? [`${describeCause(away.cause)} for ${Math.round(away.ms / 60_000)} min`] : []), ...(h.catchUp?.reason ? [h.catchUp.reason] : [])]
-      this.d.alert(`⚠️ The Slack catch-up pass${this.appSuffix()} has not completed for ${Math.round(overdue / 60_000)} min${away ? ' awake' : ''}${notes.length ? ` (${notes.join('; ')})` : ''}. Live delivery is unaffected, but a gap would not be filled.`)
+      this.d.alert(`⚠️ The Slack catch-up pass${this.appSuffix()} has not completed for ${Math.round(overdue / 60_000)} min${away ? ' awake' : ''}${notes.length ? ` (${notes.join('; ')})` : ''}. Live delivery is unaffected, but a gap would not be filled. \`hydra health\` shows the last pass and why it failed.`)
     }
   }
 }

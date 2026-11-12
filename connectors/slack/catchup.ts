@@ -210,7 +210,11 @@ export async function catchUp(watcher: CatchUpWatch, api: SlackApi, cfg: SlackWa
       let page: string | undefined
       for (let i = 0; i < maxPages; i++) {
         spend()
-        const res = await api.history({ channel, oldest: cursor, ...(page && { cursor: page }) })
+        // A refusal that names no channel is given one: the operator must know which to invite the bot to.
+        const res = await api.history({ channel, oldest: cursor, ...(page && { cursor: page }) }).catch((err: unknown) => {
+          const why = err instanceof Error ? err.message : String(err)
+          throw /not_in_channel|channel_not_found/.test(why) ? new Error(`${why} (reading ${channel})`) : err
+        })
         for (const m of res.messages) if (m.ts) { note(channel, m.ts); readTs.push(m.ts) }
         // A DM read in full and found empty moves its cursor to now, even if this pass is cut short later: there is
         // nothing in it to replay. Without that, a new one would be read back a day on every pass, and a quiet known
