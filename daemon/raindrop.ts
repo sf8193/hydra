@@ -3,7 +3,8 @@ import { occupancy, occupied } from './session-reachability.js'
 import { tmuxSync } from './tmux.js'
 import { join, basename, resolve, sep } from 'path'
 import { homedir } from 'os'
-import { STATE_DIR, PLATFORM, RAINDROP_ENV, RAINDROP_DRYRUN_FILE } from './config.js'
+import { STATE_DIR, PLATFORM, RAINDROP_DRYRUN_FILE } from './config.js'
+import { capturedSpawnVars } from '../shared/spawn-env.js'
 import { loadAccess, operatorIds } from './access.js'
 import { registry } from './sessions.js'
 import { on } from './event-bus.js'
@@ -449,7 +450,7 @@ const defaultDeps: RaindropDeps = {
   projectFor: defaultProjectFor,
   usageFor: defaultUsageFor,
   protocolPhaseFor: defaultProtocolPhaseFor,
-  env: () => RAINDROP_ENV,
+  env: capturedSpawnVars,
   now: () => Date.now(),
 }
 

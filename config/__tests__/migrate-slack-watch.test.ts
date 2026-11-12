@@ -7,6 +7,7 @@ import { planMigrate, applyMigrate } from '../migrate.js'
 import { loadHydraConfig } from '../load.js'
 import { route } from '../../routing/route.js'
 import type { HydraConfig } from '../types.js'
+import { SLACK_APP_DEFAULTS } from '../../connectors/slack/app.js'
 
 /** What `hydra migrate` would write: the step's tables, plus an operator and the workdirs specialists.json supplies. */
 function toToml(m: SlackWatchMigration): string {
@@ -53,7 +54,7 @@ describe('slack-watch.json → hydra.toml', () => {
     expect(h.specialists.ops).toMatchObject({ listens: ['slack:C0OPS', 'slack:C0OPS2'], allow: ['people'] })
     expect(h.specialists.assistant).toMatchObject({ listens: ['slack:dm'], allow: ['owner', 'assistant-allowed'] })
     expect(h.places['slack:C0FINANCE']).toMatchObject({ files: true, ack: 'eyes' })
-    expect(h.connectors.slack).toEqual({ botTokenEnv: 'SLOPBOT_SLACK_BOT_TOKEN', appTokenEnv: 'SLOPBOT_SLACK_APP_TOKEN' })
+    expect(h.slackApps.default).toEqual({ id: 'default', botTokenEnv: 'SLOPBOT_SLACK_BOT_TOKEN', appTokenEnv: 'SLOPBOT_SLACK_APP_TOKEN', displayName: 'hydra', description: SLACK_APP_DEFAULTS.description })
     expect(h.guard).toMatchObject({ command: '~/bin/guard.sh', timeoutMs: 2000, includeText: true })
     // the same decisions the old routes made
     expect(fate(h, 'U0OLIVE00', 'slack:C0FINANCE')).toBe('deliver:books')
@@ -101,7 +102,7 @@ test('hydra migrate runs it with the other steps: one hydra.toml that loads and 
     const plan = planMigrate({ stateDir: dir, env, spawnCwd: '/w', platform: 'slack' })
     if (!plan.ok) throw new Error(plan.errors.join('\n'))
     const h = load(plan.text)
-    expect(h.connectors.slack).toEqual({ botTokenEnv: 'SLOPBOT_SLACK_BOT_TOKEN', appTokenEnv: 'SLOPBOT_SLACK_APP_TOKEN' })
+    expect(h.slackApps.default).toEqual({ id: 'default', botTokenEnv: 'SLOPBOT_SLACK_BOT_TOKEN', appTokenEnv: 'SLOPBOT_SLACK_APP_TOKEN', displayName: 'hydra', description: SLACK_APP_DEFAULTS.description })
     expect(Object.values(h.people).find(p => p.ids.includes('slack:U0OPERATOR'))!.roles).toEqual(['owner']) // one person, merged by address
     expect(h.specialists.books).toMatchObject({ workdir: '/w', listens: ['slack:C0FINANCE'], allow: ['owner', 'staff'] })
     expect(fate(h, 'U0MAX0000', 'slack:C0FINANCE')).toBe('deliver:books')

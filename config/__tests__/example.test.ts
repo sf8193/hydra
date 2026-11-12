@@ -11,7 +11,8 @@ describe('hydra.example.toml', () => {
     if (!r.ok) throw new Error(formatIssues(r.errors))
     expect(formatIssues(r.warnings)).toBe('')
     // Every table the schema has is shown.
-    expect(Object.keys(r.config.connectors).sort()).toEqual(['discord', 'github', 'slack'])
+    expect(Object.keys(r.config.connectors).sort()).toEqual(['discord', 'github'])
+    expect(Object.keys(r.config.slackApps)).toEqual(['default', 'sales'])
     expect(r.config.specialists.crm.sessions).toBe('per-conversation')
     expect(r.config.schedules['disk-watch'].check).toBeDefined()
     expect(r.config.schedules['backup-watch']).toMatchObject({ runner: 'daemon', needs: ['internet'] })

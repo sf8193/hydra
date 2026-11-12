@@ -6,21 +6,24 @@ import { homedir } from 'os'
 import { isAbsolute, join, resolve } from 'path'
 import { parseCron } from '../shared/cron-local.js'
 import { parseIdleTtl } from '../shared/constants.js'
+import { ENV_NAME_RE, tokenVarRefusal } from '../shared/spawn-env.js'
+import { SLACK_APP_DEFAULTS } from '../connectors/slack/app.js'
 import { invalidSpecialistName } from '../shared/specialist-name.js'
 import {
-  BUILTIN_ROLES, type Address, type ConfigIssue, type Connectors, type Guard, type HydraConfig, type LoadEnv, type LoadResult,
-  type Person, type Place, type PlaceOptions, type Platform, type Rule, type Schedule, type SessionsMode, type Specialist, type Vitals,
+  BUILTIN_ROLES, DEFAULT_SLACK_APP, type Address, type ConfigIssue, type Connectors, type Guard, type HydraConfig, type LoadEnv, type LoadResult,
+  type Person, type Place, type PlaceOptions, type Platform, type Rule, type Schedule, type SessionsMode, type SlackApp, type Specialist, type Vitals,
 } from './types.js'
 
 export const VITALS_DEFAULTS: Vitals = Object.freeze({
   overloadLoadPerCore: 1.5, overloadIdlePct: 15, swapUsedPct: 85, ticks: 3, resumeSettleMs: 20 * 60_000, memoryCooldownMs: 24 * 3_600_000,
 })
 
-export const EMPTY_CONFIG: HydraConfig = Object.freeze({ connectors: {}, people: {}, specialists: {}, places: {}, schedules: {}, rules: [] }) as HydraConfig
+export const EMPTY_CONFIG: HydraConfig = Object.freeze({ connectors: {}, slackApps: {}, people: {}, specialists: {}, places: {}, schedules: {}, rules: [] }) as HydraConfig
 
 /** People, roles and schedules: lowercase letters, digits and dashes. Specialists add their own rule (shared/specialist-name.ts). */
 const ID_RE = /^[a-z0-9][a-z0-9-]*$/
-const ENV_NAME_RE = /^[A-Z_][A-Z0-9_]*$/
+/** A Slack app's id: lowercase, so it can never be taken for a channel id (`C0TEST`); at most 35, since it can become the app's display name. */
+const SLACK_APP_ID_RE = /^[a-z][a-z0-9_-]{0,34}$/
 const ADDRESS_RE: Record<Platform, RegExp> = {
   discord: /^discord:\d+$/,
   slack: /^slack:[UW][A-Z0-9]+$/,
@@ -36,7 +39,7 @@ const GUARD_TIMEOUT_MAX_MS = 30_000 // deliveries for a conversation wait on the
 const MAX_ALERT_AFTER_MS = 30 * MAX_DAY_MS
 const BUILTIN: readonly string[] = BUILTIN_ROLES
 
-const TOP_KEYS = ['operator', 'connectors', 'people', 'specialists', 'defaults', 'places', 'schedules', 'rules', 'guard', 'vitals']
+const TOP_KEYS = ['operator', 'connectors', 'slack', 'people', 'specialists', 'defaults', 'places', 'schedules', 'rules', 'guard', 'vitals']
 const SPECIALIST_KEYS = ['workdir', 'prompt', 'prompt_file', 'listens', 'allow', 'sessions', 'max', 'idle', 'home', 'model', 'engine', 'env_file', 'was']
 
 type Table = Record<string, unknown>
@@ -131,41 +134,33 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
 
   unknownKeys(doc, TOP_KEYS, '')
 
-  // --- connectors ----------------------------------------------------------------------------------------------------
+  // --- connectors and Slack apps -------------------------------------------------------------------------------------
 
   const connectors: Connectors = {}
+  // Which key holds each token variable: a variable on two keys (two apps, or a Slack app and Discord) is a bug.
+  const envOwner = new Map<string, string>()
+  const claimEnv = (v: string, path: string): boolean => {
+    const other = envOwner.get(v)
+    if (other) { error(path, `"${v}" is already the token variable of ${other}: each token needs its own variable`); return false }
+    envOwner.set(v, path)
+    return true
+  }
   const conns = table(doc.connectors, 'connectors') ?? {}
   for (const [platform, raw] of Object.entries(conns)) {
+    if (platform === 'slack') continue   // with [slack.apps], below
     const path = `connectors.${platform}`
     const t = table(raw, path)
     if (!t) continue
     const envName = (k: string, required: boolean): string | undefined => {
       const v = str(t, k, path)
       if (v === undefined) { if (required) error(join2(path, k), 'is required'); return undefined }
-      if (ENV_NAME_RE.test(v)) return v
-      error(join2(path, k), `"${v}" must name an environment variable, like DISCORD_BOT_TOKEN`)
-      return undefined
+      if (!ENV_NAME_RE.test(v)) { error(join2(path, k), `"${v}" must name an environment variable, like DISCORD_BOT_TOKEN`); return undefined }
+      return claimEnv(v, join2(path, k)) ? v : undefined
     }
     if (platform === 'discord') {
       unknownKeys(t, ['bot_token_env'], path)
       const botTokenEnv = envName('bot_token_env', true)
       if (botTokenEnv) connectors.discord = { botTokenEnv }
-    } else if (platform === 'slack') {
-      unknownKeys(t, ['bot_token_env', 'app_token_env', 'user_token_env', 'app_name', 'app_description'], path)
-      const botTokenEnv = envName('bot_token_env', true)
-      const appTokenEnv = envName('app_token_env', false)
-      const userTokenEnv = envName('user_token_env', false)
-      // Slack's own limits for an app's name and description: past them, creating the app from the manifest fails.
-      const capped = (k: string, max: number): string | undefined => {
-        const v = str(t, k, path)
-        const n = v === undefined ? 0 : [...v].length   // characters, not UTF-16 units: an emoji is one
-        if (v === undefined || n <= max) return v
-        error(join2(path, k), `is ${n} characters; Slack allows at most ${max}`)
-        return undefined
-      }
-      const appName = capped('app_name', 35)
-      const appDescription = capped('app_description', 140)
-      if (botTokenEnv) connectors.slack = { botTokenEnv, ...(appTokenEnv && { appTokenEnv }), ...(userTokenEnv && { userTokenEnv }), ...(appName && { appName }), ...(appDescription && { appDescription }) }
     } else if (platform === 'github') {
       unknownKeys(t, ['repos', 'poll'], path)
       const repos = strList(t, 'repos', path)
@@ -180,6 +175,56 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     } else {
       error(path, `unknown platform "${platform}": use discord, slack or github`)
     }
+  }
+
+  // Slack: any number of apps, `[slack.apps.<id>]`. `[connectors.slack]` is the app `default`, so it can't be declared twice.
+  // No prototype: an id like `constructor` is a valid name.
+  const slackApps: Record<string, SlackApp> = Object.create(null)
+  /** One Slack app from its table. Only `[connectors.slack]` spells the display name `app_name` and the description `app_description`. */
+  const slackApp = (id: string, t: Table, path: string, keys = { displayName: 'display_name', description: 'description' }): SlackApp | undefined => {
+    unknownKeys(t, ['bot_token_env', 'app_token_env', 'user_token_env', keys.displayName, keys.description], path)
+    const envName = (k: string, required: boolean): string | undefined => {
+      const v = str(t, k, path)
+      if (v === undefined) { if (required) error(join2(path, k), 'is required'); return undefined }
+      if (!ENV_NAME_RE.test(v)) { error(join2(path, k), `"${v}" must name an environment variable, like SLACK_BOT_TOKEN`); return undefined }
+      const why = tokenVarRefusal(v)
+      if (why) { error(join2(path, k), `"${v}" ${why}, so it cannot hold a token; name one only the daemon needs, like SLACK_BOT_TOKEN`); return undefined }
+      return claimEnv(v, join2(path, k)) ? v : undefined
+    }
+    const botTokenEnv = envName('bot_token_env', true)
+    const appTokenEnv = envName('app_token_env', false)
+    const userTokenEnv = envName('user_token_env', false)
+    // Slack's own limits for an app's name and description: past them, creating the app from the manifest fails.
+    const capped = (k: string, max: number): string | undefined => {
+      const v = str(t, k, path)
+      const n = v === undefined ? 0 : [...v].length   // characters, not UTF-16 units: an emoji is one
+      if (v === undefined || n <= max) return v
+      error(join2(path, k), `is ${n} characters; Slack allows at most ${max}`)
+      return undefined
+    }
+    const displayName = capped(keys.displayName, 35) ?? (id === DEFAULT_SLACK_APP ? SLACK_APP_DEFAULTS.name : id)
+    const description = capped(keys.description, 140) ?? SLACK_APP_DEFAULTS.description + (userTokenEnv ? SLACK_APP_DEFAULTS.userTokenNote : '')
+    if (!botTokenEnv) return undefined
+    return { id, botTokenEnv, ...(appTokenEnv && { appTokenEnv }), ...(userTokenEnv && { userTokenEnv }), displayName, description }
+  }
+  const connectorsSlack = table(conns.slack, 'connectors.slack')
+  if (connectorsSlack) {
+    const app = slackApp(DEFAULT_SLACK_APP, connectorsSlack, 'connectors.slack', { displayName: 'app_name', description: 'app_description' })
+    if (app) slackApps[DEFAULT_SLACK_APP] = app
+  }
+  const slackTable = table(doc.slack, 'slack') ?? {}
+  unknownKeys(slackTable, ['apps'], 'slack')
+  for (const [id, raw] of Object.entries(table(slackTable.apps, 'slack.apps') ?? {})) {
+    const path = `slack.apps.${id}`
+    if (!SLACK_APP_ID_RE.test(id)) { error(path, `"${id}" is not a valid app name: lowercase letters, digits, "-" and "_", starting with a letter, at most 35 characters`); continue }
+    const t = table(raw, path)
+    if (!t) continue
+    if (id === DEFAULT_SLACK_APP && has(conns, 'slack')) { error(path, 'is the same app as [connectors.slack]: declare it once, in either table'); continue }
+    const app = slackApp(id, t, path)
+    if (app) slackApps[id] = app
+  }
+  if (Object.keys(slackApps).length && !Object.hasOwn(slackApps, DEFAULT_SLACK_APP)) {
+    warn('slack.apps', `no app is named "${DEFAULT_SLACK_APP}", and Slack connects only the app named "${DEFAULT_SLACK_APP}", so Slack stays off. Name the app to connect "${DEFAULT_SLACK_APP}".`)
   }
 
   // --- people --------------------------------------------------------------------------------------------------------
@@ -504,12 +549,15 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     return undefined
   }
 
+  /** Whether hydra connects the platform: Slack through its app `default`. */
+  const connected = (platform: 'discord' | 'slack' | 'github'): boolean => platform === 'slack' ? Object.hasOwn(slackApps, DEFAULT_SLACK_APP) : !!connectors[platform]
+
   // --- warnings that need the whole file -----------------------------------------------------------------------------
 
   // The operator passes admin checks only through an address on the platform a daemon runs: on a connected platform
   // with none, nobody is in charge there.
   if (operator) for (const platform of ['discord', 'slack'] as const) {
-    if (connectors[platform] && !people[operator].ids.some(a => a.startsWith(`${platform}:`))) {
+    if (connected(platform) && !people[operator].ids.some(a => a.startsWith(`${platform}:`))) {
       warn('operator', `${operator} has no ${platform}: address, so on ${platform} nobody passes admin checks or reaches main by DM`)
     }
   }
@@ -530,13 +578,13 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     for (const p of s.listens) {
       const platform = p.split(':')[0] as Platform | 'cli'
       if (platform === 'cli') continue
-      if (!connectors[platform]) warn(path, `listens on ${p}, but [connectors.${platform}] isn't set, so it won't hear it`)
+      if (!connected(platform)) warn(path, platform === 'slack' ? `listens on ${p}, but hydra.toml has no app named "${DEFAULT_SLACK_APP}": add [slack.apps.${DEFAULT_SLACK_APP}], or it won't hear it` : `listens on ${p}, but [connectors.${platform}] isn't set, so it won't hear it`)
       else if (platform === 'github' && !connectors.github!.repos.includes(p.slice('github:'.length))) warn(path, `listens on ${p}, but connectors.github.repos doesn't include it`)
     }
   }
 
   if (errors.length) return { ok: false, errors, warnings }
-  return { ok: true, config: { ...(operator && { operator }), connectors, people, specialists, places, schedules, rules, ...(guard && { guard }), ...(vitals && { vitals }) }, warnings }
+  return { ok: true, config: { ...(operator && { operator }), connectors, slackApps, people, specialists, places, schedules, rules, ...(guard && { guard }), ...(vitals && { vitals }) }, warnings }
 }
 
 /** The program a `sh -c` command runs: past any leading VAR=value, with one level of quotes removed. */

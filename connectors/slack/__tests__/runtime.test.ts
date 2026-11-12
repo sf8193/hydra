@@ -15,6 +15,9 @@ import { transport } from '../../../daemon/bridge-transport.js'
 import { handleCLIRequest, type CLIRequest } from '../../../daemon/cli-handler.js'
 import { executeTool } from '../../../daemon/bridge-dispatch.js'
 import { BASE, hydra, view } from './slack-config.js'
+import { slackEnvNames } from '../../../config/token-vars.js'
+import { defaultSlackApp } from '../../../config/types.js'
+import { registerSpawnVars } from '../../../shared/spawn-env.js'
 import { fakeAdapter } from '../../../daemon/__tests__/test-harness.js'
 
 process.stderr.write = (() => true) as any
@@ -565,7 +568,7 @@ describe('the operator: hydra conversations and hydra route', () => {
     w.close()
   })
 
-  test('health flags a #name place no channel answers to, and omits the line without [connectors.slack]', async () => {
+  test('health flags a #name place no channel answers to, and omits the line without an app named default', async () => {
     configure(TOML.replace('listens = ["slack:C2"]', 'listens = ["slack:#ops-room"]'))
     expect(slackWatchHealth()!.places.find(p => p.to === OPS)!.note).toContain('no channel answers to this name')
     configure('')
@@ -601,16 +604,36 @@ describe('main and alerts', () => {
   })
 })
 
+const appOf = (toml: string) => defaultSlackApp(hydra(toml))!
+
 describe('tokens', () => {
-  test('a token is read only from a variable every session is kept from; any other name is refused, with why', () => {
+  test('a token is read only from a variable every session is kept from; any other name is refused, with which key and why', () => {
     const env = { SLOPBOT_SLACK_BOT_TOKEN: 'xoxb-1', SLOPBOT_SLACK_APP_TOKEN: 'xapp-1' }
-    expect(slackTokens(hydra(TOML), env)).toEqual({ bot: 'xoxb-1', app: 'xapp-1' })
+    expect(slackTokens(appOf(TOML), env)).toEqual({ bot: 'xoxb-1', app: 'xapp-1' })
     const warned: string[] = []
-    const leaky = hydra(TOML.replace('bot_token_env = "SLOPBOT_SLACK_BOT_TOKEN"', 'bot_token_env = "SLACK_BOT_TOKEN"'))
+    const leaky = appOf(TOML.replace('bot_token_env = "SLOPBOT_SLACK_BOT_TOKEN"', 'bot_token_env = "SLACK_BOT_TOKEN"'))
     expect(slackTokens(leaky, { ...env, SLACK_BOT_TOKEN: 'xoxb-leak' }, l => warned.push(l))).toEqual({ bot: undefined, app: 'xapp-1' })
-    expect(warned[0]).toContain('refusing to read the token in SLACK_BOT_TOKEN')
+    expect(warned[0]).toContain('refusing to read the token in SLACK_BOT_TOKEN, the `bot_token_env` of the app named `default`')
     expect(warned[0]).not.toContain('xoxb')
-    expect(slackTokens(hydra(''), env)).toEqual({})
+  })
+})
+
+describe('tokens: any variable the config names', () => {
+  test('a SLOPBOT_ name and a custom one are read once registered, and not before', () => {
+    const toml = TOML.replace('"SLOPBOT_SLACK_BOT_TOKEN"', '"SLOPBOT_SLACK_SALES_BOT"').replace('"SLOPBOT_SLACK_APP_TOKEN"', '"ACME_SOCKET_TOKEN"')
+    const env = { SLOPBOT_SLACK_SALES_BOT: 'xoxb-s', ACME_SOCKET_TOKEN: 'xapp-s' }
+    const warned: string[] = []
+    expect(slackTokens(appOf(toml), env, l => warned.push(l))).toEqual({ bot: undefined, app: undefined })
+    expect(warned).toHaveLength(2)
+    registerSpawnVars(slackEnvNames(hydra(toml)), {})
+    expect(slackTokens(appOf(toml), env)).toEqual({ bot: 'xoxb-s', app: 'xapp-s' })
+  })
+  test('a name sessions need, like PATH, is refused, saying which key and why (the loader rejects it first; this is the backstop)', () => {
+    const warned: string[] = []
+    const app = { ...appOf(TOML), botTokenEnv: 'PATH' }
+    expect(registerSpawnVars(['PATH'], {}).refused).toEqual([{ name: 'PATH', reason: 'is a variable sessions need' }])
+    expect(slackTokens(app, { PATH: '/bin' }, l => warned.push(l)).bot).toBeUndefined()
+    expect(warned[0]).toContain('refusing to read the token in PATH, the `bot_token_env` of the app named `default`: it is a variable sessions need')
   })
 })
 
@@ -618,10 +641,10 @@ describe('tokens: the operator\'s user token', () => {
   test('read from HYDRA_SLACK_USER_TOKEN, a variable every session is kept from', () => {
     const toml = TOML.replace('app_token_env = "SLOPBOT_SLACK_APP_TOKEN"', 'app_token_env = "SLOPBOT_SLACK_APP_TOKEN"\nuser_token_env = "HYDRA_SLACK_USER_TOKEN"')
     const env = { SLOPBOT_SLACK_BOT_TOKEN: 'xoxb-1', SLOPBOT_SLACK_APP_TOKEN: 'xapp-1', HYDRA_SLACK_USER_TOKEN: 'xoxp-1' }
-    expect(slackTokens(hydra(toml), env)).toEqual({ bot: 'xoxb-1', app: 'xapp-1', user: 'xoxp-1' })
+    expect(slackTokens(appOf(toml), env)).toEqual({ bot: 'xoxb-1', app: 'xapp-1', user: 'xoxp-1' })
     const warned: string[] = []
-    expect(slackTokens(hydra(toml.replace('"HYDRA_SLACK_USER_TOKEN"', '"MY_USER_TOKEN"')), { ...env, MY_USER_TOKEN: 'xoxp-leak' }, l => warned.push(l)).user).toBeUndefined()
-    expect(warned[0]).toContain('refusing to read the token in MY_USER_TOKEN')
+    expect(slackTokens(appOf(toml.replace('"HYDRA_SLACK_USER_TOKEN"', '"MY_USER_TOKEN"')), { ...env, MY_USER_TOKEN: 'xoxp-leak' }, l => warned.push(l)).user).toBeUndefined()
+    expect(warned[0]).toContain('refusing to read the token in MY_USER_TOKEN, the `user_token_env`')
   })
 })
 

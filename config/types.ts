@@ -60,13 +60,34 @@ export type Specialist = {
   was: string[]
 }
 
+/**
+ * One Slack app this hydra runs as, declared `[slack.apps.<id>]`, or as the app `default` by `[connectors.slack]`.
+ * The token fields name environment variables; the tokens themselves stay in `.env`. Defaults are filled in.
+ */
+export type SlackApp = {
+  /** The table's key: lowercase `[a-z][a-z0-9_-]*`, at most 35 characters, so it can never be taken for a Slack channel id (uppercase). */
+  id: string
+  botTokenEnv: string
+  /** Socket Mode's app-level token. Required for Slack to connect; not for `hydra slack manifest`. */
+  appTokenEnv?: string
+  /** The operator's user token, used only to read threads the bot is not in; never to post. */
+  userTokenEnv?: string
+  /** The name `hydra slack manifest` gives the app: as set, else `hydra` for `default` and the id for any other. */
+  displayName: string
+  /** What the manifest says the app does: as set, else a default (which mentions the user token when there is one). */
+  description: string
+}
+
+/** The id `[connectors.slack]` loads as: the one Slack app hydra connects. */
+export const DEFAULT_SLACK_APP = 'default'
+
+/** The Slack app hydra connects (`default`), or undefined when hydra.toml declares none. */
+export function defaultSlackApp(config: Pick<HydraConfig, 'slackApps'>): SlackApp | undefined {
+  return Object.hasOwn(config.slackApps, DEFAULT_SLACK_APP) ? config.slackApps[DEFAULT_SLACK_APP] : undefined
+}
+
 export type Connectors = {
   discord?: { botTokenEnv: string }
-  /**
-   * `userTokenEnv`: the operator's user token, used only to read threads the bot is not in; never to post.
-   * `appName`, `appDescription`: this hydra's Slack app as `hydra slack manifest` writes it (defaults in `SLACK_APP_DEFAULTS`).
-   */
-  slack?: { botTokenEnv: string; appTokenEnv?: string; userTokenEnv?: string; appName?: string; appDescription?: string }
   /** `repos` are `owner/repo`, lowercased. */
   github?: { repos: string[]; pollMs: number }
 }
@@ -149,6 +170,8 @@ export type HydraConfig = {
   /** The one person whose DMs reach `main` and who may reach every specialist. Required once anything else is declared. */
   operator?: string
   connectors: Connectors
+  /** Every Slack app, by id (no prototype: look one up with Object.hasOwn). `[connectors.slack]` is the app `default`. */
+  slackApps: Record<string, SlackApp>
   people: Record<string, Person>
   specialists: Record<string, Specialist>
   places: Record<Place, PlaceOptions>

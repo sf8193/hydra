@@ -3,7 +3,8 @@ import { join, basename } from 'path'
 import { randomBytes } from 'crypto'
 import { STATE_DIR } from '../../daemon/config.js'
 import { atomicWriteFileSync } from '../../daemon/util.js'
-import type { Address, HydraConfig, Place, PlaceOptions } from '../../config/types.js'
+import { defaultSlackApp, type Address, type HydraConfig, type Place, type PlaceOptions, type SlackApp } from '../../config/types.js'
+import { defaultAppKey } from './app.js'
 import { route, refusal, identify, currentId, isLive, isSessionThread, MAIN } from '../../routing/route.js'
 
 /** Where a delivery goes: a specialist (or `main`), and the conversation it is for, so a per-conversation specialist can give it its own session. */
@@ -223,14 +224,14 @@ export const NOT_A_MEMBER = /not_in_channel|channel_not_found/
  * Why a thread can't be heard, and what to do: one sentence, so the bind's refusal and the later alert say the same.
  * Only the operator can act on it; a session can only pass it on.
  */
-export function cantRead(h: Pick<HydraConfig, 'connectors'> | undefined, place: string, why: string, botUserId?: string, then: 'bind' | 'tag' = 'bind'): string {
+export function cantRead(app: SlackApp | undefined, place: string, why: string, botUserId?: string, then: 'bind' | 'tag' = 'bind'): string {
   if (!NOT_A_MEMBER.test(why)) return `it can't be read (${why})`
   const bot = botUserId ? `the bot (<@${botUserId}>)` : 'the bot'
   // A session binds again; a specialist's conversation opens again on a tag.
   const after = then === 'bind' ? 'then bind again' : 'then a tag in the thread opens it again'
-  return h?.connectors.slack?.userTokenEnv
+  return app?.userTokenEnv
     ? `neither ${bot} nor the operator is in ${place} (${why}). Ask the operator to invite the bot or join ${place}, ${after}`
-    : `${bot} isn't in ${place} (${why}). Ask the operator to invite it, or to set [connectors.slack] user_token_env, ${after}`
+    : `${bot} isn't in ${place} (${why}). Ask the operator to invite it, or to set the ${defaultAppKey('user_token_env')}, ${after}`
 }
 
 /** How a refused operator token is said, so catch-up can tell it from a thread that is gone. */
@@ -632,14 +633,14 @@ export class SlackWatcher {
     const place = cfg ? placeName(cfg, channel) : channel
     const others = !session && channelWide ? ` and any other conversations of yours in ${place}` : ''
     const lostText = lost ? `; ${lost} undelivered message${lost === 1 ? ' is' : 's are'} lost` : ''
-    const text = `⚠️ Let go of ${conversationId(e)}${others}${lostText}: ${cantRead(cfg?.hydra, place, why, cfg?.botUserId, session ? 'bind' : 'tag')}.`
+    const text = `⚠️ Let go of ${conversationId(e)}${others}${lostText}: ${cantRead(cfg ? defaultSlackApp(cfg.hydra) : undefined, place, why, cfg?.botUserId, session ? 'bind' : 'tag')}.`
     if (session) this.deps.alert?.(text, e.specialist)
     else this.alertOnce(`thread-gone:${e.specialist}:${channel}:${channelWide ? 'channel' : 'thread'}`, e.specialist, text)
   }
 
   /** The operator's token was refused: the threads read with it are kept, unread until it is replaced. Said once an hour. */
   operatorTokenRefused(why: string): void {
-    this.alertOnce('operator-token', undefined, `⚠️ ${why[0].toUpperCase()}${why.slice(1)}: threads read as the operator are not being read. Put a valid user token in the variable [connectors.slack] user_token_env names, and restart the daemon.`)
+    this.alertOnce('operator-token', undefined, `⚠️ ${why[0].toUpperCase()}${why.slice(1)}: threads read as the operator are not being read. Put a valid user token in the variable named by the ${defaultAppKey('user_token_env')}, and restart the daemon.`)
   }
 
   /** While catching up, live events must not move the cursor past the gap being filled. */
@@ -708,7 +709,7 @@ export class SlackWatcher {
     // With the operator's token the app hears every channel the operator is in. Untagged chatter outside the places
     // hydra.toml names, in no open conversation, is nobody's: passed over before it opens or counts anything. A tag
     // still gets its answer, as it would without the token.
-    if (!dm && !existing && !tagged && cfg.hydra.connectors.slack?.userTokenEnv && !routedChannels(cfg).includes(ev.channel)) return 'ignored'
+    if (!dm && !existing && !tagged && defaultSlackApp(cfg.hydra)?.userTokenEnv && !routedChannels(cfg).includes(ev.channel)) return 'ignored'
 
     if (own) {
       // The bot's own top-level post opens a conversation, bound to whoever listens there. Its replies are not echoed back.

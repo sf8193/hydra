@@ -7,6 +7,7 @@ import type { SessionInfo } from './sessions.js'
 import { resolveEngine } from './engines/instances.js'
 import { specialistOf, boundAs } from '../specialists/specialists.js'
 import { currentHydraConfig } from './hydra-config.js'
+import { defaultSlackApp } from '../config/types.js'
 
 // Widened views: isToolAllowed checks arbitrary wire names, not just known ToolNames.
 const BASE_TOOLS: Readonly<Record<SessionType, ReadonlySet<string>>> = TYPED_BASE_TOOLS
@@ -30,7 +31,7 @@ export const isSpecialistOccupant = (info: Partial<Pick<SessionInfo, 'threadId' 
 
 /** Whether this session holds Slack conversations of its own (specialists.ts boundAs), once hydra.toml configures Slack. */
 export const holdsConversations = (info: Partial<Pick<SessionInfo, 'threadId' | 'tmuxName' | 'sessionType'>>): boolean =>
-  !!currentHydraConfig().connectors.slack && !!boundAs(info)
+  !!defaultSlackApp(currentHydraConfig()) && !!boundAs(info)
 
 /** Stored capabilities plus the derived ones: a session that can ask its predecessor, or that holds Slack conversations, gets those tools. */
 export function sessionCapabilities(info: Pick<SessionInfo, 'capabilities' | 'engine' | 'predecessor'> & Partial<Pick<SessionInfo, 'threadId' | 'tmuxName' | 'sessionType'>>): Set<Capability | DerivedCapability> {

@@ -20,6 +20,8 @@ export type HydraConfigWatch = {
 export type WatchOpts = {
   path: string
   env: LoadEnv
+  /** The file's text, on each read that goes on to load it, before the load: for what must be done even when the load fails. */
+  onText?(text: string): void
   /** A new config loaded, with its warnings. */
   onLoad?(config: HydraConfig, warnings: ConfigIssue[]): void
   /** A load failed and the last good config stays. Called once per distinct failure, not on every save of the same bad file. */
@@ -63,6 +65,7 @@ export function watchHydraConfig(opts: WatchOpts): HydraConfigWatch {
     }
     const emptied = text.trim() === '' && !!lastText?.trim()
     lastText = text
+    opts.onText?.(text)
     const result = loadHydraConfig(text, opts.env)
     lastOk = result.ok
     if (result.ok) {

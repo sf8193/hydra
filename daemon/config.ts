@@ -5,6 +5,7 @@ import { basename, join } from 'path'
 import type { ChatGateway } from '../gateway.js'
 import { sourceEnvFiles } from '../shared/env-parse.js'
 import { captureSpawnVars } from '../shared/spawn-env.js'
+import { scrubTokenVarsInFile } from '../config/token-vars.js'
 import { claudeConfigDir, platformStateDir } from '../shared/constants.js'
 import { isUnder } from '../shared/path-containment.js'
 
@@ -42,9 +43,10 @@ for (const envFile of [LOCAL_ENV_FILE, ENV_FILE]) {
   try { if (!process.env.HYDRA_PROBE_SOCK) chmodSync(envFile, 0o600) } catch {}
 }
 sourceEnvFiles([LOCAL_ENV_FILE, ENV_FILE])
-// Everything scrubbed from the environment, kept for the daemon's own use: Raindrop's settings and the Slack-watch tokens.
-export const SCRUBBED_ENV = captureSpawnVars()
-export const RAINDROP_ENV = SCRUBBED_ENV
+// Names hydra.toml's Slack apps take tokens from join the scrubbed set before anything is captured, so no session can inherit them.
+scrubTokenVarsInFile(join(STATE_DIR, 'hydra.toml'))
+// What is scrubbed from the environment is kept for the daemon's own use (capturedSpawnVars): Raindrop's settings and the Slack tokens.
+captureSpawnVars()
 
 export const CLAUDE_CONFIG = claudeConfigDir()
 

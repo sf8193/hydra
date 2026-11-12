@@ -9,8 +9,20 @@ type Manifest = {
   oauth_config: { scopes: { bot: string[]; user?: string[] } }
   settings: { event_subscriptions: { bot_events: string[]; user_events?: string[] }; socket_mode_enabled: boolean; org_deploy_enabled: boolean }
 }
-const manifestOf = (toml: string) => Bun.YAML.parse(slackManifest(hydra(toml).connectors.slack)) as Manifest
+const manifestOf = (toml: string) => Bun.YAML.parse(slackManifest(hydra(toml).slackApps.default)) as Manifest
 const withSlack = (lines: string) => BASE.replace('[people.op]', `${lines}\n[people.op]`)
+
+describe('slackManifest for an app other than default', () => {
+  const sales = (lines = '') => hydra(`${BASE}\n[slack.apps.sales]\nbot_token_env = "SALES_BOT"\n${lines}\n`).slackApps.sales
+  test('is called by its own name unless it sets one, and says the default description', () => {
+    const m = Bun.YAML.parse(slackManifest(sales())) as Manifest
+    expect(m.display_information).toEqual({ name: 'sales', description: SLACK_APP_DEFAULTS.description })
+    expect(m.features.bot_user.display_name).toBe('sales')
+    const named = Bun.YAML.parse(slackManifest(sales('display_name = "Sales: helper"\ndescription = "Sales threads."\nuser_token_env = "SALES_USER"'))) as Manifest
+    expect(named.display_information).toEqual({ name: 'Sales: helper', description: 'Sales threads.' })
+    expect(named.oauth_config.scopes.user).toEqual([...SLACK_APP_NEEDS.userScopes])
+  })
+})
 
 describe('slackManifest', () => {
   test('the name and description are the ones hydra.toml gives, quoted so any text stays a string', () => {
@@ -44,7 +56,7 @@ describe('slackManifest', () => {
     const h = hydra(oneListener('#food', 'slopbot', '["anyone"]', '[places."slack:#food"]\nfiles = true\n'))
     const checked = scopesNeeded(h)
     expect(checked).toEqual(Object.values(SLACK_APP_NEEDS.botScopes))
-    const manifest = Bun.YAML.parse(slackManifest(h.connectors.slack)) as Manifest
+    const manifest = Bun.YAML.parse(slackManifest(h.slackApps.default)) as Manifest
     expect(manifest.oauth_config.scopes.bot).toEqual([...new Set(checked.flatMap(n => n.any))])
   })
 })

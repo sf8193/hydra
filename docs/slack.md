@@ -39,7 +39,7 @@ Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** �
 }
 ```
 
-> **Use your own app — don't share one.** A Slack app is a single event stream: pointing a second daemon at the same app token splits messages unpredictably across both. One app per deployment.
+> **Use your own app — don't share one.** A Slack app is a single event stream: pointing a second daemon at the same app token splits messages unpredictably across both. One daemon per app token.
 
 **Already installed?** App Manifest → add `"reaction_added"` to `settings.event_subscriptions.bot_events` → Save → Reinstall. `reactions:read` is already in the scopes.
 
@@ -111,6 +111,31 @@ hydra up slack                                  # daemon + bot
 Fix every ✗ that preflight reports before `hydra up`. `hydra preflight slack` re-runs the checks. See [ONBOARDING_TIPS.md](ONBOARDING_TIPS.md) for the gotcha behind each step.
 
 Healthy = daemon log shows `slack gateway: connected as <bot>` **and** `bridge registered for session main`. Then DM the bot.
+
+## Apps in hydra.toml
+
+hydra.toml declares each Slack app by name, `[slack.apps.<id>]`. Tokens stay in `.env`; the keys name the variables that hold them.
+
+```toml
+[slack.apps.default]
+bot_token_env = "SLACK_BOT_TOKEN"      # required: the bot token (xoxb-…)
+app_token_env = "SLACK_APP_TOKEN"      # Socket Mode's app-level token (xapp-…): required for Slack to connect, not for `hydra slack manifest`
+user_token_env = "SLACK_USER_TOKEN"    # optional: read threads the bot is not in, as the operator; never posts
+display_name = "Acme helper"           # the app's name in `hydra slack manifest` (default: `hydra` for `default`, else the id; at most 35 characters)
+description = "Answers Acme's threads it is tagged in."   # at most 140 characters
+
+[slack.apps.sales]
+bot_token_env = "SALES_SLACK_BOT_TOKEN"
+app_token_env = "SALES_SLACK_APP_TOKEN"
+```
+
+- An app's id is lowercase letters, digits, `-` and `_`, starting with a letter, at most 35 characters. Uppercase is reserved for Slack's own ids (`C0TEST`).
+- `[connectors.slack]` still works: it is the app named `default`, and spells the two text keys `app_name` and `app_description`. Declaring `default` in both tables is an error.
+- Each token needs its own variable: one variable on two keys (two apps, one app, or an app and `[connectors.discord]`) is an error.
+- Token variable names are uppercase. Hydra keeps every variable hydra.toml names as a token from the sessions it starts, so name only variables the daemon needs. These are refused when hydra.toml loads: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMUX`, `TERM`, `PWD`, `TMPDIR`, `LANG`, `ANTHROPIC_API_KEY`, `GH_TOKEN`, `SSH_AUTH_SOCK`, and anything starting `HYDRA_` (except `HYDRA_SLACK_`), `CLAUDE_`, `LC_` or `XDG_`.
+- Slack connects only the app named `default`. With other apps declared but no `default`, hydra.toml loads with a warning and Slack stays off.
+
+`hydra slack manifest [<app>]` prints one app's manifest. Leave the name out when hydra.toml declares one app; with several, a missing or unknown name lists the ones declared.
 
 ## Troubleshooting
 

@@ -1,6 +1,7 @@
 import { describe, test, expect, afterEach } from 'bun:test'
 import { rmSync, writeFileSync } from 'fs'
 import { _setHydraConfigForTesting, currentHydraConfig, hydraConfigPath, onHydraConfigLoad, retryHydraConfigAlert, startHydraConfig, stopHydraConfig } from '../hydra-config.js'
+import { _resetScrubbedForTesting, capturedSpawnVars, scrubbedSpawnEnv } from '../../shared/spawn-env.js'
 import type { LoadEnv } from '../../config/types.js'
 
 const env: LoadEnv = { home: '/home/op', isDir: () => true, isCommand: () => true, sessionNames: [] }
@@ -109,12 +110,42 @@ describe('the daemon\'s live hydra.toml', () => {
   test('a test can stand in for the file, and subscribers hear it', () => {
     const seen: (string | undefined)[] = []
     const off = onHydraConfigLoad(c => seen.push(c.operator))
-    _setHydraConfigForTesting({ operator: 'op', connectors: {}, people: {}, specialists: {}, places: {}, schedules: {}, rules: [] })
+    _setHydraConfigForTesting({ operator: 'op', connectors: {}, slackApps: {}, people: {}, specialists: {}, places: {}, schedules: {}, rules: [] })
     expect(currentHydraConfig().operator).toBe('op')
     expect(seen).toEqual(['op'])
     _setHydraConfigForTesting(undefined)
     expect(currentHydraConfig().operator).toBeUndefined()
     off()
+  })
+
+  test('a load keeps the token variables its Slack apps name from every session', () => {
+    process.env.ACME_LOAD_TEST_BOT = 'xoxb-secret'
+    try {
+      writeFileSync(hydraConfigPath(), config('op') + '[slack.apps.default]\nbot_token_env = "ACME_LOAD_TEST_BOT"\n')
+      startHydraConfig({ env })
+      expect(process.env.ACME_LOAD_TEST_BOT).toBeUndefined()
+      expect(capturedSpawnVars().ACME_LOAD_TEST_BOT).toBe('xoxb-secret')
+      expect(scrubbedSpawnEnv({ ACME_LOAD_TEST_BOT: 'x' }).ACME_LOAD_TEST_BOT).toBeUndefined()
+    } finally { delete process.env.ACME_LOAD_TEST_BOT; _resetScrubbedForTesting() }
+  })
+
+  test('a file that does not load still keeps the token variables it names from every session', () => {
+    process.env.ACME_BAD_FILE_BOT = 'xoxb-secret'
+    process.env.ACME_BAD_FILE_APP = 'xapp-secret'
+    const write = process.stderr.write
+    process.stderr.write = (() => true) as typeof process.stderr.write
+    try {
+      // A validation error elsewhere (an operator that is no one), and a token variable on a Slack app.
+      writeFileSync(hydraConfigPath(), 'operator = "ghost"\n[slack.apps.default]\nbot_token_env = "ACME_BAD_FILE_BOT"\n[connectors.slack]\napp_token_env = "ACME_BAD_FILE_APP"\nbot_token_env = "ACME_BAD_FILE_APP"\n')
+      expect(startHydraConfig({ env }).ok).toBe(false)
+      expect(process.env.ACME_BAD_FILE_BOT).toBeUndefined()
+      expect(process.env.ACME_BAD_FILE_APP).toBeUndefined()
+      expect(capturedSpawnVars().ACME_BAD_FILE_BOT).toBe('xoxb-secret')
+      expect(scrubbedSpawnEnv({ ACME_BAD_FILE_APP: 'x' }).ACME_BAD_FILE_APP).toBeUndefined()
+    } finally {
+      process.stderr.write = write
+      delete process.env.ACME_BAD_FILE_BOT; delete process.env.ACME_BAD_FILE_APP; _resetScrubbedForTesting()
+    }
   })
 
   test('a second start is a no-op that returns the first result', () => {

@@ -198,7 +198,7 @@ describe('specialists', () => {
     const calls = fakeSpawn()
     const name = `t-specialist-${++n}`
     _setHydraConfigForTesting({
-      operator: 'op', connectors: {}, places: {}, schedules: {}, rules: [],
+      operator: 'op', connectors: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
       people: { op: { id: 'op', ids: ['discord:100000000000000001'], roles: [], name: 'op' } },
       specialists: { [name]: { id: name, workdir: '/srv/x', prompt: 'be the slopbot', home: '555', listens: [], allow: ['people'], sessions: 'shared', max: 20, was: [] } },
     })
@@ -225,7 +225,7 @@ describe('specialists', () => {
     const [a, b] = [`t-specialist-${++n}`, `t-specialist-${++n}`]
     const base = { workdir: '/srv/x', prompt: 'k', home: '555', listens: [], allow: ['people'], was: [] }
     _setHydraConfigForTesting({
-      operator: 'op', connectors: {}, places: {}, schedules: {}, rules: [],
+      operator: 'op', connectors: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
       people: { op: { id: 'op', ids: ['discord:100000000000000001'], roles: [], name: 'op' } },
       specialists: {
         [a]: { id: a, ...base, sessions: 'shared', max: 20 },
@@ -248,7 +248,7 @@ describe('specialists', () => {
     const calls = fakeSpawn()
     const name = `t-specialist-${++n}`
     _setHydraConfigForTesting({
-      operator: 'op', connectors: {}, places: {}, schedules: {}, rules: [],
+      operator: 'op', connectors: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
       people: { op: { id: 'op', ids: ['discord:100000000000000001'], roles: [], name: 'op' } },
       specialists: { [name]: { id: name, workdir: '/srv/ops', prompt: 'be the slopbot', home: '555', listens: [], allow: ['people'], sessions: 'shared', max: 20, was: [] } },
     })

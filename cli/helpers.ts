@@ -5,6 +5,7 @@ import { homedir } from 'os'
 import { execSync, execFileSync } from 'child_process'
 import { spawnModel, TRANSCRIBE_TMUX, byteTmuxName, claudeConfigDir, platformStateDir } from '../shared/constants.js'
 import { tmuxNewSession, captureSpawnVars, withRaisedFdLimit } from '../shared/spawn-env.js'
+import { scrubTokenVarsInFile } from '../config/token-vars.js'
 import { sourceEnvFiles, parseEnvLine } from '../shared/env-parse.js'
 
 // ---------------------------------------------------------------------------
@@ -51,6 +52,7 @@ export function sourceStateDirEnv(stateDir: string): { configDir: string; spawnC
   const fileModel = readEnvFileValue(join(stateDir, '.env'), 'HYDRA_MODEL')
   if (fileModel?.trim()) process.env.HYDRA_MODEL = fileModel.trim()
   // The CLI must not forward these to the daemon it launches.
+  scrubTokenVarsInFile(join(stateDir, 'hydra.toml'))
   captureSpawnVars()
   return {
     configDir: claudeConfigDir(),
