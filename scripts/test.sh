@@ -6,17 +6,17 @@
 # to process.env, so everything below has to be in place before bun starts. test-setup.ts refuses
 # to run without the tmux and launchd guards.
 
-# The suite's bun (.bun-version), which CI installs too. The daemon still runs .tool-versions, an
-# older bun, and the gap is real: bun 1.3.14 resolves a spawned command against the PATH bun
-# started with, ignoring later edits to process.env.PATH, so the PATH-shim fakes (fake-tmux.ts)
-# never run and the real binary answers instead. Putting its directory first on PATH makes every
-# bun a test spawns the same one.
-want=$(cat "$(dirname "$0")/../.bun-version") || exit 1
+# The pinned bun (.tool-versions), which CI installs and the daemon runs too. Putting its directory
+# first on PATH makes every bun a test spawns the same one: a spawn handed no env resolves its command
+# against the PATH bun started with, not later edits to process.env.PATH (Bun.spawn and Bun.which on
+# 1.3.14 and 1.4.4, child_process on 1.3.14), so a PATH set inside the run would not reach it.
+want=$(sed -n 's/^bun[[:space:]][[:space:]]*\([^[:space:]]*\).*/\1/p' "$(dirname "$0")/../.tool-versions") || exit 1
+[ -n "$want" ] || { echo "scripts/test.sh: .tool-versions pins no bun" >&2; exit 1; }
 if [ "$(bun --version 2>/dev/null)" != "$want" ]; then
   home=$(asdf where bun "$want" 2>/dev/null) && PATH="$home/bin:$PATH"
 fi
 if [ "$(bun --version 2>/dev/null)" != "$want" ]; then
-  echo "scripts/test.sh: the suite runs on bun $want (.bun-version), as CI does; PATH has $(bun --version 2>/dev/null || echo none). Install it (asdf install bun $want) or put it first on PATH." >&2
+  echo "scripts/test.sh: the suite runs on bun $want (.tool-versions), as CI does; PATH has $(bun --version 2>/dev/null || echo none). Install it (asdf install bun $want) or put it first on PATH." >&2
   exit 1
 fi
 

@@ -7,7 +7,7 @@ import type { HydraConfig } from './helpers.js'
 import {
   resolveConfig, tmuxExists, tmuxKill, tmuxSpawn, tmuxSessionAge,
   compileCheck, killOrphanBytes, hasOrphanBytes, appendLog, shq,
-  waitForSocket, buildDaemonEnvs, requireSpawnCwd, pluginVersionDir, probeDaemonHealth,
+  waitForSocket, buildDaemonEnvs, pinnedBun, pinnedBunVersion, requireSpawnCwd, pluginVersionDir, probeDaemonHealth,
 } from './helpers.js'
 import { isKnownModel, SPIN_CPU_PERCENT } from '../shared/constants.js'
 import { modsExport, syncMods } from '../shared/mods.js'
@@ -505,6 +505,9 @@ export async function lifecyclePreflight(platform: string): Promise<void> {
       bad(`${cmd} not found on PATH`)
     }
   }
+
+  const bun = pinnedBun(cfg.hydraDir)
+  if (bun.fallback) wrn(bun.fallback); else ok(`pinned bun ${pinnedBunVersion(cfg.hydraDir)} (.tool-versions): ${bun.path}`)
 
   try {
     execFileSync('freeze', ['--version'], { stdio: 'pipe', env: process.env as Record<string, string> })

@@ -7,6 +7,7 @@ import { SCRUBBED_SPAWN_VARS } from '../../shared/spawn-env.js'
 import type { HydraConfig } from '../helpers.js'
 
 let savedEnv: NodeJS.ProcessEnv
+const PINNED = { path: '/pinned/bin/bun' }
 let stateDir: string
 
 function writeEnv(body: string): void {
@@ -88,17 +89,17 @@ test('an unset SPAWN_CWD is not flagged', () => {
 
 test('buildDaemonEnvs forwards HYDRA_MODEL so spawns do not fall back to the compiled default', () => {
   process.env.HYDRA_MODEL = 'claude-opus-5[1m]'
-  expect(buildDaemonEnvs(cfg())).toContain(`HYDRA_MODEL='claude-opus-5[1m]'`)
+  expect(buildDaemonEnvs(cfg(), PINNED)).toContain(`HYDRA_MODEL='claude-opus-5[1m]'`)
 })
 
 test('buildDaemonEnvs omits HYDRA_MODEL when unset or blank', () => {
-  expect(buildDaemonEnvs(cfg())).not.toContain('HYDRA_MODEL=')
+  expect(buildDaemonEnvs(cfg(), PINNED)).not.toContain('HYDRA_MODEL=')
   process.env.HYDRA_MODEL = '   '
-  expect(buildDaemonEnvs(cfg())).not.toContain('HYDRA_MODEL=')
+  expect(buildDaemonEnvs(cfg(), PINNED)).not.toContain('HYDRA_MODEL=')
 })
 
 test('buildDaemonEnvs carries the resolved config dir', () => {
-  expect(buildDaemonEnvs(cfg({ configDir: '/tmp/byte-config' }))).toContain(`CLAUDE_CONFIG_DIR='/tmp/byte-config'`)
+  expect(buildDaemonEnvs(cfg({ configDir: '/tmp/byte-config' }), PINNED)).toContain(`CLAUDE_CONFIG_DIR='/tmp/byte-config'`)
 })
 
 test('a blank SPAWN_CWD self-heals from the state-dir .env', () => {
@@ -107,7 +108,7 @@ test('a blank SPAWN_CWD self-heals from the state-dir .env', () => {
   const r = sourceStateDirEnv(stateDir)
   expect(r.spawnCwd).toBe('/tmp/projects')
   expect(r.spawnCwdBlank).toBe(false)
-  expect(buildDaemonEnvs(cfg(r))).toContain(`SPAWN_CWD='/tmp/projects'`)
+  expect(buildDaemonEnvs(cfg(r), PINNED)).toContain(`SPAWN_CWD='/tmp/projects'`)
 })
 
 test('a blank SPAWN_CWD with nothing in .env stays flagged and is emitted explicitly', () => {
@@ -115,11 +116,11 @@ test('a blank SPAWN_CWD with nothing in .env stays flagged and is emitted explic
   writeEnv('CHAT_PLATFORM=slack\n')
   const r = sourceStateDirEnv(stateDir)
   expect(r.spawnCwdBlank).toBe(true)
-  expect(buildDaemonEnvs(cfg(r))).toContain("SPAWN_CWD=''")
+  expect(buildDaemonEnvs(cfg(r), PINNED)).toContain("SPAWN_CWD=''")
 })
 
 test('buildDaemonEnvs still carries HYDRA_LOG added by the log-capping change', () => {
-  expect(buildDaemonEnvs(cfg())).toContain(`HYDRA_LOG='/tmp/d.log'`)
+  expect(buildDaemonEnvs(cfg(), PINNED)).toContain(`HYDRA_LOG='/tmp/d.log'`)
 })
 
 // --- wiring: these drive resolveConfig itself, so they fail if the ordering
@@ -199,7 +200,7 @@ test('a whitespace-only SPAWN_CWD never reaches byteCwd as whitespace', () => {
   const r = sourceStateDirEnv(stateDir)
   expect(r.spawnCwdBlank).toBe(true)
   expect(r.spawnCwd).toBe(homedir())
-  expect(buildDaemonEnvs(cfg({ ...r, byteCwd: r.spawnCwd }))).toContain("SPAWN_CWD=''")
+  expect(buildDaemonEnvs(cfg({ ...r, byteCwd: r.spawnCwd }), PINNED)).toContain("SPAWN_CWD=''")
 })
 
 function capturedHealth(data: Record<string, unknown>): string {
@@ -238,4 +239,14 @@ test('resolveConfig: byteTmux honours BYTE_SESSION_NAME, and a blank one falls t
   expect(resolveConfig(TEST_PLATFORM).byteTmux).toBe('custom-byte')
   process.env.BYTE_SESSION_NAME = ''
   expect(resolveConfig(TEST_PLATFORM).byteTmux).toBe(`${TEST_PLATFORM}-byte`)
+})
+
+test('buildDaemonEnvs leads PATH with the pinned bun, so the daemon and every bun it starts run the pin', () => {
+  process.env.PATH = '/caller/bun/bin:/usr/bin'
+  expect(buildDaemonEnvs(cfg(), PINNED)).toStartWith(`PATH='/pinned/bin:/caller/bun/bin:/usr/bin' `)
+})
+
+test('buildDaemonEnvs leaves PATH alone when no bun path resolved', () => {
+  process.env.PATH = '/usr/bin'
+  expect(buildDaemonEnvs(cfg({ daemonLog: join(stateDir, 'd.log') }), { path: 'bun', fallback: 'x' })).toStartWith(`PATH='/usr/bin' `)
 })
