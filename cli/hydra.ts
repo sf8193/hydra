@@ -14,6 +14,7 @@ import { migrateCommand } from './migrate.js'
 import { peopleCommand } from './people.js'
 import { configAddCommand } from './config-add.js'
 import { configCheckCommand } from './config-check.js'
+import { slackCommand } from './slack.js'
 import { readBootRefusal } from './boot-refusal.js'
 import { bootRefusal } from '../config/migrate.js'
 import { isPlatform, jobsAttempt, jobsLaunchdRun, jobsList, jobsMarkDone, jobsRun, jobsSync } from './jobs.js'
@@ -98,6 +99,10 @@ Config:
                                        new tables are appended, identical ones are already there, a changed one is refused
   hydra people add <id> <address> [--role <r>]... [--name <n>] [--dry-run]
                                        add a person to hydra.toml's roster (appended; written only if it loads)
+  hydra slack manifest                 print the Slack app manifest: name and description from hydra.toml's [connectors.slack]
+                                       (app_name, app_description), scopes and events from what hydra uses. Paste it at
+                                       api.slack.com/apps → Create New App → From a manifest, install the app, and put
+                                       its three tokens in HYDRA_SLACK_{APP,BOT,USER}_TOKEN
 
 Specialists (named addresses that refill themselves):
   hydra specialist set <name> [--channel <id>] [--thread <id>] [--kickoff <text> | --kickoff-file <path>] [--model <id>] [--idle <30m|4h|1d>]
@@ -225,6 +230,11 @@ async function main(): Promise<void> {
   if (command === 'people') {
     if (daemonName) { console.error('error: people takes --state-dir <dir>, not --daemon'); process.exit(1) }
     process.exit(peopleCommand(filtered.slice(1), stateDirOpt))
+  }
+
+  if (command === 'slack') {
+    if (daemonName) { console.error('error: slack takes --state-dir <dir>, not --daemon'); process.exit(1) }
+    process.exit(slackCommand(filtered.slice(1), stateDirOpt))
   }
 
   if (command === 'migrate') {

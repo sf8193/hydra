@@ -151,11 +151,21 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       const botTokenEnv = envName('bot_token_env', true)
       if (botTokenEnv) connectors.discord = { botTokenEnv }
     } else if (platform === 'slack') {
-      unknownKeys(t, ['bot_token_env', 'app_token_env', 'user_token_env'], path)
+      unknownKeys(t, ['bot_token_env', 'app_token_env', 'user_token_env', 'app_name', 'app_description'], path)
       const botTokenEnv = envName('bot_token_env', true)
       const appTokenEnv = envName('app_token_env', false)
       const userTokenEnv = envName('user_token_env', false)
-      if (botTokenEnv) connectors.slack = { botTokenEnv, ...(appTokenEnv && { appTokenEnv }), ...(userTokenEnv && { userTokenEnv }) }
+      // Slack's own limits for an app's name and description: past them, creating the app from the manifest fails.
+      const capped = (k: string, max: number): string | undefined => {
+        const v = str(t, k, path)
+        const n = v === undefined ? 0 : [...v].length   // characters, not UTF-16 units: an emoji is one
+        if (v === undefined || n <= max) return v
+        error(join2(path, k), `is ${n} characters; Slack allows at most ${max}`)
+        return undefined
+      }
+      const appName = capped('app_name', 35)
+      const appDescription = capped('app_description', 140)
+      if (botTokenEnv) connectors.slack = { botTokenEnv, ...(appTokenEnv && { appTokenEnv }), ...(userTokenEnv && { userTokenEnv }), ...(appName && { appName }), ...(appDescription && { appDescription }) }
     } else if (platform === 'github') {
       unknownKeys(t, ['repos', 'poll'], path)
       const repos = strList(t, 'repos', path)

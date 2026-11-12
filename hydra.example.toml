@@ -18,6 +18,8 @@ bot_token_env = "DISCORD_BOT_TOKEN"   # required: the .env variable holding the 
 [connectors.slack]
 bot_token_env = "SLACK_BOT_TOKEN"     # required
 app_token_env = "SLACK_APP_TOKEN"     # Socket Mode's app-level token
+app_name = "Acme helper"              # the Slack app's name, used by `hydra slack manifest` (default "hydra"; at most 35 characters)
+app_description = "Answers Acme's Slack threads it is tagged in."  # what the app says it does there (at most 140)
 
 [connectors.github]
 repos = ["acme/widget"]               # required: the repos whose PR comments hydra hears, as owner/repo

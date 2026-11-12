@@ -453,3 +453,20 @@ to = "desk"
       .toEqual(["specialists.ops: listens on discord:#feed, but [connectors.discord] isn't set, so it won't hear it"])
   })
 })
+
+describe('[connectors.slack] app_name and app_description', () => {
+  const slack = (lines: string) => `${BASE}\n[connectors.slack]\nbot_token_env = "SLACK_BOT_TOKEN"\n${lines}\n`
+  test('are kept as given, and absent when unset', () => {
+    expect(ok(slack('app_name = "Krust"\napp_description = "Answers the threads it is tagged in."')).config.connectors.slack)
+      .toEqual({ botTokenEnv: 'SLACK_BOT_TOKEN', appName: 'Krust', appDescription: 'Answers the threads it is tagged in.' })
+    expect(ok(slack('')).config.connectors.slack).toEqual({ botTokenEnv: 'SLACK_BOT_TOKEN' })
+  })
+  test('past Slack\'s limits (35 and 140 characters) are refused', () => {
+    // Characters, not UTF-16 units: 34 letters and an emoji is 35.
+    expect(ok(slack(`app_name = "${'k'.repeat(34)}🦀"\napp_description = "${'d'.repeat(140)}"`)).config.connectors.slack?.appName).toBe(`${'k'.repeat(34)}🦀`)
+    expect(errorsOf(slack(`app_name = "${'k'.repeat(36)}"\napp_description = "${'d'.repeat(141)}"`))).toEqual([
+      'connectors.slack.app_name: is 36 characters; Slack allows at most 35',
+      'connectors.slack.app_description: is 141 characters; Slack allows at most 140',
+    ])
+  })
+})
