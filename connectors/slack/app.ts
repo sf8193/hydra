@@ -1,7 +1,7 @@
 // The Slack app hydra runs as: every scope and event it uses, and the manifest that creates it from hydra.toml.
 // A leaf: the CLI reads it without loading Bolt or the daemon.
 
-import type { Connectors } from '../../config/types.js'
+import type { SlackApp } from '../../config/types.js'
 
 export type ScopeNeed = { option: string; any: readonly string[] }
 
@@ -30,8 +30,9 @@ export const SLACK_APP_NEEDS = {
 } as const
 
 /**
- * What the app is called and says it does when hydra.toml's `[connectors.slack]` doesn't set `app_name` or
- * `app_description`. With a user token the description says so: the app then reads threads as its installer.
+ * What the app is called and says it does when `display_name` or `description` is unset (`app_name` and `app_description`
+ * in `[connectors.slack]`). With a user token the description says so: the app then reads threads as its installer.
+ * An app other than `default` is called by its id.
  */
 export const SLACK_APP_DEFAULTS = {
   name: 'hydra',
@@ -40,13 +41,14 @@ export const SLACK_APP_DEFAULTS = {
 } as const
 
 /**
- * A Slack app manifest (YAML) for this hydra: its name and description from `[connectors.slack]`, its scopes and events
+ * A Slack app manifest (YAML) for one of this hydra's apps: its name and description from hydra.toml, its scopes and events
  * from `SLACK_APP_NEEDS`. User scopes and events only when a user token is configured. Socket Mode on, org deploy off.
  */
-export function slackManifest(slack: Connectors['slack']): string {
-  const name = slack?.appName ?? SLACK_APP_DEFAULTS.name
-  const withUser = !!slack?.userTokenEnv
-  const description = slack?.appDescription ?? SLACK_APP_DEFAULTS.description + (withUser ? SLACK_APP_DEFAULTS.userTokenNote : '')
+export function slackManifest(app?: SlackApp): string {
+  // With no app at all (no hydra.toml), the defaults.
+  const name = app?.displayName ?? SLACK_APP_DEFAULTS.name
+  const withUser = !!app?.userTokenEnv
+  const description = app?.description ?? SLACK_APP_DEFAULTS.description
   const botScopes = [...new Set(Object.values(SLACK_APP_NEEDS.botScopes).flatMap(n => n.any))]
   // The operator's text is quoted: a JSON string is a YAML double-quoted scalar, so a name with ': ' or ' #' stays a string.
   const q = (s: string) => JSON.stringify(s)
@@ -75,3 +77,10 @@ export function slackManifest(slack: Connectors['slack']): string {
     '',
   ].join('\n')
 }
+
+/** Names a key of the app hydra connects, for an operator to find: the same key in either table that can declare it. */
+export const defaultAppKey = (key: string): string =>
+  `\`${key}\` of the app named \`default\` (\`[slack.apps.default]\` or \`[connectors.slack]\`)`
+
+/** What an operator is told when hydra.toml has no app named `default`. */
+export const NO_DEFAULT_APP = 'hydra.toml has no app named `default`: add `[slack.apps.default]`'

@@ -5,8 +5,8 @@ import { catchUp, toEvent, type CatchUpResult, type Page, type RawMessage, type 
 import { mkdirSync, openSync, writeSync, closeSync, renameSync, rmSync } from 'fs'
 import { dirname } from 'path'
 import { routedChannels, hearsDms, unresolvedPlaces, NOT_A_MEMBER, OPERATOR_TOKEN_REFUSED, NO_DIRECTORY, SLACK_LIMITS, type SlackDirectory, type SlackWatchConfig, type SlackWatcher } from './watch.js'
-import type { HydraConfig } from '../../config/types.js'
-import { SLACK_APP_NEEDS, type ScopeNeed } from './app.js'
+import { defaultSlackApp, type HydraConfig, type SlackApp } from '../../config/types.js'
+import { SLACK_APP_NEEDS, NO_DEFAULT_APP, defaultAppKey, type ScopeNeed } from './app.js'
 import { timed } from '../../shared/loop-watch.js'
 import { awakeSince, suspendedSince, describeCause, type ResumeDetector } from '../../shared/resume.js'
 import { SLACK_CLIENT_PING_TIMEOUT_MS } from '../../shared/constants.js'
@@ -32,8 +32,8 @@ import { SLACK_CLIENT_PING_TIMEOUT_MS } from '../../shared/constants.js'
 
 /** Slack errors a retry cannot fix, each with what to do about it. */
 export const PERMANENT_SLACK_ERRORS: [RegExp, string][] = [
-  [/missing_scope/, 'the bot token lacks a scope. Add the scope named above (channels:history for public channels, groups:history for private ones), reinstall the app, put the new bot token in the variable [connectors.slack] bot_token_env names, and restart the daemon.'],
-  [/invalid_auth|not_authed|token_revoked|token_expired|account_inactive/, 'Slack does not accept the bot token. Put a valid bot token in the variable [connectors.slack] bot_token_env names, and restart the daemon.'],
+  [/missing_scope/, 'the bot token lacks a scope. Add the scope named above (channels:history for public channels, groups:history for private ones), reinstall the app, put the new bot token in the variable named by the ' + defaultAppKey('bot_token_env') + ', and restart the daemon.'],
+  [/invalid_auth|not_authed|token_revoked|token_expired|account_inactive/, 'Slack does not accept the bot token. Put a valid bot token in the variable named by the ' + defaultAppKey('bot_token_env') + ', and restart the daemon.'],
   [/not_in_channel|channel_not_found/, 'the bot cannot see a channel hydra.toml names. Invite it to the channel, or correct the place.'],
 ]
 
@@ -147,9 +147,10 @@ export type ListenerHealth = {
 
 export type ListenerDeps = {
   watcher: SlackWatcher
-  /** hydra.toml as loaded now. Slack is connected only while it has [connectors.slack]. */
+  /** hydra.toml as loaded now. Slack is connected only while it has an app named `default`. */
   hydra: () => HydraConfig
-  tokens: () => { app?: string; bot?: string; user?: string }
+  /** The tokens of one app, read from the variables it names. */
+  tokens: (app: SlackApp) => { app?: string; bot?: string; user?: string }
   createApp: (tokens: { app: string; bot: string; user?: string }) => SlackAppLike
   /** A plain message to the specialist's thread (not a session turn). */
   alert: (text: string) => void
@@ -201,7 +202,7 @@ export class SlackListener {
   /** What the watcher routes with: hydra.toml joined with what this connection learned. Null until connected once. */
   view(): SlackWatchConfig | null {
     const hydra = this.d.hydra()
-    if (!hydra.connectors.slack || !this.identity) return null
+    if (!defaultSlackApp(hydra) || !this.identity) return null
     return { hydra, ...this.identity, directory: this.directoryRead ? this.directory : NO_DIRECTORY, ...SLACK_LIMITS }
   }
 
@@ -229,10 +230,10 @@ export class SlackListener {
 
   /** False, with a log line naming what is missing, when Slack watching is not configured. */
   async start(): Promise<boolean> {
-    const slack = this.d.hydra().connectors.slack
-    const t = this.d.tokens()
+    const slack = defaultSlackApp(this.d.hydra())
+    const t = slack ? this.d.tokens(slack) : {}
     if (!slack || !t.app || !t.bot) {
-      this.d.log(`daemon: slack listener off (${!slack ? 'hydra.toml has no [connectors.slack]' : !t.bot ? `${slack.botTokenEnv} is not set` : slack.appTokenEnv ? `${slack.appTokenEnv} is not set` : '[connectors.slack] needs app_token_env for Socket Mode'})\n`)
+      this.d.log(`daemon: slack listener off (${!slack ? NO_DEFAULT_APP : !t.bot ? `${slack.botTokenEnv} is not set` : slack.appTokenEnv ? `${slack.appTokenEnv} is not set` : 'the app named `default` needs app_token_env for Socket Mode'})\n`)
       return false
     }
     if (this.started) return true
@@ -304,9 +305,10 @@ export class SlackListener {
 
   /** (Re)create the connection. Also what the supervisor calls to reconnect. */
   private async connect(): Promise<void> {
-    const t = this.d.tokens()
     const h = this.d.hydra()
-    if (!t.app || !t.bot || !h.connectors.slack) throw new Error('slack listener is not configured')
+    const slack = defaultSlackApp(h)
+    const t = slack ? this.d.tokens(slack) : {}
+    if (!t.app || !t.bot || !slack) throw new Error('slack listener is not configured')
     if (this.app) { try { await this.app.stop() } catch {} }
     const app = this.d.createApp({ app: t.app, bot: t.bot, ...(t.user && { user: t.user }) })
     app.onMessage(raw => this.onMessage(raw))

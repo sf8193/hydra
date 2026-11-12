@@ -6,8 +6,8 @@ import { pushToolSurface } from '../../daemon/tool-surface.js'
 import { deliverToTarget, conversationSessionName, conversationSessionRunning, placesFree, type Target } from '../../specialists/targets.js'
 import { on } from '../../daemon/event-bus.js'
 import { SlackListener, boltApp, POST_TIMEOUT_MS, type ListenerHealth } from './listener.js'
-import { SCRUBBED_ENV, STATE_DIR } from '../../daemon/config.js'
-import { SCRUBBED_SPAWN_VARS } from '../../shared/spawn-env.js'
+import { STATE_DIR } from '../../daemon/config.js'
+import { ENV_NAME_RE, capturedSpawnVars, scrubbedSpawnVars, tokenVarRefusal } from '../../shared/spawn-env.js'
 import { join } from 'path'
 import { existsSync } from 'fs'
 import { safeSend } from '../../daemon/util.js'
@@ -15,7 +15,8 @@ import { mainChannel } from '../../daemon/main-session.js'
 import { currentHydraConfig, onHydraConfigLoad } from '../../daemon/hydra-config.js'
 import { MAIN, currentId, isSessionThread } from '../../routing/route.js'
 import { chunk } from '../../daemon/util.js'
-import type { HydraConfig } from '../../config/types.js'
+import { defaultSlackApp, type HydraConfig, type SlackApp } from '../../config/types.js'
+import { NO_DEFAULT_APP } from './app.js'
 import { timed } from '../../shared/loop-watch.js'
 
 const log = (line: string) => { process.stderr.write(line) }
@@ -26,7 +27,7 @@ export const slackRuntimeDeps = {
   /** A place freed under max: catch-up refetches what waits, the oldest waiter first. */
   wake: (): void => { void listener?.runCatchUp(false, 'a place freed') },
   post: (channel: string, threadTs: string | undefined, text: string): Promise<string> => {
-    if (!listener) return Promise.reject(new Error('Slack is not connected (hydra.toml has no [connectors.slack], or its tokens are not set)'))
+    if (!listener) return Promise.reject(new Error('Slack is not connected (hydra.toml has no app named `default`, or its tokens are not set)'))
     return listener.post(channel, threadTs, text)
   },
   /** How long a listening session's thread may stand empty (a handoff, a respawn) before its threads are let go. */
@@ -136,46 +137,44 @@ export function targetFor(to: string, conversation: string | undefined): Target 
 let listener: SlackListener | undefined
 
 /**
- * A token is read only from a variable the daemon scrubs from every session it starts: a token anywhere else would
- * reach them all. Any other name is refused, with why, and the listener stays off.
+ * One app's tokens, each read from the variable the app names for it. A token is read only from a variable the daemon
+ * keeps from every session it starts: a token anywhere else would reach them all. hydra.toml's loader rejects a name
+ * that is not one, and the daemon adds the ones it names to those; a name still not kept is refused here, saying which
+ * key and why, and the listener stays off.
  */
-/** The Slack token variables the daemon scrubs from every session. */
-const SLACK_TOKEN_VARS: readonly string[] = SCRUBBED_SPAWN_VARS.filter(v => /^(SLOPBOT|HYDRA)_SLACK_/.test(v))
-
-export function slackTokens(h: HydraConfig, env: Readonly<Record<string, string>> = SCRUBBED_ENV, warn: (line: string) => void = log): { app?: string; bot?: string; user?: string } {
-  const c = h.connectors.slack
-  if (!c) return {}
-  const read = (name: string | undefined): string | undefined => {
+export function slackTokens(app: SlackApp, env: Readonly<Record<string, string>> = capturedSpawnVars(), warn: (line: string) => void = log): { app?: string; bot?: string; user?: string } {
+  const read = (key: 'bot_token_env' | 'app_token_env' | 'user_token_env', name: string | undefined): string | undefined => {
     if (!name) return undefined
-    if (!SLACK_TOKEN_VARS.includes(name)) {
-      warn(`daemon: slack listener: refusing to read the token in ${name}: only ${SLACK_TOKEN_VARS.join(' and ')} are kept from sessions, so a token in ${name} would reach every session hydra starts. Use one of those names.\n`)
+    if (!scrubbedSpawnVars().includes(name)) {
+      const why = !ENV_NAME_RE.test(name) ? 'is not an environment variable name' : tokenVarRefusal(name) ?? 'is not among the variables kept from sessions (the daemon adds the ones hydra.toml names when it loads it)'
+      warn(`daemon: slack listener: refusing to read the token in ${name}, the \`${key}\` of the app named \`${app.id}\`: it ${why}, so a token there would reach every session hydra starts. Name a variable only the daemon needs, like SLACK_BOT_TOKEN.\n`)
       return undefined
     }
     return env[name]
   }
-  const user = read(c.userTokenEnv)
-  return { bot: read(c.botTokenEnv), app: read(c.appTokenEnv), ...(user && { user }) }
+  const user = read('user_token_env', app.userTokenEnv)
+  return { bot: read('bot_token_env', app.botTokenEnv), app: read('app_token_env', app.appTokenEnv), ...(user && { user }) }
 }
 
 /**
  * Connects to Slack and begins feeding the watcher. Called once boot recovery has finished,
  * so a specialist refill never races it. The tokens come from the scrubbed environment: only this
  * module ever sees them, never a session. A no-op, with a log line, until hydra.toml has
- * [connectors.slack] and its tokens are set.
+ * an app named `default` and its tokens are set.
  */
 let watchingConfig = false
 export async function startSlackListener(): Promise<void> {
-  // A [connectors.slack] added later connects as soon as hydra.toml loads it: no restart.
-  if (!watchingConfig) { watchingConfig = true; onHydraConfigLoad(c => { if (!listener && c.connectors.slack) void startSlackListener() }) }
+  // An app named `default` added later connects as soon as hydra.toml loads it: no restart.
+  if (!watchingConfig) { watchingConfig = true; onHydraConfigLoad(c => { if (!listener && defaultSlackApp(c)) void startSlackListener() }) }
   if (listener) return
   // The old config is no longer read: left behind unmigrated, Slack would go quiet without a word.
-  if (!hydraConfig().connectors.slack && existsSync(join(STATE_DIR, 'slack-watch.json'))) {
-    alert('⚠️ <state>/slack-watch.json is no longer read, and hydra.toml has no [connectors.slack], so Slack is not connected. Run `hydra migrate` to carry its routes into hydra.toml (or add them by hand: [connectors.slack], and each route as a specialist\'s listens and allow); Slack connects as soon as hydra.toml loads it.')
+  if (!defaultSlackApp(hydraConfig()) && existsSync(join(STATE_DIR, 'slack-watch.json'))) {
+    alert('⚠️ <state>/slack-watch.json is no longer read, and hydra.toml has no app named `default`, so Slack is not connected. Run `hydra migrate` to carry its routes into hydra.toml; Slack connects as soon as hydra.toml loads it.')
   }
   const l = new SlackListener({
     watcher: getSlackWatcher(),
     hydra: hydraConfig,
-    tokens: () => slackTokens(hydraConfig()),
+    tokens: slackTokens,
     createApp: boltApp,
     log,
     alert: text => alert(text),
@@ -196,7 +195,7 @@ let lastConnected: boolean | undefined
  * disconnecting Slack gives or takes every thread session's conversation tools.
  */
 export function refreshSlackSpecialistSurface(): void {
-  const connected = !!hydraConfig().connectors.slack
+  const connected = !!defaultSlackApp(hydraConfig())
   if (lastConnected !== undefined && connected !== lastConnected) for (const s of registry.values()) pushToolSurface(s.sessionId)
   lastConnected = connected
   const now = slackSpecialists(hydraConfig())
@@ -304,7 +303,7 @@ export const TOOL_BIND_MAX = 10
  */
 export async function bindConversation(caller: Partial<Pick<SessionInfo, 'threadId' | 'tmuxName' | 'sessionType'>> | undefined, conversation: unknown): Promise<string> {
   const v = offlineView()
-  if (!v.hydra.connectors.slack) throw new Error('Slack is not connected: hydra.toml has no [connectors.slack]')
+  if (!defaultSlackApp(v.hydra)) throw new Error(`Slack is not connected: ${NO_DEFAULT_APP}`)
   const me = boundAs(caller, v.hydra)
   if (!me) throw new Error('this session has no thread to bind a conversation to')
   const c = parseConversation(conversation)
@@ -314,7 +313,7 @@ export async function bindConversation(caller: Partial<Pick<SessionInfo, 'thread
   // Asked of Slack, not assumed: a bind nobody can read would say "listening" and deliver nothing.
   const via = await slackRuntimeDeps.readThread(c.channel, c.threadTs).catch((err: unknown) => {
     const why = err instanceof Error ? err.message : String(err)
-    throw new Error(`not bound: ${conversationId(c)}: ${cantRead(v.hydra, placeName(v, c.channel), why, config()?.botUserId)}`)
+    throw new Error(`not bound: ${conversationId(c)}: ${cantRead(defaultSlackApp(v.hydra), placeName(v, c.channel), why, config()?.botUserId)}`)
   })
   // A specialist answers in its threads: one only the operator can read is one it could never post in.
   if (via === 'user' && !isSessionThread(me)) throw new Error(`not bound: ${conversationId(c)}: the bot isn't in ${placeName(v, c.channel)}, so ${me} could not answer there. Ask the operator to invite it, then bind again`)
@@ -491,7 +490,7 @@ export function formatConversationsFor(caller: Partial<Pick<SessionInfo, 'thread
 /** For `hydra health` and `hydra conversations`: null when Slack isn't configured. Refusals and drops count since the daemon started. */
 export function slackWatchHealth(now = Date.now()): ({ places: { place: string; to: string; note?: string }[]; conversations: number; readAsOperator: number; owed: number; oldestOwedAgeMin: number | null; listener?: ListenerHealth } & SlackWatchStats) | null {
   const h = hydraConfig()
-  if (!h.connectors.slack) return null
+  if (!defaultSlackApp(h)) return null
   const v = offlineView()
   const entries = getSlackWatcher().list()
   const owed = entries.flatMap(e => e.owed ?? [])

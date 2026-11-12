@@ -5,8 +5,8 @@ import { fileURLToPath } from 'url'
 import { join } from 'path'
 import { parseEnvLine } from '../env-parse.js'
 import {
-  NEW_SESSION_TIMEOUT_MS, SCRUBBED_SPAWN_VARS, SWEEP_ARGV, TMUX_PANE_FD_LIMIT,
-  captureSpawnVars, codexSpawnEnv, scrubbedSpawnEnv, tmuxNewSession, withRaisedFdLimit,
+  NEW_SESSION_TIMEOUT_MS, SCRUBBED_SPAWN_VARS, TMUX_PANE_FD_LIMIT, NEVER_SCRUBBED, NEVER_SCRUBBED_PREFIXES,
+  _resetScrubbedForTesting, capturedSpawnVars, captureSpawnVars, codexSpawnEnv, registerSpawnVars, scrubbedSpawnEnv, scrubbedSpawnVars, tmuxNewSession, tokenVarRefusal, withRaisedFdLimit,
 } from '../spawn-env.js'
 
 function withEnv(vars: Record<string, string | undefined>, fn: () => void): void {
@@ -106,7 +106,6 @@ test('tmuxNewSession sweeps every var in one call, before it creates the session
     ';', 'set-environment', '-gr', 'HYDRA_SLACK_BOT_TOKEN',
     ';', 'set-environment', '-gr', 'HYDRA_SLACK_USER_TOKEN',
   ])
-  expect(calls[0].argv).toEqual([...SWEEP_ARGV])
   expect(calls[1].argv).toEqual(['new-session', '-d', '-s', 'probe'])
 })
 
@@ -410,3 +409,32 @@ test('env-setup.sh sources the scrub after the .env, not before', () => {
   expect(src.search(/scrub-raindrop\.sh/)).toBeGreaterThan(src.lastIndexOf('"$STATE_DIR/.env"'))
 })
 
+
+test('names a config declares are scrubbed too: a SLOPBOT_ one and a custom one, from the env, the sweep and every spawn', () => {
+  _resetScrubbedForTesting()
+  try {
+    const env: NodeJS.ProcessEnv = { SLOPBOT_SLACK_SALES_TOKEN: 'xoxb-s', ACME_PRIVATE_BOT: 'xoxb-a', PATH: '/bin', KEEP: 'k' }
+    const { added, refused } = registerSpawnVars(['SLOPBOT_SLACK_SALES_TOKEN', 'ACME_PRIVATE_BOT', 'PATH', 'not-an-env-name', 'HYDRA_SLACK_BOT_TOKEN'], env)
+    // PATH and a malformed name are refused, with why; a fixed name is already scrubbed, so not added again.
+    expect(added).toEqual(['SLOPBOT_SLACK_SALES_TOKEN', 'ACME_PRIVATE_BOT'])
+    expect(refused).toEqual([{ name: 'PATH', reason: 'is a variable sessions need' }, { name: 'not-an-env-name', reason: 'is not an environment variable name' }])
+    expect(env).toEqual({ PATH: '/bin', KEEP: 'k' })
+    expect(capturedSpawnVars()).toMatchObject({ SLOPBOT_SLACK_SALES_TOKEN: 'xoxb-s', ACME_PRIVATE_BOT: 'xoxb-a' })
+    expect(scrubbedSpawnVars()).toEqual([...SCRUBBED_SPAWN_VARS, 'SLOPBOT_SLACK_SALES_TOKEN', 'ACME_PRIVATE_BOT'])
+    expect(scrubbedSpawnEnv({ SLOPBOT_SLACK_SALES_TOKEN: 'x', ACME_PRIVATE_BOT: 'y', PATH: '/bin' })).toEqual({ PATH: '/bin' })
+    expect(codexSpawnEnv({ ACME_PRIVATE_BOT: 'y' }).ACME_PRIVATE_BOT).toBeUndefined()
+    // A name registered after boot is taken by a later captureSpawnVars too.
+    expect(captureSpawnVars({ ACME_PRIVATE_BOT: 'again' })).toEqual({ ACME_PRIVATE_BOT: 'again' })
+    const { calls, exec } = capture()
+    tmuxNewSession(['-d', '-s', 'probe'], {}, exec)
+    const fixed = SCRUBBED_SPAWN_VARS.flatMap((v, i) => (i === 0 ? [] : [';']).concat('set-environment', '-gr', v))
+    expect(calls[0].argv).toEqual([...fixed, ';', 'set-environment', '-gr', 'SLOPBOT_SLACK_SALES_TOKEN', ';', 'set-environment', '-gr', 'ACME_PRIVATE_BOT'])
+  } finally { _resetScrubbedForTesting() }
+})
+
+test('a variable sessions need is never a token variable; the names hydra has always scrubbed still are', () => {
+  for (const v of [...NEVER_SCRUBBED, 'HYDRA_SESSION_ID', 'CLAUDE_CONFIG_DIR', 'LC_ALL', 'XDG_CONFIG_HOME']) expect(tokenVarRefusal(v), v).toBe('is a variable sessions need')
+  for (const v of ['ANTHROPIC_API_KEY', 'GH_TOKEN', 'SSH_AUTH_SOCK', 'LOGNAME', 'PATH']) expect(NEVER_SCRUBBED.has(v)).toBe(true)
+  expect(NEVER_SCRUBBED_PREFIXES).toEqual(['HYDRA_', 'CLAUDE_', 'LC_', 'XDG_'])
+  for (const v of [...SCRUBBED_SPAWN_VARS, 'HYDRA_SLACK_SALES_BOT', 'SLACK_BOT_TOKEN', 'ACME_X']) expect(tokenVarRefusal(v), v).toBeUndefined()
+})

@@ -6,11 +6,18 @@ import { join } from 'path'
 import { STATE_DIR, PLATFORM } from './config.js'
 import { SESSION_NAMES } from './sessions.js'
 import { EMPTY_CONFIG, formatIssues, systemEnv } from '../config/load.js'
+import { scrubTokenVarsNamedIn, slackEnvNames } from '../config/token-vars.js'
+import { registerSpawnVars, type SpawnVarRefusal } from '../shared/spawn-env.js'
 import { watchHydraConfig, type HydraConfigWatch } from '../config/watch.js'
 import type { HydraConfig, LoadEnv, LoadResult } from '../config/types.js'
 
 export const HYDRA_CONFIG_FILE = 'hydra.toml'
 export const hydraConfigPath = () => join(STATE_DIR, HYDRA_CONFIG_FILE)
+
+/** A name the loader would have rejected and the scrub will not take: said once per read, never with a value. */
+function reportRefused(refused: SpawnVarRefusal[]): void {
+  for (const r of refused) process.stderr.write(`daemon: hydra.toml names ${r.name} as a Slack token variable, but it ${r.reason}, so it is not kept from sessions and not read as a token\n`)
+}
 
 let watch: HydraConfigWatch | undefined
 let override: HydraConfig | undefined
@@ -69,11 +76,15 @@ export function startHydraConfig(opts: { alert?: Send; env?: LoadEnv; intervalMs
     path: hydraConfigPath(),
     env: opts.env ?? systemEnv(SESSION_NAMES),
     intervalMs: opts.intervalMs,
+    // The variables the file names as tokens are kept from sessions even when the file does not load.
+    onText: text => reportRefused(scrubTokenVarsNamedIn(text)),
     onAlert: text => { process.stderr.write(`daemon: ${text}\n`); undelivered = text; lastLoadOk = false; void deliver() },
     onLoad: (config, warnings) => {
       undelivered = undefined
       lastLoadOk = true
       live = config
+      // Before any consumer hears the config: the token variables its apps name are kept from every session (a backstop to onText).
+      reportRefused(registerSpawnVars(slackEnvNames(config)).refused)
       inUse = config.operator !== undefined
       const op = config.operator ? config.people[config.operator] : undefined
       if (op && !op.ids.some(a => a.startsWith(`${PLATFORM}:`))) {

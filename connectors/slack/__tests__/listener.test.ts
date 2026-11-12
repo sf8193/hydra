@@ -148,7 +148,7 @@ describe('diagnosing a refused token', () => {
     await t.listener.start()
     expect(t.alerts).toHaveLength(1)
     expect(t.alerts[0]).toContain('missing_scope: the token needs groups:history and has chat:write')
-    expect(t.alerts[0]).toContain('[connectors.slack] bot_token_env')
+    expect(t.alerts[0]).toContain('`bot_token_env` of the app named `default` (`[slack.apps.default]` or `[connectors.slack]`)')
     await t.listener.runCatchUp(true, 'retry')
     expect(t.alerts).toHaveLength(1) // not again for the same cause
     t.state.historyError = undefined
@@ -176,10 +176,10 @@ describe('diagnosing a refused token', () => {
 })
 
 describe('starting', () => {
-  test('without [connectors.slack] or a token it stays off and names what is missing, never a token', async () => {
+  test('without an app named `default` or a token it stays off and names what is missing, never a token', async () => {
     const noCfg = setup({ toml: null })
     expect(await noCfg.listener.start()).toBe(false)
-    expect(noCfg.logs.join()).toContain('hydra.toml has no [connectors.slack]')
+    expect(noCfg.logs.join()).toContain('hydra.toml has no app named `default`: add `[slack.apps.default]`')
     const noApp = setup({ tokens: { bot: TOKENS.bot } })
     expect(await noApp.listener.start()).toBe(false)
     expect(noApp.logs.join()).toContain('SLOPBOT_SLACK_APP_TOKEN is not set')
