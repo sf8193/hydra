@@ -15,6 +15,7 @@ import { checkDaemonCpu } from './watchdog-cpu.js'
 import { noteRestart } from './watchdog-restarts.js'
 import { bootRefusal } from '../config/migrate.js'
 import { noteBootRefusal } from './boot-refusal.js'
+import { clearMainRecord, writeMainRecord } from '../shared/main-record.js'
 
 // ---------------------------------------------------------------------------
 // Start byte (replaces start-byte.sh)
@@ -106,6 +107,12 @@ export async function startByte(cfg: HydraConfig): Promise<void> {
     `caffeinate -i claude --model ${shq(cfg.byteModel)} --channels plugin:discord@claude-plugins-official --dangerously-skip-permissions ${shq(prompt)}`,
   ].filter(Boolean).join(' && ')
 
+  // The daemon reads main's context on its launch model's window from this; without it, from the pane footer.
+  // A failed write must not keep the byte from starting, nor leave an earlier launch's model in place.
+  try { writeMainRecord(cfg.stateDir, { model: cfg.byteModel }) } catch (err) {
+    clearMainRecord(cfg.stateDir)
+    appendLog(cfg.byteLog, `main record not written (context % falls back to the pane footer): ${err}`)
+  }
   tmuxSpawn(cfg.byteTmux, inner)
 
   appendLog(cfg.byteLog, `${cfg.platform} byte started (daemon+bridge)`)

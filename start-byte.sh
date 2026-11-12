@@ -79,7 +79,9 @@ elif [ -f "$HOME/.angellist-claude-token" ] && [ "$CHAT_PLATFORM" = "slack" ]; t
   AUTH_EXPORT="export CLAUDE_CODE_OAUTH_TOKEN=\"\$(cat \$HOME/.angellist-claude-token)\" &&"
 fi
 
-# Start byte
+# Start byte. It writes no main record (shared/main-record.ts), so drop any an earlier `hydra up` left:
+# the daemon then reads its context from the pane footer, not from a model it was not launched with.
+rm -f "$STATE_DIR/main.json"
 tmux new-session -d -s "$SESSION" \
   "cd '$CWD' && export DAEMON_SOCK='$SOCK' && export CLAUDE_CONFIG_DIR='$CONFIG_DIR' && export CHAT_PLATFORM=$CHAT_PLATFORM && export HYDRA_ROLE=main && $AUTH_EXPORT caffeinate -i claude --model 'claude-opus-5-5[1m]' --channels plugin:discord@claude-plugins-official --dangerously-skip-permissions \
   \"$PROMPT\""
