@@ -6,9 +6,19 @@ import { join } from 'path'
 import { resolveConfig } from './helpers.js'
 import { formatIssues, loadHydraConfig, systemEnv } from '../config/load.js'
 import { slackManifest } from '../connectors/slack/app.js'
+import { scanSlackEnvNames } from '../config/token-vars.js'
+import { tokenVarRefusal } from '../shared/spawn-env.js'
 import { SESSION_NAMES } from '../shared/session-catalog.js'
 
 export function slackCommand(args: string[], stateDirOpt: string | undefined): number {
+  // Hidden, for `scrub-raindrop.sh`: the token variables hydra.toml names, one per line, so a shell entrypoint unsets a custom one too.
+  // Read like the daemon reads them (config/token-vars.ts), valid file or not; a missing file names none.
+  if (args.length === 1 && args[0] === 'token-vars') {
+    const file = join(stateDirOpt ?? resolveConfig().stateDir, 'hydra.toml')
+    // Only what the loader would accept as a token variable: a variable sessions need (`PATH`, `HOME`, `HYDRA_*`…) is never printed, so it is never unset.
+    if (existsSync(file)) for (const name of scanSlackEnvNames(readFileSync(file, 'utf8'))) if (!tokenVarRefusal(name)) console.log(name)
+    return 0
+  }
   if (args.length < 1 || args.length > 2 || args[0] !== 'manifest') {
     console.error('usage: hydra [--state-dir <dir>] slack manifest [<app>]')
     return 1

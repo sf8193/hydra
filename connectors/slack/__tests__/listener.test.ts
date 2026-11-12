@@ -6,10 +6,12 @@ import { SlackWatcher } from '../watch.js'
 import { hydra as load, oneListener, view, BASE } from './slack-config.js'
 import { EMPTY_CONFIG } from '../../../config/load.js'
 import type { HydraConfig } from '../../../config/types.js'
-import { SlackListener, DOWN_ALERT_AFTER_MS, CATCH_UP_STALE_AFTER_MS, explainSlackError, readReplies, type SlackAppLike, type RawEvent } from '../listener.js'
+import { SlackListener, DOWN_ALERT_AFTER_MS, implicitScopeOptions, type ToldScopes, CATCH_UP_STALE_AFTER_MS, explainSlackError, readReplies, type SlackAppLike, type RawEvent } from '../listener.js'
 import type { SlackApi, RawMessage } from '../catchup.js'
 import type { SocketEmitter } from '../../../shared/socket-supervisor.js'
 import { createResumeDetector, type LastSleep } from '../../../shared/resume.js'
+import { slackHealthLines } from '../../../cli/helpers.js'
+import { route } from '../../../routing/route.js'
 
 const BOT = 'UBOT'
 const CH = 'C0FOOD'
@@ -27,7 +29,7 @@ const dirs: string[] = []
 const listeners: SlackListener[] = []
 afterEach(() => { for (const l of listeners.splice(0)) l.stop(); for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
 
-function setup(over: { tokens?: { app?: string; bot?: string }; toml?: string | null; failStart?: boolean; firstRetryBaseMs?: number; scopes?: string[]; historyError?: string; history?: RawMessage[]; threads?: Record<string, RawMessage[]>; duringStart?: (deliverLive: (e: RawEvent) => void) => void; channels?: { id: string; name: string }[]; channelsError?: string } = {}) {
+function setup(over: { tokens?: { app?: string; bot?: string }; toml?: string | null; failStart?: boolean; firstRetryBaseMs?: number; scopes?: string[]; historyError?: string; history?: RawMessage[]; threads?: Record<string, RawMessage[]>; duringStart?: (deliverLive: (e: RawEvent) => void) => void; channels?: { id: string; name: string }[]; channelsError?: string; told?: ToldScopes } = {}) {
   const toml = over.toml === undefined ? TOML : over.toml
   const h: HydraConfig = toml === null ? EMPTY_CONFIG : load(toml)
   const dir = mkdtempSync(join(tmpdir(), 'slack-listener-'))
@@ -51,6 +53,7 @@ function setup(over: { tokens?: { app?: string; bot?: string }; toml?: string | 
   listener = new SlackListener({
     watcher,
     hydra: () => h,
+    ...(over.told && { told: over.told }),
     tokens: () => over.tokens ?? TOKENS,
     now: () => now,
     log: l => logs.push(l),
@@ -157,7 +160,7 @@ describe('diagnosing a refused token', () => {
     t.state.historyError = 'not_in_channel'
     await t.listener.runCatchUp(true, 'retry')
     expect(t.alerts).toHaveLength(2)
-    expect(t.alerts[1]).toContain('Invite it to the channel')
+    expect(t.alerts[1]).toContain('Invite the bot to the channel named above')
   })
 
   test("an error that is not permanent, such as a rate limit, raises no alert", async () => {
@@ -430,7 +433,7 @@ describe('health and alerts', () => {
     expect(t.alerts.filter(a => a.includes('catch-up pass has not completed'))).toHaveLength(0)
     t.tick(60_000)
     await t.listener.checkAlerts()
-    expect(t.alerts).toEqual([`⚠️ The Slack catch-up pass has not completed for 25 min awake (the machine was asleep for 99 min; ratelimited). Live delivery is unaffected, but a gap would not be filled.`])
+    expect(t.alerts).toEqual([`⚠️ The Slack catch-up pass has not completed for 25 min awake (the machine was asleep for 99 min; ratelimited). Live delivery is unaffected, but a gap would not be filled. \`hydra health\` shows the last pass and why it failed.`])
   })
 
   test('a socket that closed just before a sleep is down for its awake minutes on wake, not the sleep: no down alert', async () => {
@@ -518,5 +521,94 @@ describe('readReplies: the bot first, the operator where the bot is not a member
     const s = script({ xoxb: fail('An API error occurred: not_in_channel'), xoxp: fail('An API error occurred: ratelimited') })
     const err = await readReplies(s.read, { bot: 'xoxb', user: 'xoxp' }).then(() => new Error('read'), (e: Error) => e)
     expect(err.message).toBe('An API error occurred: ratelimited')
+  })
+})
+
+describe('an old single-app config runs unchanged', () => {
+  const ALL = ['channels:history', 'users:read', 'im:history', 'im:read', 'reactions:write', 'chat:write']
+  test('routes: a tag in the listened channel goes to its specialist, and the conversation id has no app in it', async () => {
+    const t = setup({ scopes: ALL })
+    await t.listener.start()
+    const d = route(t.listener.view()!.hydra, { from: 'slack:UB', at: [`slack:${CH}`], addressed: true, app: 'default' })
+    expect(d).toMatchObject({ fate: 'deliver', to: 'slopbot', via: 'listens' })
+    t.apps[0].handler(message({ ts: '1100.000001' }))
+    await t.watcher.flush()
+    expect(t.watcher.get(CH, '1100.000001')).toMatchObject({ specialist: 'slopbot' })
+    expect(t.watcher.get(CH, '1100.000001')!.app).toBeUndefined()
+  })
+
+  test('health: the one line it always printed, and `listener` still there beside `apps`', async () => {
+    const t = setup({ scopes: ALL })
+    await t.listener.start()
+    const h = t.listener.health()
+    expect(h).toMatchObject({ state: 'up', downMin: null, catchUp: { ok: true }, missingScopes: [] })
+    expect(slackHealthLines({ listener: h, apps: { default: h }, conversations: 1, readAsOperator: 0, owed: 0, oldestOwedAgeMin: null })).toEqual(['slack: listener up · catch-up ok 0 min ago · 1 conversation · 0 owed'])
+    expect(slackHealthLines({ conversations: 0, readAsOperator: 0, owed: 3, oldestOwedAgeMin: 12 })).toEqual(['slack: listener off · 0 conversations · 3 owed, oldest 12 min'])
+  })
+
+  test('alert wording: no app is named', async () => {
+    const t = setup({ scopes: ALL })
+    await t.listener.start()
+    t.apps[0].client.emit('disconnected')
+    t.tick(DOWN_ALERT_AFTER_MS + 60_000)
+    await t.listener.checkAlerts()
+    t.apps[0].client.emit('connected')
+    await t.listener.checkAlerts()
+    expect(t.alerts).toEqual([
+      '⚠️ The Slack listener has been down for 6 min awake. Mentions are not arriving live; the catch-up pass replays them once it reconnects. Check the tokens and the app\'s Socket Mode setting at api.slack.com/apps; `hydra health` shows its state.',
+      '✅ The Slack listener is connected again.',
+    ])
+  })
+
+  test('the scope check names the fix without an app', async () => {
+    const t = setup({ scopes: ['channels:history'] })
+    await t.listener.start()
+    expect(t.alerts).toHaveLength(1)
+    expect(t.alerts[0]).toMatch(/^⚠️ The Slack bot token lacks users:read \(sender names\); /)
+    expect(t.alerts[0]).toContain('`hydra slack manifest`')
+  })
+})
+
+describe('the scope check alerts for what was declared, once per episode', () => {
+  const FULL = ['channels:history', 'users:read', 'im:history', 'im:read', 'reactions:write', 'chat:write']
+  const without = (...gone: string[]) => FULL.filter(sc => !gone.includes(sc))
+  const memory = (): ToldScopes => { const m = new Map<string, string>(); return { get: a => m.get(a), set: (a, k) => { if (k === null) m.delete(a); else m.set(a, k) } } }
+
+  test('a token with no im:* where only the operator’s own Slack address asks for DMs: no alert at boot, and health says what is missing', async () => {
+    // BASE: the operator has a Slack address; a specialist listens on a channel; nothing names slack:dm.
+    const t = setup({ scopes: without('im:history', 'im:read') })
+    await t.listener.start()
+    expect(t.alerts).toEqual([])
+    expect(t.listener.health().missingScopes?.map(m => m.any[0])).toEqual(['im:history', 'im:read'])
+    expect(t.logs.join()).toContain('WARN dms needs im:history')
+    expect(implicitScopeOptions(t.listener.view()!.hydra)).toEqual(['dms', 'catching up DMs opened while disconnected'])
+    expect(slackHealthLines({ listener: t.listener.health(), conversations: 0, readAsOperator: 0, owed: 0, oldestOwedAgeMin: null })[0]).toContain('· missing im:history (dms); im:read (catching up DMs opened while disconnected)')
+  })
+
+  test('the same DM scopes, when a specialist names slack:dm, are declared: they alert', async () => {
+    const t = setup({ scopes: without('im:history', 'im:read'), toml: oneListener(CH, 'slopbot', '["anyone"]').replace(`listens = ["slack:${CH}"]`, `listens = ["slack:${CH}", "slack:dm"]`) })
+    await t.listener.start()
+    expect(t.alerts).toHaveLength(1)
+    expect(t.alerts[0]).toContain('im:history (dms)')
+  })
+
+  test('a declared place’s missing scope alerts once; a second boot does not say it again; complete again, then missing again, alerts again', async () => {
+    const told = memory()
+    const boot = async (scopes: string[]) => { const t = setup({ scopes, told }); await t.listener.start(); return t }
+    const first = await boot(without('channels:history'))
+    expect(first.alerts).toHaveLength(1)
+    expect(first.alerts[0]).toContain('channels:history or groups:history (channels)')
+    expect((await boot(without('channels:history'))).alerts).toEqual([])   // the next boot: the same episode
+    expect((await boot(FULL)).alerts).toEqual([])                          // complete again: the episode ends
+    expect((await boot(without('channels:history'))).alerts).toHaveLength(1)
+  })
+
+  test('within one run, a reconnect that finds the same scope missing says nothing more', async () => {
+    const t = setup({ scopes: without('channels:history') })
+    await t.listener.start()
+    t.apps[0].client.emit('disconnected')
+    t.apps[0].client.emit('connected')
+    await Bun.sleep(10)
+    expect(t.alerts.filter(a => a.includes('bot token'))).toHaveLength(1)
   })
 })

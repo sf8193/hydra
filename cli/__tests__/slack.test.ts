@@ -55,3 +55,25 @@ describe('hydra slack manifest', () => {
     expect(Bun.YAML.parse(r.out)).toMatchObject({ display_information: { name: 'sales' } })
   })
 })
+
+describe('hydra slack token-vars (hidden: what scrub-raindrop.sh asks)', () => {
+  const run = (toml?: string) => {
+    dir = mkdtempSync(join(tmpdir(), 'slack-token-vars-'))
+    if (toml !== undefined) writeFileSync(join(dir, 'hydra.toml'), toml)
+    const p = Bun.spawnSync(['bun', join(root, 'cli', 'hydra.ts'), '--state-dir', dir, 'slack', 'token-vars'], { cwd: root })
+    return { code: p.exitCode, names: p.stdout.toString().split('\n').filter(Boolean), err: p.stderr.toString() }
+  }
+  test('prints every token variable the Slack tables name, one per line, and nothing else', () => {
+    const r = run(`${OP}[connectors.slack]\nbot_token_env = "ACME_BOT"\napp_token_env = "ACME_APP"\n[slack.apps.sales]\nbot_token_env = "S_BOT"\nuser_token_env = "S_USER"\n`)
+    expect(r).toMatchObject({ code: 0, err: '' })
+    expect(r.names.sort()).toEqual(['ACME_APP', 'ACME_BOT', 'S_BOT', 'S_USER'])
+  })
+  test('never prints a variable sessions need, though hydra.toml names it (the loader refuses it; the shell must not unset it)', () => {
+    const r = run(`${OP}[slack.apps.a]\nbot_token_env = "PATH"\napp_token_env = "HOME"\nuser_token_env = "HYDRA_STATE_DIR"\n[slack.apps.b]\nbot_token_env = "TMUX"\napp_token_env = "HYDRA_SLACK_APP_TOKEN"\n`)
+    expect(r.names).toEqual(['HYDRA_SLACK_APP_TOKEN'])
+  })
+  test('names them even when hydra.toml does not load, and none when there is no file', () => {
+    expect(run('[slack.apps.sales]\nbot_token_env = "S_BOT"\nthis is not toml\n').names).toEqual(['S_BOT'])
+    expect(run()).toMatchObject({ code: 0, names: [] })
+  })
+})

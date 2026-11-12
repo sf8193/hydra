@@ -1,8 +1,8 @@
 import { test, expect } from 'bun:test'
-import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'fs'
+import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { homedir, tmpdir } from 'os'
 import { fileURLToPath } from 'url'
-import { join } from 'path'
+import { dirname, join } from 'path'
 import { parseEnvLine } from '../env-parse.js'
 import {
   NEW_SESSION_TIMEOUT_MS, SCRUBBED_SPAWN_VARS, TMUX_PANE_FD_LIMIT, NEVER_SCRUBBED, NEVER_SCRUBBED_PREFIXES,
@@ -240,6 +240,73 @@ test.each(SHELLS)('scrub-raindrop.sh sweeps an already-running server under %s',
   const { swept } = runScrub(sh, true)
   const lines = swept.trim().split('\n').filter(Boolean).sort()
   expect(lines).toEqual(SCRUBBED_SPAWN_VARS.map(v => `set-environment -gr ${v}`).sort())
+})
+
+// A token variable hydra.toml names under any name is unset by the shell entrypoints too: the script asks the CLI which names the file declares.
+function runScrubWith(sh: string, toml: string | null, extraEnv: Record<string, string>, opts: { shimBun?: string } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'rd-scrub-toml-'))
+  try {
+    copyFileSync(join(ROOT, 'scrub-raindrop.sh'), join(dir, 'scrub.sh'))
+    if (toml !== null) writeFileSync(join(dir, 'hydra.toml'), toml)
+    // A tmux that does nothing: the script's sweep must never reach a real server.
+    writeFileSync(join(dir, 'tmux'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    if (opts.shimBun !== undefined) writeFileSync(join(dir, 'bun'), opts.shimBun, { mode: 0o755 })
+    const path = opts.shimBun !== undefined ? `${dir}:/usr/bin:/bin` : `${dir}:${dirname(process.execPath)}:/usr/bin:/bin`
+    const proc = Bun.spawnSync([sh, '-c', '. ./scrub.sh; env'], { cwd: dir, env: { PATH: path, STATE_DIR: dir, SCRIPT_DIR: ROOT, ...extraEnv } })
+    return { out: new TextDecoder().decode(proc.stdout), err: new TextDecoder().decode(proc.stderr), code: proc.exitCode }
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+}
+
+test.each(SHELLS)('scrub-raindrop.sh unsets a custom token variable hydra.toml names, under %s', (sh) => {
+  const r = runScrubWith(sh, '[slack.apps.sales]\nbot_token_env = "ACME_SALES_BOT"\napp_token_env = "ACME_SALES_APP"\n', { ACME_SALES_BOT: 'xoxb-secret', ACME_SALES_APP: 'xapp-secret', UNRELATED: 'kept' })
+  expect(r.code, `${sh} exit`).toBe(0)
+  expect(r.out).not.toContain('ACME_SALES_BOT=')
+  expect(r.out).not.toContain('ACME_SALES_APP=')
+  expect(r.out).toContain('UNRELATED=kept')
+  expect(r.err).toBe('')
+})
+
+test.each(SHELLS)('a hydra.toml that names PATH, HOME, TMUX or HYDRA_* as token variables never gets them unset, under %s', (sh) => {
+  const toml = '[slack.apps.a]\nbot_token_env = "PATH"\napp_token_env = "HOME"\nuser_token_env = "TMUX"\n[slack.apps.b]\nbot_token_env = "HYDRA_STATE_DIR"\napp_token_env = "CLAUDE_CONFIG_DIR"\n[slack.apps.c]\nbot_token_env = "ACME_BOT"\n'
+  const r = runScrubWith(sh, toml, { HOME: '/home/op', TMUX: '/tmp/t,1,0', HYDRA_STATE_DIR: '/s', CLAUDE_CONFIG_DIR: '/c', ACME_BOT: 'xoxb-secret' })
+  expect(r.code).toBe(0)
+  for (const v of ['HOME=/home/op', 'TMUX=/tmp/t,1,0', 'HYDRA_STATE_DIR=/s', 'CLAUDE_CONFIG_DIR=/c', 'PATH=']) expect(r.out, `${sh}: ${v}`).toContain(v)
+  expect(r.out).not.toContain('ACME_BOT=')
+})
+
+test.each(SHELLS)('even if the lookup printed a variable sessions need, the shell refuses to unset it, under %s', (sh) => {
+  const bun = '#!/bin/sh\nprintf "PATH\\nHOME\\nHYDRA_X\\nACME_BOT\\nHYDRA_SLACK_FOO\\nlower\\n"\n'
+  const r = runScrubWith(sh, '', { HOME: '/home/op', HYDRA_X: 'x', ACME_BOT: 'b', HYDRA_SLACK_FOO: 'f', lower: 'l' }, { shimBun: bun })
+  expect(r.out).toContain('HOME=/home/op')
+  expect(r.out).toContain('HYDRA_X=x')
+  expect(r.out).toContain('PATH=')
+  expect(r.out).toContain('lower=l')
+  expect(r.out).not.toContain('ACME_BOT=')
+  expect(r.out).not.toContain('HYDRA_SLACK_FOO=')
+})
+
+test.each(SHELLS)('when the lookup cannot run, one line on stderr says custom variables were not scrubbed, and the fixed names still go, under %s', (sh) => {
+  const failing = runScrubWith(sh, '', { ACME_BOT: 'b', RAINDROP_WRITE_KEY: 'k' }, { shimBun: '#!/bin/sh\nexit 1\n' })
+  expect(failing.code).toBe(0)
+  expect(failing.err.trim().split('\n')).toHaveLength(1)
+  expect(failing.err).toContain('were not scrubbed')
+  expect(failing.out).toContain('ACME_BOT=')
+  expect(failing.out).not.toContain('RAINDROP_WRITE_KEY=')
+  // No state dir at all: the same one line, and the same exit.
+  const bare = runScrubWith(sh, null, { STATE_DIR: '', RAINDROP_WRITE_KEY: 'k' })
+  expect(bare.code).toBe(0)
+  expect(bare.err.trim().split('\n')).toHaveLength(1)
+  expect(bare.out).not.toContain('RAINDROP_WRITE_KEY=')
+})
+
+test('the shell’s never-scrub list is the loader’s: NEVER_SCRUBBED and its prefixes', () => {
+  const m = /^\s+PATH\|([^)]+)\) continue ;;$/m.exec(read('scrub-raindrop.sh'))
+  expect(m, 'shell denylist not found').toBeTruthy()
+  const items = ('PATH|' + m![1]).split('|')
+  const prefixes = items.filter(i => i.endsWith('_*')).map(i => i.slice(0, -1))
+  const names = items.filter(i => !i.endsWith('_*'))
+  expect(names.sort()).toEqual([...NEVER_SCRUBBED].sort())
+  expect(prefixes.sort()).toEqual([...NEVER_SCRUBBED_PREFIXES].sort())
 })
 
 function walk(dir: string, keep: (f: string) => boolean, acc: string[] = []): string[] {

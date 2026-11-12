@@ -12,7 +12,7 @@
 // Then `allow`: the operator is always allowed, `anyone` admits strangers, `people` admits the roster, a role admits who holds it.
 
 import { whyNotServed } from '../config/pins.js'
-import { DEFAULT_SLACK_APP, type Address, type HydraConfig, type Person, type Place } from '../config/types.js'
+import { DEFAULT_SLACK_APP, type Address, type HydraConfig, type Person, type Place, type Rule, type Specialist } from '../config/types.js'
 import { isSessionThread } from '../shared/specialist-name.js'
 export { isSessionThread }
 
@@ -133,12 +133,39 @@ export function heardApps(msg: Pick<Inbound, 'app' | 'heardBy' | 'at'>): string[
   return [...new Set([...(msg.heardBy ?? []), ...(app ? [app] : [])])]
 }
 
+/**
+ * What a Slack app can deliver to: the one answer every consumer filters (which channels it reads, whether it hears DMs, which
+ * scopes it needs, who an alert about it concerns, whether it delivers to anyone at a place). An app *serves* a specialist when
+ * it is pinned to it, or when it is unpinned and no specialist is pinned to that app (`notServedBy`).
+ *
+ * `specialists`: the declared specialists the app serves. `rules`: the `[[rules]]` that apply to messages through the app (`app`
+ * absent or this one) and whose target the app can deliver to: `main`, or a declared specialist it serves. A rule to a specialist
+ * that is not declared is ignored everywhere. A rule with no `at` is in `rules` and reaches every place; consumers that need
+ * named places read `at`. With no `app`: everything declared (nothing is filtered).
+ */
+export function reachableBy(cfg: HydraConfig, app?: string): { specialists: Specialist[]; rules: Rule[] } {
+  if (app === undefined) return { specialists: Object.values(cfg.specialists), rules: cfg.rules.filter(r => r.to === MAIN || !!cfg.specialists[currentId(cfg, r.to)]) }
+  const serves = (id: string) => id === MAIN || (!!cfg.specialists[currentId(cfg, id)] && !notServedBy(cfg, id, app))
+  return {
+    specialists: Object.values(cfg.specialists).filter(s => !notServedBy(cfg, s.id, app)),
+    rules: cfg.rules.filter(r => (r.app === undefined || r.app === app) && serves(r.to)),
+  }
+}
+
+/** The specialists (and `main`, as a rule's target) that hear Slack through `app`: they listen on a Slack place, or a Slack rule for the app sends to them. Whom an alert about the app concerns. */
+export function slackSpecialistsOf(cfg: HydraConfig, app?: string): string[] {
+  const r = reachableBy(cfg, app)
+  return [...new Set([
+    ...r.specialists.filter(s => s.listens.some(isSlackPlace)).map(s => s.id),
+    ...r.rules.filter(x => x.at === undefined || isSlackPlace(x.at)).map(x => x.to),   // a rule with only an app is a Slack rule
+  ])]
+}
+
 /** Whether a message at this place, through `app`, would be delivered to anyone: a rule's target or a listener that `app` serves, or `main` in a DM. */
 export function reachesAnyone(cfg: HydraConfig, app: string, at: Place[]): boolean {
   if (at.some(isDmPlace)) return true
-  const serves = (id: string) => id === MAIN || !notServedBy(cfg, id, app) && !!cfg.specialists[currentId(cfg, id)]
-  return cfg.rules.some(r => (r.at === undefined || at.includes(r.at)) && (r.app === undefined || r.app === app) && serves(r.to))
-    || Object.values(cfg.specialists).some(sp => sp.listens.some(p => at.includes(p)) && serves(sp.id))
+  const r = reachableBy(cfg, app)
+  return r.rules.some(x => x.at === undefined || at.includes(x.at)) || r.specialists.some(sp => sp.listens.some(p => at.includes(p)))
 }
 
 /**

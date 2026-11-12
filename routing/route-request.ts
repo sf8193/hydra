@@ -17,7 +17,7 @@ export type RouteParams = { as?: string; at?: string; bound?: string; app?: stri
  */
 export function routeFor(h: HydraConfig, p: RouteParams, aliases: (place: string, app?: string) => string[]): { ok: true; fate: string; to?: string; report: string } | { ok: false; error: string } {
   if (!p.as || !p.at) return { ok: false, error: ROUTE_USAGE }
-  if (p.boundApp && !p.bound) return { ok: false, error: '--bound-app goes with --bound: it names the app that opened the conversation bound to that specialist' }
+  if (p.boundApp && !p.bound) return { ok: false, error: '--bound-app goes with --bound: it names the app the conversation bound to that specialist is bound through' }
   let from: Address | undefined
   if (p.as !== 'stranger') {
     const person = h.people[p.as]
