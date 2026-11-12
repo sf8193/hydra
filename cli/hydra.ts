@@ -119,9 +119,10 @@ Routing (hydra.toml):
                                        --app is the app this check runs for, the one that heard the message (default: the app
                                        named "default"). --heard-by adds the other apps in the channel. --mentioned lists the
                                        apps the text tags, first tag first. --bound-app is the app that opened the bound conversation.
-  hydra conversations [list]           Conversations, the specialist each is bound to, and health
+  hydra conversations [list]           Conversations (one per app, channel and thread), the specialist each is bound to, and health
   hydra conversations bind <conversation> <specialist>
-                                       Bind or move a conversation (as list prints it: slack:C0ABC:1793732224.093059)
+                                       Bind or move a conversation, named as list prints it
+                                       (slack:<channel id>:<thread ts>; slack:<app>:… through an app other than default)
   hydra conversations unbind <conversation>
 
 Platform: slack | discord (required for lifecycle commands)

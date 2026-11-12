@@ -7,7 +7,7 @@ import { isAbsolute, join, resolve } from 'path'
 import { parseCron } from '../shared/cron-local.js'
 import { parseIdleTtl } from '../shared/constants.js'
 import { ENV_NAME_RE, tokenVarRefusal } from '../shared/spawn-env.js'
-import { noSuchApp, pinnersOf, serves, whyNotServed } from './pins.js'
+import { noSuchApp, pinnersOf, serves, speaksAsOf, whyNotServed } from './pins.js'
 import { SLACK_APP_DEFAULTS } from '../connectors/slack/app.js'
 import { invalidSpecialistName } from '../shared/specialist-name.js'
 import {
@@ -41,7 +41,7 @@ const MAX_ALERT_AFTER_MS = 30 * MAX_DAY_MS
 const BUILTIN: readonly string[] = BUILTIN_ROLES
 
 const TOP_KEYS = ['operator', 'connectors', 'slack', 'people', 'specialists', 'defaults', 'places', 'schedules', 'rules', 'guard', 'vitals']
-const SPECIALIST_KEYS = ['workdir', 'prompt', 'prompt_file', 'listens', 'apps', 'allow', 'sessions', 'max', 'idle', 'home', 'model', 'engine', 'env_file', 'was']
+const SPECIALIST_KEYS = ['workdir', 'prompt', 'prompt_file', 'listens', 'apps', 'speaks_as', 'allow', 'sessions', 'max', 'idle', 'home', 'model', 'engine', 'env_file', 'was']
 
 type Table = Record<string, unknown>
 /** Own keys only: a name like `constructor` must not resolve through the prototype. */
@@ -224,9 +224,6 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     const app = slackApp(id, t, path)
     if (app) slackApps[id] = app
   }
-  if (Object.keys(slackApps).length && !Object.hasOwn(slackApps, DEFAULT_SLACK_APP)) {
-    warn('slack.apps', `no app is named "${DEFAULT_SLACK_APP}", and Slack connects only the app named "${DEFAULT_SLACK_APP}", so Slack stays off. Name the app to connect "${DEFAULT_SLACK_APP}".`)
-  }
 
   // --- people --------------------------------------------------------------------------------------------------------
 
@@ -307,7 +304,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   }
 
   function readSpecialistKeyTypes(t: Table, path: string) {
-    str(t, 'workdir', path); str(t, 'prompt', path); str(t, 'prompt_file', path); strList(t, 'listens', path); strList(t, 'apps', path); strList(t, 'allow', path)
+    str(t, 'workdir', path); str(t, 'prompt', path); str(t, 'prompt_file', path); strList(t, 'listens', path); strList(t, 'apps', path); str(t, 'speaks_as', path); strList(t, 'allow', path)
     oneOf(t, 'sessions', path, SESSIONS); positiveInt(t, 'max', path); str(t, 'idle', path); str(t, 'home', path); str(t, 'model', path)
     oneOf(t, 'engine', path, ENGINES); str(t, 'env_file', path); strList(t, 'was', path)
   }
@@ -365,6 +362,13 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       if (appsRaw.length) apps = [...new Set(appsRaw)]
     }
 
+    // `speaks_as`: the app it posts as when no message came in (its `home`, a new thread). It names a declared app, one it is pinned to if it is pinned.
+    const speaksAs = str(t, 'speaks_as', path)
+    if (speaksAs !== undefined) {
+      if (!Object.hasOwn(slackApps, speaksAs)) error(at('speaks_as'), noSuchApp(speaksAs, Object.keys(slackApps)))
+      else if (apps && !apps.includes(speaksAs)) error(at('speaks_as'), `${speaksAs} is not one of the apps ${id} is pinned to (${apps.join(', ')}): a pinned specialist speaks only through its own apps`)
+    }
+
     const listens: Place[] = []
     for (const [i, rawPlace] of (strList(t, 'listens', path) ?? []).entries()) {
       const p = place(rawPlace, `${at('listens')}[${i}]`)
@@ -409,6 +413,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     specialists[id] = {
       id, workdir, listens, allow,
       ...(apps && { apps }),
+      ...(speaksAs !== undefined && Object.hasOwn(slackApps, speaksAs) && { speaksAs }),
       sessions: oneOf(t, 'sessions', path, SESSIONS) ?? 'shared',
       max: positiveInt(t, 'max', path) ?? 20,
       was,
@@ -614,8 +619,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     return undefined
   }
 
-  /** Whether hydra connects the platform: Slack through its app `default`. */
-  const connected = (platform: 'discord' | 'slack' | 'github'): boolean => platform === 'slack' ? Object.hasOwn(slackApps, DEFAULT_SLACK_APP) : !!connectors[platform]
+  /** Whether hydra connects the platform: Slack through any app it declares. */
+  const connected = (platform: 'discord' | 'slack' | 'github'): boolean => platform === 'slack' ? Object.keys(slackApps).length > 0 : !!connectors[platform]
 
   // --- warnings that need the whole file -----------------------------------------------------------------------------
 
@@ -625,6 +630,20 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (connected(platform) && !people[operator].ids.some(a => a.startsWith(`${platform}:`))) {
       warn('operator', `${operator} has no ${platform}: address, so on ${platform} nobody passes admin checks or reaches main by DM`)
     }
+  }
+
+  // A post that answers no message (a specialist's `home`, a new thread) goes out through its `speaks_as` app (see speaksAsOf), and
+  // the thread it opens must be one that app can deliver back to the specialist: checked for every specialist with a Slack home.
+  const declaredApps = Object.keys(slackApps)
+  for (const s of Object.values(specialists)) {
+    const slackHome = !!s.home?.startsWith('slack:') && s.home !== 'slack:dm'
+    if (!slackHome && !s.speaksAs) continue
+    const app = speaksAsOf(s, declaredApps)
+    const path = `specialists.${s.id}.speaks_as`
+    if (!app) { if (declaredApps.length) error(path, `${s.id} has a Slack home, and ${declaredApps.length} Slack apps are declared and none is \`default\`: set \`speaks_as\` to the app it posts as`); continue }
+    // A pinned specialist's own `speaks_as` was checked against its `apps` above.
+    const apart = s.apps && s.speaksAs ? undefined : whyNotServed(specialists, s, app, 'it would post through')
+    if (apart) error(path, `${apart}: set \`speaks_as\` to an app ${s.id} can be reached through, or pin ${s.id} to ${app}`)
   }
 
   const ruleTargets = new Set(rules.map(r => r.to))
@@ -649,7 +668,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     for (const p of s.listens) {
       const platform = p.split(':')[0] as Platform | 'cli'
       if (platform === 'cli') continue
-      if (!connected(platform)) warn(path, platform === 'slack' ? `listens on ${p}, but hydra.toml has no app named "${DEFAULT_SLACK_APP}": add [slack.apps.${DEFAULT_SLACK_APP}], or it won't hear it` : `listens on ${p}, but [connectors.${platform}] isn't set, so it won't hear it`)
+      if (!connected(platform)) warn(path, platform === 'slack' ? `listens on ${p}, but hydra.toml declares no Slack app: add [slack.apps.<id>], or it won't hear it` : `listens on ${p}, but [connectors.${platform}] isn't set, so it won't hear it`)
       else if (platform === 'github' && !connectors.github!.repos.includes(p.slice('github:'.length))) warn(path, `listens on ${p}, but connectors.github.repos doesn't include it`)
     }
   }

@@ -1,5 +1,6 @@
 import { route } from '../../routing/route.js'
-import { cmpTs, routedChannels, hearsDms, addressOf, TOP_LEVEL, OPERATOR_TOKEN_REFUSED, type SlackFile, type SlackMessageEvent, type SlackWatchConfig, type SlackWatcher } from './watch.js'
+import { DEFAULT_SLACK_APP } from '../../config/types.js'
+import { cmpTs, routedChannels, hearsDms, addressOf, TOP_LEVEL, OPERATOR_TOKEN_REFUSED, type SlackFile, type SlackMessageEvent, type SlackWatchConfig, type CatchUpWatch } from './watch.js'
 
 /** Where a watched thread is reread from when no specialist's channel cursor covers it (a session listening): its newest delivered message, else when it was bound. */
 function ownCursor(e: { delivered?: string[]; createdAt: number }): string {
@@ -108,7 +109,7 @@ export const MAX_CALLS_CAP = 400
 
 class OutOfBudget extends Error {}
 
-export async function catchUp(watcher: SlackWatcher, api: SlackApi, cfg: SlackWatchConfig, opts: CatchUpOpts): Promise<CatchUpResult> {
+export async function catchUp(watcher: CatchUpWatch, api: SlackApi, cfg: SlackWatchConfig, opts: CatchUpOpts): Promise<CatchUpResult> {
   // One call per watched thread on a deep pass, plus the channel scan: the budget grows with the table so a big one can still finish.
   let maxCalls = opts.maxCalls ?? Math.min(MAX_CALLS_CAP, Math.max(MIN_CALLS, 2 * watcher.list().length + watcher.dmChannels().length + 20))
   const maxPages = opts.maxPages ?? 5
@@ -159,7 +160,7 @@ export async function catchUp(watcher: SlackWatcher, api: SlackApi, cfg: SlackWa
         return []
       })
       for (const d of listed) {
-        if (known.has(d.channel) || route(cfg.hydra, { from: addressOf(d.user), at: ['slack:dm'], addressed: true }).fate !== 'deliver') continue
+        if (known.has(d.channel) || route(cfg.hydra, { from: addressOf(d.user), at: ['slack:dm'], addressed: true, app: cfg.app ?? DEFAULT_SLACK_APP }).fate !== 'deliver') continue
         // A new conversation has no cursor: read it back a day, the furthest an owed message is chased.
         scanned.push(d.channel)
         watcher.beginCatchUp([d.channel])

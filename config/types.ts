@@ -47,6 +47,8 @@ export type Specialist = {
    * Absent: unpinned. It answers messages through every app that no specialist is pinned to.
    */
   apps?: string[]
+  /** The Slack app it posts as when no message came in (its `home`, a new thread). Absent: its first pinned app, else `default`. If pinned, one of `apps`. */
+  speaksAs?: string
   /** Roles that may reach it. Default `['people']`. The operator is always allowed. */
   allow: string[]
   /** `shared`: one session for everything (default). `per-conversation`: one per thread. */
@@ -90,6 +92,9 @@ export const DEFAULT_SLACK_APP = 'default'
 export function defaultSlackApp(config: Pick<HydraConfig, 'slackApps'>): SlackApp | undefined {
   return Object.hasOwn(config.slackApps, DEFAULT_SLACK_APP) ? config.slackApps[DEFAULT_SLACK_APP] : undefined
 }
+
+/** Whether hydra.toml declares any Slack app: Slack is on. */
+export const slackConfigured = (config: Pick<HydraConfig, 'slackApps'>): boolean => Object.keys(config.slackApps).length > 0
 
 export type Connectors = {
   discord?: { botTokenEnv: string }

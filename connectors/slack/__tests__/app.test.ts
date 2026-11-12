@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test'
-import { hydra, oneListener, BASE } from './slack-config.js'
-import { slackManifest, SLACK_APP_NEEDS, SLACK_APP_DEFAULTS } from '../app.js'
+import { hydra, oneListener, BASE, TWO_APPS } from './slack-config.js'
+import { slackManifest, SLACK_APP_NEEDS, SLACK_APP_DEFAULTS, appKey } from '../app.js'
 import { scopesNeeded } from '../listener.js'
 
 type Manifest = {
@@ -58,5 +58,31 @@ describe('slackManifest', () => {
     expect(checked).toEqual(Object.values(SLACK_APP_NEEDS.botScopes))
     const manifest = Bun.YAML.parse(slackManifest(h.slackApps.default)) as Manifest
     expect(manifest.oauth_config.scopes.bot).toEqual([...new Set(checked.flatMap(n => n.any))])
+  })
+})
+
+describe('several apps in one hydra', () => {
+  test('the startup scope check adds the membership read, and only with more than one app', () => {
+    expect(scopesNeeded(hydra(BASE))).not.toContain(SLACK_APP_NEEDS.membership.public)
+    expect(scopesNeeded(hydra(TWO_APPS)).at(-1)).toBe(SLACK_APP_NEEDS.membership.public)
+    expect(scopesNeeded(hydra(TWO_APPS))).not.toContain(SLACK_APP_NEEDS.membership.private)
+    // A private channel is named: the groups scope is checked too.
+    const withPrivate = hydra(`${TWO_APPS}\n[specialists.x]\nworkdir = "/w/x"\nlistens = ["slack:G0PRIV"]\nallow = ["anyone"]\n`)
+    expect(scopesNeeded(withPrivate).slice(-2)).toEqual([SLACK_APP_NEEDS.membership.public, SLACK_APP_NEEDS.membership.private])
+    // Both are scopes the manifest already grants for channel names.
+    const m = Bun.YAML.parse(slackManifest(hydra(TWO_APPS).slackApps.sales)) as Manifest
+    for (const n of [SLACK_APP_NEEDS.membership.public, SLACK_APP_NEEDS.membership.private]) expect(n.any.every(sc => m.oauth_config.scopes.bot.includes(sc))).toBe(true)
+  })
+
+  test('the manifest subscribes to joins and leaves only when asked (several apps declared)', () => {
+    const plain = Bun.YAML.parse(slackManifest(hydra(BASE).slackApps.default)) as Manifest
+    expect(plain.settings.event_subscriptions.bot_events).not.toContain('member_joined_channel')
+    const several = Bun.YAML.parse(slackManifest(hydra(TWO_APPS).slackApps.sales, { several: true })) as Manifest
+    expect(several.settings.event_subscriptions.bot_events).toEqual([...plain.settings.event_subscriptions.bot_events, 'member_joined_channel', 'member_left_channel'])
+  })
+
+  test('a key is named for its own app', () => {
+    expect(appKey('default', 'bot_token_env')).toBe('`bot_token_env` of the app named `default` (`[slack.apps.default]` or `[connectors.slack]`)')
+    expect(appKey('sales', 'bot_token_env')).toBe('`bot_token_env` of the app named `sales` (`[slack.apps.sales]`)')
   })
 })

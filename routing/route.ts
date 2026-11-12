@@ -122,9 +122,9 @@ export function appOf(msg: Pick<Inbound, 'app' | 'at'>): string | undefined {
 }
 
 /** Why a message that came through `app` cannot be delivered to `to`, or undefined when it can. `main` and a session's own thread are exempt. */
-export function notServedBy(cfg: HydraConfig, to: string, app: string | undefined): string | undefined {
+export function notServedBy(cfg: HydraConfig, to: string, app: string | undefined, what?: string): string | undefined {
   const s = cfg.specialists[currentId(cfg, to)]
-  return s ? whyNotServed(cfg.specialists, s, app) : undefined
+  return s ? whyNotServed(cfg.specialists, s, app, what) : undefined
 }
 
 /** Every app that heard a message: `app` (see `appOf`) and `heardBy`, once each. The one set `route` and `owningApp` both use. */

@@ -22,6 +22,32 @@ app_token_env = "SLOPBOT_SLACK_APP_TOKEN"
 ids = ["slack:UOP"]
 `
 
+/** The second app's bot user id. The first (`default`) is `BOT`. */
+export const SALES_BOT = 'USALES'
+
+/** Two Slack apps: `default` (from BASE's `[connectors.slack]`) and `sales`. */
+export const TWO_APPS = `${BASE}
+[slack.apps.sales]
+bot_token_env = "SALES_SLACK_BOT_TOKEN"
+app_token_env = "SALES_SLACK_APP_TOKEN"
+`
+
+/**
+ * Two apps in one channel: `crm` (unpinned, so it answers the app `default`) and `deals` (pinned to `sales`) both listen
+ * on it, which is allowed because no app reaches both.
+ */
+export const sharedChannel = (channel: string, place = '') => `${TWO_APPS}
+[specialists.crm]
+workdir = "/w/crm"
+listens = ["slack:${channel}"]
+allow = ["anyone"]
+[specialists.deals]
+workdir = "/w/deals"
+apps = ["sales"]
+listens = ["slack:${channel}"]
+allow = ["anyone"]
+${place}`
+
 /** One specialist listening on one channel, open to `allow`. */
 export const oneListener = (channel: string, to = 'slopbot', allow = '["anyone"]', extra = '') => `${BASE}
 [specialists.${to}]
