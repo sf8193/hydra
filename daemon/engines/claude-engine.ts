@@ -6,7 +6,7 @@ import { randomUUID } from 'crypto'
 import { spawn } from 'child_process'
 import { existsSync, mkdirSync, readFileSync } from 'fs'
 import { join } from 'path'
-import type { SessionInfo } from '../sessions.js'
+import type { SessionInfo, SessionMetadata } from '../sessions.js'
 import { detectBlockingState as detectBlockingStateFn } from '../pane-probe.js'
 import type { BlockingState } from '../pane-probe.js'
 import type {
@@ -32,7 +32,8 @@ import { BRIDGE_CHANNEL_FLAG, BRIDGE_MCP_SERVER_KEY } from '../plugin-manifest.j
 import { clearNeedsAuthEntry, describeSetAt, NEEDS_AUTH_CLEARED_NOTE } from './claude-needs-auth.js'
 
 // What the pane-and-transcript methods read. The byte (main) has no SessionInfo, so these take only this.
-export type ClaudeSubject = Pick<SessionInfo, 'tmuxName'> & Partial<Pick<SessionInfo, 'claudeSessionId' | 'sessionMetadata'>>
+export type ClaudeSubject = Pick<SessionInfo, 'tmuxName'> & Partial<Pick<SessionInfo, 'claudeSessionId'>>
+  & { sessionMetadata?: Pick<SessionMetadata, 'model'> }
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
@@ -382,7 +383,7 @@ export class ClaudeEngine implements EngineAdapter {
 
   // From the transcript: the last turn's context tokens over the window the session was launched with. The id comes
   // from the status file (a /clear starts a new transcript; the stored id goes stale). The pane's footer number is
-  // the fallback (no or unknown launch model, as for the byte; no transcript yet). Only a `ctx:` footer is cross-checked,
+  // the fallback (no or unknown launch model; no transcript yet). Only a `ctx:` footer is cross-checked,
   // at most every CONTEXT_CHECK_EVERY_MS: the README's hook prints Claude Code's used percentage as is, while a bar may
   // be rescaled (GSD's reads 100% at auto-compact).
   usage(info: ClaudeSubject): ContextUsage | null {

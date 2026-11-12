@@ -716,7 +716,7 @@ Claude Code keeps `$CLAUDE_CONFIG_DIR/mcp-needs-auth-cache.json`, and while it h
 → Check `SPAWN_CWD` points at a directory that exists. Inspect `~/hydra-<platform>-byte.log` and `~/hydra-<platform>-daemon.log`.
 
 **`usage` shows `?` instead of context percentage.**
-The daemon takes a Claude session's context from its transcript: the last turn's input and cache tokens over the window of the model the session was launched with (1M for a `[1m]` model). It reads the statusline footer only when it can't do that (always for the byte, which carries no launch model; otherwise an unrecognized model or no transcript yet), so `?` means neither was there. Claude Code doesn't display context % in the status bar by default; to give the fallback a number, add a `statusLine` hook to `$CLAUDE_CONFIG_DIR/settings.json`:
+The daemon takes a Claude session's context from its transcript: the last turn's input and cache tokens over the window of the model the session was launched with (1M for a `[1m]` model). For the byte, it is the model `hydra up` records when it launches it (`main.json` in the state dir). The daemon reads the statusline footer only when it can't do that (no recorded or an unrecognized launch model, or no transcript yet), so `?` means neither was there. Claude Code doesn't display context % in the status bar by default; to give the fallback a number, add a `statusLine` hook to `$CLAUDE_CONFIG_DIR/settings.json`:
 ```json
 {
   "statusLine": {
@@ -738,7 +738,7 @@ The hook receives `context_window.used_percentage`, `model.id`, `cost.total_cost
 The daemon reads only the footer below the input box, and recognizes two shapes there: `ctx: N%` (above) or a progress bar followed by `N%` (e.g. `█████░░░░░ 54%`, as the GSD statusline renders). Percentages anywhere else on screen — conversation text, Claude Code's own "Context left until auto-compact" line (which counts *remaining*) — are ignored.
 
 **`usage` disagrees with your statusline.**
-`usage` and the context alerts (at 50% and 70%) use the transcript count wherever there is one, and the footer number as printed on the fallback. A statusline that rescales reads higher: GSD maps the auto-compact point to 100%, about 1.2× the raw figure, so on a spawned session its bar shows about 60% and 84% when the alerts fire. The byte always runs on the fallback, so there the alerts fire when the bar itself reads 50% and 70%. Only a `ctx: N%` footer is checked against the transcript: when the two differ by 2 points or more, the daemon logs `context %: <name> transcript says N% (used/window), pane says M%`, at most once every 10 minutes per session.
+`usage` and the context alerts (at 50% and 70%) use the transcript count wherever there is one, and the footer number as printed on the fallback. A statusline that rescales reads higher: GSD maps the auto-compact point to 100%, about 1.2× the raw figure, so its bar shows about 60% and 84% when the alerts fire, on the byte as on every other session. Only a `ctx: N%` footer is checked against the transcript: when the two differ by 2 points or more, the daemon logs `context %: <name> transcript says N% (used/window), pane says M%`, at most once every 10 minutes per session.
 
 **Verify inbound end-to-end:** `grep -E "main bridge connected|running tmux new-session" ~/hydra-<platform>-daemon.log`
 

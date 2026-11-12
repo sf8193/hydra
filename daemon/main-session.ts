@@ -1,5 +1,6 @@
-import { PLATFORM } from './config.js'
+import { PLATFORM, STATE_DIR } from './config.js'
 import { byteTmuxName } from '../shared/constants.js'
+import { readMainRecord } from '../shared/main-record.js'
 import { tmuxSync } from './tmux.js'
 import { claudeEngine } from './engines/instances.js'
 import type { InboundMessage } from '../gateway.js'
@@ -7,12 +8,17 @@ import type { InboundMessage } from '../gateway.js'
 // Main (the byte) is launched by `hydra up`, not spawned by the daemon, so it has no registry record,
 // and a registered one would run every registry loop's thread/lifecycle logic on it. These are the few
 // questions the features that opt in (usage, peek, alerts, handoff) ask about it, answered from its
-// tmux pane. Main is always Claude, so it is asked through ClaudeSubject: no forged SessionInfo.
+// tmux pane and the record `hydra up` wrote when it launched main (shared/main-record.ts). Main is always
+// Claude, so it is asked through ClaudeSubject: no forged SessionInfo. The recorded model lets usage() read
+// main's transcript on the same scale as every other session's; with none, it falls back to the pane footer.
 export const mainTmux = (): string => byteTmuxName(PLATFORM)
-export const mainSubject = () => ({ tmuxName: mainTmux() })
+export const mainSubject = () => {
+  const model = readMainRecord(STATE_DIR)?.model
+  return { tmuxName: mainTmux(), ...(model ? { sessionMetadata: { model } } : {}) }
+}
 export const mainAlive = (): boolean => claudeEngine.isAlive(mainSubject())
 
-/** Context used, as "N%", or null when the pane shows none. */
+/** Context used, as "N%", or null when neither the transcript nor the pane says. */
 export function mainContext(): string | null {
   const u = claudeEngine.usage(mainSubject())
   return u ? `${u.percent}%` : null
