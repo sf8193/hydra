@@ -6,6 +6,7 @@ import { mkdirSync, openSync, writeSync, closeSync, renameSync, rmSync } from 'f
 import { dirname } from 'path'
 import { routedChannels, hearsDms, unresolvedPlaces, NOT_A_MEMBER, OPERATOR_TOKEN_REFUSED, NO_DIRECTORY, SLACK_LIMITS, type SlackDirectory, type SlackWatchConfig, type SlackWatcher } from './watch.js'
 import type { HydraConfig } from '../../config/types.js'
+import { SLACK_APP_NEEDS, type ScopeNeed } from './app.js'
 import { timed } from '../../shared/loop-watch.js'
 import { awakeSince, suspendedSince, describeCause, type ResumeDetector } from '../../shared/resume.js'
 import { SLACK_CLIENT_PING_TIMEOUT_MS } from '../../shared/constants.js'
@@ -97,18 +98,19 @@ export type SlackAppLike = {
   api: SlackApi
 }
 
-/** The scopes each enabled option needs, so a missing one is a read at startup rather than a guess later. */
-export function scopesNeeded(h: HydraConfig): { option: string; any: string[] }[] {
+/** The scopes each enabled option needs (from `SLACK_APP_NEEDS`), so a missing one is a read at startup rather than a guess later. */
+export function scopesNeeded(h: HydraConfig): ScopeNeed[] {
   const places = [...Object.values(h.specialists).flatMap(s => s.listens), ...h.rules.map(r => r.at)].filter(p => p.startsWith('slack:'))
   const slackOpts = Object.entries(h.places).filter(([p]) => p.startsWith('slack:')).map(([, o]) => o)
+  const s = SLACK_APP_NEEDS.botScopes
   return [
-    ...(places.some(p => p !== 'slack:dm') ? [{ option: 'channels', any: ['channels:history', 'groups:history'] }] : []),
-    ...(places.some(p => p.startsWith('slack:#')) ? [{ option: 'channel names (slack:#name)', any: ['channels:read', 'groups:read'] }] : []),
-    { option: 'sender names', any: ['users:read'] },
-    ...(hearsDms({ hydra: h }) ? [{ option: 'dms', any: ['im:history'] }, { option: 'catching up DMs opened while disconnected', any: ['im:read'] }] : []),
-    ...(slackOpts.some(o => o.files) ? [{ option: 'files', any: ['files:read'] }] : []),
-    { option: 'ack and 🚫 reactions', any: ['reactions:write'] },
-    { option: 'replies', any: ['chat:write'] },
+    ...(places.some(p => p !== 'slack:dm') ? [s.channels] : []),
+    ...(places.some(p => p.startsWith('slack:#')) ? [s.channelNames] : []),
+    s.senderNames,
+    ...(hearsDms({ hydra: h }) ? [s.dms, s.dmCatchUp] : []),
+    ...(slackOpts.some(o => o.files) ? [s.files] : []),
+    s.reactions,
+    s.replies,
   ]
 }
 
@@ -493,7 +495,7 @@ export function boltApp(tokens: { app: string; bot: string; user?: string }): Sl
   // was told "unknown" would post twice. Reading keeps the SDK's patient retries.
   const poster = new WebClient(tokens.bot, { retryConfig: { retries: 0 }, timeout: POST_TIMEOUT_MS, logLevel: LogLevel.ERROR })
   let renamed: (id: string, name: string) => void = () => {}
-  for (const name of ['channel_rename', 'group_rename'] as const) app.event(name, async ({ event }) => { const c = (event as { channel?: { id?: string; name?: string } }).channel; if (c?.id && c.name) renamed(c.id, c.name) })
+  for (const name of SLACK_APP_NEEDS.botEvents.renames) app.event(name, async ({ event }) => { const c = (event as { channel?: { id?: string; name?: string } }).channel; if (c?.id && c.name) renamed(c.id, c.name) })
   const client = app.client
   const page = (r: { messages?: unknown[]; response_metadata?: { next_cursor?: string } }) => ({
     messages: (r.messages ?? []) as RawMessage[],

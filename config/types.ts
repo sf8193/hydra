@@ -62,8 +62,11 @@ export type Specialist = {
 
 export type Connectors = {
   discord?: { botTokenEnv: string }
-  /** `userTokenEnv`: the operator's user token, used only to read threads the bot is not in; never to post. */
-  slack?: { botTokenEnv: string; appTokenEnv?: string; userTokenEnv?: string }
+  /**
+   * `userTokenEnv`: the operator's user token, used only to read threads the bot is not in; never to post.
+   * `appName`, `appDescription`: this hydra's Slack app as `hydra slack manifest` writes it (defaults in `SLACK_APP_DEFAULTS`).
+   */
+  slack?: { botTokenEnv: string; appTokenEnv?: string; userTokenEnv?: string; appName?: string; appDescription?: string }
   /** `repos` are `owner/repo`, lowercased. */
   github?: { repos: string[]; pollMs: number }
 }
