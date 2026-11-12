@@ -1,12 +1,12 @@
-# hydra's Slack app: create it at api.slack.com/apps → "From an app manifest", install it, and set
+# hydra's Slack app (named Krust in Slack): create it at api.slack.com/apps → "From an app manifest", install it, and set
 # HYDRA_SLACK_APP_TOKEN (an app-level token with connections:write), HYDRA_SLACK_BOT_TOKEN (xoxb-) and
 # HYDRA_SLACK_USER_TOKEN (xoxp-, the installing operator's). The bot posts; the operator's token only reads.
 display_information:
-  name: hydra
-  description: Delivers Slack threads to hydra sessions. Posts as itself; reads as the operator only where the bot isn't invited.
+  name: Krust
+  description: An agent crew that replies in Slack threads it is asked to follow. Reads with its owner's access, read-only; never posts as them.
 features:
   bot_user:
-    display_name: hydra
+    display_name: Krust
     always_online: true
 oauth_config:
   scopes:
