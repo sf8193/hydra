@@ -20,8 +20,9 @@ repos = ["acme/widget"]               # required: the repos whose PR comments hy
 poll = "3m"                           # how often it looks (default 3m)
 
 # --- slack: one table per Slack app, [slack.apps.<id>]. Tokens stay in .env. `hydra slack manifest [<app>]` prints an app's manifest. ---
+# Only the app named `default` connects today, so every live Slack message arrives through `default`; `hydra route --app` checks how other apps would route.
 # [connectors.slack] is the app named `default`, with `app_name` and `app_description` for `display_name` and `description`.
-# Slack connects only the app named `default`. Each token needs its own variable, one the daemon alone needs (not PATH, HOME, HYDRA_*, ...).
+# Each token needs its own variable, one the daemon alone needs (not PATH, HOME, HYDRA_*, ...).
 
 [slack.apps.default]
 bot_token_env = "SLACK_BOT_TOKEN"     # required
@@ -73,6 +74,13 @@ sessions = "per-conversation"         # "shared" (default): one session for ever
 max = 5                               # per-conversation cap; extra messages stay owed, never dropped (default 20)
 idle = "2h"                           # end a quiet session and resume it on the next message (without it, per-conversation slots never free)
 
+# Pinned to the app `sales`: it answers only messages through that app, and that app delivers only to specialists pinned to it.
+# It shares #help with crm (which answers every app nobody is pinned to, here `default`) because no app reaches both.
+[specialists.deals]
+workdir = "~/agents/ops"
+apps = ["sales"]                      # Slack app ids (declared above). Absent: unpinned. Only Slack places: a pinned specialist can't listen on discord: or github:
+listens = ["slack:#help"]
+
 # PR reviews on one repo.
 [specialists.reviewer]
 workdir = "~/code/widget"
@@ -87,6 +95,8 @@ listen = "all"                        # "mentions" (default): only a tag opens a
 ack = "eyes"                          # a reaction added once a message is delivered
 files = true                          # download attachments (default false)
 bots = false                          # hear other bots (default false; hydra's own bot is never heard)
+default_app = "default"               # a Slack channel only: when two apps are in it, the app that answers a message that tags neither (a tag always picks the app).
+                                      # Absent: the app named `default`, else the first app above, among those that deliver to someone here. An untagged follow-up stays with the app that opened the conversation.
 
 # --- schedules: clocks that send a message to a specialist. A schedule's message carries the operator's authority. ---
 # (A repo adding its own: `hydra config add <fragment.toml>`.)
@@ -112,12 +122,18 @@ runner = "daemon"                     # "launchd" (default) tries once; "daemon"
 needs = ["internet"]                  # daemon runner only: not now while offline
 alert_after = "2d"                    # daemon runner only: how long a failure run lasts before it is alerted (default 1d)
 
-# --- rules: overrides for when the place isn't enough. Each names a place; first match in file order wins. ---
+# --- rules: overrides for when the place isn't enough. Each names a place, an app, or both; first match in file order wins. ---
+# An absent `at` matches every place and an absent `app` every app. `from` only narrows: a rule needs at or app.
 
 [[rules]]
 at = "slack:#help"
-from = "finance"                      # a person or a role (absent: anyone at that place)
+from = "finance"                      # a person or a role (absent: anyone there)
 to = "ops"
+
+[[rules]]
+app = "sales"                         # every message that comes through the sales app; with `at` too, that place through that app only
+from = "finance"
+to = "deals"                          # must be a specialist the app can reach: pinned to sales, or any specialist while no one pins sales
 
 # --- guard: the operator's hook, run after routing and the allow check for anyone but the operator ---
 

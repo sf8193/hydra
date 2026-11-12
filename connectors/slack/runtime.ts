@@ -69,7 +69,7 @@ function slackSpecialists(h: HydraConfig): string[] {
   const slack = (p: string) => p.startsWith('slack:')
   return [...new Set([
     ...Object.values(h.specialists).filter(s => s.listens.some(slack)).map(s => s.id),
-    ...h.rules.filter(r => slack(r.at)).map(r => r.to),
+    ...h.rules.filter(r => r.at === undefined || slack(r.at)).map(r => r.to),   // a rule with only an app is a Slack rule
   ])]
 }
 

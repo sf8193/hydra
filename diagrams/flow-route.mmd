@@ -1,24 +1,28 @@
-%% routing/route.ts: which specialist hears a message, and whether its sender may reach it. Pure and content-blind:
-%% it reads who sent a message and where, never what it says. Every connector asks it; `hydra route` prints its trace.
+%% routing/route.ts: which specialist hears a message, and whether its sender may reach it. Pure: it reads who sent a message,
+%% where, and which apps it tags, never the rest of what it says. Every connector asks it; `hydra route` prints its trace.
 flowchart TD
-  in(["message: from (an address), at (every name the place goes by,<br/>most specific first), addressed (DM or tag), bound (the conversation's specialist)"])
+  in(["message: from, at, addressed<br/>app (the app that delivered it)<br/>heardBy (apps in the channel)<br/>mentioned (apps tagged)<br/>bound + boundApp"])
   who["identify: the person whose ids hold the address<br/>roles = theirs + people + anyone; a stranger holds only anyone<br/>operator = that person is hydra.toml's operator"]
+  own{"more than one app heard it, and this app is not its owner?<br/>owner = first tagged app, else the app that opened the conversation,<br/>else the place's default_app, else the app named default, else the first declared<br/>(the last two: among apps that deliver to someone here)"}
+  stand(["ignored: another app owns it, so exactly one answers"])
   b{"bound?"}
-  bd{"that specialist still declared?<br/>(was = renames followed)"}
-  ad{"addressed, or a place here<br/>has listen = all?"}
+  bd{"that specialist still declared,<br/>and served by this app?<br/>(was = renames followed)"}
+  ad{"addressed, or a place here<br/>has listen = all?<br/>(a skipped binding does not count,<br/>unless its specialist is gone)"}
   ign(["ignored: not for hydra"])
-  r{"first [[rules]] entry whose at is a name here<br/>and whose from is the sender or a role they hold"}
-  l{"a specialist that listens on a name here<br/>(the id before the #name)"}
+  r{"first [[rules]] entry whose at (if set) is a name here,<br/>whose app (if set) is this app, and whose from<br/>is the sender or a role they hold<br/>and whose target is served by this app"}
+  l{"a specialist that listens on a name here<br/>(the id before the #name)<br/>and is served by this app"}
   od{"the operator, in a DM?"}
-  main["main"]
+  main["main (served by every app)"]
   unr(["unrouted → 🚫 on a mention or DM"])
   allow{"allow: the operator always;<br/>main only the operator;<br/>else a role in the specialist's allow"}
   ref(["refused → 🚫 on a mention or DM<br/>nothing bound, nothing owed"])
   del(["deliver to it; a new conversation is bound to it"])
-  in --> who --> b
+  in --> who --> own
+  own -->|"yes"| stand
+  own -->|"no"| b
   b -->|yes| bd
   bd -->|yes| allow
-  bd -->|"no: routed anew"| r
+  bd -->|"no: routed anew"| ad
   b -->|no| ad
   ad -->|no| ign
   ad -->|yes| r

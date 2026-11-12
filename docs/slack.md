@@ -137,6 +137,54 @@ app_token_env = "SALES_SLACK_APP_TOKEN"
 
 `hydra slack manifest [<app>]` prints one app's manifest. Leave the name out when hydra.toml declares one app; with several, a missing or unknown name lists the ones declared.
 
+## Apps and routing
+
+Only the app named `default` connects today, so every live Slack message arrives through `default`; `hydra route --app` checks how other apps would route.
+
+An app is a way in: a message reaches hydra through the app whose connection delivered it. Routing knows which, and three things use it. `hydra route --as <person> --at <place> --app <app>` shows each.
+
+**Rules match an app, a place, or both.** A `[[rules]]` entry names `at` (a place), `app` (an app id), or both; an absent one matches every place or every app, so a rule written before apps existed behaves as it did. `from` only narrows who: a rule with `from` and neither `at` nor `app` is an error. The first rule in file order that matches wins.
+
+```toml
+[[rules]]
+app = "sales"                    # everything that comes through the sales app
+to = "deals"
+
+[[rules]]
+at = "slack:#help"
+app = "support"                  # #help, through the support app only
+from = "staff"
+to = "desk"
+```
+
+**A specialist can be pinned to apps.** `apps = ["sales"]` in a specialist means two things:
+
+- It answers only messages that come through those apps. A message through another app never reaches it: not through `listens` (including `slack:dm`), a rule's `to`, or a conversation bound to it.
+- Those apps deliver only to specialists pinned to them. Once any specialist is pinned to `sales`, a message through `sales` goes to a specialist pinned to `sales`, or to nobody.
+
+A specialist with no `apps` is unpinned: it answers messages through every app that no specialist is pinned to. `allow` is separate: it governs who may reach a specialist, and still applies. `main` is exempt from pinning: the operator's DM reaches `main` through any app, and `main` still hears only the operator. A rule that would send a message to a specialist its app cannot deliver to is skipped, a binding to one is skipped and the message routed anew, and a guard redirect to one goes to the conversation's own specialist with one alert; `hydra route` says why. hydra.toml refuses a rule whose `app` and `to` can never meet, and a pinned specialist that listens on a place that is not a Slack place. Pinning an app takes it from every unpinned specialist, so hydra.toml warns when an unpinned specialist listens where no pinned specialist backs it up.
+
+Two specialists may `listen` on the same place only when no app reaches both: their `apps` are disjoint, or one is pinned and the other is not. Two unpinned specialists, or two whose `apps` overlap, may not.
+
+**One app owns a message.** When two apps are in one channel, both hear every message in it, and exactly one answers. The owner is the first of these that applies, among the apps that heard it:
+
+1. The app the message tags. With two tags, the first in the text. A tag always wins: it opens that app's own conversation.
+2. The app that opened the conversation, if it is already a bound conversation: an untagged follow-up stays with that app.
+3. The channel's `default_app`: `default_app = "sales"` under `[places."slack:#help"]` (the place's id or its name; it must be a declared app, on a Slack channel). It is honored as written, even if that app delivers to no one there.
+4. The app named `default`, if it delivers to someone at this place.
+5. The first app, in hydra.toml order, that delivers to someone at this place.
+
+An app "delivers to someone at this place" when a specialist it can deliver to listens there, or a rule that matches there sends to one (or to `main`), or it is a DM. If no app that heard the message does, 4 and 5 pick among all that heard it. So a channel whose only listener is pinned to `sales` is answered by `sales` with no `default_app` set; set one only to choose between apps that all deliver.
+
+The other apps do nothing: `hydra route` shows them as `ignored`, with the app that owns it. Ownership is decided before any specialist, and never hands a message on: if the owner reaches no one (an explicit `default_app` that delivers to nobody there), the message is unrouted.
+
+```toml
+[places."slack:#help"]
+default_app = "support"          # an untagged message in #help is answered by support; tag @sales and sales answers
+```
+
+`hydra route` takes `--app <app>`: the app this check runs for, the one that heard the message (default: the app named `default`). `--heard-by <app,app>` adds the other apps in the channel. `--mentioned <app,app>` lists the apps the text tags, first tag first. `--bound-app <app>` (with `--bound`) is the app that opened the bound conversation.
+
 ## Troubleshooting
 
 | Symptom | Cause / fix |

@@ -181,7 +181,7 @@ to = "ghost"
 [specialists.crm]
 workdir = "~/agents/crm"
 listens = ["slack:#ops"]
-`)).toEqual(['specialists.crm.listens[0]: ops already listens on slack:#ops: one place, one specialist'])
+`)).toEqual(['specialists.crm.listens[0]: ops already listens on slack:#ops, and every app nobody is pinned to reaches both: two specialists may share a place only when no app reaches both: give one `apps` the other lacks, or pin only one of them'])
   })
 
   test('one address under two people (GitHub logins compare without case)', () => {
@@ -566,5 +566,142 @@ description = "Answers sales threads."
   test('a slack-listening specialist with no default app is warned, naming what to add', () => {
     expect(ok(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:#y"]\n`).warnings)
       .toEqual(['specialists.ops: listens on slack:#y, but hydra.toml has no app named "default": add [slack.apps.default], or it won\'t hear it'])
+  })
+})
+
+describe('apps in routing: pinned specialists, rules by app, default_app', () => {
+  const APPS = `${BASE}
+[people.alice]
+ids = ["slack:U0ALICE"]
+roles = ["staff"]
+[slack.apps.default]
+bot_token_env = "DEFAULT_BOT"
+[slack.apps.sales]
+bot_token_env = "SALES_BOT"
+[slack.apps.support]
+bot_token_env = "SUPPORT_BOT"
+`
+  const spec = (id: string, body = '') => `[specialists.${id}]\nworkdir = "~/agents/ops"\n${body}\n`
+
+  describe('a specialist\'s apps', () => {
+    test('pins it, as written; no apps leaves it unpinned', () => {
+      const c = ok(`${APPS}${spec('deals', 'apps = ["sales", "sales"]\nlistens = ["slack:#help"]')}${spec('crm', 'listens = ["slack:#lobby"]')}`).config
+      expect(c.specialists.deals.apps).toEqual(['sales'])
+      expect(c.specialists.crm.apps).toBeUndefined()
+      expect('apps' in c.specialists.crm).toBe(false)
+    })
+    test('must name declared apps, each error at its key path', () => {
+      expect(errorsOf(`${APPS}${spec('deals', 'apps = ["sales", "nope"]')}`)).toEqual(['specialists.deals.apps[1]: no app "nope": declare [slack.apps.nope]; hydra.toml declares default, sales, support'])
+      expect(errorsOf(`${BASE}${spec('deals', 'apps = ["sales"]')}`)).toEqual(['specialists.deals.apps[0]: no app "sales": declare [slack.apps.sales]; hydra.toml declares no apps'])
+      expect(errorsOf(`${APPS}${spec('deals', 'apps = []')}`)).toEqual(['specialists.deals.apps: must name at least one app; leave `apps` out to take every app that no specialist is pinned to'])
+      expect(errorsOf(`${APPS}${spec('deals', 'apps = "sales"')}`)).toEqual(['specialists.deals.apps: must be a list of strings'])
+    })
+    test('an inherited apps is checked at the specialist that inherits it', () => {
+      expect(errorsOf(`${APPS}[defaults.specialist]\napps = ["nope"]\n${spec('deals')}`)).toEqual(['specialists.deals.apps (from defaults.specialist)[0]: no app "nope": declare [slack.apps.nope]; hydra.toml declares default, sales, support'])
+    })
+    test('a pinned specialist may not listen on a place that is not Slack', () => {
+      expect(errorsOf(`${APPS}[connectors.github]\nrepos = ["acme/w"]\n${spec('deals', 'apps = ["sales"]\nlistens = ["slack:#help", "github:acme/w", "discord:#feed"]')}`)).toEqual([
+        'specialists.deals.listens[1]: github:acme/w is not a Slack place, and `apps` pins this specialist to Slack apps: remove `apps`, or listen on a `slack:` place',
+        'specialists.deals.listens[2]: discord:#feed is not a Slack place, and `apps` pins this specialist to Slack apps: remove `apps`, or listen on a `slack:` place',
+      ])
+    })
+  })
+
+  describe('sharing a place', () => {
+    test('two specialists with disjoint apps may listen on the same place; so may a pinned and an unpinned one', () => {
+      const { config, warnings } = ok(`${APPS}${spec('deals', 'apps = ["sales"]\nlistens = ["slack:#help"]')}${spec('desk', 'apps = ["support"]\nlistens = ["slack:#help"]')}${spec('crm', 'listens = ["slack:#help"]')}`)
+      expect(['deals', 'desk', 'crm'].map(id => config.specialists[id].listens)).toEqual([['slack:#help'], ['slack:#help'], ['slack:#help']])
+      expect(warnings).toEqual([])
+    })
+    test('overlapping apps, or two unpinned, still clash', () => {
+      expect(errorsOf(`${APPS}${spec('deals', 'apps = ["sales", "support"]\nlistens = ["slack:#help"]')}${spec('desk', 'apps = ["support"]\nlistens = ["slack:#help"]')}`))
+        .toEqual(['specialists.desk.listens[0]: deals already listens on slack:#help, and app support reaches both: two specialists may share a place only when no app reaches both: give one `apps` the other lacks, or pin only one of them'])
+      expect(errorsOf(`${APPS}${spec('a', 'listens = ["slack:#help"]')}${spec('b', 'listens = ["slack:#help"]')}`))
+        .toEqual(['specialists.b.listens[0]: a already listens on slack:#help, and every app nobody is pinned to reaches both: two specialists may share a place only when no app reaches both: give one `apps` the other lacks, or pin only one of them'])
+    })
+  })
+
+  describe('a rule\'s app', () => {
+    const rule = (body: string, specs = spec('deals', 'apps = ["sales"]') + spec('crm')) => `${APPS}${specs}[[rules]]\n${body}\n`
+    test('a rule needs a place, an app, or both; from alone is an error', () => {
+      expect(ok(rule('app = "sales"\nto = "deals"')).config.rules).toEqual([{ app: 'sales', to: 'deals' }])
+      expect(ok(rule('at = "slack:#help"\nto = "crm"')).config.rules).toEqual([{ at: 'slack:#help', to: 'crm' }])
+      expect(ok(rule('at = "slack:#help"\napp = "sales"\nfrom = "alice"\nto = "deals"')).config.rules).toEqual([{ at: 'slack:#help', app: 'sales', from: 'alice', to: 'deals' }])
+      expect(errorsOf(rule('to = "crm"'))).toEqual(['rules[0]: a rule needs `at`, `app` or both; `from` only narrows who it applies to'])
+      expect(errorsOf(rule('from = "alice"\nto = "crm"'))).toEqual(['rules[0]: a rule needs `at`, `app` or both; `from` only narrows who it applies to'])
+    })
+    test('its app must be declared, and its place a Slack place', () => {
+      expect(errorsOf(rule('app = "nope"\nto = "crm"'))).toEqual(['rules[0].app: no app "nope": declare [slack.apps.nope]; hydra.toml declares default, sales, support'])
+      expect(errorsOf(rule('at = "discord:#feed"\napp = "sales"\nto = "deals"'))).toEqual(['rules[0].app: an app is a Slack app, but discord:#feed is not a Slack place: set `at` to a `slack:` place, remove `at`, or remove `app`'])
+    })
+    test('it can never send an app to a specialist that app cannot reach', () => {
+      expect(errorsOf(rule('app = "support"\nto = "deals"'))).toEqual(['rules[0].to: deals is pinned to sales, so app support can never deliver to it: add support to deals\'s `apps`, or change the rule\'s `app`'])
+      expect(errorsOf(rule('app = "sales"\nto = "crm"'))).toEqual(['rules[0].to: app sales serves only specialists pinned to it (deals), and crm is not pinned to it: add sales to crm\'s `apps`, or change the rule\'s `app`'])
+      expect(errorsOf(rule('at = "discord:#feed"\nto = "deals"'))).toEqual(['rules[0].to: deals is pinned to Slack apps, so it can never take a message at discord:#feed: remove `apps` from deals, or change `at` to a `slack:` place'])
+      // no app: fine, the rule reaches deals through sales only
+      expect(ok(rule('at = "slack:#help"\nto = "deals"')).config.rules).toHaveLength(1)
+    })
+    test('an earlier rule shadows a later one that its place and app cover', () => {
+      const two = (a: string, b: string) => ok(`${rule(a + '\n[[rules]]\n' + b, spec('deals', 'apps = ["sales"]') + spec('crm') + spec('desk', 'apps = ["support"]'))}`).warnings.filter(w => w.startsWith('rules['))
+      // app-only covers place+app, and place-only covers place+app
+      expect(two('app = "sales"\nto = "deals"', 'at = "slack:#help"\napp = "sales"\nto = "deals"')).toEqual(['rules[1]: never matches: rules[0] already takes every message at slack:#help through app sales'])
+      // a rule to an unpinned specialist is skipped for an app that has pinned specialists, so it does not shadow a later rule for that app
+      expect(two('at = "slack:#help"\nto = "crm"', 'at = "slack:#help"\napp = "sales"\nto = "deals"')).toEqual([])
+      expect(two('at = "slack:#help"\napp = "default"\nto = "crm"', 'at = "slack:#help"\napp = "default"\nfrom = "alice"\nto = "crm"')).toEqual(["rules[1]: never matches: rules[0] already takes alice's messages at slack:#help through app default"])
+      expect(two('at = "slack:#help"\nto = "crm"', 'app = "support"\nfrom = "alice"\nto = "desk"')).toEqual([])
+      // a narrower rule first does not shadow a wider one
+      expect(two('at = "slack:#help"\napp = "sales"\nto = "deals"', 'app = "sales"\nto = "deals"')).toEqual([])
+      expect(two('app = "sales"\nto = "deals"', 'app = "sales"\nfrom = "alice"\nto = "deals"')).toEqual(["rules[1]: never matches: rules[0] already takes alice's messages through app sales"])
+    })
+    test('a rule for everyone takes the place from a listener that hears its app, and from no other', () => {
+      const specs = spec('deals', 'apps = ["sales"]\nlistens = ["slack:#help"]') + spec('crm', 'listens = ["slack:#help"]') + spec('triage')
+      const w = (body: string) => ok(rule(body, specs)).warnings.filter(x => x.startsWith('rules['))
+      // no app, to an unpinned specialist: only apps nobody is pinned to take it, so crm loses #help; deals, pinned to sales, does not
+      expect(w('at = "slack:#help"\nto = "triage"')).toEqual(['rules[0]: takes every message at slack:#help, so crm, which listens there, never hears it'])
+      // through `default` only crm hears #help: deals is pinned to sales, so it loses nothing
+      expect(w('at = "slack:#help"\napp = "default"\nto = "triage"')).toEqual(['rules[0]: takes every message at slack:#help through app default, so crm, which listens there, never hears it'])
+      // an app-only rule takes every place that app hears
+      expect(w('app = "sales"\nto = "deals"')).toEqual([])
+      // support is pinned by no one here, so crm (unpinned) hears it, and the rule takes it from crm
+      expect(w('app = "support"\nto = "triage"')).toEqual(['rules[0]: takes every message through app support, so crm, which listens on slack:#help, never hears it through that app'])
+    })
+    test('an app-only rule takes the app from a pinned listener elsewhere, as the warning says', () => {
+      const w = ok(rule('to = "deals"\napp = "sales"', spec('deals', 'apps = ["sales"]') + spec('crm', 'listens = ["slack:#a"]') + spec('desk', 'apps = ["sales", "support"]\nlistens = ["slack:#b"]'))).warnings.filter(x => x.startsWith('rules['))
+      expect(w).toEqual(['rules[0]: takes every message through app sales, so desk, which listens on slack:#b, never hears it through that app'])
+    })
+  })
+
+  describe('pins and the warnings about rules and listeners', () => {
+    const rules = (specs: string, body: string) => ok(`${APPS}${specs}${body}`).warnings
+    test('a later rule is not shadowed by an earlier one that pins skip for its apps', () => {
+      // rules[0] to p (pinned to sales) takes only sales; rules[1] to the unpinned u takes the other apps: both can match
+      const specs = spec('p', 'apps = ["sales"]') + spec('u')
+      expect(rules(specs, '[[rules]]\nat = "slack:#x"\nto = "p"\n[[rules]]\nat = "slack:#x"\nto = "u"\n')).toEqual([])
+      // two rules to unpinned specialists at the same place, with no pins at all, shadow as before
+      expect(rules(spec('u') + spec('v'), '[[rules]]\nat = "slack:#x"\nto = "u"\n[[rules]]\nat = "slack:#x"\nto = "v"\n')).toEqual(['rules[1]: never matches: rules[0] already takes every message at slack:#x'])
+    })
+    test('a rule to an unpinned specialist does not shadow a listener pinned to an app that rule skips', () => {
+      const specs = spec('v') + spec('p', 'apps = ["sales"]\nlistens = ["slack:#x"]')
+      expect(rules(specs, '[[rules]]\nat = "slack:#x"\nto = "v"\n').filter(w => w.startsWith('rules['))).toEqual([])
+    })
+    test('pinning an app takes it from an unpinned listener that no pinned specialist backs up: a warning', () => {
+      expect(rules(spec('x', 'listens = ["slack:#a"]') + spec('y', 'apps = ["sales"]\nlistens = ["slack:#b"]'), '')).toEqual(['specialists.x: x is unpinned, and app sales is pinned by y, so x no longer hears sales on slack:#a'])
+      // y listens on #a too: the split is deliberate
+      expect(rules(spec('x', 'listens = ["slack:#a"]') + spec('y', 'apps = ["sales"]\nlistens = ["slack:#a"]'), '')).toEqual([])
+    })
+  })
+
+  describe('default_app', () => {
+    test('names a declared app on a Slack channel', () => {
+      const c = ok(`${APPS}[places."slack:#help"]\ndefault_app = "sales"\n[places."slack:C0HELP"]\ndefault_app = "support"\n`).config
+      expect(c.places['slack:#help'].defaultApp).toBe('sales')
+      expect(c.places['slack:C0HELP'].defaultApp).toBe('support')
+      expect(ok(`${APPS}[places."slack:#help"]\nlisten = "all"\n`).config.places['slack:#help'].defaultApp).toBeUndefined()
+    })
+    test('an undeclared app, or a place that is not a Slack channel, is an error at its key path', () => {
+      expect(errorsOf(`${APPS}[places."slack:#help"]\ndefault_app = "nope"\n`)).toEqual(['places."slack:#help".default_app: no app "nope": declare [slack.apps.nope]; hydra.toml declares default, sales, support'])
+      expect(errorsOf(`${APPS}[places."discord:#feed"]\ndefault_app = "sales"\n`)).toEqual(['places."discord:#feed".default_app: discord:#feed is not a Slack channel: `default_app` picks among the apps in a channel'])
+      expect(errorsOf(`${APPS}[places."slack:dm"]\ndefault_app = "sales"\n`)).toEqual(['places."slack:dm".default_app: slack:dm is not a Slack channel: `default_app` picks among the apps in a channel'])
+    })
   })
 })

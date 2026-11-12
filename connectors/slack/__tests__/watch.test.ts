@@ -1240,6 +1240,18 @@ roles = ["finance"]
     expect(s.alerts).toHaveLength(1)
   })
 
+  test('a redirect to a specialist pinned to another app goes to the binding instead, alerted once, in words that need no context', async () => {
+    const toml = GUARDED() + '[slack.apps.sales]\nbot_token_env = "SALES_BOT_TOKEN"\n[specialists.deals]\nworkdir = "/w/deals"\napps = ["sales"]\nallow = ["anyone"]\n'
+    const s = setup({ toml }, undefined, undefined, async () => ({ fate: 'deliver', to: 'deals' }))
+    s.w.handle(ev({ ts: '1.000001', text: mention }))
+    await s.w.flush()
+    expect(s.sent.map(x => x.specialist)).toEqual(['ops'])
+    expect(s.logs.join()).toContain('to deals, but deals is pinned to app sales, and this message came through app default; delivering to ops')
+    expect(s.alerts).toHaveLength(1)
+    expect(s.alerts[0]).toContain('redirected a Slack message in slack:C0FOOD to "deals", but deals is pinned to app sales')
+    expect(s.alerts[0]).toContain('so it went to ops instead')
+  })
+
   test('a "not now" for a message the full owed list already cut is a counted drop, not silence', async () => {
     const s = setup({ toml: GUARDED(), coalesceMs: 60_000 }, undefined, undefined, async () => ({ fate: 'later' }))
     s.w.handle(ev({ ts: '1.000001', text: mention }))
