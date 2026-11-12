@@ -10,6 +10,7 @@ import {
   type InstallOpts,
 } from './lifecycle.js'
 import { peek } from './peek.js'
+import { ROUTE_USAGE } from '../routing/route-request.js'
 import { migrateCommand } from './migrate.js'
 import { peopleCommand } from './people.js'
 import { configAddCommand } from './config-add.js'
@@ -113,8 +114,11 @@ Specialists (named addresses that refill themselves):
   hydra specialist show <name> | list | rm <name>   (rm: without hydra.toml only)
 
 Routing (hydra.toml):
-  hydra route --as <person|address|stranger> --at <place> [--bound <specialist>]
-                                       What a new message there would do: every candidate, and why the winner won
+  hydra route --as <person|address|stranger> --at <place> [--app <app>] [--heard-by <app,app>] [--mentioned <app,app>] [--bound <specialist> [--bound-app <app>]]
+                                       What a new message there would do: every candidate, and why the winner won.
+                                       --app is the app this check runs for, the one that heard the message (default: the app
+                                       named "default"). --heard-by adds the other apps in the channel. --mentioned lists the
+                                       apps the text tags, first tag first. --bound-app is the app that opened the bound conversation.
   hydra conversations [list]           Conversations, the specialist each is bound to, and health
   hydra conversations bind <conversation> <specialist>
                                        Bind or move a conversation (as list prints it: slack:C0ABC:1793732224.093059)
@@ -585,12 +589,12 @@ async function main(): Promise<void> {
 
     case 'route': {
       const flag = (name: string) => { const i = filtered.indexOf(name); return i > 0 ? filtered[i + 1] : undefined }
-      const [as, at, bound] = [flag('--as'), flag('--at'), flag('--bound')]
+      const [as, at, bound, app, heardBy, mentioned, boundApp] = [flag('--as'), flag('--at'), flag('--bound'), flag('--app'), flag('--heard-by'), flag('--mentioned'), flag('--bound-app')]
       if (!as || !at) {
-        console.error('error: usage: hydra route --as <person|address|stranger> --at <place> [--bound <specialist>]')
+        console.error(`error: ${ROUTE_USAGE}`)
         process.exit(1)
       }
-      const response = await sendRequest(socketPath(), { type: 'cli', command: 'route', id: randomUUID(), params: { as, at, ...(bound && { bound }) } })
+      const response = await sendRequest(socketPath(), { type: 'cli', command: 'route', id: randomUUID(), params: { as, at, ...(bound && { bound }), ...(app && { app }), ...(heardBy && { heardBy }), ...(mentioned && { mentioned }), ...(boundApp && { boundApp }) } })
       if (!json && response.ok) { console.log((response.data as { report: string }).report); break }
       printResponse(response, json)
       break

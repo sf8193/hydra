@@ -40,8 +40,13 @@ export type Specialist = {
   prompt?: string
   /** `~` expanded; a relative path is under `workdir`. Read when it's needed, so it's not checked on load. */
   promptFile?: string
-  /** Places it answers. No two specialists listen on the same place. */
+  /** Places it answers. Two specialists share a place only when no app reaches both: their `apps` are disjoint, or one is pinned and one is not. */
   listens: Place[]
+  /**
+   * Pins it to Slack apps (ids). It answers only messages that come through those apps. Those apps deliver only to specialists pinned to them.
+   * Absent: unpinned. It answers messages through every app that no specialist is pinned to.
+   */
+  apps?: string[]
   /** Roles that may reach it. Default `['people']`. The operator is always allowed. */
   allow: string[]
   /** `shared`: one session for everything (default). `per-conversation`: one per thread. */
@@ -102,9 +107,14 @@ export type PlaceOptions = {
   listen: 'mentions' | 'all'
   /** Hear other bots. Default false; hydra's own bot is never heard. */
   bots: boolean
+  /**
+   * A Slack channel only. Which app answers an unmentioned message when several apps are in the channel.
+   * Absent: the app named `default` if it is there, else the first app in hydra.toml order that is.
+   */
+  defaultApp?: string
 }
 
-/** A clock that sends a message to a specialist. Loaded and checked now; run by B3. */
+/** A clock that sends a message to a specialist. Loaded and checked here; run by the daemon. */
 export type Schedule = {
   id: string
   /** 5 fields, local time. */
@@ -124,16 +134,21 @@ export type Schedule = {
   alertAfterMs?: number
 }
 
-/** An override for when the place isn't enough. Loaded and checked now; applied by B2. First match in file order. */
+/**
+ * An override for when the place isn't enough. Checked when hydra.toml loads, applied by `route()`. First match in file order.
+ * A rule names a place, an app, or both; identity (`from`) only refines them. A rule with `from` alone is an error.
+ */
 export type Rule = {
-  /** Required: identity can refine a place, never take one over. */
-  at: Place
-  /** A person or a role. Absent: anyone at that place. */
+  /** A place. Absent: every place. At least one of `at` and `app` is set: identity can refine them, never take them over. */
+  at?: Place
+  /** A Slack app id (`default`, or a `[slack.apps.<id>]`). Absent: every app. */
+  app?: string
+  /** A person or a role. Absent: anyone there. */
   from?: string
   to: string
 }
 
-/** The operator's hook, run after routing and the allow check. Loaded and checked now; run by B2. */
+/** The operator's hook, run after routing and the allow check. Checked when hydra.toml loads, run by the Slack watcher after routing. */
 export type Guard = {
   command: string
   timeoutMs: number

@@ -12,9 +12,7 @@ import { spawnSpecialist, specialistStatus, SpecialistError } from '../specialis
 import { declaredInToml, getSpecialist, listSpecialists, removeSpecialist, setSpecialist, setSpecialistThread, withTargetLock, type Specialist } from '../specialists/specialists.js'
 import { slackWatchHealth, refreshSlackSpecialistSurface, formatConversations, operatorBind, operatorUnbind, placeAliases } from '../connectors/slack/runtime.js'
 import { currentHydraConfig } from './hydra-config.js'
-import { route, explain } from '../routing/route.js'
-import { normalizeAddress } from '../config/load.js'
-import type { Address } from '../config/types.js'
+import { routeFor, type RouteParams } from '../routing/route-request.js'
 import { deliverToTarget, deliverVia, sessionByName, toSession, toThread, type DeliverOutcome } from '../specialists/targets.js'
 import { gateway } from './config.js'
 import { loadAccess, operatorIds } from './access.js'
@@ -458,22 +456,9 @@ function handleConversations(req: CLIRequest): CLIResponse {
   } catch (err) { return respond(req, false, err instanceof Error ? err.message : String(err)) }
 }
 
-/**
- * `hydra route --as <person|address|stranger> --at <place>`: what routing would do with a new message there, every
- * candidate and why the winner won. It reads the live hydra.toml and binds nothing.
- */
 function handleRoute(req: CLIRequest): CLIResponse {
-  const p = req.params as { as?: string; at?: string; bound?: string }
-  if (!p.as || !p.at) return respond(req, false, 'usage: hydra route --as <person|address|stranger> --at <place> [--bound <specialist>]')
-  const h = currentHydraConfig()
-  let from: Address | undefined
-  if (p.as !== 'stranger') {
-    const person = h.people[p.as]
-    from = person ? person.ids[0] : normalizeAddress(p.as)
-    if (!from) return respond(req, false, `"${p.as}" is neither a person in hydra.toml nor an address like slack:U0ABC`)
-  }
-  const d = route(h, { ...(from && { from }), at: placeAliases(p.at), addressed: true, ...(p.bound && { bound: p.bound }) })
-  return respond(req, true, { fate: d.fate, ...('to' in d && { to: d.to }), report: explain(d, h.guard?.command) })
+  const r = routeFor(currentHydraConfig(), req.params as RouteParams, placeAliases)
+  return r.ok ? respond(req, true, { fate: r.fate, ...(r.to && { to: r.to }), report: r.report }) : respond(req, false, r.error)
 }
 
 // ---------------------------------------------------------------------------

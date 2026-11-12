@@ -55,7 +55,7 @@ for f in diagrams/*.mmd; do [ -f "${f%.mmd}.png" ] || { echo "unrendered: $f"; e
 | `flow-respawn` | Respawn: thread command → read thread history → doSpawnSession with resurrectFrom |
 | `flow-recovery-cascade` | Resume/respawn tiers: --resume → fork-transcript → respawn + death detection |
 | `flow-revive` | **Who is home, putting a session back, and where a message goes**: `occupancy()`'s decision; every revive under one lock per target through `reviveThread()`; `deliver --revive`; and every target (`to`, `spawn`, `perThread`) resolving to a session that lands through `deliverToSession` (stuck → exit 5) |
-| `flow-route` | **Which specialist hears a message** (`routing/route.ts`): binding, then `[[rules]]`, then `listens`, then the operator's DM to main; then `allow`. Refused or unrouted → 🚫 |
+| `flow-route` | **Which specialist hears a message** (`routing/route.ts`): when several apps share a channel, the owner app (others → ignored); then binding, then `[[rules]]` (place, app, sender), then `listens`, then the operator's DM to main, each only to a specialist the app can deliver to; then `allow`. Refused or unrouted → 🚫 |
 | `flow-slack-route` | A Slack message from event to delivery: catch-up, the hold, classify through routing, coalescing, the guard, and every refusal and drop |
 | `flow-destroy` | Destroy: delete thread + anchor message (Discord only, dead/orphan threads), plus the `kill +d` composite that kills first |
 | `flow-deliver` | **Whisper channel**: CLI deliver → reachability → sendToBridge (default) or sendOrQueue (`--queue`). Codex sessions route through adapter. Delivery proof in response. |

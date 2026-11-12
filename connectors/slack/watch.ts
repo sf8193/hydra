@@ -3,9 +3,9 @@ import { join, basename } from 'path'
 import { randomBytes } from 'crypto'
 import { STATE_DIR } from '../../daemon/config.js'
 import { atomicWriteFileSync } from '../../daemon/util.js'
-import { defaultSlackApp, type Address, type HydraConfig, type Place, type PlaceOptions, type SlackApp } from '../../config/types.js'
+import { defaultSlackApp, DEFAULT_SLACK_APP, type Address, type HydraConfig, type Place, type PlaceOptions, type SlackApp } from '../../config/types.js'
 import { defaultAppKey } from './app.js'
-import { route, refusal, identify, currentId, isLive, isSessionThread, MAIN } from '../../routing/route.js'
+import { route, refusal, notServedBy, identify, currentId, isLive, isSessionThread, MAIN } from '../../routing/route.js'
 
 /** Where a delivery goes: a specialist (or `main`), and the conversation it is for, so a per-conversation specialist can give it its own session. */
 export type RouteTarget = { to: string; conversation?: string }
@@ -181,7 +181,7 @@ export const conversationId = (e: Pick<SlackWatchEntry, 'channel' | 'threadTs'>)
 /** The Slack channels hydra.toml names, in `listens` and `[[rules]]`, as written. */
 function namedChannels(h: HydraConfig): Place[] {
   const all = [...Object.values(h.specialists).flatMap(s => s.listens), ...h.rules.map(r => r.at)]
-  return [...new Set(all.filter(p => p.startsWith('slack:') && p !== 'slack:dm'))]
+  return [...new Set(all.filter((p): p is Place => !!p && p.startsWith('slack:') && p !== 'slack:dm'))]
 }
 
 const channelIdOf = (cfg: Pick<SlackWatchConfig, 'directory'>, place: Place): string | undefined => {
@@ -728,8 +728,8 @@ export class SlackWatcher {
       return 'subscribed'
     }
 
-    // A DM is addressed to the bot by being one, and so is every message in a conversation already open.
-    const addressed = dm || tagged || !!existing
+    // A DM is addressed to the bot by being one, and so is every message in a conversation whose binding still holds (route decides that).
+    const addressed = dm || tagged || (!!existing && !existing.specialist)
     if (existing?.delivered?.includes(ev.ts)) return 'ignored'
     // A tag in a thread a session only listens to is for whoever answers a fresh one here: they take the thread, and the session is told.
     if (tagged && existing?.specialist && isSessionThread(existing.specialist)) {
@@ -979,7 +979,7 @@ export class SlackWatcher {
     }
     const senders = new Map(items.map(i => [i.ts, identify(h, addressOf(i.user))] as const))
     items = items.filter(i => {
-      const why = refusal(h, homes.get(i.ts)!, senders.get(i.ts)!)
+      const why = refusal(h, homes.get(i.ts)!, senders.get(i.ts)!, { app: DEFAULT_SLACK_APP })
       if (!why) return true
       // Accepted, then `allow` changed while it waited: a drop, settled and surfaced.
       this.drop('refused', entry, [i.ts], `it was accepted, but now ${why}`)
@@ -1035,11 +1035,14 @@ export class SlackWatcher {
       }
       if (to !== home) {
         // A redirect does not get around `allow`: the specialist it names must admit the sender too.
-        const why = refusal(h, to, senders.get(item.ts)!)
+        // Only the app named `default` connects today, so that is the app this message came through.
+        const why = refusal(h, to, senders.get(item.ts)!, { app: DEFAULT_SLACK_APP })
         if (why) {
           this.deps.log(`daemon: slack-watch: the guard redirected ${key} ts ${item.ts} to ${to}, but ${why}; delivering to ${home}\n`)
-          // A redirect to a specialist that doesn't exist is the guard misconfigured: said once per episode, or a typo would quietly send everything to the default forever.
-          if (!isLive(h, to)) this.alertOnce(`guard-redirect:${to}`, home, `⚠️ The guard redirected a Slack message in ${place} to "${to}", which is no specialist in hydra.toml, so it went to ${home} instead. Fix the guard, or declare [specialists.${to}].`)
+          // A redirect to a specialist that doesn't exist, or that this app cannot be served by, is the guard misconfigured: said once per episode, or a typo would quietly send everything to the default forever.
+          const apart = notServedBy(h, to, DEFAULT_SLACK_APP)
+          if (apart) this.alertOnce(`guard-redirect:${to}`, home, `⚠️ The guard redirected a Slack message in ${place} to "${to}", but ${apart}, so it went to ${home} instead. Fix the guard, or change which apps "${to}" is pinned to in hydra.toml.`)
+          else if (!isLive(h, to)) this.alertOnce(`guard-redirect:${to}`, home, `⚠️ The guard redirected a Slack message in ${place} to "${to}", which is no specialist in hydra.toml, so it went to ${home} instead. Fix the guard, or declare [specialists.${to}].`)
           to = home
         } else {
           this.deps.log(`daemon: slack-watch: the guard redirected ${key} ts ${item.ts} from ${home} to ${to}\n`)

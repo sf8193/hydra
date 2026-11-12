@@ -100,7 +100,7 @@ export type SlackAppLike = {
 
 /** The scopes each enabled option needs (from `SLACK_APP_NEEDS`), so a missing one is a read at startup rather than a guess later. */
 export function scopesNeeded(h: HydraConfig): ScopeNeed[] {
-  const places = [...Object.values(h.specialists).flatMap(s => s.listens), ...h.rules.map(r => r.at)].filter(p => p.startsWith('slack:'))
+  const places = [...Object.values(h.specialists).flatMap(s => s.listens), ...h.rules.map(r => r.at)].filter((p): p is string => !!p && p.startsWith('slack:'))
   const slackOpts = Object.entries(h.places).filter(([p]) => p.startsWith('slack:')).map(([, o]) => o)
   const s = SLACK_APP_NEEDS.botScopes
   return [
