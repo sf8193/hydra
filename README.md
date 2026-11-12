@@ -44,7 +44,7 @@ A new interface to building — run coding agents over Discord/Slack.
 
 ## Prerequisites
 
-- [Bun](https://bun.sh) — `curl -fsSL https://bun.sh/install | bash`
+- [Bun](https://bun.sh), the version `.tool-versions` pins — `asdf install`, or any install of that version. The daemon runs it whatever bun starts the CLI, and falls back to the bun on PATH, with a warning, when it is missing.
 - [tmux](https://github.com/tmux/tmux) — `brew install tmux`
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — `npm install -g @anthropic-ai/claude-code`
 

@@ -15,7 +15,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version-file: .bun-version # the suite's bun; scripts/test.sh refuses any other. Bump deliberately: --isolate semantics are load-bearing, and 1.4.3 fixed spawnSync spinning forever after a GC (oven-sh/bun#34069)
+          bun-version-file: .tool-versions # hydra's one bun: the daemon's, the suite's and CI's; scripts/test.sh refuses any other. Bump deliberately: --isolate semantics are load-bearing, and 1.4.3 fixed spawnSync spinning forever after a GC (oven-sh/bun#34069)
 
       - name: Install dependencies
         run: bun install --frozen-lockfile

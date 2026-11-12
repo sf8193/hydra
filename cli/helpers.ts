@@ -1,6 +1,6 @@
 import { connect } from 'net'
 import { existsSync, readdirSync, statSync, unlinkSync, readFileSync, writeFileSync } from 'fs'
-import { join } from 'path'
+import { join, dirname } from 'path'
 import { homedir } from 'os'
 import { execSync, execFileSync } from 'child_process'
 import { spawnModel, TRANSCRIBE_TMUX, byteTmuxName, claudeConfigDir, platformStateDir } from '../shared/constants.js'
@@ -522,9 +522,18 @@ export function requireSpawnCwd(cfg: HydraConfig): void {
   process.exit(1)
 }
 
-export function buildDaemonEnvs(cfg: HydraConfig): string {
+/**
+ * The env a daemon's tmux session starts with. PATH leads with the pinned bun's directory, so `bun run daemon.ts`
+ * and every bare `bun` the daemon starts in turn (bridges, job attempts) run the pin, whatever bun the caller ran.
+ */
+export function buildDaemonEnvs(cfg: HydraConfig, bun: { path: string; fallback?: string } = pinnedBun(cfg.hydraDir)): string {
+  if (bun.fallback) {
+    appendLog(cfg.daemonLog, bun.fallback)
+    console.error(`warning: ${bun.fallback}`)
+  }
+  const path = bun.path.includes('/') ? `${dirname(bun.path)}:${process.env.PATH}` : process.env.PATH
   const envs = [
-    `PATH='${process.env.PATH}'`,
+    `PATH=${shq(path ?? '')}`,
     `HYDRA_STATE_DIR=${shq(cfg.stateDir)}`,
     `SPAWN_CWD=${shq(cfg.spawnCwdBlank ? '' : cfg.spawnCwd)}`,
     `CHAT_PLATFORM=${shq(cfg.platform)}`,
@@ -539,4 +548,52 @@ export function buildDaemonEnvs(cfg: HydraConfig): string {
   const model = process.env.HYDRA_MODEL?.trim()
   if (model) envs.push(`HYDRA_MODEL=${shq(model)}`)
   return envs.join(' ')
+}
+
+// ---------------------------------------------------------------------------
+// The pinned bun
+// ---------------------------------------------------------------------------
+
+/** The bun version .tool-versions pins: the one file asdf, CI (setup-bun) and scripts/test.sh all read. */
+export function pinnedBunVersion(hydraDir: string): string | null {
+  try {
+    return /^bun\s+(\S+)/m.exec(readFileSync(join(hydraDir, '.tool-versions'), 'utf8'))?.[1] ?? null
+  } catch { return null }
+}
+
+export type BunIO = {
+  version: string
+  execPath: string
+  asdfDir: string
+  exists: (p: string) => boolean
+  which: () => string | null
+}
+
+const bunIO = (): BunIO => ({
+  version: Bun.version,
+  execPath: process.execPath,
+  asdfDir: process.env.ASDF_DATA_DIR || join(homedir(), '.asdf'),
+  exists: existsSync,
+  // Bun.which searches the PATH bun started with unless handed one, and resolveConfig edits process.env.PATH.
+  which: () => Bun.which('bun', { PATH: process.env.PATH ?? '' }),
+})
+
+/**
+ * The pinned bun's absolute path, for the daemon. Before, the daemon ran whichever bun led the caller's PATH, where
+ * asdf had put the bun it chose by the caller's working directory: a restart typed outside the repo started the
+ * daemon on the home directory's bun. When the pinned bun is not installed, the bun on PATH, with the reason in
+ * `fallback`: a daemon on another bun beats no daemon.
+ */
+export function pinnedBun(hydraDir: string, io: BunIO = bunIO()): { path: string; fallback?: string } {
+  const pin = pinnedBunVersion(hydraDir)
+  if (pin && io.version === pin) return { path: io.execPath }
+  const installed = pin ? join(io.asdfDir, 'installs', 'bun', pin, 'bin', 'bun') : null
+  if (installed && io.exists(installed)) return { path: installed }
+  const onPath = io.which() ?? 'bun'
+  return {
+    path: onPath,
+    fallback: pin
+      ? `bun ${pin} (.tool-versions) is not installed, so the daemon runs ${onPath}; install it: asdf install bun ${pin}`
+      : `.tool-versions pins no bun, so the daemon runs ${onPath}`,
+  }
 }
