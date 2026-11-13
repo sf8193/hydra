@@ -4,6 +4,7 @@ import { SocketSupervisor, START_TIMEOUT_MS, type SocketEmitter } from '../../sh
 import { catchUp, toEvent, type CatchUpResult, type Page, type RawMessage, type SlackApi } from './catchup.js'
 import { mkdirSync, openSync, writeSync, closeSync, renameSync, rmSync } from 'fs'
 import { dirname } from 'path'
+import { linkPreviewsOff } from '../../shared/link-previews.js'
 import { routedChannels, hearsDms, dmsDeclared, namedChannels, unresolvedPlaces, isDm, mentionedApps, NOT_A_MEMBER, OPERATOR_TOKEN_REFUSED, NO_DIRECTORY, SLACK_LIMITS, type AppWatch, type SlackDirectory, type SlackWatchConfig, type SlackWatcher } from './watch.js'
 import { DEFAULT_SLACK_APP, type HydraConfig, type SlackApp } from '../../config/types.js'
 import { reachableBy } from '../../routing/route.js'
@@ -83,6 +84,14 @@ const MISSED_LIVE_ALERT_EVERY_MS = 60 * 60_000
 export const MEMBERSHIP_WAIT_MS = 5_000
 
 /** What the Slack SDK offers the listener, narrowed so the rest is testable without it. */
+/** `unfurl: false` posts without link previews (a place's `link_previews = false`); absent, Slack's own default. */
+export type PostOptions = { unfurl?: false }
+
+/** The chat.postMessage arguments for one reply: the thread when there is one, and unfurling off exactly when asked. */
+export function postPayload(channel: string, threadTs: string | undefined, text: string, opts?: PostOptions): Record<string, unknown> {
+  return { channel, text, ...(threadTs && { thread_ts: threadTs }), ...(opts?.unfurl === false && { unfurl_links: false, unfurl_media: false }) }
+}
+
 export type SlackAppLike = {
   onMessage(handler: (event: RawEvent) => void): void
   start(): Promise<void>
@@ -99,7 +108,7 @@ export type SlackAppLike = {
   onMembership?(handler: (channel: string) => void): void
   userName(userId: string): Promise<string | undefined>
   /** A message in a channel, or in a thread when `threadTs` is set. Resolves to its ts. */
-  post(channel: string, threadTs: string | undefined, text: string): Promise<string>
+  post(channel: string, threadTs: string | undefined, text: string, opts?: PostOptions): Promise<string>
   /** Reactions (the ack, and 🚫). */
   react(channel: string, ts: string, name: string): Promise<void>
   /** A file's bytes, to `dest` at mode 0600 (its directory 0700). Throws past `maxBytes`. */
@@ -285,7 +294,9 @@ export class SlackListener {
   /** A specialist's reply, into its conversation. Throws when Slack isn't connected. */
   async post(channel: string, threadTs: string | undefined, text: string): Promise<string> {
     if (!this.app || !this.sup?.state.connected) throw new Error(`Slack is not connected${this.appSuffix()}; try again once it is (hydra health shows the listener)`)
-    return this.app.post(channel, threadTs, text)
+    // The same predicate the gateway asks (shared/link-previews.ts), with this app's own view of hydra.toml and channel names.
+    const unfurl = linkPreviewsOff('slack', [channel], { config: this.d.hydra(), slackName: id => this.directory.nameOf(id) }) ? { unfurl: false as const } : undefined
+    return this.app.post(channel, threadTs, text, unfurl)
   }
 
   /** Channel names, read again. A failure keeps the last list; the missing scope is said once. */
@@ -699,8 +710,8 @@ export function boltApp(tokens: { app: string; bot: string; user?: string }): Sl
       return { botId: r.bot_id, userId: r.user_id, ...(r.url && { url: r.url }), ...(scopes && { scopes }) }
     },
     react: async (channel, ts, name) => { await client.reactions.add({ token: tokens.bot, channel, timestamp: ts, name }) },
-    post: async (channel, threadTs, text) => {
-      const r = await poster.chat.postMessage({ channel, text, ...(threadTs && { thread_ts: threadTs }) }).catch(e => { throw explainSlackError(e) })
+    post: async (channel, threadTs, text, opts) => {
+      const r = await poster.chat.postMessage(postPayload(channel, threadTs, text, opts) as any).catch(e => { throw explainSlackError(e) })
       if (!r.ts) throw new Error('Slack accepted the message but returned no ts')
       return r.ts
     },

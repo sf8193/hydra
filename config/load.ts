@@ -1,6 +1,7 @@
 // Loads `<state>/hydra.toml`: parse, fill defaults, check. Pure but for `env`, so the same text and machine give the same answer.
 // Strict: an unknown key, a malformed address or place, or a reference to nothing is an error, and any error rejects the whole file.
 
+import { operatorAddress } from './operator.js'
 import { statSync, accessSync, lstatSync, readdirSync, readFileSync, realpathSync, constants as fsConstants } from 'fs'
 import { parseEnvLine } from '../shared/env-parse.js'
 import { homedir } from 'os'
@@ -579,7 +580,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     const t = table(raw, path)
     if (!p || !t) continue
     if (has(places, p)) { error(path, `${p} is already set: places compare without case on GitHub`); continue }
-    unknownKeys(t, ['ack', 'files', 'listen', 'bots', 'default_app'], path)
+    unknownKeys(t, ['ack', 'files', 'listen', 'bots', 'default_app', 'link_previews'], path)
     const ack = str(t, 'ack', path)
     // Which app answers an unmentioned message when several apps are in this channel.
     const defaultApp = str(t, 'default_app', path)
@@ -587,12 +588,15 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       if (!p.startsWith('slack:') || p === 'slack:dm') error(`${path}.default_app`, `${p} is not a Slack channel: \`default_app\` picks among the apps in a channel`)
       else if (!Object.hasOwn(slackApps, defaultApp)) error(`${path}.default_app`, noSuchApp(defaultApp, Object.keys(slackApps)))
     }
+    // Hydra reads a Discord channel by id: a place named `discord:#name` can never be matched to a channel, so previews could not be switched off there.
+    if (p.startsWith('discord:#') && t.link_previews === false) error(`${path}.link_previews`, 'cannot be set on a Discord channel by name: hydra reads a Discord channel by id, so name it discord:<channel id>')
     places[p] = {
       ...(ack !== undefined && { ack }),
       ...(defaultApp !== undefined && Object.hasOwn(slackApps, defaultApp) && { defaultApp }),
       files: bool(t, 'files', path) ?? false,
       listen: oneOf(t, 'listen', path, ['mentions', 'all'] as const) ?? 'mentions',
       bots: bool(t, 'bots', path) ?? false,
+      linkPreviews: bool(t, 'link_previews', path) ?? true,
     }
   }
 
@@ -817,6 +821,37 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   }
   const listJoin = (items: string[]) => items.length <= 2 ? items.join(' and ') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
 
+  // `escalate` posts to a confined specialist's `home` and tags the operator. So the home is a chat place hydra can post to, by a name it
+  // can use; it is not the specialist's own conversation; the operator's own account is not listening there; and the operator has an
+  // address on its platform to be tagged by. Places are compared in one spelling (a bare id is `discord:<id>`, case ignored); a Slack
+  // channel by id and by name cannot be equated before Slack has been asked, so escalate checks that again when it posts.
+  const canon = (p: string): string => (/^\d+$/.test(p.trim()) ? `discord:${p.trim()}` : p.trim().toLowerCase())
+  const operatorSession = (id: string) => id === 'main' || specialists[id]?.access === 'operator'
+  for (const s of Object.values(specialists)) {
+    if (s.access !== 'workdir') continue
+    const at = `specialists.${s.id}.home`
+    if (!s.home) {
+      warn(`specialists.${s.id}`, 'it has no home, so its escalate tool has nowhere to post and reports that it cannot reach the operator; set `home` to a place only the operator reads')
+      continue
+    }
+    const home = canon(s.home)
+    if (home.endsWith(':dm')) { error(at, `${s.home} is a direct-message place: an escalation needs a place only the operator reads, not someone's DMs`); continue }
+    if (home === 'cli' || home.startsWith('git' + 'hub:')) { error(at, `${s.home} is not a chat place hydra can post to: use a slack: or discord: place`); continue }
+    if (home.startsWith('discord:#')) { error(at, 'escalate cannot post to a Discord channel by name: use its id (discord:<channel id>)'); continue }
+    if (s.listens.some(l => canon(l) === home)) { error(at, `${s.home} is a place ${s.id} listens on itself: an escalation there is not out of its conversation; give it a home only the operator reads`); continue }
+    const listener = Object.values(specialists).find(o => o.access === 'operator' && o.listens.some(l => canon(l) === home))?.id
+      ?? rules.find(r => r.at && canon(r.at) === home && operatorSession(r.to))?.to
+    if (listener) error(at, `${s.home} is a place ${listener} listens on, and ${listener} runs under the operator's account: an escalation posted there would be heard by that account; give ${s.id} a home only the operator reads`)
+    // A rule that names an app and no place sends everything that app hears to its target: the app this specialist posts its escalations through hears its home.
+    if (home.startsWith('slack:')) {
+      const via = speaksAsOf(s, Object.keys(slackApps))
+      const sweep = via ? rules.find(r => !r.at && r.app === via && operatorSession(r.to)) : undefined
+      if (sweep) error(at, `${s.home} is heard by the app ${via}, and a rule sends everything ${via} hears to ${sweep.to}, which runs under the operator's account: an escalation posted there would be heard by that account; give ${s.id} a home that app does not hear, or change the rule`)
+    }
+    const platform = home.split(':')[0]
+    if (operator && (platform === 'slack' || platform === 'discord') && !operatorAddress({ operator, people }, platform)) error(at, `escalate tags the operator, and ${operator} has no ${platform}: address; add one under [people.${operator}]`)
+  }
+
   const ruleTargets = new Set(rules.map(r => r.to))
   const scheduleTargets = new Set(Object.values(schedules).map(s => s.to))
   for (const s of Object.values(specialists)) {
@@ -828,6 +863,17 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (s.access === 'operator') {
       const who = reachedBy(s)
       if (who.length) warn(path, `${listJoin(who)} can reach the operator's account through it; set access = "workdir"`)
+    }
+    // A confined specialist's answer can carry a link; where previews are on, the preview shows readers content they could not open themselves.
+    // Previews can be switched off in a Slack channel (by id or name) and a Discord channel by id; a Discord channel given by name is not one hydra can match.
+    if (s.access === 'workdir' && s.allow.includes('anyone')) {
+      const chat = s.listens.filter(p => (p.startsWith('slack:') || p.startsWith('discord:')) && places[p]?.linkPreviews !== false)
+      const open = chat.filter(p => !p.startsWith('discord:#'))
+      const named = chat.filter(p => p.startsWith('discord:#'))
+      const lead = `anyone can talk to it in`
+      const why = 'where a link in its answer unfurls a preview that can show readers content they could not open themselves'
+      if (open.length) warn(path, `${lead} ${listJoin(open)}, ${why}; set link_previews = false in ${open.map(p => `[places.${JSON.stringify(p)}]`).join(' and ')}`)
+      if (named.length) warn(path, `${lead} ${listJoin(named)}, ${why}; hydra can switch previews off in a Discord channel only by id, so list it as discord:<channel id> and set link_previews = false there`)
     }
     if (s.sessions === 'shared') {
       if (s.listens.length >= 2) warn(path, `one shared session hears ${s.listens.join(', ')}, so what's said in one place is remembered in the others; use sessions = "per-conversation" or one specialist per place`)

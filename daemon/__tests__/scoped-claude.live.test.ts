@@ -13,6 +13,7 @@ import { join } from 'path'
 import { ClaudeEngine } from '../engines/claude-engine.js'
 import { CLAUDE_CONFIG, STATE_DIR } from '../config.js'
 import { policyIdFor, type LaunchPolicy } from '../scope.js'
+import { mismatches, readLoaded, verifyDeps, verifyLaunch } from '../engines/claude-verify.js'
 import { withFakeTmux } from './fake-tmux.js'
 import { PROBE_INHERITED_ENV, minimalProbeEnv } from './scoped-probe.js'
 
@@ -154,6 +155,12 @@ for line in sys.stdin:
     expect(init.mcp_servers.map((m: any) => m.name)).not.toContain('planted')
     expect(init.tools.filter((t: string) => t.startsWith('mcp__planted'))).toEqual([])
     expect(init.tools).not.toContain('Bash')
+  })
+  test('the start\'s own check (engines/claude-verify.ts) accepts this launch\'s debug file, and refuses the unrestricted control\'s', async () => {
+    expect(mismatches(policy as any, readLoaded(debugLog))).toEqual([])
+    expect(await verifyLaunch(policy as any, 'scoped.log', { ...verifyDeps, read: () => debugLog })).toEqual({ ok: true })
+    const control = await verifyLaunch(policy as any, 'control.log', { ...verifyDeps, read: () => controlDebug, deadlineMs: 0 })
+    expect(control.ok).toBe(false)
   })
   test('the turn ran: Claude answered', () => {
     expect(initOnly?.is_error).toBe(false)

@@ -84,12 +84,34 @@ speaks_as = "sales"                   # the app it posts as when it answers no m
                                       # Absent: its first pinned app; if unpinned, `default`, else the only app declared. With several apps and no `default`, required for a specialist with a Slack home. A `#name` home is resolved through that app's workspace.
 listens = ["slack:#help"]
 
+# A specialist other people talk to, confined: it knows only its workdir, uses only the tools and servers it lists, and answers only its own
+# conversation. `access = "operator"` (the default) is the operator's account, with every tool and server they have. A workdir must be a folder
+# of its own (not $HOME, not a git work tree, no symlinks out). `access`, `tools` and `mcp` are refused in [defaults.specialist] and in `hydra
+# config add` fragments. Each new start is checked against this, from Claude Code's own debug file (docs/slack.md, "A specialist other people talk to",
+# which shows the same kind of specialist as a file of its own, named `ops`). Its `.env` variables are read when the daemon starts.
+[specialists.helpdesk]
+workdir = "~/agents/helpdesk"
+apps = ["sales"]                      # pinned, because the `sales` app is pinned by deals: an unpinned specialist would lose it (hydra.toml warns)
+listens = ["slack:#ops"]
+allow = ["staff"]
+access = "workdir"
+tools = ["Read", "Grep", "Glob"]      # built-in tools; these three are the default and all it may list
+mcp = ["datadog"]                     # names from [mcp.*] below
+home = "slack:#ops-escalations"       # where its `escalate` tool posts (tagging the operator): a place no operator-access session listens on
+
 # PR reviews on one repo.
 [specialists.reviewer]
 workdir = "~/code/widget"
 listens = ["github:acme/widget"]
 engine = "claude"                     # claude | codex | omp
 env_file = ".env.reviewer"            # extra environment for its sessions; relative to workdir
+
+# --- mcp: servers a confined specialist may list in `mcp`. Per-operator: only hydra.toml declares one ---
+
+[mcp.datadog]
+command = "/usr/local/bin/datadog-mcp"   # required: a pinned binary or versioned package, not `npx -y` latest
+token_env = ["DD_API_KEY"]               # names in the state dir's .env; only these reach the server (never GH_TOKEN or the SSH agent)
+tools = ["search_logs", "get_monitor"]   # the tools of it a specialist may call (default: none, which a specialist cannot list)
 
 # --- places: optional platform options for one place ---
 
@@ -100,6 +122,12 @@ files = true                          # download attachments (default false)
 bots = false                          # hear other bots (default false; hydra's own bot is never heard)
 default_app = "default"               # a Slack channel only: when two apps are in it, the app that answers a message that tags neither (a tag always picks the app).
                                       # Absent: the app named `default`, else the first app above, among those that deliver to someone here. An untagged follow-up stays with the app that opened the conversation.
+link_previews = true                  # false: no link previews (Slack unfurl_links/unfurl_media, Discord suppress-embeds) on what hydra posts here: replies, new threads, DMs, escalations, alerts; not Slack edits (default true)
+
+# The channel helpdesk answers: it hears every top-level post, and its answers carry no previews.
+[places."slack:#ops"]
+listen = "all"
+link_previews = false
 
 # --- schedules: clocks that send a message to a specialist. A schedule's message carries the operator's authority. ---
 # (A repo adding its own: `hydra config add <fragment.toml>`.)
@@ -134,7 +162,8 @@ from = "finance"                      # a person or a role (absent: anyone there
 to = "ops"
 
 [[rules]]
-app = "sales"                         # every message that comes through the sales app; with `at` too, that place through that app only
+at = "slack:#help"
+app = "sales"                         # an app alone matches every message that comes through it (which would include a confined specialist's home: hydra.toml refuses that); with `at`, that place through that app only
 from = "finance"
 to = "deals"                          # must be a specialist the app can reach: pinned to sales, or any specialist while no one pins sales
 

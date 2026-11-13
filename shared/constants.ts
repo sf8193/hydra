@@ -243,6 +243,8 @@ export const BASE_TOOLS: Readonly<Record<SessionType, ReadonlySet<ToolName>>> = 
   scoped: new Set([
     'reply', 'react', 'edit_message', 'delete_message', 'fetch_messages',
     'download_attachment', 'set_description',
+    // Its one way to speak outside its conversation: a post to its specialist's home (daemon/escalate.ts).
+    'escalate',
   ]),
 }
 

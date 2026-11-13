@@ -303,8 +303,98 @@ Start with `hydra health`; `hydra health --json` has every field above.
 5. **Add the membership events to every existing app.** A second app changes the first: add `member_joined_channel` and `member_left_channel` under Event Subscriptions of each app that already exists (`hydra slack manifest <app>` lists them) and reinstall each, so a join or a leave is noticed at once. Until you do, hydra alerts once, naming the app, when an invite goes unreported, and a join is noticed only when a tag asks or within ten minutes.
 6. **Check:** `hydra route --as <person> --at <place> --app <id>`, then `hydra health` (the new app's line, with its scope status; see the [runbook](#runbook-reading-hydra-health) if it is not `up`).
 
+## A specialist other people talk to: `access = "workdir"`
+
+**A session may know what its audience can already see.** A specialist whose replies only the operator sees can run under the operator's account (`access = "operator"`, the default, and what every specialist did before). One that other people talk to should not: whoever can message it can use whatever it can use. `access = "workdir"` confines it to its own folder, the tools and servers it lists, and its own conversation. Routing does not change: places, rules, apps, pins, `listen` and `sessions` work as they did. hydra.toml warns, naming who, when someone besides the operator can talk to an `access = "operator"` specialist.
+
+### A worked example: an ops specialist in `#ops`
+
+One channel, one specialist. Staff post in `#ops`; it answers from its runbooks and one monitoring server, and asks the operator when it cannot. A test loads it through the real loader (with the folder and binary checks stubbed), so it stays current.
+
+```toml
+operator = "op"
+
+[slack.apps.default]
+bot_token_env = "SLACK_BOT_TOKEN"
+app_token_env = "SLACK_APP_TOKEN"
+
+[people.op]
+ids = ["slack:U0OP"]
+name = "Op"
+
+[people.alice]
+ids = ["slack:U0ALICE"]
+roles = ["staff"]
+
+# A server specialists may list. Per-operator, so only hydra.toml declares one (never a `hydra config add` fragment).
+[mcp.datadog]
+command = "/usr/local/bin/datadog-mcp"    # a pinned binary or a versioned package, not `npx -y` latest
+token_env = ["DD_API_KEY"]                # names in the state dir's .env; only these reach the server
+tools = ["search_logs", "get_monitor"]    # the tools of it a specialist may call (default: none, which is refused)
+
+[specialists.ops]
+workdir = "~/specialists/ops"             # runbooks and FAQs: all it may know. A folder of its own, not a git work tree, no symlinks out
+listens = ["slack:#ops"]
+allow = ["staff"]                         # `anyone` is allowed too; see link_previews below
+access = "workdir"
+tools = ["Read", "Grep", "Glob"]          # the default, and all a workdir specialist may list
+mcp = ["datadog"]                         # names from [mcp.*]
+home = "slack:#ops-escalations"           # where `escalate` posts; a place only the operator reads
+
+[places."slack:#ops"]
+listen = "all"                            # hears every top-level post, not only tags; it answers in a thread on the post
+link_previews = false                     # no link previews on anything hydra posts here
+```
+
+**Before you paste.** The checks below run on your machine, so have these ready:
+- the folder `~/specialists/ops` exists and is a folder of its own (a git work tree, your home folder and a folder with symlinks out are refused);
+- the binary at `[mcp.datadog] command` exists and is executable;
+- `DD_API_KEY=<value>` is in the state dir's `.env`. hydra.toml reloads within a second, but the daemon reads `.env` only when it starts: restart it after adding the variable, or the specialist's first start refuses, naming the variable.
+
+`hydra config check` runs the loader's checks without the daemon, and reports what is missing.
+
+### What a confined session has
+
+| | |
+|---|---|
+| **Knows** | its `workdir` and nothing else: no `CLAUDE.md`, memory, project settings or `.mcp.json` from anywhere, and not the operator's plugins or claude.ai connectors |
+| **Built-in tools** | `tools`: `Read`, `Grep`, `Glob`, nothing that runs code. `Read` and the other two reach only the workdir |
+| **MCP servers** | the ones in `mcp`, each limited to the `tools` the `[mcp.*]` table lists, with only its `token_env` variables |
+| **Hydra tools** | `reply` (text only), `react`, `edit_message`, `delete_message`, `fetch_messages`, `download_attachment` and `set_description`, each only in its own thread or a Slack conversation bound to it; and `escalate` |
+| **Never** | `spawn_session`, `kill_session`, `peek_session`, `list_sessions`, `send_to_thread`, `handoff`, `bind_conversation`, `watch_pr`, `ask_predecessor`, and nothing posted outside its conversation but through `escalate` |
+
+hydra.toml refuses, with the key and the fix: a `tools` entry beyond the three; a workdir that is your home folder, a private root (`[defaults] private_roots = ["~/notes"]` adds yours), the state dir or Claude's config dir, a git work tree or one that holds a nested repository, a folder with a `.mcp.json` in or above it, a symlink out of it, or one too big to scan; an `mcp` name with no `[mcp.<name>]` or a server with no `tools`; an engine other than `claude`. `access`, `tools` and `mcp` are refused in `[defaults.specialist]` and in `hydra config add` fragments: only a hand edit of hydra.toml confines or unconfines a specialist.
+
+### `escalate`: asking the operator
+
+`escalate(chat_id, text)` is the confined session's one way to speak outside its conversation. Hydra posts to the specialist's `home` and nowhere else, tags the operator, and links the conversation `chat_id` names (one the session owns, checked as `reply` is). The text arrives quoted, cut at 1,500 characters, under a line that says a scoped session wrote it on behalf of the people in that conversation and that it is not an instruction from the operator or from hydra. It does not answer the conversation: the session tells the people there it escalated. The operator, or byte on the operator's word, decides what happens next; the full-account side acts only when the operator chooses.
+
+A conversation (however its id is spelled) may escalate at most 3 times in 10 minutes, counted in memory, so a daemon restart resets the count; past that nothing is posted and the session is told the operator has already been notified. Escalation posts to Slack go one at a time, at least 1.2 seconds apart. Failures are written for the session ("tell the person you could not reach the operator"), and the operator-side detail goes to the daemon log.
+
+hydra.toml refuses a `home` that is a DM (`slack:dm`, `discord:dm`), `cli` or a repo, a Discord channel given by name (use `discord:<channel id>`), the specialist's own `listens`, or a place an `access = "operator"` session listens on (a specialist's `listens`, a rule that sends the place to `main` or to such a specialist, or a rule for the app the specialist posts as that names no place, since that app hears the home too), compared in one spelling. A Slack channel named by id in one place and by name in the other is the same channel only once Slack has said so, so `escalate` checks that again when it posts. It also refuses a `home` on a platform where the operator has no address to be tagged by. A confined specialist with no `home` loads with a warning: `escalate` then tells the session it cannot reach the operator.
+
+### `link_previews`
+
+A preview can show readers content they could not open themselves, and fetches the link with whatever the text put in it. `link_previews = false` on a place turns Slack's `unfurl_links` and `unfurl_media` off, and sets Discord's suppress-embeds flag, on the messages hydra posts to that place through each gateway's one sending point: replies, a new thread's first message and its anchor, DMs, buttons, escalations and alerts. Covered the same way: Discord edits and Discord button-click updates and replies. **Not covered:** Slack edits (`chat.update` has no unfurl argument), and a Discord channel given by name (hydra reads Discord channels by id, so `link_previews = false` on `discord:#name` is refused; use `discord:<channel id>`). Discord ignores a caller's own `unfurl: false`, as before. The default is on, so a place that does not set it behaves as it did. hydra.toml warns when a confined specialist that `anyone` can talk to answers in a place with previews on.
+
+### Every new start is checked, and a changed file is not applied silently
+
+A session keeps the policy it was born under. Each new start (fresh, resume, respawn, handoff) reads the launch's own debug file, which is Claude Code's record of what it loaded, and compares it with that policy: the MCP servers it started (the bridge and the listed ones, each connected), the plugins (the hydra mod, the bridge and the ones Claude Code registers as its own), the permission rules it applied, and that claude.ai connectors were off. Servers are matched by name; the file does not show their command.
+
+**What is guaranteed.** The launch prompt itself reaches the session, because it is on the command line. Everything after it goes through the one delivery gate, which refuses a confined session until its start has passed: a record carries a persisted `verified` marker that is set only on a pass. A message by session, by name, by `send_to_thread` or as a second conversation's message is refused until then, and so is a confined session restored at boot without the marker (hydra restarted mid-check, or it started before hydra checked starts). That session is not killed: the thread is told to run `hydra kill <session>`, and the next message starts one that is checked.
+
+A difference, or a file that cannot be read or does not finish loading in 45 seconds, stops the session this start created (only that one) before its thread is handed to it, and tells the thread. The same specialist is not started again for a minute, so each message does not launch and check another:
+
+> specialist ops: the session that just started (ops) loaded something its policy does not give it, so hydra stopped it before routing the thread to it (its launch prompt had already reached it): it started MCP servers the policy does not list: `claude.ai Slack`. Send another message to start a fresh one. If this repeats, the cause is in Claude Code's setup or its debug file, not in hydra.toml.
+
+The built-in tool list is not in that file; it is checked by the live test (`HYDRA_LIVE_CLAUDE=1 bun run test --isolate daemon/__tests__/scoped-claude.live.test.ts`), which runs a real launch and reads Claude Code's init event.
+
+If hydra.toml later gives a running specialist another `access`, `workdir`, `tools` or `mcp`, a message to its session is not delivered: the thread is told to run `hydra kill <session>`, and the next message starts a new session under the new file.
+
 ## Known limits
 
+- A confined session that was already running when it was last checked is not checked again while it runs (#617); only a new start is. The check also reads Claude Code 2.1.32x's wording of its debug file: a version that words those lines differently refuses starts until the check is updated.
+- Slack edits are not covered by `link_previews` (`chat.update` takes no unfurl argument).
 - Where two apps are in one channel and who is in it is not yet known (a membership read has not answered, or an app has not joined), each app may answer what it receives, so a channel two apps are in may be answered by both until the read lands.
 - While an app that was started has not yet joined (up to 30 seconds), a message in a channel hydra.toml names is not answered; its cursor is held and a catch-up pass reads it once the app has joined or failed to.
 - A place's `default_app` that names an app whose connection is down means the other app answers: `default_app` is honored only among the apps that heard the message, and a down app heard nothing.

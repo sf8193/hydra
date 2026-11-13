@@ -13,6 +13,7 @@ import { SocketSupervisor } from './shared/socket-supervisor.js'
 import { ThrottledQueue } from './throttled-queue.js'
 import { HOME_STATUS_ACTION_PREFIX, SLACK_CLIENT_PING_TIMEOUT_MS } from './shared/constants.js'
 import { parseHomeStatusClick } from './daemon/home-status.js'
+import { linkPreviewsOff } from './shared/link-previews.js'
 import type {
   ChatGateway,
   InboundMessage,
@@ -502,12 +503,13 @@ export class SlackGateway implements ChatGateway {
       }
     }
 
+    // The caller asked, or the place says so (`[places]` `link_previews = false`).
     if (opts?.unfurl === false) {
       payload.unfurl_links = false
       payload.unfurl_media = false
     }
 
-    const result = await this.throttledSend(() => this.app!.client.chat.postMessage(payload as any))
+    const result = await this.throttledSend(() => this.postMessage(payload))
     const sentId = result.ts!
     this.noteSent(sentId)
     return { id: sentId, channelId }
@@ -520,6 +522,15 @@ export class SlackGateway implements ChatGateway {
     applyMessageBody(payload, text, false)
     const result = await this.throttledSend(() => this.app!.client.chat.update(payload as any))
     return result.ts!
+  }
+
+  /**
+   * The one place this gateway posts a message to Slack (every send, thread anchor, first reply and DM goes through it): a place that sets
+   * `link_previews = false` gets `unfurl_links` and `unfurl_media` false. `chat.update` takes no such argument, so an edit is not covered.
+   */
+  private postMessage(payload: Record<string, unknown>) {
+    if (typeof payload.channel === 'string' && linkPreviewsOff('slack', [payload.channel])) { payload.unfurl_links = false; payload.unfurl_media = false }
+    return this.app!.client.chat.postMessage(payload as any)
   }
 
   /** Rate-limit chat.postMessage and chat.update to ~50/min (Slack Tier 4). */
@@ -640,7 +651,7 @@ export class SlackGateway implements ChatGateway {
       threadTs = opts.messageId
     } else {
       // Post a parent message that acts as the thread anchor
-      const anchor = await this.app.client.chat.postMessage({
+      const anchor = await this.postMessage({
         channel,
         text: `*${name}*`,
       })
@@ -650,7 +661,7 @@ export class SlackGateway implements ChatGateway {
 
     let messageId: string | undefined
     if (opts?.text) {
-      const reply = await this.app.client.chat.postMessage({
+      const reply = await this.postMessage({
         channel,
         text: opts.text,
         thread_ts: threadTs,
@@ -749,7 +760,7 @@ export class SlackGateway implements ChatGateway {
       ]
     }
 
-    await this.app.client.chat.postMessage(payload as any)
+    await this.postMessage(payload)
   }
 
   async isMentioned(msg: InboundMessage, extraPatterns?: string[]): Promise<boolean> {

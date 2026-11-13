@@ -29,7 +29,8 @@ import { gateway } from '../config.js'
 import { SESSION_IDENTITY_VARS, capturedSpawnVars, scrubbedSpawnEnv, withRaisedFdLimit } from '../../shared/spawn-env.js'
 import { modsExport } from '../../shared/mods.js'
 import { BRIDGE_CHANNEL_FLAG, BRIDGE_MCP_SERVER_KEY, BRIDGE_PLUGIN_ID, BRIDGE_TOOLS_PERMISSION } from '../plugin-manifest.js'
-import { confined, deliveryRefusal, missingTokenRefusal, PolicyRefusal, type ConfinedPolicy } from '../scope.js'
+import { confined, deliveryRefusal, missingTokenRefusal, PolicyRefusal, SCOPED_MODS, serverToolRule, type ConfinedPolicy } from '../scope.js'
+import { verifyLaunch as verifyLoaded, type Verdict } from './claude-verify.js'
 import { ENGINE_CAPABILITIES } from '../../shared/engine-capabilities.js'
 import { removeScopedFiles, writeScopedFiles } from '../scoped-files.js'
 import { clearNeedsAuthEntry, describeSetAt, NEEDS_AUTH_CLEARED_NOTE } from './claude-needs-auth.js'
@@ -41,9 +42,6 @@ export type ClaudeSubject = Pick<SessionInfo, 'tmuxName'> & Partial<Pick<Session
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
 
-/** The one mod a scoped session loads: the tracked hydra mod, never the operator's `mods.local`. */
-export const SCOPED_MODS = ['hydra'] as const
-
 /**
  * What a scoped launch writes and passes: the settings (the bridge plugin on, and the only tool permissions: the bridge's
  * and each listed server tool), and the MCP config (the listed servers, each with the `token_env` variables and nothing
@@ -53,7 +51,7 @@ export function scopedConfig(scope: Pick<ConfinedPolicy, 'specialist' | 'servers
   return {
     settings: {
       enabledPlugins: { [BRIDGE_PLUGIN_ID]: true },
-      permissions: { allow: [BRIDGE_TOOLS_PERMISSION, ...scope.servers.flatMap(s => s.tools.map(t => `mcp__${s.name}__${t}`))] },
+      permissions: { allow: [BRIDGE_TOOLS_PERMISSION, ...scope.servers.flatMap(s => s.tools.map(t => serverToolRule(s.name, t)))] },
     },
     mcp: {
       mcpServers: Object.fromEntries(scope.servers.map(s => [s.name, {
@@ -263,6 +261,9 @@ export class ClaudeEngine implements EngineAdapter {
   }
 
   async start(_records: readonly SessionInfo[]): Promise<void> {}
+
+  /** What a confined launch loaded, from its own debug file, against the policy (claude-verify.ts). */
+  verifyLaunch(policy: ConfinedPolicy, launched: LaunchResult): Promise<Verdict> { return verifyLoaded(policy, launched.debugLogPath) }
 
   async launch(input: LaunchInput): Promise<LaunchResult> {
     try {

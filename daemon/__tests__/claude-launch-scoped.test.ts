@@ -3,9 +3,9 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { ClaudeEngine, scopedConfig, SCOPED_MODS } from '../engines/claude-engine.js'
+import { ClaudeEngine, scopedConfig } from '../engines/claude-engine.js'
 import { STATE_DIR, CLAUDE_CONFIG, SOCK_PATH } from '../config.js'
-import { PolicyRefusal, policyIdFor, type ConfinedPolicy } from '../scope.js'
+import { PolicyRefusal, policyIdFor, SCOPED_MODS, type ConfinedPolicy } from '../scope.js'
 import { removeScopedFiles, scopedDir } from '../scoped-files.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 

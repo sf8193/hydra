@@ -5,6 +5,8 @@ import {
   _setDeliveryDeps, _resetDelivery, _heldCount, HOLD_QUEUE_MAX, type DeliveryOutcome, type DeliveryFacts,
 } from '../typed-delivery.js'
 import { emit } from '../event-bus.js'
+import { _setHydraConfigForTesting } from '../hydra-config.js'
+import { bornPolicy } from '../scope.js'
 import type { SessionInfo } from '../sessions.js'
 
 process.stderr.write = (() => true) as any
@@ -238,5 +240,28 @@ describe('typed text', () => {
   test('tryTypedDelivery pastes the tagged text', async () => {
     expect(await tryTypedDelivery(sess, 'hi', meta())).toBe(true)
     expect(pasted[0]!.text).toBe('[Discord · dan · msg m-42 · thread thread-9] hi')
+  })
+})
+
+describe('a confined session is not typed into until its start is verified', () => {
+  // A specialist that hydra.toml declares with the policy the session was born under, so the drift check passes and only the marker decides.
+  const confine = (over: Partial<SessionInfo> = {}): SessionInfo => {
+    _setHydraConfigForTesting({
+      operator: 'op', connectors: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
+      people: { op: { id: 'op', ids: ['discord:1'], roles: [], name: 'op' } },
+      specialists: { ops: { id: 'ops', workdir: '/srv/ops', listens: [], allow: [], sessions: 'shared', max: 20, was: [], access: 'workdir', tools: ['Read'], mcp: [] } },
+    } as any)
+    return session({ sessionType: 'scoped', policy: bornPolicy('ops'), threadId: 'th', ...over })
+  }
+  afterEach(() => _setHydraConfigForTesting(undefined))
+  test('unverified: the message takes the channel path (the gate refuses it), and nothing is pasted', async () => {
+    sess = confine()
+    expect(await send('u1')).toEqual({ by: 'channel' })
+    expect(pasted).toHaveLength(0)
+  })
+  test('verified, same policy, same config: the same message is pasted (so the marker is what decided)', async () => {
+    sess = confine({ verified: true })
+    expect(await send('u2')).toEqual({ by: 'paste' })
+    expect(pasted).toHaveLength(1)
   })
 })

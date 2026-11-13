@@ -8,6 +8,7 @@ import { quietSend, shouldQuiet } from './quiet-send.js'
 import { beginMainHandoff } from './main-handoff.js'
 import { getSpecialist } from '../specialists/specialists.js'
 import { ensureSpecialist } from '../specialists/specialist-deliver.js'
+import { escalate } from './escalate.js'
 import { READ_ONLY_DISALLOWED_TOOLS, claudeLaunchCwd, doSpawnSession, handOff, handoffNoteFate, killSession, predecessorOf, runPreHandoffHook, sessionDir, type PreHandoffVerdict } from './session-lifecycle.js'
 import { fallbackDescription, formatDuration, chunk, assertSendable, parseDuration } from './util.js'
 import { tmuxHasSession } from './tmux.js'
@@ -148,7 +149,7 @@ const askingPredecessor = new Set<string>()  // session ids with an ask_predeces
 
 /** The argument that names where a scoped session's tool acts, by tool. */
 const SCOPED_PLACE_ARG: Readonly<Record<string, string>> = {
-  reply: 'chat_id', react: 'chat_id', edit_message: 'chat_id', delete_message: 'chat_id', download_attachment: 'chat_id', fetch_messages: 'channel',
+  reply: 'chat_id', escalate: 'chat_id', react: 'chat_id', edit_message: 'chat_id', delete_message: 'chat_id', download_attachment: 'chat_id', fetch_messages: 'channel',
 }
 
 /**
@@ -308,6 +309,9 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         return { content: [{ type: 'text', text: out }] }
       }
 
+      case 'escalate': {
+        return { content: [{ type: 'text', text: await escalate(callerSessionId, args) }] }
+      }
       case 'react': {
         if (gateway.platform === 'slack') return { content: [{ type: 'text', text: 'no-op on Slack (reactions disabled)' }] }
         await retrySend(() => gateway.react(args.chat_id as string, args.message_id as string, args.emoji as string))

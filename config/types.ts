@@ -141,6 +141,12 @@ export type PlaceOptions = {
   /** Hear other bots. Default false; hydra's own bot is never heard. */
   bots: boolean
   /**
+   * Whether links in what hydra posts here unfurl into previews (Slack `unfurl_links`/`unfurl_media`, Discord's suppress-embeds flag), on each
+   * gateway's one sending point: replies, new threads, DMs, buttons, escalations, alerts, Discord edits and button clicks. Not Slack edits (`chat.update` has
+   * no such argument), and not a Discord channel given by name. Default true. A preview can show readers content they could not open themselves, and fetches the URL with whatever is in it.
+   */
+  linkPreviews: boolean
+  /**
    * A Slack channel only. Which app answers an unmentioned message when several apps are in the channel.
    * Absent: the app named `default` if it is there, else the first app in hydra.toml order that is.
    */

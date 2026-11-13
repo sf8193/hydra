@@ -54,6 +54,30 @@ export const remedy = (sessionName: string): string => `Run \`hydra kill ${sessi
 
 export const policyIdOf = (p: LaunchPolicy | undefined): string => p?.id ?? OPERATOR_SCOPE
 
+/** The one mod a scoped session loads: the tracked hydra mod, never the operator's `mods.local`. */
+export const HYDRA_MOD = 'hydra'
+export const SCOPED_MODS = [HYDRA_MOD] as const
+
+/** After a start is stopped by verification, the same specialist is not started again for this long: each message would otherwise launch a session and wait to verify it. `now` is a test seam. */
+export const verifyBackoff = { ms: 60_000, now: (): number => Date.now() }
+
+/** The permission rule that allows one tool of one MCP server: Claude Code's `mcp__<server>__<tool>`. The launch's settings and the start's check both say it this way. */
+export const serverToolRule = (server: string, tool: string): string => `mcp__${server}__${tool}`
+
+/** Sessions whose start is being verified right now (in memory: a restart empties it, which is what leaves an unfinished one unverified). */
+const verifying = new Set<string>()
+export const startVerifying = (sessionId: string): void => { verifying.add(sessionId) }
+export const endVerifying = (sessionId: string): void => { verifying.delete(sessionId) }
+export const isVerifying = (sessionId: string): boolean => verifying.has(sessionId)
+
+/** A confined session whose start has not passed verification: the one that takes no message. Operator access and non-specialist sessions are never this. */
+export const unverified = (info: Pick<SessionInfo, 'sessionType' | 'policy' | 'verified'>): boolean =>
+  (info.sessionType === 'scoped' || info.policy?.access === 'workdir') && !info.verified
+
+/** The text of a start that verification stopped: the session is gone, its launch prompt had reached it, and hydra.toml is not the usual cause. */
+export const verifyRefusal = (specialist: string, sessionName: string, why: string): string =>
+  `specialist ${specialist}: the session that just started (${sessionName}) loaded something its policy does not give it, so hydra stopped it before routing the thread to it (its launch prompt had already reached it): ${why}. Send another message to start a fresh one. If this repeats, the cause is in Claude Code's setup or its debug file, not in hydra.toml.`
+
 /** Why a stored policy cannot be read (a confining one missing a part), or undefined. */
 export function policyProblem(p: unknown): string | undefined {
   if (typeof p !== 'object' || p === null) return 'it is not an object'
@@ -206,6 +230,16 @@ export function sessionDrift(info: Pick<SessionInfo, 'policy' | 'threadId' | 'tm
  * the remedy (at most once a minute per cause) and the log names the old and new access in words.
  */
 export function deliveryRefusal(info: SessionInfo): string | undefined {
+  // A confined session takes nothing until its start has been checked: the first line of the gate, whatever route the message took.
+  if (unverified(info)) {
+    const name = info.tmuxName
+    const reason = verifying.has(info.sessionId)
+      ? `specialist ${info.policy?.specialist ?? '?'}: its session ${name} is still being checked against its policy and takes no message until that passes; send it again in a moment.`
+      : `specialist ${info.policy?.specialist ?? '?'}: its running session ${name} has not been checked against its policy (hydra restarted while it was being checked, or it started before hydra checked each start), so nothing is delivered to it. ${remedy(name)}`
+    process.stderr.write(`daemon: delivery to ${name} refused: its start is not verified\n`)
+    if (threadNotices.allow(`${info.threadId}\n${reason}`)) void safeSend(info.threadId, `⚠️ ${reason.replace(/^specialist [^:]+: /, '')}`).catch(() => {})
+    return reason
+  }
   let found: ReturnType<typeof sessionDrift>
   try { found = sessionDrift(info) } catch (err) { return err instanceof Error ? err.message : String(err) }
   if (!found.drift.length) return undefined
