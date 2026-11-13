@@ -24,11 +24,14 @@ import { drainSession, lastContextTokens, newSessionCursor, projectDirName, proj
 import { claudeTurnOutcome } from './claude-transcript.js'
 import { readClaudeStatus } from './claude-status.js'
 import { defaultTurnSources } from './codex-observation.js'
-import { CLAUDE_CONFIG, SOCK_PATH, PLATFORM, STATE_DIR } from '../config.js'
+import { CLAUDE_CONFIG, ENV_FILE, SOCK_PATH, PLATFORM, STATE_DIR } from '../config.js'
 import { gateway } from '../config.js'
-import { SESSION_IDENTITY_VARS, scrubbedSpawnEnv, withRaisedFdLimit } from '../../shared/spawn-env.js'
+import { SESSION_IDENTITY_VARS, capturedSpawnVars, scrubbedSpawnEnv, withRaisedFdLimit } from '../../shared/spawn-env.js'
 import { modsExport } from '../../shared/mods.js'
-import { BRIDGE_CHANNEL_FLAG, BRIDGE_MCP_SERVER_KEY } from '../plugin-manifest.js'
+import { BRIDGE_CHANNEL_FLAG, BRIDGE_MCP_SERVER_KEY, BRIDGE_PLUGIN_ID, BRIDGE_TOOLS_PERMISSION } from '../plugin-manifest.js'
+import { confined, deliveryRefusal, missingTokenRefusal, PolicyRefusal, type ConfinedPolicy } from '../scope.js'
+import { ENGINE_CAPABILITIES } from '../../shared/engine-capabilities.js'
+import { removeScopedFiles, writeScopedFiles } from '../scoped-files.js'
 import { clearNeedsAuthEntry, describeSetAt, NEEDS_AUTH_CLEARED_NOTE } from './claude-needs-auth.js'
 
 // What the pane-and-transcript methods read. The byte (main) has no SessionInfo, so these take only this.
@@ -37,6 +40,39 @@ export type ClaudeSubject = Pick<SessionInfo, 'tmuxName'> & Partial<Pick<Session
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
+
+/** The one mod a scoped session loads: the tracked hydra mod, never the operator's `mods.local`. */
+export const SCOPED_MODS = ['hydra'] as const
+
+/**
+ * What a scoped launch writes and passes: the settings (the bridge plugin on, and the only tool permissions: the bridge's
+ * and each listed server tool), and the MCP config (the listed servers, each with the `token_env` variables and nothing
+ * else of the daemon's environment). Written by scoped-files.ts: mode 0600, since the MCP config holds secrets.
+ */
+export function scopedConfig(scope: Pick<ConfinedPolicy, 'specialist' | 'servers' | 'tools'>, env: NodeJS.ProcessEnv = process.env, held: Readonly<Record<string, string>> = capturedSpawnVars(), sessionName = '<session name>'): { settings: object; mcp: object } {
+  return {
+    settings: {
+      enabledPlugins: { [BRIDGE_PLUGIN_ID]: true },
+      permissions: { allow: [BRIDGE_TOOLS_PERMISSION, ...scope.servers.flatMap(s => s.tools.map(t => `mcp__${s.name}__${t}`))] },
+    },
+    mcp: {
+      mcpServers: Object.fromEntries(scope.servers.map(s => [s.name, {
+        type: 'stdio', command: s.command, args: [],
+        env: Object.fromEntries(s.tokenEnv.map(v => {
+          const value = env[v] ?? held[v]
+          if (value === undefined) throw new PolicyRefusal(missingTokenRefusal({ specialist: scope.specialist, servers: [s] } as ConfinedPolicy, ENV_FILE, sessionName, env, held)!)
+          return [v, value]
+        })),
+      }])),
+    },
+  }
+}
+
+/** Writes this launch's settings and MCP config (scoped-files.ts); returns their paths. */
+function writeScopedConfig(scope: ConfinedPolicy, tmuxName: string, sessionId: string): { settings: string; mcp: string } {
+  const { settings, mcp } = scopedConfig(scope, process.env, capturedSpawnVars(), tmuxName)
+  return writeScopedFiles(tmuxName, sessionId, { settings, mcp })
+}
 
 // Spawn env whitelist: explicit construction, not ambient inheritance. Each env var the byte
 // carries gets a conscious routing decision here:
@@ -55,7 +91,9 @@ function buildSpawnEnv(input: LaunchInput): string[] {
     `export DAEMON_SOCK=${shq(SOCK_PATH)}`,
     `export CLAUDE_CONFIG_DIR=${shq(CLAUDE_CONFIG)}`,
     `export CHAT_PLATFORM=${shq(PLATFORM)}`,
-    modsExport(STATE_DIR),
+    modsExport(STATE_DIR, confined(input.policy, input.tmuxName) ? SCOPED_MODS : undefined),
+    // Enabling the bridge plugin by settings would also bring back the account's claude.ai connectors: this keeps them off.
+    ...(confined(input.policy, input.tmuxName) ? [`export ENABLE_CLAUDEAI_MCP_SERVERS=false`] : []),
     `unset HYDRA_ROLE`,
   ]
 }
@@ -180,6 +218,7 @@ export const CLAUDE_WORKING_SILENCE_S = 10 * 60
 export class ClaudeEngine implements EngineAdapter {
   readonly provider = 'claude' as const
   readonly channel = 'bridge' as const
+  readonly confinesAccess = ENGINE_CAPABILITIES.claude.confinesAccess
   constructor(private readonly transport: BridgeTransport) {}
 
   // Resume relaunches with --resume and is confirmed when the bridge registers.
@@ -226,9 +265,23 @@ export class ClaudeEngine implements EngineAdapter {
   async start(_records: readonly SessionInfo[]): Promise<void> {}
 
   async launch(input: LaunchInput): Promise<LaunchResult> {
+    try {
+      return await this.launchSession(input)
+    } catch (err) {
+      // A confined launch writes a file holding token values before it starts anything; one that fails then has no session record
+      // whose kill or death would remove it, so it is removed here.
+      if (input.policy?.access === 'workdir') removeScopedFiles({ tmuxName: input.tmuxName, sessionId: input.sessionId })
+      throw err
+    }
+  }
+
+  private async launchSession(input: LaunchInput): Promise<LaunchResult> {
     const { sessionId, tmuxName, model } = input
-    const effectiveCwd = input.cwd
-    const spawnCwd = input.originalCwd
+    // The folder, flags, env and files of a launch come from the launch policy here, whatever cwd the caller passed. A policy that
+    // cannot be read refuses (never the operator's account).
+    const scoped = confined(input.policy, tmuxName)
+    const effectiveCwd = scoped ? scoped.workdir : input.cwd
+    const spawnCwd = scoped ? scoped.workdir : input.originalCwd
     const worktreePath = input.worktreePath
     const worktreeTarget = !!input.forkFromOriginalCwd
     const isFork = !!input.forkFrom?.claudeSessionId
@@ -248,7 +301,20 @@ export class ClaudeEngine implements EngineAdapter {
     let assignedClaudeSessionId: string | undefined
     const disallowed = input.disallowedTools?.length ? ` --disallowedTools ${shq(input.disallowedTools.join(','))}` : ''
     const toolsFlag = input.tools?.length ? ` --tools ${shq(input.tools.join(','))}` : ''
-    if (isFork) {
+    if (scoped) {
+      // A specialist with access = "workdir": no --dangerously-skip-permissions (--permission-mode dontAsk instead), the
+      // prompt positional before the variadic flags, and the generated settings and MCP config (see scopedConfig).
+      const files = writeScopedConfig(scoped, tmuxName, sessionId)
+      const confinement = ` --restricted --tools ${shq(scoped.tools.join(','))} --settings ${shq(files.settings)} --mcp-config ${shq(files.mcp)} --permission-mode dontAsk`
+      if (isFork) {
+        claudeArgs = `claude --resume ${shq(input.forkFrom!.claudeSessionId!)} --fork-session --model ${shq(model)} ${shq(prompt)} --channels ${shq(channelFlag)}${confinement}${disallowed}`
+      } else if (isResume) {
+        claudeArgs = `claude --resume ${shq(input.resumeFrom!)} --model ${shq(model)} --channels ${shq(channelFlag)}${confinement}${disallowed}`
+      } else {
+        assignedClaudeSessionId = randomUUID()
+        claudeArgs = `claude --session-id ${shq(assignedClaudeSessionId)} --model ${shq(model)} ${shq(prompt)} --channels ${shq(channelFlag)}${confinement}${disallowed}`
+      }
+    } else if (isFork) {
       claudeArgs = [
         `claude`,
         `--resume ${shq(input.forkFrom!.claudeSessionId!)}`,
@@ -271,7 +337,8 @@ export class ClaudeEngine implements EngineAdapter {
       claudeArgs = `claude --session-id ${shq(assignedClaudeSessionId)} --model ${shq(model)} --channels ${shq(channelFlag)} --dangerously-skip-permissions ${shq(prompt)}${disallowed}${toolsFlag}`
     }
     if (disallowed) process.stderr.write(`daemon: disallowedTools flag: ${disallowed}\n`)
-    if (toolsFlag) process.stderr.write(`daemon: tools whitelist active (${input.tools!.length} tools, Edit/Write blocked)\n`)
+    if (scoped) process.stderr.write(`daemon: scoped launch ${tmuxName}: specialist ${scoped.specialist}, tools ${scoped.tools.join(',')}, servers ${scoped.servers.map(x => x.name).join(',') || 'none'}\n`)
+    if (toolsFlag && !scoped) process.stderr.write(`daemon: tools whitelist active (${input.tools!.length} tools, Edit/Write blocked)\n`)
 
     const stderrLog = join(SPAWN_LOGS_DIR, `stderr-${tmuxName}-${sessionId}.log`)
     const debugLog = join(SPAWN_LOGS_DIR, `debug-${tmuxName}-${sessionId}.log`)
@@ -346,6 +413,9 @@ export class ClaudeEngine implements EngineAdapter {
 
   // No await before the write: callers rely on it having happened on return.
   async deliver(info: SessionInfo, msg: Notification): Promise<DeliveryResult> {
+    // Every delivery to a Claude session passes here: one that no longer matches what hydra.toml gives its specialist is not delivered to.
+    const refused = deliveryRefusal(info)
+    if (refused) return { status: 'rejected', retryable: false, reason: refused }
     const r = this.transport.writeOrQueue(info.sessionId, withoutIntents(msg))
     return r === 'written' ? { status: 'accepted', via: 'bridge-socket' }
       : r === 'queued' ? { status: 'accepted', via: 'queued' }

@@ -30,9 +30,12 @@ export function syncMods(repoDir: string, stateDir: string): string[] {
   return [...sources.keys()]
 }
 
-/** The `export` line that hands a session the mods the daemon synced at boot. */
-export function modsExport(stateDir: string): string {
+/**
+ * The `export` line that hands a session the mods the daemon synced at boot. `only` names the mods a session may load
+ * (a scoped specialist gets the tracked `hydra` mod and none of the operator's `mods.local`).
+ */
+export function modsExport(stateDir: string, only?: readonly string[]): string {
   const dest = join(stateDir, 'mods')
-  const dirs = readdirSync(dest).map(n => join(dest, n))
+  const dirs = readdirSync(dest).filter(n => !only || only.includes(n)).map(n => join(dest, n))
   return `export CLAUDE_CODE_PLUGIN_DIRS='${dirs.join(':').replace(/'/g, "'\\''")}'`
 }

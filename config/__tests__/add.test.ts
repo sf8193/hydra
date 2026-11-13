@@ -5,8 +5,9 @@ import { join } from 'path'
 import { addFragment, planAddFragment } from '../add.js'
 import { loadHydraConfig } from '../load.js'
 import type { LoadEnv } from '../types.js'
+import { testLoadEnv } from './load-env.js'
 
-const env: LoadEnv = { home: '/h', isDir: () => true, isCommand: () => true, sessionNames: [] }
+const env: LoadEnv = testLoadEnv({ home: '/h', sessionNames: [] })
 
 // The live hydra.toml's shape after its migrate (2026-11-09), with the operator's address made up.
 const LIVE = `# Written by \`hydra migrate\`. Edit freely: hydra re-reads this file when it changes.

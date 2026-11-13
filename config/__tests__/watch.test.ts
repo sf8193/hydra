@@ -4,8 +4,9 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { watchHydraConfig, type HydraConfigWatch } from '../watch.js'
 import type { LoadEnv } from '../types.js'
+import { testLoadEnv } from './load-env.js'
 
-const env: LoadEnv = { home: '/home/op', isDir: () => true, isCommand: () => true, sessionNames: [] }
+const env: LoadEnv = testLoadEnv({ home: '/home/op', sessionNames: [] })
 const GOOD = 'operator = "op"\n[people.op]\nids = ["slack:U0OP"]\n'
 const GOOD2 = 'operator = "op2"\n[people.op2]\nids = ["slack:U0OP2"]\n'
 const BAD = 'operator = "ghost"\n'

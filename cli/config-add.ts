@@ -17,9 +17,10 @@ export function configAddCommand(args: string[], stateDirOpt: string | undefined
   const file = resolve(files[0])
   let text: string
   try { text = readFileSync(file, 'utf8') } catch (e) { console.error(`error: can't read ${file}: ${(e as Error).message}`); return 1 }
-  const stateDir = stateDirOpt ?? resolveConfig().stateDir
+  const cfg = stateDirOpt ? undefined : resolveConfig()
+  const stateDir = stateDirOpt ?? cfg!.stateDir
   const dryRun = args.includes('--dry-run')
-  const plan = addFragment(stateDir, systemEnv(SESSION_NAMES), text, file, { dryRun })
+  const plan = addFragment(stateDir, systemEnv(SESSION_NAMES, stateDir, cfg?.configDir), text, file, { dryRun })
   if (!plan.ok) { console.error(`error: ${plan.error}`); console.error('hydra.toml was not changed'); return 1 }
   const already = plan.already.length ? `already there: ${plan.already.join(', ')}` : ''
   if (!plan.added.length) { console.log(`${already}; hydra.toml was not changed`); return 0 }

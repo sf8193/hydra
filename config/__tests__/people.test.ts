@@ -5,8 +5,9 @@ import { join } from 'path'
 import { applyAddPerson, planAddPerson } from '../people.js'
 import { loadHydraConfig } from '../load.js'
 import type { LoadEnv } from '../types.js'
+import { testLoadEnv } from './load-env.js'
 
-const env: LoadEnv = { home: '/h', isDir: () => true, isCommand: () => true, sessionNames: [] }
+const env: LoadEnv = testLoadEnv({ home: '/h', sessionNames: [] })
 const MINE = '# mine\noperator = "op"\n\n[people.op]\nids = ["discord:100000000000000001"]\n\n[people.ana]\nids = ["slack:U0ANA"]\nroles = ["staff"]\n'
 let dir: string
 afterEach(() => { if (dir) rmSync(dir, { recursive: true, force: true }) })

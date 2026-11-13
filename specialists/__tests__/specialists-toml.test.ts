@@ -5,12 +5,13 @@ import { STATE_DIR, DEFAULT_SESSION_CHANNEL } from '../../daemon/config.js'
 import { _reloadSpecialists, getSpecialist, listSpecialists, removeSpecialist, setSpecialist, setSpecialistThread, specialistForThread } from '../specialists.js'
 import { _setHydraConfigForTesting, hydraConfigPath, onHydraConfigLoad, startHydraConfig, stopHydraConfig } from '../../daemon/hydra-config.js'
 import type { HydraConfig, Specialist as Declared } from '../../config/types.js'
+import { testLoadEnv } from '../../config/__tests__/load-env.js'
 
 const threads = join(STATE_DIR, 'specialist-threads.json')
 const legacy = join(STATE_DIR, 'specialists.json')
 
 const declared = (id: string, extra: Partial<Declared> = {}): Declared =>
-  ({ id, workdir: `/srv/${id}`, listens: [], allow: ['people'], sessions: 'shared', max: 20, was: [], ...extra })
+  ({ id, workdir: `/srv/${id}`, listens: [], allow: ['people'], sessions: 'shared', max: 20, was: [], access: 'operator', ...extra })
 const config = (...specialists: Declared[]): HydraConfig => ({
   operator: 'op', connectors: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
   people: { op: { id: 'op', ids: ['discord:100000000000000001'], roles: [], name: 'op' } },
@@ -80,7 +81,7 @@ describe('specialists declared in hydra.toml', () => {
     _reloadSpecialists()
     const seen: (string | undefined)[] = []
     const off = onHydraConfigLoad(() => seen.push(getSpecialist('ops')?.threadId))
-    startHydraConfig({ env: { home: '/h', isDir: () => true, isCommand: () => true, sessionNames: [] } })
+    startHydraConfig({ env: testLoadEnv({ home: '/h', sessionNames: [] }) })
     try {
       expect(seen).toEqual(['900'])
       expect(getSpecialist('ops')?.threadId).toBe('900')
@@ -108,7 +109,7 @@ describe('specialists declared in hydra.toml', () => {
   test('a hydra.toml that failed to load at boot declares nothing, and never falls back to specialists.json', () => {
     setSpecialist('old', { channel: 'C1', kickoff: 'k' })
     writeFileSync(hydraConfigPath(), 'operator = "ghost"\n')
-    startHydraConfig({ env: { home: '/h', isDir: () => true, isCommand: () => true, sessionNames: [] } })
+    startHydraConfig({ env: testLoadEnv({ home: '/h', sessionNames: [] }) })
     try {
       expect(getSpecialist('old')).toBeUndefined()
       expect(() => setSpecialist('new', { channel: 'C1', kickoff: 'k' })).toThrow('declared in hydra.toml')

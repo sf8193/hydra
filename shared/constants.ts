@@ -211,7 +211,12 @@ export function claudeConfigDir(): string {
 }
 export type { ToolName }
 
-export type SessionType = 'master_orchestrator' | 'thread_owner' | 'thread_guest'
+/**
+ * `scoped`: a specialist set to `access = "workdir"`. It speaks only in its own conversation, so it has none of the tools
+ * that reach another session, thread, watch or the operator's account (spawn, kill, peek, list, send_to_thread, handoff,
+ * bind, watch, ask_predecessor), and no capability grants it any.
+ */
+export type SessionType = 'master_orchestrator' | 'thread_owner' | 'thread_guest' | 'scoped'
 
 export const BASE_TOOLS: Readonly<Record<SessionType, ReadonlySet<ToolName>>> = {
   master_orchestrator: new Set([
@@ -233,6 +238,11 @@ export const BASE_TOOLS: Readonly<Record<SessionType, ReadonlySet<ToolName>>> = 
     'reply', 'fetch_messages', 'react', 'edit_message',
     'download_attachment', 'set_description',
     'advance', 'extend_phase',
+  ]),
+  // Each is checked against the session's own conversation where it is called (bridge-dispatch `scopedRefusal`), not only here.
+  scoped: new Set([
+    'reply', 'react', 'edit_message', 'delete_message', 'fetch_messages',
+    'download_attachment', 'set_description',
   ]),
 }
 

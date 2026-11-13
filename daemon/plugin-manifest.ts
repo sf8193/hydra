@@ -27,6 +27,10 @@ const BRIDGE_MARKETPLACE = 'claude-plugins-official'
 const BRIDGE_SERVER_NAME = 'discord'
 export const BRIDGE_CHANNEL_FLAG = `plugin:${BRIDGE_PLUGIN}@${BRIDGE_MARKETPLACE}`
 export const BRIDGE_MCP_SERVER_KEY = `plugin:${BRIDGE_PLUGIN}:${BRIDGE_SERVER_NAME}`
+/** The plugin as `enabledPlugins` names it. */
+export const BRIDGE_PLUGIN_ID = `${BRIDGE_PLUGIN}@${BRIDGE_MARKETPLACE}`
+/** The permission rule that allows the bridge's tools: Claude Code names them `mcp__<server key with ':' as '_'>__<tool>`. */
+export const BRIDGE_TOOLS_PERMISSION = `mcp__${BRIDGE_MCP_SERVER_KEY.replaceAll(':', '_')}__*`
 
 /**
  * How Claude Code is told to launch the bridge.

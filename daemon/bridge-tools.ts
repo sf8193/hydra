@@ -22,13 +22,22 @@ export function defaultToolDescription(name: string): string {
   return tool.description
 }
 
+/** `reply` as a scoped session sees it: text only. Attachments are never posted for it. */
+function withoutFiles(tool: SessionTool): SessionTool {
+  const schema = tool.inputSchema as { properties?: Record<string, unknown> }
+  const { files: _files, ...properties } = schema.properties ?? {}
+  return { ...tool, inputSchema: { ...schema, properties } }
+}
+
 export function computeToolsForSession(type: SessionType, capabilities: Set<Capability | DerivedCapability>, overrides?: ToolOverrides): SessionTool[] {
   const allowed = new Set(BASE_TOOLS[type])
-  for (const cap of capabilities) {
+  // A scoped session's surface is its base set and nothing more: no capability grants it a tool.
+  for (const cap of type === 'scoped' ? [] : capabilities) {
     const extra = ALL_CAPABILITY_TOOLS[cap]
     if (extra) for (const t of extra) allowed.add(t)
   }
-  const tools = UNIVERSAL_TOOLS.filter(t => allowed.has(t.name))
+  const base: SessionTool[] = UNIVERSAL_TOOLS.filter(t => allowed.has(t.name))
+  const tools = type === 'scoped' ? base.map(t => t.name === 'reply' ? withoutFiles(t) : t) : base
   if (!overrides?.descriptions && !overrides?.inputSchemas) return tools
   return tools.map(t => {
     const desc = overrides.descriptions?.[t.name]

@@ -19,9 +19,10 @@ export function peopleCommand(args: string[], stateDirOpt: string | undefined): 
     else if (args[i] === '--name' && args[i + 1]) name = args[++i]
     else if (args[i] !== '--dry-run') { console.error(`error: unknown option ${args[i]}`); return 1 }
   }
-  const stateDir = stateDirOpt ?? resolveConfig().stateDir
+  const cfg = stateDirOpt ? undefined : resolveConfig()
+  const stateDir = stateDirOpt ?? cfg!.stateDir
   const dryRun = args.includes('--dry-run')
-  const plan = addPerson(stateDir, systemEnv(SESSION_NAMES), { id, address, roles, ...(name && { name }) }, { dryRun })
+  const plan = addPerson(stateDir, systemEnv(SESSION_NAMES, stateDir, cfg?.configDir), { id, address, roles, ...(name && { name }) }, { dryRun })
   if (!plan.ok) { console.error(`error: ${plan.error}`); console.error('hydra.toml was not changed'); return 1 }
   if (dryRun) { console.log(plan.text); console.log(`dry run: would append ${plan.added}`); return 0 }
   console.log(`added ${plan.added} to ${stateDir}/hydra.toml; the daemon picks it up within a second`)

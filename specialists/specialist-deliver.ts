@@ -7,7 +7,8 @@ import { occupancy, occupied } from '../daemon/session-reachability.js'
 import { pushToolSurface } from '../daemon/tool-surface.js'
 import { resumeIdleLimit } from '../daemon/idle-limit.js'
 import { parseIdleTtl } from '../shared/constants.js'
-import { getSpecialist, setSpecialistThread, readKickoff, withTargetLock, type Specialist } from './specialists.js'
+import { conversationSpecialistOf, getSpecialist, setSpecialistThread, readKickoff, specialistOf, withTargetLock, type Specialist } from './specialists.js'
+import { safeSend } from '../daemon/util.js'
 import { deliverToTarget } from './targets.js'
 
 export type SpecialistDeliverResult =
@@ -79,6 +80,8 @@ async function fill(name: string, specialist: Specialist, initiator: string | un
       return kickoff
     },
     name, model: specialist.model, ...(specialist.workdir && { cwd: specialist.workdir }),
+    // Whose account the session runs under comes from this id (a conversation's own session is named `<id>_…`).
+    specialist: conversationSpecialistOf(name) ?? name,
     initiator: initiator ?? `specialist:${name}`, trigger: `specialist:${name}`,
     backoffKey: key, ignoreBackoff: opts.ignoreBackoff,
   })

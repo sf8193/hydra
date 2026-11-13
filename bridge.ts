@@ -303,7 +303,7 @@ function connectSocket(): void {
     process.stderr.write(`bridge: connected to daemon\n`)
     lineBuf = ''
     const claudeId = resolveClaudeSessionId()
-    sendToSocket({ type: 'register', sessionId: SESSION_ID, claudeSessionId: claudeId, pid: IS_STRAY ? undefined : process.pid })
+    sendToSocket({ type: 'register', sessionId: SESSION_ID, claudeSessionId: claudeId, pid: IS_STRAY ? undefined : process.pid, sessionType: process.env.HYDRA_SESSION_TYPE || undefined })
   })
 
   sock.on('data', (data: Buffer) => {

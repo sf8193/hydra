@@ -8,6 +8,7 @@ import { loadHydraConfig } from '../load.js'
 import { daemonFile, readDaemonState, stateFile } from '../../shared/jobs.js'
 import { schedulesAreSource } from '../../shared/schedules.js'
 import { latestSlot, nextSlot } from '../../shared/cron-local.js'
+import { testLoadEnv } from './load-env.js'
 
 const opts = { sessionNames: ['byte'], defaultWorkdir: '/home/u/work' }
 // The live discord/jobs.toml's shapes, with its paths and prompts shortened.
@@ -71,7 +72,7 @@ describe('migrate jobs.toml → [schedules]', () => {
     try {
       writeFileSync(join(dir, 'jobs.toml'), LIVE)
       writeFileSync(join(dir, 'access.json'), JSON.stringify({ allowFrom: ['100000000000000001'] }))   // the operator
-      const env = { home: '/home/u', isDir: () => true, isCommand: () => true, sessionNames: ['byte'] }
+      const env = testLoadEnv({ home: '/home/u', sessionNames: ['byte'] })
       const input = { stateDir: dir, env, spawnCwd: '/home/u/work', platform: 'discord' as const }
       expect(jobsStep.pending(dir)).toBe(true)
       const plan = planMigrate(input)
@@ -97,7 +98,7 @@ describe('migrate jobs.toml → [schedules]', () => {
       writeFileSync(join(dir, 'access.json'), JSON.stringify({ allowFrom: ['100000000000000001'] }))
       mkdirSync(join(dir, 'jobs-state'))
       writeFileSync(daemonFile(dir), JSON.stringify({ lastGoodConfig: LIVE, lastTick: '2026-11-09T07:00:00.000Z' }))
-      const env = { home: '/home/u', isDir: () => true, isCommand: () => true, sessionNames: ['byte'] }
+      const env = testLoadEnv({ home: '/home/u', sessionNames: ['byte'] })
       const plan = planMigrate({ stateDir: dir, env, spawnCwd: '/home/u/work', platform: 'discord' as const })
       if (!plan.ok) throw new Error(plan.errors.join('\n'))
       applyMigrate(dir, plan)
@@ -114,7 +115,7 @@ describe('migrate jobs.toml → [schedules]', () => {
     try {
       writeFileSync(join(dir, 'jobs.toml'), LIVE)
       writeFileSync(join(dir, 'access.json'), JSON.stringify({ allowFrom: ['100000000000000001'] }))
-      const env = { home: '/home/u', isDir: () => true, isCommand: () => true, sessionNames: ['byte'] }
+      const env = testLoadEnv({ home: '/home/u', sessionNames: ['byte'] })
       const plan = planMigrate({ stateDir: dir, env, spawnCwd: '/home/u/work', platform: 'discord' as const })
       if (!plan.ok) throw new Error(plan.errors.join('\n'))
       applyMigrate(dir, plan)
@@ -130,7 +131,7 @@ describe('migrate jobs.toml → [schedules]', () => {
       const latest = latestSlot('0 11 * * FRI', new Date())!
       mkdirSync(join(dir, 'jobs-state'), { recursive: true })
       writeFileSync(stateFile(dir, 'review'), JSON.stringify({ v: 1, covered: { slot: latest.label, at: latest.at.toISOString() }, last: { at: latest.at.toISOString(), result: 'done' } }))
-      const out = jobsStep.run({ stateDir: dir, env: { home: '/h', isDir: () => true, isCommand: () => true, sessionNames: [] }, spawnCwd: '/h/work', platform: 'discord' })!
+      const out = jobsStep.run({ stateDir: dir, env: testLoadEnv({ home: '/h', sessionNames: [] }), spawnCwd: '/h/work', platform: 'discord' })!
       const line = (id: string) => out.notes.find(n => n.startsWith(`${id}: next `))
       expect(line('review')).toBe(`review: next ${nextSlot('0 11 * * FRI', new Date())!.label}, not owed; runner daemon, needs internet; to review: a fresh session in a new thread in 1551794455227404370; initiator jobs:review`)
       expect(line('pull')).toMatch(/^pull: next \S+ \S+, no record yet \(nothing owed\); runner daemon, needs internet, alert_after 2d; a sensor \(no message\); initiator jobs:pull$/)
@@ -145,7 +146,7 @@ describe('migrate jobs.toml → [schedules]', () => {
       writeFileSync(join(dir, 'hydra.toml'), migrated)
       writeFileSync(join(dir, 'access.json.migrated'), JSON.stringify({ allowFrom: ['100000000000000001'] }))
       writeFileSync(join(dir, 'jobs.toml'), LIVE)
-      const env = { home: '/home/u', isDir: () => true, isCommand: () => true, sessionNames: ['byte'] }
+      const env = testLoadEnv({ home: '/home/u', sessionNames: ['byte'] })
       const plan = planMigrate({ stateDir: dir, env, spawnCwd: '/home/u/work', platform: 'discord' })
       if (!plan.ok) throw new Error(plan.errors.join('\n'))
       expect(plan.text.startsWith(migrated.trimEnd())).toBe(true)
@@ -164,7 +165,7 @@ describe('migrate jobs.toml → [schedules]', () => {
     const dir = mkdtempSync(join(tmpdir(), 'migrate-jobs-'))
     try {
       writeFileSync(join(dir, 'jobs.toml'), '[t]\nschedule="0 6 * * *"\nprompt="p"\nto="1234567890"\n')
-      const plan = planMigrate({ stateDir: dir, env: { home: '/h', isDir: () => true, isCommand: () => true, sessionNames: [] }, spawnCwd: '/h', platform: 'discord' }, [jobsStep])
+      const plan = planMigrate({ stateDir: dir, env: testLoadEnv({ home: '/h', sessionNames: [] }), spawnCwd: '/h', platform: 'discord' }, [jobsStep])
       expect(plan).toEqual({ ok: false, errors: ['jobs.toml: t: to = "1234567890" is a thread; declare a specialist for it and send to that'] })
       expect(existsSync(join(dir, 'hydra.toml'))).toBe(false)
     } finally { rmSync(dir, { recursive: true }) }

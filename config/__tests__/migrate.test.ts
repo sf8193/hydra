@@ -5,8 +5,9 @@ import { join } from 'path'
 import { accessStep, appendOnly, applyMigrate, bootRefusal, finishMigrate, mergeDocs, planMigrate, specialistsStep, toToml, type MigrateInput } from '../migrate.js'
 import { loadHydraConfig } from '../load.js'
 import type { LoadEnv } from '../types.js'
+import { testLoadEnv } from './load-env.js'
 
-const env: LoadEnv = { home: '/home/op', isDir: () => true, isCommand: () => true, sessionNames: ['spark'] }
+const env: LoadEnv = testLoadEnv({ home: '/home/op', sessionNames: ['spark'] })
 let dir: string
 afterEach(() => { if (dir) rmSync(dir, { recursive: true, force: true }) })
 

@@ -19,6 +19,7 @@ import { isSessionWorkingAsync } from './session-activity.js'
 import { registry } from './sessions.js'
 import { on } from './event-bus.js'
 import type { SessionInfo } from './sessions.js'
+import { sessionDrift } from './scope.js'
 
 // ---------------------------------------------------------------------------
 // The rule: one place that knows when each path applies
@@ -117,8 +118,11 @@ export function _setDeliveryDeps(custom: Partial<DeliveryDeps>): void { deps = {
 export function _resetDelivery(): void { deps = defaultDeps; held.clear() }
 export function _heldCount(sessionId: string): number { return held.get(sessionId)?.length ?? 0 }
 
+/** A drifted session (its stored policy is not what hydra.toml gives its specialist) is not typed into: the channel path refuses it. */
+const drifted = (info: SessionInfo): boolean => { try { return sessionDrift(info).drift.length > 0 } catch { return true } }
+
 const claudeLive = (info: SessionInfo | undefined): info is SessionInfo =>
-  !!info && deps.occupancy(info) !== 'dead' && info.engine === 'claude'
+  !!info && deps.occupancy(info) !== 'dead' && info.engine === 'claude' && !drifted(info)
 
 /** Release one held message: channel when asked, else paste with the channel as fallback. */
 async function release(info: SessionInfo | undefined, h: Held, how: 'channel' | 'paste', reason: 'idle' | 'max-hold' | 'death'): Promise<void> {

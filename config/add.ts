@@ -6,7 +6,7 @@
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { withHydraTomlLock, writeIfUnchanged } from './append.js'
-import { formatIssues, loadHydraConfig } from './load.js'
+import { formatIssues, loadHydraConfig, SCOPE_KEYS } from './load.js'
 import { appendOnly, appendText, HYDRA_TOML, hydraTomlInUse, toToml } from './migrate.js'
 import type { LoadEnv } from './types.js'
 
@@ -25,13 +25,16 @@ export function planAddFragment(stateDir: string, env: LoadEnv, fragmentText: st
   let fragment: Doc
   try { fragment = Bun.TOML.parse(fragmentText) as Doc } catch (e) { return { ok: false, error: `${source} isn't valid TOML (${(e as Error).message})` } }
   const others = Object.keys(fragment).filter(k => !(SECTIONS as readonly string[]).includes(k))
-  if (others.length) return { ok: false, error: `${source} sets ${others.join(', ')}; hydra config add takes only [specialists.<id>] and [schedules.<id>] tables (a person: hydra people add; anything else is a hand edit)` }
+  if (others.length) return { ok: false, error: `${source} sets ${others.join(', ')}; hydra config add takes only [specialists.<id>] and [schedules.<id>] tables (a person: hydra people add; anything else, including an [mcp.*] server, is a hand edit)` }
   const flat = SECTIONS.flatMap(sec => {
     const v = fragment[sec]
     return v === undefined ? [] : isTable(v) && Object.values(v).every(isTable) ? Object.entries(v).map(([id, t]) => ({ sec, id, t: t as Doc })) : [{ sec, id: '', t: {} }]
   })
   const loose = flat.find(e => e.id === '')
   if (loose) return { ok: false, error: `${source}: ${loose.sec} must be [${loose.sec}.<id>] tables` }
+  // What a session may reach is the operator's to set by hand: a fragment comes from another repo, and a table it names can't widen or narrow that.
+  const scoped = flat.flatMap(e => e.sec === 'specialists' ? SCOPE_KEYS.filter(k => k in e.t).map(k => `[specialists.${e.id}] ${k}`) : [])
+  if (scoped.length) return { ok: false, error: `${source} sets ${scoped.join(', ')}: access, tools and mcp say what a specialist's session may reach, and only a hand edit of hydra.toml sets them (and the [mcp.*] servers they name)` }
   if (!flat.length) return { ok: false, error: `${source} has no [specialists.<id>] or [schedules.<id>] table to add` }
 
   const existingText = readFileSync(path, 'utf8')

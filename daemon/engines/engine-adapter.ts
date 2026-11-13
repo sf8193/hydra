@@ -5,6 +5,7 @@
 // callers just call info.adapter.deliver(...) — no dispatch logic needed.
 
 import type { SessionInfo, SpawnOpts } from '../sessions.js'
+import type { LaunchPolicy } from '../scope.js'
 import type { BlockingState } from '../pane-probe.js'
 import type { PhaseTotals, TokenTotals } from '../usage.js'
 import type { LatchPhase, UsagePhase } from '../usage-phase.js'
@@ -128,6 +129,7 @@ export type LaunchInput = {
   readonly resumeOmp?: { fromSessionId: string }                 // omp: continue the session file of this dead hydra session
   readonly threadId?: string                                     // the chat thread this session serves; exported to its env
   readonly sessionType?: SessionInfo['sessionType']              // and its role there; exported to its env
+  readonly policy?: LaunchPolicy                                 // what a specialist's session may reach, decided at its birth (scope.ts). In launch() alone, access = "workdir" decides the folder, argv, env and files (confined, in policy.workdir); absent or operator: as ever
 }
 
 export type LaunchResult = {
@@ -181,6 +183,8 @@ export interface EngineAdapter {
   // Boot, once, over this provider's persisted records; never rejects. Claude:
   // nothing to do. Codex: reconnect the live records to their app-servers.
   start(records: readonly SessionInfo[]): Promise<void>
+  /** Whether this engine can run a session confined to a folder, a tool list and a server list (`access = "workdir"`). Read from shared/engine-capabilities.ts. */
+  readonly confinesAccess: boolean
   launch(input: LaunchInput): Promise<LaunchResult>
   // Deliver one notification. Claude: strip the intents, then write to the
   // owning transport's session bridge, else enqueue there; the write is

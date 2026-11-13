@@ -57,7 +57,7 @@ export async function migrateCommand(opts: { platform?: string; stateDir?: strin
     return 0
   }
 
-  const plan = planMigrate({ stateDir, env: systemEnv(SESSION_NAMES), spawnCwd, platform, daemonCwd: cfg.hydraDir })
+  const plan = planMigrate({ stateDir, env: systemEnv(SESSION_NAMES, stateDir, cfg.configDir), spawnCwd, platform, daemonCwd: cfg.hydraDir })
   if (!plan.ok) {
     for (const e of plan.errors) console.error(`error: ${e}`)
     console.error('nothing was written')

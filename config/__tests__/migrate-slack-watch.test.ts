@@ -8,6 +8,7 @@ import { loadHydraConfig } from '../load.js'
 import { route } from '../../routing/route.js'
 import type { HydraConfig } from '../types.js'
 import { SLACK_APP_DEFAULTS } from '../../connectors/slack/app.js'
+import { testLoadEnv } from './load-env.js'
 
 /** What `hydra migrate` would write: the step's tables, plus an operator and the workdirs specialists.json supplies. */
 function toToml(m: SlackWatchMigration): string {
@@ -24,7 +25,7 @@ function toToml(m: SlackWatchMigration): string {
   ].join('\n')
 }
 const load = (text: string): HydraConfig => {
-  const r = loadHydraConfig(text, { home: '/h', isDir: () => true, isCommand: () => true, sessionNames: [] })
+  const r = loadHydraConfig(text, testLoadEnv({ home: '/h', sessionNames: [] }))
   if (!r.ok) throw new Error(r.errors.map(e => `${e.path}: ${e.message}`).join('\n') + '\n' + text)
   return r.config
 }
@@ -98,7 +99,7 @@ test('hydra migrate runs it with the other steps: one hydra.toml that loads and 
       people: { U0OPERATOR: { name: 'Op', role: 'owner' }, U0MAX0000: { name: 'Max', role: 'staff' } },
       routes: [{ channels: ['C0FINANCE'], to: 'books', from: ['owner', 'staff'] }, { dms: true, to: 'ops', from: ['owner'] }],
     }))
-    const env = { home: '/h', isDir: () => true, isCommand: () => true, sessionNames: [] }
+    const env = testLoadEnv({ home: '/h', sessionNames: [] })
     const plan = planMigrate({ stateDir: dir, env, spawnCwd: '/w', platform: 'slack' })
     if (!plan.ok) throw new Error(plan.errors.join('\n'))
     const h = load(plan.text)

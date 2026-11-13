@@ -3,7 +3,7 @@
 // A failed load keeps the last good config, and the alert the caller passes hears it.
 
 import { join } from 'path'
-import { STATE_DIR, PLATFORM } from './config.js'
+import { CLAUDE_CONFIG, STATE_DIR, PLATFORM } from './config.js'
 import { SESSION_NAMES } from './sessions.js'
 import { EMPTY_CONFIG, formatIssues, systemEnv } from '../config/load.js'
 import { scrubTokenVarsNamedIn, slackEnvNames } from '../config/token-vars.js'
@@ -72,9 +72,10 @@ export function startHydraConfig(opts: { alert?: Send; env?: LoadEnv; intervalMs
   if (watch) return watch.initial
   send = opts.alert
   inUse = false
+  loadEnvInUse = opts.env ?? systemEnv(SESSION_NAMES, STATE_DIR, CLAUDE_CONFIG)
   watch = watchHydraConfig({
     path: hydraConfigPath(),
-    env: opts.env ?? systemEnv(SESSION_NAMES),
+    env: loadEnvInUse,
     intervalMs: opts.intervalMs,
     // The variables the file names as tokens are kept from sessions even when the file does not load.
     onText: text => reportRefused(scrubTokenVarsNamedIn(text)),
@@ -96,6 +97,8 @@ export function startHydraConfig(opts: { alert?: Send; env?: LoadEnv; intervalMs
       }
       const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
       process.stderr.write(`daemon: hydra.toml loaded: ${config.operator ? `operator ${config.operator}` : 'no operator'}, ${count(Object.keys(config.people).length, 'person', 'people')}, ${count(Object.keys(config.specialists).length, 'specialist', 'specialists')}, ${count(Object.keys(config.schedules).length, 'schedule', 'schedules')}\n`)
+      // What each specialist's session runs under, so the operator reads it in the log without opening the file.
+      for (const s of Object.values(config.specialists)) process.stderr.write(`daemon: hydra.toml: specialist ${s.id} access = ${s.access}${s.access === 'workdir' ? ` (tools ${(s.tools ?? []).join(',') || 'none'}; mcp ${(s.mcp ?? []).join(',') || 'none'})` : ''}\n`)
       if (warnings.length) process.stderr.write(`daemon: hydra.toml loaded with warnings:\n${formatIssues(warnings)}\n`)
       notify(config)
     },
@@ -104,7 +107,14 @@ export function startHydraConfig(opts: { alert?: Send; env?: LoadEnv; intervalMs
   return watch.initial
 }
 
+/** The probes the daemon loads hydra.toml with: what a scoped launch checks the workdir with again. */
+export function hydraLoadEnv(): LoadEnv {
+  return loadEnvInUse ?? systemEnv(SESSION_NAMES, STATE_DIR, CLAUDE_CONFIG)
+}
+let loadEnvInUse: LoadEnv | undefined
+
 export function stopHydraConfig(): void {
+  loadEnvInUse = undefined
   inUse = false
   live = undefined
   inFlight = undefined

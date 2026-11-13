@@ -1,7 +1,9 @@
 // The shape of `<state>/hydra.toml` once loaded: who Hydra recognizes, the specialists that answer, and where.
 // Every default is filled in and every reference checked (config/load.ts), so a consumer reads these as facts.
 // Keys are camelCase here; the file's are snake_case (`prompt_file` → `promptFile`).
-// Content and actions (what may be said, tools, approvals) are out of scope: they belong to each specialist.
+// Content (what may be said, approvals) is out of scope: it belongs to each specialist. What a specialist's session may
+// reach is not: `access` says whose account it runs under, and `tools` and `mcp` (with `[mcp.*]`) list what a
+// `workdir` specialist may use.
 
 /** A platform hydra can connect to. A person's address and most places start with one. */
 export type Platform = 'discord' | 'slack' | 'github'
@@ -32,6 +34,26 @@ export type Person = {
 
 export type SessionsMode = 'shared' | 'per-conversation'
 
+/**
+ * Whose account a specialist's session runs under. `operator`: the operator's (all their tools, servers and files; today's
+ * behaviour). `workdir`: its folder and the tools and servers it lists, and it can answer only its own conversation.
+ */
+export type Access = 'operator' | 'workdir'
+
+/** The built-in tools an `access = "workdir"` specialist may list. Anything else runs code or reaches past its folder. */
+export const WORKDIR_TOOLS = ['Read', 'Grep', 'Glob'] as const
+
+/** A server specialists may list in `mcp`, declared `[mcp.<name>]`. Per-operator: only hydra.toml declares one. */
+export type McpServer = {
+  name: string
+  /** The executable (a path or a name on PATH). */
+  command: string
+  /** Names in the state dir's `.env`; only these reach the server. */
+  tokenEnv: string[]
+  /** The server's tools a specialist may call. */
+  tools: string[]
+}
+
 export type Specialist = {
   id: string
   /** The folder it runs in, `~` expanded. Its knowledge and tools live there. */
@@ -61,6 +83,12 @@ export type Specialist = {
   home?: string
   model?: string
   engine?: 'claude' | 'codex' | 'omp'
+  /** Whose account it runs under. Default `operator`. */
+  access: Access
+  /** `access = "workdir"` only: the built-in tools it may use (default Read, Grep, Glob). */
+  tools?: string[]
+  /** `access = "workdir"` only: the `[mcp.<name>]` servers it may use (default none). */
+  mcp?: string[]
   /** `~` expanded; a relative path is under `workdir`. */
   envFile?: string
   /** Old ids, so a rename keeps its thread, session and owed messages. */
@@ -197,6 +225,10 @@ export type HydraConfig = {
   places: Record<Place, PlaceOptions>
   schedules: Record<string, Schedule>
   rules: Rule[]
+  /** The servers specialists may list in `mcp`. Absent when none is declared. */
+  mcpServers?: Record<string, McpServer>
+  /** Folders (`~` expanded) no `access = "workdir"` specialist's workdir may be, hold or sit inside, beyond the built-in ones. Absent: none. */
+  privateRoots?: string[]
   guard?: Guard
   /** Absent: `VITALS_DEFAULTS`. */
   vitals?: Vitals
@@ -218,4 +250,28 @@ export type LoadEnv = {
   isCommand(command: string): boolean
   /** The daemon's default session names, which no specialist may take. */
   sessionNames: readonly string[]
+  // What an `access = "workdir"` check needs. All required: a load on a machine that cannot answer is not one that skips the question,
+  // so `hydra config check` and `hydra config add` pass the same real probes the daemon does (systemEnv).
+  /** The state dir: hydra.toml, `.env` and the daemon's records live there. */
+  stateDir: string
+  /** Claude's config folder (CLAUDE_CONFIG_DIR): its account state and transcripts. */
+  claudeConfigDir: string
+  /** The path with symlinks resolved, or the path itself when it does not exist. */
+  realpath(path: string): string
+  exists(path: string): boolean
+  /** Whether the state dir's `.env` sets this variable (to something non-blank). */
+  envFileHas(name: string): boolean
+  /** Whether the path is, or sits inside, a git work tree. */
+  isGitWorkTree(path: string): boolean
+  /** What lies under the folder that a scoped session must not be able to reach. */
+  scanWorkdir(dir: string): WorkdirScan
+}
+
+/** What looking through a folder found. `truncated`: it stopped at its entry cap, so the rest is unseen. */
+export type WorkdirScan = {
+  /** Symlinks that resolve outside the folder (the first few); a dangling one counts. */
+  escapingSymlinks: string[]
+  /** `.git` entries in folders below the top one (the first few). */
+  nestedGit: string[]
+  truncated: boolean
 }
