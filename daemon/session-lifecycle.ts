@@ -3,11 +3,17 @@ import { spawn } from 'child_process'
 import { mkdirSync, writeFileSync, readFileSync, existsSync, openSync, readSync, closeSync, accessSync, realpathSync, constants as fsConstants } from 'fs'
 import { basename, dirname, join, resolve as resolvePath } from 'path'
 import { homedir, tmpdir } from 'os'
-import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, STATE_DIR } from './config.js'
+import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, ENV_FILE, STATE_DIR } from './config.js'
 import { safeSend, formatSpawnLine, atomicWriteFileSync } from './util.js'
 import { tmuxHasSession, tmuxSync, tmuxTimedOut } from './tmux.js'
 import { nameHeldByAnother, occupancy, occupied } from './session-reachability.js'
 import { withThreadLock } from '../specialists/specialists.js'
+import { confined, describePolicy, missingTokenRefusal, PolicyRefusal, remedy, resolvePolicy, type LaunchPolicy } from './scope.js'
+import { threadNotices } from './notice-limit.js'
+import { hydraLoadEnv, currentHydraConfig } from './hydra-config.js'
+import { workdirScopeIssues } from '../config/workdir-scope.js'
+import { removeScopedFiles } from './scoped-files.js'
+import { capturedSpawnVars } from '../shared/spawn-env.js'
 import { authorityId, markDead, parentSessionOf, registry, repointChildren, sessionEmoji, threadRegistry } from './sessions.js'
 import type { Predecessor, SessionInfo, SessionMetadata, SpawnOpts, SpawnResult } from './sessions.js'
 import { notePendingReply } from './reply-guard.js'
@@ -282,6 +288,8 @@ export function carryOver(dead: SessionInfo): NonNullable<SpawnOpts['carryOver']
     artifacts: dead.artifacts, contextLinks: dead.contextLinks, description: dead.description,
     predecessor: dead.predecessor, launchCwd: dead.launchCwd, disallowedTools: dead.disallowedTools,
     parentId: authorityId(dead), initiator: dead.initiator,
+    // The dead session's launch policy: a replacement continues it, or (resume, fork) is refused where it differs from hydra.toml now.
+    policy: dead.policy,
   }
 }
 
@@ -660,6 +668,7 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
       registry.removeMember(info.threadId, info.sessionId)
     }
 
+    removeScopedFiles(info)
     emitSessionDeath(info)
     runKillHook(info, reason)
 
@@ -695,6 +704,15 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
 // Main spawn orchestrator
 // ---------------------------------------------------------------------------
 
+/** Tells a thread why a start was refused, at most once a minute per cause (threadNotices): a revive tries three tiers, each refused for the same cause. */
+async function tellThread(threadId: string, why: string): Promise<void> {
+  if (!threadNotices.allow(`${threadId}\n${why}`)) return
+  await safeSend(threadId, `⚠️ ${why}`).catch(() => {})
+}
+
+/** Test seam: forget which refusals a thread was told. */
+export function _resetRefusalNotices(): void { threadNotices.clear() }
+
 export async function doSpawnSession(topic: string, chatId?: string, messageId?: string, opts?: SpawnOpts): Promise<SpawnResult> {
   // Before a thread is opened: a working dir that has gone away fails the spawn without leaving an empty thread.
   if (opts?.cwd && !existsSync(opts.cwd)) throw new Error(`working directory ${opts.cwd} does not exist`)
@@ -717,6 +735,10 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   // Authority: the spawner, or (resume/recovery/handoff) the dead record's parent, carried.
   let carriedParentId: string | null | undefined = opts?.parentId ?? opts?.carryOver?.parentId
   let carriedInitiator: string | undefined = opts?.initiator ?? opts?.carryOver?.initiator
+  // The launch policy of the conversation this start continues or replaces (resume, fork): see scope.ts.
+  // The records it continues or replaces, for resolvePolicy: what a recovery carries, then the record in the thread.
+  const actingRecords: Array<Pick<SessionInfo, 'policy'> | undefined> = [opts?.carryOver]
+  let replacedName: string | undefined = opts?.carryOver?.sessionName   // the record's own session name, for the remedy a refusal ends with
   // Recovery: reuse the dead session's on-disk worktree rather than recreate one.
   // An explicit descriptor (opts.reuseWorktree) wins so fallback tiers can adopt it
   // even after the record it came from was deleted.
@@ -878,6 +900,8 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
         carriedArtifacts ??= existing.artifacts
         carriedContextLinks ??= existing.contextLinks
         carriedDescription ??= existing.description
+        actingRecords.push(existing)
+        replacedName ??= existing.tmuxName
         // A resume continues the dead session itself. Other tiers (fork, respawn) name it
         // via carryOver; any other replacement has a different predecessor.
         if (opts?.resumeFrom || opts?.resumeCodex || opts?.resumeOmp) {
@@ -923,6 +947,28 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     }
   }
 
+  // The launch policy: decided once, at birth, from hydra.toml; a continuation (resume, fork) keeps the one its conversation was born with.
+  // A start that cannot read or satisfy it refuses, in the thread, naming the cause and the fix: never the operator's account or spawn dir.
+  const continuing = isResume || isFork || !!opts?.resumeCodex || !!opts?.resumeOmp
+  let policy: LaunchPolicy | undefined
+  const sessionName = replacedName ?? tmuxName
+  try {
+    const r = resolvePolicy({ named: opts?.specialist, records: actingRecords, sessionName, ...(!isJoin && { sits: { threadId, tmuxName } }) })
+    if (continuing && r.drift.length) {
+      // Not posted: the revive that asked moves on to the respawn tier, which is a new birth under hydra.toml as it is now.
+      throw new Error(`specialist ${r.specialistId}: this conversation was born with ${describePolicy(r.stored)} and hydra.toml now says ${describePolicy(r.current)} (changed: ${r.drift.join('; ')}), so it is not resumed or forked. ${remedy(sessionName)}`)
+    }
+    policy = continuing ? (r.stored ?? r.current) : r.current
+    // The engine comes from the thread's history, and `handoff <model>` can change it: only an engine that confines can run a confined session.
+    if (policy?.access === 'workdir' && !resolveEngine(opts?.engine ?? 'claude').confinesAccess) {
+      throw new PolicyRefusal(`specialist ${policy.specialist} has access = "workdir", which the ${opts?.engine} engine cannot give: set engine = "claude", or set access = "operator". ${remedy(sessionName)}`)
+    }
+  } catch (err) {
+    if (err instanceof PolicyRefusal && threadId) await tellThread(threadId, err.message)
+    throw err
+  }
+  const confinedPolicy = confined(policy, sessionName)
+
   const spawnCwd = process.env.SPAWN_CWD
   if (!spawnCwd) throw new Error('SPAWN_CWD env var is required -- set it to the working directory for spawned sessions')
 
@@ -933,6 +979,23 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   // Only a fork or a resume continues a transcript filed under launchCwd. A fresh launch
   // (respawn) starts as usual — the dir may be a worktree that died with its session.
   if (!isFork && !isResume && !opts?.resumeCodex && !opts?.resumeOmp) launchCwd = undefined
+  // A confined session runs in its policy's workdir and nowhere else, whatever the caller passed or left out: its file tools reach
+  // exactly the folder it starts in, so any other start (the operator's spawn dir, a worktree) would widen them. launch() holds
+  // the same line; this keeps the record and the metadata telling the truth.
+  if (confinedPolicy) {
+    const refuse = async (why: string): Promise<never> => { if (threadId) await tellThread(threadId, why); throw new PolicyRefusal(why) }
+    if (worktreeTarget || reuseWorktree) await refuse(`specialist ${confinedPolicy.specialist} runs only in its workdir ${confinedPolicy.workdir}: a confined session never gets a git worktree: start it without one`)
+    if (!existsSync(confinedPolicy.workdir)) await refuse(`specialist ${confinedPolicy.specialist}: its workdir ${confinedPolicy.workdir} does not exist, so no confined session starts: create it (or change workdir in hydra.toml). ${remedy(sessionName)}`)
+    // The folder can change after hydra.toml loaded (a repository cloned into it, a symlink added): the load's checks run again.
+    const why = workdirScopeIssues(hydraLoadEnv(), confinedPolicy.workdir, currentHydraConfig().privateRoots ?? [])
+    if (why.length) await refuse(`specialist ${confinedPolicy.specialist}: its workdir no longer passes the checks hydra.toml was loaded with, so no confined session starts: ${why.join('; ')}. ${remedy(sessionName)}`)
+    // A listed server's token variable must be set: checked here, with the other refusals, so the thread hears it.
+    const noToken = missingTokenRefusal(confinedPolicy, ENV_FILE, sessionName, process.env, capturedSpawnVars())
+    if (noToken) await refuse(noToken)
+    launchCwd = confinedPolicy.workdir
+    // The operator declared this folder in hydra.toml; without this a first launch there waits on Claude's trust dialog (as for any specialist workdir).
+    preApproveClaudeTrust([confinedPolicy.workdir], `workdir ${confinedPolicy.workdir}`)
+  }
   if (launchCwd) {
     // A fork (and its resume) must start where its source started, or --resume can't find the transcript.
     if (!existsSync(launchCwd)) throw new Error(`cannot fork: the source's launch directory ${launchCwd} no longer exists`)
@@ -1026,13 +1089,13 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     }
   }
   const adapter = resolveEngine(engine)
-  const spawnType = opts?.sessionType ?? (isJoin ? 'thread_guest' : 'thread_owner')
+  const spawnType: SessionType = confinedPolicy ? 'scoped' : opts?.sessionType ?? (isJoin ? 'thread_guest' : 'thread_owner')
   const launched = await adapter.launch({
     sessionId, tmuxName, cwd: effectiveCwd, originalCwd: spawnCwd, model, prompt,
     worktreePath, forkFromOriginalCwd: !!worktreeTarget,
     tools: opts?.tools, disallowedTools,
     forkFrom: opts?.forkFrom, resumeFrom: opts?.resumeFrom, resumeCodex: opts?.resumeCodex, resumeOmp: opts?.resumeOmp,
-    threadId, sessionType: spawnType,
+    threadId, sessionType: spawnType, ...(policy && { policy }),
   })
 
   const now = Date.now()
@@ -1049,6 +1112,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     sessionId, topic, threadId: threadId!, anchorMessageId, anchorChannelId, createdAt: now, lastActive: now,
     tmuxName, listening: resolveListenState(threadId!, chatId), originType, originFrom, sessionMetadata,
     sessionType: spawnType,
+    ...(policy && { policy }),
     ...labelFields,
     threadUrl: url || undefined,
     engine,
@@ -1119,6 +1183,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       sessionId, tmuxName, originType, originFrom, model: launched.model, parentChannelId,
       label: sessionLabel,
       claudeSessionId: launched.identity.claudeSessionId,
+      ...(policy && { policy }),
     })
   }
 
@@ -1181,6 +1246,8 @@ export async function tryResume(dead: {
   reuseName?: string
   /** A specialist's name, claimed rather than picked. */
   name?: string
+  /** The specialist it acts for (its id): carried so the resumed session is scoped as it was. */
+  specialist?: string
   topic: string
   threadId: string
   claudeSessionId?: string
@@ -1200,6 +1267,7 @@ export async function tryResume(dead: {
       existingThreadId: dead.threadId,
       reuseName: dead.reuseName,
       ...(dead.name && { name: dead.name }),
+      ...(dead.specialist && { specialist: dead.specialist }),
       resumeFrom: dead.claudeSessionId,
       model: dead.model,
       label: dead.label,

@@ -2,8 +2,9 @@ import { describe, test, expect } from 'bun:test'
 import { loadHydraConfig } from '../../config/load.js'
 import type { LoadEnv } from '../../config/types.js'
 import { routeFor, ROUTE_USAGE } from '../route-request.js'
+import { testLoadEnv } from '../../config/__tests__/load-env.js'
 
-const env: LoadEnv = { home: '/home/op', isDir: () => true, isCommand: () => true, sessionNames: [] }
+const env: LoadEnv = testLoadEnv({ home: '/home/op', sessionNames: [] })
 const r = loadHydraConfig(`
 operator = "op"
 [slack.apps.default]

@@ -1,18 +1,22 @@
 // Loads `<state>/hydra.toml`: parse, fill defaults, check. Pure but for `env`, so the same text and machine give the same answer.
 // Strict: an unknown key, a malformed address or place, or a reference to nothing is an error, and any error rejects the whole file.
 
-import { statSync, accessSync, constants as fsConstants } from 'fs'
+import { statSync, accessSync, lstatSync, readdirSync, readFileSync, realpathSync, constants as fsConstants } from 'fs'
+import { parseEnvLine } from '../shared/env-parse.js'
 import { homedir } from 'os'
-import { isAbsolute, join, resolve } from 'path'
+import { dirname, isAbsolute, join, resolve, sep } from 'path'
 import { parseCron } from '../shared/cron-local.js'
 import { parseIdleTtl } from '../shared/constants.js'
 import { ENV_NAME_RE, tokenVarRefusal } from '../shared/spawn-env.js'
+import { workdirScopeIssues } from './workdir-scope.js'
+import { engineConfinesAccess } from '../shared/engine-capabilities.js'
 import { noSuchApp, pinnersOf, serves, speaksAsOf, whyNotServed } from './pins.js'
 import { SLACK_APP_DEFAULTS } from '../connectors/slack/app.js'
 import { invalidSpecialistName } from '../shared/specialist-name.js'
 import {
   BUILTIN_ROLES, DEFAULT_SLACK_APP, type Address, type ConfigIssue, type Connectors, type Guard, type HydraConfig, type LoadEnv, type LoadResult,
-  type Person, type Place, type PlaceOptions, type Platform, type Rule, type Schedule, type SessionsMode, type SlackApp, type Specialist, type Vitals,
+  type Access, type McpServer, type WorkdirScan, type Person, type Place, type PlaceOptions, type Platform, type Rule, type Schedule, type SessionsMode, type SlackApp, type Specialist, type Vitals,
+  WORKDIR_TOOLS,
 } from './types.js'
 
 export const VITALS_DEFAULTS: Vitals = Object.freeze({
@@ -35,30 +39,98 @@ const REPO_RE = /^[a-z0-9][a-z0-9-]*\/[a-z0-9._-]+$/
 const CHANNEL_PLACE_RE = /^(slack|discord):(dm|#[a-z0-9][a-z0-9_-]*)$|^slack:[CG][A-Z0-9]+$|^discord:\d+$/
 const SESSIONS: readonly SessionsMode[] = ['shared', 'per-conversation']
 const ENGINES = ['claude', 'codex', 'omp'] as const
+const ACCESS: readonly Access[] = ['operator', 'workdir']
+/** Why a built-in tool is not on an `access = "workdir"` specialist's list. Any other name gets the generic refusal. */
+const TOOL_REFUSALS: Readonly<Record<string, string>> = {
+  Bash: 'runs code outside the workdir', PowerShell: 'runs code outside the workdir', Monitor: 'runs code outside the workdir',
+  Edit: 'writes files', Write: 'writes files', NotebookEdit: 'writes files',
+  Task: 'starts agents that carry other tools', Agent: 'starts agents that carry other tools',
+  WebSearch: 'reaches the open web with whatever it was asked',
+}
+/** Warned, not refused: a fetch can carry data to a URL the readers chose. */
+const TOOL_WARNINGS: Readonly<Record<string, string>> = {
+  WebFetch: 'can fetch an outside URL with data in it; anyone who can talk to this specialist can choose that URL',
+}
+const MCP_TOOL_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/
 const MAX_DAY_MS = 86_400_000
 const GUARD_TIMEOUT_MAX_MS = 30_000 // deliveries for a conversation wait on the guard
 const MAX_ALERT_AFTER_MS = 30 * MAX_DAY_MS
 const BUILTIN: readonly string[] = BUILTIN_ROLES
 
-const TOP_KEYS = ['operator', 'connectors', 'slack', 'people', 'specialists', 'defaults', 'places', 'schedules', 'rules', 'guard', 'vitals']
-const SPECIALIST_KEYS = ['workdir', 'prompt', 'prompt_file', 'listens', 'apps', 'speaks_as', 'allow', 'sessions', 'max', 'idle', 'home', 'model', 'engine', 'env_file', 'was']
+const TOP_KEYS = ['operator', 'connectors', 'slack', 'people', 'specialists', 'defaults', 'places', 'schedules', 'rules', 'guard', 'vitals', 'mcp']
+const SPECIALIST_KEYS = ['workdir', 'prompt', 'prompt_file', 'listens', 'apps', 'speaks_as', 'allow', 'sessions', 'max', 'idle', 'home', 'model', 'engine', 'env_file', 'was', 'access', 'tools', 'mcp']
+/** Keys only a hand edit of one specialist's own table sets: a default would reach every specialist, a fragment's table is someone else's. */
+export const SCOPE_KEYS = ['access', 'tools', 'mcp'] as const
 
 type Table = Record<string, unknown>
 /** Own keys only: a name like `constructor` must not resolve through the prototype. */
 const has = (t: object, k: string) => Object.hasOwn(t, k)
 const isTable = (v: unknown): v is Table => typeof v === 'object' && v !== null && !Array.isArray(v) && !(v instanceof Date)
 
+/** Claude's config folder as sessions get it: CLAUDE_CONFIG_DIR, else `~/.claude`. */
+export const defaultClaudeConfigDir = (): string => process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude')
+
 /** The machine as it is: `~` is this user's home, folders and commands are looked up for real. */
-export function systemEnv(sessionNames: readonly string[]): LoadEnv {
+export function systemEnv(sessionNames: readonly string[], stateDir: string, claudeConfigDir: string = defaultClaudeConfigDir()): LoadEnv {
   return {
     home: homedir(),
     sessionNames,
+    stateDir,
+    claudeConfigDir,
+    exists: path => { try { statSync(path); return true } catch { return false } },
+    envFileHas: name => {
+      try {
+        for (const line of readFileSync(join(stateDir, '.env'), 'utf8').split('\n')) { const kv = parseEnvLine(line); if (kv && kv[0] === name && kv[1].trim() !== '') return true }
+      } catch { /* no .env */ }
+      return false
+    },
+    realpath: path => { try { return realpathSync(path) } catch { return path } },
+    isGitWorkTree: path => {
+      for (let p = resolve(path); ; p = dirname(p)) {
+        try { lstatSync(join(p, '.git')); return true } catch { /* not here */ }
+        if (dirname(p) === p) return false
+      }
+    },
+    scanWorkdir: dir => scanWorkdirOnDisk(dir),
     isDir: path => { try { return statSync(path).isDirectory() } catch { return false } },
     isCommand: command => {
       if (!command.includes('/')) return Bun.which(command) !== null
       try { accessSync(command, fsConstants.X_OK); return statSync(command).isFile() } catch { return false }
     },
   }
+}
+
+const SCAN_MAX_ENTRIES = 50_000
+
+/**
+ * Looks through `dir` for symlinks that resolve outside it (a dangling one counts: where it points cannot be checked) and for
+ * git repositories below it. Stops after `maxEntries` entries and says so (`truncated`): a folder too big to look through is not
+ * thereby clean.
+ */
+export function scanWorkdirOnDisk(dir: string, maxEntries = SCAN_MAX_ENTRIES): WorkdirScan {
+  const out: WorkdirScan = { escapingSymlinks: [], nestedGit: [], truncated: false }
+  let root: string
+  try { root = realpathSync(dir) } catch { return out }
+  let seen = 0
+  const walk = (d: string, top: boolean) => {
+    let names: string[]
+    try { names = readdirSync(d) } catch { return }
+    for (const name of names) {
+      if (out.truncated) return
+      if (++seen > maxEntries) { out.truncated = true; return }
+      const full = join(d, name)
+      let st
+      try { st = lstatSync(full) } catch { continue }
+      if (name === '.git' && !top) { if (out.nestedGit.length < 5) out.nestedGit.push(full); continue }
+      if (st.isSymbolicLink()) {
+        let target: string
+        try { target = realpathSync(full) } catch { if (out.escapingSymlinks.length < 5) out.escapingSymlinks.push(full); continue }
+        if (target !== root && !target.startsWith(root + sep) && out.escapingSymlinks.length < 5) out.escapingSymlinks.push(full)
+      } else if (st.isDirectory() && name !== '.git') walk(full, false)
+    }
+  }
+  walk(root, true)
+  return out
 }
 
 /** One line per issue, for an alert or a CLI. */
@@ -225,6 +297,34 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (app) slackApps[id] = app
   }
 
+  // --- MCP servers specialists may list ------------------------------------------------------------------------------
+
+  // Declared here and nowhere else: a server is a process that runs as the operator, so only a hand edit of hydra.toml adds one.
+  const mcpServers: Record<string, McpServer> = Object.create(null)
+  for (const [name, raw] of Object.entries(table(doc.mcp, 'mcp') ?? {})) {
+    const path = `mcp.${name}`
+    if (!ID_RE.test(name)) { error(path, `"${name}" is not a valid server name: lowercase letters, digits and dashes`); continue }
+    const t = table(raw, path)
+    if (!t) continue
+    unknownKeys(t, ['command', 'token_env', 'tools'], path)
+    const command = str(t, 'command', path)
+    if (t.command === undefined) error(`${path}.command`, 'is required: the server\'s executable, pinned (a path or a versioned binary, not `npx -y` latest)')
+    else if (command !== undefined && !env.isCommand(expand(command))) error(`${path}.command`, `${expand(command)} is not an executable file or a command on PATH`)
+    const tokenEnv: string[] = []
+    for (const [i, v] of (strList(t, 'token_env', path) ?? []).entries()) {
+      if (!ENV_NAME_RE.test(v)) { error(`${path}.token_env[${i}]`, `"${v}" must name an environment variable, like DD_API_KEY`); continue }
+      const owned = envOwner.get(v)
+      if (owned) { error(`${path}.token_env[${i}]`, `"${v}" is the token variable of ${owned}: a server never gets hydra's own tokens`); continue }
+      if (!tokenEnv.includes(v)) tokenEnv.push(v)
+    }
+    const tools: string[] = []
+    for (const [i, v] of (strList(t, 'tools', path) ?? []).entries()) {
+      if (!MCP_TOOL_RE.test(v)) { error(`${path}.tools[${i}]`, `"${v}" must be a tool name the server offers, like search_logs (no wildcards)`); continue }
+      if (!tools.includes(v)) tools.push(v)
+    }
+    if (command !== undefined) mcpServers[name] = { name, command: expand(command), tokenEnv, tools }
+  }
+
   // --- people --------------------------------------------------------------------------------------------------------
 
   const people: Record<string, Person> = {}
@@ -273,9 +373,18 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   // --- specialists, with [defaults.specialist] -----------------------------------------------------------------------
 
   const defaultsTable = table(doc.defaults, 'defaults') ?? {}
-  unknownKeys(defaultsTable, ['specialist'], 'defaults')
+  unknownKeys(defaultsTable, ['specialist', 'private_roots'], 'defaults')
+  // Folders no `access = "workdir"` specialist may use, beyond the built-in ones: per-operator, so they live here and never in code.
+  const privateRoots: string[] = []
+  for (const [i, raw] of (strList(defaultsTable, 'private_roots', 'defaults') ?? []).entries()) {
+    const root = expand(raw)
+    if (!isAbsolute(root)) error(`defaults.private_roots[${i}]`, `"${raw}" must be an absolute path or start with ~`)
+    else privateRoots.push(root)
+  }
   const defaults = table(defaultsTable.specialist, 'defaults.specialist') ?? {}
   unknownKeys(defaults, SPECIALIST_KEYS, 'defaults.specialist')
+  // A default reaches every specialist, including ones nobody meant to scope: these are set on one specialist's own table.
+  for (const k of SCOPE_KEYS) if (has(defaults, k)) error(`defaults.specialist.${k}`, `can't be a default: ${k} says what one specialist's session may reach. Set it under [specialists.<id>] by editing hydra.toml`)
   if (defaults.workdir !== undefined && typeof defaults.workdir === 'string' && !defaults.workdir.includes('{id}')) {
     warn('defaults.specialist.workdir', 'has no {id}, so every specialist without its own workdir shares one folder')
   }
@@ -283,7 +392,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   // Defaults are type-checked once, here, so a bad default is reported once, not once per specialist.
   const goodDefaults: Table = {}
   for (const k of Object.keys(defaults)) {
-    if (!SPECIALIST_KEYS.includes(k)) continue
+    if (!SPECIALIST_KEYS.includes(k) || (SCOPE_KEYS as readonly string[]).includes(k)) continue
     const n = errors.length
     readSpecialistKeyTypes({ [k]: defaults[k] }, 'defaults.specialist')
     if (errors.length === n && k === 'idle') checkIdle(defaults.idle as string, 'defaults.specialist.idle')
@@ -307,6 +416,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     str(t, 'workdir', path); str(t, 'prompt', path); str(t, 'prompt_file', path); strList(t, 'listens', path); strList(t, 'apps', path); str(t, 'speaks_as', path); strList(t, 'allow', path)
     oneOf(t, 'sessions', path, SESSIONS); positiveInt(t, 'max', path); str(t, 'idle', path); str(t, 'home', path); str(t, 'model', path)
     oneOf(t, 'engine', path, ENGINES); str(t, 'env_file', path); strList(t, 'was', path)
+    oneOf(t, 'access', path, ACCESS); strList(t, 'tools', path); strList(t, 'mcp', path)
   }
   function positiveInt(t: Table, k: string, path: string): number | undefined {
     const v = t[k]
@@ -315,6 +425,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     error(join2(path, k), 'must be a whole number above 0')
     return undefined
   }
+
+  const checkWorkdirScope = (at: string, workdir: string) => { for (const why of workdirScopeIssues(env, workdir, privateRoots)) error(at, why) }
 
   const specialists: Record<string, Specialist> = {}
   /** Who listens on each place, with the apps they are pinned to (undefined: unpinned). */
@@ -410,6 +522,32 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (home !== undefined && !normalizePlace(home) && !/^\d+$/.test(home)) error(at('home'), `"${home}" must be a place (slack:#channel, discord:#channel, …) or a channel id`)
     const model = str(t, 'model', path)
     const engine = oneOf(t, 'engine', path, ENGINES)
+
+    // `access`: whose account its session runs under. Everything below it refuses what would let a `workdir` session reach past its folder.
+    const access: Access = oneOf(t, 'access', path, ACCESS) ?? 'operator'
+    const toolsRaw = strList(t, 'tools', path)
+    const mcpRaw = strList(t, 'mcp', path)
+    let tools: string[] | undefined
+    let mcp: string[] | undefined
+    if (access === 'operator') {
+      for (const k of ['tools', 'mcp'] as const) if (t[k] !== undefined) error(`${path}.${k}`, 'has no effect while access = "operator": it already has every tool and server the operator does; set access = "workdir" to choose them')
+    } else {
+      tools = [...new Set(toolsRaw ?? WORKDIR_TOOLS)]
+      for (const [i, name] of (toolsRaw ?? []).entries()) {
+        if ((WORKDIR_TOOLS as readonly string[]).includes(name)) continue
+        if (Object.hasOwn(TOOL_WARNINGS, name)) { warn(`${path}.tools[${i}]`, `${name} ${TOOL_WARNINGS[name]}`); continue }
+        error(`${path}.tools[${i}]`, `${name} ${Object.hasOwn(TOOL_REFUSALS, name) ? TOOL_REFUSALS[name] : `is not a tool a workdir specialist may use (${WORKDIR_TOOLS.join(', ')})`}; remove it or set access = "operator"`)
+      }
+      mcp = [...new Set(mcpRaw ?? [])]
+      for (const [i, name] of (mcpRaw ?? []).entries()) {
+        if (!Object.hasOwn(mcpServers, name)) error(`${path}.mcp[${i}]`, `no [mcp.${name}]: declare the server in hydra.toml first`)
+        else if (mcpServers[name].tools.length === 0) error(`${path}.mcp[${i}]`, `[mcp.${name}] lists no tools, so a specialist could call none of them: set its \`tools\``)
+        else for (const v of mcpServers[name].tokenEnv) if (!env.envFileHas(v)) warn(`${path}.mcp[${i}]`, `[mcp.${name}] needs ${v}, and ${join(env.stateDir, '.env')} does not set it, so no session of this specialist can start until it does: add ${v}=<value> there and restart the daemon`)
+      }
+      // The engine actually used comes from thread history and `handoff <model>` can switch it, so launch checks it again.
+      if (engine !== undefined && !engineConfinesAccess(engine)) error(`${path}.engine`, `${engine} can't run an access = "workdir" specialist: that engine cannot confine its tools; set engine = "claude", or set access = "operator"`)
+      if (workdirRaw !== undefined && isAbsolute(workdir) && env.isDir(workdir)) checkWorkdirScope(at('workdir'), workdir)
+    }
     specialists[id] = {
       id, workdir, listens, allow,
       ...(apps && { apps }),
@@ -423,6 +561,9 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       ...(home !== undefined && { home: normalizePlace(home) ?? home }),
       ...(model !== undefined && { model }),
       ...(engine !== undefined && { engine }),
+      access,
+      ...(tools && { tools }),
+      ...(mcp && { mcp }),
       ...(envFile !== undefined && { envFile: underWorkdir(envFile) }),
     }
   }
@@ -646,12 +787,47 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (apart) error(path, `${apart}: set \`speaks_as\` to an app ${s.id} can be reached through, or pin ${s.id} to ${app}`)
   }
 
+  /**
+   * Who, besides the operator, can talk to this specialist: the people `allow` lets in (other than the operator), anyone if
+   * `allow` says so (with where they would be: a shared or public place, a repo), and other bots where a place hears them.
+   * Reading its replies is not talking to it: a place others only read adds nothing here.
+   */
+  function reachedBy(s: Specialist): string[] {
+    const shared = s.listens.filter(p => p !== 'cli' && !p.endsWith(':dm'))
+    const others = (people_: Person[]) => people_.filter(p => p.id !== operator).map(p => p.id)
+    const who: string[] = []
+    if (s.allow.includes('anyone')) {
+      const where = shared.map(p => p.startsWith('github:') ? `who can comment on ${p}` : `in ${p}`)
+      // "anyone in A and B", "anyone who can comment on R"; one phrase per kind of place.
+      const inPlaces = where.filter(w => w.startsWith('in '))
+      const onRepos = where.filter(w => w.startsWith('who '))
+      who.push(`anyone${inPlaces.length ? ` ${inPlaces[0]}${inPlaces.slice(1).map(w => ` and ${w.slice(3)}`).join('')}` : ''}${onRepos.length ? `${inPlaces.length ? ', ' : ' '}${onRepos.join(' and ')}` : ''}`)
+    } else {
+      const named = new Set<string>()
+      for (const role of s.allow) {
+        const holders = others(role === 'people' ? Object.values(people) : Object.values(people).filter(p => p.roles.includes(role)))
+        const fresh = holders.filter(id => !named.has(id))
+        if (!fresh.length) continue
+        fresh.forEach(id => named.add(id))
+        who.push(role === 'people' ? `${listJoin(fresh)} (allow = ${JSON.stringify(s.allow)})` : `${listJoin(fresh)} (role "${role}")`)
+      }
+    }
+    for (const p of s.listens) if (p !== 'cli' && places[p]?.bots) who.push(`any other bot in ${p}`)
+    return who
+  }
+  const listJoin = (items: string[]) => items.length <= 2 ? items.join(' and ') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
+
   const ruleTargets = new Set(rules.map(r => r.to))
   const scheduleTargets = new Set(Object.values(schedules).map(s => s.to))
   for (const s of Object.values(specialists)) {
     const path = `specialists.${s.id}`
     if (s.listens.length === 0 && !ruleTargets.has(s.id) && !scheduleTargets.has(s.id)) {
       warn(path, 'nobody can reach it: it listens nowhere, and no rule or schedule sends to it')
+    }
+    // An `access = "operator"` session runs under the operator's account, so whoever can talk to it can use that account through it.
+    if (s.access === 'operator') {
+      const who = reachedBy(s)
+      if (who.length) warn(path, `${listJoin(who)} can reach the operator's account through it; set access = "workdir"`)
     }
     if (s.sessions === 'shared') {
       if (s.listens.length >= 2) warn(path, `one shared session hears ${s.listens.join(', ')}, so what's said in one place is remembered in the others; use sessions = "per-conversation" or one specialist per place`)
@@ -674,7 +850,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   }
 
   if (errors.length) return { ok: false, errors, warnings }
-  return { ok: true, config: { ...(operator && { operator }), connectors, slackApps, people, specialists, places, schedules, rules, ...(guard && { guard }), ...(vitals && { vitals }) }, warnings }
+  return { ok: true, config: { ...(operator && { operator }), connectors, slackApps, people, specialists, places, schedules, rules, ...(Object.keys(mcpServers).length && { mcpServers }), ...(privateRoots.length && { privateRoots }), ...(guard && { guard }), ...(vitals && { vitals }) }, warnings }
 }
 
 /** The program a `sh -c` command runs: past any leading VAR=value, with one level of quotes removed. */

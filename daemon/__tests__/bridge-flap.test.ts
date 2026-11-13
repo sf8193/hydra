@@ -10,6 +10,7 @@ import { registry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { engines } from '../engines/instances.js'
 import type { SessionInfo } from '../sessions.js'
+import { isToolAllowed } from '../tool-surface.js'
 
 let dir: string
 let sock: string
@@ -23,13 +24,13 @@ afterAll(() => { socketServer.close(); rmSync(dir, { recursive: true, force: tru
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
 // A bridge client: registers as `id`, resolves once the server answered 'registered' or closed on it.
-function bridge(id: string, claudeSessionId?: string, connectionRole?: string): Promise<{ socket: Socket; accepted: boolean }> {
+function bridge(id: string, claudeSessionId?: string, connectionRole?: string, sessionType?: string): Promise<{ socket: Socket; accepted: boolean }> {
   return new Promise(resolve => {
     const socket = connect(sock)
     let buf = ''
     let done = false
     const finish = (accepted: boolean) => { if (!done) { done = true; resolve({ socket, accepted }) } }
-    socket.on('connect', () => socket.write(JSON.stringify({ type: 'register', sessionId: id, claudeSessionId, connectionRole }) + '\n'))
+    socket.on('connect', () => socket.write(JSON.stringify({ type: 'register', sessionId: id, claudeSessionId, connectionRole, sessionType }) + '\n'))
     socket.on('data', d => { buf += d.toString(); if (buf.includes('"registered"')) finish(true) })
     socket.on('close', () => finish(false))
     socket.on('error', () => finish(false))
@@ -68,6 +69,35 @@ describe('bridge flap circuit breaker', () => {
       for (const s of sockets) s.destroy()
       registry.delete(id)
     }
+  })
+
+  test('a refused newcomer that claims to be scoped does not narrow the live session it was refused for', async () => {
+    const id = 'flap-scoped-claim'
+    session(id)
+    const sockets: Socket[] = []
+    const accepted: boolean[] = []
+    for (let i = 0; i < 14; i++) {
+      const b = await bridge(id, i < 9 ? 'legit' : 'INTRUDER', undefined, i < 9 ? undefined : 'scoped')
+      sockets.push(b.socket); accepted.push(b.accepted)
+      await sleep(15)
+    }
+    try {
+      expect(accepted.slice(9).every(a => !a)).toBe(true)         // refused, as in the test above
+      expect(isToolAllowed(id, 'spawn_session')).toBe(true)        // and its claim changed nothing
+    } finally {
+      for (const s of sockets) s.destroy()
+      registry.delete(id)
+    }
+  })
+
+  test('an accepted bridge that declares scoped is narrowed', async () => {
+    const id = 'flap-scoped-accepted'
+    session(id)
+    const b = await bridge(id, undefined, undefined, 'scoped')
+    try {
+      expect(b.accepted).toBe(true)
+      expect(isToolAllowed(id, 'spawn_session')).toBe(false)
+    } finally { b.socket.destroy(); registry.delete(id) }
   })
 
   test('the hold ends with the incumbent: once it dies, the next bridges are accepted again', async () => {

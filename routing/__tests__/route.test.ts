@@ -2,8 +2,9 @@ import { describe, test, expect } from 'bun:test'
 import { loadHydraConfig } from '../../config/load.js'
 import type { HydraConfig, LoadEnv } from '../../config/types.js'
 import { route, explain, identify, owningApp, reachesAnyone, refusal, type Inbound } from '../route.js'
+import { testLoadEnv } from '../../config/__tests__/load-env.js'
 
-const env: LoadEnv = { home: '/home/op', isDir: () => true, isCommand: () => true, sessionNames: [] }
+const env: LoadEnv = testLoadEnv({ home: '/home/op', sessionNames: [] })
 const load = (text: string): HydraConfig => {
   const r = loadHydraConfig(text, env)
   if (!r.ok) throw new Error(r.errors.map(e => `${e.path}: ${e.message}`).join('\n'))

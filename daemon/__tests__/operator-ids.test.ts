@@ -5,6 +5,7 @@ import { gate, operatorIds } from '../access.js'
 import { _setHydraConfigForTesting, hydraConfigPath, startHydraConfig, stopHydraConfig } from '../hydra-config.js'
 import type { HydraConfig } from '../../config/types.js'
 import type { InboundMessage } from '../../gateway.js'
+import { testLoadEnv } from '../../config/__tests__/load-env.js'
 
 // The suite runs as the discord platform (CHAT_PLATFORM unset).
 const withOperator: HydraConfig = {
@@ -26,7 +27,7 @@ describe('operatorIds: who every admin check means', () => {
 
   test('a hydra.toml that fails to load at boot gives nobody, never allowFrom', () => {
     writeFileSync(hydraConfigPath(), 'operator = "ghost"\n')
-    startHydraConfig({ env: { home: '/h', isDir: () => true, isCommand: () => true, sessionNames: [] } })
+    startHydraConfig({ env: testLoadEnv({ home: '/h', sessionNames: [] }) })
     expect(operatorIds({ allowFrom: ['999'] })).toEqual([])
   })
 

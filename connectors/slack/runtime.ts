@@ -402,6 +402,34 @@ const CLEANLY_REFUSED = /An API error occurred|rate.?limit|not connected/i
 const POST_BACKSTOP_MS = POST_TIMEOUT_MS + 5_000
 
 /**
+ * Whether the caller answers this conversation: a per-conversation session answers its own conversation and no other; a
+ * shared session, any conversation bound to its specialist. `bound` is who the conversation is bound to (current id), `me` who the caller acts for.
+ */
+function mayAnswerConversation(h: HydraConfig, caller: SessionInfo | undefined, me: string | undefined, bound: string | undefined, id: string): boolean {
+  const ownSession = !!caller && !!bound && [bound, ...(h.specialists[bound]?.was ?? [])].some(sid => caller.tmuxName === conversationSessionName(sid, id))
+  return isConversationSession(caller) ? ownSession : (!!me && bound === me)
+}
+
+/**
+ * Whether `conversation` is an open conversation the caller answers: bound to its specialist (a conversation's own session:
+ * its own). Never throws: an id that parses to nothing, or is not open, is not theirs. Unlike `reply`, this does not count
+ * the specialist's home channel: a scoped session's tools are held to this, and it speaks at home only through `escalate`.
+ */
+export function conversationBelongsTo(callerSessionId: string | undefined, conversation: unknown): boolean {
+  try {
+    const h = hydraConfig()
+    const caller = callerSessionId ? registry.get(callerSessionId) : undefined
+    const me = boundAs(caller, h)
+    const c = parseConversation(conversation)
+    const e = getSlackWatcher().get(c.channel, c.threadTs, appOfEntry(c))
+    if (!e) return false
+    const bound = e.specialist ? currentId(h, e.specialist) : undefined
+    if (bound && isSessionThread(bound)) return false
+    return mayAnswerConversation(h, caller, me, bound, conversationId(c))
+  } catch { return false }
+}
+
+/**
  * `reply` with a conversation id as its chat_id: the specialist answers a Slack conversation. Hydra posts the text
  * as given, and only into a conversation bound to the caller's specialist: a reply goes back where its question came from. A thread
  * bound to a session's own thread is listen-only.
@@ -441,11 +469,8 @@ export async function replyInConversation(callerSessionId: string | undefined, c
   const bound = e.specialist ? currentId(h, e.specialist) : undefined
   // A thread a session bound to itself is listen-only: only a specialist (or main) speaks in Slack.
   if (bound && isSessionThread(bound)) throw new Error(`${id} is bound to a session to listen to: hydra posts to Slack only for a specialist (or main), so reply to the operator instead`)
-  // A per-conversation session answers its own conversation, and no other.
   const caller = callerSessionId ? registry.get(callerSessionId) : undefined
-  const ownSession = !!caller && !!bound && [bound, ...(h.specialists[bound]?.was ?? [])].some(sid => caller.tmuxName === conversationSessionName(sid, id))
-  // A conversation's own session answers its conversation and no other; a shared session, any bound to its specialist.
-  if (isConversationSession(caller) ? !ownSession : (!me || bound !== me)) throw new Error(`${id} is bound to ${bound ?? 'no one yet'}${me ? `, not ${me}` : ''}: a reply goes only to a conversation bound to your specialist (or its home)${isConversationSession(caller) ? ', and from a conversation\'s own session only to that conversation' : ''}`)
+  if (!mayAnswerConversation(h, caller, me, bound, id)) throw new Error(`${id} is bound to ${bound ?? 'no one yet'}${me ? `, not ${me}` : ''}: a reply goes only to a conversation bound to your specialist (or its home)${isConversationSession(caller) ? ', and from a conversation\'s own session only to that conversation' : ''}`)
   // Checked again before every part: a conversation moved away mid-reply gets no more of it.
   const stillMine = () => { const now = getSlackWatcher().get(c.channel, c.threadTs, app)?.specialist; return !!now && currentId(hydraConfig(), now) === bound }
   // Through the app that heard the conversation, and no other.

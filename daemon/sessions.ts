@@ -4,6 +4,8 @@ import { occupancy, occupied } from './session-reachability.js'
 import { join } from 'path'
 import { STATE_DIR, STATE_WRITABLE } from './config.js'
 import { emit } from './event-bus.js'
+import { removeScopedFiles } from './scoped-files.js'
+import type { LaunchPolicy } from './scope.js'
 import { atomicWriteFileSync, baseNameFromBranch } from './util.js'
 import { tmuxSessionState, tmuxSync } from './tmux.js'
 import { CAPABILITY_TOOLS } from '../shared/constants.js'
@@ -87,6 +89,12 @@ export type SessionInfo = {
   ownershipGeneration?: string // immutable lifecycle owner; prevents stale cleanup from targeting successors
   contextUsage?: { usedTokens: number; contextWindow: number; percent: number; updatedAt: number }
   sessionType: SessionType
+  /**
+   * What a specialist's session may reach, decided once when it was born (scope.ts): access and, for `workdir`, the one folder it
+   * runs in, its tools and servers, with an id that changes when any of them does. `launch()` builds the folder, argv, env and files
+   * from it; birth re-checks the folder; delivery compares it with hydra.toml. Absent: no specialist fills it.
+   */
+  policy?: LaunchPolicy
   label?: SessionLabel
   capabilities?: Capability[]
   // Keys are subsystem-owned: protocol owns 'advance'/'extend_phase'.
@@ -204,6 +212,8 @@ export type ThreadSessionEntry = {
   codexHomeName?: string
   model?: string
   label?: SessionLabel
+  /** The launch policy the session was born with: the only evidence left once a kill deletes the record (read by resolvePolicy through a revive). */
+  policy?: LaunchPolicy
 }
 
 export type ThreadMetadata = {
@@ -262,12 +272,13 @@ export type SpawnOpts = {
   launchCwd?: string          // fork: launch from the source's launch dir, where --resume finds its transcript (no worktree)
   cwd?: string                // a fresh launch's working dir (a specialist's workdir) in place of SPAWN_CWD; a fork, resume or worktree wins
   tools?: string[]            // Claude --tools whitelist (must include MCP tools with prefix)
-  sessionType?: SessionType  // declared at spawn — determines base tool set
+  sessionType?: SessionType  // declared at spawn — determines base tool set (a specialist with access = "workdir" is always `scoped`)
+  specialist?: string        // the specialist a caller names as the one this session acts for (a fill, a conversation's own session); its launch policy is decided from hydra.toml at birth (scope.ts)
   worktree?: string           // git repo subdirectory to create a worktree from (structural alternative to topic prefix)
   worktreeBranchSuffix?: string // appended to `wt/<name>` to avoid branch collisions between same-named builders
   preserveWorktree?: boolean  // recovery: reuse the dead session's on-disk worktree instead of destroying+recreating it (keeps unpushed work + lets --resume find the transcript)
   reuseWorktree?: { repo: string; path: string; branch: string }  // recovery: explicit worktree to adopt in place — survives even after the dead record it came from is deleted (resume-fail fallback tiers)
-  carryOver?: { artifacts?: string[]; contextLinks?: string[]; description?: string; predecessor?: Predecessor; launchCwd?: string; disallowedTools?: string[]; parentId?: string | null; initiator?: string }  // recovery: deliverables/description (and a handoff successor's predecessor, a fork's launch dir and blocked tools) to re-apply — carried explicitly so fallback tiers keep them after the dead record is gone
+  carryOver?: { artifacts?: string[]; contextLinks?: string[]; description?: string; predecessor?: Predecessor; launchCwd?: string; disallowedTools?: string[]; parentId?: string | null; initiator?: string; policy?: LaunchPolicy; sessionName?: string }  // recovery: deliverables/description (and a handoff successor's predecessor, a fork's launch dir and blocked tools) to re-apply — carried explicitly so fallback tiers keep them after the dead record is gone
 }
 
 // ---------------------------------------------------------------------------
@@ -605,7 +616,7 @@ export class ThreadRegistry {
     respawnCount: number, sessionId: string, tmuxName: string,
     originType: 'spawn' | 'fork' | 'handoff' | 'resurrect', originFrom?: string,
     model?: string, parentChannelId?: string, claudeSessionId?: string,
-    label: SessionLabel | undefined,
+    label: SessionLabel | undefined, policy?: LaunchPolicy,
   }): void {
     const now = Date.now()
     let thread = this.threads.get(threadId)
@@ -640,6 +651,7 @@ export class ThreadRegistry {
       model: opts.model,
       claudeSessionId: opts.claudeSessionId,
       label: opts.label,
+      ...(opts.policy !== undefined && { policy: opts.policy }),
     })
     this.persist()
   }
@@ -748,6 +760,8 @@ export const threadRegistry = new ThreadRegistry()
 export function markDead(info: SessionInfo, at = Date.now()): void {
   const fresh = info.deadAt === undefined
   info.deadAt ??= at
+  // A scoped session's generated config holds token values: gone with the session (a resume writes its own).
+  removeScopedFiles(info)
   registry.persist()
   threadRegistry.closeHistoryEntry(info.threadId, info)
   if (fresh) emit('session:marked-dead', { sessionId: info.sessionId, tmuxName: info.tmuxName })

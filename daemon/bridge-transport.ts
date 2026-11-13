@@ -2,7 +2,7 @@ import { readFileSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import type { Socket } from 'net'
 import { STATE_DIR } from './config.js'
-import { registry } from './sessions.js'
+import { registry, type SessionInfo } from './sessions.js'
 import { atomicWriteFileSync } from './util.js'
 import { emit } from './event-bus.js'
 import { withoutIntents, type DeliveryResult, type Notification } from './engines/engine-adapter.js'
@@ -25,6 +25,13 @@ export type BridgeConn = {
 // ---------------------------------------------------------------------------
 // BridgeTransport — owns bridges + messageQueues Maps
 // ---------------------------------------------------------------------------
+
+/**
+ * Whether a queued notification may still be flushed to this session: a reason it may not, or undefined. Set by daemon/scope.ts
+ * (the one drift gate; it cannot be imported here, since it reaches back to this module through the specialists).
+ */
+let flushGate: ((info: SessionInfo) => string | undefined) | undefined
+export function setFlushGate(gate: ((info: SessionInfo) => string | undefined) | undefined): void { flushGate = gate }
 
 export class BridgeTransport {
   readonly bridges = new Map<string, BridgeConn>()
@@ -166,8 +173,14 @@ export class BridgeTransport {
     if (!queue || queue.length === 0) return
     const bridge = this.bridges.get(sessionId)
     if (!bridge) return
-    process.stderr.write(`daemon: flushing ${queue.length} queued message(s) for ${sessionId}\n`)
-    for (const msg of queue) {
+    // What was queued (while the session started, or before a daemon restart) is held to the same rule as a new message: if the
+    // session's policy no longer matches hydra.toml, its messages are dropped (the thread is told why and the remedy), the rest goes.
+    const info = registry.get(sessionId)
+    const refused = info?.adapter ? flushGate?.(info) : undefined
+    const sendable = refused ? queue.filter(m => m.type !== 'notification') : queue
+    if (refused) process.stderr.write(`daemon: dropped ${queue.length - sendable.length} queued message(s) for ${sessionId}: ${refused}\n`)
+    process.stderr.write(`daemon: flushing ${sendable.length} queued message(s) for ${sessionId}\n`)
+    for (const msg of sendable) {
       this.sendToBridge(bridge, msg)
     }
     this.messageQueues.delete(sessionId)

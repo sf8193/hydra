@@ -1,3 +1,4 @@
+import { deliveryRefusal } from '../scope.js'
 // daemon/engines/codex-engine-adapter.ts
 //
 // Codex engine adapter — wraps the CodexEngine (app-server + unix socket)
@@ -10,6 +11,7 @@ import { join } from 'path'
 import { codexSpawnEnv } from '../../shared/spawn-env.js'
 import { registry, type SessionInfo } from '../sessions.js'
 import type { BlockingState } from '../pane-probe.js'
+import { ENGINE_CAPABILITIES } from '../../shared/engine-capabilities.js'
 import type {
   EngineAdapter, LaunchInput, LaunchResult,
   DeliveryMode, DeliveryResult, Notification,
@@ -58,6 +60,7 @@ export function resumeHomeOwner(records: Iterable<SessionInfo>, resumeCodex: { h
 export const codexLaunchProcess = { registerMcp: registerCodexMcp, start: startCodexAppServer, stop: stopCodexAppServer }
 
 export class CodexEngineAdapter implements EngineAdapter {
+  readonly confinesAccess = ENGINE_CAPABILITIES.codex.confinesAccess
   // Tests shorten these; production uses the defaults.
   static COMPOSER_DEADLINE_MS = 5000
   static COMPOSER_POLL_MS = 100
@@ -142,6 +145,8 @@ export class CodexEngineAdapter implements EngineAdapter {
   }
 
   async launch(input: LaunchInput): Promise<LaunchResult> {
+    // This engine cannot confine a session (confinesAccess); it would run one as the operator.
+    if (input.policy?.access === 'workdir') throw new Error(`specialist ${input.policy.specialist} has access = "workdir", which this engine cannot give: set engine = "claude", or set access = "operator"`)
     const { sessionId, tmuxName, model, prompt, resumeCodex } = input
     // Resume reuses the ORIGINAL home: the rollout lives there, and a fresh home cannot see it.
     const codexHomeName = resumeCodex?.homeName ?? tmuxName
@@ -197,6 +202,9 @@ export class CodexEngineAdapter implements EngineAdapter {
 
   // Every delivery is a priced turn, so the intents decide whether it gets one.
   deliver(info: SessionInfo, msg: Notification): Promise<DeliveryResult> {
+    // The one drift gate every engine's deliver passes (Claude's, and omp's through it): a session whose policy no longer matches hydra.toml is not delivered to.
+    const refused = deliveryRefusal(info)
+    if (refused) return Promise.resolve({ status: 'rejected', retryable: false, reason: refused })
     if (msg.optional === true) return Promise.resolve({ status: 'rejected', retryable: false, reason: 'optional delivery dropped for codex' })
     // Accepting into a dead session's queue would lose it silently.
     if (!this.isAlive(info)) return Promise.resolve({ status: 'rejected', retryable: false, reason: 'session is dead — resume or respawn' })

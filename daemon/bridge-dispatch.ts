@@ -16,13 +16,13 @@ import { formatContextPercent } from './engines/engine-adapter.js'
 import { resolveEngine } from './engines/instances.js'
 import { dispatchAdvance, finishPrivateProtocolChildLaunch, isProtocolParticipant, markPrivateProtocolChildLaunching, protocolChildRequiresPrivate, protocolSpawnRequiresPrivate, registerProtocolChild, registerProtocolChildResult } from './protocol-registry.js'
 import { watchPr, unwatchPr, listWatches, getWatchesBySession, formatWatchEntry, detectPrUrl, WATCH_ERRORS } from '../connectors/github/pr-watch.js'
-import { bindConversation, unbindConversation, formatConversationsFor, replyInConversation } from '../connectors/slack/runtime.js'
+import { bindConversation, unbindConversation, formatConversationsFor, replyInConversation, conversationBelongsTo } from '../connectors/slack/runtime.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { refreshDashboard } from './dashboard.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './artifacts.js'
 import { fetchPrTitle, parsePrUrl } from '../connectors/github/pr-watch.js'
 import { ASK_PREDECESSOR_TIMEOUT_MS, normalizeReviewRounds, resolveCodexModelAlias, resolveOmpModelAlias } from '../shared/constants.js'
-import { isToolAllowed, predecessorAsker } from './tool-surface.js'
+import { isScopedSession, isToolAllowed, predecessorAsker, refusalText } from './tool-surface.js'
 import { parseRateLimits, reportUsage } from './usage-alerts.js'
 import { markYourTurn } from './home-status.js'
 
@@ -146,13 +146,39 @@ const handoffChecksInFlight = new Set<string>()
 
 const askingPredecessor = new Set<string>()  // session ids with an ask_predecessor fork running
 
+/** The argument that names where a scoped session's tool acts, by tool. */
+const SCOPED_PLACE_ARG: Readonly<Record<string, string>> = {
+  reply: 'chat_id', react: 'chat_id', edit_message: 'chat_id', delete_message: 'chat_id', download_attachment: 'chat_id', fetch_messages: 'channel',
+}
+
+/**
+ * Why a scoped session may not make this call, or undefined. The tools it keeps work only where it speaks: its own session
+ * thread, or a Slack conversation bound to its specialist (not its home channel: `escalate` is how it speaks there). It never posts files.
+ * isToolAllowed has already refused the tools it does not keep.
+ */
+export function scopedRefusal(callerSessionId: string, name: string, args: Record<string, unknown>): string | undefined {
+  if (name === 'set_description') return args.session_id === callerSessionId ? undefined : "set_description: a scoped session describes only itself; session_id must be this session's own"
+  if (name === 'reply' && Array.isArray(args.files) && args.files.length) return 'reply: a scoped session posts text only, so remove files (attachments are not sent)'
+  const arg = SCOPED_PLACE_ARG[name]
+  const target = arg ? args[arg] : undefined
+  const own = registry.get(callerSessionId)
+  if (typeof target === 'string' && ((!!own && target === own.threadId) || conversationBelongsTo(callerSessionId, target))) return undefined
+  if (typeof target !== 'string' || !target) return `${name}: ${arg ?? 'chat_id'} is required: pass the ${arg ?? 'chat_id'} of ${arg === 'channel' ? 'the conversation you are reading' : 'the message you are answering'}`
+  return `${name}: ${arg} ${target} is not this session's own conversation; a scoped session acts only in its own thread or in a Slack conversation bound to its specialist`
+}
+
 export async function executeTool(name: string, args: Record<string, unknown>, callerSessionId?: string): Promise<ToolResult> {
   try {
     // Bridge-server enforces this at the socket boundary. Keep the dispatcher
     // fail-closed too: Codex advertises phase-scoped tools statically, and tests
     // or future callers may invoke executeTool without crossing bridge-server.
     if (callerSessionId && !isToolAllowed(callerSessionId, name)) {
-      throw new Error(`${name} is not available to this session`)
+      throw new Error(refusalText(callerSessionId, name))
+    }
+    // A scoped session keeps the tools it has only for its own conversation.
+    if (callerSessionId && isScopedSession(callerSessionId)) {
+      const refusal = scopedRefusal(callerSessionId, name, args)
+      if (refusal) throw new Error(refusal)
     }
     // A private protocol helper must not bypass send_to_thread's visibility
     // policy through another gateway-mutating tool. Keep this centralized so
@@ -814,7 +840,8 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     return {
-      content: [{ type: 'text', text: `${name} failed: ${msg}` }],
+      // A refusal already starts with the tool's name: not said twice.
+      content: [{ type: 'text', text: msg.startsWith(`${name} `) || msg.startsWith(`${name}:`) ? msg : `${name} failed: ${msg}` }],
       isError: true,
     }
   }

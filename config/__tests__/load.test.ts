@@ -2,18 +2,20 @@ import { describe, test, expect } from 'bun:test'
 import { loadHydraConfig, VITALS_DEFAULTS } from '../load.js'
 import { SLACK_APP_DEFAULTS } from '../../connectors/slack/app.js'
 import { defaultSlackApp, type HydraConfig, type LoadEnv, type LoadResult } from '../types.js'
+import { testLoadEnv } from './load-env.js'
 
-const env: LoadEnv = {
+const env: LoadEnv = testLoadEnv({
   home: '/home/op',
   isDir: p => ['/home/op', '/home/op/agents/ops', '/home/op/agents/crm', '/home/op/agents/desk', '/srv/review'].includes(p),
   isCommand: c => c === '/home/op/bin/guard' || c === 'bun',
   sessionNames: ['spark', 'glyph'],
-}
+})
 
 const ok = (text: string): { config: HydraConfig; warnings: string[] } => {
   const r = loadHydraConfig(text, env)
   if (!r.ok) throw new Error(`expected a load, got:\n${r.errors.map(e => `${e.path}: ${e.message}`).join('\n')}`)
-  return { config: r.config, warnings: r.warnings.map(w => `${w.path}: ${w.message}`) }
+  // The reachability warning (specialists.<id>: ... reach the operator's account) has its own tests, in access.test.ts.
+  return { config: r.config, warnings: r.warnings.filter(w => !w.message.includes("the operator's account")).map(w => `${w.path}: ${w.message}`) }
 }
 const errorsOf = (text: string): string[] => {
   const r: LoadResult = loadHydraConfig(text, env)
@@ -93,7 +95,7 @@ timeout = "2s"
     expect(config.people.alice.name).toBe('Alice')
     expect(config.specialists.crm).toEqual({
       id: 'crm', workdir: '/home/op/agents/crm', prompt: '/orient crm', listens: ['slack:#help'], allow: ['staff'],
-      sessions: 'per-conversation', max: 5, idleMs: 4 * 3_600_000, was: [],
+      sessions: 'per-conversation', max: 5, idleMs: 4 * 3_600_000, was: [], access: 'operator',
     })
     // Its own prompt_file replaces the default prompt; a relative prompt_file is under the workdir.
     expect(config.specialists.ops).toMatchObject({ promptFile: '/home/op/agents/ops/kickoff.md', allow: [], engine: 'codex', was: ['old-ops'], sessions: 'shared', max: 20 })

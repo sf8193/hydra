@@ -41,11 +41,26 @@ export function sessionCapabilities(info: Pick<SessionInfo, 'capabilities' | 'en
   return caps
 }
 
+/**
+ * Session ids whose bridge declared `scoped` when it registered (HYDRA_SESSION_TYPE, set by the launch). A bridge can only
+ * narrow itself this way: a declaration of `scoped` is believed whether or not the registry knows the id, and never undone.
+ */
+const declaredScoped = new Set<string>()
+
+/** Records what a registering bridge says it is. Only `scoped` matters: the one declaration that takes tools away. */
+export function noteDeclaredSessionType(sessionId: string, declared: unknown): void {
+  if (declared === 'scoped' && sessionId !== 'main') declaredScoped.add(sessionId)
+}
+
+/** Whether this session runs as a scoped specialist: its record says so, or its bridge declared it (an unregistered id never falls back to a wider surface). */
+export const isScopedSession = (sessionId: string): boolean => declaredScoped.has(sessionId) || registry.get(sessionId)?.sessionType === 'scoped'
+
 export function getToolsForSession(sessionId: string): SessionTool[] {
   if (sessionId === 'main') {
     return computeToolsForSession('master_orchestrator', new Set<Capability>(['main_handoff']))
   }
   const info = registry.get(sessionId)
+  if (isScopedSession(sessionId)) return computeToolsForSession('scoped', new Set(), { descriptions: info?.toolDescriptions, inputSchemas: info?.toolInputSchemas })
   if (!info) {
     process.stderr.write(`daemon: getToolsForSession: no registry entry for ${sessionId}, using thread_owner defaults\n`)
     return computeToolsForSession('thread_owner', new Set())
@@ -65,6 +80,8 @@ export function isToolAllowed(sessionId: string, toolName: string): boolean {
   if (sessionId === 'main') {
     return BASE_TOOLS.master_orchestrator.has(toolName) || ALL_CAPABILITY_TOOLS.main_handoff.has(toolName)
   }
+  // Before the registry lookup: a scoped caller whose record is missing must not be handed thread_owner's tools.
+  if (isScopedSession(sessionId)) return BASE_TOOLS.scoped.has(toolName)
   const info = registry.get(sessionId)
   if (!info) return BASE_TOOLS.thread_owner.has(toolName)
   if (BASE_TOOLS[info.sessionType].has(toolName)) return true
@@ -72,6 +89,13 @@ export function isToolAllowed(sessionId: string, toolName: string): boolean {
     if (ALL_CAPABILITY_TOOLS[cap]?.has(toolName)) return true
   }
   return false
+}
+
+/** What a refused tool call says: a scoped session is told what it has, anyone else the plain refusal. */
+export function refusalText(sessionId: string, name: string): string {
+  return isScopedSession(sessionId)
+    ? `${name} is not available to a scoped session: it has set_description (on itself) and, each only in its own conversation, ${[...BASE_TOOLS.scoped].filter(t => t !== 'set_description').join(', ')}`
+    : `${name} is not available to this session`
 }
 
 export function pushToolSurface(sessionId: string): void {

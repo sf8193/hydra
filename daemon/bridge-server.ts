@@ -10,7 +10,8 @@ import { pendingPermissions } from './permission.js'
 import { discoverClaudeSessionId, killSession } from './session-lifecycle.js'
 import { loadAccess, operatorIds } from './access.js'
 import { dispatchReconnect, dispatchSessionReply, dispatchDisconnect } from './protocol-registry.js'
-import { getToolsForSession, isToolAllowed } from './tool-surface.js'
+import './scope.js'   // registers the queue-flush gate on the transport
+import { getToolsForSession, isToolAllowed, noteDeclaredSessionType, refusalText } from './tool-surface.js'
 import { getProtocolContext } from './protocol-runner.js'
 import { maybeNudgeMissingAdvance } from './advance-nudge.js'
 import { clearPendingReply, settlePendingOnReact, notePendingFromQueue } from './reply-guard.js'
@@ -263,6 +264,8 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
         try { existing.socket.end() } catch {}
       }
 
+      // Only a registration that was accepted may declare: a refused newcomer must not narrow the session it was refused for.
+      noteDeclaredSessionType(sessionId, msg.sessionType)
       transport.set(sessionId, conn)
       const tools = getToolsForSession(sessionId)
       transport.sendToBridge(conn, {
@@ -307,7 +310,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
         transport.sendToBridge(conn, {
           type: 'tool_result',
           id,
-          content: [{ type: 'text', text: `${name} is not available to this session` }],
+          content: [{ type: 'text', text: refusalText(conn.sessionId ?? '', name) }],
           isError: true,
         })
         return

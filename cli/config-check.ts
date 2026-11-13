@@ -13,7 +13,7 @@ export function configCheckCommand(platformArg: string | undefined, stateDirOpt:
   const platform = platformArg ?? (['discord', 'slack'].includes(basename(stateDir)) ? basename(stateDir) : cfg.platform)
   const path = join(stateDir, 'hydra.toml')
   if (!existsSync(path)) { console.log(`${path}: none (the old files still apply)`); return 0 }
-  const r = loadHydraConfig(readFileSync(path, 'utf8'), systemEnv(SESSION_NAMES))
+  const r = loadHydraConfig(readFileSync(path, 'utf8'), systemEnv(SESSION_NAMES, stateDir, cfg.configDir))
   if (!r.ok) {
     console.log(`${path}: doesn't load; a running daemon keeps its last good config\n${formatIssues(r.errors)}`)
     if (r.warnings.length) console.log(formatIssues(r.warnings))

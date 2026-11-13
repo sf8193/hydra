@@ -24,14 +24,16 @@ export function slackCommand(args: string[], stateDirOpt: string | undefined): n
     return 1
   }
   const name = args[1]
-  const path = join(stateDirOpt ?? resolveConfig().stateDir, 'hydra.toml')
+  const cfg = stateDirOpt ? undefined : resolveConfig()
+  const stateDir = stateDirOpt ?? cfg!.stateDir
+  const path = join(stateDir, 'hydra.toml')
   if (!existsSync(path)) {
     if (name) { console.error(`${path}: none, so there is no app named ${name}`); return 1 }
     console.error(`${path}: none, so the app gets the default name and description and no user scopes`)
     process.stdout.write(slackManifest(undefined))
     return 0
   }
-  const r = loadHydraConfig(readFileSync(path, 'utf8'), systemEnv(SESSION_NAMES))
+  const r = loadHydraConfig(readFileSync(path, 'utf8'), systemEnv(SESSION_NAMES, stateDir, cfg?.configDir))
   if (!r.ok) {
     console.error(`${path}: doesn't load, so no manifest\n${formatIssues(r.errors)}`)
     return 1

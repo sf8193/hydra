@@ -22,6 +22,7 @@ import { resolveEngine } from './engines/instances.js'
 import type { ProviderId } from './engines/engine-adapter.js'
 import { activeBackoff, clearBackoff, recordFailure, type Backoff } from './recovery-backoff.js'
 import { targetKeyForThread, withThreadLock } from '../specialists/specialists.js'
+import { PolicyRefusal } from './scope.js'
 import type { InboundMessage } from '../gateway.js'
 
 // ---------------------------------------------------------------------------
@@ -66,6 +67,8 @@ export type ReviveRequest = {
   reuseName?: boolean
   initiator?: string
   trigger?: string
+  /** The specialist the revived session acts for (its id): its scope decides whether the old conversation may be resumed. Absent: the dead session's, else the one whose thread this is. */
+  specialist?: string
   /** Back-off key (a specialist name, or the thread id): refuse while it backs off, and count a failure toward it. */
   backoffKey?: string
   /** An operator asking by hand: not held back by the back-off (a failure still counts). */
@@ -112,12 +115,20 @@ export async function reviveThread(req: ReviveRequest): Promise<ReviveOutcome> {
   const claudeSessionId = entry?.claudeSessionId ?? dead?.claudeSessionId
   // The `respawn` command is a fresh start: it carries no restrictions, parent or launch dir from the dead session.
   const carried = dead && !req.respawnOnly ? carryOver(dead) : undefined
+  // What the launch policy is read from when no record is left (a kill deleted it): the history entry's. Carried even by `respawn`,
+  // which carries no restrictions: a confined thread whose specialist can no longer be resolved refuses, whichever way it is revived.
+  const carriedPolicy = dead?.policy ?? entry?.policy
+  const carriedOut = carried || carriedPolicy ? { ...carried, ...(carriedPolicy && { policy: carriedPolicy }), sessionName: lastTmuxName } : undefined
   // A worktree still on disk is kept on every tier and into a new thread; boot recovery reattaches a missing one first.
   const worktree = dead?.worktreeRepo && dead.worktreePath && existsSync(dead.worktreePath)
     ? { repo: dead.worktreeRepo, path: dead.worktreePath, branch: dead.worktreeBranch ?? `wt/${dead.tmuxName}` }
     : undefined
   const keep = worktree ? { preserveWorktree: true, reuseWorktree: worktree } : {}
   const named = req.name ? { name: req.name } : {}
+  // Whom the revived session acts for is passed through (a fill names it); its launch policy is decided, and a conversation born under
+  // another policy refused, in one place: doSpawnSession. A resume or fork that policy refuses fails there, and the cascade moves on
+  // to the respawn tier, which is a new birth.
+  const acting = req.specialist !== undefined ? { specialist: req.specialist } : {}
   const origin = { ...(req.initiator && { initiator: req.initiator }), ...(req.trigger && { trigger: req.trigger }) }
 
   // Hold the worktree branch's base name for the whole cascade, so a concurrent spawn can't pick it (freed when
@@ -130,6 +141,7 @@ export async function reviveThread(req: ReviveRequest): Promise<ReviveOutcome> {
   const reservedBranch = reservedName !== undefined && reserve(reservedName)
   let busy = false
   let lastError: string | undefined
+  let lastRefused = false   // the last tier failed with a refusal hydra.toml caused (a policy that cannot be read or satisfied), not a fault
   let revived: Extract<ReviveOutcome, { ok: true }> | undefined
   try {
     revived = req.newThreadIn ? await respawnInNewThread(req.newThreadIn) : await cascade()
@@ -153,7 +165,8 @@ export async function reviveThread(req: ReviveRequest): Promise<ReviveOutcome> {
     registry.persist()
     process.stderr.write(`daemon: revive ${lastTmuxName}: all tiers failed — restored the dead record\n`)
   }
-  const backoff = req.backoffKey ? recordFailure(req.backoffKey, lastError ?? 'all recovery methods failed') : undefined
+  // A refusal hydra.toml caused is not a failure to back off from: once the operator fixes the config, the next revive must run.
+  const backoff = req.backoffKey && !lastRefused ? recordFailure(req.backoffKey, lastError ?? 'all recovery methods failed') : undefined
   return { ok: false, lastTmuxName, reason: lastError ? `start failed: ${lastError}` : 'all recovery methods failed', ...(backoff && { backoff }) }
 
   function ok(result: SpawnResult & { bridgeOrphan?: boolean }, method: ReviveMethod): Extract<ReviveOutcome, { ok: true }> {
@@ -169,7 +182,7 @@ export async function reviveThread(req: ReviveRequest): Promise<ReviveOutcome> {
     })
     const prefix = req.promptPrefix ?? RECOVERY_REVERIFY_GUARD
     // The `respawn` command hands the dead session's bucket down (a template or a flag on the topic wins); a revive keeps it.
-    const shared = { engine, ...(req.respawnOnly ? { inheritedLabel: label } : { label }), ...(carried && { carryOver: carried }), ...keep, ...named, ...origin }
+    const shared = { engine, ...(req.respawnOnly ? { inheritedLabel: label } : { label }), ...(carriedOut && { carryOver: carriedOut }), ...keep, ...named, ...acting, ...origin }
     const common = { model, ...shared }
 
     // The gate reads both ids (PINNED R9: a mixed-ID record logs both tier failures, then respawns).
@@ -179,8 +192,8 @@ export async function reviveThread(req: ReviveRequest): Promise<ReviveOutcome> {
       if (r?.kind === 'await-bridge') {
         result = await recoveryDeps.tryResume({
           topic: thread.topic, threadId: thread.threadId, claudeSessionId: r.resumeFrom, threadUrl: thread.threadUrl, model, label,
-          ...(req.reuseName && { reuseName: lastTmuxName }), ...named,
-          ...(worktree && { worktree, preserveWorktree: true }), ...(carried && { carryOver: carried }),
+          ...(req.reuseName && { reuseName: lastTmuxName }), ...named, ...acting,
+          ...(worktree && { worktree, preserveWorktree: true }), ...(carriedOut && { carryOver: carriedOut }),
         })
       } else if (r && 'resumeOmp' in r) {
         // The reservation is the lock: two resumes of one dead session would each copy its file into a live session.
@@ -193,7 +206,7 @@ export async function reviveThread(req: ReviveRequest): Promise<ReviveOutcome> {
           })
         } catch (err) {
           process.stderr.write(`daemon: omp resume of session ${from} failed: ${err}\n`)
-          lastError = errorText(err)
+          lastError = errorText(err); lastRefused = err instanceof PolicyRefusal
         } finally {
           if (held) registry.reservedNames.delete(from)
         }
@@ -209,7 +222,7 @@ export async function reviveThread(req: ReviveRequest): Promise<ReviveOutcome> {
           })
         } catch (err) {
           process.stderr.write(`daemon: codex resume of ${r.resumeCodex.threadId} in home ${home} failed: ${err}\n`)
-          lastError = errorText(err)
+          lastError = errorText(err); lastRefused = err instanceof PolicyRefusal
         } finally {
           if (held) registry.reservedNames.delete(home)
         }
@@ -223,7 +236,7 @@ export async function reviveThread(req: ReviveRequest): Promise<ReviveOutcome> {
           ...common, existingThreadId: thread.threadId, forkFrom: plan.fork, ...(req.promptPrefix && { promptPrefix: req.promptPrefix }),
         }), 'forked')
       } catch (err) {
-        lastError = errorText(err)
+        lastError = errorText(err); lastRefused = err instanceof PolicyRefusal
         process.stderr.write(`daemon: resume tier 2 (fork-from-dead) failed for ${lastTmuxName}, falling back to respawn\n`)
       }
     }
@@ -234,7 +247,7 @@ export async function reviveThread(req: ReviveRequest): Promise<ReviveOutcome> {
       })
       if (result) return ok(result, 'respawned')
     } catch (err) {
-      lastError = errorText(err)
+      lastError = errorText(err); lastRefused = err instanceof PolicyRefusal
       process.stderr.write(`daemon: revive tier 3 (respawn) failed for ${lastTmuxName}: ${lastError}\n`)
     }
     return undefined
@@ -246,10 +259,10 @@ export async function reviveThread(req: ReviveRequest): Promise<ReviveOutcome> {
         ? `[system] Your previous thread (${thread.threadId}) is gone, so this is a new one; its history cannot be read here.\n\n${respawnTopic()}`
         : respawnTopic()
       return ok(await recoveryDeps.doSpawnSession(prompt, channel, undefined, {
-        model, engine, label, carryOver: carried, ...keep, ...named, ...origin, ...(req.cwd && { cwd: req.cwd }),
+        model, engine, label, carryOver: carriedOut, ...keep, ...named, ...acting, ...origin, ...(req.cwd && { cwd: req.cwd }),
       }), 'respawned')
     } catch (err) {
-      lastError = errorText(err)
+      lastError = errorText(err); lastRefused = err instanceof PolicyRefusal
       process.stderr.write(`daemon: revive ${lastTmuxName}: a new thread in ${channel} failed: ${lastError}\n`)
       return undefined
     }

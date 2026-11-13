@@ -7,6 +7,7 @@
 import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'fs'
 import { join } from 'path'
 import type { SessionInfo } from '../sessions.js'
+import { ENGINE_CAPABILITIES } from '../../shared/engine-capabilities.js'
 import type {
   EngineAdapter, LaunchInput, LaunchResult, DeliveryResult, Notification, StopResult,
   ContextUsage, RecoveryPlan, RecoverySource, Turn, UsageReading, UsageSubject,
@@ -25,6 +26,7 @@ const OMP_CONFIG = join(import.meta.dir, '..', '..', 'omp', 'hydra-omp.yml')
 const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
 
 export class OmpEngine implements EngineAdapter {
+  readonly confinesAccess = ENGINE_CAPABILITIES.omp.confinesAccess
   readonly provider = 'omp' as const
   readonly channel = 'bridge' as const
   constructor(private readonly claude: ClaudeEngine) {}
@@ -32,6 +34,8 @@ export class OmpEngine implements EngineAdapter {
   async start(_records: readonly SessionInfo[]): Promise<void> {}
 
   async launch(input: LaunchInput): Promise<LaunchResult> {
+    // This engine cannot confine a session (confinesAccess); it would run one as the operator.
+    if (input.policy?.access === 'workdir') throw new Error(`specialist ${input.policy.specialist} has access = "workdir", which this engine cannot give: set engine = "claude", or set access = "operator"`)
     const { sessionId, tmuxName, model } = input
     // CLAUDE_CONFIG_DIR unset and the claude providers disabled (OMP_CONFIG): omp must not load Claude's plugins or a cwd .mcp.json.
     const stderrLog = join(SPAWN_LOGS_DIR, `stderr-${tmuxName}-${sessionId}.log`)

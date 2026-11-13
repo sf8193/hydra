@@ -1,10 +1,13 @@
 import { describe, test, expect, afterEach } from 'bun:test'
-import { rmSync, writeFileSync } from 'fs'
+import { mkdirSync, rmSync, writeFileSync } from 'fs'
+import { join } from 'path'
+import { CLAUDE_CONFIG, STATE_DIR } from '../config.js'
 import { _setHydraConfigForTesting, currentHydraConfig, hydraConfigPath, onHydraConfigLoad, retryHydraConfigAlert, startHydraConfig, stopHydraConfig } from '../hydra-config.js'
 import { _resetScrubbedForTesting, capturedSpawnVars, scrubbedSpawnEnv } from '../../shared/spawn-env.js'
 import type { LoadEnv } from '../../config/types.js'
+import { testLoadEnv } from '../../config/__tests__/load-env.js'
 
-const env: LoadEnv = { home: '/home/op', isDir: () => true, isCommand: () => true, sessionNames: [] }
+const env: LoadEnv = testLoadEnv({ home: '/home/op', sessionNames: [] })
 // Discord addresses: the suite runs as the discord platform, and an operator with none there is alerted.
 const config = (op: string) => `operator = "${op}"\n[people.${op}]\nids = ["discord:${[...op].map(c => c.charCodeAt(0)).join('')}"]\n`
 
@@ -105,6 +108,35 @@ describe('the daemon\'s live hydra.toml', () => {
     } finally {
       process.stderr.write = write
     }
+  })
+
+  test('a good load logs each specialist\'s effective access', () => {
+    const lines: string[] = []
+    const write = process.stderr.write
+    process.stderr.write = ((t: string) => { lines.push(String(t)); return true }) as typeof process.stderr.write
+    try {
+      writeFileSync(hydraConfigPath(), config('op') + '[specialists.ops]\nworkdir = "/tmp"\nallow = []\n[specialists.desk]\nworkdir = "/tmp"\nallow = []\naccess = "workdir"\n')
+      startHydraConfig({ env })
+      expect(lines.filter(l => l.includes('access ='))).toEqual(['daemon: hydra.toml: specialist ops access = operator\n', 'daemon: hydra.toml: specialist desk access = workdir (tools Read,Grep,Glob; mcp none)\n'])
+    } finally {
+      process.stderr.write = write
+    }
+  })
+
+  test("the daemon's own load knows its state dir: a workdir inside it is refused (no test env passed)", () => {
+    mkdirSync(join(STATE_DIR, 'inside'), { recursive: true })
+    writeFileSync(hydraConfigPath(), config('op') + `[specialists.ops]\nworkdir = "${join(STATE_DIR, 'inside')}"\nallow = []\naccess = "workdir"\n`)
+    const r = startHydraConfig()
+    expect(r.ok).toBe(false)
+    expect(!r.ok && r.errors.map(e => e.message).join('\n')).toContain(`is inside the state folder ${STATE_DIR}`)
+  })
+
+  test("and Claude's config folder, as the daemon's sessions get it, is private too", () => {
+    mkdirSync(join(CLAUDE_CONFIG, 'projects-x'), { recursive: true })
+    writeFileSync(hydraConfigPath(), config('op') + `[specialists.ops]\nworkdir = "${join(CLAUDE_CONFIG, 'projects-x')}"\nallow = []\naccess = "workdir"\n`)
+    const r = startHydraConfig()
+    expect(r.ok).toBe(false)
+    expect(!r.ok && r.errors.map(e => e.message).join('\n')).toContain('CLAUDE_CONFIG_DIR')
   })
 
   test('a test can stand in for the file, and subscribers hear it', () => {

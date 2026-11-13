@@ -74,7 +74,7 @@ export function cliSchedules(stateDir: string): { jobs: Job[]; from: string } | 
   let text = ''
   try { text = readFileSync(file, 'utf8') } catch {}
   // The daemon's own session names aren't known here; a specialist that takes one is refused by the daemon's load.
-  const r = loadHydraConfig(text, systemEnv([]))
+  const r = loadHydraConfig(text, systemEnv([], stateDir))
   if (r.ok) return { jobs: jobsFromSchedules(r.config), from: 'read from hydra.toml (newer than the daemon\'s record)' }
   if (state.scheduleJobs) return { jobs: state.scheduleJobs, from: 'as the daemon last loaded them (hydra.toml does not load)' }
   return { error: `hydra.toml does not load:\n${formatIssues(r.errors)}` }
