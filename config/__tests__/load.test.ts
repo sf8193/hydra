@@ -101,7 +101,7 @@ timeout = "2s"
     expect(config.specialists.ops).toMatchObject({ promptFile: '/home/op/agents/ops/kickoff.md', allow: [], engine: 'codex', was: ['old-ops'], sessions: 'shared', max: 20 })
     expect(config.specialists.ops.prompt).toBeUndefined()
     expect(config.specialists.review.allow).toEqual(['people'])
-    expect(config.places['slack:#help']).toEqual({ ack: 'eyes', files: false, listen: 'all', bots: false })
+    expect(config.places['slack:#help']).toEqual({ ack: 'eyes', files: false, listen: 'all', bots: false, linkPreviews: true })
     expect(config.schedules.nightly).toEqual({ id: 'nightly', cron: '0 3 * * *', to: 'ops', prompt: 'Nightly run.', runner: 'launchd' })
     expect(config.rules).toEqual([{ at: 'slack:#help', from: 'alice', to: 'ops' }])
     expect(config.guard).toEqual({ command: '~/bin/guard --strict', timeoutMs: 2000, includeText: false, owedMaxMs: 3_600_000 })

@@ -169,7 +169,7 @@ describe('specialists', () => {
     test('a tools-only change refuses too', async () => {
       const name = nameOf()
       configure(name, { access: 'workdir', tools: ['Read', 'Grep', 'Glob'], mcp: [] })
-      const sid = occupy('thread-scope-2', { policy: bornPolicy(name), sessionType: 'scoped', adapter: gated() })
+      const sid = occupy('thread-scope-2', { policy: bornPolicy(name), sessionType: 'scoped', verified: true, adapter: gated() })
       setSpecialistThread(name, 'thread-scope-2')
       expect((await deliver(name)).ok).toBe(true)                                  // same scope: delivered
       configure(name, { access: 'workdir', tools: ['Read'], mcp: [] })
@@ -183,7 +183,7 @@ describe('specialists', () => {
     test('an mcp-only change refuses too', async () => {
       const name = nameOf()
       configure(name, { access: 'workdir', tools: ['Read'], mcp: ['datadog'] })
-      const sid = occupy('thread-scope-3', { policy: bornPolicy(name), sessionType: 'scoped', adapter: gated() })
+      const sid = occupy('thread-scope-3', { policy: bornPolicy(name), sessionType: 'scoped', verified: true, adapter: gated() })
       setSpecialistThread(name, 'thread-scope-3')
       expect((await deliver(name)).ok).toBe(true)
       configure(name, { access: 'workdir', tools: ['Read'], mcp: ['datadog', 'loki'] })
@@ -196,7 +196,7 @@ describe('specialists', () => {
     test('a listed server gaining a tool: the refusal and the thread say what changed (the old and new tools differ in the words)', async () => {
       const name = nameOf()
       configure(name, { access: 'workdir', tools: ['Read'], mcp: ['datadog'] })
-      const sid = occupy('thread-scope-7', { policy: bornPolicy(name), sessionType: 'scoped', adapter: gated() })
+      const sid = occupy('thread-scope-7', { policy: bornPolicy(name), sessionType: 'scoped', verified: true, adapter: gated() })
       setSpecialistThread(name, 'thread-scope-7')
       _setHydraConfigForTesting({ ...currentHydraConfig(), mcpServers: { ...MCP, datadog: { ...MCP.datadog, tools: ['search_logs', 'get_monitor'] } } })
       const r = await quiet(() => deliver(name, { idempotencyKey: `scope-k-${++n}` }))
@@ -211,7 +211,7 @@ describe('specialists', () => {
     test('workdir back to operator refuses as well (the session still holds the narrower scope)', async () => {
       const name = nameOf()
       configure(name, { access: 'workdir', tools: ['Read'], mcp: [] })
-      const sid = occupy('thread-scope-4', { policy: bornPolicy(name), sessionType: 'scoped', adapter: gated() })
+      const sid = occupy('thread-scope-4', { policy: bornPolicy(name), sessionType: 'scoped', verified: true, adapter: gated() })
       setSpecialistThread(name, 'thread-scope-4')
       configure(name, { access: 'operator' })
       const r = await quiet(() => deliver(name, { idempotencyKey: `scope-k-${++n}` }))
@@ -332,7 +332,7 @@ describe('specialists', () => {
       const reason = (await quiet(async () => deliveryRefusal(conv))).out
       expect(reason).toContain(`hydra kill ${name}_c1`)
       expect(reason).toContain('access = "operator"')
-      expect(deliveryRefusal({ ...conv, policy: bornPolicy(name) })).toBeUndefined()
+      expect(deliveryRefusal({ ...conv, policy: bornPolicy(name), sessionType: 'scoped', verified: true })).toBeUndefined()
     })
 
     test('an unchanged scope is never refused, and a session no specialist fills is not looked at', async () => {

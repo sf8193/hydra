@@ -95,6 +95,8 @@ export type SessionInfo = {
    * from it; birth re-checks the folder; delivery compares it with hydra.toml. Absent: no specialist fills it.
    */
   policy?: LaunchPolicy
+  /** A confined session's start was checked against its policy (engines/claude-verify.ts) and passed. Persisted. Without it a confined session takes no message (scope.ts `unverified`). */
+  verified?: true
   label?: SessionLabel
   capabilities?: Capability[]
   // Keys are subsystem-owned: protocol owns 'advance'/'extend_phase'.

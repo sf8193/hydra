@@ -14,6 +14,7 @@ import {
   ButtonBuilder,
   ButtonStyle,
   ActionRowBuilder,
+  MessageFlags,
   type Message,
   type MessageMentionOptions,
 } from 'discord.js'
@@ -21,6 +22,7 @@ import { readFileSync, writeFileSync, mkdirSync, statSync } from 'fs'
 import { sanitizeFilename, COUNT_EMOJI, SUPERSCRIPT } from './gateway.js'
 import { GatewayHealth } from './daemon/gateway-health.js'
 import { planReactionReconciliation } from './shared/reaction-reconcile.js'
+import { linkPreviewsOff } from './shared/link-previews.js'
 import type {
   ChatGateway,
   InboundMessage,
@@ -165,40 +167,7 @@ export class DiscordGateway implements ChatGateway {
       if (threadId) this.messageDeleteHandler?.(msg.id, threadId)
     })
 
-    this.client.on('interactionCreate', async interaction => {
-      if (!interaction.isButton()) return
-      if (!this.buttonClickHandler) return
-
-      this.buttonClickHandler({
-        userId: interaction.user.id,
-        customId: interaction.customId,
-        messageContent: interaction.message.content,
-        respond: async (text, buttons) => {
-          if (buttons) {
-            const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-              ...buttons.map(b => {
-                const btn = new ButtonBuilder()
-                  .setCustomId(b.id)
-                  .setLabel(b.label)
-                  .setStyle(
-                    b.style === 'success' ? ButtonStyle.Success :
-                    b.style === 'danger' ? ButtonStyle.Danger :
-                    ButtonStyle.Secondary,
-                  )
-                if (b.emoji) btn.setEmoji({ name: b.emoji })
-                return btn
-              }),
-            )
-            await interaction.update({ content: text, components: [row] }).catch(() => {})
-          } else {
-            await interaction.reply({ content: text, ephemeral: true }).catch(() => {})
-          }
-        },
-        clearButtons: async (text) => {
-          await interaction.update({ content: text, components: [] }).catch(() => {})
-        },
-      })
-    })
+    this.client.on('interactionCreate', interaction => this.handleInteraction(interaction))
 
     this.client.on('messageReactionAdd', async (reaction, user) => {
       if (!this.reactionHandler) return
@@ -359,7 +328,7 @@ export class DiscordGateway implements ChatGateway {
       payload.components = [row]
     }
 
-    const sent = await ch.send(payload)
+    const sent = await ch.send(this.previewPolicy(payload, this.previewIds(ch)))
     this.noteSent(sent.id)
     return { id: sent.id, channelId: sent.channelId }
   }
@@ -367,7 +336,8 @@ export class DiscordGateway implements ChatGateway {
   async edit(channelId: string, messageId: string, text: string): Promise<string> {
     const ch = await this.fetchTextChannel(channelId)
     const msg = await ch.messages.fetch(messageId)
-    const edited = await msg.edit(text)
+    // An edit re-embeds links unless it says again that the place wants none.
+    const edited = await (linkPreviewsOff('discord', this.previewIds(ch)) ? msg.edit({ content: text, flags: MessageFlags.SuppressEmbeds }) : msg.edit(text))
     return edited.id
   }
 
@@ -485,10 +455,10 @@ export class DiscordGateway implements ChatGateway {
           }
         }
       }
-      const sent = await thread.send({
+      const sent = await thread.send(this.previewPolicy({
         content: opts.text,
         ...(opts?.files?.length ? { files: opts.files } : {}),
-      })
+      }, [thread.id, ...this.previewIds(ch)]))
       this.noteSent(sent.id)
       messageId = sent.id
     }
@@ -550,7 +520,7 @@ export class DiscordGateway implements ChatGateway {
       )
       payload.components = [row]
     }
-    await user.send(payload)
+    await user.send(this.previewPolicy(payload, ['dm']))
   }
 
   async isMentioned(msg: InboundMessage, extraPatterns?: string[]): Promise<boolean> {
@@ -729,6 +699,57 @@ export class DiscordGateway implements ChatGateway {
     } catch {
       return null
     }
+  }
+
+  /** A button click: hands it to the registered handler, whose respond and clearButtons edit or answer the message it was on. */
+  private handleInteraction(interaction: import('discord.js').Interaction): void {
+    if (!interaction.isButton()) return
+    if (!this.buttonClickHandler) return
+
+    // The message a button click edits or answers is in the same place as the message it was on: the same previews rule.
+    const ids = this.previewIds({ id: interaction.channelId ?? '', isThread: () => !!interaction.channel?.isThread?.(), parentId: (interaction.channel as { parentId?: string | null } | null)?.parentId, isDMBased: () => !!interaction.channel?.isDMBased?.() })
+    this.buttonClickHandler({
+      userId: interaction.user.id,
+      customId: interaction.customId,
+      messageContent: interaction.message.content,
+      respond: async (text, buttons) => {
+        if (buttons) {
+          const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+            ...buttons.map(b => {
+              const btn = new ButtonBuilder()
+                .setCustomId(b.id)
+                .setLabel(b.label)
+                .setStyle(
+                  b.style === 'success' ? ButtonStyle.Success :
+                  b.style === 'danger' ? ButtonStyle.Danger :
+                  ButtonStyle.Secondary,
+                )
+              if (b.emoji) btn.setEmoji({ name: b.emoji })
+              return btn
+            }),
+          )
+          await interaction.update(this.previewPolicy({ content: text, components: [row] }, ids)).catch(() => {})
+        } else {
+          await interaction.reply(this.previewPolicy({ content: text, ephemeral: true }, ids)).catch(() => {})
+        }
+      },
+      clearButtons: async (text) => {
+        await interaction.update(this.previewPolicy({ content: text, components: [] }, ids)).catch(() => {})
+      },
+    })
+  }
+
+  /** The ids a channel is a place by: itself, and for a thread its parent channel (the place a thread belongs to). */
+  private previewIds(ch: { id: string; isThread?: () => boolean; isDMBased?: () => boolean; parentId?: string | null }): string[] {
+    return [ch.id, ...(ch.isThread?.() && ch.parentId ? [ch.parentId] : []), ...(ch.isDMBased?.() ? ['dm'] : [])]
+  }
+
+  /**
+   * The one point where this gateway decides how a message is sent (send, a new thread's first message, a DM): a place that sets
+   * `link_previews = false` gets the suppress-embeds flag. `unfurl: false` from a caller is still not read here, as before.
+   */
+  private previewPolicy<T extends Record<string, unknown>>(payload: T, ids: string[]): T {
+    return linkPreviewsOff('discord', ids) ? { ...payload, flags: MessageFlags.SuppressEmbeds } : payload
   }
 
   private async fetchTextChannel(id: string) {

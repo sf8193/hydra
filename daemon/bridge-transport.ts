@@ -174,7 +174,9 @@ export class BridgeTransport {
     const bridge = this.bridges.get(sessionId)
     if (!bridge) return
     // What was queued (while the session started, or before a daemon restart) is held to the same rule as a new message: if the
-    // session's policy no longer matches hydra.toml, its messages are dropped (the thread is told why and the remedy), the rest goes.
+    // session's policy no longer matches hydra.toml, or a confined session has no `verified` marker (a queue persisted for one that
+    // was never verified, or that started before hydra verified starts), its notifications are dropped here (the thread is told why
+    // and the remedy), the rest goes. A dropped notification is not redelivered: the sender sees the thread's notice.
     const info = registry.get(sessionId)
     const refused = info?.adapter ? flushGate?.(info) : undefined
     const sendable = refused ? queue.filter(m => m.type !== 'notification') : queue

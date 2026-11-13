@@ -5,7 +5,7 @@
 // callers just call info.adapter.deliver(...) — no dispatch logic needed.
 
 import type { SessionInfo, SpawnOpts } from '../sessions.js'
-import type { LaunchPolicy } from '../scope.js'
+import type { ConfinedPolicy, LaunchPolicy } from '../scope.js'
 import type { BlockingState } from '../pane-probe.js'
 import type { PhaseTotals, TokenTotals } from '../usage.js'
 import type { LatchPhase, UsagePhase } from '../usage-phase.js'
@@ -186,6 +186,8 @@ export interface EngineAdapter {
   /** Whether this engine can run a session confined to a folder, a tool list and a server list (`access = "workdir"`). Read from shared/engine-capabilities.ts. */
   readonly confinesAccess: boolean
   launch(input: LaunchInput): Promise<LaunchResult>
+  /** A confined launch's check, from the engine's own record of what it loaded: refuse (with the cause) or pass. Absent: the engine cannot say, so it cannot run a confined session. */
+  verifyLaunch?(policy: ConfinedPolicy, launched: LaunchResult): Promise<{ ok: true } | { ok: false; why: string }>
   // Deliver one notification. Claude: strip the intents, then write to the
   // owning transport's session bridge, else enqueue there; the write is
   // synchronous (no await before it). Codex: optional → rejected; lowPriority

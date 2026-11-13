@@ -314,7 +314,7 @@ describe('two apps in one channel: exactly one owns it', () => {
   /** Route the same message as each hearing app sees it. */
   const asEach = (cfg: HydraConfig, extra: Partial<Inbound>) => Object.fromEntries((extra.heardBy ?? []).map(a => [a, route(cfg, inApp(a, extra))]))
   const owners = (r: Record<string, ReturnType<typeof route>>) => Object.entries(r).filter(([, d]) => d.fate !== 'ignored' || d.trace.every(s => s.via !== 'owner')).map(([a]) => a)
-  const placeDefault = (cfg: HydraConfig, defaultApp: string) => { cfg.places['slack:#help'] = { files: false, listen: 'mentions', bots: false, defaultApp } }
+  const placeDefault = (cfg: HydraConfig, defaultApp: string) => { cfg.places['slack:#help'] = { files: false, listen: 'mentions', bots: false, linkPreviews: true, defaultApp } }
 
   test('no tag, no default_app: the app named `default` owns it, and the other stands down', () => {
     const r = asEach(TWO, both())
@@ -347,7 +347,7 @@ describe('two apps in one channel: exactly one owns it', () => {
   })
   test('a default_app on the channel\'s id applies as on its name', () => {
     const cfg = structuredClone(TWO)
-    cfg.places['slack:C0HELP'] = { files: false, listen: 'mentions', bots: false, defaultApp: 'sales' }
+    cfg.places['slack:C0HELP'] = { files: false, listen: 'mentions', bots: false, linkPreviews: true, defaultApp: 'sales' }
     expect(owners(asEach(cfg, both()))).toEqual(['sales'])
   })
   test('a tag always wins: over default_app, `default`, and the app that opened the conversation', () => {
@@ -378,7 +378,7 @@ describe('two apps in one channel: exactly one owns it', () => {
   })
   test('a non-owner is ignored even when addressed, listen = "all", or bound: never a second answer', () => {
     const cfg = structuredClone(TWO)
-    cfg.places['slack:#help'] = { files: false, listen: 'all', bots: false }
+    cfg.places['slack:#help'] = { files: false, listen: 'all', bots: false, linkPreviews: true }
     for (const extra of [{}, { addressed: false }, { bound: 'crm', boundApp: 'default' }]) {
       const r = asEach(cfg, both(extra))
       expect(Object.values(r).filter(d => d.fate !== 'ignored').length).toBe(1)

@@ -8,6 +8,7 @@ import { SESSION_NAMES } from './sessions.js'
 import { EMPTY_CONFIG, formatIssues, systemEnv } from '../config/load.js'
 import { scrubTokenVarsNamedIn, slackEnvNames } from '../config/token-vars.js'
 import { registerSpawnVars, type SpawnVarRefusal } from '../shared/spawn-env.js'
+import { registerPreviewConfig } from '../shared/link-previews.js'
 import { watchHydraConfig, type HydraConfigWatch } from '../config/watch.js'
 import type { HydraConfig, LoadEnv, LoadResult } from '../config/types.js'
 
@@ -144,6 +145,8 @@ export function reloadHydraConfig(): void {
 export function currentHydraConfig(): HydraConfig {
   return override ?? live ?? EMPTY_CONFIG
 }
+// The gateways read `[places]` `link_previews` through this on every send (shared/link-previews.ts).
+registerPreviewConfig(currentHydraConfig)
 
 /** Tests: stand in for the file. Set, it is current and subscribers hear it; undefined goes back to the file's. */
 export function _setHydraConfigForTesting(config: HydraConfig | undefined): void {

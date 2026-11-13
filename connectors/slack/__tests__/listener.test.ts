@@ -6,7 +6,7 @@ import { SlackWatcher } from '../watch.js'
 import { hydra as load, oneListener, view, BASE } from './slack-config.js'
 import { EMPTY_CONFIG } from '../../../config/load.js'
 import type { HydraConfig } from '../../../config/types.js'
-import { SlackListener, DOWN_ALERT_AFTER_MS, implicitScopeOptions, type ToldScopes, CATCH_UP_STALE_AFTER_MS, explainSlackError, readReplies, type SlackAppLike, type RawEvent } from '../listener.js'
+import { SlackListener, postPayload, DOWN_ALERT_AFTER_MS, implicitScopeOptions, type ToldScopes, CATCH_UP_STALE_AFTER_MS, explainSlackError, readReplies, type SlackAppLike, type RawEvent } from '../listener.js'
 import type { SlackApi, RawMessage } from '../catchup.js'
 import type { SocketEmitter } from '../../../shared/socket-supervisor.js'
 import { createResumeDetector, type LastSleep } from '../../../shared/resume.js'
@@ -79,7 +79,7 @@ function setup(over: { tokens?: { app?: string; bot?: string }; toml?: string | 
         authTest: async () => ({ botId: 'BBOT', userId: BOT, url: 'https://x.slack.com/', ...(over.scopes && { scopes: over.scopes }) }),
         userName: async id => { state.nameLookups.push(id); return id === 'UB' ? 'Bea B' : undefined },
         react: async (c, ts, name) => { rec.apiCalls.push(`react:${c}:${ts}:${name}`) },
-        post: async (c, thread, text) => { rec.apiCalls.push(`post:${c}:${thread ?? '-'}:${text}`); return '9999.000001' },
+        post: async (c, thread, text, opts) => { rec.apiCalls.push(`post:${c}:${thread ?? '-'}:${text}${opts ? `:${JSON.stringify(opts)}` : ''}`); return '9999.000001' },
         download: async (url, dest) => { rec.apiCalls.push(`download:${url}`); mkdirSync(dirname(dest), { recursive: true }); writeFileSync(dest, 'bytes', { mode: 0o600 }) },
         api,
       } as SlackAppLike
@@ -252,6 +252,28 @@ describe('posting', () => {
     expect(await t.listener.post(CH, '1.000001', 'in the thread')).toBe('9999.000001')
     await t.listener.post('D0A', undefined, 'top level')
     expect(t.apps[0].apiCalls.filter(c => c.startsWith('post:'))).toEqual([`post:${CH}:1.000001:in the thread`, 'post:D0A:-:top level'])
+  })
+})
+
+describe('posting where link previews are off', () => {
+  const off = (extra = '') => oneListener(CH) + `[places."slack:${CH}"]\nlink_previews = false\n${extra}`
+  test('a post into a place with link_previews = false asks for no unfurl; a place without the option posts as before', async () => {
+    const t = setup({ toml: off() })
+    await t.listener.start()
+    await t.listener.post(CH, '1.000001', 'see https://example.com')
+    await t.listener.post('C0OTHER', undefined, 'elsewhere')
+    expect(t.apps[0].apiCalls.filter(c => c.startsWith('post:'))).toEqual([`post:${CH}:1.000001:see https://example.com:{"unfurl":false}`, 'post:C0OTHER:-:elsewhere'])
+  })
+  test('the place may be named by its channel name once the directory knows it', async () => {
+    const t = setup({ toml: oneListener('#food') + '[places."slack:#food"]\nlink_previews = false\n', channels: [{ id: CH, name: 'food' }] })
+    await t.listener.start()
+    await t.listener.post(CH, undefined, 'x')
+    expect(t.apps[0].apiCalls.filter(c => c.startsWith('post:'))).toEqual([`post:${CH}:-:x:{"unfurl":false}`])
+  })
+  test('the Slack arguments: unfurl_links and unfurl_media false with the option, and exactly today\'s arguments without it', () => {
+    expect(postPayload('C1', '1.0', 'hi', { unfurl: false })).toEqual({ channel: 'C1', text: 'hi', thread_ts: '1.0', unfurl_links: false, unfurl_media: false })
+    expect(postPayload('C1', undefined, 'hi')).toEqual({ channel: 'C1', text: 'hi' })
+    expect(postPayload('C1', '1.0', 'hi', {})).toEqual({ channel: 'C1', text: 'hi', thread_ts: '1.0' })
   })
 })
 

@@ -8,7 +8,7 @@ import { safeSend, formatSpawnLine, atomicWriteFileSync } from './util.js'
 import { tmuxHasSession, tmuxSync, tmuxTimedOut } from './tmux.js'
 import { nameHeldByAnother, occupancy, occupied } from './session-reachability.js'
 import { withThreadLock } from '../specialists/specialists.js'
-import { confined, describePolicy, missingTokenRefusal, PolicyRefusal, remedy, resolvePolicy, type LaunchPolicy } from './scope.js'
+import { endVerifying, startVerifying, verifyBackoff, verifyRefusal, confined, describePolicy, missingTokenRefusal, PolicyRefusal, remedy, resolvePolicy, type LaunchPolicy } from './scope.js'
 import { threadNotices } from './notice-limit.js'
 import { hydraLoadEnv, currentHydraConfig } from './hydra-config.js'
 import { workdirScopeIssues } from '../config/workdir-scope.js'
@@ -658,7 +658,8 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
     } else {
       if (info.sessionType !== 'thread_guest') {
         threadRegistry.closeHistoryEntry(info.threadId, info)
-        registry.deleteThread(info.threadId)
+        // A thread another live session is bound to stays bound to it (a refused start must not unbind its predecessor's successor).
+        if (registry.getByThread(info.threadId) === info.sessionId) registry.deleteThread(info.threadId)
       }
       registry.delete(info.sessionId)
     }
@@ -709,6 +710,19 @@ async function tellThread(threadId: string, why: string): Promise<void> {
   if (!threadNotices.allow(`${threadId}\n${why}`)) return
   await safeSend(threadId, `⚠️ ${why}`).catch(() => {})
 }
+
+/** A start that must not happen: the thread is told why (once a minute per cause) and the start throws a PolicyRefusal, which no revive counts as a failure. */
+async function refuseStart(threadId: string | undefined, why: string): Promise<never> {
+  if (threadId) await tellThread(threadId, why)
+  throw new PolicyRefusal(why)
+}
+
+/** When a start of each specialist was last stopped by verification, and why: it is not started again at once (see VERIFY_BACKOFF_MS). */
+const verifyRefused = new Map<string, { at: number; why: string }>()
+/** The back-off is per thread (one refused conversation does not block the specialist's others). */
+const verifyKey = (specialist: string, threadId: string | undefined, sessionName: string): string => `${specialist}\n${threadId ?? sessionName}`
+/** Test seam: forget the verification refusals. */
+export function _resetVerifyBackoff(): void { verifyRefused.clear() }
 
 /** Test seam: forget which refusals a thread was told. */
 export function _resetRefusalNotices(): void { threadNotices.clear() }
@@ -983,7 +997,10 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   // exactly the folder it starts in, so any other start (the operator's spawn dir, a worktree) would widen them. launch() holds
   // the same line; this keeps the record and the metadata telling the truth.
   if (confinedPolicy) {
-    const refuse = async (why: string): Promise<never> => { if (threadId) await tellThread(threadId, why); throw new PolicyRefusal(why) }
+    const refuse = (why: string): Promise<never> => refuseStart(threadId, why)
+    // A start whose verification stopped it a minute ago is not repeated per message: each would launch a session and wait to verify it.
+    const lastStop = verifyRefused.get(verifyKey(confinedPolicy.specialist, threadId, sessionName))
+    if (lastStop && verifyBackoff.now() - lastStop.at < verifyBackoff.ms) await refuse(`specialist ${confinedPolicy.specialist}: its last start was stopped ${Math.round((verifyBackoff.now() - lastStop.at) / 1000)}s ago and hydra waits ${verifyBackoff.ms / 1000}s before starting it again, so one message does not relaunch it each time (${lastStop.why}). Send another message after that. If this repeats, the cause is in Claude Code's setup or its debug file, not in hydra.toml.`)
     if (worktreeTarget || reuseWorktree) await refuse(`specialist ${confinedPolicy.specialist} runs only in its workdir ${confinedPolicy.workdir}: a confined session never gets a git worktree: start it without one`)
     if (!existsSync(confinedPolicy.workdir)) await refuse(`specialist ${confinedPolicy.specialist}: its workdir ${confinedPolicy.workdir} does not exist, so no confined session starts: create it (or change workdir in hydra.toml). ${remedy(sessionName)}`)
     // The folder can change after hydra.toml loaded (a repository cloned into it, a symlink added): the load's checks run again.
@@ -1108,6 +1125,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   }
   const url = await gateway.getThreadUrl(threadId!)
 
+  if (confinedPolicy) startVerifying(sessionId)   // the record below is refused every message until its start passes (scope.ts `unverified`)
   registry.set(sessionId, {
     sessionId, topic, threadId: threadId!, anchorMessageId, anchorChannelId, createdAt: now, lastActive: now,
     tmuxName, listening: resolveListenState(threadId!, chatId), originType, originFrom, sessionMetadata,
@@ -1146,6 +1164,31 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       if (registry.getByThread(s.threadId) === s.sessionId) registry.deleteThread(s.threadId)
     }
     registry.persist()
+  }
+  // A confined session is checked against its policy from its own debug file, before its thread is handed to it (below: setThread):
+  // no message reaches it through the thread until what it loaded is known to be what hydra.toml gives it. One that loaded anything
+  // else, or whose file cannot be read, is stopped here (this launch's own session, by its id) and the start refuses.
+  if (confinedPolicy) {
+    // The adapter says what its engine loaded; an engine that cannot say cannot run a confined session (it is refused at the engine check above).
+    let verdict: { ok: true } | { ok: false; why: string }
+    try {
+      verdict = adapter.verifyLaunch ? await adapter.verifyLaunch(confinedPolicy, launched) : { ok: false, why: `the ${engine} engine cannot check what it loaded` }
+    } catch (err) {
+      // A check that cannot run is a check that did not pass: the session is stopped like any other refused start.
+      process.stderr.write(`daemon: spawn ${tmuxName}: launch verification threw: ${err}\n`)
+      verdict = { ok: false, why: 'the check itself failed to run, so what it loaded is unknown' }
+    } finally { endVerifying(sessionId) }
+    if (!verdict.ok) {
+      verifyRefused.set(verifyKey(confinedPolicy.specialist, threadId, sessionName), { at: verifyBackoff.now(), why: verdict.why })
+      process.stderr.write(`daemon: spawn ${tmuxName}: launch verification refused: ${verdict.why}\n`)
+      const created = registry.get(sessionId)
+      if (created && created.sessionId === sessionId) await killSession(created, 'stopped: it did not load what its launch policy allows', { keepWatches: true }).catch((err: unknown) => process.stderr.write(`daemon: spawn ${tmuxName}: could not stop the unverified session ${sessionId}: ${err}\n`))
+      await refuseStart(threadId, verifyRefusal(confinedPolicy.specialist, sessionName, verdict.why))
+    }
+    // The marker the delivery gate reads: persisted, so a restart keeps a verified session reachable and leaves an unfinished one not.
+    const created = registry.get(sessionId)
+    if (created && created.sessionId === sessionId) { created.verified = true; registry.persist() }
+    process.stderr.write(`daemon: spawn ${tmuxName}: launch verified against its policy from ${launched.debugLogPath}\n`)
   }
   if (phaseBudgetMs) startPhaseBudget(sessionId)
   if (opts?.ephemeral) resumeIdleLimit(sessionId)

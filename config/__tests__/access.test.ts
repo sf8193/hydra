@@ -36,7 +36,7 @@ tools = ["search_logs", "get_monitor"]
 [mcp.empty]
 command = "bun"
 `
-const spec = (body: string, workdir = '~/agents/ops') => `${BASE}\n[specialists.ops]\nworkdir = "${workdir}"\nlistens = ["slack:dm"]\nallow = []\n${body}\n`
+const spec = (body: string, workdir = '~/agents/ops') => `${BASE}\n[specialists.ops]\nworkdir = "${workdir}"\nlistens = ["slack:dm"]\nallow = []\nhome = "slack:#escalations"\n${body}\n`
 
 const load = (text: string, e: LoadEnv = env) => loadHydraConfig(text, e)
 const errorsOf = (text: string, e: LoadEnv = env): string[] => {
