@@ -86,7 +86,7 @@ listens = ["slack:#help"]
 
 # A specialist other people talk to, confined: it knows only its workdir, uses only the tools and servers it lists, and answers only its own
 # conversation. `access = "operator"` (the default) is the operator's account, with every tool and server they have. A workdir must be a folder
-# of its own (not $HOME, not a git work tree, no symlinks out). `access`, `tools` and `mcp` are refused in [defaults.specialist] and in `hydra
+# of its own (not $HOME, not a git work tree, no symlinks out). `access`, `tools`, `mcp` and `talks_to` are refused in [defaults.specialist] and in `hydra
 # config add` fragments. Each new start is checked against this, from Claude Code's own debug file (docs/slack.md, "A specialist other people talk to",
 # which shows the same kind of specialist as a file of its own, named `ops`). Its `.env` variables are read when the daemon starts.
 [specialists.helpdesk]
@@ -97,7 +97,13 @@ allow = ["staff"]
 access = "workdir"
 tools = ["Read", "Grep", "Glob"]      # built-in tools; these three are the default and all it may list
 mcp = ["datadog"]                     # names from [mcp.*] below
-home = "slack:#ops-escalations"       # where its `escalate` tool posts (tagging the operator): a place no operator-access session listens on
+talks_to = ["triage"]                # the specialists it may send to with send_to_thread (shared-session specialists, never main); refused unless access = "workdir"
+
+# What helpdesk hands a question to: confined too, with a folder of its own. Nobody listens to it; only helpdesk's talks_to reaches it.
+[specialists.triage]
+workdir = "~/agents/triage"
+allow = []
+access = "workdir"
 
 # PR reviews on one repo.
 [specialists.reviewer]
@@ -126,7 +132,7 @@ files = true                          # download attachments (default false)
 bots = false                          # hear other bots (default false; hydra's own bot is never heard)
 default_app = "default"               # a Slack channel only: when two apps are in it, the app that answers a message that tags neither (a tag always picks the app).
                                       # Absent: the app named `default`, else the first app above, among those that deliver to someone here. An untagged follow-up stays with the app that opened the conversation.
-link_previews = true                  # false: no link previews (Slack unfurl_links/unfurl_media, Discord suppress-embeds) on what hydra posts here: replies, new threads, DMs, escalations, alerts; not Slack edits (default true)
+link_previews = true                  # false: no link previews (Slack unfurl_links/unfurl_media, Discord suppress-embeds) on what hydra posts here: replies, new threads, DMs, alerts; not Slack edits (default true)
 
 # The channel helpdesk answers: it hears every top-level post, and its answers carry no previews.
 [places."slack:#ops"]

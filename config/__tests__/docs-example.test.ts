@@ -27,10 +27,11 @@ describe('docs/slack.md: the ops specialist example', () => {
     if (!r.ok) throw new Error(formatIssues(r.errors))
     expect(formatIssues(r.warnings)).toBe('')
   })
-  test('is the confined specialist, its server, its place, and a home to escalate to', () => {
+  test('is the confined specialist, its server, its place, and the specialist it hands off to', () => {
     const r = loadHydraConfig(text, env)
     if (!r.ok) throw new Error(formatIssues(r.errors))
-    expect(r.config.specialists.ops).toMatchObject({ access: 'workdir', tools: ['Read', 'Grep', 'Glob'], mcp: ['datadog'], listens: ['slack:#ops'], allow: ['staff'], home: 'slack:#ops-escalations', workdir: '/home/op/specialists/ops' })
+    expect(r.config.specialists.ops).toMatchObject({ access: 'workdir', tools: ['Read', 'Grep', 'Glob'], mcp: ['datadog'], listens: ['slack:#ops'], allow: ['staff'], talksTo: ['ops-deep'], workdir: '/home/op/specialists/ops' })
+    expect(r.config.specialists['ops-deep']).toMatchObject({ access: 'workdir', listens: [], allow: [], workdir: '/home/op/specialists/ops-deep' })
     expect(r.config.mcpServers?.datadog).toEqual({ name: 'datadog', command: '/usr/local/bin/datadog-mcp', tokenEnv: ['DD_API_KEY'], tools: ['search_logs', 'get_monitor'] })
     expect(r.config.places['slack:#ops']).toMatchObject({ listen: 'all', linkPreviews: false })
   })
@@ -43,11 +44,13 @@ describe('docs/slack.md: the ops specialist example', () => {
     const r = loadHydraConfig(text, testLoadEnv({ home: '/home/op', sessionNames: ['spark'], isGitWorkTree: () => true }))
     expect(r.ok).toBe(false)
   })
-  test('widening it is refused: Bash in tools, the escalation home listened on by an operator-access specialist', () => {
+  test('widening it is refused: Bash in tools, a hand-off to a specialist that is not declared, to main, or to a per-conversation one', () => {
     expect(loadHydraConfig(text.replace('tools = ["Read", "Grep", "Glob"]', 'tools = ["Read", "Bash"]'), env).ok).toBe(false)
-    const withListener = text + '\n[specialists.byte2]\nworkdir = "~/agents/b"\nlistens = ["slack:#ops-escalations"]\nallow = []\n'
-    const r = loadHydraConfig(withListener, env)
-    expect(r.ok).toBe(false)
-    if (!r.ok) expect(formatIssues(r.errors)).toContain('specialists.ops.home')
+    for (const target of ['ghost', 'main']) {
+      const r = loadHydraConfig(text.replace('talks_to = ["ops-deep"]', `talks_to = ["${target}"]`), env)
+      expect(r.ok).toBe(false)
+      if (!r.ok) expect(formatIssues(r.errors)).toContain('specialists.ops.talks_to[0]')
+    }
+    expect(loadHydraConfig(text.replace('allow = []\naccess = "workdir"', 'allow = []\naccess = "workdir"\nsessions = "per-conversation"'), env).ok).toBe(false)
   })
 })
