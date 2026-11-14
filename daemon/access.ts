@@ -153,6 +153,27 @@ export async function notifyOperator(text: string): Promise<boolean> {
 // Gate
 // ---------------------------------------------------------------------------
 
+/** Where an event happened: enough to ask whether this daemon is allowed there. */
+export type Place = Pick<InboundMessage, 'isDM' | 'channelId' | 'parentChannelId'>
+
+/**
+ * The group policy of the channel a place is in (a thread's parent channel; parentChannelId is null outside
+ * a thread); undefined when this daemon has none there. Own keys only: 'constructor' is not a channel.
+ */
+export function channelPolicy(access: Pick<Access, 'groups'>, place: Place): GroupPolicy | undefined {
+  const key = place.parentChannelId ?? place.channelId
+  return Object.hasOwn(access.groups, key) ? access.groups[key] : undefined
+}
+
+/**
+ * Whether this daemon acts in the place at all, whoever the sender is: a DM, or a channel it has a
+ * policy for. Two daemons can share a guild and an operator; an operator's word in the other
+ * daemon's channel is not this daemon's to obey.
+ */
+export function channelAllowed(access: Pick<Access, 'groups'>, place: Place): boolean {
+  return place.isDM || channelPolicy(access, place) !== undefined
+}
+
 export async function gate(msg: InboundMessage): Promise<GateResult> {
   const access = loadAccess()
   const pruned = pruneExpired(access)
@@ -190,10 +211,7 @@ export async function gate(msg: InboundMessage): Promise<GateResult> {
     return { action: 'pair', code, isResend: false }
   }
 
-  const channelId = msg.isThread
-    ? msg.parentChannelId ?? msg.channelId
-    : msg.channelId
-  const policy = access.groups[channelId]
+  const policy = channelPolicy(access, msg)
   if (!policy) return { action: 'drop' }
   const groupAllowFrom = policy.allowFrom ?? []
   const requireMention = policy.requireMention ?? true

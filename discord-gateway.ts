@@ -94,6 +94,17 @@ export function formatThreadName(opts: SessionVisualOpts): { name: string; prior
  * @here or a role. Session text is model output and can quote anything: a stray `@everyone`
  * must not notify a server. User pings stay, because CLI spawns and auth alerts rely on them.
  */
+/** Where a reaction's message lives, or null when its channel is unknown (a partial). */
+export function reactionPlace(
+  ch: { type: ChannelType; isDMBased(): boolean; isThread(): boolean; parentId?: string | null } | null | undefined,
+): { isDM: boolean; parentChannelId: string | null } | null {
+  if (!ch) return null
+  return {
+    isDM: ch.type === ChannelType.DM || ch.isDMBased(),
+    parentChannelId: ch.isThread() ? (ch.parentId ?? null) : null,
+  }
+}
+
 export const DISCORD_ALLOWED_MENTIONS = { parse: ['users'], repliedUser: true } satisfies MessageMentionOptions
 
 /** Discord's subtext marker applies per line. */
@@ -173,11 +184,15 @@ export class DiscordGateway implements ChatGateway {
       if (!this.reactionHandler) return
       if (user.bot) return
       const msg = reaction.message
+      // A reaction we cannot place is not one the daemon may act on.
+      const place = reactionPlace(msg.channel)
+      if (!place) return
       this.reactionHandler({
         channelId: msg.channelId,
         messageId: msg.id,
         userId: user.id,
         emoji: reaction.emoji.name ?? '',
+        ...place,
       }).catch(e => process.stderr.write(`discord gateway: reaction handler error: ${e}\n`))
     })
 

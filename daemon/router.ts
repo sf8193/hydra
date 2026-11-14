@@ -4,7 +4,7 @@ import { cacheSlackChannel, cacheSlackThread } from './artifacts.js'
 import { refreshDashboard } from './dashboard.js'
 import { registry, threadRegistry } from './sessions.js'
 import { transport } from './bridge-transport.js'
-import { loadAccess, operatorIds, gate } from './access.js'
+import { loadAccess, operatorIds, gate, channelAllowed } from './access.js'
 import type { Access } from './access.js'
 import type { DownloadedFile } from '../gateway.js'
 import type { InboundMessage } from '../gateway.js'
@@ -372,6 +372,7 @@ if (gateway.onReaction) {
     if (!isDeleteReaction(event.emoji)) return
     const access = loadAccess()
     if (!operatorIds(access).includes(event.userId)) return
+    if (!channelAllowed(access, event)) return
     try {
       await gateway.delete(event.channelId, event.messageId)
       process.stderr.write(`daemon: deleted message ${event.messageId} via reaction from ${event.userId}\n`)
@@ -389,6 +390,8 @@ gateway.onMessage(async (msg: InboundMessage) => {
   if (msg.isBot) return
 
   const access = loadAccess()
+  // The one chokepoint: nothing below, operator command or not, acts in a place this daemon is not allowed in.
+  if (!channelAllowed(access, msg)) return
   const senderId = msg.authorId
   const isAllowed = operatorIds(access).includes(senderId)
 
