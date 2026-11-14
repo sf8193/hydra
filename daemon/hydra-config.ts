@@ -114,6 +114,9 @@ export function hydraLoadEnv(): LoadEnv {
 }
 let loadEnvInUse: LoadEnv | undefined
 
+/** Test seam: the probes `hydraLoadEnv()` answers with, as `startHydraConfig({ env })` would set them. `undefined`: the machine's own. */
+export function _setLoadEnvForTesting(env: LoadEnv | undefined): void { loadEnvInUse = env }
+
 export function stopHydraConfig(): void {
   loadEnvInUse = undefined
   inUse = false

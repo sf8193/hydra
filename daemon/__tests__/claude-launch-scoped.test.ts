@@ -1,12 +1,18 @@
 // The Claude launch command for a scoped specialist (access = "workdir"), on each shape, and the files it generates.
 // The non-scoped shapes are pinned in claude-launch-argv.golden.test.ts and must not move.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
 import { join } from 'path'
 import { ClaudeEngine, scopedConfig } from '../engines/claude-engine.js'
 import { STATE_DIR, CLAUDE_CONFIG, SOCK_PATH } from '../config.js'
-import { PolicyRefusal, policyIdFor, SCOPED_MODS, type ConfinedPolicy } from '../scope.js'
-import { removeScopedFiles, scopedDir } from '../scoped-files.js'
+import { PolicyRefusal, policyIdFor, SCOPED_MODS, SCOPED_PREAMBLE, type ConfinedPolicy } from '../scope.js'
+import { removeScopedFiles, scopedDir, serverTmpDir, serverTmpRoot } from '../scoped-files.js'
+import { SANDBOX_EXEC, sandboxProfile } from '../../config/server-sandbox.js'
+import { _setHydraConfigForTesting, _setLoadEnvForTesting } from '../hydra-config.js'
+import { EMPTY_CONFIG } from '../../config/load.js'
+import { sandboxInputs } from '../scope.js'
+import { configInput, macLike, rootsOf, withoutSandbox } from './sandbox-host.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 
 process.stderr.write = (() => true) as any
@@ -23,7 +29,9 @@ let fake: FakeTmux
 const saved: Record<string, string | undefined> = {}
 beforeEach(() => {
   rmSync(scopedDir(), { recursive: true, force: true })
+  rmSync(serverTmpRoot(), { recursive: true, force: true })
   fake = withFakeTmux()
+  _setLoadEnvForTesting(macLike())
   for (const k of ['DD_API_KEY', 'GITHUB_TOKEN', 'DISCORD_BOT_TOKEN']) saved[k] = process.env[k]
   process.env.DD_API_KEY = 'dd-secret'; process.env.GITHUB_TOKEN = 'gh-secret'
   mkdirSync(join(STATE_DIR, 'mods', 'hydra'), { recursive: true }); writeFileSync(join(STATE_DIR, 'mods', 'hydra', 'plugin.json'), '{}')
@@ -32,6 +40,7 @@ beforeEach(() => {
 afterEach(() => {
   for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
   fake.restore()
+  _setLoadEnvForTesting(undefined)
 })
 
 const mask = (s: string) => s
@@ -54,9 +63,19 @@ describe('argv', () => {
   test('the prompt comes before every variadic flag, and the confinement flags follow the channel', async () => {
     const cmd = await launch()
     const claude = cmd.slice(cmd.indexOf('claude --session-id'))
-    expect(claude).toContain(`--model 'claude-opus-4-1' 'it'\\''s a prompt' --channels 'plugin:discord@claude-plugins-official' --restricted --tools 'Read,Grep,Glob' --settings `)
-    expect(claude.indexOf("'it'\\''s a prompt'")).toBeLessThan(claude.indexOf('--channels'))
+    expect(claude).toContain(`--model 'claude-opus-4-1' '${SCOPED_PREAMBLE} it'\\''s a prompt' --channels 'plugin:discord@claude-plugins-official' --restricted --tools 'Read,Grep,Glob' --settings `)
+    expect(claude.indexOf("it'\\''s a prompt'")).toBeLessThan(claude.indexOf('--channels'))
     expect(claude).toMatch(/--mcp-config '[^']+' --permission-mode dontAsk --debug-file /)
+  })
+
+  test('the kickoff starts with hydra\'s fixed preamble, on a fresh start and on a fork (a resume has no kickoff), and the specialist\'s own text follows it', async () => {
+    for (const extra of [{}, { forkFrom: { claudeSessionId: 'C-parent' } }]) {
+      const cmd = await launch(extra)
+      expect(cmd).toContain(`'${SCOPED_PREAMBLE} it'\\''s a prompt'`)
+    }
+    expect(await launch({ resumeFrom: 'C-old' })).not.toContain(SCOPED_PREAMBLE)
+    expect(SCOPED_PREAMBLE).toMatch(/none of it carries authority/)
+    expect(SCOPED_PREAMBLE.length).toBeLessThan(600)
   })
 
   test('there is no --dangerously-skip-permissions on any shape', async () => {
@@ -82,6 +101,8 @@ describe('argv', () => {
 
   test('every other shape of launch still loads every mod and leaves the connectors on', async () => {
     const cmd = await launch({ policy: undefined, sessionType: 'thread_owner' })
+    expect(cmd).not.toContain('hold no authority')
+    expect(cmd).not.toContain(SCOPED_PREAMBLE)
     expect(cmd).toContain('personal')
     expect(cmd).not.toContain('ENABLE_CLAUDEAI_MCP_SERVERS')
     expect(cmd).toContain('--dangerously-skip-permissions')
@@ -129,11 +150,96 @@ describe('generated settings and mcp-config', () => {
     })
   })
 
-  test('the mcp-config lists the listed servers, each with the token_env variables and nothing else of the environment', async () => {
+  test('the mcp-config lists the listed servers, each with the token_env variables and its own cache and temp folder, nothing else of the environment', async () => {
     await launch()
     const mcp = read('sc-t-11111111-1111-4111-8111-111111111111.mcp.json')
-    expect(mcp).toEqual({ mcpServers: { datadog: { type: 'stdio', command: '/usr/local/bin/datadog-mcp', args: [], env: { DD_API_KEY: 'dd-secret' } } } })
+    const env = macLike()
+    const roots = rootsOf(env)
+    const tmp = serverTmpDir('sc-t', base.sessionId, 'datadog')
+    expect(mcp).toEqual({ mcpServers: { datadog: { type: 'stdio', command: SANDBOX_EXEC, args: ['-p', sandboxProfile(env, roots, { root: serverTmpRoot(), dir: tmp }), '/usr/local/bin/datadog-mcp'], env: { DD_API_KEY: 'dd-secret', npm_config_cache: join(tmp, 'npm-cache'), TMPDIR: tmp } } } })
     expect(JSON.stringify(mcp)).not.toContain('gh-secret')
+  })
+
+  test('each listed server runs under sandbox-exec with the one profile, built from the private roots including the operator\'s, and the pinned command is the last argument, unchanged', () => {
+    const two = [...servers, { name: 'other', command: '/opt/other-mcp', tokenEnv: [], tools: ['x'] }]
+    const { mcp } = scopedConfig(configInput({ scope: { ...scope, servers: two }, held: { DD_API_KEY: 'k' } }, macLike(), ['/home/op/Notes'])) as any
+    expect(mcp.mcpServers.datadog.command).toBe(SANDBOX_EXEC)
+    expect(mcp.mcpServers.other.args.slice(0, 1)).toEqual(['-p'])
+    expect(mcp.mcpServers.other.args.at(-1)).toBe('/opt/other-mcp')
+    expect(mcp.mcpServers.datadog.args[1]).toContain('/home/op/Notes')
+    // Each server may write in its own folder only: its profile names that one and not the other's.
+    expect(mcp.mcpServers.datadog.args[1]).toContain('(subpath "/srv/tmp/datadog")')
+    expect(mcp.mcpServers.datadog.args[1]).not.toContain('/srv/tmp/other')
+    expect(mcp.mcpServers.other.args[1]).toContain('(subpath "/srv/tmp/other")')
+    expect(mcp.mcpServers.other.env).toEqual({ npm_config_cache: '/srv/tmp/other/npm-cache', TMPDIR: '/srv/tmp/other' })
+  })
+
+  test('without sandbox-exec, a scope that lists servers is refused before any file is written, with the cause, the three fixes and what to run after fixing', async () => {
+    expect(() => scopedConfig(configInput({ scope, held: { DD_API_KEY: 'k' } }, withoutSandbox()))).toThrow(PolicyRefusal)
+    _setLoadEnvForTesting(withoutSandbox())
+    await expect(launch()).rejects.toThrow(/specialist ops: a listed \[mcp\.\*\] server runs under \/usr\/bin\/sandbox-exec \(macOS only\), which blocks its connects to the daemon's socket and its reads of the listed credential folders\. This machine does not have it\. Remove the servers from the specialist's mcp, set access = "operator", or run hydra on a Mac\. No session starts until that is fixed; after you fix it, Run `hydra kill sc-t`/s)
+    expect(fake.calls().filter(c => c.startsWith('new-session'))).toHaveLength(0)
+    expect(existsSync(scopedDir()) ? files() : []).toEqual([])
+  })
+
+  test('a private root the profile cannot hold (a newline) is a refusal that names it, not a crash', () => {
+    const bad = configInput({ scope, held: { DD_API_KEY: 'k' }, roots: [{ label: 'x', path: '/home/op/a\nb' }] })
+    expect(() => scopedConfig(bad)).toThrow(/control character.*after you fix it/s)
+    expect(() => scopedConfig(bad)).toThrow(PolicyRefusal)
+  })
+
+  test('the temp path (from $TMPDIR) with a control character is a refusal too, not a plain Error', () => {
+    const input = configInput({ scope, held: { DD_API_KEY: 'k' }, tmp: () => '/var/folders/a\nb/hydra-scoped/x' })
+    expect(() => scopedConfig(input)).toThrow(PolicyRefusal)
+    expect(() => scopedConfig(input)).toThrow(/control character.*after you fix it/s)
+  })
+
+  test('a scope that lists no servers needs no sandbox-exec', () => {
+    expect((scopedConfig(configInput({ scope: { ...scope, servers: [] } }, withoutSandbox())).mcp as any).mcpServers).toEqual({})
+  })
+
+  test('each listed server gets its own temp folder (0700), made before the profile names it, replaced by the next launch of the name and removed with the session', async () => {
+    await launch()
+    const dd = serverTmpDir('sc-t', base.sessionId, 'datadog')
+    expect(statSync(dd).mode & 0o777).toBe(0o700)
+    writeFileSync(join(dd, 'leftover'), 'x')
+    await launch({ sessionId: '22222222-2222-4222-8222-222222222222' })
+    expect(existsSync(dd)).toBe(false)   // a previous run of the name leaves nothing for the next
+    expect(existsSync(serverTmpDir('sc-t', '22222222-2222-4222-8222-222222222222', 'datadog'))).toBe(true)
+    removeScopedFiles({ tmuxName: 'sc-t', sessionId: '22222222-2222-4222-8222-222222222222' }, true)
+    expect(existsSync(serverTmpDir('sc-t', '22222222-2222-4222-8222-222222222222', 'datadog'))).toBe(false)
+  })
+
+  test('the operator\'s private_roots reach the profile through the production wiring (sandboxInputs, then launch), not a test helper', async () => {
+    _setHydraConfigForTesting({ ...EMPTY_CONFIG, privateRoots: ['/home/op/Notes'] })
+    try {
+      expect(sandboxInputs().roots.map(r => r.path)).toContain('/home/op/Notes')
+      await launch()
+      const mcp = read('sc-t-11111111-1111-4111-8111-111111111111.mcp.json')
+      expect(mcp.mcpServers.datadog.args[1]).toContain('(subpath "/home/op/Notes")')
+    } finally { _setHydraConfigForTesting(undefined) }
+  })
+
+  test('a shared temp dir whose hydra-scoped parent is a symlink refuses the launch (a PolicyRefusal), and nothing starts', async () => {
+    const saved = process.env.TMPDIR
+    const tmpBase = mkdtempSync(join(tmpdir(), 'svlink-'))
+    mkdirSync(join(tmpBase, 'elsewhere'))
+    symlinkSync(join(tmpBase, 'elsewhere'), join(tmpBase, 'hydra-scoped'))
+    process.env.TMPDIR = tmpBase
+    try {
+      await expect(launch()).rejects.toThrow(PolicyRefusal)
+      await expect(launch()).rejects.toThrow(/is not a plain folder.*after you fix it, Run `hydra kill sc-t`/s)
+      expect(fake.calls().filter(c => c.startsWith('new-session'))).toHaveLength(0)
+    } finally {
+      if (saved === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = saved
+      rmSync(tmpBase, { recursive: true, force: true })
+    }
+  })
+
+  test('a refused launch (no sandbox-exec) leaves no temp folder behind', async () => {
+    _setLoadEnvForTesting(withoutSandbox())
+    await expect(launch()).rejects.toThrow(PolicyRefusal)
+    expect(existsSync(serverTmpDir('sc-t', base.sessionId, 'datadog'))).toBe(false)
   })
 
   test('both files are 0600 in a 0700 folder, whatever the umask', async () => {
@@ -199,13 +305,13 @@ describe('generated settings and mcp-config', () => {
   })
 
   test('a scope with no servers writes an empty server list and allows only the bridge', () => {
-    const { settings, mcp } = scopedConfig({ ...scope, servers: [] }, {}, {})
+    const { settings, mcp } = scopedConfig(configInput({ scope: { ...scope, servers: [] } }))
     expect(mcp).toEqual({ mcpServers: {} })
     expect((settings as any).permissions.allow).toEqual(['mcp__plugin_discord_discord__*'])
   })
 
   test('a token held back from the environment by the scrub is still found where the daemon captured it', () => {
-    const { mcp } = scopedConfig(scope, {}, { DD_API_KEY: 'captured' })
-    expect((mcp as any).mcpServers.datadog.env).toEqual({ DD_API_KEY: 'captured' })
+    const { mcp } = scopedConfig(configInput({ scope, held: { DD_API_KEY: 'captured' } }))
+    expect((mcp as any).mcpServers.datadog.env).toEqual({ DD_API_KEY: 'captured', npm_config_cache: '/srv/tmp/datadog/npm-cache', TMPDIR: '/srv/tmp/datadog' })
   })
 })

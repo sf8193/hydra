@@ -29,10 +29,13 @@ import { gateway } from '../config.js'
 import { SESSION_IDENTITY_VARS, capturedSpawnVars, scrubbedSpawnEnv, withRaisedFdLimit } from '../../shared/spawn-env.js'
 import { modsExport } from '../../shared/mods.js'
 import { BRIDGE_CHANNEL_FLAG, BRIDGE_MCP_SERVER_KEY, BRIDGE_PLUGIN_ID, BRIDGE_TOOLS_PERMISSION } from '../plugin-manifest.js'
-import { confined, deliveryRefusal, missingTokenRefusal, PolicyRefusal, SCOPED_MODS, serverToolRule, type ConfinedPolicy } from '../scope.js'
+import { confined, deliveryRefusal, missingTokenRefusal, PolicyRefusal, remedy, SCOPED_MODS, SCOPED_PREAMBLE, sandboxInputs, serverToolRule, type ConfinedPolicy } from '../scope.js'
 import { verifyLaunch as verifyLoaded, type Verdict } from './claude-verify.js'
 import { ENGINE_CAPABILITIES } from '../../shared/engine-capabilities.js'
-import { removeScopedFiles, writeScopedFiles } from '../scoped-files.js'
+import { makeServerTmpDirs, removeScopedFiles, serverTmpDir, serverTmpRoot, writeScopedFiles } from '../scoped-files.js'
+import { sandboxedServer, sandboxIssues } from '../../config/server-sandbox.js'
+import type { PrivateRoot } from '../../config/workdir-scope.js'
+import type { LoadEnv } from '../../config/types.js'
 import { clearNeedsAuthEntry, describeSetAt, NEEDS_AUTH_CLEARED_NOTE } from './claude-needs-auth.js'
 
 // What the pane-and-transcript methods read. The byte (main) has no SessionInfo, so these take only this.
@@ -47,7 +50,29 @@ const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
  * and each listed server tool), and the MCP config (the listed servers, each with the `token_env` variables and nothing
  * else of the daemon's environment). Written by scoped-files.ts: mode 0600, since the MCP config holds secrets.
  */
-export function scopedConfig(scope: Pick<ConfinedPolicy, 'specialist' | 'servers' | 'tools'>, env: NodeJS.ProcessEnv = process.env, held: Readonly<Record<string, string>> = capturedSpawnVars(), sessionName = '<session name>'): { settings: object; mcp: object } {
+export type ScopedConfigInput = {
+  scope: Pick<ConfinedPolicy, 'specialist' | 'servers' | 'tools'>
+  /** The variables a server's `token_env` may take (the daemon's environment) and the ones its scrub held back. */
+  env: NodeJS.ProcessEnv
+  held: Readonly<Record<string, string>>
+  sessionName: string
+  /** The sandbox: the machine's probes, the places off limits, and each server's one writable folder. All injected, none read here. */
+  load: Pick<LoadEnv, 'isCommand' | 'realpath'>
+  roots: readonly PrivateRoot[]
+  /** The folder every scoped server's folder sits in, and one server's own folder in it. */
+  tmpRoot: string
+  tmp: (server: string) => string
+}
+
+export function scopedConfig({ scope, env, held, sessionName, load, roots, tmpRoot, tmp }: ScopedConfigInput): { settings: object; mcp: object } {
+  // Listed servers run under sandbox-exec (config/server-sandbox.ts): where that cannot be set up none starts, and the launch says why.
+  // The same check hydra.toml's load makes; both run in the daemon. A failure while building a profile (the temp path) is a refusal too.
+  const refuse = (why: string): never => { throw new PolicyRefusal(`specialist ${scope.specialist}: ${why}. No session starts until that is fixed; after you fix it, ${remedy(sessionName)}`) }
+  const why = scope.servers.length ? sandboxIssues(load.isCommand, roots) : undefined
+  if (why) refuse(why)
+  const sandboxed = (command: string, dir: string) => {
+    try { return sandboxedServer(command, load, roots, { root: tmpRoot, dir }) } catch (err) { return refuse(err instanceof Error ? err.message : String(err)) }
+  }
   return {
     settings: {
       enabledPlugins: { [BRIDGE_PLUGIN_ID]: true },
@@ -55,12 +80,17 @@ export function scopedConfig(scope: Pick<ConfinedPolicy, 'specialist' | 'servers
     },
     mcp: {
       mcpServers: Object.fromEntries(scope.servers.map(s => [s.name, {
-        type: 'stdio', command: s.command, args: [],
-        env: Object.fromEntries(s.tokenEnv.map(v => {
-          const value = env[v] ?? held[v]
-          if (value === undefined) throw new PolicyRefusal(missingTokenRefusal({ specialist: scope.specialist, servers: [s] } as ConfinedPolicy, ENV_FILE, sessionName, env, held)!)
-          return [v, value]
-        })),
+        type: 'stdio', ...sandboxed(s.command, tmp(s.name)),
+        env: {
+          ...Object.fromEntries(s.tokenEnv.map(v => {
+            const value = env[v] ?? held[v]
+            if (value === undefined) throw new PolicyRefusal(missingTokenRefusal({ specialist: scope.specialist, servers: [s] } as ConfinedPolicy, ENV_FILE, sessionName, env, held)!)
+            return [v, value]
+          })),
+          // The one place the server may write is its own folder: npm's cache and the temp dir are put in it, never in ~/.npm (which a server could poison for the operator's other npx runs).
+          npm_config_cache: join(tmp(s.name), 'npm-cache'),
+          TMPDIR: tmp(s.name),
+        },
       }])),
     },
   }
@@ -68,8 +98,18 @@ export function scopedConfig(scope: Pick<ConfinedPolicy, 'specialist' | 'servers
 
 /** Writes this launch's settings and MCP config (scoped-files.ts); returns their paths. */
 function writeScopedConfig(scope: ConfinedPolicy, tmuxName: string, sessionId: string): { settings: string; mcp: string } {
-  const { settings, mcp } = scopedConfig(scope, process.env, capturedSpawnVars(), tmuxName)
-  return writeScopedFiles(tmuxName, sessionId, { settings, mcp })
+  // Made first: Seatbelt matches resolved paths, which the profile can only name once the folders exist.
+  try { makeServerTmpDirs(tmuxName, sessionId, scope.servers.map(s => s.name)) } catch (err) {
+    throw new PolicyRefusal(`specialist ${scope.specialist}: ${err instanceof Error ? err.message : String(err)}. No session starts until that is fixed; after you fix it, ${remedy(tmuxName)}`)
+  }
+  try {
+    const { env: load, roots } = sandboxInputs()
+    const { settings, mcp } = scopedConfig({ scope, env: process.env, held: capturedSpawnVars(), sessionName: tmuxName, load, roots, tmpRoot: serverTmpRoot(), tmp: server => serverTmpDir(tmuxName, sessionId, server) })
+    return writeScopedFiles(tmuxName, sessionId, { settings, mcp })
+  } catch (err) {
+    removeScopedFiles({ tmuxName, sessionId }, true)   // a refused launch leaves no folder behind
+    throw err
+  }
 }
 
 // Spawn env whitelist: explicit construction, not ambient inheritance. Each env var the byte
@@ -294,6 +334,8 @@ export class ClaudeEngine implements EngineAdapter {
     }
 
     let prompt = input.prompt
+    // A scoped kickoff starts with hydra's fixed preamble (scope.ts): a prompt, not a control. Operator and non-specialist kickoffs are untouched.
+    if (scoped) prompt = `${SCOPED_PREAMBLE} ${prompt}`
     const worktreeAppend = buildWorktreePromptAppend(isFork, worktreePath)
     if (worktreeAppend) prompt += worktreeAppend
 
