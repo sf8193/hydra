@@ -5,7 +5,7 @@ import { BASE_TOOLS as TYPED_BASE_TOOLS, ALL_CAPABILITY_TOOLS as TYPED_ALL_CAPAB
 import type { SessionType, Capability, DerivedCapability } from '../shared/constants.js'
 import type { SessionInfo } from './sessions.js'
 import { resolveEngine } from './engines/instances.js'
-import { specialistOf, boundAs } from '../specialists/specialists.js'
+import { specialistOf, boundAs, talksToOf } from '../specialists/specialists.js'
 import { currentHydraConfig } from './hydra-config.js'
 import { slackConfigured } from '../config/types.js'
 
@@ -60,7 +60,11 @@ export function getToolsForSession(sessionId: string): SessionTool[] {
     return computeToolsForSession('master_orchestrator', new Set<Capability>(['main_handoff']))
   }
   const info = registry.get(sessionId)
-  if (isScopedSession(sessionId)) return computeToolsForSession('scoped', new Set(), { descriptions: info?.toolDescriptions, inputSchemas: info?.toolInputSchemas })
+  if (isScopedSession(sessionId)) {
+    const tools = computeToolsForSession('scoped', new Set(), { descriptions: info?.toolDescriptions, inputSchemas: info?.toolInputSchemas })
+    // send_to_thread is advertised only to a specialist with someone to send to; the call is held to the list at the gate either way.
+    return talksToOf(info).length ? tools : tools.filter(t => t.name !== 'send_to_thread')
+  }
   if (!info) {
     process.stderr.write(`daemon: getToolsForSession: no registry entry for ${sessionId}, using thread_owner defaults\n`)
     return computeToolsForSession('thread_owner', new Set())

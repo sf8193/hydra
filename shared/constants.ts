@@ -213,8 +213,8 @@ export type { ToolName }
 
 /**
  * `scoped`: a specialist set to `access = "workdir"`. It speaks only in its own conversation, so it has none of the tools
- * that reach another session, thread, watch or the operator's account (spawn, kill, peek, list, send_to_thread, handoff,
- * bind, watch, ask_predecessor), and no capability grants it any.
+ * that reach another thread, watch or the operator's account (spawn, kill, peek, list, handoff, bind, watch, ask_predecessor),
+ * and no capability grants it any. `send_to_thread` it keeps only toward the specialists its `talks_to` names (daemon/talks-to.ts).
  */
 export type SessionType = 'master_orchestrator' | 'thread_owner' | 'thread_guest' | 'scoped'
 
@@ -243,8 +243,8 @@ export const BASE_TOOLS: Readonly<Record<SessionType, ReadonlySet<ToolName>>> = 
   scoped: new Set([
     'reply', 'react', 'edit_message', 'delete_message', 'fetch_messages',
     'download_attachment', 'set_description',
-    // Its one way to speak outside its conversation: a post to its specialist's home (daemon/escalate.ts).
-    'escalate',
+    // Its one way to speak to another session: only the specialists in its talks_to, quoted, capped and labelled (daemon/talks-to.ts).
+    'send_to_thread',
   ]),
 }
 

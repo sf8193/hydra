@@ -281,6 +281,12 @@ export function specialistOf(caller: Partial<Pick<SessionInfo, 'threadId' | 'tmu
   return Object.keys(h.specialists).find(id => getSpecialist(id)?.threadId === caller.threadId)
 }
 
+/** The specialists a session's specialist may send to (its `talks_to`, read from hydra.toml as it is now); none for a session that fills no specialist. */
+export function talksToOf(caller: Partial<Pick<SessionInfo, 'threadId' | 'tmuxName'>> | undefined, h: HydraConfig = currentHydraConfig()): readonly string[] {
+  const id = specialistOf(caller, h)
+  return (id !== undefined && h.specialists[id]?.talksTo) || []
+}
+
 /**
  * Where a session's Slack conversations are bound: the specialist it acts for, else its own thread (not a protocol
  * guest's: it sits in another's). The one notion behind the conversation tools, bind, unbind, list and reply.

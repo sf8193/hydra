@@ -5,6 +5,7 @@ import { STATE_DIR } from '../../daemon/config.js'
 import { atomicWriteFileSync } from '../../daemon/util.js'
 import { DEFAULT_SLACK_APP, type Address, type HydraConfig, type Place, type PlaceOptions, type SlackApp } from '../../config/types.js'
 import { appKey } from './app.js'
+import { attr, oneLine, quoteBody, UNTRUSTED_TEXT_MAX_CHARS } from '../../shared/untrusted-text.js'
 import { conversationId, appOfEntry, appPrefix, scopeKey, unscopeKey, TOP_LEVEL } from './conversation.js'
 import { reachableBy, route, owningApp, refusal, notServedBy, identify, currentId, isLive, isSessionThread, MAIN } from '../../routing/route.js'
 
@@ -355,30 +356,18 @@ const insertTs = (list: string[] | undefined, ts: string, keep: number): string[
 // Event subtypes that are ordinary messages. Edits, deletes, joins and the rest are not.
 const PLAIN_SUBTYPES = new Set([undefined, 'thread_broadcast', 'file_share', 'bot_message'])
 
+/** Who sent a message, as hydra.toml says: the roster person (null: not on it), their roles, and whether they are the operator. */
+export type Asker = { person: string | null; roles: string[]; operator: boolean }
+const ASKERS_KEEP = 5_000
+
 /** One message. `person`, `roles` and `operator` are who hydra.toml says sent it, filled in at delivery. */
 export type Item = {
   ts: string; user?: string; name?: string; person?: string; roles?: string[]; operator?: boolean
   kind: 'mention' | 'follow-up' | 'dm'; text: string; files?: SlackFile[]; saved?: FileRef[]
 }
 
-// Invisible and direction-changing characters that let a message look like something it is not
-// (controls except newline and tab, NEL, zero-width and direction marks, line/paragraph separators, bidi overrides, BOM).
-const HIDDEN_RANGES: readonly (readonly [number, number])[] = [
-  [0x00, 0x08], [0x0B, 0x1F], [0x7F, 0x7F], [0x85, 0x85], [0x200B, 0x200F],
-  [0x2028, 0x2029], [0x202A, 0x202E], [0x2066, 0x2069], [0xFEFF, 0xFEFF],
-]
-const clean = (s: string) => Array.from(s).filter(ch => {
-  const c = ch.codePointAt(0)!
-  return !HIDDEN_RANGES.some(([lo, hi]) => c >= lo && c <= hi)
-}).join('')
-
-export const ITEM_TEXT_MAX_CHARS = 1500
+export const ITEM_TEXT_MAX_CHARS = UNTRUSTED_TEXT_MAX_CHARS
 export const BATCH_MAX_BYTES = 8000
-
-const oneLine = (s: string | undefined, max: number) => s ? clean(s).replace(/\s+/g, ' ').trim().slice(0, max) : ''
-/** An attribute value: one clean line, quoted, so no value can end its attribute or its line. */
-// Quotes, backslashes, `=` and brackets go: a sender's own display name cannot spell out another attribute.
-const attr = (s: string) => `"${oneLine(s, 120).replace(/["\\=[\]]/g, '')}"`
 
 /**
  * One message, as the specialist reads it. Who sent it rides as attributes on its header line, never as prose, and the
@@ -393,13 +382,9 @@ export function renderItem(i: Item): string {
     ...(i.user ? [`address=${attr(`slack:${i.user}`)}`] : []),
     ...(name ? [`name=${attr(name)}`] : []),
   ]
-  const chars = Array.from(clean(i.text))
-  const body = chars.length > ITEM_TEXT_MAX_CHARS
-    ? `${chars.slice(0, ITEM_TEXT_MAX_CHARS).join('')} […truncated ${chars.length - ITEM_TEXT_MAX_CHARS} chars; read the thread]`
-    : chars.join('')
   // File names are the sender's words too: one line each, cleaned, and never at the start of a line where they could pose as an item.
   const files = (i.saved ?? []).map(f => `  file: ${oneLine(f.name, 120) || '(unnamed)'}${f.size !== undefined ? ` (${formatBytes(f.size)})` : ''}${f.path ? ` → ${f.path}` : `: ${f.note}`}`)
-  return [`[${i.kind} ts=${attr(i.ts)} ${who.join(' ')}]`, body.split('\n').map(l => `| ${l}`).join('\n'), ...files].join('\n')
+  return [`[${i.kind} ts=${attr(i.ts)} ${who.join(' ')}]`, quoteBody(i.text), ...files].join('\n')
 }
 
 const formatBytes = (n: number): string => n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`
@@ -456,6 +441,8 @@ export class SlackWatcher {
   private readonly refusalTimes = new Map<string, number[]>()
   private readonly names = new Map<string, { name?: string; at: number }>()   // by `<app>:<user id>`: a user id belongs to one app's workspace
   private readonly nameFlights = new Map<string, Promise<string | undefined>>()
+  // Who sent the last message handed over in each conversation: what a session sending on its behalf names as the asker. In memory only, one entry per conversation, the oldest dropped when full.
+  private readonly askers = new Map<string, Asker>()
   // Deliveries go out one at a time, in the order they were scheduled.
   private chain: Promise<void> = Promise.resolve()
   // Each thread's flushes run in order, but the work before sending (names, beforeDeliver) runs beside other threads': one slow guard holds back only its own thread.
@@ -518,6 +505,9 @@ export class SlackWatcher {
   /** Refusals and drops since the daemon started: what `hydra conversations` and `hydra health` count. */
   stats(): SlackWatchStats { return structuredClone(this.stats_) }
   get(channel: string, threadTs: string, app?: string): SlackWatchEntry | undefined { return this.entries.get(watchKey(app, channel, threadTs)) }
+
+  /** Who sent the last message delivered in this conversation (hydra.toml's word for them), or undefined when none has been since the daemon started. */
+  askerOf(channel: string, threadTs: string, app?: string): Asker | undefined { return this.askers.get(watchKey(app, channel, threadTs)) }
   setBotId(id: string | undefined, app?: string): void { if (id) this.botIds.set(appOfEntry({ app }), id); else this.botIds.delete(appOfEntry({ app })) }
   /** Supplied once an app's listener has a Slack client: display names for the senders in its deliveries. */
   setNameResolver(fn: SlackWatchDeps['resolveName'], app?: string): void { if (fn) this.resolvers.set(appOfEntry({ app }), fn); else this.resolvers.delete(appOfEntry({ app })) }
@@ -1204,6 +1194,7 @@ export class SlackWatcher {
   private async deliverGroup(key: string, entry: SlackWatchEntry, target: RouteTarget, items: Item[], cfg: SlackWatchConfig, fallback?: string): Promise<void> {
     for (const batch of packItems(items)) {
       const first = batch[0].ts
+      this.noteAsker(key, batch[batch.length - 1])
       const last = batch[batch.length - 1].ts
       const message = formatDelivery(entry, batch, { place: placeName(cfg, entry.channel), ...(cfg.workspaceUrl && { workspaceUrl: cfg.workspaceUrl }) })
       // The target is part of the key: the same messages re-routed elsewhere are a different send.
@@ -1238,6 +1229,12 @@ export class SlackWatcher {
       else this.ack(entry, batch, cfg)
       this.settle(key, entry, batch.map(i => i.ts))
     }
+  }
+
+  private noteAsker(key: string, last: Item): void {
+    this.askers.delete(key)
+    this.askers.set(key, { person: last.person ?? null, roles: last.roles ?? ['anyone'], operator: !!last.operator })
+    if (this.askers.size > ASKERS_KEEP) this.askers.delete(this.askers.keys().next().value!)
   }
 
   /** The sender sees the message was picked up: the place's `ack` reaction on each delivered message. Best effort, never retried. */

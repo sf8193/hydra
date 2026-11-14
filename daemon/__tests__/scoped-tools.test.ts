@@ -13,8 +13,10 @@ process.stderr.write = (() => true) as any
 
 const ALL: string[] = UNIVERSAL_TOOLS.map(t => t.name)
 const namesOf = (id: string): string[] => getToolsForSession(id).map(t => t.name).sort()
-const KEPT = ['reply', 'react', 'edit_message', 'delete_message', 'fetch_messages', 'download_attachment', 'set_description', 'escalate']
-const REMOVED = ['spawn_session', 'kill_session', 'peek_session', 'list_sessions', 'send_to_thread', 'handoff', 'bind_conversation', 'watch_pr', 'ask_predecessor']
+const KEPT = ['reply', 'react', 'edit_message', 'delete_message', 'fetch_messages', 'download_attachment', 'set_description', 'send_to_thread']
+/** Advertised to a specialist with no talks_to: send_to_thread is held back (the gate refuses it either way). */
+const NO_TALKS = KEPT.filter(n => n !== 'send_to_thread')
+const REMOVED = ['spawn_session', 'kill_session', 'peek_session', 'list_sessions', 'handoff', 'bind_conversation', 'watch_pr', 'ask_predecessor']
 
 const mk = (id: string, extra: Record<string, unknown> = {}) => registry.set(id, {
   sessionId: id, tmuxName: id, topic: 't', threadId: `th-${id}`, createdAt: Date.now(), lastActive: Date.now(),
@@ -28,7 +30,7 @@ describe('the surface of a scoped session', () => {
   test('is exactly the kept tools, advertised and enforced, over every tool the daemon defines', () => {
     const id = scoped()
     expect(ALL.filter(n => isToolAllowed(id, n)).sort()).toEqual([...KEPT].sort())
-    expect(namesOf(id)).toEqual([...KEPT].sort())
+    expect(namesOf(id)).toEqual([...NO_TALKS].sort())
     expect([...BASE_TOOLS.scoped].map(String).sort()).toEqual([...KEPT].sort())
   })
   test.each(REMOVED)('%s is refused at isToolAllowed and at executeTool', async tool => {
@@ -36,7 +38,7 @@ describe('the surface of a scoped session', () => {
     expect(isToolAllowed(id, tool)).toBe(false)
     const r = await executeTool(tool, {}, id)
     expect(r.isError).toBe(true)
-    expect(r.content[0].text).toBe(`${tool} is not available to a scoped session: it has set_description (on itself) and, each only in its own conversation, reply, react, edit_message, delete_message, fetch_messages, download_attachment, escalate`)   // once: the wrapper does not repeat the tool name
+    expect(r.content[0].text).toBe(`${tool} is not available to a scoped session: it has set_description (on itself) and, each only in its own conversation, reply, react, edit_message, delete_message, fetch_messages, download_attachment, send_to_thread`)   // once: the wrapper does not repeat the tool name
   })
   test('no capability or predecessor grants a scoped session a removed tool', () => {
     const id = scoped({ capabilities: ['protocol_spawn', 'protocol_context', 'main_handoff'], predecessor: { engine: 'claude', fork: { claudeSessionId: 'p', parentName: 'x' }, cwd: '/x' } })
@@ -59,7 +61,7 @@ describe('an unknown or unregistered caller is never handed thread_owner tools w
   test('a bridge that declared scoped, with no registry record, gets the scoped surface', () => {
     noteDeclaredSessionType('ghost-scoped', 'scoped')
     expect(ALL.filter(n => isToolAllowed('ghost-scoped', n)).sort()).toEqual([...KEPT].sort())
-    expect(namesOf('ghost-scoped')).toEqual([...KEPT].sort())
+    expect(namesOf('ghost-scoped')).toEqual([...NO_TALKS].sort())
     for (const tool of REMOVED) expect(isToolAllowed('ghost-scoped', tool)).toBe(false)
   })
   test('a record that says scoped wins over a bridge that declares nothing', () => {
@@ -86,7 +88,7 @@ describe('an unknown or unregistered caller is never handed thread_owner tools w
 
 describe('a kept tool works only in the session\'s own conversation', () => {
   const own = (id: string) => registry.get(id)!.threadId
-  test.each([['reply', 'chat_id'], ['escalate', 'chat_id'], ['react', 'chat_id'], ['edit_message', 'chat_id'], ['delete_message', 'chat_id'], ['download_attachment', 'chat_id'], ['fetch_messages', 'channel']])('%s outside its own conversation is refused', async (tool, key) => {
+  test.each([['reply', 'chat_id'], ['react', 'chat_id'], ['edit_message', 'chat_id'], ['delete_message', 'chat_id'], ['download_attachment', 'chat_id'], ['fetch_messages', 'channel']])('%s outside its own conversation is refused', async (tool, key) => {
     const id = scoped()
     for (const other of ['th-someone-else', '123456789', 'slack:C0OTHER:1.0', 'slack:dm', '']) {
       expect(scopedRefusal(id, tool, { [key]: other, text: 'x', message_id: 'm', emoji: 'x' })).toBe(other ? `${tool}: ${key} ${other} is not this session's own conversation; a scoped session acts only in its own thread or in a Slack conversation bound to its specialist` : `${tool}: ${key} is required: pass the ${key} of ${key === 'chat_id' ? 'the message you are answering' : 'the conversation you are reading'}`)
@@ -96,7 +98,7 @@ describe('a kept tool works only in the session\'s own conversation', () => {
     expect(r.isError).toBe(true)
     expect(r.content[0].text).toContain("not this session's own conversation")
   })
-  test.each([['reply', 'chat_id'], ['escalate', 'chat_id'], ['react', 'chat_id'], ['edit_message', 'chat_id'], ['delete_message', 'chat_id'], ['download_attachment', 'chat_id'], ['fetch_messages', 'channel']])('%s in its own session thread passes the scope check', (tool, key) => {
+  test.each([['reply', 'chat_id'], ['react', 'chat_id'], ['edit_message', 'chat_id'], ['delete_message', 'chat_id'], ['download_attachment', 'chat_id'], ['fetch_messages', 'channel']])('%s in its own session thread passes the scope check', (tool, key) => {
     const id = scoped()
     expect(scopedRefusal(id, tool, { [key]: own(id), text: 'x' })).toBeUndefined()
   })

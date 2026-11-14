@@ -1,5 +1,5 @@
 // A scoped session's kept tools work in a Slack conversation bound to its specialist, and nowhere else in Slack: its home
-// channel is not its conversation (`escalate`, a later change, is the one way it speaks there).
+// channel is not its conversation.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { rmSync } from 'fs'
 import { join } from 'path'

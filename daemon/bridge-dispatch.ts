@@ -8,7 +8,7 @@ import { quietSend, shouldQuiet } from './quiet-send.js'
 import { beginMainHandoff } from './main-handoff.js'
 import { getSpecialist } from '../specialists/specialists.js'
 import { ensureSpecialist } from '../specialists/specialist-deliver.js'
-import { escalate } from './escalate.js'
+import { envelopeFor, sendTalk, talksToRefusal } from './talks-to.js'
 import { READ_ONLY_DISALLOWED_TOOLS, claudeLaunchCwd, doSpawnSession, handOff, handoffNoteFate, killSession, predecessorOf, runPreHandoffHook, sessionDir, type PreHandoffVerdict } from './session-lifecycle.js'
 import { fallbackDescription, formatDuration, chunk, assertSendable, parseDuration } from './util.js'
 import { tmuxHasSession } from './tmux.js'
@@ -149,17 +149,18 @@ const askingPredecessor = new Set<string>()  // session ids with an ask_predeces
 
 /** The argument that names where a scoped session's tool acts, by tool. */
 const SCOPED_PLACE_ARG: Readonly<Record<string, string>> = {
-  reply: 'chat_id', escalate: 'chat_id', react: 'chat_id', edit_message: 'chat_id', delete_message: 'chat_id', download_attachment: 'chat_id', fetch_messages: 'channel',
+  reply: 'chat_id', send_to_thread: 'chat_id', react: 'chat_id', edit_message: 'chat_id', delete_message: 'chat_id', download_attachment: 'chat_id', fetch_messages: 'channel',
 }
 
 /**
  * Why a scoped session may not make this call, or undefined. The tools it keeps work only where it speaks: its own session
- * thread, or a Slack conversation bound to its specialist (not its home channel: `escalate` is how it speaks there). It never posts files.
- * isToolAllowed has already refused the tools it does not keep.
+ * thread, or a Slack conversation bound to its specialist (not its home channel). It never posts files. `send_to_thread` also goes
+ * only to a specialist its `talks_to` names (talks-to.ts). isToolAllowed has already refused the tools it does not keep.
  */
 export function scopedRefusal(callerSessionId: string, name: string, args: Record<string, unknown>): string | undefined {
   if (name === 'set_description') return args.session_id === callerSessionId ? undefined : "set_description: a scoped session describes only itself; session_id must be this session's own"
   if (name === 'reply' && Array.isArray(args.files) && args.files.length) return 'reply: a scoped session posts text only, so remove files (attachments are not sent)'
+  if (name === 'send_to_thread') { const why = talksToRefusal(callerSessionId, args); if (why) return why }
   const arg = SCOPED_PLACE_ARG[name]
   const target = arg ? args[arg] : undefined
   const own = registry.get(callerSessionId)
@@ -309,9 +310,6 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         return { content: [{ type: 'text', text: out }] }
       }
 
-      case 'escalate': {
-        return { content: [{ type: 'text', text: await escalate(callerSessionId, args) }] }
-      }
       case 'react': {
         if (gateway.platform === 'slack') return { content: [{ type: 'text', text: 'no-op on Slack (reactions disabled)' }] }
         await retrySend(() => gateway.react(args.chat_id as string, args.message_id as string, args.emoji as string))
@@ -628,6 +626,8 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       }
 
       case 'send_to_thread': {
+        // A scoped caller was held to its talks_to above (scopedRefusal): what it sends is rendered and landed by talks-to.ts, not by the route below.
+        if (callerSessionId && isScopedSession(callerSessionId)) return { content: [{ type: 'text', text: await sendTalk(callerSessionId, args) }] }
         const target = (args.target as string)?.trim()
         const msgType = (args.type as string)?.trim()
         const text = args.text as string
@@ -754,10 +754,14 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const replyInstruction = msgType === 'question'
           ? `\nRespond via send_to_thread(target="${senderName}", type="result", text="...").`
           : ''
+        // Into a scoped session, whoever sends: quoted, cut and labelled by hydra (talks-to.ts), never behind a header the sender can write into.
+        const intoScoped = isScopedSession(targetSession.sessionId)
         transport.sendOrQueue(targetSession.sessionId, {
           type: 'notification',
           // The recipient learns what the human already saw, so its reply can add rather than repeat.
-          content: `[${msgType} from ${senderName}${quietOutcome?.posted ? ` · your thread shows: ${JSON.stringify(quietOutcome.headline)}` : ''}] ${delivered}${replyInstruction}`,
+          content: intoScoped
+            ? await envelopeFor({ from: senderName, type: msgType, ...(caller?.threadId && { conversation: caller.threadId }), text: delivered })
+            : `[${msgType} from ${senderName}${quietOutcome?.posted ? ` · your thread shows: ${JSON.stringify(quietOutcome.headline)}` : ''}] ${delivered}${replyInstruction}`,
           meta: {
             chat_id: threadId,
             message_id: sentIds[0] ?? '',

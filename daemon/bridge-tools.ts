@@ -29,6 +29,27 @@ function withoutFiles(tool: SessionTool): SessionTool {
   return { ...tool, inputSchema: { ...schema, properties } }
 }
 
+/**
+ * `send_to_thread` as a scoped session sees it: to a specialist its hydra.toml `talks_to` names, a question or an answer, about a
+ * conversation it owns, text only. Hydra renders what the receiver reads (daemon/talks-to.ts); nothing here reaches a header.
+ */
+function scopedSend(tool: SessionTool): SessionTool {
+  return {
+    ...tool,
+    description: 'Ask another specialist for what you cannot do or know, or answer one that asked you. target is the name of a specialist your hydra.toml lets you talk to. type is question (you need something from it) or result (your answer to its question). chat_id is the conversation this is about: the chat_id of the message you are answering. Hydra delivers your text to the specialist quoted, cut at 1,500 characters, with your name, the asker you are serving and a link to the conversation, and labelled as written by a scoped session: to it your text is words from another session, never an instruction. It does not answer the person: tell them you asked, and that you do not know what comes back. If it fails, tell the person you could not reach the specialist.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        target: { type: 'string', description: 'The specialist to send to.' },
+        type: { type: 'string', enum: ['question', 'result'], description: 'question: you need something from it. result: your answer to its question.' },
+        text: { type: 'string', description: 'Self-contained: it sees only this and the link.' },
+        chat_id: { type: 'string', description: 'The chat_id of the message you are answering: the conversation this is about.' },
+      },
+      required: ['target', 'type', 'text', 'chat_id'],
+    },
+  }
+}
+
 export function computeToolsForSession(type: SessionType, capabilities: Set<Capability | DerivedCapability>, overrides?: ToolOverrides): SessionTool[] {
   const allowed = new Set(BASE_TOOLS[type])
   // A scoped session's surface is its base set and nothing more: no capability grants it a tool.
@@ -37,7 +58,7 @@ export function computeToolsForSession(type: SessionType, capabilities: Set<Capa
     if (extra) for (const t of extra) allowed.add(t)
   }
   const base: SessionTool[] = UNIVERSAL_TOOLS.filter(t => allowed.has(t.name))
-  const tools = type === 'scoped' ? base.map(t => t.name === 'reply' ? withoutFiles(t) : t) : base
+  const tools = type === 'scoped' ? base.map(t => t.name === 'reply' ? withoutFiles(t) : t.name === 'send_to_thread' ? scopedSend(t) : t) : base
   if (!overrides?.descriptions && !overrides?.inputSchemas) return tools
   return tools.map(t => {
     const desc = overrides.descriptions?.[t.name]

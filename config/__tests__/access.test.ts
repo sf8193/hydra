@@ -38,7 +38,7 @@ tools = ["search_logs", "get_monitor"]
 [mcp.empty]
 command = "bun"
 `
-const spec = (body: string, workdir = '~/agents/ops') => `${BASE}\n[specialists.ops]\nworkdir = "${workdir}"\nlistens = ["slack:dm"]\nallow = []\nhome = "slack:#escalations"\n${body}\n`
+const spec = (body: string, workdir = '~/agents/ops') => `${BASE}\n[specialists.ops]\nworkdir = "${workdir}"\nlistens = ["slack:dm"]\nallow = []\n${body}\n`
 
 const load = (text: string, e: LoadEnv = env) => loadHydraConfig(text, e)
 const errorsOf = (text: string, e: LoadEnv = env): string[] => {
@@ -284,7 +284,7 @@ describe('engine', () => {
 })
 
 describe('[defaults.specialist]', () => {
-  test.each(['access = "workdir"', 'tools = ["Read"]', 'mcp = ["datadog"]'])('%s is refused as a default', line => {
+  test.each(['access = "workdir"', 'tools = ["Read"]', 'mcp = ["datadog"]', 'talks_to = ["y"]'])('%s is refused as a default', line => {
     const key = line.split(' ')[0]
     const text = `${BASE}\n[defaults.specialist]\nworkdir = "~/agents/ops"\n${line}\n[specialists.ops]\nlistens = ["slack:dm"]\nallow = []\n`
     expect(errorsOf(text)).toEqual([`defaults.specialist.${key}: can't be a default: ${key} says what one specialist's session may reach. Set it under [specialists.<id>] by editing hydra.toml`])
