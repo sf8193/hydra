@@ -7,11 +7,13 @@
 // Env hygiene: the process starts from `env -i HOME PATH USER` (scoped-probe.ts); no test token, daemon socket or plugin
 // dir of the live daemon reaches it, and the launch's own exports point DAEMON_SOCK at a socket that does not exist.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs'
 import { homedir, tmpdir } from 'os'
 import { join } from 'path'
+import { createServer, connect, type Server } from 'net'
 import { ClaudeEngine } from '../engines/claude-engine.js'
 import { CLAUDE_CONFIG, STATE_DIR } from '../config.js'
+import { serverTmpDir } from '../scoped-files.js'
 import { policyIdFor, type LaunchPolicy } from '../scope.js'
 import { mismatches, readLoaded, verifyDeps, verifyLaunch } from '../engines/claude-verify.js'
 import { withFakeTmux } from './fake-tmux.js'
@@ -43,6 +45,15 @@ describe.skipIf(!LIVE)('a scoped launch, run for real', () => {
   const dir = mkdtempSync(join(tmpdir(), 'scoped-live-'))
   const workdir = join(dir, 'workdir')
   const stub = join(dir, 'stub-mcp')
+  const standinSock = join(dir, 'daemon-standin.sock')
+  // The sandbox lets a server write only in its own temp folder (its TMPDIR): the stub records what it could do there.
+  const serverDir = serverTmpDir('live-t', 'live-s', 'stub')
+  const standinResult = join(serverDir, 'standin-result.txt')
+  const parentEnvResult = join(serverDir, 'parent-env-result.txt')
+  let standin: Server
+  let standinAccepted = 0
+  /** What the stand-in saw by the time the scoped run ended (the control run below plants an unsandboxed stub of its own, which does connect). */
+  let afterScoped = { accepted: 0, result: '', parentEnv: '' }
   let init: any
   let debugLog = ''
   let initOnly: any
@@ -67,8 +78,22 @@ describe.skipIf(!LIVE)('a scoped launch, run for real', () => {
       hooks: { SessionStart: [{ hooks: [{ type: 'command', command: `echo ${PLANT_HOOK}` }] }] },
     }))
     writeFileSync(join(workdir, '.mcp.json'), JSON.stringify({ mcpServers: { planted: { command: stub } } }))
+    // A stand-in for the daemon's socket: a listed server that can reach it can claim a session id. The stub tries, and records what happened.
+    standin = createServer(c => { standinAccepted++; c.end() })
+    await new Promise<void>(res => standin.listen(standinSock, res))
     writeFileSync(join(stub), `#!/usr/bin/python3
-import sys, json
+import sys, json, socket, os
+try:
+    s = socket.socket(socket.AF_UNIX); s.connect(${JSON.stringify(standinSock)}); s.close(); res = "connected"
+except Exception as e:
+    res = "refused: " + type(e).__name__
+open(os.path.join(os.environ.get("TMPDIR", "/tmp"), "standin-result.txt"), "w").write(res)
+# Can this server read the environment of its parent, the claude process (it holds HYDRA_SESSION_ID, DAEMON_SOCK and every token)?
+import ctypes, ctypes.util, os
+libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+mib = (ctypes.c_int * 3)(1, 49, os.getppid()); size = ctypes.c_size_t(1 << 20); buf = ctypes.create_string_buffer(1 << 20)
+rc = libc.sysctl(mib, 3, buf, ctypes.byref(size), None, 0)
+open(os.path.join(os.environ.get("TMPDIR", "/tmp"), "parent-env-result.txt"), "w").write("READ" if rc == 0 and b"HYDRA_SESSION_ID=" in buf.raw[:size.value] else "denied rc=%d" % rc)
 for line in sys.stdin:
     m = json.loads(line)
     if m.get("method") == "initialize":
@@ -109,6 +134,7 @@ for line in sys.stdin:
     }
     const scopedRun = await run(command)
     init = scopedRun.init; initOnly = scopedRun.result
+    afterScoped = { accepted: standinAccepted, result: readFileSync(standinResult, 'utf8'), parentEnv: readFileSync(parentEnvResult, 'utf8') }
     if (process.env.HYDRA_LIVE_DEBUG) console.log(JSON.stringify({ plugins: init?.plugins, mcp: init?.mcp_servers, result: initOnly, stderr: (() => { try { return readFileSync(join(dir, 'stderr.log'), 'utf8') } catch { return '' } })(), out: scopedRun.out.slice(0, 1500) }, null, 1))
     debugLog = readFileSync(join(STATE_DIR, 'spawn-logs', 'debug-live-t-live-s.log'), 'utf8')
     // The control: the same command without --restricted. The planted files must show up here, or "not loaded" above proves nothing.
@@ -119,7 +145,7 @@ for line in sys.stdin:
     controlDebug = readFileSync(join(STATE_DIR, 'spawn-logs', 'debug-control.log'), 'utf8')
   }, 120_000)
 
-  afterAll(() => { delete process.env.STUB_KEY; rmSync(dir, { recursive: true, force: true }) })
+  afterAll(() => { standin?.close(); delete process.env.STUB_KEY; rmSync(dir, { recursive: true, force: true }) })
 
   test('the built-in tools are exactly the list', () => {
     expect(init.tools.filter((t: string) => !t.startsWith('mcp__')).sort()).toEqual(['Glob', 'Grep', 'Read'])
@@ -161,6 +187,19 @@ for line in sys.stdin:
     expect(await verifyLaunch(policy as any, 'scoped.log', { ...verifyDeps, read: () => debugLog })).toEqual({ ok: true })
     const control = await verifyLaunch(policy as any, 'control.log', { ...verifyDeps, read: () => controlDebug, deadlineMs: 0 })
     expect(control.ok).toBe(false)
+  })
+  test('the listed server runs under sandbox-exec, still connects and answers, and cannot reach a stand-in for the daemon\'s socket', async () => {
+    const mcpConfig = JSON.parse(readFileSync(join(STATE_DIR, 'scoped', readdirSync(join(STATE_DIR, 'scoped')).find(f => f.endsWith('.mcp.json'))!), 'utf8'))
+    expect(mcpConfig.mcpServers.stub.command).toBe('/usr/bin/sandbox-exec')
+    expect(mcpConfig.mcpServers.stub.args.at(-1)).toBe(stub)
+    expect(init.mcp_servers.find((m: any) => m.name === 'stub').status).toBe('connected')
+    expect(afterScoped.result).toMatch(/^refused/)
+    expect(afterScoped.accepted).toBe(0)
+    expect(afterScoped.parentEnv).toMatch(/^denied/)   // it could not read the claude process's environment either
+    // The stand-in is reachable by anyone not under the profile, so the refusal above is the sandbox and not a dead socket.
+    const before = standinAccepted
+    await new Promise<void>(res => { const c = connect(standinSock); c.on('connect', () => c.end()); c.on('close', () => res()) })
+    expect(standinAccepted).toBe(before + 1)
   })
   test('the turn ran: Claude answered', () => {
     expect(initOnly?.is_error).toBe(false)

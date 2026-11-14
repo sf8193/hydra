@@ -1,6 +1,7 @@
 // A specialist with access = "workdir" launches scoped on every shape, derived from the one place (doSpawnSession) and the
 // record it replaces; a conversation that ran under another scope is never resumed or forked; the engine is checked again
 // at launch. Through the real spawn and recovery paths: fake engine, fake tmux, no daemon I/O.
+import { macLike } from './sandbox-host.js'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
@@ -17,7 +18,7 @@ import { engines } from '../engines/instances.js'
 import { ClaudeEngine } from '../engines/claude-engine.js'
 import type { LaunchInput } from '../engines/engine-adapter.js'
 import { _resetRecoveryDeps, _setRecoveryDeps, reviveThread } from '../recovery.js'
-import { _setHydraConfigForTesting } from '../hydra-config.js'
+import { _setHydraConfigForTesting, _setLoadEnvForTesting } from '../hydra-config.js'
 import { bornPolicy, deliveryRefusal, isVerifying, verifyBackoff, OPERATOR_SCOPE, PolicyRefusal, resolvePolicy, unverified, type LaunchPolicy } from '../scope.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import { debugLogFor, verifyLaunchesAgainst } from './verified-launch.js'
@@ -96,12 +97,13 @@ afterAll(() => {
   if (orig.spawnCwd === undefined) delete process.env.SPAWN_CWD; else process.env.SPAWN_CWD = orig.spawnCwd
   _setHydraConfigForTesting(undefined)
 })
-beforeEach(() => { fake = withFakeTmux(); failResume = false; failFork = false; launches.length = 0; stops.length = 0; use(OPS, DESK, CRM) })
+beforeEach(() => { _setLoadEnvForTesting(macLike()); fake = withFakeTmux(); failResume = false; failFork = false; launches.length = 0; stops.length = 0; use(OPS, DESK, CRM) })
 afterEach(() => {
   for (const s of [...registry.values()]) if (s.threadId === THREAD) registry.delete(s.sessionId)
   registry.deleteThread(THREAD)
   threadRegistry.threads.delete(THREAD)
   fake.restore()
+  _setLoadEnvForTesting(undefined)
 })
 
 let seq = 0

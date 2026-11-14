@@ -112,6 +112,10 @@ env_file = ".env.reviewer"            # extra environment for its sessions; rela
 command = "/usr/local/bin/datadog-mcp"   # required: a pinned binary or versioned package, not `npx -y` latest
 token_env = ["DD_API_KEY"]               # names in the state dir's .env; only these reach the server (never GH_TOKEN or the SSH agent)
 tools = ["search_logs", "get_monitor"]   # the tools of it a specialist may call (default: none, which a specialist cannot list)
+# Listing a server means running code you trust with your own privileges. Its `tools` limits which of its tools the specialist may call.
+# On macOS it also runs under a best-effort sandbox (hygiene, not containment; the network stays open): no unix sockets but name lookup,
+# file writes only in its own temp folder and two devices, /dev/null and /dev/dtracehelper (emptied at each start: a server that must keep data cannot run here), no credential folders,
+# no other process's environment or command line.
 
 # --- places: optional platform options for one place ---
 

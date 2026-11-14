@@ -103,8 +103,10 @@ describe('a missing thing in the debug file refuses', () => {
   test('the bridge never connected', () => {
     expect(mismatches(policy, readLoaded(without('"plugin:discord:discord": Successfully connected')))).toEqual([`these MCP servers did not connect: \`${BRIDGE_MCP_SERVER_KEY}\``])
   })
-  test('the listed server never connected', () => {
-    expect(mismatches(policy, readLoaded(without('"stub": Successfully connected')))).toEqual(['these MCP servers did not connect: `stub`'])
+  test('the listed server never connected: the refusal also says it runs under sandbox-exec and what that denies', () => {
+    const m = mismatches(policy, readLoaded(without('"stub": Successfully connected')))
+    expect(m).toHaveLength(1)
+    expect(m[0]).toMatch(/^these MCP servers did not connect: `stub` \(a listed server runs under sandbox-exec, which denies unix sockets other than name lookup, writes outside its own temp folder, signals to other processes and the places hydra lists as off limits \(credential folders and more\): a server that needs one of those cannot start\)$/)
   })
   test('the permission rules were not applied', () => {
     const noRules = REAL.split('\n').filter(l => !/flagSettings' (with 2|:)/.test(l) && !l.includes("destination 'flagSettings': ")).join('\n')
@@ -176,7 +178,8 @@ describe('verifyLaunch', () => {
   })
   test('a launch that never finishes loading refuses at the deadline, naming what is missing', async () => {
     const v = await verifyLaunch(policy, PATH, clock({ [PATH]: without('"stub": Successfully connected') }).deps)
-    expect(v).toEqual({ ok: false, why: 'it had not finished loading after 5s: these MCP servers did not connect: `stub`' })
+    expect(v.ok).toBe(false)
+    expect((v as any).why).toMatch(/^it had not finished loading after 5s: these MCP servers did not connect: `stub` \(a listed server runs under sandbox-exec/)
   })
   test('a surplus line written after the expected servers connected is caught by the second read', async () => {
     const c = clock({ [PATH]: REAL }, () => { c.files[PATH] = REAL + `${t(31)}MCP server "late-evil": Starting connection with timeout of 30000ms\n` })

@@ -3,16 +3,18 @@ import { describe, test, expect } from 'bun:test'
 import { loadHydraConfig } from '../load.js'
 import type { HydraConfig, LoadEnv } from '../types.js'
 import { testLoadEnv } from './load-env.js'
+import { SANDBOX_EXEC } from '../server-sandbox.js'
+import { offLimitRoots, workdirScopeIssues } from '../workdir-scope.js'
 
 const HOME = '/home/op'
 const STATE = '/home/op/.claude/channels/discord'
-const DIRS = [HOME, `${HOME}/agents/nested`, `${HOME}/agents/huge`, `${HOME}/agents/under-mcp/work`, `${HOME}/cfg/claude/projects`, `${HOME}/agents/ops`, `${HOME}/agents/repo`, `${HOME}/agents/links`, `${HOME}/agents/mcpjson`, `${HOME}/notes/hydra`, `${HOME}/.ssh`, `${HOME}/.config/app`, `${HOME}/.claude/projects`, STATE, `${STATE}/sub`, '/']
+const DIRS = [HOME, `${HOME}/Library/Safari`, `${HOME}/Library/Application Support/Firefox/profiles`, `${HOME}/Library/Cookies`, `${HOME}/.claude.json`, `${HOME}/.docker`, `${HOME}/.aws`, `${HOME}/.kube/cache`, `${HOME}/.gnupg`, `${HOME}/Library/Keychains`, `${HOME}/agents/nested`, `${HOME}/agents/huge`, `${HOME}/agents/under-mcp/work`, `${HOME}/cfg/claude/projects`, `${HOME}/agents/ops`, `${HOME}/agents/repo`, `${HOME}/agents/links`, `${HOME}/agents/mcpjson`, `${HOME}/notes/hydra`, `${HOME}/.ssh`, `${HOME}/.config/app`, `${HOME}/.claude/projects`, STATE, `${STATE}/sub`, '/']
 const env: LoadEnv = testLoadEnv({
   home: HOME, sessionNames: ['spark'],
   stateDir: STATE,
   claudeConfigDir: `${HOME}/.claude`,
   isDir: p => DIRS.includes(p),
-  isCommand: c => ['/usr/local/bin/datadog-mcp', 'bun'].includes(c),
+  isCommand: c => ['/usr/local/bin/datadog-mcp', 'bun', SANDBOX_EXEC].includes(c),
   realpath: p => (p === `${HOME}/agents/links-alias` ? `${HOME}/agents/links` : p),
   isGitWorkTree: p => p === `${HOME}/agents/repo`,
   scanWorkdir: p => ({
@@ -105,6 +107,8 @@ describe('workdir (access = "workdir")', () => {
   })
   test.each([
     ['~/.ssh', '~/.ssh'], ['~/.config/app', '~/.config'], ['~/.claude/projects', '~/.claude'],
+    ['~/.aws', '~/.aws'], ['~/.kube/cache', '~/.kube'], ['~/.gnupg', '~/.gnupg'], ['~/Library/Keychains', '~/Library/Keychains'],
+    ['~/.docker', '~/.docker'], ['~/.claude.json', '~/.claude.json'], ['~/Library/Safari', '~/Library/Safari'], ['~/Library/Application Support/Firefox/profiles', '~/Library/Application Support/Firefox'], ['~/Library/Cookies', '~/Library/Cookies'],
   ])('%s is inside a private home folder', (path, root) => {
     expect(wd(path)).toEqual([`specialists.ops.workdir: ${HOME}${path.slice(1)} is inside ${root}, which holds what a scoped specialist must not know`])
   })
@@ -188,6 +192,46 @@ describe('mcp (access = "workdir")', () => {
   })
   test('a server with no tools is refused', () => {
     expect(errorsOf(spec('access = "workdir"\nmcp = ["empty"]'))).toEqual(['specialists.ops.mcp[0]: [mcp.empty] lists no tools, so a specialist could call none of them: set its `tools`'])
+  })
+})
+
+describe('a machine without sandbox-exec (a listed server runs under it)', () => {
+  const noSandbox = testLoadEnv({ ...env, isCommand: c => c !== SANDBOX_EXEC && env.isCommand(c) })
+  test('a workdir specialist listing a server is refused, naming the cause and both fixes', () => {
+    const e = errorsOf(spec('access = "workdir"\nmcp = ["datadog"]'), noSandbox)
+    expect(e).toHaveLength(1)
+    expect(e[0]).toMatch(/^specialists\.ops\.mcp: a listed \[mcp\.\*\] server runs under \/usr\/bin\/sandbox-exec \(macOS only\), which blocks its connects to the daemon's socket and its reads of the listed credential folders\. This machine does not have it\. Remove the servers from the specialist's mcp, set access = "operator", or run hydra on a Mac$/)
+  })
+  test('a workdir specialist listing none loads as before', () => {
+    expect(ok(spec('access = "workdir"'), noSandbox).config.specialists.ops.access).toBe('workdir')
+  })
+  test('an operator specialist is not asked', () => {
+    expect(ok(spec('access = "operator"'), noSandbox).config.specialists.ops.access).toBe('operator')
+  })
+})
+
+describe('one list of off-limits roots, for the workdir check and the sandbox profile', () => {
+  test('a folder inside any place privateRoots lists is refused as a workdir, with that place named', () => {
+    const roots = offLimitRoots(env, ['/home/op/Notes'])
+    expect(roots.length).toBeGreaterThanOrEqual(12)
+    // Some roots sit inside others here (the state dir is under ~/.claude), so the place named may be the outer one.
+    for (const r of roots) expect([r.label, workdirScopeIssues(env, `${r.path}/work`, ['/home/op/Notes'])[0]]).toEqual([r.label, expect.stringMatching(new RegExp(`^${r.path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/work is inside .*, which holds what a scoped specialist must not know$`))])
+  })
+})
+
+describe('a path the sandbox profile cannot hold (a control character), refused at load', () => {
+  test('a private_roots entry with a newline is refused where it is written, with the fix', () => {
+    const e = errorsOf(`${BASE}\n[defaults]\nprivate_roots = ["/home/op/a\\nb"]`)
+    expect(e).toHaveLength(1)
+    expect(e[0]).toMatch(/^defaults\.private_roots\[0\]: .*control character.*remove it from the path$/)
+  })
+  test('a quote, a parenthesis and a backslash in a private_roots entry are fine: they are escaped', () => {
+    expect(ok(`${BASE}\n[defaults]\nprivate_roots = ["/home/op/a\\"b)c(d\\\\e"]`).config.privateRoots).toEqual(['/home/op/a"b)c(d\\e'])
+  })
+  test('a state dir or Claude config dir with a newline refuses a specialist that lists a server (it is in the profile), and no one else', () => {
+    const e = errorsOf(spec('access = "workdir"\nmcp = ["datadog"]'), testLoadEnv({ ...env, stateDir: '/srv/hy\ndra' }))
+    expect(e.some(m => /^specialists\.ops\.mcp: .*control character/.test(m))).toBe(true)
+    expect(ok(spec('access = "workdir"'), testLoadEnv({ ...env, stateDir: '/srv/hy\ndra', isDir: p => DIRS.includes(p) })).config.specialists.ops.access).toBe('workdir')
   })
 })
 

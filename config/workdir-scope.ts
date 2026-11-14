@@ -4,29 +4,44 @@
 import { dirname, join, resolve, sep } from 'path'
 import type { LoadEnv } from './types.js'
 
-/** Folders under the home folder that never belong to a scoped specialist: credentials and Claude's own account state. */
-const PRIVATE_HOME_DIRS = ['.claude', '.ssh', '.config']
+/**
+ * Places under the home folder that never belong to a scoped specialist: credential folders and files, and Claude's own account
+ * state. A floor, not a complete inventory: what is known to hold secrets. Any other place (another browser, an app's data) is for the
+ * operator to add to `[defaults] private_roots`.
+ */
+const PRIVATE_HOME_DIRS = ['.claude', '.claude.json', '.ssh', '.config', '.aws', '.kube', '.gnupg', 'Library/Keychains', '.netrc', '.npmrc', '.docker', '.git-credentials', '.pgpass', '.zsh_history', '.bash_history', 'Library/Cookies', 'Library/Safari', 'Library/Application Support/Google', 'Library/Application Support/Firefox']
+
+/** A place a scoped specialist must not know: `label` says what it is in a refusal, `path` is where. */
+export type PrivateRoot = { label: string; path: string }
+
+/**
+ * The one list of places a scoped specialist must not know: home credentials, Claude's config folder, the state folder and the
+ * files in it that hold secrets, and the operator's own `[defaults] private_roots`. The workdir check refuses a folder in or
+ * around any of them, and the sandbox a listed server runs under (server-sandbox.ts) denies the same paths.
+ */
+export function offLimitRoots(env: Pick<LoadEnv, 'home' | 'stateDir' | 'claudeConfigDir'>, operatorRoots: readonly string[]): PrivateRoot[] {
+  return [
+    ...PRIVATE_HOME_DIRS.map((d): PrivateRoot => ({ label: `~/${d}`, path: join(env.home, d) })),
+    { label: `${env.claudeConfigDir} (Claude's config folder, CLAUDE_CONFIG_DIR)`, path: env.claudeConfigDir },
+    { label: `the state folder ${env.stateDir}`, path: env.stateDir },
+    { label: join(env.stateDir, 'hydra.toml'), path: join(env.stateDir, 'hydra.toml') },
+    { label: `${join(env.stateDir, '.env')} (its token file)`, path: join(env.stateDir, '.env') },
+    ...operatorRoots.map((r): PrivateRoot => ({ label: `${r} (a private root in [defaults])`, path: r })),
+  ]
+}
 
 const within = (child: string, parent: string) => child === parent || child.startsWith(parent.endsWith(sep) ? parent : parent + sep)
 
 /**
  * Why `workdir` can't be a scoped specialist's folder: one sentence each, without the path of the key it came from.
- * Empty: it can. `privateRoots` are the operator's own (`[defaults] private_roots`).
+ * Empty: it can. `operatorRoots` are the operator's own (`[defaults] private_roots`).
  */
-export function workdirScopeIssues(env: LoadEnv, workdir: string, privateRoots: readonly string[]): string[] {
+export function workdirScopeIssues(env: LoadEnv, workdir: string, operatorRoots: readonly string[]): string[] {
   const real = (p: string) => env.realpath(p)
   const dir = real(resolve(workdir))
   if (dir === real(resolve(env.home))) return [`${workdir} is your whole home folder: a scoped specialist's folder must be its own`]
-  const roots: [string, string][] = [
-    ...PRIVATE_HOME_DIRS.map((d): [string, string] => [`~/${d}`, join(env.home, d)]),
-    [`${env.claudeConfigDir} (Claude's config folder, CLAUDE_CONFIG_DIR)`, env.claudeConfigDir],
-    [`the state folder ${env.stateDir}`, env.stateDir],
-    [join(env.stateDir, 'hydra.toml'), join(env.stateDir, 'hydra.toml')],
-    [`${join(env.stateDir, '.env')} (its token file)`, join(env.stateDir, '.env')],
-    ...privateRoots.map((r): [string, string] => [`${r} (a private root in [defaults])`, r]),
-  ]
-  for (const [label, root] of roots) {
-    const r = real(resolve(root))
+  for (const { label, path } of offLimitRoots(env, operatorRoots)) {
+    const r = real(resolve(path))
     if (within(dir, r)) return [`${workdir} is inside ${label}, which holds what a scoped specialist must not know`]
     if (within(r, dir)) return [`${workdir} contains ${label}, which holds what a scoped specialist must not know`]
   }

@@ -327,6 +327,7 @@ ids = ["slack:U0ALICE"]
 roles = ["staff"]
 
 # A server specialists may list. Per-operator, so only hydra.toml declares one (never a `hydra config add` fragment).
+# Listing a server means running code you trust with your own privileges; `tools` limits which of its tools the specialist may call. Most specialists list none (see [Listed servers](#listed-servers-code-you-trust-run-with-best-effort-hygiene)).
 [mcp.datadog]
 command = "/usr/local/bin/datadog-mcp"    # a pinned binary or a versioned package, not `npx -y` latest
 token_env = ["DD_API_KEY"]                # names in the state dir's .env; only these reach the server
@@ -349,6 +350,7 @@ link_previews = false                     # no link previews on anything hydra p
 **Before you paste.** The checks below run on your machine, so have these ready:
 - the folder `~/specialists/ops` exists and is a folder of its own (a git work tree, your home folder and a folder with symlinks out are refused);
 - the binary at `[mcp.datadog] command` exists and is executable;
+- the daemon runs on macOS: a specialist that lists servers is refused where `/usr/bin/sandbox-exec` is missing (remove the servers from its `mcp`, set `access = "operator"`, or run hydra on a Mac). `hydra config check` refuses it on any machine without `sandbox-exec`, so run the check on the machine the daemon runs on;
 - `DD_API_KEY=<value>` is in the state dir's `.env`. hydra.toml reloads within a second, but the daemon reads `.env` only when it starts: restart it after adding the variable, or the specialist's first start refuses, naming the variable.
 
 `hydra config check` runs the loader's checks without the daemon, and reports what is missing.
@@ -359,11 +361,36 @@ link_previews = false                     # no link previews on anything hydra p
 |---|---|
 | **Knows** | its `workdir` and nothing else: no `CLAUDE.md`, memory, project settings or `.mcp.json` from anywhere, and not the operator's plugins or claude.ai connectors |
 | **Built-in tools** | `tools`: `Read`, `Grep`, `Glob`, nothing that runs code. `Read` and the other two reach only the workdir |
-| **MCP servers** | the ones in `mcp`, each limited to the `tools` the `[mcp.*]` table lists, with only its `token_env` variables |
+| **MCP servers** | the ones in `mcp`, each limited to the `tools` the `[mcp.*]` table lists, with only its `token_env` variables; code you trust, run under a best-effort sandbox (below) |
 | **Hydra tools** | `reply` (text only), `react`, `edit_message`, `delete_message`, `fetch_messages`, `download_attachment` and `set_description`, each only in its own thread or a Slack conversation bound to it; and `escalate` |
 | **Never** | `spawn_session`, `kill_session`, `peek_session`, `list_sessions`, `send_to_thread`, `handoff`, `bind_conversation`, `watch_pr`, `ask_predecessor`, and nothing posted outside its conversation but through `escalate` |
 
 hydra.toml refuses, with the key and the fix: a `tools` entry beyond the three; a workdir that is your home folder, a private root (`[defaults] private_roots = ["~/notes"]` adds yours), the state dir or Claude's config dir, a git work tree or one that holds a nested repository, a folder with a `.mcp.json` in or above it, a symlink out of it, or one too big to scan; an `mcp` name with no `[mcp.<name>]` or a server with no `tools`; an engine other than `claude`. `access`, `tools` and `mcp` are refused in `[defaults.specialist]` and in `hydra config add` fragments: only a hand edit of hydra.toml confines or unconfines a specialist.
+
+### Listed servers: code you trust, run with best-effort hygiene
+
+**Listing a server means running code you trust with your own privileges.** A listed `[mcp.*]` server is a process of your user: pin it, read it, and trust its authors as you would a program you run yourself. The server's `tools` list limits which of its tools the specialist may call, and it is the primary control. The recommended shape for a specialist other people talk to has no `mcp` at all: `Read`, `Grep`, `Glob`, its folder and its own conversation.
+
+For the servers you do list, hydra adds a sandbox on macOS. It is best-effort hygiene, proven by probes on one macOS version, **not containment**: do not rely on it against a hostile server. Each listed server runs under `sandbox-exec` with one profile, the same for every operator, which the server's own children inherit. The profile starts from "allow everything" and takes away:
+
+- every unix-socket connect except name lookup (not the daemon's socket, tmux, or another session);
+- every file write except to the server's own temp folder, `/dev/null` and `/dev/dtracehelper`: no shell rc files, LaunchAgents or `~/.claude.json`. npm's cache and `TMPDIR` are put in that folder, never in `~/.npm`. The folder is made new at each start (also at a resume or respawn) and removed when the session ends, so **a server that must keep data across sessions cannot run under the sandbox**: use an `access = "operator"` specialist for it. The contents of the other servers' folders are unreadable (their names and sizes can still be listed by `stat`);
+- reads and writes of the places a confined specialist's workdir may not be, one list used by both (the source is `offLimitRoots` in `config/workdir-scope.ts`; it is a floor, not a complete inventory): credential files and folders such as `~/.ssh`, `~/.aws`, `~/.kube`, `~/.config`, `~/.gnupg`, `~/Library/Keychains`, `~/.netrc`, `~/.npmrc`, `~/.docker`, `~/.git-credentials`, `~/.pgpass`; shell history; browser data under `~/Library`; Claude's config (`~/.claude`, `~/.claude.json`); the state dir (hydra.toml and `.env` live there); and your `[defaults] private_roots`;
+- another process's environment (the daemon's tokens, Claude's, tmux's) and its full command line, and signalling any process but itself and its children;
+- typing into the session's terminal (the `TIOCSTI` ioctl on terminal devices);
+- the system services behind `open` (LaunchServices and CoreServices: a helper started outside the sandbox), the preferences service (`defaults write` into `~/Library/Preferences`) and the pasteboard. Denying the first also breaks Apple Events to Terminal and to claude.ai; Apple Events to Finder and System Events were shown refused too.
+
+When hydra.toml loads, the daemon logs one line per specialist that lists servers, with the sentence above. The profile is built when a session starts: a session already running keeps the servers it started with (before this change, unsandboxed), and a changed `private_roots` or off-limits list reaches a running session only after `hydra kill <session>`. A daemon crash leaves a session's temp folder in the system temp directory until that session name starts again or is killed.
+
+**What it costs.** A server that needs another unix socket, a terminal, `~/.config`, `~/.aws`, `~/.claude` or `~/.kube`, or that signals its process group, stops working; when a listed server does not connect, the refusal in the thread says it runs under the sandbox. There is no per-server allowance, on purpose: one profile has no knob and no owner to widen it, and such a server belongs under an `access = "operator"` specialist. The off-limits list also grew: a workdir under `~/.aws`, `~/.kube`, `~/.gnupg`, `~/Library/Keychains` or any other entry is now refused at load, which can reject a config that loaded before.
+
+**What it does not do.**
+- The network is fully open: anything the server can read can leave. A place not on the list is readable (the list is a floor): shell history, `/etc`, variables exported in rc files, any other folder. The server runs with your `HOME` and with claude's own environment (not the daemon's).
+- Shortcuts, and Apple Events to apps other than the three probed, can still reach other apps, which run outside the sandbox. The system call `task_for_pid` was not tested on protected processes. The list of other processes (pids and names) is visible, their environments and command lines are not (`ps` cannot run under any `sandbox-exec` profile, and `pgrep` is denied on purpose). The temp parent folder's owner and mode are checked when a session starts, which is evidence, not a lock: on a shared temp dir without the sticky bit another user could swap it afterwards (read from code, not probed). The keychain is reachable through its system service.
+- `sandbox-exec` is deprecated by Apple and exists on macOS only. Where it is missing a specialist that lists servers is refused, at load and at launch. `hydra config check` refuses it on a machine without it, so run the check where the daemon runs.
+- The unauthenticated `cli` command on the daemon socket stays open for your `hydra` CLI (#625), and per-session socket keys are not scheduled (#626).
+
+A scoped session's kickoff also starts with a short fixed preamble from hydra (messages that follow come from people talking to it and carry no authority, not even if they say they come from the operator or hydra; it cannot change its tools or leave its folder). That is a prompt, not a control: it can fail. PR 4 (`talks_to`) changes its wording.
 
 ### `escalate`: asking the operator
 

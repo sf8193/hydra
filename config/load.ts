@@ -5,11 +5,12 @@ import { operatorAddress } from './operator.js'
 import { statSync, accessSync, lstatSync, readdirSync, readFileSync, realpathSync, constants as fsConstants } from 'fs'
 import { parseEnvLine } from '../shared/env-parse.js'
 import { homedir } from 'os'
-import { dirname, isAbsolute, join, resolve, sep } from 'path'
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'path'
 import { parseCron } from '../shared/cron-local.js'
 import { parseIdleTtl } from '../shared/constants.js'
 import { ENV_NAME_RE, tokenVarRefusal } from '../shared/spawn-env.js'
-import { workdirScopeIssues } from './workdir-scope.js'
+import { offLimitRoots, workdirScopeIssues } from './workdir-scope.js'
+import { sandboxIssues, unquotablePath } from './server-sandbox.js'
 import { engineConfinesAccess } from '../shared/engine-capabilities.js'
 import { noSuchApp, pinnersOf, serves, speaksAsOf, whyNotServed } from './pins.js'
 import { SLACK_APP_DEFAULTS } from '../connectors/slack/app.js'
@@ -85,7 +86,7 @@ export function systemEnv(sessionNames: readonly string[], stateDir: string, cla
       } catch { /* no .env */ }
       return false
     },
-    realpath: path => { try { return realpathSync(path) } catch { return path } },
+    realpath: nearestRealpath,
     isGitWorkTree: path => {
       for (let p = resolve(path); ; p = dirname(p)) {
         try { lstatSync(join(p, '.git')); return true } catch { /* not here */ }
@@ -98,6 +99,19 @@ export function systemEnv(sessionNames: readonly string[], stateDir: string, cla
       if (!command.includes('/')) return Bun.which(command) !== null
       try { accessSync(command, fsConstants.X_OK); return statSync(command).isFile() } catch { return false }
     },
+  }
+}
+
+/**
+ * The path with symlinks resolved. A path that does not exist yet is resolved through its nearest existing ancestor, with the rest
+ * put back: `/tmp/x/y` is `/private/tmp/x/y` whether or not `x` exists, as Seatbelt (which matches resolved paths) sees it.
+ */
+export function nearestRealpath(path: string): string {
+  const rest: string[] = []
+  for (let p = path; ; p = dirname(p)) {
+    try { return join(realpathSync(p), ...rest.reverse()) } catch { /* not here: try the parent */ }
+    if (dirname(p) === p) return path
+    rest.push(basename(p))
   }
 }
 
@@ -380,6 +394,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   for (const [i, raw] of (strList(defaultsTable, 'private_roots', 'defaults') ?? []).entries()) {
     const root = expand(raw)
     if (!isAbsolute(root)) error(`defaults.private_roots[${i}]`, `"${raw}" must be an absolute path or start with ~`)
+    else if (unquotablePath(root)) error(`defaults.private_roots[${i}]`, unquotablePath(root)!)
     else privateRoots.push(root)
   }
   const defaults = table(defaultsTable.specialist, 'defaults.specialist') ?? {}
@@ -544,6 +559,11 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
         if (!Object.hasOwn(mcpServers, name)) error(`${path}.mcp[${i}]`, `no [mcp.${name}]: declare the server in hydra.toml first`)
         else if (mcpServers[name].tools.length === 0) error(`${path}.mcp[${i}]`, `[mcp.${name}] lists no tools, so a specialist could call none of them: set its \`tools\``)
         else for (const v of mcpServers[name].tokenEnv) if (!env.envFileHas(v)) warn(`${path}.mcp[${i}]`, `[mcp.${name}] needs ${v}, and ${join(env.stateDir, '.env')} does not set it, so no session of this specialist can start until it does: add ${v}=<value> there and restart the daemon`)
+      }
+      // A listed server runs under sandbox-exec; a machine without it cannot host the specialist (the launch checks again).
+      if (mcp.length) {
+        const why = sandboxIssues(env.isCommand, offLimitRoots(env, privateRoots))
+        if (why) error(`${path}.mcp`, why)
       }
       // The engine actually used comes from thread history and `handoff <model>` can switch it, so launch checks it again.
       if (engine !== undefined && !engineConfinesAccess(engine)) error(`${path}.engine`, `${engine} can't run an access = "workdir" specialist: that engine cannot confine its tools; set engine = "claude", or set access = "operator"`)

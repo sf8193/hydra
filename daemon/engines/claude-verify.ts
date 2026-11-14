@@ -123,7 +123,9 @@ export function shortfall(p: Pick<ConfinedPolicy, 'servers'>, got: Loaded): stri
   const want = expectedLoad(p)
   const out: string[] = []
   const unconnected = want.servers.filter(s => !got.connected.includes(s))
-  if (unconnected.length) out.push(`these MCP servers did not connect: ${list(unconnected)}`)
+  // A listed server runs under sandbox-exec (config/server-sandbox.ts), and a denied path or socket shows only as 'did not connect': say so.
+  const sandboxed = unconnected.some(n => n !== BRIDGE_MCP_SERVER_KEY)
+  if (unconnected.length) out.push(`these MCP servers did not connect: ${list(unconnected)}${sandboxed ? ' (a listed server runs under sandbox-exec, which denies unix sockets other than name lookup, writes outside its own temp folder, signals to other processes and the places hydra lists as off limits (credential folders and more): a server that needs one of those cannot start)' : ''}`)
   const missingRules = want.allow.filter(r => !(got.allow ?? []).includes(r))
   if (missingRules.length) out.push(`it did not apply these permission rules: ${list(missingRules)}`)
   if (!got.connectorsOff && !got.connectorActivity) out.push('nothing says claude.ai connectors were off (no `[claudeai-mcp] Disabled via env var` line)')

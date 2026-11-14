@@ -1,3 +1,4 @@
+import { serverTrustLine } from '../scope.js'
 import { describe, test, expect, afterEach } from 'bun:test'
 import { mkdirSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
@@ -118,6 +119,22 @@ describe('the daemon\'s live hydra.toml', () => {
       writeFileSync(hydraConfigPath(), config('op') + '[specialists.ops]\nworkdir = "/tmp"\nallow = []\n[specialists.desk]\nworkdir = "/tmp"\nallow = []\naccess = "workdir"\n')
       startHydraConfig({ env })
       expect(lines.filter(l => l.includes('access ='))).toEqual(['daemon: hydra.toml: specialist ops access = operator\n', 'daemon: hydra.toml: specialist desk access = workdir (tools Read,Grep,Glob; mcp none)\n'])
+    } finally {
+      process.stderr.write = write
+    }
+  })
+
+  test('a specialist that lists servers gets one load-log line with the trust statement; one that lists none gets none', () => {
+    const lines: string[] = []
+    const write = process.stderr.write
+    process.stderr.write = ((t: string) => { lines.push(String(t)); return true }) as typeof process.stderr.write
+    try {
+      writeFileSync(hydraConfigPath(), config('op') + '[mcp.datadog]\ncommand = "/bin/sh"\ntools = ["search_logs"]\n[specialists.ops]\nworkdir = "/tmp"\nallow = []\naccess = "workdir"\nmcp = ["datadog"]\n[specialists.desk]\nworkdir = "/tmp"\nallow = []\naccess = "workdir"\n')
+      startHydraConfig({ env: { ...env, isCommand: () => true } })
+      const trust = lines.filter(l => l.includes('Listing a server means'))
+      expect(trust).toEqual([`daemon: hydra.toml: ${serverTrustLine('ops', ['datadog'])}\n`])
+      expect(trust[0]).toBe("daemon: hydra.toml: specialist ops lists servers (datadog). Listing a server means running code you trust with your own privileges. They run under a best-effort sandbox (hygiene, not containment); the tools list limits which of a server's tools the specialist may call\n")
+      expect(lines.some(l => l.includes('loaded with warnings') && l.includes('Listing a server'))).toBe(false)   // a log line, not a warning
     } finally {
       process.stderr.write = write
     }
