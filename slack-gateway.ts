@@ -271,6 +271,9 @@ export class SlackGateway implements ChatGateway {
         messageId: event.item.ts,
         userId: event.user,
         emoji: event.reaction,
+        // A Slack thread reply lives in its parent's channel; DM channel ids start with D.
+        isDM: event.item.channel.startsWith('D'),
+        parentChannelId: null,
       }).catch(e =>
         process.stderr.write(`slack gateway: reaction handler error: ${e}\n`),
       )

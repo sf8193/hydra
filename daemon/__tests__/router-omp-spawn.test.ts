@@ -12,7 +12,7 @@ const spies: Array<{ mockRestore(): void }> = []
 beforeAll(async () => {
   spies.push(spyOn(gateway, 'onMessage').mockImplementation(((cb: any) => { handler = cb }) as any))
   spies.push(spyOn(gateway, 'send').mockImplementation((async (_c: string, text: string) => { sent.push(text); return { id: 'x' } }) as any))
-  spies.push(spyOn(access, 'loadAccess').mockImplementation((() => ({ allowFrom: ['u1'] })) as any))
+  spies.push(spyOn(access, 'loadAccess').mockImplementation((() => ({ allowFrom: ['u1'], groups: { c1: {} } })) as any))
   spies.push(spyOn(global, 'handleSpawnIntercept').mockImplementation((async (...args: any[]) => { spawns.push(args) }) as any))
   await import('../router.js')
 })

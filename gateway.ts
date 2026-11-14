@@ -89,6 +89,9 @@ export type ReactionEvent = {
   messageId: string
   userId: string
   emoji: string
+  // Where it happened, as on InboundMessage, so the daemon can tell whether it is allowed there.
+  isDM: boolean
+  parentChannelId: string | null
 }
 
 export type ThreadStarterInfo = {

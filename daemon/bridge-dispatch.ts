@@ -3,7 +3,7 @@ import { isAbsolute, join, resolve as resolvePath } from 'path'
 import { gateway, INBOX_DIR, STATE_DIR } from './config.js'
 import { isParentOf, parentSessionOf, registry, resolveSendTarget, sessionEmoji, threadRegistry, type Predecessor, type SessionInfo, type ThreadSessionEntry } from './sessions.js'
 import { transport } from './bridge-transport.js'
-import { loadAccess, operatorIds, maxChunkLimit, MAX_ATTACHMENT_BYTES } from './access.js'
+import { loadAccess, operatorIds, maxChunkLimit, channelPolicy, MAX_ATTACHMENT_BYTES } from './access.js'
 import { quietSend, shouldQuiet } from './quiet-send.js'
 import { beginMainHandoff } from './main-handoff.js'
 import { getSpecialist } from '../specialists/specialists.js'
@@ -205,8 +205,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
             throw new Error(`channel ${chat_id} is not allowlisted (DM recipient ${ch.recipientId || 'unknown'})`)
           }
         } else {
-          const key = ch.isThread ? ch.parentId ?? ch.id : ch.id
-          if (!(key in access.groups)) {
+          if (!channelPolicy(access, { isDM: false, channelId: ch.id, parentChannelId: ch.parentId })) {
             throw new Error(`channel ${chat_id} is not allowlisted`)
           }
         }
