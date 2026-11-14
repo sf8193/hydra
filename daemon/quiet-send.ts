@@ -1,6 +1,7 @@
 import { mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'fs'
 import { randomBytes } from 'crypto'
 import { join } from 'path'
+import { clean } from '../shared/untrusted-text.js'
 
 // Session-to-session sends reach the recipient's session in full. Each thread shows one
 // subtext line instead of the whole text: 📨 in the recipient's, 📤 in the sender's.
@@ -22,13 +23,15 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 /** The sender's own summary, else the first non-empty line: one line, bounded, identifiers intact. */
 export function oneLine(text: string, summary?: string, sender?: string): string {
-  const source = summary?.trim() || text.split('\n').map(l => l.trim()).find(l => l.length > 0) || ''
+  // Hidden and direction-changing characters go first (they would otherwise survive into the human's thread).
+  const source = clean(summary?.trim() || text.split('\n').map(l => l.trim()).find(l => l.length > 0) || '')
   let flat = source
     .replace(/^[#>*\-\s]+/, '')
     .replace(/\*\*/g, '')
     .replace(/\s+/g, ' ')
     .replace(/@/g, '@\u200b')
-    .replace(/<(?=[@#&!])/g, '<\u200b')
+    // Any `<` could open a Slack link (`<https://x|label>`) or a mention: none does.
+    .replace(/</g, '<\u200b')
     // Only the line itself links: a masked link in the summary would render on both platforms.
     .replace(/\]\(/g, '] (')
   // The line already names the sender.
