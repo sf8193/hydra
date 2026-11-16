@@ -1,4 +1,4 @@
-import { App, LogLevel, SocketModeReceiver } from '@slack/bolt'
+import { LogLevel } from '@slack/bolt'
 import { WebClient } from '@slack/web-api'
 import { SocketSupervisor, START_TIMEOUT_MS, type SocketEmitter } from '../../shared/socket-supervisor.js'
 import { catchUp, toEvent, type CatchUpResult, type Page, type RawMessage, type SlackApi } from './catchup.js'
@@ -12,7 +12,7 @@ import { SLACK_APP_NEEDS, NO_SLACK_APP, appKey, appSuffix, type ScopeNeed } from
 import { ConnectedApps } from './apps.js'
 import { timed } from '../../shared/loop-watch.js'
 import { awakeSince, suspendedSince, describeCause, type ResumeDetector } from '../../shared/resume.js'
-import { SLACK_CLIENT_PING_TIMEOUT_MS } from '../../shared/constants.js'
+import { buildSocketApp, parseAuth, unfurlFields } from '../../shared/slack-client.js'
 
 /**
  * The Slack connector for one app: one Socket Mode connection that feeds `message` events to the watcher, and the catch-up pass
@@ -89,7 +89,7 @@ export type PostOptions = { unfurl?: false }
 
 /** The chat.postMessage arguments for one reply: the thread when there is one, and unfurling off exactly when asked. */
 export function postPayload(channel: string, threadTs: string | undefined, text: string, opts?: PostOptions): Record<string, unknown> {
-  return { channel, text, ...(threadTs && { thread_ts: threadTs }), ...(opts?.unfurl === false && { unfurl_links: false, unfurl_media: false }) }
+  return { channel, text, ...(threadTs && { thread_ts: threadTs }), ...unfurlFields(opts?.unfurl === false) }
 }
 
 export type SlackAppLike = {
@@ -658,9 +658,7 @@ export class SlackListener {
 // ---------------------------------------------------------------------------
 
 export function boltApp(tokens: { app: string; bot: string; user?: string }): SlackAppLike {
-  // Built here, not by Bolt: Bolt's own receiver leaves out clientPingTimeout, and the headroom is the point.
-  const receiver = new SocketModeReceiver({ appToken: tokens.app, clientPingTimeout: SLACK_CLIENT_PING_TIMEOUT_MS, logLevel: LogLevel.ERROR })
-  const app = new App({ token: tokens.bot, receiver, socketMode: true, logLevel: LogLevel.ERROR })
+  const { app } = buildSocketApp({ appToken: tokens.app, botToken: tokens.bot })
   let handler: (event: RawEvent) => void = () => {}
   app.message(async ({ message }) => { handler(message as RawEvent) })
   // Posting never retries behind the caller's back, and gives up at a hard deadline: a retry landing after the caller
@@ -707,7 +705,7 @@ export function boltApp(tokens: { app: string; bot: string; user?: string }): Sl
     authTest: async () => {
       const r = await client.auth.test({ token: tokens.bot })
       const scopes = (r as { response_metadata?: { scopes?: string[] } }).response_metadata?.scopes
-      return { botId: r.bot_id, userId: r.user_id, ...(r.url && { url: r.url }), ...(scopes && { scopes }) }
+      return { ...parseAuth(r), ...(scopes && { scopes }) }
     },
     react: async (channel, ts, name) => { await client.reactions.add({ token: tokens.bot, channel, timestamp: ts, name }) },
     post: async (channel, threadTs, text, opts) => {

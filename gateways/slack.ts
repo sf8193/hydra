@@ -6,12 +6,13 @@
  * similar to Discord's gateway model.
  */
 
-import { App, LogLevel, SocketModeReceiver, webApi, type MessageEvent, type GenericMessageEvent, type BotMessageEvent } from '@slack/bolt'
+import { App, webApi, type MessageEvent, type GenericMessageEvent, type BotMessageEvent } from '@slack/bolt'
 import { readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { sanitizeFilename } from './gateway.js'
 import { SocketSupervisor } from '../shared/socket-supervisor.js'
 import { ThrottledQueue } from '../throttled-queue.js'
-import { HOME_STATUS_ACTION_PREFIX, SLACK_CLIENT_PING_TIMEOUT_MS } from '../shared/constants.js'
+import { HOME_STATUS_ACTION_PREFIX } from '../shared/constants.js'
+import { buildSocketApp, parseAuth, unfurlFields } from '../shared/slack-client.js'
 import { parseHomeStatusClick } from '../daemon/home-status.js'
 import { linkPreviewsOff } from '../shared/link-previews.js'
 import type {
@@ -169,10 +170,8 @@ export class SlackGateway implements ChatGateway {
       this.app = null
     }
 
-    // Built here, not by Bolt: Bolt's own receiver leaves out clientPingTimeout, and the headroom is the point.
     // Don't log to stdout — we write to stderr like the Discord gateway
-    const receiver = new SocketModeReceiver({ appToken: this.appToken, clientPingTimeout: SLACK_CLIENT_PING_TIMEOUT_MS, logLevel: LogLevel.ERROR })
-    this.app = new App({ token, receiver, socketMode: true, logLevel: LogLevel.ERROR })
+    this.app = buildSocketApp({ appToken: this.appToken, botToken: token }).app
     this.visualApi = new webApi.WebClient(token, {
       logLevel: webApi.LogLevel.ERROR,
       retryConfig: { retries: 0 },
@@ -378,10 +377,11 @@ export class SlackGateway implements ChatGateway {
     // Get bot identity
     try {
       const auth = await this.app.client.auth.test({ token })
-      this._botId = auth.bot_id ?? null
-      this._botUserId = auth.user_id ?? null
+      const who = parseAuth(auth)
+      this._botId = who.botId ?? null
+      this._botUserId = who.userId ?? null
       this._teamId = auth.team_id ?? null
-      const url = auth.url as string | undefined
+      const url = who.url
       if (url) {
         try { this._teamDomain = new URL(url).hostname.split('.')[0] } catch {}
       }
@@ -507,10 +507,7 @@ export class SlackGateway implements ChatGateway {
     }
 
     // The caller asked, or the place says so (`[places]` `link_previews = false`).
-    if (opts?.unfurl === false) {
-      payload.unfurl_links = false
-      payload.unfurl_media = false
-    }
+    Object.assign(payload, unfurlFields(opts?.unfurl === false))
 
     const result = await this.throttledSend(() => this.postMessage(payload))
     const sentId = result.ts!
@@ -532,7 +529,7 @@ export class SlackGateway implements ChatGateway {
    * `link_previews = false` gets `unfurl_links` and `unfurl_media` false. `chat.update` takes no such argument, so an edit is not covered.
    */
   private postMessage(payload: Record<string, unknown>) {
-    if (typeof payload.channel === 'string' && linkPreviewsOff('slack', [payload.channel])) { payload.unfurl_links = false; payload.unfurl_media = false }
+    if (typeof payload.channel === 'string') Object.assign(payload, unfurlFields(linkPreviewsOff('slack', [payload.channel])))
     return this.app!.client.chat.postMessage(payload as any)
   }
 
