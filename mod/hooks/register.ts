@@ -24,10 +24,16 @@ export function register(on: On) {
     return r
   })
 
-  // Account-wide rate limits, for the daemon's usage alerts. Byte alone reports: the limits are the account's, so
-  // one reporter is enough. An observer: the measurement goes on first, and a failed report is retried next time.
+  // An observer of each measurement: it goes on first.
+  // - Context fill goes in the status line as `ctx: N%`, the shape daemon/util.ts's footer reader takes first: Claude
+  //   Code's own used percentage. Every session hydra launches loads this mod, so none needs a statusline script. The
+  //   daemon computes the same figure from the transcript, so the two agree while the session runs on its launch model.
+  //   A context with no fill (a new conversation) clears the line, so the daemon's fallback never reads a stale one.
+  // - Account-wide rate limits go to the daemon for its usage alerts. Byte alone reports: the limits are the
+  //   account's, so one reporter is enough. A failed report is retried next time.
   on('session.measure', async ($, e, next) => {
     const r = await next(e)
+    if (e.changed.includes('context')) $.ui.status(e.context.percent === undefined ? undefined : `ctx: ${e.context.percent}%`)
     if (e.changed.includes('rateLimits')) usageUnsent = true
     if (!usageUnsent || e.rateLimits.length === 0) return r
     try {
@@ -36,6 +42,12 @@ export function register(on: On) {
       if (!sent.isError) usageUnsent = false
     } catch {}
     return r
+  })
+
+  // A session that ends (exit, /clear, resume) takes its context line with it: the next conversation starts empty.
+  on('session.end', ($, e, next) => {
+    $.ui.status(undefined)
+    return next(e)
   })
 
   // Discord collapses spacing in tables and box art, so they go out inside a code fence.
