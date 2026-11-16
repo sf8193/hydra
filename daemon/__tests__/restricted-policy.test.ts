@@ -100,7 +100,7 @@ describe('NoticeLimiter: at most once a minute per cause, and bounded', () => {
 
 describe('bornPolicy from a config that skipped the loader', () => {
   const config = (over: Record<string, unknown>): HydraConfig => ({
-    connectors: {}, slackApps: {}, people: {}, places: {}, schedules: {}, rules: [],
+    connectors: {}, gateways: {}, slackApps: {}, people: {}, places: {}, schedules: {}, rules: [],
     specialists: { ops: { id: 'ops', workdir: '/w/ops', listens: [], allow: [], sessions: 'shared', max: 20, was: [], access: 'workdir', ...over } as any },
   })
   test('a workdir specialist with no tools list gets Read, Grep, Glob: the narrowest set, never every tool', () => {

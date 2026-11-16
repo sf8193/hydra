@@ -4,7 +4,7 @@ import { scanSlackEnvNames } from '../token-vars.js'
 describe('scanSlackEnvNames', () => {
   test('finds the token variables of [connectors.slack] and every [slack.apps.<id>], and not Discord\'s', () => {
     expect(scanSlackEnvNames(`
-[connectors.discord]
+[gateways.discord]
 bot_token_env = "DISCORD_BOT_TOKEN"
 [connectors.slack]
 bot_token_env = "A_BOT"
@@ -17,7 +17,7 @@ display_name = "Sales"
   })
   test('works when the file is not valid TOML, line by line under the same headers', () => {
     expect(scanSlackEnvNames(`
-[connectors.discord]
+[gateways.discord]
 bot_token_env = "DISCORD_BOT_TOKEN"
 [slack.apps.sales]  # the sales app
 bot_token_env = "S_BOT"

@@ -9,7 +9,7 @@ import { testLoadEnv } from '../../config/__tests__/load-env.js'
 
 // The suite runs as the discord platform (CHAT_PLATFORM unset).
 const withOperator: HydraConfig = {
-  operator: 'op', connectors: {}, slackApps: {}, specialists: {}, places: {}, schedules: {}, rules: [],
+  operator: 'op', connectors: {}, gateways: {}, slackApps: {}, specialists: {}, places: {}, schedules: {}, rules: [],
   people: {
     op: { id: 'op', ids: ['discord:100000000000000001', 'slack:U0OP', 'github:op'], roles: [], name: 'op' },
     alice: { id: 'alice', ids: ['discord:100000000000000002'], roles: ['staff'], name: 'alice' },

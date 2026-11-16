@@ -10,10 +10,13 @@
 # Required once anything else is declared.
 operator = "op"
 
-# --- connectors: the platforms hydra connects to. A platform with no table isn't connected. Tokens stay in .env. ---
+# --- gateways: how you talk to hydra. Discord is a gateway only if it has a table here. Tokens stay in .env. ---
+# (Slack's gateway reads SLACK_BOT_TOKEN and SLACK_APP_TOKEN from .env and has no table.)
 
-[connectors.discord]
+[gateways.discord]
 bot_token_env = "DISCORD_BOT_TOKEN"   # required: the .env variable holding the bot token
+
+# --- connectors: where events come from. A source with no table isn't heard. Tokens stay in .env. ---
 
 [connectors.github]
 repos = ["acme/widget"]               # required: the repos whose PR comments hydra hears, as owner/repo
