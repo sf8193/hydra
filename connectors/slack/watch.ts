@@ -22,7 +22,7 @@ import type { Guard } from '../../config/types.js'
  * A conversation is a Slack thread, or a DM's top level. It opens when the bot is tagged (or posts the thread's
  * first message, or someone DMs it), and is bound then to the specialist routing picks; from then on every reply is
  * delivered to that specialist, tagged or not, until it goes idle. A config change re-routes only new conversations;
- * `allow` is checked again at delivery. Where `listen = "all"`, an untagged top-level message opens a conversation too:
+ * `allow` is checked again at delivery. Where `messages = "all"`, an untagged top-level message opens a conversation too:
  * its own thread, bound to wherever that one message routed.
  *
  * This file is the matcher and the store. It never talks to Slack: events come in
@@ -107,7 +107,7 @@ export type SlackWatchEntry = {
   delivered?: string[]
   /** ts of messages accepted but not yet delivered. Persisted before sending; tells catch-up where to look. */
   owed?: string[]
-  /** Opened by untagged chatter where `listen = "all"`: while owed or answered, such conversations take at most half the table; they idle out in a day. */
+  /** Opened by untagged chatter where `messages = "all"`: while owed or answered, such conversations take at most half the table; they idle out in a day. */
   ambient?: true
   /** When the guard first said "not now" (exit 75) to an owed ts: `owed_max` counts from here. */
   heldSince?: Record<string, number>
@@ -187,12 +187,12 @@ export function placesOf(cfg: Pick<SlackWatchConfig, 'directory'>, channel: stri
 export const placeName = (cfg: Pick<SlackWatchConfig, 'directory'>, channel: string): Place => placesOf(cfg, channel).at(-1)!
 
 /**
- * The Slack channels hydra.toml names, in `listens` and `[[rules]]` (those with an `at`), as written. For one `app`: only those it
+ * The Slack channels hydra.toml names, in `listens` and `[[rules]]` (those with a `place`), as written. For one `app`: only those it
  * can deliver to (`reachableBy`), so an app is not asked to read a channel it has nothing to do in.
  */
 export function namedChannels(h: HydraConfig, app?: string): Place[] {
   const r = reachableBy(h, app)
-  const all = [...r.specialists.flatMap(s => s.listens), ...r.rules.map(x => x.at)]
+  const all = [...r.specialists.flatMap(s => s.listens), ...r.rules.map(x => x.place)]
   return [...new Set(all.filter((p): p is Place => !!p && p.startsWith('slack:') && p !== 'slack:dm'))]
 }
 
@@ -215,7 +215,7 @@ export function unresolvedPlaces(cfg: Pick<SlackWatchConfig, 'hydra' | 'director
 /** Whether a specialist or a rule that app (none: any) serves names `slack:dm`: DMs someone declared they want, as opposed to the operator's own. */
 export function dmsDeclared(cfg: Pick<SlackWatchConfig, 'hydra' | 'app'>): boolean {
   const r = reachableBy(cfg.hydra, cfg.app)
-  return r.specialists.some(s => s.listens.includes('slack:dm')) || r.rules.some(x => x.at === 'slack:dm')
+  return r.specialists.some(s => s.listens.includes('slack:dm')) || r.rules.some(x => x.place === 'slack:dm')
 }
 
 /**

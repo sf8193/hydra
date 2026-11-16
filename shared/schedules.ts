@@ -39,7 +39,7 @@ export function jobsFromSchedules(cfg: Pick<HydraConfig, 'schedules' | 'speciali
         notes.push(`${(e as Error).message}, so the daemon runs it; set runner = "daemon" to say so`)
       }
     }
-    const to = s.to || undefined
+    const to = s.target || undefined
     const perConversation = to !== undefined && cfg.specialists[to]?.sessions === 'per-conversation'
     return {
       name: s.id,

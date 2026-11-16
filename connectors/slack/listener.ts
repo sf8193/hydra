@@ -128,7 +128,7 @@ export function scopesNeeded(h: HydraConfig, app: string = DEFAULT_SLACK_APP): S
   const r = reachableBy(h, app)
   const places = namedChannels(h, app)
   const dms = hearsDms({ hydra: h, app })
-  const everyPlace = r.rules.some(x => x.at === undefined)
+  const everyPlace = r.rules.some(x => x.place === undefined)
   const channels = places.length > 0 || everyPlace || r.specialists.some(sp => sp.listens.length === 0)
   const slackOpts = Object.entries(h.places).filter(([p]) => p.startsWith('slack:') && (everyPlace || places.includes(p) || (p === 'slack:dm' && dms))).map(([, o]) => o)
   const s = SLACK_APP_NEEDS.botScopes

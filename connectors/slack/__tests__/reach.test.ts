@@ -24,11 +24,11 @@ workdir = "/w/ops"
 apps = ["sales"]
 allow = ["anyone"]
 [[rules]]
-at = "slack:G0PRIV"
-to = "crm"
+place = "slack:G0PRIV"
+target = "crm"
 [[rules]]
 app = "sales"
-to = "ops"
+target = "ops"
 `
 const NO_OPERATOR_ADDRESS = TOML.replace('slack:UOP', 'github:op')
 
@@ -51,13 +51,13 @@ describe('what an app can reach: one answer, four readers', () => {
   }
 
   test('a rule to a specialist that is not declared reaches no one, anywhere', () => {
-    const ghost = { ...h, rules: [...h.rules, { at: 'slack:C0GHOST', to: 'nobody' }] }
+    const ghost = { ...h, rules: [...h.rules, { place: 'slack:C0GHOST', target: 'nobody' }] }
     for (const app of ['default', 'sales']) {
-      expect(reachableBy(ghost, app).rules.map(r => r.to)).not.toContain('nobody')
+      expect(reachableBy(ghost, app).rules.map(r => r.target)).not.toContain('nobody')
       expect(namedChannels(ghost, app)).not.toContain('slack:C0GHOST')
     }
     expect(reachesAnyone(ghost, 'default', ['slack:C0GHOST'])).toBe(false)
-    expect(reachableBy(ghost).rules.map(r => r.to)).not.toContain('nobody')
+    expect(reachableBy(ghost).rules.map(r => r.target)).not.toContain('nobody')
   })
 
   test('a rule with no place reaches every place through its app: counted for alerts and scopes, not for named channels', () => {
@@ -80,7 +80,7 @@ describe('what an app is asked for, by what it reaches', () => {
   const NO_ADDRESS = (t: string) => t.replace('slack:UOP', 'github:op')
 
   test('an app-only rule reaches every place and asks for channel history, with no named place', () => {
-    const t = NO_ADDRESS(`${TWO_APPS}\n[specialists.x]\nworkdir = "/w/x"\napps = ["sales"]\nallow = ["anyone"]\n[[rules]]\napp = "sales"\nto = "x"\n`)
+    const t = NO_ADDRESS(`${TWO_APPS}\n[specialists.x]\nworkdir = "/w/x"\napps = ["sales"]\nallow = ["anyone"]\n[[rules]]\napp = "sales"\ntarget = "x"\n`)
     expect(needs(t, 'sales')).toContain(SLACK_APP_NEEDS.botScopes.channels)
     // …and not DMs: nothing names slack:dm, and the operator has no Slack address.
     expect(needs(t, 'sales')).not.toContain(SLACK_APP_NEEDS.botScopes.dms)

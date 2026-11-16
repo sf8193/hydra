@@ -4,7 +4,7 @@
 //   0. When several Slack apps are in the channel, one app owns the message (`owningApp`); the others ignore it, so exactly one answers.
 //   1. A bound conversation follows its binding, unless hydra.toml no longer declares that specialist, or this app cannot be served by it
 //      (it is pinned elsewhere, or this app serves only specialists pinned to it): then the message is routed anew, and counts as unbound for "is it addressed" (a gone specialist's thread stays addressed).
-//   2. Otherwise the first matching [[rules]] entry: its place, app and sender all match (an absent `at` or `app` matches every one).
+//   2. Otherwise the first matching [[rules]] entry: its place, app and sender all match (an absent `place` or `app` matches every one).
 //   3. Otherwise the specialist that `listens` there.
 //   4. Otherwise, the operator's DM goes to `main`; anything else is unrouted.
 // Every candidate above must be served by the app the message came through (`notServedBy`, config/pins.ts): a specialist pinned to apps
@@ -28,7 +28,7 @@ export type Inbound = {
   from?: Address
   /** Every name this place goes by, most specific first: `slack:C0ABC`, then `slack:#help`. */
   at: Place[]
-  /** A DM, or a message that tags the bot: either may open a conversation. Ambient chatter may only where `listen = "all"`. */
+  /** A DM, or a message that tags the bot: either may open a conversation. Ambient chatter may only where `messages = "all"`. */
   addressed: boolean
   /** The conversation's binding, if it has one. A bound conversation is addressed while its binding holds: everything in it is for its specialist. A binding skipped because this app cannot be served by its specialist does not count. */
   bound?: string
@@ -108,9 +108,9 @@ export function currentId(cfg: HydraConfig, id: string): string {
   return Object.values(cfg.specialists).find(s => s.was.includes(id))?.id ?? id
 }
 
-/** Whether an unaddressed message at this place may open a conversation (`[places]` `listen = "all"`). */
+/** Whether an unaddressed message at this place may open a conversation (`[places]` `messages = "all"`). */
 export function listensToAll(cfg: HydraConfig, at: Place[]): boolean {
-  return at.some(p => cfg.places[p]?.listen === 'all')
+  return at.some(p => cfg.places[p]?.messages === 'all')
 }
 
 const isDmPlace = (p: Place) => p.endsWith(':dm')
@@ -140,15 +140,15 @@ export function heardApps(msg: Pick<Inbound, 'app' | 'heardBy' | 'at'>): string[
  *
  * `specialists`: the declared specialists the app serves. `rules`: the `[[rules]]` that apply to messages through the app (`app`
  * absent or this one) and whose target the app can deliver to: `main`, or a declared specialist it serves. A rule to a specialist
- * that is not declared is ignored everywhere. A rule with no `at` is in `rules` and reaches every place; consumers that need
- * named places read `at`. With no `app`: everything declared (nothing is filtered).
+ * that is not declared is ignored everywhere. A rule with no `place` is in `rules` and reaches every place; consumers that need
+ * named places read `place`. With no `app`: everything declared (nothing is filtered).
  */
 export function reachableBy(cfg: HydraConfig, app?: string): { specialists: Specialist[]; rules: Rule[] } {
-  if (app === undefined) return { specialists: Object.values(cfg.specialists), rules: cfg.rules.filter(r => r.to === MAIN || !!cfg.specialists[currentId(cfg, r.to)]) }
+  if (app === undefined) return { specialists: Object.values(cfg.specialists), rules: cfg.rules.filter(r => r.target === MAIN || !!cfg.specialists[currentId(cfg, r.target)]) }
   const serves = (id: string) => id === MAIN || (!!cfg.specialists[currentId(cfg, id)] && !notServedBy(cfg, id, app))
   return {
     specialists: Object.values(cfg.specialists).filter(s => !notServedBy(cfg, s.id, app)),
-    rules: cfg.rules.filter(r => (r.app === undefined || r.app === app) && serves(r.to)),
+    rules: cfg.rules.filter(r => (r.app === undefined || r.app === app) && serves(r.target)),
   }
 }
 
@@ -157,7 +157,7 @@ export function slackSpecialistsOf(cfg: HydraConfig, app?: string): string[] {
   const r = reachableBy(cfg, app)
   return [...new Set([
     ...r.specialists.filter(s => s.listens.some(isSlackPlace)).map(s => s.id),
-    ...r.rules.filter(x => x.at === undefined || isSlackPlace(x.at)).map(x => x.to),   // a rule with only an app is a Slack rule
+    ...r.rules.filter(x => x.place === undefined || isSlackPlace(x.place)).map(x => x.target),   // a rule with only an app is a Slack rule
   ])]
 }
 
@@ -165,7 +165,7 @@ export function slackSpecialistsOf(cfg: HydraConfig, app?: string): string[] {
 export function reachesAnyone(cfg: HydraConfig, app: string, at: Place[]): boolean {
   if (at.some(isDmPlace)) return true
   const r = reachableBy(cfg, app)
-  return r.rules.some(x => x.at === undefined || at.includes(x.at)) || r.specialists.some(sp => sp.listens.some(p => at.includes(p)))
+  return r.rules.some(x => x.place === undefined || at.includes(x.place)) || r.specialists.some(sp => sp.listens.some(p => at.includes(p)))
 }
 
 /**
@@ -234,20 +234,20 @@ export function route(cfg: HydraConfig, msg: Inbound): Decision {
   }
 
   if (!addressed && !listensToAll(cfg, msg.at)) {
-    trace.push({ via: 'listens', to: '', matched: false, why: 'not a DM or a mention, and no place here has listen = "all"' })
+    trace.push({ via: 'listens', to: '', matched: false, why: 'not a DM or a mention, and no place here has messages = "all"' })
     return { ...heard, fate: 'ignored', sender, trace }
   }
 
   let winner: { to: string; via: Via } | undefined
   for (const [i, r] of cfg.rules.entries()) {
-    const atOk = r.at === undefined || msg.at.includes(r.at)
+    const atOk = r.place === undefined || msg.at.includes(r.place)
     const appOk = r.app === undefined || r.app === app
-    const fromOk = r.from === undefined || r.from === sender.person?.id || sender.roles.includes(r.from)
-    const apart = atOk && appOk && fromOk && !winner ? notServedBy(cfg, r.to, app) : undefined
+    const fromOk = r.person === undefined || r.person === sender.person?.id || sender.roles.includes(r.person)
+    const apart = atOk && appOk && fromOk && !winner ? notServedBy(cfg, r.target, app) : undefined
     const matched = !winner && atOk && appOk && fromOk && !apart
-    const why = !atOk ? `rules[${i}] is at ${r.at}` : !appOk ? `rules[${i}] is for app ${r.app}, and this came through ${app ?? 'no Slack app'}` : !fromOk ? `rules[${i}] is from ${r.from}` : winner ? `rules[${i}] matches, but an earlier rule won` : apart ? `rules[${i}] matches, but ${apart}; skipped` : `rules[${i}]: first rule that matches`
-    trace.push({ via: 'rule', to: r.to, matched, why })
-    if (matched) winner = { to: r.to, via: 'rule' }
+    const why = !atOk ? `rules[${i}] is for place ${r.place}` : !appOk ? `rules[${i}] is for app ${r.app}, and this came through ${app ?? 'no Slack app'}` : !fromOk ? `rules[${i}] is for person ${r.person}` : winner ? `rules[${i}] matches, but an earlier rule won` : apart ? `rules[${i}] matches, but ${apart}; skipped` : `rules[${i}]: first rule that matches`
+    trace.push({ via: 'rule', to: r.target, matched, why })
+    if (matched) winner = { to: r.target, via: 'rule' }
   }
 
   // Most specific name first: a specialist listening on the channel's id outranks one listening on its name.
@@ -270,7 +270,7 @@ export function route(cfg: HydraConfig, msg: Inbound): Decision {
 /** `hydra route`'s report: every candidate, the winner, and the allow check. */
 export function explain(d: Decision, guardCommand?: string): string {
   const who = d.sender.person ? `${d.sender.person.id}${d.sender.operator ? ' (operator)' : ''}, roles ${d.sender.roles.join(', ')}` : `a stranger, roles ${d.sender.roles.join(', ')}`
-  const lines = [`from: ${who}`]
+  const lines = [`person: ${who}`]
   // Only when it says something: not for the one app a single-app hydra has.
   if (d.app && (d.owner || d.app !== DEFAULT_SLACK_APP)) lines.push(`app: ${d.app}${d.owner ? (d.owner === d.app ? ' (owns this message)' : ` (does not own it: ${d.owner} does)`) : ''}`)
   for (const s of d.trace) lines.push(`  ${s.matched ? '→' : ' '} ${s.via}${s.to ? ` ${s.to}` : ''}: ${s.why}`)

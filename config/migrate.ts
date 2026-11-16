@@ -213,7 +213,7 @@ type PersonDoc = { ids: string[]; roles?: string[]; name?: string }
 
 /**
  * Merges the steps' docs. People are merged by address (one address, one person; the first step's id wins, roles
- * are unioned), and a merged-away id is rewritten where the step referred to it (operator, a rule's from).
+ * are unioned), and a merged-away id is rewritten where the step referred to it (operator, a rule's person).
  * Everything else merges key by key, a conflict being the same key with different values.
  */
 export function mergeDocs(docs: Doc[]): { doc: Doc; conflicts: string[]; notes: string[]; renames: Map<string, string>[] } {
@@ -253,7 +253,8 @@ export function mergeDocs(docs: Doc[]): { doc: Doc; conflicts: string[]; notes: 
     }
     if (Array.isArray(rules)) {
       const list = (out.rules ??= []) as Doc[]
-      for (const r of rules as Doc[]) list.push(r.from === undefined ? r : { ...r, from: renamed(r.from) })
+      // A rule's person is its `person`, or, in a file not yet moved to the new name, its `from`.
+      for (const r of rules as Doc[]) list.push(Object.fromEntries(Object.entries(r).map(([k, v]) => [k, k === 'person' || k === 'from' ? renamed(v) : v])))
     }
     mergeTable(out, rest, '', conflicts)
   }

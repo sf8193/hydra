@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'bun:test'
 import { loadHydraConfig } from '../../config/load.js'
 import type { LoadEnv } from '../../config/types.js'
-import { routeFor, ROUTE_USAGE } from '../route-request.js'
+import { routeFor, routeFlags, ROUTE_USAGE } from '../route-request.js'
 import { testLoadEnv } from '../../config/__tests__/load-env.js'
 
 const env: LoadEnv = testLoadEnv({ home: '/home/op', sessionNames: [] })
@@ -24,7 +24,7 @@ listens = ["slack:#help"]
 if (!r.ok) throw new Error(JSON.stringify(r.errors))
 const CFG = r.config
 const aliases = (p: string) => p === 'slack:#help' ? ['slack:C0HELP', p] : [p]
-const run = (p: Parameters<typeof routeFor>[1]) => routeFor(CFG, { as: 'op', at: 'slack:#help', ...p }, aliases)
+const run = (p: Parameters<typeof routeFor>[1]) => routeFor(CFG, { person: 'op', place: 'slack:#help', ...p }, aliases)
 
 describe('hydra route --app', () => {
   test('defaults to the app named default', () => {
@@ -54,19 +54,29 @@ describe('hydra route --app', () => {
     expect(run({ mentioned: 'x' })).toMatchObject({ ok: false, error: expect.stringContaining('`--mentioned`: no app "x"') })
   })
   test('off Slack the message came through no app: --app is ignored, and the report says so', () => {
-    const d = routeFor(CFG, { as: 'op', at: 'cli', app: 'sales' }, aliases) as { ok: true; fate: string; report: string }
+    const d = routeFor(CFG, { person: 'op', place: 'cli', app: 'sales' }, aliases) as { ok: true; fate: string; report: string }
     expect(d).toMatchObject({ ok: true, fate: 'unrouted' })
     expect(d.report.split('\n')[0]).toBe('(`--app` ignored: cli is not a Slack place)')
-    expect((routeFor(CFG, { as: 'op', at: 'cli' }, aliases) as { report: string }).report).not.toContain('ignored: cli')
+    expect((routeFor(CFG, { person: 'op', place: 'cli' }, aliases) as { report: string }).report).not.toContain('ignored: cli')
   })
   test('the implicit default app is named when hydra.toml does not declare it', () => {
     const noDefault = { ...CFG, slackApps: { sales: CFG.slackApps.sales } }
-    expect(routeFor(noDefault, { as: 'op', at: 'slack:#help' }, aliases)).toEqual({ ok: false, error: '`--app` (default `default`): no app "default": declare [slack.apps.default]; hydra.toml declares sales' })
+    expect(routeFor(noDefault, { person: 'op', place: 'slack:#help' }, aliases)).toEqual({ ok: false, error: '`--app` (default `default`): no app "default": declare [slack.apps.default]; hydra.toml declares sales' })
   })
   test('--bound-app goes with --bound', () => {
     expect(run({ boundApp: 'sales' })).toMatchObject({ ok: false, error: expect.stringContaining('--bound-app goes with --bound') })
   })
-  test('without --as or --at: the usage, which lists --app', () => {
+  test('--person and --place name what --as and --at did: the old flags still work, with a note, and both names of one flag is an error', () => {
+    expect(routeFlags(['route', '--person', 'op', '--place', 'slack:#help', '--app', 'sales'])).toEqual({ ok: true, notes: [], params: { person: 'op', place: 'slack:#help', app: 'sales' } })
+    expect(routeFlags(['route', '--as', 'op', '--at', 'slack:#help'])).toEqual({ ok: true, params: { person: 'op', place: 'slack:#help' }, notes: [
+      '--as is now --person; --as still works and will be removed',
+      '--at is now --place; --at still works and will be removed',
+    ] })
+    expect(routeFlags(['route', '--as', 'op', '--person', 'op', '--place', 'x'])).toEqual({ ok: false, error: '--as is the old name of --person, which is also set: keep --person and delete --as' })
+    expect(routeFlags(['route', '--person', 'op', '--place', 'x', '--at', 'y'])).toEqual({ ok: false, error: '--at is the old name of --place, which is also set: keep --place and delete --at' })
+    expect(routeFlags(['route'])).toEqual({ ok: true, notes: [], params: {} })
+  })
+  test('without --person or --place: the usage, which lists --app', () => {
     expect(routeFor(CFG, {}, aliases)).toEqual({ ok: false, error: ROUTE_USAGE })
     expect(ROUTE_USAGE).toContain('[--app <app>]')
   })

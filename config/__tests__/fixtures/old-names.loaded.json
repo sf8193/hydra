@@ -1,0 +1,172 @@
+{
+  "config": {
+    "operator": "op",
+    "connectors": {},
+    "gateways": {},
+    "slackApps": {
+      "default": {
+        "id": "default",
+        "botTokenEnv": "CONNECTOR_SLACK_BOT_TOKEN",
+        "appTokenEnv": "CONNECTOR_SLACK_APP_TOKEN",
+        "displayName": "hydra",
+        "description": "Answers the Slack threads it is tagged in, and its DMs, using Claude."
+      },
+      "sales": {
+        "id": "sales",
+        "botTokenEnv": "SALES_SLACK_BOT_TOKEN",
+        "displayName": "sales",
+        "description": "Answers the Slack threads it is tagged in, and its DMs, using Claude."
+      }
+    },
+    "people": {
+      "op": {
+        "id": "op",
+        "ids": [
+          "slack:U0OP"
+        ],
+        "roles": [],
+        "name": "op"
+      },
+      "alice": {
+        "id": "alice",
+        "ids": [
+          "slack:U0ALICE"
+        ],
+        "roles": [
+          "staff"
+        ],
+        "name": "alice"
+      }
+    },
+    "specialists": {
+      "crm": {
+        "id": "crm",
+        "workdir": "/home/op/agents/crm",
+        "listens": [
+          "slack:#help"
+        ],
+        "allow": [
+          "staff"
+        ],
+        "sessions": "shared",
+        "max": 20,
+        "was": [],
+        "access": "operator"
+      },
+      "ops": {
+        "id": "ops",
+        "workdir": "/home/op/agents/ops",
+        "listens": [
+          "slack:dm"
+        ],
+        "allow": [
+          "people"
+        ],
+        "sessions": "shared",
+        "max": 20,
+        "was": [],
+        "access": "operator"
+      },
+      "deals": {
+        "id": "deals",
+        "workdir": "/home/op/agents/deals",
+        "listens": [],
+        "allow": [
+          "people"
+        ],
+        "apps": [
+          "sales"
+        ],
+        "sessions": "shared",
+        "max": 20,
+        "was": [],
+        "access": "operator"
+      }
+    },
+    "places": {
+      "slack:#help": {
+        "ack": "eyes",
+        "files": false,
+        "listen": "all",
+        "bots": false,
+        "linkPreviews": true
+      },
+      "slack:#ops": {
+        "files": false,
+        "listen": "mentions",
+        "bots": false,
+        "linkPreviews": true
+      },
+      "slack:#quiet": {
+        "files": true,
+        "listen": "mentions",
+        "bots": false,
+        "linkPreviews": true
+      }
+    },
+    "schedules": {
+      "nightly": {
+        "id": "nightly",
+        "cron": "0 3 * * *",
+        "prompt": "Nightly run.",
+        "runner": "launchd",
+        "to": "ops"
+      },
+      "sensor": {
+        "id": "sensor",
+        "cron": "@hourly",
+        "prompt": "",
+        "runner": "launchd",
+        "check": "true"
+      }
+    },
+    "rules": [
+      {
+        "to": "ops",
+        "at": "slack:#help",
+        "from": "alice"
+      },
+      {
+        "to": "deals",
+        "at": "slack:#ops",
+        "app": "sales"
+      },
+      {
+        "to": "main",
+        "at": "slack:#ops",
+        "from": "staff"
+      },
+      {
+        "to": "crm",
+        "app": "default",
+        "from": "people"
+      }
+    ]
+  },
+  "warnings": [
+    {
+      "path": "specialists.crm",
+      "message": "alice (role \"staff\") can reach the operator's account through it; set access = \"workdir\""
+    },
+    {
+      "path": "specialists.crm",
+      "message": "crm is unpinned, and app sales is pinned by deals, so crm no longer hears sales on slack:#help"
+    },
+    {
+      "path": "specialists.ops",
+      "message": "alice (allow = [\"people\"]) can reach the operator's account through it; set access = \"workdir\""
+    },
+    {
+      "path": "specialists.ops",
+      "message": "one shared session hears everyone's DMs (allow = [\"people\"]), so one person's DM is remembered in another's; use sessions = \"per-conversation\" or allow = []"
+    },
+    {
+      "path": "specialists.ops",
+      "message": "ops is unpinned, and app sales is pinned by deals, so ops no longer hears sales on slack:dm"
+    },
+    {
+      "path": "specialists.deals",
+      "message": "alice (allow = [\"people\"]) can reach the operator's account through it; set access = \"workdir\""
+    }
+  ]
+}

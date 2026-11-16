@@ -47,7 +47,7 @@ name = "Op"                           # shown to specialists (default: the id)
 
 [people.alice]
 ids = ["slack:U0ALICE"]
-roles = ["staff"]                     # labels for `allow` and a rule's `from`. Built in: `people` (everyone here), `anyone`
+roles = ["staff"]                     # labels for `allow` and a rule's `person`. Built in: `people` (everyone here), `anyone`
 
 [people.bob]
 ids = ["slack:U0BOB", "github:bob"]
@@ -130,7 +130,7 @@ tools = ["search_logs", "get_monitor"]   # the tools of it a specialist may call
 # --- places: optional platform options for one place ---
 
 [places."slack:#help"]
-listen = "all"                        # "mentions" (default): only a tag opens a conversation; "all": any top-level message
+messages = "all"                      # "addressed" (default): only a DM or a tag opens a conversation; "all": any top-level message
 ack = "eyes"                          # a reaction added once a message is delivered
 files = true                          # download attachments (default false)
 bots = false                          # hear other bots (default false; hydra's own bot is never heard)
@@ -140,7 +140,7 @@ link_previews = true                  # false: no link previews (Slack unfurl_li
 
 # The channel helpdesk answers: it hears every top-level post, and its answers carry no previews.
 [places."slack:#ops"]
-listen = "all"
+messages = "all"
 link_previews = false
 
 # --- schedules: clocks that send a message to a specialist. A schedule's message carries the operator's authority. ---
@@ -148,18 +148,18 @@ link_previews = false
 
 [schedules.nightly-review]
 cron = "0 3 * * *"                    # required: 5 fields, local time
-to = "ops"                            # a specialist, or "main" (required unless it's a sensor, below)
+target = "ops"                        # a specialist, or "main" (required unless it's a sensor, below)
 prompt = "Nightly run: look over yesterday's work."
 
 # A check first: empty output sends nothing; anything it prints is appended to the prompt.
 [schedules.disk-watch]
 cron = "*/30 * * * *"
-to = "ops"
+target = "ops"
 prompt = "The disk check found something:"
 check = "./scripts/disk-check.sh"
 cwd = "~/agents/ops"                  # the check's working dir (absolute or ~/); a relative env_file is under it
 
-# A sensor: no `to`, so it sends nothing and takes no prompt; only its check runs, and a failure alerts the operator.
+# A sensor: no `target`, so it sends nothing and takes no prompt; only its check runs, and a failure alerts the operator.
 [schedules.backup-watch]
 cron = "0 * * * *"
 check = "~/bin/backup-fresh.sh"
@@ -168,18 +168,18 @@ needs = ["internet"]                  # daemon runner only: not now while offlin
 alert_after = "2d"                    # daemon runner only: how long a failure run lasts before it is alerted (default 1d)
 
 # --- rules: overrides for when the place isn't enough. Each names a place, an app, or both; first match in file order wins. ---
-# An absent `at` matches every place and an absent `app` every app. `from` only narrows: a rule needs at or app.
+# An absent `place` matches every place and an absent `app` every app. `person` only narrows: a rule needs place or app.
 
 [[rules]]
-at = "slack:#help"
-from = "finance"                      # a person or a role (absent: anyone there)
-to = "ops"
+place = "slack:#help"
+person = "finance"                    # a person or a role (absent: anyone there)
+target = "ops"
 
 [[rules]]
-at = "slack:#help"
-app = "sales"                         # an app alone matches every message that comes through it (which would include a confined specialist's home: hydra.toml refuses that); with `at`, that place through that app only
-from = "finance"
-to = "deals"                          # must be a specialist the app can reach: pinned to sales, or any specialist while no one pins sales
+place = "slack:#help"
+app = "sales"                         # an app alone matches every message that comes through it (which would include a confined specialist's home: hydra.toml refuses that); with `place`, that place through that app only
+person = "finance"
+target = "deals"                      # must be a specialist the app can reach: pinned to sales, or any specialist while no one pins sales
 
 # --- guard: the operator's hook, run after routing and the allow check for anyone but the operator ---
 

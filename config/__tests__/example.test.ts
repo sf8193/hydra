@@ -25,7 +25,7 @@ describe('hydra.example.toml', () => {
     expect(r.config.specialists.helpdesk).toMatchObject({ access: 'workdir', tools: ['Read', 'Grep', 'Glob'], mcp: ['datadog'], talksTo: ['triage'] })
     expect(r.config.specialists.triage).toMatchObject({ access: 'workdir', listens: [], talksTo: ['helpdesk'] })
     expect(r.config.mcpServers?.datadog.tools).toEqual(['search_logs', 'get_monitor'])
-    expect(r.config.places['slack:#ops']).toMatchObject({ listen: 'all', linkPreviews: false })
+    expect(r.config.places['slack:#ops']).toMatchObject({ messages: 'all', linkPreviews: false })
     expect(r.config.places['slack:#help'].linkPreviews).toBe(true)
     expect(r.config.guard).toBeDefined()
     expect(r.config.vitals).toBeDefined()

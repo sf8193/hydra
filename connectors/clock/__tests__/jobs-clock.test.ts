@@ -1597,7 +1597,7 @@ describe('launchd-runner jobs: launchd triggers, the daemon delivers', () => {
 })
 
 describe("hydra.toml [schedules]: run once migrate has moved jobs.toml; until then, jobs.toml exactly as today", () => {
-  const schedule = (over: Partial<Schedule> & { id: string }): Schedule => ({ cron: '*/5 * * * *', to: '', prompt: '', runner: 'daemon', ...over })
+  const schedule = (over: Partial<Schedule> & { id: string }): Schedule => ({ cron: '*/5 * * * *', target: '', prompt: '', runner: 'daemon', ...over })
   const cfg = (...ss: Schedule[]) => ({ schedules: Object.fromEntries(ss.map(s => [s.id, s])), specialists: {} as HydraConfig['specialists'] })
   const sweep = cfg(schedule({ id: 'sweep', check: 'sweep.sh' }))
 
@@ -1741,7 +1741,7 @@ describe("hydra.toml [schedules]: run once migrate has moved jobs.toml; until th
 
   test("a schedule's failure alerts the operator, never its target", async () => {
     const targets: string[] = []
-    const c = clock({ schedules: () => jobsFromSchedules(cfg(schedule({ id: 'sweep', check: 'sweep.sh', to: 'ops', alertAfterMs: 0 }))), toTarget: async to => { targets.push(to); return true } })
+    const c = clock({ schedules: () => jobsFromSchedules(cfg(schedule({ id: 'sweep', check: 'sweep.sh', target: 'ops', alertAfterMs: 0 }))), toTarget: async to => { targets.push(to); return true } })
     at('2026-11-04T09:59:00-08:00'); await c.tick()
     at('2026-11-04T10:00:30-08:00'); await c.tick()
     finish('sweep', 1, 'failed', 'boom', 1000)
@@ -1755,11 +1755,11 @@ describe('jobsFromSchedules', () => {
   test('to, none, main and a per-conversation specialist; a schedule launchd cannot hold runs on the daemon', () => {
     const jobs = jobsFromSchedules({
       schedules: {
-        a: { id: 'a', cron: '0 6 * * *', to: 'ops', prompt: 'p', runner: 'launchd' },
-        b: { id: 'b', cron: '0 6 * * *', to: '', prompt: '', check: 'c.sh', cwd: '/srv', envFile: '/srv/.env', runner: 'launchd' },
-        c: { id: 'c', cron: '0 6 * * *', to: 'main', prompt: 'p', runner: 'daemon' },
-        d: { id: 'd', cron: '0 * * * *', to: 'review', prompt: '', check: 'r.sh', runner: 'launchd' },
-        e: { id: 'e', cron: '*/2 9-17 * * 1-5', to: '', prompt: '', check: 'e.sh', runner: 'launchd' },
+        a: { id: 'a', cron: '0 6 * * *', target: 'ops', prompt: 'p', runner: 'launchd' },
+        b: { id: 'b', cron: '0 6 * * *', target: '', prompt: '', check: 'c.sh', cwd: '/srv', envFile: '/srv/.env', runner: 'launchd' },
+        c: { id: 'c', cron: '0 6 * * *', target: 'main', prompt: 'p', runner: 'daemon' },
+        d: { id: 'd', cron: '0 * * * *', target: 'review', prompt: '', check: 'r.sh', runner: 'launchd' },
+        e: { id: 'e', cron: '*/2 9-17 * * 1-5', target: '', prompt: '', check: 'e.sh', runner: 'launchd' },
       },
       specialists: { review: { sessions: 'per-conversation' } as HydraConfig['specialists'][string] },
     })

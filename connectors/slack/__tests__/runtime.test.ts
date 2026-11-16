@@ -249,7 +249,7 @@ describe('bind_conversation / unbind_conversation', () => {
   })
 
   test("a rule there doesn't count: it takes chosen people's messages, not the place", async () => {
-    configure(`${TOML}[[rules]]\nat = "slack:C2"\nfrom = "olive"\nto = "${FOOD}"\n`)
+    configure(`${TOML}[[rules]]\nplace = "slack:C2"\nperson = "olive"\ntarget = "${FOOD}"\n`)
     await expect(bindConversation(food, 'slack:C2:1.000001')).rejects.toThrow(`${FOOD} doesn't listen on slack:C2`)
   })
 
@@ -282,7 +282,7 @@ describe('bind_conversation / unbind_conversation', () => {
   test('conversation ids: a thread, or a DM', () => {
     expect(parseConversation('slack:C1:1.000001')).toEqual({ channel: 'C1', threadTs: '1.000001' })
     expect(parseConversation('slack:D0ABC')).toEqual({ channel: 'D0ABC', threadTs: '0.000000' })
-    expect(parseConversation('slack:C1')).toEqual({ channel: 'C1', threadTs: '0.000000' }) // a listen = "all" place's top level
+    expect(parseConversation('slack:C1')).toEqual({ channel: 'C1', threadTs: '0.000000' }) // a messages = "all" place's top level
   })
 
   test("list_watches: a specialist's session sees the conversations bound to it, never another's", async () => {
@@ -541,14 +541,14 @@ describe('the operator: hydra conversations and hydra route', () => {
   })
 
   test('hydra route prints every candidate and why the winner won, and binds nothing', async () => {
-    configure(`${TOML}[[rules]]\nat = "slack:C2"\nfrom = "owner"\nto = "${FOOD}"\n`)
-    const r = await handleCLIRequest(req('route', { as: 'olive', at: 'slack:C2' }))
+    configure(`${TOML}[[rules]]\nplace = "slack:C2"\nperson = "owner"\ntarget = "${FOOD}"\n`)
+    const r = await handleCLIRequest(req('route', { person: 'olive', place: 'slack:C2' }))
     expect(r).toMatchObject({ ok: true, data: { fate: 'deliver', to: FOOD } })
     expect((r.data as any).report).toContain(`→ rule ${FOOD}: rules[0]: first rule that matches`)
     expect((r.data as any).report).toContain(`listens ${OPS}: listens on slack:C2, but a rule won`)
-    expect(await handleCLIRequest(req('route', { as: 'stranger', at: 'slack:C2' }))).toMatchObject({ ok: true, data: { fate: 'refused', to: OPS } })
-    expect(await handleCLIRequest(req('route', { as: 'slack:UNEW', at: 'slack:C9' }))).toMatchObject({ ok: true, data: { fate: 'unrouted' } })
-    expect(await handleCLIRequest(req('route', { as: 'nobody', at: 'slack:C2' }))).toMatchObject({ ok: false })
+    expect(await handleCLIRequest(req('route', { person: 'stranger', place: 'slack:C2' }))).toMatchObject({ ok: true, data: { fate: 'refused', to: OPS } })
+    expect(await handleCLIRequest(req('route', { person: 'slack:UNEW', place: 'slack:C9' }))).toMatchObject({ ok: true, data: { fate: 'unrouted' } })
+    expect(await handleCLIRequest(req('route', { person: 'nobody', place: 'slack:C2' }))).toMatchObject({ ok: false })
     expect(getSlackWatcher().list()).toEqual([])
   })
 

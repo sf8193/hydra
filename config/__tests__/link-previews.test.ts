@@ -34,12 +34,12 @@ ${places}`
 
 describe('link_previews', () => {
   test('defaults to on, for a place that sets other options and for a place not declared at all', () => {
-    const { config } = ok(`[places."slack:#ops"]\nlisten = "all"\n`)
+    const { config } = ok(`[places."slack:#ops"]\nmessages = "all"\n`)
     expect(config.places['slack:#ops'].linkPreviews).toBe(true)
     expect(config.places['slack:#other']).toBeUndefined()
   })
   test('false turns it off for that place only', () => {
-    const { config } = ok(`[places."slack:#ops"]\nlink_previews = false\n[places."slack:#faq"]\nlisten = "all"\n`)
+    const { config } = ok(`[places."slack:#ops"]\nlink_previews = false\n[places."slack:#faq"]\nmessages = "all"\n`)
     expect(config.places['slack:#ops'].linkPreviews).toBe(false)
     expect(config.places['slack:#faq'].linkPreviews).toBe(true)
   })
@@ -58,7 +58,7 @@ describe('the load warning', () => {
     expect(warn(ok(specialist('workdir', '"anyone"', '[places."slack:#ops"]\nlink_previews = false\n')).warnings)).toEqual([])
   })
   test('a place declared for other options, previews still on, warns', () => {
-    expect(warn(ok(specialist('workdir', '"anyone"', '[places."slack:#ops"]\nlisten = "all"\n')).warnings)).toHaveLength(1)
+    expect(warn(ok(specialist('workdir', '"anyone"', '[places."slack:#ops"]\nmessages = "all"\n')).warnings)).toHaveLength(1)
   })
   test('allow without anyone does not warn', () => {
     expect(warn(ok(specialist('workdir', '"people"')).warnings)).toEqual([])
