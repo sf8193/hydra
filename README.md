@@ -42,6 +42,52 @@ A new interface to building — run coding agents over Discord/Slack.
 - **Platform selection via env var.** Set `CHAT_PLATFORM=discord` or `CHAT_PLATFORM=slack`. Default: `discord`.
 - **Simultaneous platforms.** Run two daemons on different state dirs for Discord + Slack at the same time.
 
+## Core abstractions
+
+Twelve names carry the design. Each answers one question.
+
+| Name | Question | Sentence |
+|---|---|---|
+| Gateway | How does the operator talk to hydra? | A chat platform (Discord or Slack) that carries the operator's messages and commands. One identity: its bot. |
+| App | Who hears, who speaks? | A Slack app. Its bot hears where it is a member and is the only one that speaks. The operator's user token, if given, hears every channel the operator is in and never speaks. |
+| Connector | Where do events from outside come from? | A source of events: Slack, GitHub, a clock. |
+| Inbound | What arrived? | One event as routing sees it: who sent it, where, why it counts. |
+| Place | Where did it happen? | A channel, a DM or a repository, named `slack:#ops`, `github:owner/repo`. |
+| Person, roles | Who sent it? | A name from `[people]`, and the roles it holds. |
+| Conversation | Which exchange? | An app, a channel and a thread; what a binding attaches to. |
+| Trigger | Why does it count? | The reason an inbound is heard: addressed (a tag or a DM), `listen = "all"`, or bound. |
+| Rule | Which inbound goes to which target? | `at`, `from`, then `to`; the first match wins. |
+| Target | Who receives it? | main (the operator's harness), a specialist, a session's thread, a conversation's own session, or a new session started from a recipe. |
+| Specialist | Who answers a place? | A named session that hydra refills when it ends. Reached by places, rules, schedules and deliveries. |
+| Restricted specialist | What may it know? | A specialist that may know only what its audience can already see (`access = "workdir"`). A property of a specialist, not a kind of target. |
+
+In code: the gateways are `gateways/`, the Slack connector is `connectors/slack/`, an Inbound is `Inbound` in `routing/route.ts`, a Target is `Target` in `specialists/targets.ts`, and the restricted layer is `daemon/restricted.ts`. `diagrams/core.mmd` is the picture below; a test checks that every path and symbol named here and in `diagrams/core.mmd` exists.
+
+```mermaid
+flowchart LR
+  GW["<b>Gateway</b><br/>Discord or Slack"] --> MN(["main<br/>the operator's harness"])
+  AP["<b>App</b><br/>a Slack app"] --> CN["<b>Connector</b><br/>Slack, GitHub, a clock"]
+  CN -- "Slack" --> IN["<b>Inbound</b><br/>what arrived"]
+  PE["<b>Person, roles</b><br/>who sent it"] --> IN
+  PL["<b>Place</b><br/>where it happened"] --> IN
+  TR["<b>Trigger</b><br/>why it counts"] --> IN
+  CV["<b>Conversation</b><br/>which exchange"] -.-> TR
+  IN --> RU{{"<b>Rule</b><br/>at, from, to:<br/>first match wins"}}
+  RU --> TG(["<b>Target</b><br/>who receives it"])
+  CN -. "GitHub watch, clock job:<br/>target named at creation" .-> TG
+  TG --> SP["<b>Specialist</b><br/>a named session,<br/>refilled when it ends"]
+  SP -.-> RS["<b>Restricted specialist</b><br/>knows only what its<br/>audience can already see"]
+  classDef core fill:#ecfdf5,stroke:#10b981,color:#1f2937
+  classDef step fill:#eef2ff,stroke:#6366f1,color:#1f2937
+  classDef gate fill:#fff7ed,stroke:#f97316,color:#1f2937
+  class TG,SP,RS,MN core
+  class GW,AP,CN,IN,PE,PL,TR,CV step
+  class RU gate
+```
+
+**Route or name.** Route when the recipient depends on each event's sender and place: Slack, where a rule picks the target per event. Name the target when the subscriber chose it at creation: a GitHub watch or a clock job, set once.
+Both end in `deliverToTarget`, so a restricted specialist's audience is checked the same way at delivery (`deliveryRefusal`).
+
 ## Prerequisites
 
 - [Bun](https://bun.sh), the version `.tool-versions` pins — `asdf install`, or any install of that version. The daemon runs it whatever bun starts the CLI, and falls back to the bun on PATH, with a warning, when it is missing.
