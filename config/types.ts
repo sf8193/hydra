@@ -2,8 +2,8 @@
 // Every default is filled in and every reference checked (config/load.ts), so a consumer reads these as facts.
 // Keys are camelCase here; the file's are snake_case (`prompt_file` → `promptFile`).
 // Content (what may be said, approvals) is out of scope: it belongs to each specialist. What a specialist's session may
-// reach is not: `access` says whose account it runs under, and `tools` and `mcp` (with `[mcp.*]`) list what a
-// `workdir` specialist may use.
+// reach is not: `access` says whose account it runs under, `tools` and `mcp` (with `[mcp.*]`) list what a
+// `workdir` specialist may use, and `talks_to` names the specialists it may send to.
 
 /** A platform hydra can connect to. A person's address and most places start with one. */
 export type Platform = 'discord' | 'slack' | 'github'
@@ -89,6 +89,8 @@ export type Specialist = {
   tools?: string[]
   /** `access = "workdir"` only: the `[mcp.<name>]` servers it may use (default none). */
   mcp?: string[]
+  /** `access = "workdir"` only: the specialists its session may send to with `send_to_thread` (default none). Shared-session specialists; never `main`. */
+  talksTo?: string[]
   /** `~` expanded; a relative path is under `workdir`. */
   envFile?: string
   /** Old ids, so a rename keeps its thread, session and owed messages. */
@@ -142,7 +144,7 @@ export type PlaceOptions = {
   bots: boolean
   /**
    * Whether links in what hydra posts here unfurl into previews (Slack `unfurl_links`/`unfurl_media`, Discord's suppress-embeds flag), on each
-   * gateway's one sending point: replies, new threads, DMs, buttons, escalations, alerts, Discord edits and button clicks. Not Slack edits (`chat.update` has
+   * gateway's one sending point: replies, new threads, DMs, buttons, alerts, Discord edits and button clicks. Not Slack edits (`chat.update` has
    * no such argument), and not a Discord channel given by name. Default true. A preview can show readers content they could not open themselves, and fetches the URL with whatever is in it.
    */
   linkPreviews: boolean

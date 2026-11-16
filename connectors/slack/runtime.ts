@@ -1,4 +1,4 @@
-import { SlackWatcher, namedChannels, cantRead, cmpTs, slackWatchesPath, unresolvedPlaces, conversationId, placeName, isDm, appOfEntry, TOP_LEVEL, NO_DIRECTORY, SLACK_LIMITS, type SlackWatchConfig, type SlackWatchEntry, type SlackWatchStats } from './watch.js'
+import { SlackWatcher, namedChannels, cantRead, cmpTs, slackWatchesPath, unresolvedPlaces, conversationId, placeName, isDm, appOfEntry, TOP_LEVEL, NO_DIRECTORY, SLACK_LIMITS, type Asker, type SlackWatchConfig, type SlackWatchEntry, type SlackWatchStats } from './watch.js'
 import { parseConversation } from './conversation.js'
 import { ConnectedApps, type AppIdentity } from './apps.js'
 import { getSpecialist, conversationSpecialistOf, specialistOf, boundAs } from '../../specialists/specialists.js'
@@ -416,7 +416,7 @@ function mayAnswerConversation(h: HydraConfig, caller: SessionInfo | undefined, 
 /**
  * Whether `conversation` is an open conversation the caller answers: bound to its specialist (a conversation's own session:
  * its own). Never throws: an id that parses to nothing, or is not open, is not theirs. Unlike `reply`, this does not count
- * the specialist's home channel: a scoped session's tools are held to this, and it speaks at home only through `escalate`.
+ * the specialist's home channel: a scoped session's tools are held to this.
  */
 export function conversationBelongsTo(callerSessionId: string | undefined, conversation: unknown): boolean {
   try {
@@ -481,48 +481,6 @@ export async function replyInConversation(callerSessionId: string | undefined, c
   return `posted ${posted} message${posted === 1 ? '' : 's'} to ${id}`
 }
 
-/** Escalation posts go one at a time, at most one per `gapMs` (Slack's own limit is about 50 a minute, as slack-gateway's throttledSend keeps to). `sleep` and `now` are test seams. */
-export const homePostGate = { gapMs: 1200, sleep: (ms: number) => new Promise<void>(r => setTimeout(r, ms)), now: () => Date.now() }
-let homePostChain: Promise<unknown> = Promise.resolve()
-let lastHomePostAt = 0
-function throttledHomePost<T>(post: () => Promise<T>): Promise<T> {
-  const run = homePostChain.then(async () => {
-    const wait = Math.max(0, lastHomePostAt + homePostGate.gapMs - homePostGate.now())
-    if (wait > 0) await homePostGate.sleep(wait)
-    lastHomePostAt = homePostGate.now()
-    return post()
-  })
-  homePostChain = run.then(() => {}, () => {})   // a failed post does not stop the next one
-  return run
-}
-
-/**
- * A specialist's escalation: one post at the top level of its `home`, through the app it speaks as. Not bound to the specialist,
- * so the operator's answers under it never come back to a confined session. The scoped session's one way to speak at home.
- */
-export async function postToSlackHome(me: string, text: string): Promise<string> {
-  const h = hydraConfig()
-  const spec = h.specialists[me]
-  if (!spec?.home) throw new Error(`${me} has no home`)
-  const speaks = speaksAsOf(spec, Object.keys(h.slackApps))
-  if (!speaks) throw new Error(`${me} has no Slack app to post as: set \`speaks_as\` in [specialists.${me}]`)
-  declaredApp(h, speaks)
-  const home = homeChannel(h, me, speaks)
-  if (!home) throw new Error(`${me}'s home ${spec.home} is not a Slack channel hydra can resolve yet (a #name resolves once the app has read channel names; the channel's id always works)`)
-  const where = `${me}'s home (${spec.home})`
-  // The loader compares places as written; a channel named by id in one place and by name in another is only the same channel here, once Slack has said so.
-  const v = config(speaks)
-  const places = [`slack:${home}`, ...(v?.directory.nameOf(home) ? [`slack:#${v.directory.nameOf(home)}`] : [])]
-  const heardBy = Object.values(h.specialists).find(o => o.access === 'operator' && o.listens.some(l => places.includes(l)))?.id
-    ?? h.rules.find(r => r.at && places.includes(r.at) && (r.to === MAIN || h.specialists[r.to]?.access === 'operator'))?.to
-  if (heardBy) throw new Error(`${where} is a channel ${heardBy} listens on, and ${heardBy} runs under the operator's account: nothing is posted there; the operator gives ${me} another home`)
-  // A rule that names the app and no place sends everything the app hears to its target: it hears the home too.
-  const sweep = h.rules.find(r => !r.at && r.app === speaks && (r.to === MAIN || h.specialists[r.to]?.access === 'operator'))
-  if (sweep) throw new Error(`${where} is heard by the app ${speaks}, and a rule sends everything it hears to ${sweep.to}, which runs under the operator's account: nothing is posted there; the operator gives ${me} another home`)
-  await throttledHomePost(() => postParts(speaks, home, undefined, text, where, false, () => homeChannel(hydraConfig(), me, speaks) === home))
-  return `posted to ${where}`
-}
-
 /** A link to a Slack conversation (`slack:[app:]C…[:ts]`), when the app that heard it knows the workspace's address; undefined otherwise. */
 export function slackConversationLink(conversation: string): string | undefined {
   try {
@@ -530,6 +488,14 @@ export function slackConversationLink(conversation: string): string | undefined 
     const url = config(appOfEntry(c))?.workspaceUrl
     if (!url) return undefined
     return `${url}/archives/${c.channel}${c.threadTs === TOP_LEVEL ? '' : `/p${c.threadTs.replace('.', '')}`}`
+  } catch { return undefined }
+}
+
+/** Who sent the last message hydra delivered in this conversation, as hydra.toml says; undefined when it has delivered none since it started (or the id is not a Slack conversation). */
+export function askerOfConversation(conversation: unknown): Asker | undefined {
+  try {
+    const c = parseConversation(conversation)
+    return getSlackWatcher().askerOf(c.channel, c.threadTs, appOfEntry(c))
   } catch { return undefined }
 }
 

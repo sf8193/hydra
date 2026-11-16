@@ -1,7 +1,6 @@
 // Loads `<state>/hydra.toml`: parse, fill defaults, check. Pure but for `env`, so the same text and machine give the same answer.
 // Strict: an unknown key, a malformed address or place, or a reference to nothing is an error, and any error rejects the whole file.
 
-import { operatorAddress } from './operator.js'
 import { statSync, accessSync, lstatSync, readdirSync, readFileSync, realpathSync, constants as fsConstants } from 'fs'
 import { parseEnvLine } from '../shared/env-parse.js'
 import { homedir } from 'os'
@@ -60,9 +59,9 @@ const MAX_ALERT_AFTER_MS = 30 * MAX_DAY_MS
 const BUILTIN: readonly string[] = BUILTIN_ROLES
 
 const TOP_KEYS = ['operator', 'connectors', 'slack', 'people', 'specialists', 'defaults', 'places', 'schedules', 'rules', 'guard', 'vitals', 'mcp']
-const SPECIALIST_KEYS = ['workdir', 'prompt', 'prompt_file', 'listens', 'apps', 'speaks_as', 'allow', 'sessions', 'max', 'idle', 'home', 'model', 'engine', 'env_file', 'was', 'access', 'tools', 'mcp']
+const SPECIALIST_KEYS = ['workdir', 'prompt', 'prompt_file', 'listens', 'apps', 'speaks_as', 'allow', 'sessions', 'max', 'idle', 'home', 'model', 'engine', 'env_file', 'was', 'access', 'tools', 'mcp', 'talks_to']
 /** Keys only a hand edit of one specialist's own table sets: a default would reach every specialist, a fragment's table is someone else's. */
-export const SCOPE_KEYS = ['access', 'tools', 'mcp'] as const
+export const SCOPE_KEYS = ['access', 'tools', 'mcp', 'talks_to'] as const
 
 type Table = Record<string, unknown>
 /** Own keys only: a name like `constructor` must not resolve through the prototype. */
@@ -432,7 +431,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     str(t, 'workdir', path); str(t, 'prompt', path); str(t, 'prompt_file', path); strList(t, 'listens', path); strList(t, 'apps', path); str(t, 'speaks_as', path); strList(t, 'allow', path)
     oneOf(t, 'sessions', path, SESSIONS); positiveInt(t, 'max', path); str(t, 'idle', path); str(t, 'home', path); str(t, 'model', path)
     oneOf(t, 'engine', path, ENGINES); str(t, 'env_file', path); strList(t, 'was', path)
-    oneOf(t, 'access', path, ACCESS); strList(t, 'tools', path); strList(t, 'mcp', path)
+    oneOf(t, 'access', path, ACCESS); strList(t, 'tools', path); strList(t, 'mcp', path); strList(t, 'talks_to', path)
   }
   function positiveInt(t: Table, k: string, path: string): number | undefined {
     const v = t[k]
@@ -543,10 +542,11 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     const access: Access = oneOf(t, 'access', path, ACCESS) ?? 'operator'
     const toolsRaw = strList(t, 'tools', path)
     const mcpRaw = strList(t, 'mcp', path)
+    const talksToRaw = strList(t, 'talks_to', path)
     let tools: string[] | undefined
     let mcp: string[] | undefined
     if (access === 'operator') {
-      for (const k of ['tools', 'mcp'] as const) if (t[k] !== undefined) error(`${path}.${k}`, 'has no effect while access = "operator": it already has every tool and server the operator does; set access = "workdir" to choose them')
+      for (const k of ['tools', 'mcp', 'talks_to'] as const) if (t[k] !== undefined) error(`${path}.${k}`, `has no effect while access = "operator": it already has every tool and server the operator does${k === 'talks_to' ? ', and send_to_thread to any session' : ''}; set access = "workdir" to choose them`)
     } else {
       tools = [...new Set(toolsRaw ?? WORKDIR_TOOLS)]
       for (const [i, name] of (toolsRaw ?? []).entries()) {
@@ -585,6 +585,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       access,
       ...(tools && { tools }),
       ...(mcp && { mcp }),
+      ...(talksToRaw && access === 'workdir' && { talksTo: [...new Set(talksToRaw)] }),
       ...(envFile !== undefined && { envFile: underWorkdir(envFile) }),
     }
   }
@@ -841,38 +842,21 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   }
   const listJoin = (items: string[]) => items.length <= 2 ? items.join(' and ') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
 
-  // `escalate` posts to a confined specialist's `home` and tags the operator. So the home is a chat place hydra can post to, by a name it
-  // can use; it is not the specialist's own conversation; the operator's own account is not listening there; and the operator has an
-  // address on its platform to be tagged by. Places are compared in one spelling (a bare id is `discord:<id>`, case ignored); a Slack
-  // channel by id and by name cannot be equated before Slack has been asked, so escalate checks that again when it posts.
-  const canon = (p: string): string => (/^\d+$/.test(p.trim()) ? `discord:${p.trim()}` : p.trim().toLowerCase())
-  const operatorSession = (id: string) => id === 'main' || specialists[id]?.access === 'operator'
+  // `talks_to`: the specialists a confined session may send to (send_to_thread). Only specialists: never `main`, byte or a session by name. The
+  // target must be a shared-session specialist, which has one session to land in. A target that runs under the operator's account is a way in for
+  // whatever a confined session was talked into saying, so it loads with a warning that says so.
   for (const s of Object.values(specialists)) {
-    if (s.access !== 'workdir') continue
-    const at = `specialists.${s.id}.home`
-    if (!s.home) {
-      warn(`specialists.${s.id}`, 'it has no home, so its escalate tool has nowhere to post and reports that it cannot reach the operator; set `home` to a place only the operator reads')
-      continue
+    for (const [i, target] of (s.talksTo ?? []).entries()) {
+      const id = s.id
+      const at = `specialists.${id}.talks_to[${i}]`
+      if (target === id) { error(at, `${id} cannot talk to itself`); continue }
+      if (target === 'main' || !has(specialists, target)) { error(at, target === 'main' ? 'main is the operator\'s own session: talks_to names specialists only' : `no [specialists.${target}]: talks_to names a specialist declared in hydra.toml`); continue }
+      if (specialists[target].sessions !== 'shared') { error(at, `${target} has sessions = "per-conversation": a hand-off needs one session to land in; talk to a shared specialist`); continue }
+      if (specialists[target].access === 'operator') warn(at, `${target} runs under the operator's account (access = "operator"): whatever ${id} is talked into sending reaches that account, quoted and labelled but read by a session that can act as the operator; give ${target} access = "workdir" with the broader folder it needs`)
     }
-    const home = canon(s.home)
-    if (home.endsWith(':dm')) { error(at, `${s.home} is a direct-message place: an escalation needs a place only the operator reads, not someone's DMs`); continue }
-    if (home === 'cli' || home.startsWith('git' + 'hub:')) { error(at, `${s.home} is not a chat place hydra can post to: use a slack: or discord: place`); continue }
-    if (home.startsWith('discord:#')) { error(at, 'escalate cannot post to a Discord channel by name: use its id (discord:<channel id>)'); continue }
-    if (s.listens.some(l => canon(l) === home)) { error(at, `${s.home} is a place ${s.id} listens on itself: an escalation there is not out of its conversation; give it a home only the operator reads`); continue }
-    const listener = Object.values(specialists).find(o => o.access === 'operator' && o.listens.some(l => canon(l) === home))?.id
-      ?? rules.find(r => r.at && canon(r.at) === home && operatorSession(r.to))?.to
-    if (listener) error(at, `${s.home} is a place ${listener} listens on, and ${listener} runs under the operator's account: an escalation posted there would be heard by that account; give ${s.id} a home only the operator reads`)
-    // A rule that names an app and no place sends everything that app hears to its target: the app this specialist posts its escalations through hears its home.
-    if (home.startsWith('slack:')) {
-      const via = speaksAsOf(s, Object.keys(slackApps))
-      const sweep = via ? rules.find(r => !r.at && r.app === via && operatorSession(r.to)) : undefined
-      if (sweep) error(at, `${s.home} is heard by the app ${via}, and a rule sends everything ${via} hears to ${sweep.to}, which runs under the operator's account: an escalation posted there would be heard by that account; give ${s.id} a home that app does not hear, or change the rule`)
-    }
-    const platform = home.split(':')[0]
-    if (operator && (platform === 'slack' || platform === 'discord') && !operatorAddress({ operator, people }, platform)) error(at, `escalate tags the operator, and ${operator} has no ${platform}: address; add one under [people.${operator}]`)
   }
 
-  const ruleTargets = new Set(rules.map(r => r.to))
+  const ruleTargets = new Set([...rules.map(r => r.to), ...Object.values(specialists).flatMap(s => s.talksTo ?? [])])
   const scheduleTargets = new Set(Object.values(schedules).map(s => s.to))
   for (const s of Object.values(specialists)) {
     const path = `specialists.${s.id}`

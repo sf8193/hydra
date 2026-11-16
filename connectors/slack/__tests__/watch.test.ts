@@ -518,6 +518,56 @@ describe('what the specialist reads', () => {
     expect(sent[0].msg).toContain('person="op" roles="people,anyone" operator=true')
   })
 
+  test('who sent the last message delivered in a conversation is what a session sending for it names as the asker: in memory, per conversation, unknown before any delivery', async () => {
+    const toml = oneListener(CH) + '[people.bob]\nids = ["slack:UBOB"]\nname = "Bob B"\nroles = ["staff"]\n'
+    const { w, make } = setup({ toml })
+    expect(w.askerOf(CH, '1000.000001')).toBeUndefined()
+    w.handle(ev({ ts: '1000.000001', user: 'UALICE', text: mention }))
+    await w.flush()
+    expect(w.askerOf(CH, '1000.000001')).toEqual({ person: null, roles: ['anyone'], operator: false })
+    w.handle(ev({ ts: '1001.000001', threadTs: '1000.000001', user: 'UBOB', text: 'hello' }))
+    await w.flush()
+    expect(w.askerOf(CH, '1000.000001')).toEqual({ person: 'bob', roles: ['staff', 'people', 'anyone'], operator: false })
+    w.handle(ev({ ts: '1002.000001', threadTs: '1000.000001', user: 'UOP', text: 'and me' }))
+    await w.flush()
+    expect(w.askerOf(CH, '1000.000001')).toEqual({ person: 'op', roles: ['people', 'anyone'], operator: true })
+    expect(w.askerOf(CH, '2000.000001')).toBeUndefined()   // another conversation
+    expect(make().askerOf(CH, '1000.000001')).toBeUndefined()   // nothing persisted: a restart knows no asker
+  })
+
+  test('a delivered batch with more than one sender names no asker; a failed delivery names none and changes nothing', async () => {
+    let ok = true
+    const { w } = setup({}, () => ok ? { ok: true } : { ok: false, error: 'down' })
+    w.handle(ev({ ts: '1000.000001', user: 'UALICE', text: mention }))
+    await w.flush()
+    expect(w.askerOf(CH, '1000.000001')).toEqual({ person: null, roles: ['anyone'], operator: false })
+    ok = false
+    w.handle(ev({ ts: '1001.000001', threadTs: '1000.000001', user: 'UOP', text: 'thanks' }))
+    await w.flush()
+    expect(w.askerOf(CH, '1000.000001')).toEqual({ person: null, roles: ['anyone'], operator: false })   // the operator's undelivered message is not the asker
+    ok = true
+    w.handle(ev({ ts: '1002.000001', threadTs: '1000.000001', user: 'UALICE', text: 'a' }))
+    w.handle(ev({ ts: '1003.000001', threadTs: '1000.000001', user: 'UOP', text: 'b' }))
+    await w.flush()
+    expect(w.askerOf(CH, '1000.000001')).toBeUndefined()   // two senders in what landed: unknown, never the last
+  })
+
+  test('a batch that is dropped as too large records no asker, and one with several user-less senders reads unknown', async () => {
+    let mode: 'big' | 'ok' = 'big'
+    const { w } = setup({}, () => mode === 'big' ? { ok: false, error: 'too large', permanent: true } : { ok: true })
+    w.handle(ev({ ts: '1000.000001', user: 'UALICE', text: mention }))
+    await w.flush()
+    expect(w.askerOf(CH, '1000.000001')).toBeUndefined()
+    mode = 'ok'
+    w.handle(ev({ ts: '1001.000001', threadTs: '1000.000001', user: 'UALICE', text: 'ok now' }))
+    await w.flush()
+    expect(w.askerOf(CH, '1000.000001')).toMatchObject({ roles: ['anyone'] })
+    w.handle(ev({ ts: '1002.000001', threadTs: '1000.000001', user: undefined, text: 'bot one', subtype: 'bot_message' }))
+    w.handle(ev({ ts: '1003.000001', threadTs: '1000.000001', user: undefined, text: 'bot two', subtype: 'bot_message' }))
+    await w.flush()
+    expect(w.askerOf(CH, '1000.000001')).toBeUndefined()
+  })
+
   test('a failing name lookup still delivers, with the address alone', async () => {
     const { w, sent } = setup({}, undefined, async () => { throw new Error('users.info down') })
     w.handle(ev({ ts: '1000.000001', user: 'UALICE', text: mention }))
