@@ -137,7 +137,7 @@ export class SlackGateway implements ChatGateway {
   constructor(appToken: string, opts?: { heartbeatPath?: string; staleThresholdMs?: number }) {
     this.appToken = appToken
     this.heartbeatPath = opts?.heartbeatPath ?? null
-    // Keeping the connection alive is the supervisor's job (shared with the Slack-watch listener).
+    // Keeping the connection alive is the supervisor's job (shared with the Slack connector).
     // What to do when it cannot is the gateway's call: exit, so the watchdog restarts the daemon.
     this.sup = new SocketSupervisor({
       name: 'slack gateway',

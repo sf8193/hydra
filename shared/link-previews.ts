@@ -1,6 +1,6 @@
 // Whether hydra.toml turns link previews off where a message is going (`[places]` `link_previews = false`).
 //
-// Each gateway asks this at its one point of sending (Slack: `postMessage`; Discord: `previewPolicy`), and the Slack connector's listener asks it
+// Each gateway asks this at its one point of sending (Slack: `postMessage`; Discord: `previewPolicy`), and the Slack connector asks it
 // the same way with its own view, so what a place says is decided by this one function. A leaf module: the gateways cannot import hydra.toml's loader (config.ts builds the
 // gateway), so the daemon registers where the config and Slack's channel names come from.
 

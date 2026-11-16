@@ -609,9 +609,9 @@ export function slackHealthLines(s: SlackHealthView): string[] {
   if (ids.length <= 1 && (ids.length === 0 || ids[0] === 'default')) {
     const l = s.listener
     const lacks = l?.missingScopes?.length ? ` · missing ${l.missingScopes.map(m => `${m.any.join(' or ')} (${m.option})`).join('; ')}` : ''
-    return [`slack: listener ${stateOf(l)}${catchUpOf(l)} · ${conversations}${lacks}`]
+    return [`slack connector: ${stateOf(l)}${catchUpOf(l)} · ${conversations}${lacks}`]
   }
-  const lines = [`slack: ${ids.length} app${ids.length === 1 ? '' : 's'} · ${conversations}`]
+  const lines = [`slack connector: ${ids.length} app${ids.length === 1 ? '' : 's'} · ${conversations}`]
   for (const id of ids) {
     const a = s.apps![id]
     const parts = a.tokens && !a.tokens.ok ? [`off · ${a.tokens.why}`] : [

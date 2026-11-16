@@ -45,6 +45,16 @@ describe('Socket Mode keepalive headroom', () => {
     expect(pingTimeout(client)).toBe(SLACK_CLIENT_PING_TIMEOUT_MS)
   })
 
+  test('the gateway names itself "slack gateway" in the daemon log, never "listener"', async () => {
+    const lines: string[] = []
+    const write = process.stderr.write.bind(process.stderr)
+    process.stderr.write = ((chunk: string | Uint8Array) => { lines.push(String(chunk)); return true }) as typeof process.stderr.write
+    const gateway = new SlackGateway('xapp-test')
+    try { await gateway.start('xoxb-test') } finally { process.stderr.write = write; await gateway.stop() }
+    expect(lines.join('')).toContain('slack gateway: connected as ')
+    expect(lines.join('')).not.toMatch(/slack listener/i)
+  })
+
   test('the gateway builds its receiver with the headroom, and its supervisor hooks that receiver\'s client', async () => {
     const gateway = new SlackGateway('xapp-test')
     await gateway.start('xoxb-test')

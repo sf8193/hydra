@@ -31,7 +31,7 @@ const NO_SERVER = /no server running|error connecting to/
 
 export const SCRUBBED_SPAWN_VARS = [
   'RAINDROP_WRITE_KEY', 'RAINDROP_MODE', 'RAINDROP_USER_ID', 'RAINDROP_OMIT_REPO',
-  // The Slack listener's default tokens: only the daemon's listener may hold them. HYDRA_SLACK_USER_TOKEN reads as the
+  // The Slack connector's default tokens: only the Slack connector may hold them. HYDRA_SLACK_USER_TOKEN reads as the
   // operator. Names hydra.toml's Slack apps declare are added to these by registerSpawnVars.
   'SLOPBOT_SLACK_APP_TOKEN', 'SLOPBOT_SLACK_BOT_TOKEN',
   'HYDRA_SLACK_APP_TOKEN', 'HYDRA_SLACK_BOT_TOKEN', 'HYDRA_SLACK_USER_TOKEN',

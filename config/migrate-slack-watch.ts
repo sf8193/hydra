@@ -1,7 +1,7 @@
 // `hydra migrate`'s step for `<state>/slack-watch.json`: its routes become hydra.toml tables. `migrateSlackWatch` is
 // pure: the old file's JSON in, the tables (in the file's own snake_case keys) and what could not be carried over out.
 //
-//   (the file existing)               → [connectors.slack], with the token variables the listener has always read
+//   (the file existing)               → [connectors.slack], with the token variables the Slack connector has always read
 //   people {U…: {name, role}}         → [people.<id>] ids = ["slack:U…"], roles = [<role>]
 //   route {channels, to}              → [specialists.<to>] listens = ["slack:C…"]
 //   route {dms: true, to}             → listens = ["slack:dm"]

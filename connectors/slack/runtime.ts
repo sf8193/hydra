@@ -103,7 +103,7 @@ function alert(text: string, to?: string, app?: string): void {
     return sent
   }
   if (post(targets) || post([MAIN])) return
-  log(`daemon: slack alert with no specialist thread to send it to: ${text}\n`)
+  log(`daemon: slack connector alert with no specialist thread to send it to: ${text}\n`)
 }
 
 /** Where a binding's alerts are posted: main's channel for `main`, a session's own thread, else the specialist's thread. */
@@ -160,7 +160,7 @@ function savedIdentities(): Record<string, AppIdentity> {
 const newSharedApps = () => {
   const apps = new ConnectedApps({
     alert: (text, app) => alert(text, undefined, app), log,
-    persist: ids => { try { atomicWriteFileSync(identitiesPath(), JSON.stringify(ids, null, 2) + '\n') } catch (err) { log(`daemon: slack apps: saving bot ids failed: ${err}\n`) } },
+    persist: ids => { try { atomicWriteFileSync(identitiesPath(), JSON.stringify(ids, null, 2) + '\n') } catch (err) { log(`daemon: slack connector: saving bot ids failed: ${err}\n`) } },
   })
   apps.seedIdentities(savedIdentities())
   return apps
@@ -175,7 +175,7 @@ const scopesTold: ToldScopes = {
       const all: Record<string, string> = existsSync(toldPath()) ? JSON.parse(readFileSync(toldPath(), 'utf8')) : {}
       if (key === null) delete all[app]; else all[app] = key
       atomicWriteFileSync(toldPath(), JSON.stringify(all, null, 2) + '\n')
-    } catch (err) { log(`daemon: slack scopes: saving what was said failed: ${err}\n`) }
+    } catch (err) { log(`daemon: slack connector: saving what was said failed: ${err}\n`) }
   },
 }
 
@@ -207,14 +207,14 @@ registerSlackChannelNames(channel => { for (const [, l] of connections.listeners
  * One app's tokens, each read from the variable the app names for it. A token is read only from a variable the daemon
  * keeps from every session it starts: a token anywhere else would reach them all. hydra.toml's loader rejects a name
  * that is not one, and the daemon adds the ones it names to those; a name still not kept is refused here, saying which
- * key and why, and the listener stays off.
+ * key and why, and that app stays off.
  */
 export function slackTokens(app: SlackApp, env: Readonly<Record<string, string>> = capturedSpawnVars(), warn: (line: string) => void = log): { app?: string; bot?: string; user?: string } {
   const read = (key: 'bot_token_env' | 'app_token_env' | 'user_token_env', name: string | undefined): string | undefined => {
     if (!name) return undefined
     if (!scrubbedSpawnVars().includes(name)) {
       const why = !ENV_NAME_RE.test(name) ? 'is not an environment variable name' : tokenVarRefusal(name) ?? 'is not among the variables kept from sessions (the daemon adds the ones hydra.toml names when it loads it)'
-      warn(`daemon: slack listener: refusing to read the token in ${name}, the \`${key}\` of the app named \`${app.id}\`: it ${why}, so a token there would reach every session hydra starts. Name a variable only the daemon needs, like CONNECTOR_SLACK_BOT_TOKEN.\n`)
+      warn(`daemon: slack connector: refusing to read the token in ${name}, the \`${key}\` of the app named \`${app.id}\`: it ${why}, so a token there would reach every session hydra starts. Name a variable only the daemon needs, like CONNECTOR_SLACK_BOT_TOKEN.\n`)
       return undefined
     }
     return env[name]
@@ -276,14 +276,14 @@ export function startSlackWatch(): void {
   }
   // A session that listened ends (killed, reaped, or found dead) and nobody is home in its thread within the grace (a
   // handoff successor or a respawn would be): its threads are let go, said once there, not owed to a thread nobody answers.
-  const offRelease = on('session:death', ({ threadId }) => releaseIfVacant(threadId), 'slack-watch: let go of the threads a session listened to')
-  const offReleaseDead = on('session:marked-dead', ({ sessionId }) => releaseIfVacant(registry.get(sessionId)?.threadId), 'slack-watch: let go of the threads a session listened to (found dead)')
+  const offRelease = on('session:death', ({ threadId }) => releaseIfVacant(threadId), 'slack connector: let go of the threads a session listened to')
+  const offReleaseDead = on('session:marked-dead', ({ sessionId }) => releaseIfVacant(registry.get(sessionId)?.threadId), 'slack connector: let go of the threads a session listened to (found dead)')
   // A timer pending at the last shutdown is gone: every listened thread is checked once at boot.
   for (const t of new Set(getSlackWatcher().list().map(e => e.specialist).filter((id): id is string => !!id && isSessionThread(id)))) releaseIfVacant(t)
-  const offDeath = on('session:death', freed, 'slack-watch: wake conversations waiting at max')
-  const offDead = on('session:marked-dead', freed, 'slack-watch: wake conversations waiting at max (found dead)')
+  const offDeath = on('session:death', freed, 'slack connector: wake conversations waiting at max')
+  const offDead = on('session:marked-dead', freed, 'slack connector: wake conversations waiting at max (found dead)')
   // After a sleep the socket is likely dead and Slack replays nothing: replace it and catch up now, not when a timer notices.
-  const offResumed = on('clock:resumed', () => { for (const l of connections.listeners().values()) l.onResume() }, 'slack listener: replace the socket and catch up after a resume')
+  const offResumed = on('clock:resumed', () => { for (const l of connections.listeners().values()) l.onResume() }, 'slack connector: replace the socket and catch up after a resume')
   unsubscribe = () => { offConfig(); offRelease(); offReleaseDead(); offDeath(); offDead(); offResumed() }
 }
 

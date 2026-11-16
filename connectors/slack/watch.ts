@@ -466,7 +466,7 @@ export class SlackWatcher {
       for (const e of raw.entries ?? []) this.entries.set(keyOf(e), e)
       this.channelCursors = raw.channelCursors ?? {}
     } catch (err) {
-      this.deps.log(`daemon: slack-watch: load failed: ${err}\n`)
+      this.deps.log(`daemon: slack connector: load failed: ${err}\n`)
     }
   }
 
@@ -487,7 +487,7 @@ export class SlackWatcher {
       atomicWriteFileSync(this.deps.file, JSON.stringify(store, null, 2) + '\n')
     } catch (err) {
       this.dirty = true
-      this.deps.log(`daemon: slack-watch: persist failed: ${err}\n`)
+      this.deps.log(`daemon: slack connector: persist failed: ${err}\n`)
     }
   }
 
@@ -530,7 +530,7 @@ export class SlackWatcher {
     const entry = this.watch(channel, threadTs, specialist, by, app)
     if (!entry) return undefined
     if (entry.specialist !== specialist) {
-      this.deps.log(`daemon: slack-watch: ${conversationId(entry)} moved from ${entry.specialist} to ${specialist}\n`)
+      this.deps.log(`daemon: slack connector: ${conversationId(entry)} moved from ${entry.specialist} to ${specialist}\n`)
       entry.specialist = specialist
       this.persist()
     }
@@ -619,7 +619,7 @@ export class SlackWatcher {
     const e = this.get(channel, threadTs, app)
     if (!e || (e.via ?? 'bot') === via) return
     if (via === 'user') e.via = 'user'; else delete e.via
-    this.deps.log(`daemon: slack-watch: ${conversationId(e)} is now read ${via === 'user' ? 'as the operator' : 'by the bot'}\n`)
+    this.deps.log(`daemon: slack connector: ${conversationId(e)} is now read ${via === 'user' ? 'as the operator' : 'by the bot'}\n`)
     this.persist()
   }
 
@@ -672,7 +672,7 @@ export class SlackWatcher {
     if (!this.firstTime(this.noted.dropped, `${scoped(app, channel)}:${fact}`)) return
     this.stats_.dropped['catch-up-gap'] = (this.stats_.dropped['catch-up-gap'] ?? 0) + 1
     const line = `catch-up read the newest ${read} messages in ${channel} since ${cursor} and moved on; anything between ${cursor} and ${oldestRead ?? 'them'} was not replayed, so a tag there was not delivered`
-    this.deps.log(`daemon: slack-watch: ${line}\n`)
+    this.deps.log(`daemon: slack connector: ${line}\n`)
     const to = listenerOf(this.deps.config(app), channel)
     this.alertOnce(`catch-up-gap:${to ?? '-'}`, to, `⚠️ Slack ${line}.`, appOfEntry({ app }))
   }
@@ -780,7 +780,7 @@ export class SlackWatcher {
         const from = existing.specialist
         existing.specialist = fresh.to
         this.persist()
-        this.deps.log(`daemon: slack-watch: ${conversationId(existing)} was tagged; ${fresh.to} answers here, so it takes the thread from the session listening in ${from}\n`)
+        this.deps.log(`daemon: slack connector: ${conversationId(existing)} was tagged; ${fresh.to} answers here, so it takes the thread from the session listening in ${from}\n`)
         this.deps.alert?.(`ℹ️ Someone tagged the bot in ${conversationId(existing)}, so ${fresh.to} took it, since it answers there. This session no longer hears it.`, from)
       }
     }
@@ -846,7 +846,7 @@ export class SlackWatcher {
       }
     }
     try { walk(dir) } catch (err) {
-      this.deps.log(`daemon: slack-watch: sweeping ${dir} failed: ${err}\n`)
+      this.deps.log(`daemon: slack connector: sweeping ${dir} failed: ${err}\n`)
     }
   }
 
@@ -911,7 +911,7 @@ export class SlackWatcher {
     const who = ev.user ?? 'unknown sender'
     if (fate === 'unrouted') this.stats_.unrouted++
     else { this.stats_.refused++; this.stats_.refusedBy[who] = (this.stats_.refusedBy[who] ?? 0) + 1 }
-    this.deps.log(`daemon: slack-watch: ${fate} ${who} in ${watchKey(ev.app, ev.channel, threadTs)} (ts ${ev.ts}): ${why}\n`)
+    this.deps.log(`daemon: slack connector: ${fate} ${who} in ${watchKey(ev.app, ev.channel, threadTs)} (ts ${ev.ts}): ${why}\n`)
     // The 🚫 is capped per sender like tags are: past the window, a refusal is logged and counted only.
     const sender = ev.user ?? ev.botId
     if (react && sender) {
@@ -925,7 +925,7 @@ export class SlackWatcher {
     if (react && slack) {
       void slack.react(ev.channel, ev.ts, REFUSED_REACTION).catch(err => {
         const e = err instanceof Error ? err.message : String(err)
-        if (!/already_reacted/.test(e)) this.deps.log(`daemon: slack-watch: 🚫 on ${ev.channel} ts ${ev.ts} failed: ${e}\n`)
+        if (!/already_reacted/.test(e)) this.deps.log(`daemon: slack connector: 🚫 on ${ev.channel} ts ${ev.ts} failed: ${e}\n`)
       })
     }
   }
@@ -936,7 +936,7 @@ export class SlackWatcher {
     if (!fresh.length) return
     this.stats_.dropped[kind] = (this.stats_.dropped[kind] ?? 0) + fresh.length
     const line = `dropped ${fresh.length} Slack message${fresh.length === 1 ? '' : 's'} in ${keyOf(where)} (${kind}, ts ${fresh.join(', ')}): ${why}`
-    this.deps.log(`daemon: slack-watch: ${line}\n`)
+    this.deps.log(`daemon: slack connector: ${line}\n`)
     // Keyed by kind and by who hears it: one specialist's trouble does not silence another's.
     const to = where.specialist ?? listenerOf(this.deps.config(where.app), where.channel)
     if (alert) this.alertOnce(`${kind}:${to ?? '-'}`, to, `⚠️ ${line[0].toUpperCase()}${line.slice(1)}. Further ${kind} drops within the hour are logged, not alerted; \`hydra conversations\` counts them.`, appOfEntry(where))
@@ -994,7 +994,7 @@ export class SlackWatcher {
     this.inflight.set(key, flying)
     const run = (this.threadRuns.get(key) ?? Promise.resolve())
       .then(() => this.deliverItems(key, entry, items, cfg))
-      .catch(err => this.deps.log(`daemon: slack-watch: delivering ${key} failed: ${err instanceof Error ? err.stack ?? err.message : err}\n`))
+      .catch(err => this.deps.log(`daemon: slack connector: delivering ${key} failed: ${err instanceof Error ? err.stack ?? err.message : err}\n`))
     this.threadRuns.set(key, run)
     void run.finally(() => { if (this.threadRuns.get(key) === run) this.threadRuns.delete(key) })
   }
@@ -1029,7 +1029,7 @@ export class SlackWatcher {
         this.drop('unrouted', entry, lost.map(i => i.ts), 'it was accepted, but its specialist is gone and nothing that hears this place now takes it from its sender')
         this.settle(key, entry, lost.map(i => i.ts))
       }
-      if (lost.length < homeless.length) this.deps.log(`daemon: slack-watch: ${key}: ${homeless.length - lost.length} message(s) were for a specialist hydra.toml no longer declares; they stay owed and are routed anew when catch-up replays them\n`)
+      if (lost.length < homeless.length) this.deps.log(`daemon: slack connector: ${key}: ${homeless.length - lost.length} message(s) were for a specialist hydra.toml no longer declares; they stay owed and are routed anew when catch-up replays them\n`)
       items = items.filter(i => !homeless.includes(i))
     }
     const senders = new Map(items.map(i => [i.ts, identify(h, addressOf(i.user))] as const))
@@ -1077,14 +1077,14 @@ export class SlackWatcher {
           this.settle(key, entry, [item.ts])
           return
         }
-        this.deps.log(`daemon: slack-watch: the guard said not now (exit 75) for ${key} ts ${item.ts}; it stays owed and the next catch-up pass offers it again\n`)
+        this.deps.log(`daemon: slack connector: the guard said not now (exit 75) for ${key} ts ${item.ts}; it stays owed and the next catch-up pass offers it again\n`)
         return
       }
-      if (v.fate === 'open') this.deps.log(`daemon: slack-watch: the guard ${v.why} for ${key} ts ${item.ts}; delivering anyway\n`)
+      if (v.fate === 'open') this.deps.log(`daemon: slack connector: the guard ${v.why} for ${key} ts ${item.ts}; delivering anyway\n`)
       let to = v.fate === 'deliver' && v.to ? currentId(h, v.to) : home
       if (to !== home && isSessionThread(to)) {
         // A session's thread is held only by that session's own bind: a guard can't send a conversation's message there.
-        this.deps.log(`daemon: slack-watch: the guard redirected ${key} ts ${item.ts} to the session thread ${to}, which only that session's bind may hold; delivering to ${home}\n`)
+        this.deps.log(`daemon: slack connector: the guard redirected ${key} ts ${item.ts} to the session thread ${to}, which only that session's bind may hold; delivering to ${home}\n`)
         this.alertOnce(`guard-redirect:${to}`, home, `⚠️ The guard redirected a Slack message in ${place} to the session thread ${to}, so it went to ${home} instead: a guard redirects only to a specialist (or main).`, app)
         to = home
       }
@@ -1093,14 +1093,14 @@ export class SlackWatcher {
         // The app that heard the conversation is the one this message came through.
         const why = refusal(h, to, senders.get(item.ts)!, { app })
         if (why) {
-          this.deps.log(`daemon: slack-watch: the guard redirected ${key} ts ${item.ts} to ${to}, but ${why}; delivering to ${home}\n`)
+          this.deps.log(`daemon: slack connector: the guard redirected ${key} ts ${item.ts} to ${to}, but ${why}; delivering to ${home}\n`)
           // A redirect to a specialist that doesn't exist, or that this app cannot be served by, is the guard misconfigured: said once per episode, or a typo would quietly send everything to the default forever.
           const apart = notServedBy(h, to, app)
           if (apart) this.alertOnce(`guard-redirect:${to}`, home, `⚠️ The guard redirected a Slack message in ${place} to "${to}", but ${apart}, so it went to ${home} instead. Fix the guard, or change which apps "${to}" is pinned to in hydra.toml.`, app)
           else if (!isLive(h, to)) this.alertOnce(`guard-redirect:${to}`, home, `⚠️ The guard redirected a Slack message in ${place} to "${to}", which is no specialist in hydra.toml, so it went to ${home} instead. Fix the guard, or declare [specialists.${to}].`, app)
           to = home
         } else {
-          this.deps.log(`daemon: slack-watch: the guard redirected ${key} ts ${item.ts} from ${home} to ${to}\n`)
+          this.deps.log(`daemon: slack connector: the guard redirected ${key} ts ${item.ts} from ${home} to ${to}\n`)
           fallbackOf.set(to, home)
         }
       }
@@ -1147,7 +1147,7 @@ export class SlackWatcher {
           ref.path = dest
         } catch (err) {
           ref.note = `not downloaded (${err instanceof Error ? err.message : err})`
-          this.deps.log(`daemon: slack-watch: downloading ${f.id} from ${entry.channel} ts ${i.ts} failed: ${ref.note}\n`)
+          this.deps.log(`daemon: slack connector: downloading ${f.id} from ${entry.channel} ts ${i.ts} failed: ${ref.note}\n`)
         }
       }
       saved.push(ref)
@@ -1193,16 +1193,16 @@ export class SlackWatcher {
       if (!result.ok && result.wait) {
         // Not a failure: a turn. Said once an hour while it lasts, so a specialist stuck at max (no idle) is noticed.
         if (entry.waitingSince === undefined) { entry.waitingSince = this.deps.now(); this.persist() }
-        this.deps.log(`daemon: slack-watch: ${key} waits: ${result.error}\n`)
+        this.deps.log(`daemon: slack connector: ${key} waits: ${result.error}\n`)
         this.alertOnce(`max:${target.to}`, target.to, `⏳ ${result.error}. Its messages stay owed until then.`, appOfEntry(entry))
         continue
       }
       if (entry.waitingSince !== undefined) { delete entry.waitingSince; this.persist() }
       if (!result.ok && !result.permanent) {
         // Still owed: it stays in `owed`, so the catch-up pass fetches it again. Unless the owed list was full and cut it.
-        this.deps.log(`daemon: slack-watch: delivery to ${target.to} failed for ${key} (${first}..${last}): ${result.error}\n`)
+        this.deps.log(`daemon: slack connector: delivery to ${target.to} failed for ${key} (${first}..${last}): ${result.error}\n`)
         if (result.exit === 8 && fallback) {
-          this.deps.log(`daemon: slack-watch: the guard redirected ${key} (${first}..${last}) to ${target.to}, which has no session record; delivering to ${fallback}\n`)
+          this.deps.log(`daemon: slack connector: the guard redirected ${key} (${first}..${last}) to ${target.to}, which has no session record; delivering to ${fallback}\n`)
           this.alertOnce(`guard-redirect:${target.to}`, fallback, `⚠️ The guard redirected a Slack message in ${placeName(cfg, entry.channel)} to "${target.to}", which has no session record (${result.error}), so it went to ${fallback} instead.`, appOfEntry(entry))
           await this.deliverGroup(key, entry, { to: fallback }, batch, cfg)
           continue
@@ -1226,7 +1226,7 @@ export class SlackWatcher {
     for (const i of batch) {
       void slack.react(entry.channel, i.ts, name).catch(err => {
         const why = err instanceof Error ? err.message : String(err)
-        if (!/already_reacted/.test(why)) this.deps.log(`daemon: slack-watch: ack ${name} on ${entry.channel} ts ${i.ts} failed: ${why}\n`)
+        if (!/already_reacted/.test(why)) this.deps.log(`daemon: slack connector: ack ${name} on ${entry.channel} ts ${i.ts} failed: ${why}\n`)
       })
     }
   }

@@ -6,9 +6,9 @@ const totals = { conversations: 14, readAsOperator: 0, owed: 0, oldestOwedAgeMin
 
 describe('hydra health, Slack lines', () => {
   test('one app named `default`: the single line it has always been', () => {
-    expect(slackHealthLines({ listener: up, apps: { default: up }, ...totals })).toEqual(['slack: listener up · catch-up ok 3 min ago · 14 conversations · 0 owed'])
+    expect(slackHealthLines({ listener: up, apps: { default: up }, ...totals })).toEqual(['slack connector: up · catch-up ok 3 min ago · 14 conversations · 0 owed'])
     expect(slackHealthLines({ listener: { ...up, state: 'down', downMin: 9, catchUp: { ok: false, ageMin: 20, reason: 'ratelimited' } }, apps: {}, ...totals, owed: 2, oldestOwedAgeMin: 7, readAsOperator: 1 }))
-      .toEqual(['slack: listener down 9 min · catch-up failing (ratelimited) 20 min ago · 14 conversations (1 read as the operator) · 2 owed, oldest 7 min'])
+      .toEqual(['slack connector: down 9 min · catch-up failing (ratelimited) 20 min ago · 14 conversations (1 read as the operator) · 2 owed, oldest 7 min'])
   })
 
   test('several apps: a header, then one line each with its id, last event, catch-up and scope status', () => {
@@ -22,7 +22,7 @@ describe('hydra health, Slack lines', () => {
       ...totals,
     })
     expect(lines).toEqual([
-      'slack: 3 apps · 14 conversations · 0 owed',
+      'slack connector: 3 apps · 14 conversations · 0 owed',
       '  default: up · last event 1 min ago · catch-up ok 3 min ago · scopes ok',
       '  sales: down 12 min · last event 14 min ago · catch-up failing (ratelimited) 40 min ago · missing chat:write (replies) · membership unreadable (missing_scope)',
       '  ops: off · `bot_token_env` of the app named `ops` (`[slack.apps.ops]`) names OPS_BOT, which has no value in the daemon\'s environment',
@@ -30,6 +30,6 @@ describe('hydra health, Slack lines', () => {
   })
 
   test('a lone app that is not `default` is still named', () => {
-    expect(slackHealthLines({ apps: { sales: up }, ...totals })).toEqual(['slack: 1 app · 14 conversations · 0 owed', '  sales: up · last event 1 min ago · catch-up ok 3 min ago · scopes ok'])
+    expect(slackHealthLines({ apps: { sales: up }, ...totals })).toEqual(['slack connector: 1 app · 14 conversations · 0 owed', '  sales: up · last event 1 min ago · catch-up ok 3 min ago · scopes ok'])
   })
 })

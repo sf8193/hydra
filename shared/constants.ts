@@ -38,7 +38,7 @@ export const BRIDGE_SHUTDOWN_GRACE_MS = 1_000
 /** In the state dir: an alert the watchdog (a fresh process, no chat connection) leaves for the daemon to post. */
 export const WATCHDOG_ALERT_FILE = 'watchdog-alert.json'
 
-// Slack Socket Mode's keepalive, for both Slack connections (the gateway and the Slack-watch listener). The client
+// Slack Socket Mode's keepalive, for both Slack connections (the gateway and the Slack connector). The client
 // pings every third of this timeout (5 s) and drops its socket once the last pong is older than the timeout. After
 // a block of the event loop the overdue ping runs before the waiting pong is read, so the pong ages by the whole
 // block: at the SDK's default of 5 s, any block of about 4 s dropped the socket. At 15 s a block shorter than the
