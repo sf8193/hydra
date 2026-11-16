@@ -1,8 +1,8 @@
-// The trust statement is one sentence (scope.ts SERVER_TRUST_SENTENCE), said the same in the load log and in every place an operator reads it.
+// The trust statement is one sentence (restricted.ts SERVER_TRUST_SENTENCE), said the same in the load log and in every place an operator reads it.
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { SERVER_TRUST_SENTENCE } from '../scope.js'
+import { SERVER_TRUST_SENTENCE } from '../restricted.js'
 
 const root = join(import.meta.dir, '..', '..')
 

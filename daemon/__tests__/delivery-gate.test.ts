@@ -10,7 +10,7 @@ import { registry } from '../sessions.js'
 import { engines } from '../engines/instances.js'
 import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
 import { _setHydraConfigForTesting } from '../hydra-config.js'
-import type { LaunchPolicy } from '../scope.js'
+import type { LaunchPolicy } from '../restricted.js'
 import { threadNotices } from '../notice-limit.js'
 import type { HydraConfig, Specialist } from '../../config/types.js'
 

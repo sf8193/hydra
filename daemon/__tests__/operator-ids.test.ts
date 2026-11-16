@@ -4,7 +4,7 @@ import { ACCESS_FILE } from '../config.js'
 import { gate, operatorIds } from '../access.js'
 import { _setHydraConfigForTesting, hydraConfigPath, startHydraConfig, stopHydraConfig } from '../hydra-config.js'
 import type { HydraConfig } from '../../config/types.js'
-import type { InboundMessage } from '../../gateway.js'
+import type { InboundMessage } from '../../gateways/gateway.js'
 import { testLoadEnv } from '../../config/__tests__/load-env.js'
 
 // The suite runs as the discord platform (CHAT_PLATFORM unset).

@@ -2,7 +2,7 @@
 // launch was given, so the start's own check (engines/claude-verify.ts) passes, and a way to make it see something else.
 import { BRIDGE_MCP_SERVER_KEY } from '../plugin-manifest.js'
 import { expectedLoad, verifyDeps } from '../engines/claude-verify.js'
-import type { ConfinedPolicy } from '../scope.js'
+import type { ConfinedPolicy } from '../restricted.js'
 
 /** The lines of a launch's debug file that say what loaded, for a launch that loaded exactly this policy. */
 export function debugLogFor(policy: Pick<ConfinedPolicy, 'servers'>, extra: string[] = []): string {

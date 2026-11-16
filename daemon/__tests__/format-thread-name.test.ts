@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { formatThreadName } from '../../discord-gateway.js'
+import { formatThreadName } from '../../gateways/discord.js'
 
 const base = {
   state: 'live' as const,

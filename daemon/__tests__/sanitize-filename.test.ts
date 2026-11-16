@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { sanitizeFilename } from '../../gateway.js'
+import { sanitizeFilename } from '../../gateways/gateway.js'
 
 describe('sanitizeFilename', () => {
   test('normal filename passes through', () => {

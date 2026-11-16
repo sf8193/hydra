@@ -4,8 +4,8 @@ import { registry } from '../sessions.js'
 import type { SessionInfo } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { executeTool } from '../bridge-dispatch.js'
-import { discordSubtext } from '../../discord-gateway.js'
-import { slackSubtextBlocks } from '../../slack-gateway.js'
+import { discordSubtext } from '../../gateways/discord.js'
+import { slackSubtextBlocks } from '../../gateways/slack.js'
 
 process.stderr.write = (() => true) as any
 

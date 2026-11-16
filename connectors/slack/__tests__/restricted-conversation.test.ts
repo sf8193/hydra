@@ -1,4 +1,4 @@
-// A scoped session's kept tools work in a Slack conversation bound to its specialist, and nowhere else in Slack: its home
+// A restricted session's kept tools work in a Slack conversation bound to its specialist, and nowhere else in Slack: its home
 // channel is not its conversation.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { rmSync } from 'fs'
@@ -7,7 +7,7 @@ import { STATE_DIR } from '../../../daemon/config.js'
 import { registry } from '../../../daemon/sessions.js'
 import { setSpecialistThread, _reloadSpecialists } from '../../../specialists/specialists.js'
 import { _setHydraConfigForTesting } from '../../../daemon/hydra-config.js'
-import { scopedRefusal } from '../../../daemon/bridge-dispatch.js'
+import { restrictedRefusal } from '../../../daemon/bridge-dispatch.js'
 import { conversationBelongsTo, getSlackWatcher, slackRuntimeDeps, stopSlackListener } from '../runtime.js'
 import { TOP_LEVEL } from '../conversation.js'
 import { TWO_APPS, hydra, view } from './slack-config.js'
@@ -53,13 +53,13 @@ describe('a Slack conversation bound to the specialist', () => {
   test.each(KEPT)('%s passes the scope check there', (tool, key) => {
     getSlackWatcher().bind('C1', '5.000001', CRM, 'tool')
     expect(conversationBelongsTo('crm-session', 'slack:C1:5.000001')).toBe(true)
-    expect(scopedRefusal('crm-session', tool, { [key]: 'slack:C1:5.000001', text: 'x' })).toBeUndefined()
+    expect(restrictedRefusal('crm-session', tool, { [key]: 'slack:C1:5.000001', text: 'x' })).toBeUndefined()
   })
   test.each(KEPT)('%s is refused in a conversation bound to another specialist, and in one bound to no one', (tool, key) => {
     getSlackWatcher().bind('C2', '6.000001', OPS, 'tool')
     for (const other of ['slack:C2:6.000001', 'slack:C1:7.000001']) {
       expect(conversationBelongsTo('crm-session', other)).toBe(false)
-      expect(scopedRefusal('crm-session', tool, { [key]: other, text: 'x' })).toBe(`${tool}: ${key} ${other} is not this session's own conversation; a scoped session acts only in its own thread or in a Slack conversation bound to its specialist`)
+      expect(restrictedRefusal('crm-session', tool, { [key]: other, text: 'x' })).toBe(`${tool}: ${key} ${other} is not this session's own conversation; a restricted session acts only in its own thread or in a Slack conversation bound to its specialist`)
     }
   })
 })
@@ -72,7 +72,7 @@ describe("the specialist's home is not its conversation", () => {
   })
   for (const [tool, key] of KEPT) {
     test.each(HOME)(`${tool} on home %s is refused`, home => {
-      expect(scopedRefusal('crm-session', tool, { [key]: home, text: 'x' })).toBe(`${tool}: ${key} ${home} is not this session's own conversation; a scoped session acts only in its own thread or in a Slack conversation bound to its specialist`)
+      expect(restrictedRefusal('crm-session', tool, { [key]: home, text: 'x' })).toBe(`${tool}: ${key} ${home} is not this session's own conversation; a restricted session acts only in its own thread or in a Slack conversation bound to its specialist`)
     })
   }
   test('even with the home open as a conversation bound to the specialist (a post to it opens one)', () => {

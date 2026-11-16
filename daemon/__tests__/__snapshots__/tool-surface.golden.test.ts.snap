@@ -1,6 +1,6 @@
 // Bun Snapshot v1, https://bun.sh/docs/test/snapshots
 
-exports[`tool surface of each non-scoped session, advertised and enforced, is pinned 1`] = `
+exports[`tool surface of each non-restricted session, advertised and enforced, is pinned 1`] = `
 {
   "g-guest": {
     "advertised": [

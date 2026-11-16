@@ -84,8 +84,8 @@ describe('slack-watch.json → hydra.toml', () => {
   })
 
   test("the legacy one-route form, with no roster, stays open to anyone", () => {
-    const h = load(toToml(migrateSlackWatch({ botUserId: 'U', channels: ['C1'], specialist: 'slopbot' })))
-    expect(h.specialists.slopbot).toMatchObject({ listens: ['slack:C1'], allow: ['anyone'] })
+    const h = load(toToml(migrateSlackWatch({ botUserId: 'U', channels: ['C1'], specialist: 'helper' })))
+    expect(h.specialists.helper).toMatchObject({ listens: ['slack:C1'], allow: ['anyone'] })
   })
 })
 

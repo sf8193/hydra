@@ -17,7 +17,7 @@ import { registry } from '../sessions.js'
 import type { SessionInfo } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { gateway } from '../config.js'
-import type { InboundMessage } from '../../gateway.js'
+import type { InboundMessage } from '../../gateways/gateway.js'
 
 if (!runnerTest) throw new Error('protocol-runner.__test only available under NODE_ENV=test')
 const runner = runnerTest

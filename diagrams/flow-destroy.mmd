@@ -10,7 +10,7 @@ sequenceDiagram
     participant handler as commands/<br/>thread.ts
     participant registry as sessions.ts
     participant protocol as protocol-<br/>registry.ts
-    participant gateway as discord-<br/>gateway.ts
+    participant gateway as gateways/<br/>discord.ts
 
     alt "kill +d" / "kill +destroy" — one command, two steps
         user->>router: "kill +d" (in thread)

@@ -1,5 +1,5 @@
-// Golden: the Claude launch command for every non-scoped shape, byte for byte (after masking the one random UUID and
-// the temp state dir). Written against the code before scoped specialists and kept green through them: an
+// Golden: the Claude launch command for every non-restricted shape, byte for byte (after masking the one random UUID and
+// the temp state dir). Written against the code before restricted specialists and kept green through them: an
 // `access = "operator"` specialist and every non-specialist session must launch exactly as they always have.
 import { expect, test } from 'bun:test'
 import { ClaudeEngine } from '../engines/claude-engine.js'

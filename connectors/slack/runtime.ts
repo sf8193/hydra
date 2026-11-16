@@ -416,7 +416,7 @@ function mayAnswerConversation(h: HydraConfig, caller: SessionInfo | undefined, 
 /**
  * Whether `conversation` is an open conversation the caller answers: bound to its specialist (a conversation's own session:
  * its own). Never throws: an id that parses to nothing, or is not open, is not theirs. Unlike `reply`, this does not count
- * the specialist's home channel: a scoped session's tools are held to this.
+ * the specialist's home channel: a restricted session's tools are held to this.
  */
 export function conversationBelongsTo(callerSessionId: string | undefined, conversation: unknown): boolean {
   try {

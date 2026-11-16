@@ -47,7 +47,7 @@ const actions = (opts: { fail?: string } = {}) => {
 describe("a thread bound to a session's own thread (any session listening)", () => {
   const SESSION = '1552619225032425525'
   test('every reply is delivered to the session, from anyone, in a channel no specialist hears, and the binding stays put', async () => {
-    const { w, sent } = setup({ toml: oneListener(CH, 'slopbot', '[]') })     // the only specialist admits only the operator
+    const { w, sent } = setup({ toml: oneListener(CH, 'helper', '[]') })     // the only specialist admits only the operator
     w.bind('C0OTHER', '2000.000001', SESSION, 'tool')
     expect(w.handle(ev({ channel: 'C0OTHER', ts: '2001.000001', threadTs: '2000.000001', user: 'USTRANGER', text: 'ship it?' }))).toBe('follow-up')
     await w.flush()
@@ -62,21 +62,21 @@ describe("a thread bound to a session's own thread (any session listening)", () 
     s.w.bind(CH, '4000.000001', SESSION, 'tool')
     expect(s.w.handle(ev({ ts: '4001.000001', threadTs: '4000.000001', text: mention }))).toBe('mention')
     await s.w.flush()
-    expect(s.sent.map(x => x.specialist)).toEqual(['slopbot'])
-    expect(s.w.get(CH, '4000.000001')?.specialist).toBe('slopbot')
+    expect(s.sent.map(x => x.specialist)).toEqual(['helper'])
+    expect(s.w.get(CH, '4000.000001')?.specialist).toBe('helper')
     expect(s.alertTo).toContain(SESSION)
     // untagged chatter in a thread a session listens to stays with the session
     s.w.bind(CH, '5000.000001', SESSION, 'tool')
     s.w.handle(ev({ ts: '5001.000001', threadTs: '5000.000001', text: 'just chatting' }))
     await s.w.flush()
-    expect(s.sent.map(x => x.specialist)).toEqual(['slopbot', SESSION])
+    expect(s.sent.map(x => x.specialist)).toEqual(['helper', SESSION])
   })
 
   test("a guard can't send a conversation's message to a session thread: it goes to the binding, alerted", async () => {
-    const s = setup({ toml: oneListener(CH, 'slopbot', '["anyone"]', '[guard]\ncommand = "guard"') }, undefined, undefined, async () => ({ fate: 'deliver', to: SESSION }))
+    const s = setup({ toml: oneListener(CH, 'helper', '["anyone"]', '[guard]\ncommand = "guard"') }, undefined, undefined, async () => ({ fate: 'deliver', to: SESSION }))
     s.w.handle(ev({ ts: '3000.000001', text: mention }))
     await s.w.flush()
-    expect(s.sent.map(x => x.specialist)).toEqual(['slopbot'])
+    expect(s.sent.map(x => x.specialist)).toEqual(['helper'])
     expect(s.alerts.join()).toContain('a guard redirects only to a specialist')
   })
 })
@@ -86,10 +86,10 @@ describe('what opens and continues a conversation', () => {
     const { w, sent } = setup()
     expect(w.handle(ev({ ts: '1000.000001', text: mention }))).toBe('mention')
     await w.flush()
-    expect(w.get(CH, '1000.000001')).toMatchObject({ specialist: 'slopbot', mentionedBy: 'UALICE', delivered: ['1000.000001'] })
+    expect(w.get(CH, '1000.000001')).toMatchObject({ specialist: 'helper', mentionedBy: 'UALICE', delivered: ['1000.000001'] })
     expect(w.get(CH, '1000.000001')!.owed).toBeUndefined()
     expect(sent).toHaveLength(1)
-    expect(sent[0].specialist).toBe('slopbot')
+    expect(sent[0].specialist).toBe('helper')
     expect(sent[0].msg).toContain('[mention ts="1000.000001" person=null roles="anyone" operator=false address="slack:UALICE"]')
     expect(sent[0].msg).toContain('link="https://x.slack.com/archives/C0FOOD/p1000000001"')
   })
@@ -115,11 +115,11 @@ describe('what opens and continues a conversation', () => {
   })
 
   test('listen = "all": an untagged top-level message opens its own conversation, its thread, delivered like a mention', async () => {
-    const { w, sent } = setup({ toml: oneListener(CH, 'slopbot', '["anyone"]', `[places."slack:${CH}"]\nlisten = "all"\n`) })
+    const { w, sent } = setup({ toml: oneListener(CH, 'helper', '["anyone"]', `[places."slack:${CH}"]\nlisten = "all"\n`) })
     expect(w.handle(ev({ ts: '1.000001', text: 'chatter' }))).toBe('follow-up')
     expect(w.handle(ev({ ts: '2.000001', threadTs: '1.000001', text: 'a reply under it' }))).toBe('follow-up')
     await w.flush()
-    expect(w.list().map(e => [e.threadTs, e.specialist, e.ambient])).toEqual([['1.000001', 'slopbot', true]])
+    expect(w.list().map(e => [e.threadTs, e.specialist, e.ambient])).toEqual([['1.000001', 'helper', true]])
     expect(sent[0].msg).toContain(`conversation="slack:${CH}:1.000001"`)
   })
 
@@ -149,7 +149,7 @@ to = "finance"
   })
 
   test('chatter still owed (or answered) takes at most half the table; once delivered and unanswered it holds no slot; all of it goes after a day', async () => {
-    const { w, logs, tick } = setup({ toml: oneListener(CH, 'slopbot', '["anyone"]', `[places."slack:${CH}"]\nlisten = "all"\n`), maxWatches: 4, coalesceMs: 60_000 })
+    const { w, logs, tick } = setup({ toml: oneListener(CH, 'helper', '["anyone"]', `[places."slack:${CH}"]\nlisten = "all"\n`), maxWatches: 4, coalesceMs: 60_000 })
     for (let i = 1; i <= 4; i++) w.handle(ev({ ts: `${i}.000001`, text: 'chatter' }))
     expect(w.list().filter(e => e.ambient)).toHaveLength(2) // two owed: half the table
     expect(logs.join()).toContain('conversations opened by untagged chatter already hold half the conversation table (2 of 4)')
@@ -177,7 +177,7 @@ to = "finance"
   test("the bot's own top-level post opens a conversation without a delivery; its own replies are not echoed", async () => {
     const { w, sent } = setup()
     expect(w.handle(ev({ ts: '2000.000001', user: BOT, text: 'cart post' }))).toBe('subscribed')
-    expect(w.get(CH, '2000.000001')!.specialist).toBe('slopbot')
+    expect(w.get(CH, '2000.000001')!.specialist).toBe('helper')
     expect(w.handle(ev({ ts: '2001.000001', user: BOT, threadTs: '2000.000001', text: 'its own reply' }))).toBe('ignored')
     expect(w.handle(ev({ ts: '2002.000001', threadTs: '2000.000001', text: 'sounds good' }))).toBe('follow-up')
     await w.flush()
@@ -196,7 +196,7 @@ to = "finance"
   })
 
   test('other bots are heard only where the place says bots = true', () => {
-    const on = setup({ toml: oneListener(CH, 'slopbot', '["anyone"]', `[places."slack:${CH}"]\nbots = true\n`) })
+    const on = setup({ toml: oneListener(CH, 'helper', '["anyone"]', `[places."slack:${CH}"]\nbots = true\n`) })
     expect(on.w.handle({ channel: CH, ts: '1.000001', botId: 'BOTHER', subtype: 'bot_message', text: `<@${BOT}> hi` })).toBe('mention')
   })
 
@@ -277,7 +277,7 @@ describe('🚫: a refused or unrouted mention or DM', () => {
 
   test('a refused mention gets 🚫; refused chatter in a bound thread does not', async () => {
     const { a, reactions } = actions()
-    const s = setup({ toml: oneListener(CH, 'slopbot', '["staff"]') + '[people.alice]\nids = ["slack:UALICE"]\nroles = ["staff"]\n' })
+    const s = setup({ toml: oneListener(CH, 'helper', '["staff"]') + '[people.alice]\nids = ["slack:UALICE"]\nroles = ["staff"]\n' })
     s.w.setSlackActions(a)
     expect(s.w.handle(ev({ ts: '1.000001', text: mention }))).toBe('mention')
     expect(s.w.handle(ev({ ts: '2.000001', threadTs: '1.000001', user: 'USTRANGER', text: 'me too' }))).toBe('refused')
@@ -302,7 +302,7 @@ describe('🚫: a refused or unrouted mention or DM', () => {
 
   test('another bot (where bots = true) has its 🚫 capped by its bot id', async () => {
     const { a, reactions } = actions()
-    const s = setup({ toml: oneListener(CH, 'slopbot', '["people"]', `[places."slack:${CH}"]\nbots = true\n`), maxMentionsPer10Min: 2 })
+    const s = setup({ toml: oneListener(CH, 'helper', '["people"]', `[places."slack:${CH}"]\nbots = true\n`), maxMentionsPer10Min: 2 })
     s.w.setSlackActions(a)
     for (let i = 1; i <= 5; i++) s.w.handle({ channel: CH, ts: `${i}.000001`, botId: 'BOTHER', subtype: 'bot_message', text: mention })
     await Bun.sleep(1)
@@ -359,7 +359,7 @@ describe('delivery', () => {
     w.handle(ev({ ts: '1000.000002', threadTs: '1000.000001', text: 'second' }))
     await w.flush()
     expect(sent).toHaveLength(1)
-    expect(sent[0].key).toBe(`slack-watch-${CH}-1000.000001-1000.000001-1000.000003-slopbot`) // the target is in the key
+    expect(sent[0].key).toBe(`slack-watch-${CH}-1000.000001-1000.000001-1000.000003-helper`) // the target is in the key
     const m = sent[0].msg
     expect(m.indexOf('second')).toBeLessThan(m.indexOf('third'))
     expect(m.match(/^\[(mention|follow-up) /gm)).toHaveLength(3)
@@ -543,10 +543,10 @@ describe('what the specialist reads', () => {
 describe('expiry, cursors and persistence', () => {
   test('idle conversations expire after the idle window; activity keeps them', () => {
     const { w, tick } = setup({ idleExpiryMs: 1000 })
-    w.watch(CH, 'a', 'slopbot')
-    w.watch(CH, 'b', 'slopbot')
+    w.watch(CH, 'a', 'helper')
+    w.watch(CH, 'b', 'helper')
     tick(800)
-    w.watch(CH, 'b', 'slopbot') // touched
+    w.watch(CH, 'b', 'helper') // touched
     tick(400)
     expect(w.sweep()).toBe(1)
     expect(w.get(CH, 'a')).toBeUndefined()
@@ -594,7 +594,7 @@ describe('expiry, cursors and persistence', () => {
     w.handle(ev({ ts: '1000.000001', text: mention }))
     await w.flush()
     const reborn = make()
-    expect(reborn.get(CH, '1000.000001')).toMatchObject({ specialist: 'slopbot', delivered: ['1000.000001'] })
+    expect(reborn.get(CH, '1000.000001')).toMatchObject({ specialist: 'helper', delivered: ['1000.000001'] })
     expect(reborn.channelCursor(CH)).toBe('1000.000001')
   })
 
@@ -604,9 +604,9 @@ describe('expiry, cursors and persistence', () => {
     const w = s.make()
     expect(w.handle(ev({ ts: '2.000001', threadTs: '1.000001', text: 'hi, untagged' }))).toBe('follow-up')
     await w.flush()
-    expect(s.sent.map(x => x.specialist)).toEqual(['slopbot'])
-    expect(w.get(CH, '1.000001')!.specialist).toBe('slopbot')
-    expect(JSON.parse(readFileSync(s.file, 'utf8')).entries[0].specialist).toBe('slopbot')
+    expect(s.sent.map(x => x.specialist)).toEqual(['helper'])
+    expect(w.get(CH, '1.000001')!.specialist).toBe('helper')
+    expect(JSON.parse(readFileSync(s.file, 'utf8')).entries[0].specialist).toBe('helper')
   })
 
   test('cmpTs keeps microsecond precision', () => {
@@ -631,7 +631,7 @@ ids = ["slack:UGUEST"]
 name = "Gus"
 roles = ["guest"]
 `
-  const allowing = (allow: string) => oneListener(CH, 'slopbot', allow) + ROSTER
+  const allowing = (allow: string) => oneListener(CH, 'helper', allow) + ROSTER
 
   test('a message owed before allow was tightened is settled by its refusal, so catch-up stops chasing it', async () => {
     let config = cfg({ toml: allowing('["anyone"]') })
@@ -688,7 +688,7 @@ roles = ["guest"]
     expect(s.sent).toHaveLength(0)
     expect(s.w.owedHints()).toEqual([])
     expect(s.w.stats().dropped).toEqual({ refused: 1 })
-    expect(s.alerts.join()).toContain('it was accepted, but now slopbot allows owner')
+    expect(s.alerts.join()).toContain('it was accepted, but now helper allows owner')
   })
 
   test('a flood of refusals does not evict drops: a replayed drop is not counted twice', () => {
@@ -1054,7 +1054,7 @@ allow = ["anyone"]
     expect(s.sent).toHaveLength(2)
     expect(s.w.owedHints()).toHaveLength(1)
     expect(s.alerts).toHaveLength(1)
-    expect(s.alerts[0]).toContain('no such specialist: slopbot')
+    expect(s.alerts[0]).toContain('no such specialist: helper')
     expect(s.alertTo).toEqual([undefined]) // not to the missing specialist's thread: to every Slack specialist's
   })
 })

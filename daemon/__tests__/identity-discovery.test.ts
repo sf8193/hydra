@@ -17,7 +17,7 @@ import { registry, threadRegistry } from '../sessions.js'
 import type { SessionInfo } from '../sessions.js'
 import { gateway } from '../config.js'
 import { fakeCodexAdapter } from './test-harness.js'
-import type { InboundMessage } from '../../gateway.js'
+import type { InboundMessage } from '../../gateways/gateway.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 
 const SID = '11111111-2222-4333-8444-555555555555'

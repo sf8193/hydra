@@ -212,7 +212,9 @@ export function claudeConfigDir(): string {
 export type { ToolName }
 
 /**
- * `scoped`: a specialist set to `access = "workdir"`. It speaks only in its own conversation, so it has none of the tools
+ * `scoped`: a restricted specialist, one set to `access = "workdir"`. The stored value `scoped` is historical (from before
+ * "restricted specialist"): it sits in session records and in HYDRA_SESSION_TYPE, so renaming it needs a read alias first.
+ * It speaks only in its own conversation, so it has none of the tools
  * that reach another thread, watch or the operator's account (spawn, kill, peek, list, handoff, bind, watch, ask_predecessor),
  * and no capability grants it any. `send_to_thread` it keeps only toward the specialists its `talks_to` names (daemon/talks-to.ts).
  */
@@ -239,7 +241,7 @@ export const BASE_TOOLS: Readonly<Record<SessionType, ReadonlySet<ToolName>>> = 
     'download_attachment', 'set_description',
     'advance', 'extend_phase',
   ]),
-  // Each is checked against the session's own conversation where it is called (bridge-dispatch `scopedRefusal`), not only here.
+  // Each is checked against the session's own conversation where it is called (bridge-dispatch `restrictedRefusal`), not only here.
   scoped: new Set([
     'reply', 'react', 'edit_message', 'delete_message', 'fetch_messages',
     'download_attachment', 'set_description',

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { SlackGateway } from '../slack-gateway'
+import { SlackGateway } from '../slack'
 
 // A thread link must carry thread_ts and cid, or Slack opens the channel at that message instead of the thread.
 test('getThreadUrl links to the thread, not the message in the channel', async () => {

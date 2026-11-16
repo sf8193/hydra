@@ -14,7 +14,7 @@ import { isThreadOccupied } from '../protocol-registry.js'
 import { unwatchBySession } from "../../connectors/github/pr-watch.js"
 import { emit } from "../event-bus.js"
 import { getTemplate, buildTemplateSpawnOpts } from '../templates.js'
-import type { InboundMessage } from '../../gateway.js'
+import type { InboundMessage } from '../../gateways/gateway.js'
 import { recoveryEntry } from '../recovery-selection.js'
 import { recoveryEngine } from '../engines/history.js'
 import { formatContextPercent, type ProviderId } from '../engines/engine-adapter.js'

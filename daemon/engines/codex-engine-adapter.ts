@@ -1,4 +1,4 @@
-import { deliveryRefusal } from '../scope.js'
+import { deliveryRefusal } from '../restricted.js'
 // daemon/engines/codex-engine-adapter.ts
 //
 // Codex engine adapter — wraps the CodexEngine (app-server + unix socket)

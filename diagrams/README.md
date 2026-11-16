@@ -12,7 +12,7 @@ Each diagram has a `.mmd` source and a rendered `.png`.
 
 **Structure:** Each `.mmd` file is a self-contained Mermaid diagram. Use `sequenceDiagram` for message flows through layers, `flowchart TD` for structural/topology diagrams.
 
-**Participants:** Use the actual source file names (`session-lifecycle.ts`, `router.ts`) not abstractions. `gateway.ts` is the abstract interface — reference the concrete implementations (`{platform}-gateway.ts` or `discord-gateway.ts` / `slack-gateway.ts`) for message entry points. The daemon is platform-agnostic; platform names appear only in gateway implementations.
+**Participants:** Use the actual source file names (`session-lifecycle.ts`, `router.ts`) not abstractions. `gateways/gateway.ts` is the abstract interface — reference the concrete implementations (`gateways/{platform}.ts`, that is `gateways/discord.ts` or `gateways/slack.ts`) for message entry points. The daemon is platform-agnostic; platform names appear only in gateway implementations.
 
 **When to create a new diagram:**
 - A new command or protocol that routes through multiple daemon layers

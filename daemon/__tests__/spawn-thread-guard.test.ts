@@ -9,7 +9,7 @@ import { gateway } from '../config.js'
 import { registry } from '../sessions.js'
 import { resolveSpawnTarget } from '../commands/global.js'
 import type { SessionInfo } from '../sessions.js'
-import type { InboundMessage } from '../../gateway.js'
+import type { InboundMessage } from '../../gateways/gateway.js'
 
 function liveSession(id: string, threadId: string, anchorChannelId?: string): SessionInfo {
   const info = {

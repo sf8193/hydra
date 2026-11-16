@@ -21,7 +21,7 @@
 import { stat, readFile } from 'fs/promises'
 import { basename } from 'path'
 
-import type { DownloadedFile } from '../gateway.js'
+import type { DownloadedFile } from '../gateways/gateway.js'
 
 export type Transcript = { name: string; text: string }
 

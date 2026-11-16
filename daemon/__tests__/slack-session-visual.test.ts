@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test'
-import { SlackGateway, slackSessionStatus, slackSessionTitles } from '../../slack-gateway.js'
-import type { SessionVisualOpts } from '../../gateway.js'
+import { SlackGateway, slackSessionStatus, slackSessionTitles } from '../../gateways/slack.js'
+import type { SessionVisualOpts } from '../../gateways/gateway.js'
 
 const THREAD = 'D0BE3RB4Y00:1792779646.816639'
 const SESSION = { channel_id: 'D0BE3RB4Y00', thread_ts: '1792779646.816639' }

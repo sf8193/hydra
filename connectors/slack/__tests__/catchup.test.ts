@@ -68,7 +68,7 @@ describe('catchUp: a thread a session listens to, where no specialist listens', 
 
 describe('catchUp', () => {
   test('a refused sender found in the gap is refused once, like live, and is not counted as recovered', async () => {
-    const closed: SlackWatchConfig = view(oneListener(CH, 'slopbot', '["people"]') + '[people.owner]\nids = ["slack:UOWNER"]\nname = "Owner"\nroles = ["boss"]\n')
+    const closed: SlackWatchConfig = view(oneListener(CH, 'helper', '["people"]') + '[people.owner]\nids = ["slack:UOWNER"]\nname = "Owner"\nroles = ["boss"]\n')
     const { w, sent } = setup(undefined, closed)
     w.handle({ channel: CH, ts: '1000.000001', user: 'UOWNER', text: 'old chat' }) // sets the cursor
     const { api } = fakeApi({ [CH]: [
@@ -212,7 +212,7 @@ describe('catchUp', () => {
     const big = { ...cfg, maxWatches: 200 }
     const { w } = setup(undefined, big)
     w.handle({ channel: CH, ts: '1000.000001', user: 'UA', text: 'chat' })
-    for (let i = 0; i < 100; i++) w.watch(CH, `${2000 + i}.000001`, 'slopbot')
+    for (let i = 0; i < 100; i++) w.watch(CH, `${2000 + i}.000001`, 'helper')
     const { api, calls } = fakeApi({ [CH]: [] })
     const r = await catchUp(w, api, big, opts({ deep: true }))
     expect(r).toMatchObject({ complete: true })
@@ -245,8 +245,8 @@ test("a thread Slack says isn't there (a made-up ts) is skipped and logged; the 
   const { w, sent } = setup(() => ({ ok: true }))
   const logs: string[] = []
   w.handle({ channel: CH, ts: '1000.000001', user: 'UA', text: 'chat' })
-  w.bind(CH, '1.000001', 'slopbot', 'tool') // made up
-  w.bind(CH, '1001.000001', 'slopbot')
+  w.bind(CH, '1.000001', 'helper', 'tool') // made up
+  w.bind(CH, '1001.000001', 'helper')
   const api: SlackApi = {
     history: async () => ({ messages: [] }),
     replies: async a => { if (a.ts === '1.000001') throw new Error('An API error occurred: thread_not_found'); return { messages: [{ ts: '1002.000001', thread_ts: '1001.000001', user: 'UA', text: 'missed reply' }] } },
@@ -261,7 +261,7 @@ test("a thread Slack says isn't there (a made-up ts) is skipped and logged; the 
 test("a thread whose channel the bot can no longer read is let go like a gone one: the pass goes on, the queue isn't pinned", async () => {
   const { w } = setup(() => ({ ok: false, error: 'down' }))
   w.handle({ channel: CH, ts: '1000.000001', user: 'UA', text: 'chat' })
-  w.bind(CH, '1500.000001', 'slopbot')
+  w.bind(CH, '1500.000001', 'helper')
   const e = w.get(CH, '1500.000001')!
   e.owed = ['1500.000002']; e.waitingSince = 1
   const api: SlackApi = { history: async () => ({ messages: [] }), replies: async () => { throw new Error('An API error occurred: not_in_channel') } }
@@ -273,7 +273,7 @@ test("a thread whose channel the bot can no longer read is let go like a gone on
 test('a gone thread that still owed messages drops them and is let go: they can never be fetched', async () => {
   const { w } = setup(() => ({ ok: false, error: 'down' }))
   w.handle({ channel: CH, ts: '1000.000001', user: 'UA', text: 'chat' })
-  w.bind(CH, '1500.000001', 'slopbot')
+  w.bind(CH, '1500.000001', 'helper')
   const e = w.get(CH, '1500.000001')!
   e.owed = ['1500.000002']; e.waitingSince = 1
   const api: SlackApi = { history: async () => ({ messages: [] }), replies: async () => { throw new Error('An API error occurred: thread_not_found') } }
@@ -315,14 +315,14 @@ test('owed threads follow their binding: refetched even once no specialist liste
   const w = new SlackWatcher({ now: () => 1_793_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => routed, deliver: async () => ({ ok: false, error: 'down' }) })
   w.handle({ channel: CH, ts: '1000.000001', user: 'UA', text: mention })
   await w.flush()
-  routed = view(oneListener('C0ELSE', 'slopbot'))
+  routed = view(oneListener('C0ELSE', 'helper'))
   const { api, calls } = fakeApi({ C0ELSE: [] })
   await catchUp(w, api, routed, opts())
   expect(calls.filter(c => c.kind === 'replies').map(c => `${c.args.channel}:${c.args.ts}`)).toEqual([`${CH}:1000.000001`])
 })
 
 test('a message the guard put off (exit 75) is refetched by catch-up and judged again, like any owed message', async () => {
-  const guarded: SlackWatchConfig = view(oneListener(CH, 'slopbot', '["anyone"]', '[guard]\ncommand = "g"\n'))
+  const guarded: SlackWatchConfig = view(oneListener(CH, 'helper', '["anyone"]', '[guard]\ncommand = "g"\n'))
   const T = '1792999990.000001' // within owed_max of now: a "not now" holds it rather than failing it
   const dir = mkdtempSync(join(tmpdir(), 'slack-catchup-'))
   dirs.push(dir)
@@ -612,13 +612,13 @@ test("a specialist's conversations in a channel no token can read are all let go
   dirs.push(dir)
   const w = new SlackWatcher({ now: () => 1_793_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => cfg, deliver: async () => ({ ok: true }), alert: (text, to) => alerts.push({ text, to }) })
   // A channel no specialist listens on (catch-up reads no history there): bound by the operator, or a home post.
-  w.bind('C0LEFT', '1500.000001', 'slopbot', 'cli')
-  w.bind('C0LEFT', '1600.000001', 'slopbot', 'cli')
+  w.bind('C0LEFT', '1500.000001', 'helper', 'cli')
+  w.bind('C0LEFT', '1600.000001', 'helper', 'cli')
   const calls: string[] = []
   const api: SlackApi = { history: async () => ({ messages: [] }), replies: async a => { calls.push(a.ts); throw new Error('An API error occurred: not_in_channel') } }
   await catchUp(w, api, cfg, opts({ deep: true }))
   expect(w.list()).toEqual([])
-  expect(alerts).toEqual([{ text: expect.stringContaining('Let go of slack:C0LEFT:'), to: 'slopbot' }])
+  expect(alerts).toEqual([{ text: expect.stringContaining('Let go of slack:C0LEFT:'), to: 'helper' }])
   expect(alerts[0].text).toContain(`and any other conversations of yours in slack:C0LEFT: the bot (<@${BOT}>) isn't in slack:C0LEFT`)
   expect(alerts[0].text).toContain('then a tag in the thread opens it again')
   calls.length = 0
@@ -631,7 +631,7 @@ test("a deleted thread a specialist only followed, with nothing lost, is let go 
   const dir = mkdtempSync(join(tmpdir(), 'slack-catchup-'))
   dirs.push(dir)
   const w = new SlackWatcher({ now: () => 1_793_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => cfg, deliver: async () => ({ ok: true }), alert: t => alerts.push(t) })
-  w.bind('C0LEFT', '1500.000001', 'slopbot', 'cli')
+  w.bind('C0LEFT', '1500.000001', 'helper', 'cli')
   const api: SlackApi = { history: async () => ({ messages: [] }), replies: async () => { throw new Error('An API error occurred: thread_not_found') } }
   await catchUp(w, api, cfg, opts({ deep: true }))
   expect(w.list()).toEqual([])

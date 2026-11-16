@@ -71,8 +71,8 @@ describe('bridge flap circuit breaker', () => {
     }
   })
 
-  test('a refused newcomer that claims to be scoped does not narrow the live session it was refused for', async () => {
-    const id = 'flap-scoped-claim'
+  test('a refused newcomer that claims to be restricted does not narrow the live session it was refused for', async () => {
+    const id = 'flap-restricted-claim'
     session(id)
     const sockets: Socket[] = []
     const accepted: boolean[] = []
@@ -90,8 +90,8 @@ describe('bridge flap circuit breaker', () => {
     }
   })
 
-  test('an accepted bridge that declares scoped is narrowed', async () => {
-    const id = 'flap-scoped-accepted'
+  test('an accepted bridge that declares restricted is narrowed', async () => {
+    const id = 'flap-restricted-accepted'
     session(id)
     const b = await bridge(id, undefined, undefined, 'scoped')
     try {

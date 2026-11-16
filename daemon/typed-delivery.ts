@@ -19,7 +19,7 @@ import { isSessionWorkingAsync } from './session-activity.js'
 import { registry } from './sessions.js'
 import { on } from './event-bus.js'
 import type { SessionInfo } from './sessions.js'
-import { sessionDrift, unverified } from './scope.js'
+import { sessionDrift, unverified } from './restricted.js'
 
 // ---------------------------------------------------------------------------
 // The rule: one place that knows when each path applies

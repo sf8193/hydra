@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { createServer as createTcpServer, createServer, type Server } from 'net'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
-import { offLimitRoots, type PrivateRoot } from '../workdir-scope.js'
+import { offLimitRoots, type PrivateRoot } from '../restricted-workdir.js'
 import { nearestRealpath, systemEnv } from '../load.js'
 import { SANDBOX_EXEC, sandboxIssues, sandboxProfile, sandboxedServer, unquotablePath, type ServerFolders } from '../server-sandbox.js'
 
@@ -136,10 +136,10 @@ describe.skipIf(!HAVE)('under the real sandbox-exec', () => {
   const odd = join(dir, 'odd "q" (p) \\b ;x')   // a folder named to try to break out of the profile's string
   const roots = [...placesOf(home, [operatorRoot, odd])]
   const sock = join(dir, 'daemon.sock')
-  const scopedRoot = join(dir, 'hydra-scoped')
-  const tmp = join(scopedRoot, 'ops-1', 'srv')
-  const siblingTmp = join(scopedRoot, 'ops-2', 'srv')
-  const folders: ServerFolders = { root: scopedRoot, dir: tmp }
+  const restrictedRoot = join(dir, 'hydra-scoped')
+  const tmp = join(restrictedRoot, 'ops-1', 'srv')
+  const siblingTmp = join(restrictedRoot, 'ops-2', 'srv')
+  const folders: ServerFolders = { root: restrictedRoot, dir: tmp }
   const profile = () => sandboxProfile(realEnv, roots, folders)
   let unixServer: Server
   let tcpServer: Server

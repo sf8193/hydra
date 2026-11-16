@@ -116,7 +116,7 @@ describe('transcriptionEnabled', () => {
 })
 
 describe('transcribeDownloads', () => {
-  // DownloadedFile as slack-gateway.ts downloadAttachments() produces it
+  // DownloadedFile as gateways/slack.ts downloadAttachments() produces it
   const dir = mkdtempSync(join(tmpdir(), 'hydra-transcribe-test-'))
   const audioPath = join(dir, 'audio_message.m4a')
   const imagePath = join(dir, 'screenshot.png')

@@ -10,7 +10,7 @@ import { pendingPermissions } from './permission.js'
 import { discoverClaudeSessionId, killSession } from './session-lifecycle.js'
 import { loadAccess, operatorIds } from './access.js'
 import { dispatchReconnect, dispatchSessionReply, dispatchDisconnect } from './protocol-registry.js'
-import './scope.js'   // registers the queue-flush gate on the transport
+import './restricted.js'   // registers the queue-flush gate on the transport
 import { getToolsForSession, isToolAllowed, noteDeclaredSessionType, refusalText } from './tool-surface.js'
 import { getProtocolContext } from './protocol-runner.js'
 import { maybeNudgeMissingAdvance } from './advance-nudge.js'
@@ -27,7 +27,7 @@ import { clearIdleLimit, resumeIdleLimit } from './idle-limit.js'
 import { createMainBridgeCycle, formatReconnectLine, mainCloseRecordsReason } from './main-bridge-cycle.js'
 import { emit } from './event-bus.js'
 import { bridgeLifePath, describeBridgeExit, pidAlive, pruneBridgeLife, readBridgeLife } from '../shared/bridge-life.js'
-import type { ButtonDef } from '../gateway.js'
+import type { ButtonDef } from '../gateways/gateway.js'
 
 const DEATH_DETECT_DELAY_MS = 3_000
 const BRIDGE_LIFE_READ_DELAY_MS = BRIDGE_SHUTDOWN_GRACE_MS + 1_000
