@@ -1,8 +1,8 @@
 // `hydra migrate`'s step for `<state>/slack-watch.json`: its routes become hydra.toml tables. `migrateSlackWatch` is
 // pure: the old file's JSON in, the tables (in the file's own snake_case keys) and what could not be carried over out.
 //
-//   (the file existing)               → [connectors.slack], with the token variables the Slack connector has always read
-//   people {U…: {name, role}}         → [people.<id>] ids = ["slack:U…"], roles = [<role>]
+//   (the file existing)               → [slack.apps.default], with the token variables the Slack connector has always read
+//   people {U…: {name, role}}         → [people.<id>] addresses = ["slack:U…"], roles = [<role>]
 //   route {channels, to}              → [specialists.<to>] listens = ["slack:C…"]
 //   route {dms: true, to}             → listens = ["slack:dm"]
 //   route from                        → that specialist's allow (user ids get a role of their own)
@@ -12,8 +12,8 @@
 // constant now, so it is dropped, with a note when it was set to something other than the default.
 
 export type SlackWatchMigration = {
-  connectors: { slack: { bot_token_env: string; app_token_env: string } }
-  people: Record<string, { ids: string[]; roles?: string[]; name?: string }>
+  slack: { apps: { default: { bot_token_env: string; socket_token_env: string } } }
+  people: Record<string, { addresses: string[]; roles?: string[]; name?: string }>
   /** Only the keys this file decides; the specialist's workdir and kickoff come from specialists.json. */
   specialists: Record<string, { listens: string[]; allow: string[] }>
   places: Record<string, { files?: true; ack?: string }>
@@ -34,7 +34,7 @@ const SLACK_ID = /^[UW][A-Z0-9]+$/
 export function migrateSlackWatch(raw: unknown): SlackWatchMigration {
   if (!isObj(raw)) throw new Error('slack-watch.json: must be an object')
   const out: SlackWatchMigration = {
-    connectors: { slack: { bot_token_env: 'SLOPBOT_SLACK_BOT_TOKEN', app_token_env: 'SLOPBOT_SLACK_APP_TOKEN' } },
+    slack: { apps: { default: { bot_token_env: 'SLOPBOT_SLACK_BOT_TOKEN', socket_token_env: 'SLOPBOT_SLACK_APP_TOKEN' } } },
     people: {}, specialists: {}, places: {}, notes: [],
   }
   const note = (s: string) => { out.notes.push(s) }
@@ -47,7 +47,7 @@ export function migrateSlackWatch(raw: unknown): SlackWatchMigration {
     for (let n = 2; taken.has(id); n++) id = `${slug(name ?? user)}-${n}`
     taken.add(id)
     personOf.set(user, id)
-    out.people[id] = { ids: [`slack:${user}`], ...(name && { name }) , ...(role && { roles: [slug(role)] }) }
+    out.people[id] = { addresses: [`slack:${user}`], ...(name && { name }) , ...(role && { roles: [slug(role)] }) }
   }
   const roleOf = new Map<string, string>() // free text → label
   for (const [user, p] of Object.entries(isObj(raw.people) ? raw.people : {})) {
@@ -100,7 +100,7 @@ export function migrateSlackWatch(raw: unknown): SlackWatchMigration {
       note(`routes[${i}]: ${to} is reached from several routes with different "from"; its allow is now their union, since one specialist has one allow`)
     }
     s.allow = [...new Set([...s.allow, ...allow])]
-    if (r.dms === true) note(`routes[${i}]: the operator's own DMs reach ${to} too, since the operator reaches every specialist; their Slack id must be in [people.<operator>] ids`)
+    if (r.dms === true) note(`routes[${i}]: the operator's own DMs reach ${to} too, since the operator reaches every specialist; their Slack id must be in [people.<operator>] addresses`)
     if (r.beforeDeliver !== undefined) note(`routes[${i}].beforeDeliver: a guard per route has no hydra.toml form; [guard] applies to every specialist`)
   }
 

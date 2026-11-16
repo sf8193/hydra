@@ -13,15 +13,15 @@ const load = (text: string): HydraConfig => {
 
 const CFG = load(`
 operator = "op"
-[connectors.slack]
+[slack.apps.default]
 bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"
 [people.op]
-ids = ["slack:U0OP"]
+addresses = ["slack:U0OP"]
 [people.alice]
-ids = ["slack:U0ALICE"]
+addresses = ["slack:U0ALICE"]
 roles = ["staff"]
 [people.bob]
-ids = ["slack:U0BOB"]
+addresses = ["slack:U0BOB"]
 [specialists.crm]
 workdir = "/a/crm"
 listens = ["slack:#help"]
@@ -76,7 +76,7 @@ describe('where: the order', () => {
     const renamed = load(`
 operator = "op"
 [people.op]
-ids = ["slack:U0OP"]
+addresses = ["slack:U0OP"]
 [specialists.desk]
 workdir = "/a/desk"
 listens = ["slack:#help"]
@@ -97,7 +97,7 @@ renamed_from = ["crm"]
     const empty = load('')
     // an empty file has no operator: nothing is heard
     expect(route(empty, msg('slack:U0OP', ['slack:dm'])).fate).toBe('unrouted')
-    const bare = load('operator = "op"\n[people.op]\nids = ["slack:U0OP"]\n')
+    const bare = load('operator = "op"\n[people.op]\naddresses = ["slack:U0OP"]\n')
     expect(route(bare, msg('slack:U0OP', ['slack:D0OP', 'slack:dm']))).toMatchObject({ fate: 'deliver', to: 'main', via: 'operator-dm' })
   })
 
@@ -151,9 +151,9 @@ bot_token_env = "SALES_BOT"
 [slack.apps.support]
 bot_token_env = "SUPPORT_BOT"
 [people.op]
-ids = ["slack:U0OP"]
+addresses = ["slack:U0OP"]
 [people.alice]
-ids = ["slack:U0ALICE"]
+addresses = ["slack:U0ALICE"]
 roles = ["staff"]
 `
 /** Two apps in #help: crm hears every app nobody pins (default); deals is pinned to sales; desk to support. */

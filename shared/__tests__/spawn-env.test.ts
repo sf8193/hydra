@@ -258,7 +258,7 @@ function runScrubWith(sh: string, toml: string | null, extraEnv: Record<string, 
 }
 
 test.each(SHELLS)('scrub-raindrop.sh unsets a custom token variable hydra.toml names, under %s', (sh) => {
-  const r = runScrubWith(sh, '[slack.apps.sales]\nbot_token_env = "ACME_SALES_BOT"\napp_token_env = "ACME_SALES_APP"\n', { ACME_SALES_BOT: 'xoxb-secret', ACME_SALES_APP: 'xapp-secret', UNRELATED: 'kept' })
+  const r = runScrubWith(sh, '[slack.apps.sales]\nbot_token_env = "ACME_SALES_BOT"\nsocket_token_env = "ACME_SALES_APP"\n', { ACME_SALES_BOT: 'xoxb-secret', ACME_SALES_APP: 'xapp-secret', UNRELATED: 'kept' })
   expect(r.code, `${sh} exit`).toBe(0)
   expect(r.out).not.toContain('ACME_SALES_BOT=')
   expect(r.out).not.toContain('ACME_SALES_APP=')
@@ -267,7 +267,7 @@ test.each(SHELLS)('scrub-raindrop.sh unsets a custom token variable hydra.toml n
 })
 
 test.each(SHELLS)('a hydra.toml that names PATH, HOME, TMUX or HYDRA_* as token variables never gets them unset, under %s', (sh) => {
-  const toml = '[slack.apps.a]\nbot_token_env = "PATH"\napp_token_env = "HOME"\nuser_token_env = "TMUX"\n[slack.apps.b]\nbot_token_env = "HYDRA_STATE_DIR"\napp_token_env = "CLAUDE_CONFIG_DIR"\n[slack.apps.c]\nbot_token_env = "ACME_BOT"\n'
+  const toml = '[slack.apps.a]\nbot_token_env = "PATH"\nsocket_token_env = "HOME"\noperator_token_env = "TMUX"\n[slack.apps.b]\nbot_token_env = "HYDRA_STATE_DIR"\nsocket_token_env = "CLAUDE_CONFIG_DIR"\n[slack.apps.c]\nbot_token_env = "ACME_BOT"\n'
   const r = runScrubWith(sh, toml, { HOME: '/home/op', TMUX: '/tmp/t,1,0', HYDRA_STATE_DIR: '/s', CLAUDE_CONFIG_DIR: '/c', ACME_BOT: 'xoxb-secret' })
   expect(r.code).toBe(0)
   for (const v of ['HOME=/home/op', 'TMUX=/tmp/t,1,0', 'HYDRA_STATE_DIR=/s', 'CLAUDE_CONFIG_DIR=/c', 'PATH=']) expect(r.out, `${sh}: ${v}`).toContain(v)

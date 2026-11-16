@@ -187,7 +187,7 @@ describe('jobs launchd-run: what the plist runs', () => {
     writeFileSync(join(dir, 'jobs.toml.migrated'), '')
     mkdirSync(dirname(daemonFile(dir)), { recursive: true })
     writeFileSync(daemonFile(dir), JSON.stringify({ lastGoodConfig: '[old]' }))   // migrated: the daemon hasn't ticked since
-    writeFileSync(join(dir, 'hydra.toml'), 'operator = "op"\n[people.op]\nids = ["discord:1"]\n[schedules.scan]\ncron = "0 * * * *"\ncheck = "s.sh"\n')
+    writeFileSync(join(dir, 'hydra.toml'), 'operator = "op"\n[people.op]\naddresses = ["discord:1"]\n[schedules.scan]\ncron = "0 * * * *"\ncheck = "s.sh"\n')
     expect(await jobsLaunchdRun('test', 'scan', dir)).toBe(0)
     expect(checks).toBe(1)
     const stale = { name: 'scan', schedule: '0 * * * *', check: 'gone.sh', runner: 'daemon', runnerFrom: 'job', alertAfterMs: 0 }

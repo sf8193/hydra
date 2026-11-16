@@ -16,21 +16,21 @@ export function hydra(text: string): HydraConfig {
 /** The operator and the Slack connector: every config starts with these. */
 export const BASE = `
 operator = "op"
-[connectors.slack]
+[slack.apps.default]
 bot_token_env = "SLOPBOT_SLACK_BOT_TOKEN"
-app_token_env = "SLOPBOT_SLACK_APP_TOKEN"
+socket_token_env = "SLOPBOT_SLACK_APP_TOKEN"
 [people.op]
-ids = ["slack:UOP"]
+addresses = ["slack:UOP"]
 `
 
 /** The second app's bot user id. The first (`default`) is `BOT`. */
 export const SALES_BOT = 'USALES'
 
-/** Two Slack apps: `default` (from BASE's `[connectors.slack]`) and `sales`. */
+/** Two Slack apps: `default` (from BASE's `[slack.apps.default]`) and `sales`. */
 export const TWO_APPS = `${BASE}
 [slack.apps.sales]
 bot_token_env = "SALES_SLACK_BOT_TOKEN"
-app_token_env = "SALES_SLACK_APP_TOKEN"
+socket_token_env = "SALES_SLACK_APP_TOKEN"
 `
 
 /**

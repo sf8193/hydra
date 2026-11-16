@@ -25,7 +25,7 @@ export type BuiltinRole = typeof BUILTIN_ROLES[number]
 export type Person = {
   id: string
   /** Addresses on each platform. */
-  ids: Address[]
+  addresses: Address[]
   /** Labels used only by a specialist's `allow` (and a rule's `person`). */
   roles: string[]
   /** Shown in the metadata a specialist receives. Default: the id. */
@@ -95,7 +95,7 @@ export type Specialist = {
 }
 
 /**
- * One Slack app this hydra runs as, declared `[slack.apps.<id>]`, or as the app `default` by `[connectors.slack]`.
+ * One Slack app this hydra runs as, declared `[slack.apps.<id>]`, or, in the old form, as the app `default` by `[connectors.slack]`.
  * The token fields name environment variables; the tokens themselves stay in `.env`. Defaults are filled in.
  */
 export type SlackApp = {
@@ -103,16 +103,16 @@ export type SlackApp = {
   id: string
   botTokenEnv: string
   /** Socket Mode's app-level token. Required for Slack to connect; not for `hydra slack manifest`. */
-  appTokenEnv?: string
-  /** The operator's user token, used only to read threads the bot is not in; never to post. */
-  userTokenEnv?: string
+  socketTokenEnv?: string
+  /** The operator's token (a Slack user token), used only to read threads the bot is not in; never to post. */
+  operatorTokenEnv?: string
   /** The name `hydra slack manifest` gives the app: as set, else `hydra` for `default` and the id for any other. */
   displayName: string
-  /** What the manifest says the app does: as set, else a default (which mentions the user token when there is one). */
+  /** What the manifest says the app does: as set, else a default (which mentions the operator token when there is one). */
   description: string
 }
 
-/** The id `[connectors.slack]` loads as: the one Slack app hydra connects. */
+/** The id the old `[connectors.slack]` loads as: the one Slack app hydra connects. */
 export const DEFAULT_SLACK_APP = 'default'
 
 /** The Slack app hydra connects (`default`), or undefined when hydra.toml declares none. */
@@ -164,11 +164,12 @@ export type Schedule = {
   cron: string
   /** A specialist or `main`. Absent: a sensor. Its check runs and its result is recorded; a failure alerts the operator. */
   target?: string
-  prompt: string
+  /** What is sent each run (after a check's output, when there is one). */
+  message: string
   /** A script run first: empty output sends nothing; its output is appended. */
   check?: string
   /** Absolute, `~` expanded. A relative `envFile` is under it. */
-  cwd?: string
+  workdir?: string
   envFile?: string
   runner: 'launchd' | 'daemon'
   /** Daemon runner only: preconditions checked before a run; unmet is "not now", and the slot stays owed. */
@@ -230,7 +231,7 @@ export type HydraConfig = {
   operator?: string
   connectors: Connectors
   gateways: Gateways
-  /** Every Slack app, by id (no prototype: look one up with Object.hasOwn). `[connectors.slack]` is the app `default`. */
+  /** Every Slack app, by id (no prototype: look one up with Object.hasOwn). The old `[connectors.slack]` loads as the app `default`. */
   slackApps: Record<string, SlackApp>
   people: Record<string, Person>
   specialists: Record<string, Specialist>

@@ -28,14 +28,14 @@ const renameWarnings = (w: string[]) => w.filter(x => x.includes('still loads an
 // A config to hang one key on: an operator, two specialists, two Slack apps.
 const BASE = `
 operator = "op"
-[connectors.slack]
+[slack.apps.default]
 bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"
 [slack.apps.sales]
 bot_token_env = "SALES_SLACK_BOT_TOKEN"
 [people.op]
-ids = ["slack:U0OP"]
+addresses = ["slack:U0OP"]
 [people.alice]
-ids = ["slack:U0ALICE"]
+addresses = ["slack:U0ALICE"]
 [specialists.ops]
 workdir = "/home/op/ops"
 restricted = true
@@ -53,7 +53,10 @@ describe('a full config in the old names', () => {
   const inNewNames = (c: Json): Json => ({
     ...c,
     rules: c.rules.map((r: Json) => rename(rename(rename(r, 'at', 'place'), 'from', 'person'), 'to', 'target')),
-    schedules: Object.fromEntries(Object.entries(c.schedules as Json).map(([id, s]) => [id, rename(s as Json, 'to', 'target')])),
+    schedules: Object.fromEntries(Object.entries(c.schedules as Json).map(([id, s]) => [id, rename(rename(rename(s as Json, 'to', 'target'), 'prompt', 'message'), 'cwd', 'workdir')])),
+    // The people, schedule and Slack app keys renamed after this test was written (rename-platform-keys.test.ts has their own).
+    people: Object.fromEntries(Object.entries(c.people as Json).map(([id, p]) => [id, rename(p as Json, 'ids', 'addresses')])),
+    slackApps: Object.fromEntries(Object.entries(c.slackApps as Json).map(([id, a]) => [id, rename(rename(a as Json, 'appTokenEnv', 'socketTokenEnv'), 'userTokenEnv', 'operatorTokenEnv')])),
     places: Object.fromEntries(Object.entries(c.places as Json).map(([p, o]) => [p, { ...rename(o as Json, 'listen', 'messages'), messages: (o as Json).listen === 'mentions' ? 'addressed' : (o as Json).listen }])),
     // The specialist keys renamed after this test was written (rename-specialist-keys.test.ts has their own).
     specialists: Object.fromEntries(Object.entries(c.specialists as Json).map(([id, s]) => {
@@ -93,7 +96,7 @@ describe('rule `at` is now `place`', () => {
   test('the old name works, and the warning names the new one', () => {
     const r = ok(rule('at = "slack:#help"'))
     expect(r.config.rules).toEqual([{ place: 'slack:#help', target: 'ops' }])
-    expect(renameWarnings(r.warnings)).toEqual(['rules[0].at: is now `place`; `at` still loads and will be removed'])
+    expect(renameWarnings(r.warnings)).toEqual(['rules[0].at: rename `at` to `place`; `at` still loads and will be removed'])
   })
   test('both names is an error', () => {
     expect(load(rule('at = "slack:#help"\nplace = "slack:#help"')).errors).toEqual(['rules[0].at: is the old name of `place`, which is also set: keep `place` and delete `at`'])
@@ -113,7 +116,7 @@ describe('rule `from` is now `person`', () => {
   test('the old name works, and the warning names the new one', () => {
     const r = ok(rule('from = "alice"'))
     expect(r.config.rules).toEqual([{ place: 'slack:#help', person: 'alice', target: 'ops' }])
-    expect(renameWarnings(r.warnings)).toEqual(['rules[0].from: is now `person`; `from` still loads and will be removed'])
+    expect(renameWarnings(r.warnings)).toEqual(['rules[0].from: rename `from` to `person`; `from` still loads and will be removed'])
   })
   test('both names is an error', () => {
     expect(load(rule('from = "alice"\nperson = "alice"')).errors).toEqual(['rules[0].from: is the old name of `person`, which is also set: keep `person` and delete `from`'])
@@ -133,7 +136,7 @@ describe('rule `to` is now `target`', () => {
   test('the old name works, and the warning names the new one', () => {
     const r = ok(rule('to = "crm"'))
     expect(r.config.rules).toEqual([{ place: 'slack:#help', target: 'crm' }])
-    expect(renameWarnings(r.warnings)).toEqual(['rules[0].to: is now `target`; `to` still loads and will be removed'])
+    expect(renameWarnings(r.warnings)).toEqual(['rules[0].to: rename `to` to `target`; `to` still loads and will be removed'])
   })
   test('both names is an error', () => {
     expect(load(rule('to = "crm"\ntarget = "crm"')).errors).toEqual(['rules[0].to: is the old name of `target`, which is also set: keep `target` and delete `to`'])
@@ -146,17 +149,17 @@ describe('rule `to` is now `target`', () => {
 describe('schedule `to` is now `target`', () => {
   const sched = (body: string) => `${BASE}[schedules.nightly]\ncron = "0 3 * * *"\n${body}\n`
   test('the new name works', () => {
-    const r = ok(sched('target = "ops"\nprompt = "go"'))
-    expect(r.config.schedules.nightly).toEqual({ id: 'nightly', cron: '0 3 * * *', prompt: 'go', runner: 'launchd', target: 'ops' })
+    const r = ok(sched('target = "ops"\nmessage = "go"'))
+    expect(r.config.schedules.nightly).toEqual({ id: 'nightly', cron: '0 3 * * *', message: 'go', runner: 'launchd', target: 'ops' })
     expect(r.warnings).toEqual([])
   })
   test('the old name works, and the warning names the new one', () => {
-    const r = ok(sched('to = "ops"\nprompt = "go"'))
-    expect(r.config.schedules.nightly).toEqual({ id: 'nightly', cron: '0 3 * * *', prompt: 'go', runner: 'launchd', target: 'ops' })
-    expect(renameWarnings(r.warnings)).toEqual(['schedules.nightly.to: is now `target`; `to` still loads and will be removed'])
+    const r = ok(sched('to = "ops"\nmessage = "go"'))
+    expect(r.config.schedules.nightly).toEqual({ id: 'nightly', cron: '0 3 * * *', message: 'go', runner: 'launchd', target: 'ops' })
+    expect(renameWarnings(r.warnings)).toEqual(['schedules.nightly.to: rename `to` to `target`; `to` still loads and will be removed'])
   })
   test('both names is an error', () => {
-    expect(load(sched('to = "ops"\ntarget = "ops"\nprompt = "go"')).errors).toEqual(['schedules.nightly.to: is the old name of `target`, which is also set: keep `target` and delete `to`'])
+    expect(load(sched('to = "ops"\ntarget = "ops"\nmessage = "go"')).errors).toEqual(['schedules.nightly.to: is the old name of `target`, which is also set: keep `target` and delete `to`'])
   })
   test('a schedule with neither is a sensor only with a check', () => {
     expect(load(sched('')).errors).toEqual(['schedules.nightly.target: is required unless there is a check (a sensor): a specialist, or main'])
@@ -176,12 +179,12 @@ describe('place `listen` is now `messages`, and its value `mentions` is now `add
   test('the old name works, and the warning names the new one', () => {
     const r = ok(place('listen = "all"'))
     expect(r.config.places['slack:#help'].messages).toBe('all')
-    expect(renameWarnings(r.warnings)).toEqual(['places."slack:#help".listen: is now `messages`; `listen` still loads and will be removed'])
+    expect(renameWarnings(r.warnings)).toEqual(['places."slack:#help".listen: rename `listen` to `messages`; `listen` still loads and will be removed'])
   })
   test('the old value `mentions` is read as `addressed`, and the warning says the value changed', () => {
     const r = ok(place('listen = "mentions"'))
     expect(r.config.places['slack:#help'].messages).toBe('addressed')
-    expect(renameWarnings(r.warnings)).toEqual(['places."slack:#help".listen: is now `messages` and its value "mentions" is now "addressed"; `listen` still loads and will be removed'])
+    expect(renameWarnings(r.warnings)).toEqual(['places."slack:#help".listen: rename `listen` to `messages` and its value "mentions" is now "addressed"; `listen` still loads and will be removed'])
   })
   test('under the new name the old value is refused, naming the new ones', () => {
     expect(load(place('messages = "mentions"')).errors).toEqual(['places."slack:#help".messages: must be one of "addressed", "all"'])

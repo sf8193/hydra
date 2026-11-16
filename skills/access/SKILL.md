@@ -141,9 +141,9 @@ asks for. Every key is shown in `hydra.example.toml` in the hydra repo.
 ```toml
 operator = "op"                              # the one person whose DMs reach main and who passes admin checks
 [people.op]
-ids = ["discord:100000000000000001"]         # addresses: discord:<user id>, slack:<user id>, github:<login>
+addresses = ["discord:100000000000000001"]         # addresses: discord:<user id>, slack:<user id>, github:<login>
 [people.alice]
-ids = ["discord:100000000000000002"]
+addresses = ["discord:100000000000000002"]
 roles = ["staff"]                            # labels a specialist's `allow` names
 ```
 
@@ -157,14 +157,14 @@ roles = ["staff"]                            # labels a specialist's `allow` nam
   text, which it keeps exactly, and writes only if the result loads. It
   refuses, changing nothing, when the address already belongs to someone or the
   id exists. Relay its message. To give an existing person another address,
-  edit their `ids` by hand as the message says. Tell the user what this does
+  edit their `addresses` by hand as the message says. Tell the user what this does
   and doesn't grant:
   - Being on the roster lets specialists whose `allow` includes `people`, or one
     of the person's roles, hear them.
   - It does **not** let them DM main or use admin commands. Only `operator`
     does that, and there's exactly one.
 - **`remove <senderId>`**: delete `discord:<senderId>` from the person whose
-  `ids` holds it. If that leaves the person with no addresses, delete their
+  `addresses` holds it. If that leaves the person with no addresses, delete their
   whole `[people.<id>]` table. Refuse to remove the operator's last
   `discord:` address, even if they have a `slack:` one: on Discord nobody
   would pass admin checks or reach main. Say to change `operator` first.

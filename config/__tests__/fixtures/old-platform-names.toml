@@ -1,0 +1,39 @@
+# A full config in the people, schedule and Slack app key names before the rename: people ids; schedule prompt and cwd;
+# app_token_env and user_token_env; [connectors.slack] with app_name and app_description. Loaded on the commit before and after.
+operator = "op"
+[connectors.slack]
+bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"
+app_token_env = "CONNECTOR_SLACK_APP_TOKEN"
+user_token_env = "CONNECTOR_SLACK_USER_TOKEN"
+app_name = "Acme helper"
+app_description = "Answers Acme's Slack threads."
+[slack.apps.sales]
+bot_token_env = "SALES_SLACK_BOT_TOKEN"
+app_token_env = "SALES_SLACK_APP_TOKEN"
+user_token_env = "SALES_SLACK_USER_TOKEN"
+display_name = "Sales helper"
+[people.op]
+ids = ["slack:U0OP", "discord:100000000000000001", "github:op"]
+name = "Op"
+[people.alice]
+ids = ["slack:U0ALICE"]
+roles = ["staff"]
+[specialists.ops]
+workdir = "/home/op/agents/ops"
+listens = ["slack:dm"]
+allow = []
+[schedules.nightly]
+cron = "0 3 * * *"
+target = "ops"
+prompt = "Nightly run."
+[schedules.disk]
+cron = "*/30 * * * *"
+target = "ops"
+prompt = "The disk check found something:"
+check = "./scripts/disk-check.sh"
+cwd = "~/agents/ops"
+env_file = ".env"
+[schedules.sensor]
+cron = "@hourly"
+check = "true"
+cwd = "/home/op/sensors"

@@ -11,8 +11,8 @@ import { testLoadEnv } from '../../config/__tests__/load-env.js'
 const withOperator: HydraConfig = {
   operator: 'op', connectors: {}, gateways: {}, slackApps: {}, specialists: {}, places: {}, schedules: {}, rules: [],
   people: {
-    op: { id: 'op', ids: ['discord:100000000000000001', 'slack:U0OP', 'github:op'], roles: [], name: 'op' },
-    alice: { id: 'alice', ids: ['discord:100000000000000002'], roles: ['staff'], name: 'alice' },
+    op: { id: 'op', addresses: ['discord:100000000000000001', 'slack:U0OP', 'github:op'], roles: [], name: 'op' },
+    alice: { id: 'alice', addresses: ['discord:100000000000000002'], roles: ['staff'], name: 'alice' },
   },
 }
 const dm = (authorId: string) => ({ isDM: true, authorId, chatId: 'D1', content: 'hi', messageId: 'm1' }) as unknown as InboundMessage
@@ -32,7 +32,7 @@ describe('operatorIds: who every admin check means', () => {
   })
 
   test('an operator with no address on this platform gives nobody', () => {
-    _setHydraConfigForTesting({ ...withOperator, people: { op: { id: 'op', ids: ['slack:U0OP'], roles: [], name: 'op' } } })
+    _setHydraConfigForTesting({ ...withOperator, people: { op: { id: 'op', addresses: ['slack:U0OP'], roles: [], name: 'op' } } })
     expect(operatorIds({ allowFrom: ['999'] })).toEqual([])
   })
 

@@ -21,11 +21,11 @@ export const SLACK_APP_NEEDS = {
     reactions: { option: 'ack and 🚫 reactions', any: ['reactions:write'] },
     replies: { option: 'replies', any: ['chat:write'] },
   } as const satisfies Record<string, ScopeNeed>,
-  /** With `user_token_env`: reading threads in channels the bot isn't in. Never a write scope, never DMs. */
+  /** With `operator_token_env`: reading threads in channels the bot isn't in. Never a write scope, never DMs. */
   userScopes: ['channels:history', 'groups:history'],
   /** `renames` are the events the listener subscribes to by name; messages arrive through Bolt's message handler. */
   botEvents: { messages: ['message.channels', 'message.groups', 'message.im'], renames: ['channel_rename', 'group_rename'] },
-  /** With `user_token_env`. */
+  /** With `operator_token_env`. */
   userEvents: ['message.channels', 'message.groups'],
   /**
    * Only when hydra.toml declares several apps: which of them are in a channel, so exactly one answers a message they all hear.
@@ -40,25 +40,25 @@ export const SLACK_APP_NEEDS = {
 } as const
 
 /**
- * What the app is called and says it does when `display_name` or `description` is unset (`app_name` and `app_description`
- * in `[connectors.slack]`). With a user token the description says so: the app then reads threads as its installer.
+ * What the app is called and says it does when `display_name` or `description` is unset. With an operator token the
+ * description says so: the app then reads threads as its installer.
  * An app other than `default` is called by its id.
  */
 export const SLACK_APP_DEFAULTS = {
   name: 'hydra',
   description: 'Answers the Slack threads it is tagged in, and its DMs, using Claude.',
-  userTokenNote: ' It can also read threads its installer can see.',
+  operatorTokenNote: ' It can also read threads its installer can see.',
 } as const
 
 /**
  * A Slack app manifest (YAML) for one of this hydra's apps: its name and description from hydra.toml, its scopes and events
- * from `SLACK_APP_NEEDS`. User scopes and events only when a user token is configured; the membership events only when
+ * from `SLACK_APP_NEEDS`. User scopes and events only when an operator token is configured; the membership events only when
  * hydra.toml declares `several` apps. Socket Mode on, org deploy off.
  */
 export function slackManifest(app?: SlackApp, opts: { several?: boolean } = {}): string {
   // With no app at all (no hydra.toml), the defaults.
   const name = app?.displayName ?? SLACK_APP_DEFAULTS.name
-  const withUser = !!app?.userTokenEnv
+  const withOperatorToken = !!app?.operatorTokenEnv
   const description = app?.description ?? SLACK_APP_DEFAULTS.description
   const botScopes = [...new Set(Object.values(SLACK_APP_NEEDS.botScopes).flatMap(n => n.any))]
   // The operator's text is quoted: a JSON string is a YAML double-quoted scalar, so a name with ': ' or ' #' stays a string.
@@ -76,12 +76,12 @@ export function slackManifest(app?: SlackApp, opts: { several?: boolean } = {}):
     '  scopes:',
     '    bot:',
     ...list('      ', botScopes),
-    ...(withUser ? ['    user:', ...list('      ', SLACK_APP_NEEDS.userScopes)] : []),
+    ...(withOperatorToken ? ['    user:', ...list('      ', SLACK_APP_NEEDS.userScopes)] : []),
     'settings:',
     '  event_subscriptions:',
     '    bot_events:',
     ...list('      ', [...SLACK_APP_NEEDS.botEvents.messages, ...SLACK_APP_NEEDS.botEvents.renames, ...(opts.several ? SLACK_APP_NEEDS.membership.botEvents : [])]),
-    ...(withUser ? ['    user_events:', ...list('      ', SLACK_APP_NEEDS.userEvents)] : []),
+    ...(withOperatorToken ? ['    user_events:', ...list('      ', SLACK_APP_NEEDS.userEvents)] : []),
     '  socket_mode_enabled: true',
     '  org_deploy_enabled: false',
     '  token_rotation_enabled: false',
@@ -89,11 +89,8 @@ export function slackManifest(app?: SlackApp, opts: { several?: boolean } = {}):
   ].join('\n')
 }
 
-/** Names a key of one app, for an operator to find. `default` is also declared by `[connectors.slack]`, so it names both tables. */
-export const appKey = (app: string, key: string): string =>
-  app === 'default'
-    ? `\`${key}\` of the app named \`default\` (\`[slack.apps.default]\` or \`[connectors.slack]\`)`
-    : `\`${key}\` of the app named \`${app}\` (\`[slack.apps.${app}]\`)`
+/** Names a key of one app, for an operator to find. */
+export const appKey = (app: string, key: string): string => `\`${key}\` of the app named \`${app}\` (\`[slack.apps.${app}]\`)`
 
 /** ` for the app named `x``: said where an app would otherwise go unnamed, only once there is more than one app to tell apart (a lone `default` is just "Slack"). */
 export const appSuffix = (app: string, declared: number): string => app === 'default' && declared <= 1 ? '' : ` for the app named \`${app}\``
@@ -102,4 +99,4 @@ export const appSuffix = (app: string, declared: number): string => app === 'def
 export const notConnected = (app: string, declared: number): string => `Slack is not connected${appSuffix(app, declared)} (hydra.toml does not declare it, or its tokens are not set)`
 
 /** What an operator is told when hydra.toml declares no Slack app. */
-export const NO_SLACK_APP = 'hydra.toml declares no Slack app: add `[slack.apps.<id>]` (or `[connectors.slack]`)'
+export const NO_SLACK_APP = 'hydra.toml declares no Slack app: add `[slack.apps.<id>]`'

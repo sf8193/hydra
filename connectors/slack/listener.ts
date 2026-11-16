@@ -54,7 +54,7 @@ const OPERATOR_CANT = /not_in_channel|channel_not_found|thread_not_found|message
 const OPERATOR_TOKEN_BAD = /missing_scope|invalid_auth|not_authed|token_revoked|token_expired|account_inactive/
 
 /**
- * A thread is read by the bot; where the bot is not a member and a user token is set, as the operator: reading only,
+ * A thread is read by the bot; where the bot is not a member and an operator token is set, as the operator: reading only,
  * never posting. The bot is always asked first, so an invite moves the thread back. When the operator can't read it
  * either, the bot's "not a member" is kept in the error, so catch-up lets go of that one thread. A refused operator
  * token is said as such, so catch-up skips the thread and keeps it; a passing failure is thrown as itself.
@@ -321,7 +321,7 @@ export class SlackListener {
     const slack = this.declared()
     const t = slack ? this.d.tokens(slack) : {}
     if (!slack || !t.app || !t.bot) {
-      this.d.log(`daemon: slack connector${this.appSuffix()} off (${!slack ? (Object.keys(this.d.hydra().slackApps).length ? `hydra.toml has no app named \`${this.id}\`` : NO_SLACK_APP) : !t.bot ? `${slack.botTokenEnv} is not set` : slack.appTokenEnv ? `${slack.appTokenEnv} is not set` : `the app named \`${this.id}\` needs app_token_env for Socket Mode`})\n`)
+      this.d.log(`daemon: slack connector${this.appSuffix()} off (${!slack ? (Object.keys(this.d.hydra().slackApps).length ? `hydra.toml has no app named \`${this.id}\`` : NO_SLACK_APP) : !t.bot ? `${slack.botTokenEnv} is not set` : slack.socketTokenEnv ? `${slack.socketTokenEnv} is not set` : `the app named \`${this.id}\` needs socket_token_env for Socket Mode`})\n`)
       return false
     }
     if (this.started) return true

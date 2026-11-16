@@ -3,7 +3,7 @@
 // over out. The jobs parser reads the file, so a schedule means exactly what its job meant.
 //
 //   [name] schedule                → [schedules.<name>] cron (same id: its state and launchd entry carry over)
-//   check, prompt, cwd, env_file   → the same keys
+//   check, env_file                → the same keys; prompt → message; cwd → workdir
 //   runner (job or file-wide)      → runner on each schedule
 //   needs, alert_after             → the same keys (daemon runner only, as before)
 //   to = "<specialist>" / "main"   → target; mode = "main" → target = "main"; mode = "none" → no target (a sensor)
@@ -23,9 +23,9 @@ import type { MigrateStep } from './migrate.js'
 export type ScheduleTable = {
   cron: string
   target?: string
-  prompt?: string
+  message?: string
   check?: string
-  cwd?: string
+  workdir?: string
   env_file?: string
   runner: 'launchd' | 'daemon'
   needs?: string[]
@@ -78,9 +78,9 @@ export function migrateJobs(text: string, opts: JobsMigrationOpts): JobsMigratio
     const t = own(j)
     const s: ScheduleTable = {
       cron: j.schedule,
-      ...(j.prompt !== undefined && { prompt: j.prompt }),
+      ...(j.prompt !== undefined && { message: j.prompt }),
       ...(j.check !== undefined && { check: j.check }),
-      ...(j.cwd !== undefined && { cwd: j.cwd }),
+      ...(j.cwd !== undefined && { workdir: j.cwd }),
       ...(j.envFile !== undefined && { env_file: j.envFile }),
       runner: j.runner,
       ...(j.needs && j.needs.length > 0 && { needs: [...j.needs] }),
@@ -113,12 +113,12 @@ export function migrateJobs(text: string, opts: JobsMigrationOpts): JobsMigratio
         ...(!kickoff && j.prompt !== undefined && { kickoff: j.prompt }),
         ...(r.model !== undefined && { model: r.model }),
       }
-      // With a check, its output is the run's message and the prompt is the session's first words. With none, the
+      // With a check, its output is the run's message and the job's prompt is the session's first words. With none, the
       // prompt is the only message there is, so the schedule keeps it too (the session reads it twice).
-      if (!kickoff && j.check !== undefined) delete s.prompt
+      if (!kickoff && j.check !== undefined) delete s.message
       s.target = j.name
       note(`${j.name}: a per-conversation specialist; each run is a fresh session in a new thread, as before`)
-      if (!kickoff && j.check === undefined) note(`${j.name}: no check, so the schedule sends the prompt each run, and a fresh session also starts with it`)
+      if (!kickoff && j.check === undefined) note(`${j.name}: no check, so the schedule sends its message each run, and a fresh session also starts with it`)
       note(`${j.name}: workdir ${workdir} is where its spawned sessions ran (SPAWN_CWD)${j.cwd ? `; its check still runs in ${j.cwd}` : ''}; set workdir to run them elsewhere`)
       if (r.idle === undefined) note(`${j.name}: idle ${SPAWN_IDLE}, the default its spawned sessions had`)
     } else if (target.to === 'main' || !isSessionThread(target.to)) {

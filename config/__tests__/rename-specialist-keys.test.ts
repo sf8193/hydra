@@ -27,12 +27,12 @@ const renameWarnings = (w: string[]) => w.filter(x => x.includes('still loads an
 
 const BASE = `
 operator = "op"
-[connectors.slack]
+[slack.apps.default]
 bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"
 [slack.apps.sales]
 bot_token_env = "SALES_SLACK_BOT_TOKEN"
 [people.op]
-ids = ["slack:U0OP"]
+addresses = ["slack:U0OP"]
 `
 const spec = (body: string, id = 'ops') => `${BASE}[specialists.${id}]\nworkdir = "/home/op/${id}"\nlistens = ["slack:#help"]\n${body}\n`
 
@@ -44,6 +44,10 @@ describe('a full specialist config in the old names', () => {
   const rename = (o: Json, from: string, to: string): Json => Object.fromEntries(Object.entries(o).map(([k, v]) => [k === from ? to : k, v]))
   const inNewNames = (c: Json): Json => ({
     ...c,
+    // The people, schedule and Slack app keys renamed after this test was written (rename-platform-keys.test.ts has their own).
+    people: Object.fromEntries(Object.entries(c.people as Json).map(([id, p]) => [id, rename(p as Json, 'ids', 'addresses')])),
+    slackApps: Object.fromEntries(Object.entries(c.slackApps as Json).map(([id, a]) => [id, rename(rename(a as Json, 'appTokenEnv', 'socketTokenEnv'), 'userTokenEnv', 'operatorTokenEnv')])),
+    schedules: Object.fromEntries(Object.entries(c.schedules as Json).map(([id, s]) => [id, rename(rename(s as Json, 'prompt', 'message'), 'cwd', 'workdir')])),
     specialists: Object.fromEntries(Object.entries(c.specialists as Json).map(([id, s]) => {
       const { access, ...rest } = s as Json
       let o: Json = { ...rest, restricted: access === 'workdir' }
@@ -83,10 +87,10 @@ describe('`access` is now `restricted`', () => {
   test('the old name works, and the warning names the new key and the value it became', () => {
     const w = ok(spec('access = "workdir"'))
     expect(w.config.specialists.ops.restricted).toBe(true)
-    expect(renameWarnings(w.warnings)).toEqual(['specialists.ops.access: is now `restricted` and its value "workdir" is now true; `access` still loads and will be removed'])
+    expect(renameWarnings(w.warnings)).toEqual(['specialists.ops.access: rename `access` to `restricted` and its value "workdir" is now true; `access` still loads and will be removed'])
     const o = ok(spec('access = "operator"'))
     expect(o.config.specialists.ops.restricted).toBe(false)
-    expect(renameWarnings(o.warnings)).toEqual(['specialists.ops.access: is now `restricted` and its value "operator" is now false; `access` still loads and will be removed'])
+    expect(renameWarnings(o.warnings)).toEqual(['specialists.ops.access: rename `access` to `restricted` and its value "operator" is now false; `access` still loads and will be removed'])
   })
   test('both names is an error', () => {
     expect(load(spec('access = "workdir"\nrestricted = true')).errors).toEqual(['specialists.ops.access: is the old name of `restricted`, which is also set: keep `restricted` and delete `access`'])
@@ -114,10 +118,10 @@ describe('`prompt` and `prompt_file` are now `kickoff` and `kickoff_file`', () =
   test('the old names work, and the warnings name the new ones', () => {
     const a = ok(spec('prompt = "go"'))
     expect(a.config.specialists.ops.kickoff).toBe('go')
-    expect(renameWarnings(a.warnings)).toEqual(['specialists.ops.prompt: is now `kickoff`; `prompt` still loads and will be removed'])
+    expect(renameWarnings(a.warnings)).toEqual(['specialists.ops.prompt: rename `prompt` to `kickoff`; `prompt` still loads and will be removed'])
     const b = ok(spec('prompt_file = "k.md"'))
     expect(b.config.specialists.ops.kickoffFile).toBe('/home/op/ops/k.md')
-    expect(renameWarnings(b.warnings)).toEqual(['specialists.ops.prompt_file: is now `kickoff_file`; `prompt_file` still loads and will be removed'])
+    expect(renameWarnings(b.warnings)).toEqual(['specialists.ops.prompt_file: rename `prompt_file` to `kickoff_file`; `prompt_file` still loads and will be removed'])
   })
   test('both names is an error', () => {
     expect(load(spec('prompt = "a"\nkickoff = "a"')).errors).toEqual(['specialists.ops.prompt: is the old name of `kickoff`, which is also set: keep `kickoff` and delete `prompt`'])
@@ -134,11 +138,11 @@ describe('`prompt` and `prompt_file` are now `kickoff` and `kickoff_file`', () =
     const r = ok(`${BASE}[defaults.specialist]\nprompt = "d"\n[specialists.a]\nworkdir = "/home/op/a"\nlistens = ["slack:#a"]\n[specialists.b]\nworkdir = "/home/op/b"\nlistens = ["slack:#b"]\nkickoff = "own"\n`)
     expect(r.config.specialists.a.kickoff).toBe('d')
     expect(r.config.specialists.b.kickoff).toBe('own')
-    expect(renameWarnings(r.warnings)).toEqual(['defaults.specialist.prompt: is now `kickoff`; `prompt` still loads and will be removed'])
+    expect(renameWarnings(r.warnings)).toEqual(['defaults.specialist.prompt: rename `prompt` to `kickoff`; `prompt` still loads and will be removed'])
   })
-  test('the schedule `prompt` is not renamed here', () => {
-    const r = ok(`${spec('')}[schedules.nightly]\ncron = "@daily"\ntarget = "ops"\nprompt = "go"\n`)
-    expect(r.config.schedules.nightly.prompt).toBe('go')
+  test('a schedule\'s message is not renamed to kickoff', () => {
+    const r = ok(`${spec('')}[schedules.nightly]\ncron = "@daily"\ntarget = "ops"\nmessage = "go"\n`)
+    expect(r.config.schedules.nightly.message).toBe('go')
     expect(renameWarnings(r.warnings)).toEqual([])
   })
 })
@@ -151,7 +155,7 @@ describe('`max` is now `max_sessions`', () => {
   test('the old name works, and the warning names the new one', () => {
     const r = ok(spec('sessions = "per-conversation"\nmax = 5\nidle = "1h"'))
     expect(r.config.specialists.ops.maxSessions).toBe(5)
-    expect(renameWarnings(r.warnings)).toEqual(['specialists.ops.max: is now `max_sessions`; `max` still loads and will be removed'])
+    expect(renameWarnings(r.warnings)).toEqual(['specialists.ops.max: rename `max` to `max_sessions`; `max` still loads and will be removed'])
   })
   test('both names is an error', () => {
     expect(load(spec('max = 5\nmax_sessions = 5')).errors).toEqual(['specialists.ops.max: is the old name of `max_sessions`, which is also set: keep `max_sessions` and delete `max`'])
@@ -173,7 +177,7 @@ describe('`was` is now `renamed_from`', () => {
   test('the old name works, and the warning names the new one', () => {
     const r = ok(spec('was = ["old-ops"]'))
     expect(r.config.specialists.ops.renamedFrom).toEqual(['old-ops'])
-    expect(renameWarnings(r.warnings)).toEqual(['specialists.ops.was: is now `renamed_from`; `was` still loads and will be removed'])
+    expect(renameWarnings(r.warnings)).toEqual(['specialists.ops.was: rename `was` to `renamed_from`; `was` still loads and will be removed'])
   })
   test('both names is an error', () => {
     expect(load(spec('was = ["a"]\nrenamed_from = ["a"]')).errors).toEqual(['specialists.ops.was: is the old name of `renamed_from`, which is also set: keep `renamed_from` and delete `was`'])
@@ -191,7 +195,7 @@ describe('`apps` is now `pinned_to`', () => {
   test('the old name works, and the warning names the new one', () => {
     const r = ok(spec('apps = ["sales"]'))
     expect(r.config.specialists.ops.pinnedTo).toEqual(['sales'])
-    expect(renameWarnings(r.warnings)).toEqual(['specialists.ops.apps: is now `pinned_to`; `apps` still loads and will be removed'])
+    expect(renameWarnings(r.warnings)).toEqual(['specialists.ops.apps: rename `apps` to `pinned_to`; `apps` still loads and will be removed'])
   })
   test('both names is an error', () => {
     expect(load(spec('apps = ["sales"]\npinned_to = ["sales"]')).errors).toEqual(['specialists.ops.apps: is the old name of `pinned_to`, which is also set: keep `pinned_to` and delete `apps`'])

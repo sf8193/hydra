@@ -248,7 +248,7 @@ describe('a confined session is not typed into until its start is verified', () 
   const confine = (over: Partial<SessionInfo> = {}): SessionInfo => {
     _setHydraConfigForTesting({
       operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
-      people: { op: { id: 'op', ids: ['discord:1'], roles: [], name: 'op' } },
+      people: { op: { id: 'op', addresses: ['discord:1'], roles: [], name: 'op' } },
       specialists: { ops: { id: 'ops', workdir: '/srv/ops', listens: [], allow: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: true, tools: ['Read'], mcp: [] } },
     } as any)
     return session({ sessionType: 'scoped', policy: bornPolicy('ops'), threadId: 'th', ...over })

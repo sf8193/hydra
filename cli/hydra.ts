@@ -100,11 +100,11 @@ Config:
                                        new tables are appended, identical ones are already there, a changed one is refused
   hydra people add <id> <address> [--role <r>]... [--name <n>] [--dry-run]
                                        add a person to hydra.toml's roster (appended; written only if it loads)
-  hydra slack manifest [<app>]         print a Slack app's manifest: name and description from hydra.toml ([slack.apps.<app>], or
-                                       [connectors.slack] as the app "default"), scopes and events from what hydra uses. <app> may be
+  hydra slack manifest [<app>]         print a Slack app's manifest: name and description from hydra.toml ([slack.apps.<app>]),
+                                       scopes and events from what hydra uses. <app> may be
                                        left out when there is one app. Paste it at api.slack.com/apps → Create New App → From a
                                        manifest, install the app, and put its tokens in the variables the app names
-                                       (bot_token_env, app_token_env, user_token_env)
+                                       (bot_token_env, socket_token_env, operator_token_env)
 
 Specialists (named addresses that refill themselves):
   hydra specialist set <name> [--channel <id>] [--thread <id>] [--kickoff <text> | --kickoff-file <path>] [--model <id>] [--idle <30m|4h|1d>]

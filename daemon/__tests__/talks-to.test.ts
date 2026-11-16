@@ -31,8 +31,8 @@ const load = (text: string): HydraConfig => {
 const TOML = `
 operator = "op"
 [people.op]
-ids = ["slack:U0OP"]
-[connectors.slack]
+addresses = ["slack:U0OP"]
+[slack.apps.default]
 bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"
 [specialists.ops]
 workdir = "~/agents/ops"

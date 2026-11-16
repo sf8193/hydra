@@ -15,16 +15,16 @@ const check = (toml?: string, platform = 'discord') => {
 
 describe('hydra config check', () => {
   test('clean, broken, and an operator with no address on the platform', () => {
-    expect(check('operator = "op"\n[people.op]\nids = ["discord:100000000000000001"]\n')).toEqual({ code: 0, out: '$d/hydra.toml: loads clean\n' })
+    expect(check('operator = "op"\n[people.op]\naddresses = ["discord:100000000000000001"]\n')).toEqual({ code: 0, out: '$d/hydra.toml: loads clean\n' })
     const broken = check('operator = "ghost"\n')
     expect(broken.code).toBe(1)
     expect(broken.out).toContain('"ghost" is not a person')
-    expect(check('operator = "op"\n[people.op]\nids = ["slack:U0OP"]\n').out)
+    expect(check('operator = "op"\n[people.op]\naddresses = ["slack:U0OP"]\n').out)
       .toBe('$d/hydra.toml: loads, with 1 warning\nhydra.toml operator: op has no discord: address, so on discord nobody passes admin checks or reaches main by DM\n')
     expect(check(undefined).out).toBe('$d/hydra.toml: none (the old files still apply)\n')
   })
   test('the old [connectors.discord] key loads, and the warning shows', () => {
-    const base = 'operator = "op"\n[people.op]\nids = ["discord:100000000000000001"]\n'
+    const base = 'operator = "op"\n[people.op]\naddresses = ["discord:100000000000000001"]\n'
     expect(check(`${base}[connectors.discord]\nbot_token_env = "DISCORD_BOT_TOKEN"\n`)).toEqual({
       code: 0,
       out: '$d/hydra.toml: loads, with 1 warning\nhydra.toml connectors.discord: moved to [gateways.discord]; [connectors.discord] still loads and will be removed\n',
@@ -32,7 +32,7 @@ describe('hydra config check', () => {
     expect(check(`${base}[gateways.discord]\nbot_token_env = "DISCORD_BOT_TOKEN"\n`)).toEqual({ code: 0, out: '$d/hydra.toml: loads clean\n' })
   })
   test('agrees with the daemon: on slack a connector app naming the gateway\'s tokens does not load, on discord it does', () => {
-    const toml = 'operator = "op"\n[people.op]\nids = ["slack:U0OP", "discord:100000000000000001"]\n[slack.apps.default]\nbot_token_env = "SLACK_BOT_TOKEN"\napp_token_env = "SLACK_APP_TOKEN"\n'
+    const toml = 'operator = "op"\n[people.op]\naddresses = ["slack:U0OP", "discord:100000000000000001"]\n[slack.apps.default]\nbot_token_env = "SLACK_BOT_TOKEN"\nsocket_token_env = "SLACK_APP_TOKEN"\n'
     const onSlack = check(toml, 'slack')
     expect(onSlack.code).toBe(1)
     expect(onSlack.out).toContain('slack.apps.default.bot_token_env: "SLACK_BOT_TOKEN" is already the token variable of the Slack gateway (CHAT_PLATFORM=slack)')
@@ -46,7 +46,7 @@ describe('hydra config add', () => {
     dir = mkdtempSync(join(tmpdir(), 'config-add-'))
     const state = join(dir, platform)
     mkdirSync(state)
-    writeFileSync(join(state, 'hydra.toml'), 'operator = "op"\n[people.op]\nids = ["slack:U0OP", "discord:100000000000000001"]\n[slack.apps.default]\nbot_token_env = "SLACK_BOT_TOKEN"\napp_token_env = "SLACK_APP_TOKEN"\n')
+    writeFileSync(join(state, 'hydra.toml'), 'operator = "op"\n[people.op]\naddresses = ["slack:U0OP", "discord:100000000000000001"]\n[slack.apps.default]\nbot_token_env = "SLACK_BOT_TOKEN"\nsocket_token_env = "SLACK_APP_TOKEN"\n')
     const frag = join(dir, 'frag.toml')
     writeFileSync(frag, `[specialists.books]\nworkdir = "${dir}"\nkickoff = "Keep the books."\n`)
     const p = Bun.spawnSync(['bun', join(root, 'cli', 'hydra.ts'), '--state-dir', state, 'config', 'add', frag, '--dry-run'], { cwd: root, env: { ...process.env, CHAT_PLATFORM: '' } })

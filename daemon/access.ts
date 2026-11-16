@@ -61,7 +61,7 @@ export function operatorIds(access: Pick<Access, 'allowFrom'>): string[] {
   const cfg = currentHydraConfig()
   if (!cfg.operator) return []
   const prefix = `${PLATFORM}:`
-  return cfg.people[cfg.operator].ids.filter(a => a.startsWith(prefix)).map(a => a.slice(prefix.length))
+  return cfg.people[cfg.operator].addresses.filter(a => a.startsWith(prefix)).map(a => a.slice(prefix.length))
 }
 export const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 

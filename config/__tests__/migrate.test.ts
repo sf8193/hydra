@@ -33,8 +33,8 @@ describe('hydra migrate', () => {
     const loaded = loadHydraConfig(plan.text, env)
     if (!loaded.ok) throw new Error('migrated text must load')
     expect(loaded.config.operator).toBe('operator')
-    expect(loaded.config.people.operator.ids).toEqual(['discord:100000000000000001'])
-    expect(loaded.config.people['person-2'].ids).toEqual(['discord:100000000000000002'])
+    expect(loaded.config.people.operator.addresses).toEqual(['discord:100000000000000001'])
+    expect(loaded.config.people['person-2'].addresses).toEqual(['discord:100000000000000002'])
     expect(loaded.config.specialists.ops).toMatchObject({ workdir: '/home/op/work', kickoffFile: '/home/op/ops.md', model: 'm1', idleMs: 4 * 3_600_000, home: '555' })
     expect(loaded.config.specialists.ops.kickoff).toBeUndefined()
     expect(loaded.config.specialists.desk).toMatchObject({ kickoff: 'be the desk', home: '556' })
@@ -75,7 +75,7 @@ describe('hydra migrate', () => {
     const plan = planMigrate({ ...input, platform: 'slack' })
     if (!plan.ok) throw new Error(plan.errors.join('\n'))
     expect(plan.text).toContain('home = "slack:C0OPS"')
-    expect(plan.text).toContain('ids = ["slack:U0OP"]')
+    expect(plan.text).toContain('addresses = ["slack:U0OP"]')
     expect(accessStep.pending(dir)).toBe(true)
     expect(specialistsStep.pending(dir)).toBe(true)
     applyMigrate(dir, plan)
@@ -96,7 +96,7 @@ describe('hydra migrate: found in review', () => {
 
   test('allowFrom ids are trimmed and deduplicated, numbers taken as ids; no false note', () => {
     const plan = okPlan(state({ 'access.json': { allowFrom: [' 100000000000000001', '100000000000000001', 100000000000000002] } }))
-    expect(plan.text).toContain('[people.operator]\nids = ["discord:100000000000000001"]')
+    expect(plan.text).toContain('[people.operator]\naddresses = ["discord:100000000000000001"]')
     expect(plan.notes.filter(n => n.includes('isn\'t the operator'))).toHaveLength(1)
   })
 
@@ -169,19 +169,19 @@ describe('hydra migrate: found in review', () => {
 describe('merging steps', () => {
   test('people merge by address, unioning roles; the first id wins and a later step\'s references follow it', () => {
     const { doc, conflicts, notes } = mergeDocs([
-      { operator: 'operator', people: { operator: { ids: ['slack:U0OP'] } } },
-      { people: { dan: { ids: ['slack:U0OP'], roles: ['staff'], name: 'Dan' }, ana: { ids: ['slack:U0ANA'], roles: ['staff'] } }, rules: [{ place: 'slack:#help', person: 'dan', target: 'ops' }] },
+      { operator: 'operator', people: { operator: { addresses: ['slack:U0OP'] } } },
+      { people: { op: { addresses: ['slack:U0OP'], roles: ['staff'], name: 'Op' }, ana: { addresses: ['slack:U0ANA'], roles: ['staff'] } }, rules: [{ place: 'slack:#help', person: 'op', target: 'ops' }] },
     ])
     expect(conflicts).toEqual([])
-    expect(doc.people).toEqual({ operator: { ids: ['slack:U0OP'], roles: ['staff'], name: 'Dan' }, ana: { ids: ['slack:U0ANA'], roles: ['staff'] } })
+    expect(doc.people).toEqual({ operator: { addresses: ['slack:U0OP'], roles: ['staff'], name: 'Op' }, ana: { addresses: ['slack:U0ANA'], roles: ['staff'] } })
     expect(doc.rules).toEqual([{ place: 'slack:#help', person: 'operator', target: 'ops' }])
     expect(notes).toEqual([])
   })
 
   test('a rule still written with `from` has its person followed too', () => {
     const { doc } = mergeDocs([
-      { operator: 'operator', people: { operator: { ids: ['slack:U0OP'] } } },
-      { people: { lee: { ids: ['slack:U0OP'] } }, rules: [{ at: 'slack:#help', from: 'lee', to: 'ops' }] },
+      { operator: 'operator', people: { operator: { addresses: ['slack:U0OP'] } } },
+      { people: { lee: { addresses: ['slack:U0OP'] } }, rules: [{ at: 'slack:#help', from: 'lee', to: 'ops' }] },
     ])
     expect(doc.rules).toEqual([{ at: 'slack:#help', from: 'operator', to: 'ops' }])
   })
@@ -193,8 +193,8 @@ describe('merging steps', () => {
   })
 
   test('people whose names read alike are listed for the operator to merge', () => {
-    expect(mergeDocs([{ people: { dan: { ids: ['slack:U01'], name: 'Dan C' }, 'dan-c': { ids: ['discord:1'], name: 'dan-c' } } }]).notes)
-      .toEqual(['people.dan and people.dan-c may be the same human: to merge, move every address into one and drop the other'])
+    expect(mergeDocs([{ people: { op: { addresses: ['slack:U01'], name: 'Op C' }, 'op-c': { addresses: ['discord:1'], name: 'op-c' } } }]).notes)
+      .toEqual(['people.op and people.op-c may be the same human: to merge, move every address into one and drop the other'])
   })
 })
 
@@ -202,8 +202,8 @@ describe('toToml', () => {
   test('writes what Bun.TOML reads back: nested tables, quoted keys, [[rules]], top-level values', () => {
     const doc = {
       operator: 'op',
-      connectors: { slack: { bot_token_env: 'T' } },
-      people: { op: { ids: ['slack:U0OP'], roles: ['staff'] } },
+      slack: { apps: { default: { bot_token_env: 'T' } } },
+      people: { op: { addresses: ['slack:U0OP'], roles: ['staff'] } },
       specialists: { ops: { workdir: '/w', prompt: 'line one\n"quoted"', max: 5 } },
       places: { 'slack:#help': { messages: 'all', files: true } },
       rules: [{ place: 'slack:#help', person: 'staff', target: 'ops' }],
@@ -214,7 +214,7 @@ describe('toToml', () => {
 })
 
 describe('bootRefusal: hydra.toml beside the old state it replaces', () => {
-  const TOML = 'operator = "op"\n[people.op]\nids = ["discord:1"]\n'
+  const TOML = 'operator = "op"\n[people.op]\naddresses = ["discord:1"]\n'
   test('refuses, naming each old state, only while hydra.toml has content', () => {
     expect(bootRefusal(state({ 'specialists.json': SPECIALISTS, 'access.json': ACCESS }).stateDir)).toBeUndefined()
     expect(bootRefusal(state({ 'hydra.toml': '\n', 'specialists.json': SPECIALISTS }).stateDir)).toBeUndefined()
@@ -247,18 +247,18 @@ describe('bootRefusal: hydra.toml beside the old state it replaces', () => {
 })
 
 describe('incremental migrate: what\'s pending is appended to an existing hydra.toml', () => {
-  const HAND = '# my config\noperator = "dan"\n\n[people.dan]\nname = "Dan"\nids = ["discord:100000000000000001"]\n\n[specialists.chief]\nworkdir = "/w"\n'
+  const HAND = '# my config\noperator = "op"\n\n[people.op]\nname = "Op"\naddresses = ["discord:100000000000000001"]\n\n[specialists.chief]\nworkdir = "/w"\n'
   test('pending specialists are appended; the operator\'s file stays byte for byte, and allowFrom\'s person merges into theirs', () => {
     const input = state({ 'hydra.toml': HAND, 'access.json': ACCESS, 'specialists.json': { ops: { channel: '555', kickoff: 'be ops', threadId: '900' } } })
     const plan = planMigrate(input)
     if (!plan.ok) throw new Error(plan.errors.join('\n'))
     expect(plan.text.startsWith(HAND.trimEnd())).toBe(true)
     expect(plan.notes[0]).toBe('appends to the existing hydra.toml, leaving what\'s there as it is: [people.person-2], [specialists.ops]')
-    // allowFrom's operator is hydra.toml's dan already: the note names dan, not the step's own id.
-    expect(plan.notes[1]).toStartWith('discord:100000000000000001 is the operator, as people.dan')
+    // allowFrom's operator is hydra.toml's op already: the note names op, not the step's own id.
+    expect(plan.notes[1]).toStartWith('discord:100000000000000001 is the operator, as people.op')
     const loaded = loadHydraConfig(plan.text, env)
     if (!loaded.ok) throw new Error('must load')
-    expect(loaded.config.operator).toBe('dan')
+    expect(loaded.config.operator).toBe('op')
     expect(Object.keys(loaded.config.specialists)).toEqual(['chief', 'ops'])
     applyMigrate(dir, plan)
     expect(read('hydra.toml')).toBe(plan.text)
@@ -269,8 +269,8 @@ describe('incremental migrate: what\'s pending is appended to an existing hydra.
   test('a change to what hydra.toml already says is refused, naming it', () => {
     const input = state({ 'hydra.toml': HAND, 'specialists.json': { chief: { channel: '555', kickoff: 'k' } } })
     expect(planMigrate(input)).toMatchObject({ ok: false, errors: [expect.stringContaining('two sources disagree on specialists.chief.workdir')] })
-    expect(appendOnly({ people: { a: { ids: ['x'] } } }, { people: { a: { ids: ['x'], roles: ['staff'] } } })).toEqual({ refusal: expect.stringContaining('[people.a]') })
-    expect(appendOnly({ people: { a: { name: 'A', ids: ['x'] } } }, { people: { a: { ids: ['x'], name: 'A' } } })).toEqual({ doc: {}, tables: [] })
+    expect(appendOnly({ people: { a: { addresses: ['x'] } } }, { people: { a: { addresses: ['x'], roles: ['staff'] } } })).toEqual({ refusal: expect.stringContaining('[people.a]') })
+    expect(appendOnly({ people: { a: { name: 'A', addresses: ['x'] } } }, { people: { a: { addresses: ['x'], name: 'A' } } })).toEqual({ doc: {}, tables: [] })
   })
 
   test('a hydra.toml with only comments is kept above the migrated content', () => {
@@ -281,7 +281,7 @@ describe('incremental migrate: what\'s pending is appended to an existing hydra.
   })
 
   test('the existing text is an exact prefix: CRLF and trailing blank lines kept, new lines in the file\'s style', () => {
-    const CRLF = '# c\r\noperator = "dan"\r\n\r\n[people.dan]\r\nids = ["discord:100000000000000001"]  \r\n\r\n\r\n'
+    const CRLF = '# c\r\noperator = "op"\r\n\r\n[people.op]\r\naddresses = ["discord:100000000000000001"]  \r\n\r\n\r\n'
     const plan = planMigrate(state({ 'hydra.toml': CRLF, 'specialists.json': { ops: { kickoff: 'k' } }, 'access.json': { allowFrom: ['100000000000000001'] } }))
     if (!plan.ok) throw new Error(plan.errors.join('\n'))
     expect(plan.text.startsWith(CRLF)).toBe(true)
@@ -290,7 +290,7 @@ describe('incremental migrate: what\'s pending is appended to an existing hydra.
   })
 
   test('nothing to add: hydra.toml is left exactly as it is, with no header, and the old state is still retired', () => {
-    const MINE = 'operator = "dan"\n[people.dan]\nids = ["discord:100000000000000001"]\n'
+    const MINE = 'operator = "op"\n[people.op]\naddresses = ["discord:100000000000000001"]\n'
     const plan = planMigrate(state({ 'hydra.toml': MINE, 'access.json': { allowFrom: ['100000000000000001'], dmPolicy: 'pairing' } }))
     if (!plan.ok) throw new Error(plan.errors.join('\n'))
     expect(plan.text).toBe(MINE)
@@ -299,13 +299,13 @@ describe('incremental migrate: what\'s pending is appended to an existing hydra.
   })
 
   test('a table set inline at the top is refused by name, not by a parse error', () => {
-    const INLINE = 'operator = "dan"\npeople = { dan = { ids = ["discord:100000000000000001"] } }\n'
+    const INLINE = 'operator = "op"\npeople = { op = { addresses = ["discord:100000000000000001"] } }\n'
     expect(planMigrate(state({ 'hydra.toml': INLINE, 'access.json': { allowFrom: ['100000000000000001', '100000000000000002'] } })))
       .toMatchObject({ ok: false, errors: [expect.stringContaining('hydra.toml sets people inline or with dotted keys at the top of the file')] })
   })
 
   test('a change to an existing table lists the exact edits to make by hand', () => {
-    const MINE = 'operator = "dan"\n[people.dan]\nids = ["discord:100000000000000001"]\n[specialists.ops]\nworkdir = "/w"\n'
+    const MINE = 'operator = "op"\n[people.op]\naddresses = ["discord:100000000000000001"]\n[specialists.ops]\nworkdir = "/w"\n'
     const input = state({ 'hydra.toml': MINE, 'specialists.json': { ops: { kickoff: 'be ops', channel: '555' } } })
     const plan = planMigrate({ ...input, spawnCwd: '/w' })
     expect(plan.ok).toBe(false)

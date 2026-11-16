@@ -610,14 +610,14 @@ describe('health is per app: scopes', () => {
 
   test('each app is asked only for what it does: no private-channel read without a private place, no im:* without a DM listener', () => {
     const h = load(`operator = "op"
-[connectors.slack]
+[slack.apps.default]
 bot_token_env = "A_BOT"
-app_token_env = "A_APP"
+socket_token_env = "A_APP"
 [slack.apps.sales]
 bot_token_env = "S_BOT"
-app_token_env = "S_APP"
+socket_token_env = "S_APP"
 [people.op]
-ids = ["github:op"]
+addresses = ["github:op"]
 [specialists.crm]
 workdir = "/w/crm"
 listens = ["slack:G0PRIV"]

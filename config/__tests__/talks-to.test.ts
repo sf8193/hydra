@@ -12,13 +12,13 @@ const env = testLoadEnv({ home: '/home/op', sessionNames: ['spark'] })
 const BASE = `
 operator = "op"
 [people.op]
-ids = ["slack:U0OP"]
-[connectors.slack]
+addresses = ["slack:U0OP"]
+[slack.apps.default]
 bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"
 `
 const ops = (body = 'talks_to = ["deep"]') => `[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:C0OPS"]\nallow = ["staff"]\nrestricted = true\n${body}\n`
 const deep = (body = '') => `[specialists.deep]\nworkdir = "~/agents/deep"\nallow = []\nrestricted = true\n${body}\n`
-const people = `[people.alice]\nids = ["slack:U0A"]\nroles = ["staff"]\n`
+const people = `[people.alice]\naddresses = ["slack:U0A"]\nroles = ["staff"]\n`
 const text = (...parts: string[]) => [BASE, people, ...parts].join('\n')
 
 const errorsOf = (t: string): string[] => {
@@ -52,7 +52,7 @@ describe('talks_to', () => {
   test('it is refused in a hydra config add fragment, and nothing is written', () => {
     const dir = mkdtempSync(join(tmpdir(), 'talks-add-'))
     try {
-      const live = `operator = "op"\n[people.op]\nids = ["slack:U0OP"]\n`
+      const live = `operator = "op"\n[people.op]\naddresses = ["slack:U0OP"]\n`
       writeFileSync(join(dir, 'hydra.toml'), live)
       const r = addFragment(dir, testLoadEnv({ home: '/h' }), `[specialists.x]\nworkdir = "~/x"\ntalks_to = ["y"]\n`, '/repo/frag.toml')
       expect(r.ok).toBe(false)

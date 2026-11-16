@@ -113,7 +113,7 @@ describe('diagnosing a refused token', () => {
   })
 
   test('a live DM with a file: downloaded, delivered to the slack:dm listener, and acked', async () => {
-    const t = setup({ toml: TOML + `[people.bea]\nids = ["slack:UB"]\nname = "Bea B"\nroles = ["owner"]\n[specialists.assistant]\nworkdir = "/w/a"\nlistens = ["slack:dm"]\nallow = ["owner"]\n[places."slack:dm"]\nfiles = true\nack = "eyes"\n` })
+    const t = setup({ toml: TOML + `[people.bea]\naddresses = ["slack:UB"]\nname = "Bea B"\nroles = ["owner"]\n[specialists.assistant]\nworkdir = "/w/a"\nlistens = ["slack:dm"]\nallow = ["owner"]\n[places."slack:dm"]\nfiles = true\nack = "eyes"\n` })
     await t.listener.start()
     t.apps[0].handler({ channel: 'D0BEA0001', ts: '1793000001.000001', user: 'UB', text: 'see attached', channel_type: 'im',
       files: [{ id: 'F1', name: 'a.pdf', size: 3, url_private_download: 'https://files.slack.com/F1' }] } as RawEvent)
@@ -151,7 +151,7 @@ describe('diagnosing a refused token', () => {
     await t.listener.start()
     expect(t.alerts).toHaveLength(1)
     expect(t.alerts[0]).toContain('missing_scope: the token needs groups:history and has chat:write')
-    expect(t.alerts[0]).toContain('`bot_token_env` of the app named `default` (`[slack.apps.default]` or `[connectors.slack]`)')
+    expect(t.alerts[0]).toContain('`bot_token_env` of the app named `default` (`[slack.apps.default]`)')
     await t.listener.runCatchUp(true, 'retry')
     expect(t.alerts).toHaveLength(1) // not again for the same cause
     t.state.historyError = undefined
@@ -182,7 +182,7 @@ describe('starting', () => {
   test('without a declared app or a token it stays off and names what is missing, never a token', async () => {
     const noCfg = setup({ toml: null })
     expect(await noCfg.listener.start()).toBe(false)
-    expect(noCfg.logs.join()).toContain('hydra.toml declares no Slack app: add `[slack.apps.<id>]` (or `[connectors.slack]`)')
+    expect(noCfg.logs.join()).toContain('hydra.toml declares no Slack app: add `[slack.apps.<id>]`')
     const noApp = setup({ tokens: { bot: TOKENS.bot } })
     expect(await noApp.listener.start()).toBe(false)
     expect(noApp.logs.join()).toContain('SLOPBOT_SLACK_APP_TOKEN is not set')

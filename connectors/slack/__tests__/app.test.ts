@@ -18,7 +18,7 @@ describe('slackManifest for an app other than default', () => {
     const m = Bun.YAML.parse(slackManifest(sales())) as Manifest
     expect(m.display_information).toEqual({ name: 'sales', description: SLACK_APP_DEFAULTS.description })
     expect(m.features.bot_user.display_name).toBe('sales')
-    const named = Bun.YAML.parse(slackManifest(sales('display_name = "Sales: helper"\ndescription = "Sales threads."\nuser_token_env = "SALES_USER"'))) as Manifest
+    const named = Bun.YAML.parse(slackManifest(sales('display_name = "Sales: helper"\ndescription = "Sales threads."\noperator_token_env = "SALES_USER"'))) as Manifest
     expect(named.display_information).toEqual({ name: 'Sales: helper', description: 'Sales threads.' })
     expect(named.oauth_config.scopes.user).toEqual([...SLACK_APP_NEEDS.userScopes])
   })
@@ -26,27 +26,27 @@ describe('slackManifest for an app other than default', () => {
 
 describe('slackManifest', () => {
   test('the name and description are the ones hydra.toml gives, quoted so any text stays a string', () => {
-    const m = manifestOf(withSlack('app_name = "Acme helper: #1"\napp_description = "Answers threads # in Slack."'))
+    const m = manifestOf(withSlack('display_name = "Acme helper: #1"\ndescription = "Answers threads # in Slack."'))
     expect(m.display_information).toEqual({ name: 'Acme helper: #1', description: 'Answers threads # in Slack.' })
     expect(m.features.bot_user).toEqual({ display_name: 'Acme helper: #1', always_online: true })
     expect(m.settings).toMatchObject({ socket_mode_enabled: true, org_deploy_enabled: false })
   })
 
-  test('without app_name or app_description, the defaults', () => {
+  test('without display_name or description, the defaults', () => {
     const m = manifestOf(BASE)
     expect(m.display_information).toEqual({ name: SLACK_APP_DEFAULTS.name, description: SLACK_APP_DEFAULTS.description })
     expect(m.features.bot_user.display_name).toBe('hydra')
     expect(Bun.YAML.parse(slackManifest(undefined))).toEqual(m)
   })
 
-  test('user scopes and user events only with user_token_env', () => {
+  test('user scopes and user events only with operator_token_env', () => {
     const bot = manifestOf(BASE)
     expect(bot.oauth_config.scopes.user).toBeUndefined()
     expect(bot.settings.event_subscriptions.user_events).toBeUndefined()
     expect(bot.settings.event_subscriptions.bot_events).toEqual(['message.channels', 'message.groups', 'message.im', 'channel_rename', 'group_rename'])
-    const user = manifestOf(withSlack('user_token_env = "HYDRA_SLACK_USER_TOKEN"'))
+    const user = manifestOf(withSlack('operator_token_env = "HYDRA_SLACK_USER_TOKEN"'))
     // The default description tells coworkers the app can read as its installer.
-    expect(user.display_information.description).toBe(SLACK_APP_DEFAULTS.description + SLACK_APP_DEFAULTS.userTokenNote)
+    expect(user.display_information.description).toBe(SLACK_APP_DEFAULTS.description + SLACK_APP_DEFAULTS.operatorTokenNote)
     expect(user.oauth_config.scopes.user).toEqual([...SLACK_APP_NEEDS.userScopes])
     expect(user.settings.event_subscriptions.user_events).toEqual([...SLACK_APP_NEEDS.userEvents])
   })
@@ -86,7 +86,7 @@ describe('several apps in one hydra', () => {
   })
 
   test('a key is named for its own app', () => {
-    expect(appKey('default', 'bot_token_env')).toBe('`bot_token_env` of the app named `default` (`[slack.apps.default]` or `[connectors.slack]`)')
+    expect(appKey('default', 'bot_token_env')).toBe('`bot_token_env` of the app named `default` (`[slack.apps.default]`)')
     expect(appKey('sales', 'bot_token_env')).toBe('`bot_token_env` of the app named `sales` (`[slack.apps.sales]`)')
   })
 })

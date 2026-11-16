@@ -68,7 +68,7 @@ export const MAIN = 'main'
 
 /** Who an address belongs to. A stranger holds only `anyone`. */
 export function identify(cfg: HydraConfig, from: Address | undefined): Sender {
-  const person = from ? Object.values(cfg.people).find(p => p.ids.includes(from)) : undefined
+  const person = from ? Object.values(cfg.people).find(p => p.addresses.includes(from)) : undefined
   return {
     ...(from && { address: from }),
     ...(person && { person }),

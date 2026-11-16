@@ -12,7 +12,7 @@ bot_token_env = "DEFAULT_BOT"
 [slack.apps.sales]
 bot_token_env = "SALES_BOT"
 [people.op]
-ids = ["slack:U0OP"]
+addresses = ["slack:U0OP"]
 [specialists.crm]
 workdir = "/a/crm"
 listens = ["slack:#help"]

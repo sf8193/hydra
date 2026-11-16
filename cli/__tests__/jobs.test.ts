@@ -1218,7 +1218,7 @@ describe('jobs list warnings', () => {
     try {
       writeFileSync(join(dir, 'jobs.toml'), `channel="1"\n[a]\nschedule="0 2 * * *"\nprompt="p"\nto="ops"\n[b]\nschedule="0 2 * * *"\nprompt="p"\nto="old"`)
       writeFileSync(join(dir, 'specialists.json'), JSON.stringify({ old: { channel: 'C0TEST', updatedAt: 1 } }))
-      writeFileSync(join(dir, 'hydra.toml'), 'operator = "op"\n[people.op]\nids = ["discord:1"]\n[specialists.ops]\nworkdir = "/w"\n')
+      writeFileSync(join(dir, 'hydra.toml'), 'operator = "op"\n[people.op]\naddresses = ["discord:1"]\n[specialists.ops]\nworkdir = "/w"\n')
       jobsList('test', dir)
       expect(lines.filter(l => l.includes('no such specialist'))).toEqual(['  warning: no such specialist "old" (hydra specialist list)'])
     } finally { console.log = log; rmSync(dir, { recursive: true }) }

@@ -8,7 +8,7 @@ describe('daemon boot with hydra.toml beside the old state', () => {
   test('exits 78 at once, says why on stderr, and leaves the reason for the watchdog and hydra health', () => {
     const dir = mkdtempSync(join(tmpdir(), 'boot-refusal-'))
     try {
-      writeFileSync(join(dir, 'hydra.toml'), 'operator = "op"\n[people.op]\nids = ["discord:100000000000000001"]\n')
+      writeFileSync(join(dir, 'hydra.toml'), 'operator = "op"\n[people.op]\naddresses = ["discord:100000000000000001"]\n')
       writeFileSync(join(dir, 'specialists.json'), JSON.stringify({ ops: { channel: '1', kickoff: 'k' } }))
       const root = join(import.meta.dir, '..', '..')
       const p = Bun.spawnSync(['bun', join(root, 'daemon.ts')], {

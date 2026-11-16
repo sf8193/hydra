@@ -16,7 +16,7 @@ const LIVE = `# Written by \`hydra migrate\`. Edit freely: hydra re-reads this f
 operator = "operator"
 
 [people.operator]
-ids = ["discord:100000000000000001"]
+addresses = ["discord:100000000000000001"]
 
 [specialists.ledger-review]
 workdir = "~/Documents/ledger-agent-system"
@@ -39,7 +39,7 @@ runner = "launchd"
 
 [schedules.machine-health]
 cron = "*/5 * * * *"
-prompt = "🩺 Machine health check found something."
+message = "🩺 Machine health check found something."
 check = "~/Workstreams/MachineHealth/check.sh"
 runner = "launchd"
 target = "main"
@@ -83,7 +83,7 @@ home = "1551794455227404371"
 [schedules.nightly-books]
 cron = "0 3 * * *"
 target = "books"
-prompt = "Nightly run."
+message = "Nightly run."
 `
 
 let dir: string
@@ -97,13 +97,16 @@ const file = () => readFileSync(join(dir, 'hydra.toml'), 'utf8')
 const loaded = () => { const r = loadHydraConfig(file(), env); if (!r.ok) throw new Error('hydra.toml must load'); return r.config }
 
 describe('hydra config add', () => {
-  test('a fragment still written with a schedule\'s old `to` is added as `target`', () => {
+  test('a fragment still written with a schedule\'s old `to`, `prompt` and `cwd` is added as `target`, `message` and `workdir`', () => {
     const d = at(LIVE)
-    const r = addFragment(d, env, '[schedules.nightly-books]\ncron = "0 3 * * *"\nto = "main"\nprompt = "p"\n', '/repo/f.toml')
+    const r = addFragment(d, env, '[schedules.nightly-books]\ncron = "0 3 * * *"\nto = "main"\nprompt = "p"\ncwd = "/srv/books"\n', '/repo/f.toml')
     expect(r).toMatchObject({ ok: true, added: ['[schedules.nightly-books]'] })
-    expect(file()).toContain('target = "main"')
-    expect(file()).not.toMatch(/^to = /m)
-    expect(loaded().schedules['nightly-books'].target).toBe('main')
+    const text = file().slice(file().indexOf('[schedules.nightly-books]'))
+    expect(text).toContain('target = "main"')
+    expect(text).toContain('message = "p"')
+    expect(text).toContain('workdir = "/srv/books"')
+    expect(text).not.toMatch(/^(to|prompt|cwd) = /m)
+    expect(loaded().schedules['nightly-books']).toMatchObject({ target: 'main', message: 'p', workdir: '/srv/books' })
   })
 
   test('a fragment still written with a specialist\'s old keys is added under the new ones', () => {
@@ -163,10 +166,10 @@ describe('hydra config add', () => {
 
   test('refuses, changing nothing: no hydra.toml, other tables, a fragment that does not load with hydra.toml', () => {
     expect(planAddFragment(at(), env, BACKUP, '/f')).toMatchObject({ ok: false, error: expect.stringContaining('hydra migrate') })
-    expect(planAddFragment(at(LIVE), env, 'operator = "x"\n[people.x]\nids = ["discord:3"]\n', '/f')).toMatchObject({ ok: false, error: expect.stringContaining('sets operator, people') })
+    expect(planAddFragment(at(LIVE), env, 'operator = "x"\n[people.x]\naddresses = ["discord:3"]\n', '/f')).toMatchObject({ ok: false, error: expect.stringContaining('sets operator, people') })
     expect(planAddFragment(at(LIVE), env, 'schedules = 3\n', '/f')).toMatchObject({ ok: false, error: expect.stringContaining('must be [schedules.<id>] tables') })
     expect(planAddFragment(at(LIVE), env, '# nothing\n', '/f')).toMatchObject({ ok: false, error: expect.stringContaining('no [specialists.<id>]') })
-    expect(planAddFragment(at(LIVE), env, '[schedules.x]\ncron = "0 3 * * *"\ntarget = "nobody"\nprompt = "p"\n', '/f')).toMatchObject({ ok: false, error: expect.stringContaining('wouldn\'t load with [schedules.x]') })
+    expect(planAddFragment(at(LIVE), env, '[schedules.x]\ncron = "0 3 * * *"\ntarget = "nobody"\nmessage = "p"\n', '/f')).toMatchObject({ ok: false, error: expect.stringContaining('wouldn\'t load with [schedules.x]') })
     expect(file()).toBe(LIVE)
   })
 

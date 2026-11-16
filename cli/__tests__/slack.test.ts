@@ -12,11 +12,11 @@ const manifest = (toml?: string, ...app: string[]) => {
   const p = Bun.spawnSync(['bun', join(root, 'cli', 'hydra.ts'), '--state-dir', dir, 'slack', 'manifest', ...app], { cwd: root })
   return { code: p.exitCode, out: p.stdout.toString(), err: p.stderr.toString().replaceAll(dir, '$d') }
 }
-const OP = 'operator = "op"\n[people.op]\nids = ["slack:U0OP"]\n'
+const OP = 'operator = "op"\n[people.op]\naddresses = ["slack:U0OP"]\n'
 
 describe('hydra slack manifest', () => {
   test('prints the manifest for the name hydra.toml gives, and only the manifest', () => {
-    const r = manifest(`${OP}[connectors.slack]\nbot_token_env = "HYDRA_SLACK_BOT_TOKEN"\napp_name = "Acme helper"\n`)
+    const r = manifest(`${OP}[slack.apps.default]\nbot_token_env = "HYDRA_SLACK_BOT_TOKEN"\ndisplay_name = "Acme helper"\n`)
     expect(r.code).toBe(0)
     expect(r.err).toBe('')
     expect(Bun.YAML.parse(r.out)).toMatchObject({ display_information: { name: 'Acme helper' }, features: { bot_user: { display_name: 'Acme helper' } } })
@@ -26,7 +26,7 @@ describe('hydra slack manifest', () => {
     expect(none.code).toBe(0)
     expect(Bun.YAML.parse(none.out)).toMatchObject({ display_information: { name: 'hydra' } })
     expect(none.err).toContain('$d/hydra.toml: none')
-    const broken = manifest(`${OP}[connectors.slack]\nbot_token_env = "HYDRA_SLACK_BOT_TOKEN"\napp_name = "${'k'.repeat(36)}"\n`)
+    const broken = manifest(`${OP}[slack.apps.default]\nbot_token_env = "HYDRA_SLACK_BOT_TOKEN"\ndisplay_name = "${'k'.repeat(36)}"\n`)
     expect(broken).toMatchObject({ code: 1, out: '' })
     const noSlack = manifest(OP)
     expect(noSlack.code).toBe(0)
@@ -64,12 +64,12 @@ describe('hydra slack token-vars (hidden: what scrub-raindrop.sh asks)', () => {
     return { code: p.exitCode, names: p.stdout.toString().split('\n').filter(Boolean), err: p.stderr.toString() }
   }
   test('prints every token variable the Slack tables name, one per line, and nothing else', () => {
-    const r = run(`${OP}[connectors.slack]\nbot_token_env = "ACME_BOT"\napp_token_env = "ACME_APP"\n[slack.apps.sales]\nbot_token_env = "S_BOT"\nuser_token_env = "S_USER"\n`)
+    const r = run(`${OP}[slack.apps.default]\nbot_token_env = "ACME_BOT"\nsocket_token_env = "ACME_APP"\n[slack.apps.sales]\nbot_token_env = "S_BOT"\noperator_token_env = "S_USER"\n`)
     expect(r).toMatchObject({ code: 0, err: '' })
     expect(r.names.sort()).toEqual(['ACME_APP', 'ACME_BOT', 'S_BOT', 'S_USER'])
   })
   test('never prints a variable sessions need, though hydra.toml names it (the loader refuses it; the shell must not unset it)', () => {
-    const r = run(`${OP}[slack.apps.a]\nbot_token_env = "PATH"\napp_token_env = "HOME"\nuser_token_env = "HYDRA_STATE_DIR"\n[slack.apps.b]\nbot_token_env = "TMUX"\napp_token_env = "HYDRA_SLACK_APP_TOKEN"\n`)
+    const r = run(`${OP}[slack.apps.a]\nbot_token_env = "PATH"\nsocket_token_env = "HOME"\noperator_token_env = "HYDRA_STATE_DIR"\n[slack.apps.b]\nbot_token_env = "TMUX"\nsocket_token_env = "HYDRA_SLACK_APP_TOKEN"\n`)
     expect(r.names).toEqual(['HYDRA_SLACK_APP_TOKEN'])
   })
   test('names them even when hydra.toml does not load, and none when there is no file', () => {

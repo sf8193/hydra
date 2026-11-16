@@ -65,6 +65,14 @@ export const SPECIALIST_RENAMES: readonly Rename[] = [
   { from: 'prompt', to: 'kickoff' }, { from: 'prompt_file', to: 'kickoff_file' },
   { from: 'max', to: 'max_sessions' }, { from: 'was', to: 'renamed_from' }, { from: 'apps', to: 'pinned_to' },
 ]
+/** A Slack app's keys, as `[slack.apps.<id>]` spells them. */
+const SLACK_APP_KEYS = ['bot_token_env', 'socket_token_env', 'operator_token_env', 'display_name', 'description']
+/** The two token keys under their old names, read as the new ones. */
+const SLACK_APP_RENAMES: readonly Rename[] = [{ from: 'app_token_env', to: 'socket_token_env' }, { from: 'user_token_env', to: 'operator_token_env' }]
+/** The old `[connectors.slack]` table also spells a name and a description `app_name` and `app_description`. */
+const CONNECTORS_SLACK_RENAMES: readonly Rename[] = [...SLACK_APP_RENAMES, { from: 'app_name', to: 'display_name' }, { from: 'app_description', to: 'description' }]
+/** A schedule's keys under their old names. */
+export const SCHEDULE_RENAMES: readonly Rename[] = [{ from: 'to', to: 'target' }, { from: 'prompt', to: 'message' }, { from: 'cwd', to: 'workdir' }]
 /** Keys only a hand edit of one specialist's own table sets: a default would reach every specialist, a fragment's table is someone else's. */
 export const RESTRICTION_KEYS = ['restricted', 'tools', 'mcp', 'talks_to'] as const
 /** The old name of one of them, still read: a fragment may not set it either. */
@@ -209,7 +217,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       }
       const mapped = typeof v === 'string' && r.values && has(r.values, v) ? r.values[v] : v
       const valueNote = mapped !== v ? ` and its value ${JSON.stringify(v)} is now ${JSON.stringify(mapped)}` : ''
-      warn(join2(path, r.from), `is now \`${r.to}\`${valueNote}; \`${r.from}\` still loads and will be removed`)
+      warn(join2(path, r.from), `rename \`${r.from}\` to \`${r.to}\`${valueNote}; \`${r.from}\` still loads and will be removed`)
       out = Object.fromEntries(Object.entries(out).map(([k, x]) => k === r.from ? [r.to, mapped] : [k, x]))
     }
     return out
@@ -276,7 +284,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   const claimEnv = (v: string, path: string): boolean => {
     const other = envOwner.get(v)
     if (other) { error(path, `"${v}" is already the token variable of ${other}: each token needs its own variable${other === GATEWAY ? GATEWAY_HINT : ''}`); return false }
-    envOwner.set(v, path)
+    envOwner.set(v, oldPath(path))
     return true
   }
   const gateways: Gateways = {}
@@ -321,12 +329,13 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     }
   }
 
-  // Slack: any number of apps, `[slack.apps.<id>]`. `[connectors.slack]` is the app `default`, so it can't be declared twice.
+  // Slack: any number of apps, `[slack.apps.<id>]`. The old `[connectors.slack]` is the app `default` (with a warning), so it can't be declared twice.
   // No prototype: an id like `constructor` is a valid name.
   const slackApps: Record<string, SlackApp> = Object.create(null)
-  /** One Slack app from its table. Only `[connectors.slack]` spells the display name `app_name` and the description `app_description`. */
-  const slackApp = (id: string, t: Table, path: string, keys = { displayName: 'display_name', description: 'description' }): SlackApp | undefined => {
-    unknownKeys(t, ['bot_token_env', 'app_token_env', 'user_token_env', keys.displayName, keys.description], path)
+  /** One Slack app from its table, its keys under the new names (`renames` reads the old ones). */
+  const slackApp = (id: string, t0: Table, path: string, renames: readonly Rename[] = SLACK_APP_RENAMES): SlackApp | undefined => {
+    const t = renamed(t0, path, renames)
+    unknownKeys(t, SLACK_APP_KEYS, path)
     const envName = (k: string, required: boolean): string | undefined => {
       const v = str(t, k, path)
       if (v === undefined) { if (required) error(join2(path, k), 'is required'); return undefined }
@@ -336,8 +345,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       return claimEnv(v, join2(path, k)) ? v : undefined
     }
     const botTokenEnv = envName('bot_token_env', true)
-    const appTokenEnv = envName('app_token_env', false)
-    const userTokenEnv = envName('user_token_env', false)
+    const socketTokenEnv = envName('socket_token_env', false)
+    const operatorTokenEnv = envName('operator_token_env', false)
     // Slack's own limits for an app's name and description: past them, creating the app from the manifest fails.
     const capped = (k: string, max: number): string | undefined => {
       const v = str(t, k, path)
@@ -346,14 +355,15 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       error(join2(path, k), `is ${n} characters; Slack allows at most ${max}`)
       return undefined
     }
-    const displayName = capped(keys.displayName, 35) ?? (id === DEFAULT_SLACK_APP ? SLACK_APP_DEFAULTS.name : id)
-    const description = capped(keys.description, 140) ?? SLACK_APP_DEFAULTS.description + (userTokenEnv ? SLACK_APP_DEFAULTS.userTokenNote : '')
+    const displayName = capped('display_name', 35) ?? (id === DEFAULT_SLACK_APP ? SLACK_APP_DEFAULTS.name : id)
+    const description = capped('description', 140) ?? SLACK_APP_DEFAULTS.description + (operatorTokenEnv ? SLACK_APP_DEFAULTS.operatorTokenNote : '')
     if (!botTokenEnv) return undefined
-    return { id, botTokenEnv, ...(appTokenEnv && { appTokenEnv }), ...(userTokenEnv && { userTokenEnv }), displayName, description }
+    return { id, botTokenEnv, ...(socketTokenEnv && { socketTokenEnv }), ...(operatorTokenEnv && { operatorTokenEnv }), displayName, description }
   }
   const connectorsSlack = table(conns.slack, 'connectors.slack')
   if (connectorsSlack) {
-    const app = slackApp(DEFAULT_SLACK_APP, connectorsSlack, 'connectors.slack', { displayName: 'app_name', description: 'app_description' })
+    warn('connectors.slack', `rename the table [connectors.slack] to [slack.apps.${DEFAULT_SLACK_APP}]; it still loads and will be removed`)
+    const app = slackApp(DEFAULT_SLACK_APP, connectorsSlack, 'connectors.slack', CONNECTORS_SLACK_RENAMES)
     if (app) slackApps[DEFAULT_SLACK_APP] = app
   }
   const slackTable = table(doc.slack, 'slack') ?? {}
@@ -363,7 +373,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (!SLACK_APP_ID_RE.test(id)) { error(path, `"${id}" is not a valid app name: lowercase letters, digits, "-" and "_", starting with a letter, at most 35 characters`); continue }
     const t = table(raw, path)
     if (!t) continue
-    if (id === DEFAULT_SLACK_APP && has(conns, 'slack')) { error(path, 'is the same app as [connectors.slack]: declare it once, in either table'); continue }
+    if (id === DEFAULT_SLACK_APP && has(conns, 'slack')) { error(path, 'declares the same app as [connectors.slack]: keep [slack.apps.default] and delete [connectors.slack]'); continue }
     const app = slackApp(id, t, path)
     if (app) slackApps[id] = app
   }
@@ -404,17 +414,18 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     const path = `people.${id}`
     if (!ID_RE.test(id)) error(path, 'a person\'s id must be lowercase letters, digits and dashes')
     else if (BUILTIN.includes(id)) error(path, `"${id}" is a built-in role; a person needs another id`)
-    const t = table(raw, path)
-    if (!t) continue
-    unknownKeys(t, ['ids', 'roles', 'name'], path)
-    const ids = strList(t, 'ids', path)
-    if (t.ids === undefined || ids?.length === 0) error(`${path}.ids`, 'is required: at least one address, like "slack:U0TEST" or "github:alice"')
+    const t0 = table(raw, path)
+    if (!t0) continue
+    const t = renamed(t0, path, [{ from: 'ids', to: 'addresses' }])
+    unknownKeys(t, ['addresses', 'roles', 'name'], path)
+    const written = strList(t, 'addresses', path)
+    if (t.addresses === undefined || written?.length === 0) error(`${path}.addresses`, 'is required: at least one address, like "slack:U0TEST" or "github:alice"')
     const addresses: Address[] = []
-    for (const [i, raw] of (ids ?? []).entries()) {
+    for (const [i, raw] of (written ?? []).entries()) {
       const a = normalizeAddress(raw)
-      if (!a) { error(`${path}.ids[${i}]`, `"${raw}" is not an address: use discord:<user id>, slack:<user id> or github:<login>`); continue }
+      if (!a) { error(`${path}.addresses[${i}]`, `"${raw}" is not an address: use discord:<user id>, slack:<user id> or github:<login>`); continue }
       const other = owner.get(a)
-      if (other && other !== id) error(`${path}.ids[${i}]`, `${a} already belongs to ${other}: one address, one person`)
+      if (other && other !== id) error(`${path}.addresses[${i}]`, `${a} already belongs to ${other}: one address, one person`)
       owner.set(a, id)
       addresses.push(a)
     }
@@ -423,7 +434,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       if (BUILTIN.includes(r)) error(`${path}.roles[${i}]`, `"${r}" is built in: ${r === 'people' ? 'everyone on the roster' : 'anyone at all'} holds it already`)
       else if (!ID_RE.test(r)) error(`${path}.roles[${i}]`, `role "${r}" must be lowercase letters, digits and dashes`)
     }
-    people[id] = { id, ids: addresses, roles, name: str(t, 'name', path) ?? id }
+    people[id] = { id, addresses, roles, name: str(t, 'name', path) ?? id }
   }
   const declaredRoles = new Set(Object.values(people).flatMap(p => p.roles))
   // A role named like a person would make a rule's `person` ambiguous.
@@ -691,8 +702,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (!ID_RE.test(id)) error(path, 'a schedule\'s id must be lowercase letters, digits and dashes')
     const t0 = table(raw, path)
     if (!t0) continue
-    const t = renamed(t0, path, [{ from: 'to', to: 'target' }])
-    unknownKeys(t, ['cron', 'target', 'prompt', 'check', 'cwd', 'env_file', 'runner', 'needs', 'alert_after'], path)
+    const t = renamed(t0, path, SCHEDULE_RENAMES)
+    unknownKeys(t, ['cron', 'target', 'message', 'check', 'workdir', 'env_file', 'runner', 'needs', 'alert_after'], path)
     const cron = str(t, 'cron', path)
     if (t.cron === undefined) error(`${path}.cron`, 'is required: 5 fields, local time')
     else if (cron !== undefined) {
@@ -700,18 +711,18 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     }
     const target = str(t, 'target', path)
     if (target !== undefined && !isTarget(target)) error(`${path}.target`, `no specialist "${target}"`)
-    const prompt = t.prompt === '' ? '' : str(t, 'prompt', path) ?? ''
+    const message = t.message === '' ? '' : str(t, 'message', path) ?? ''
     const check = str(t, 'check', path)
-    // No `target`: a sensor. It sends nothing, so it needs a check and takes no prompt.
+    // No `target`: a sensor. It sends nothing, so it needs a check and takes no message.
     if (t.target === undefined && check === undefined) error(`${path}.target`, 'is required unless there is a check (a sensor): a specialist, or main')
-    if (t.target === undefined && prompt !== '') error(`${path}.prompt`, 'a schedule with no target sends nothing, so it takes no prompt')
-    const cwdRaw = str(t, 'cwd', path)
-    const cwd = cwdRaw === undefined ? undefined : expand(cwdRaw)
-    if (cwd !== undefined && !isAbsolute(cwd)) error(`${path}.cwd`, `"${cwdRaw}" must be an absolute path or start with ~`)
-    // Relative to the schedule's cwd, as prompt_file and env_file are to a specialist's workdir.
+    if (t.target === undefined && message !== '') error(`${path}.message`, 'a schedule with no target sends nothing, so it takes no message')
+    const workdirRaw = str(t, 'workdir', path)
+    const workdir = workdirRaw === undefined ? undefined : expand(workdirRaw)
+    if (workdir !== undefined && !isAbsolute(workdir)) error(`${path}.workdir`, `"${workdirRaw}" must be an absolute path or start with ~`)
+    // Relative to the schedule's workdir, as kickoff_file and env_file are to a specialist's workdir.
     const envFileRaw = str(t, 'env_file', path)
-    const envFile = envFileRaw === undefined ? undefined : isAbsolute(expand(envFileRaw)) ? expand(envFileRaw) : cwd && isAbsolute(cwd) ? join(cwd, envFileRaw) : undefined
-    if (envFileRaw !== undefined && envFile === undefined) error(`${path}.env_file`, `"${envFileRaw}" is relative, so it needs an absolute cwd`)
+    const envFile = envFileRaw === undefined ? undefined : isAbsolute(expand(envFileRaw)) ? expand(envFileRaw) : workdir && isAbsolute(workdir) ? join(workdir, envFileRaw) : undefined
+    if (envFileRaw !== undefined && envFile === undefined) error(`${path}.env_file`, `"${envFileRaw}" is relative, so it needs an absolute workdir`)
     const runner = oneOf(t, 'runner', path, ['launchd', 'daemon'] as const) ?? 'launchd'
     // A daemon schedule is retried until done; launchd fires once. needs and alert_after only mean something retried.
     const needs = strList(t, 'needs', path)
@@ -719,12 +730,12 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     const alertAfterMs = duration(t, 'alert_after', path, MAX_ALERT_AFTER_MS)
     for (const k of ['needs', 'alert_after']) if (t[k] !== undefined && runner !== 'daemon') error(`${path}.${k}`, 'needs runner = "daemon"')
     schedules[id] = {
-      id, cron: cron ?? '', prompt, runner,
+      id, cron: cron ?? '', message, runner,
       ...(target !== undefined && { target }),
       ...(needs?.length && { needs: [...new Set(needs)] as 'internet'[] }),
       ...(alertAfterMs !== undefined && { alertAfterMs }),
       ...(check !== undefined && { check }),
-      ...(cwd !== undefined && { cwd }),
+      ...(workdir !== undefined && { workdir }),
       ...(envFile !== undefined && { envFile }),
     }
   }
@@ -857,7 +868,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   // The operator passes admin checks only through an address on the platform a daemon runs: on a connected platform
   // with none, nobody is in charge there.
   if (operator) for (const platform of ['discord', 'slack'] as const) {
-    if (connected(platform) && !people[operator].ids.some(a => a.startsWith(`${platform}:`))) {
+    if (connected(platform) && !people[operator].addresses.some(a => a.startsWith(`${platform}:`))) {
       warn('operator', `${operator} has no ${platform}: address, so on ${platform} nobody passes admin checks or reaches main by DM`)
     }
   }

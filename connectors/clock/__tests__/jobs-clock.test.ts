@@ -1597,7 +1597,7 @@ describe('launchd-runner jobs: launchd triggers, the daemon delivers', () => {
 })
 
 describe("hydra.toml [schedules]: run once migrate has moved jobs.toml; until then, jobs.toml exactly as today", () => {
-  const schedule = (over: Partial<Schedule> & { id: string }): Schedule => ({ cron: '*/5 * * * *', target: '', prompt: '', runner: 'daemon', ...over })
+  const schedule = (over: Partial<Schedule> & { id: string }): Schedule => ({ cron: '*/5 * * * *', target: '', message: '', runner: 'daemon', ...over })
   const cfg = (...ss: Schedule[]) => ({ schedules: Object.fromEntries(ss.map(s => [s.id, s])), specialists: {} as HydraConfig['specialists'] })
   const sweep = cfg(schedule({ id: 'sweep', check: 'sweep.sh' }))
 
@@ -1755,11 +1755,11 @@ describe('jobsFromSchedules', () => {
   test('to, none, main and a per-conversation specialist; a schedule launchd cannot hold runs on the daemon', () => {
     const jobs = jobsFromSchedules({
       schedules: {
-        a: { id: 'a', cron: '0 6 * * *', target: 'ops', prompt: 'p', runner: 'launchd' },
-        b: { id: 'b', cron: '0 6 * * *', target: '', prompt: '', check: 'c.sh', cwd: '/srv', envFile: '/srv/.env', runner: 'launchd' },
-        c: { id: 'c', cron: '0 6 * * *', target: 'main', prompt: 'p', runner: 'daemon' },
-        d: { id: 'd', cron: '0 * * * *', target: 'review', prompt: '', check: 'r.sh', runner: 'launchd' },
-        e: { id: 'e', cron: '*/2 9-17 * * 1-5', target: '', prompt: '', check: 'e.sh', runner: 'launchd' },
+        a: { id: 'a', cron: '0 6 * * *', target: 'ops', message: 'p', runner: 'launchd' },
+        b: { id: 'b', cron: '0 6 * * *', target: '', message: '', check: 'c.sh', workdir: '/srv', envFile: '/srv/.env', runner: 'launchd' },
+        c: { id: 'c', cron: '0 6 * * *', target: 'main', message: 'p', runner: 'daemon' },
+        d: { id: 'd', cron: '0 * * * *', target: 'review', message: '', check: 'r.sh', runner: 'launchd' },
+        e: { id: 'e', cron: '*/2 9-17 * * 1-5', target: '', message: '', check: 'e.sh', runner: 'launchd' },
       },
       specialists: { review: { sessions: 'per-conversation' } as HydraConfig['specialists'][string] },
     })

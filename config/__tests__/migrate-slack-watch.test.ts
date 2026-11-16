@@ -16,8 +16,8 @@ function toToml(m: SlackWatchMigration): string {
   const table = (head: string, t: Record<string, unknown>) => `[${head}]\n${Object.entries(t).map(([k, x]) => `${k} = ${v(x)}`).join('\n')}\n`
   return [
     'operator = "op"',
-    table('connectors.slack', m.connectors.slack),
-    table('people.op', { ids: ['slack:U0OPERATOR'] }),
+    table('slack.apps.default', m.slack.apps.default),
+    table('people.op', { addresses: ['slack:U0OPERATOR'] }),
     ...Object.entries(m.people).map(([id, p]) => table(`people.${id}`, p)),
     ...Object.entries(m.specialists).map(([id, s]) => table(`specialists.${id}`, { workdir: `/w/${id}`, ...s })),
     ...Object.entries(m.places).map(([p, o]) => table(`places."${p}"`, o)),
@@ -55,7 +55,7 @@ describe('slack-watch.json → hydra.toml', () => {
     expect(h.specialists.ops).toMatchObject({ listens: ['slack:C0OPS', 'slack:C0OPS2'], allow: ['people'] })
     expect(h.specialists.assistant).toMatchObject({ listens: ['slack:dm'], allow: ['owner', 'assistant-allowed'] })
     expect(h.places['slack:C0FINANCE']).toMatchObject({ files: true, ack: 'eyes' })
-    expect(h.slackApps.default).toEqual({ id: 'default', botTokenEnv: 'SLOPBOT_SLACK_BOT_TOKEN', appTokenEnv: 'SLOPBOT_SLACK_APP_TOKEN', displayName: 'hydra', description: SLACK_APP_DEFAULTS.description })
+    expect(h.slackApps.default).toEqual({ id: 'default', botTokenEnv: 'SLOPBOT_SLACK_BOT_TOKEN', socketTokenEnv: 'SLOPBOT_SLACK_APP_TOKEN', displayName: 'hydra', description: SLACK_APP_DEFAULTS.description })
     expect(h.guard).toMatchObject({ command: '~/bin/guard.sh', timeoutMs: 2000, includeText: true })
     // the same decisions the old routes made
     expect(fate(h, 'U0OLIVE00', 'slack:C0FINANCE')).toBe('deliver:books')
@@ -103,8 +103,8 @@ test('hydra migrate runs it with the other steps: one hydra.toml that loads and 
     const plan = planMigrate({ stateDir: dir, env, spawnCwd: '/w', platform: 'slack' })
     if (!plan.ok) throw new Error(plan.errors.join('\n'))
     const h = load(plan.text)
-    expect(h.slackApps.default).toEqual({ id: 'default', botTokenEnv: 'SLOPBOT_SLACK_BOT_TOKEN', appTokenEnv: 'SLOPBOT_SLACK_APP_TOKEN', displayName: 'hydra', description: SLACK_APP_DEFAULTS.description })
-    expect(Object.values(h.people).find(p => p.ids.includes('slack:U0OPERATOR'))!.roles).toEqual(['owner']) // one person, merged by address
+    expect(h.slackApps.default).toEqual({ id: 'default', botTokenEnv: 'SLOPBOT_SLACK_BOT_TOKEN', socketTokenEnv: 'SLOPBOT_SLACK_APP_TOKEN', displayName: 'hydra', description: SLACK_APP_DEFAULTS.description })
+    expect(Object.values(h.people).find(p => p.addresses.includes('slack:U0OPERATOR'))!.roles).toEqual(['owner']) // one person, merged by address
     expect(h.specialists.books).toMatchObject({ workdir: '/w', listens: ['slack:C0FINANCE'], allow: ['owner', 'staff'] })
     expect(fate(h, 'U0MAX0000', 'slack:C0FINANCE')).toBe('deliver:books')
     expect(fate(h, 'U0STRANGE', 'slack:C0FINANCE')).toBe('refused:books')

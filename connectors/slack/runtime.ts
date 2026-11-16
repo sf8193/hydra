@@ -210,7 +210,7 @@ registerSlackChannelNames(channel => { for (const [, l] of connections.listeners
  * key and why, and that app stays off.
  */
 export function slackTokens(app: SlackApp, env: Readonly<Record<string, string>> = capturedSpawnVars(), warn: (line: string) => void = log): { app?: string; bot?: string; user?: string } {
-  const read = (key: 'bot_token_env' | 'app_token_env' | 'user_token_env', name: string | undefined): string | undefined => {
+  const read = (key: 'bot_token_env' | 'socket_token_env' | 'operator_token_env', name: string | undefined): string | undefined => {
     if (!name) return undefined
     if (!scrubbedSpawnVars().includes(name)) {
       const why = !ENV_NAME_RE.test(name) ? 'is not an environment variable name' : tokenVarRefusal(name) ?? 'is not among the variables kept from sessions (the daemon adds the ones hydra.toml names when it loads it)'
@@ -219,8 +219,8 @@ export function slackTokens(app: SlackApp, env: Readonly<Record<string, string>>
     }
     return env[name]
   }
-  const user = read('user_token_env', app.userTokenEnv)
-  return { bot: read('bot_token_env', app.botTokenEnv), app: read('app_token_env', app.appTokenEnv), ...(user && { user }) }
+  const user = read('operator_token_env', app.operatorTokenEnv)
+  return { bot: read('bot_token_env', app.botTokenEnv), app: read('socket_token_env', app.socketTokenEnv), ...(user && { user }) }
 }
 
 /**
