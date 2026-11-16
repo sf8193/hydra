@@ -100,7 +100,7 @@ describe('specialists', () => {
   describe("a running session whose specialist's scope changed is not delivered to", () => {
     const MCP = { datadog: { name: 'datadog', command: '/usr/local/bin/datadog-mcp', tokenEnv: ['DD_API_KEY'], tools: ['search_logs'] }, loki: { name: 'loki', command: '/usr/local/bin/loki-mcp', tokenEnv: [], tools: ['query'] } }
     const configure = (name: string, over: Record<string, unknown> = {}) => _setHydraConfigForTesting({
-      operator: 'op', connectors: {}, slackApps: {}, places: {}, schedules: {}, rules: [], mcpServers: MCP,
+      operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [], mcpServers: MCP,
       people: { op: { id: 'op', ids: ['discord:100000000000000001'], roles: [], name: 'op' } },
       specialists: { [name]: { id: name, workdir: '/srv/x', prompt: 'k', home: '555', listens: [], allow: [], sessions: 'shared', max: 20, was: [], access: 'operator', ...over } as any },
     })
@@ -450,7 +450,7 @@ describe('specialists', () => {
     const calls = fakeSpawn()
     const name = `t-specialist-${++n}`
     _setHydraConfigForTesting({
-      operator: 'op', connectors: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
+      operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
       people: { op: { id: 'op', ids: ['discord:100000000000000001'], roles: [], name: 'op' } },
       specialists: { [name]: { id: name, workdir: '/srv/x', prompt: 'be the helper', home: '555', listens: [], allow: ['people'], sessions: 'shared', max: 20, was: [], access: 'operator' } },
     })
@@ -477,7 +477,7 @@ describe('specialists', () => {
     const [a, b] = [`t-specialist-${++n}`, `t-specialist-${++n}`]
     const base = { workdir: '/srv/x', prompt: 'k', home: '555', listens: [], allow: ['people'], was: [], access: 'operator' as const }
     _setHydraConfigForTesting({
-      operator: 'op', connectors: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
+      operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
       people: { op: { id: 'op', ids: ['discord:100000000000000001'], roles: [], name: 'op' } },
       specialists: {
         [a]: { id: a, ...base, sessions: 'shared', max: 20 },
@@ -500,7 +500,7 @@ describe('specialists', () => {
     const [a, b] = [`t-specialist-${++n}`, `t-specialist-${++n}`]
     const base = { workdir: '/srv/x', prompt: 'k', home: '555', listens: [], allow: ['people'], was: [], sessions: 'shared' as const, max: 20 }
     _setHydraConfigForTesting({
-      operator: 'op', connectors: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
+      operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
       people: { op: { id: 'op', ids: ['discord:100000000000000001'], roles: [], name: 'op' } },
       specialists: {
         [a]: { id: a, ...base, access: 'operator' },
@@ -521,7 +521,7 @@ describe('specialists', () => {
     const calls = fakeSpawn()
     const name = `t-specialist-${++n}`
     _setHydraConfigForTesting({
-      operator: 'op', connectors: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
+      operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
       people: { op: { id: 'op', ids: ['discord:100000000000000001'], roles: [], name: 'op' } },
       specialists: { [name]: { id: name, workdir: '/srv/ops', prompt: 'be the helper', home: '555', listens: [], allow: ['people'], sessions: 'shared', max: 20, was: [], access: 'operator' } },
     })

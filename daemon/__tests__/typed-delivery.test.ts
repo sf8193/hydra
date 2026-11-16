@@ -247,7 +247,7 @@ describe('a confined session is not typed into until its start is verified', () 
   // A specialist that hydra.toml declares with the policy the session was born under, so the drift check passes and only the marker decides.
   const confine = (over: Partial<SessionInfo> = {}): SessionInfo => {
     _setHydraConfigForTesting({
-      operator: 'op', connectors: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
+      operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
       people: { op: { id: 'op', ids: ['discord:1'], roles: [], name: 'op' } },
       specialists: { ops: { id: 'ops', workdir: '/srv/ops', listens: [], allow: [], sessions: 'shared', max: 20, was: [], access: 'workdir', tools: ['Read'], mcp: [] } },
     } as any)

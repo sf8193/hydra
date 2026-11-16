@@ -15,7 +15,7 @@ import { noSuchApp, pinnersOf, serves, speaksAsOf, whyNotServed } from './pins.j
 import { SLACK_APP_DEFAULTS } from '../connectors/slack/app.js'
 import { invalidSpecialistName } from '../shared/specialist-name.js'
 import {
-  BUILTIN_ROLES, DEFAULT_SLACK_APP, type Address, type ConfigIssue, type Connectors, type Guard, type HydraConfig, type LoadEnv, type LoadResult,
+  BUILTIN_ROLES, DEFAULT_SLACK_APP, type Address, type ConfigIssue, type Connectors, type Gateways, type Guard, type HydraConfig, type LoadEnv, type LoadResult,
   type Access, type McpServer, type WorkdirScan, type Person, type Place, type PlaceOptions, type Platform, type Rule, type Schedule, type SessionsMode, type SlackApp, type Specialist, type Vitals,
   WORKDIR_TOOLS,
 } from './types.js'
@@ -24,7 +24,7 @@ export const VITALS_DEFAULTS: Vitals = Object.freeze({
   overloadLoadPerCore: 1.5, overloadIdlePct: 15, swapUsedPct: 85, ticks: 3, resumeSettleMs: 20 * 60_000, memoryCooldownMs: 24 * 3_600_000,
 })
 
-export const EMPTY_CONFIG: HydraConfig = Object.freeze({ connectors: {}, slackApps: {}, people: {}, specialists: {}, places: {}, schedules: {}, rules: [] }) as HydraConfig
+export const EMPTY_CONFIG: HydraConfig = Object.freeze({ connectors: {}, gateways: {}, slackApps: {}, people: {}, specialists: {}, places: {}, schedules: {}, rules: [] }) as HydraConfig
 
 /** People, roles and schedules: lowercase letters, digits and dashes. Specialists add their own rule (shared/specialist-name.ts). */
 const ID_RE = /^[a-z0-9][a-z0-9-]*$/
@@ -58,7 +58,7 @@ const GUARD_TIMEOUT_MAX_MS = 30_000 // deliveries for a conversation wait on the
 const MAX_ALERT_AFTER_MS = 30 * MAX_DAY_MS
 const BUILTIN: readonly string[] = BUILTIN_ROLES
 
-const TOP_KEYS = ['operator', 'connectors', 'slack', 'people', 'specialists', 'defaults', 'places', 'schedules', 'rules', 'guard', 'vitals', 'mcp']
+const TOP_KEYS = ['operator', 'gateways', 'connectors', 'slack', 'people', 'specialists', 'defaults', 'places', 'schedules', 'rules', 'guard', 'vitals', 'mcp']
 const SPECIALIST_KEYS = ['workdir', 'prompt', 'prompt_file', 'listens', 'apps', 'speaks_as', 'allow', 'sessions', 'max', 'idle', 'home', 'model', 'engine', 'env_file', 'was', 'access', 'tools', 'mcp', 'talks_to']
 /** Keys only a hand edit of one specialist's own table sets: a default would reach every specialist, a fragment's table is someone else's. */
 export const RESTRICTION_KEYS = ['access', 'tools', 'mcp', 'talks_to'] as const
@@ -222,7 +222,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
 
   unknownKeys(doc, TOP_KEYS, '')
 
-  // --- connectors and Slack apps -------------------------------------------------------------------------------------
+  // --- gateways, connectors and Slack apps -------------------------------------------------------------------------------------
 
   const connectors: Connectors = {}
   // Which key holds each token variable: a variable on two keys (two apps, or a Slack app and Discord) is a bug.
@@ -236,22 +236,32 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     envOwner.set(v, path)
     return true
   }
+  const gateways: Gateways = {}
+  const discordGateway = (t: Table, path: string) => {
+    unknownKeys(t, ['bot_token_env'], path)
+    const v = str(t, 'bot_token_env', path)
+    if (v === undefined) { if (t.bot_token_env === undefined) error(join2(path, 'bot_token_env'), 'is required'); return }
+    if (!ENV_NAME_RE.test(v)) { error(join2(path, 'bot_token_env'), `"${v}" must name an environment variable, like DISCORD_BOT_TOKEN`); return }
+    if (claimEnv(v, join2(path, 'bot_token_env'))) gateways.discord = { botTokenEnv: v }
+  }
+  const gw = table(doc.gateways, 'gateways') ?? {}
+  unknownKeys(gw, ['discord'], 'gateways')
+  const gwDiscord = table(gw.discord, 'gateways.discord')
+  if (gwDiscord) discordGateway(gwDiscord, 'gateways.discord')
+
   const conns = table(doc.connectors, 'connectors') ?? {}
   for (const [platform, raw] of Object.entries(conns)) {
     if (platform === 'slack') continue   // with [slack.apps], below
     const path = `connectors.${platform}`
     const t = table(raw, path)
     if (!t) continue
-    const envName = (k: string, required: boolean): string | undefined => {
-      const v = str(t, k, path)
-      if (v === undefined) { if (required) error(join2(path, k), 'is required'); return undefined }
-      if (!ENV_NAME_RE.test(v)) { error(join2(path, k), `"${v}" must name an environment variable, like DISCORD_BOT_TOKEN`); return undefined }
-      return claimEnv(v, join2(path, k)) ? v : undefined
-    }
     if (platform === 'discord') {
-      unknownKeys(t, ['bot_token_env'], path)
-      const botTokenEnv = envName('bot_token_env', true)
-      if (botTokenEnv) connectors.discord = { botTokenEnv }
+      // The old home of the Discord gateway, which is not an event source. Loads as before until it is removed.
+      if (gwDiscord) error(path, 'declares the same gateway as [gateways.discord]: keep [gateways.discord] and delete [connectors.discord]')
+      else {
+        warn(path, 'moved to [gateways.discord]; [connectors.discord] still loads and will be removed')
+        discordGateway(t, path)
+      }
     } else if (platform === 'github') {
       unknownKeys(t, ['repos', 'poll'], path)
       const repos = strList(t, 'repos', path)
@@ -264,7 +274,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       const pollMs = duration(t, 'poll', path, MAX_DAY_MS) ?? 3 * 60_000
       if (repos) connectors.github = { repos: good, pollMs }
     } else {
-      error(path, `unknown platform "${platform}": use discord, slack or github`)
+      error(path, `unknown platform "${platform}": use slack or github`)
     }
   }
 
@@ -790,7 +800,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   }
 
   /** Whether hydra connects the platform: Slack through any app it declares. */
-  const connected = (platform: 'discord' | 'slack' | 'github'): boolean => platform === 'slack' ? Object.keys(slackApps).length > 0 : !!connectors[platform]
+  const connected = (platform: 'discord' | 'slack' | 'github'): boolean => platform === 'slack' ? Object.keys(slackApps).length > 0 : platform === 'discord' ? !!gateways.discord : !!connectors.github
 
   // --- warnings that need the whole file -----------------------------------------------------------------------------
 
@@ -898,13 +908,13 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     for (const p of s.listens) {
       const platform = p.split(':')[0] as Platform | 'cli'
       if (platform === 'cli') continue
-      if (!connected(platform)) warn(path, platform === 'slack' ? `listens on ${p}, but hydra.toml declares no Slack app: add [slack.apps.<id>], or it won't hear it` : `listens on ${p}, but [connectors.${platform}] isn't set, so it won't hear it`)
+      if (!connected(platform)) warn(path, platform === 'slack' ? `listens on ${p}, but hydra.toml declares no Slack app: add [slack.apps.<id>], or it won't hear it` : `listens on ${p}, but [${platform === 'discord' ? 'gateways' : 'connectors'}.${platform}] isn't set, so it won't hear it`)
       else if (platform === 'github' && !connectors.github!.repos.includes(p.slice('github:'.length))) warn(path, `listens on ${p}, but connectors.github.repos doesn't include it`)
     }
   }
 
   if (errors.length) return { ok: false, errors, warnings }
-  return { ok: true, config: { ...(operator && { operator }), connectors, slackApps, people, specialists, places, schedules, rules, ...(Object.keys(mcpServers).length && { mcpServers }), ...(privateRoots.length && { privateRoots }), ...(guard && { guard }), ...(vitals && { vitals }) }, warnings }
+  return { ok: true, config: { ...(operator && { operator }), connectors, gateways, slackApps, people, specialists, places, schedules, rules, ...(Object.keys(mcpServers).length && { mcpServers }), ...(privateRoots.length && { privateRoots }), ...(guard && { guard }), ...(vitals && { vitals }) }, warnings }
 }
 
 /** The program a `sh -c` command runs: past any leading VAR=value, with one level of quotes removed. */

@@ -127,7 +127,7 @@ Four homes, each for one kind of fact. A fact lives in exactly one of them.
 | Where | Holds | Who writes it |
 |---|---|---|
 | `<state dir>/.env` | **how the daemon runs**: `SPAWN_CWD`, `HYDRA_MODEL`, bot tokens | you |
-| `<state dir>/hydra.toml` | **whom it serves**: the operator, people and roles, connectors, specialists and where they listen, schedules, rules, the guard, host-health thresholds | you; hydra re-reads it within a second of a change |
+| `<state dir>/hydra.toml` | **whom it serves**: the operator, the Discord gateway, people and roles, connectors, specialists and where they listen, schedules, rules, the guard, host-health thresholds | you; hydra re-reads it within a second of a change |
 | `<state dir>/` state files (`sessions.json`, `threads.json`, `specialist-threads.json`, `jobs-state/`, `idempotency.json`, …) | **what it remembers** | hydra only; never edit by hand |
 | a specialist's `workdir` | **what the agent knows**: its `CLAUDE.md`, `AGENTS.md`, skills and files | you and the agent; hydra never reads it |
 

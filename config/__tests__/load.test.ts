@@ -32,7 +32,7 @@ ids = ["slack:U0OP"]
 
 describe('an empty file', () => {
   test('is valid: no operator, nothing heard', () => {
-    expect(ok('').config).toEqual({ connectors: {}, slackApps: {}, people: {}, specialists: {}, places: {}, schedules: {}, rules: [] })
+    expect(ok('').config).toEqual({ connectors: {}, gateways: {}, slackApps: {}, people: {}, specialists: {}, places: {}, schedules: {}, rules: [] })
     expect(ok('# just a comment\n').warnings).toEqual([])
   })
 })
@@ -108,12 +108,56 @@ timeout = "2s"
   })
 })
 
+describe('the Discord gateway: [gateways.discord]', () => {
+  const B = BASE.replace('ids = ["slack:U0OP"]', 'ids = ["slack:U0OP", "discord:1"]')
+  const GW = '[gateways.discord]\nbot_token_env = "DISCORD_BOT_TOKEN"\n'
+  test('loads, with no warning', () => {
+    const r = ok(`${B}\n${GW}`)
+    expect(r.config.gateways).toEqual({ discord: { botTokenEnv: 'DISCORD_BOT_TOKEN' } })
+    expect(r.config.connectors).toEqual({})
+    expect(r.warnings).toEqual([])
+  })
+  test('its keys are checked like any table', () => {
+    expect(errorsOf(`${B}\n[gateways.discord]\nbot_token_env = "lower"\nx = 1\n`)).toEqual([
+      'gateways.discord.x: unknown key "x"',
+      'gateways.discord.bot_token_env: "lower" must name an environment variable, like DISCORD_BOT_TOKEN',
+    ])
+    expect(errorsOf(`${B}\n[gateways.discord]\n`)).toEqual(['gateways.discord.bot_token_env: is required'])
+    expect(errorsOf(`${B}\n[gateways.irc]\nx = 1\n`)).toEqual(['gateways.irc: unknown key "irc"'])
+  })
+  test('the old home, [connectors.discord], still loads exactly as before, with one warning that says where it went', () => {
+    const r = ok(`${B}\n[connectors.discord]\nbot_token_env = "DISCORD_BOT_TOKEN"\n`)
+    expect(r.config.gateways).toEqual({ discord: { botTokenEnv: 'DISCORD_BOT_TOKEN' } })
+    expect(r.config.connectors).toEqual({})
+    expect(r.warnings).toEqual(['connectors.discord: moved to [gateways.discord]; [connectors.discord] still loads and will be removed'])
+  })
+  test('the old home with a bad key is reported at its own path', () => {
+    expect(errorsOf(`${B}\n[connectors.discord]\nx = 1\n`)).toEqual([
+      'connectors.discord.x: unknown key "x"',
+      'connectors.discord.bot_token_env: is required',
+    ])
+  })
+  test('both homes is an error naming both', () => {
+    expect(errorsOf(`${B}\n${GW}[connectors.discord]\nbot_token_env = "OTHER_TOKEN"\n`)).toEqual([
+      'connectors.discord: declares the same gateway as [gateways.discord]: keep [gateways.discord] and delete [connectors.discord]',
+    ])
+  })
+  test('a specialist listening on discord with neither warns, naming the new key', () => {
+    expect(ok(`${B}\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["discord:#feed"]\n`).warnings)
+      .toEqual(["specialists.ops: listens on discord:#feed, but [gateways.discord] isn't set, so it won't hear it"])
+  })
+  test('a specialist listening on discord through the old key hears it: no listens warning', () => {
+    expect(ok(`${B}\n[connectors.discord]\nbot_token_env = "D"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["discord:#feed"]\n`).warnings)
+      .toEqual(['connectors.discord: moved to [gateways.discord]; [connectors.discord] still loads and will be removed'])
+  })
+})
+
 describe('places', () => {
   test('a channel by name or by platform id', () => {
     const { config } = ok(`${BASE}
 [connectors.slack]
 bot_token_env = "T"
-[connectors.discord]
+[gateways.discord]
 bot_token_env = "D"
 [specialists.ops]
 workdir = "~/agents/ops"
@@ -267,7 +311,7 @@ ids = ["github:alice"]
   test('strict: unknown keys, malformed places and addresses', () => {
     expect(errorsOf(`colour = "red"\n${BASE}`)).toEqual(['colour: unknown key "colour"'])
     expect(errorsOf(spec('listen = ["slack:#x"]'))).toEqual(['specialists.ops.listen: unknown key "listen"'])
-    expect(errorsOf(`${BASE}\n[connectors.irc]\nx = 1\n`)).toEqual(['connectors.irc: unknown platform "irc": use discord, slack or github'])
+    expect(errorsOf(`${BASE}\n[connectors.irc]\nx = 1\n`)).toEqual(['connectors.irc: unknown platform "irc": use slack or github'])
     expect(errorsOf(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:help", "discord:#Feed"]\n`)).toEqual([
       'specialists.ops.listens[0]: "slack:help" is not a place: use slack:#channel, slack:<channel id>, slack:dm, discord:#channel, discord:<channel id>, discord:dm, github:owner/repo or cli',
       'specialists.ops.listens[1]: "discord:#Feed" is not a place: use slack:#channel, slack:<channel id>, slack:dm, discord:#channel, discord:<channel id>, discord:dm, github:owner/repo or cli',
@@ -309,7 +353,7 @@ describe('found in review', () => {
     expect(ok(`${BASE}\n[connectors.github]\nrepos = ["me/r"]\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["github:Me/R", "github:me/r"]\n`).config.specialists.ops.listens).toEqual(['github:me/r'])
   })
   test('operator is required beside any other table', () => {
-    expect(errorsOf('[connectors.discord]\nbot_token_env = "T"\n')).toEqual(['operator: is required: name the person whose DMs reach main and who may reach every specialist'])
+    expect(errorsOf('[gateways.discord]\nbot_token_env = "T"\n')).toEqual(['operator: is required: name the person whose DMs reach main and who may reach every specialist'])
   })
   test('the same GitHub place twice, differing in case', () => {
     expect(errorsOf(`${BASE}\n[places."github:Me/R"]\nfiles = true\n[places."github:me/r"]\nfiles = false\n`)).toEqual(['places."github:me/r": github:me/r is already set: places compare without case on GitHub'])
@@ -438,7 +482,7 @@ to = "desk"
   })
 
   test('an operator with no address on a connected platform warns: nobody is in charge there', () => {
-    expect(ok(`${BASE}\n[connectors.discord]\nbot_token_env = "T"\n`).warnings)
+    expect(ok(`${BASE}\n[gateways.discord]\nbot_token_env = "T"\n`).warnings)
       .toEqual(['operator: op has no discord: address, so on discord nobody passes admin checks or reaches main by DM'])
   })
 
@@ -451,7 +495,11 @@ to = "desk"
 
   test('a place on a platform that isn\'t connected', () => {
     expect(ok(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["discord:#feed"]\n`).warnings)
-      .toEqual(["specialists.ops: listens on discord:#feed, but [connectors.discord] isn't set, so it won't hear it"])
+      .toEqual(["specialists.ops: listens on discord:#feed, but [gateways.discord] isn't set, so it won't hear it"])
+  })
+  test('a github place with no [connectors.github] names that table', () => {
+    expect(ok(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["github:me/r"]\n`).warnings)
+      .toEqual(["specialists.ops: listens on github:me/r, but [connectors.github] isn't set, so it won't hear it"])
   })
 })
 
@@ -550,8 +598,8 @@ description = "Answers sales threads."
     expect(errorsOf(`${BASE}\n[slack.apps.sales]\nbot_token_env = "SAME_TOKEN"\napp_token_env = "SAME_TOKEN"\n`)).toEqual([
       'slack.apps.sales.app_token_env: "SAME_TOKEN" is already the token variable of slack.apps.sales.bot_token_env: each token needs its own variable',
     ])
-    expect(errorsOf(`${BASE}\n[connectors.discord]\nbot_token_env = "DISCORD_BOT_TOKEN"\n[slack.apps.sales]\nbot_token_env = "DISCORD_BOT_TOKEN"\n`)).toEqual([
-      'slack.apps.sales.bot_token_env: "DISCORD_BOT_TOKEN" is already the token variable of connectors.discord.bot_token_env: each token needs its own variable',
+    expect(errorsOf(`${BASE}\n[gateways.discord]\nbot_token_env = "DISCORD_BOT_TOKEN"\n[slack.apps.sales]\nbot_token_env = "DISCORD_BOT_TOKEN"\n`)).toEqual([
+      'slack.apps.sales.bot_token_env: "DISCORD_BOT_TOKEN" is already the token variable of gateways.discord.bot_token_env: each token needs its own variable',
     ])
   })
   test('a variable sessions need cannot hold a token, however the app is declared', () => {

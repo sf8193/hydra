@@ -13,7 +13,7 @@ const legacy = join(STATE_DIR, 'specialists.json')
 const declared = (id: string, extra: Partial<Declared> = {}): Declared =>
   ({ id, workdir: `/srv/${id}`, listens: [], allow: ['people'], sessions: 'shared', max: 20, was: [], access: 'operator', ...extra })
 const config = (...specialists: Declared[]): HydraConfig => ({
-  operator: 'op', connectors: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
+  operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
   people: { op: { id: 'op', ids: ['discord:100000000000000001'], roles: [], name: 'op' } },
   specialists: Object.fromEntries(specialists.map(s => [s.id, s])),
 })

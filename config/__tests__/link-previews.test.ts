@@ -11,7 +11,7 @@ operator = "op"
 ids = ["slack:U0OP", "discord:1"]
 [connectors.slack]
 bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"
-[connectors.discord]
+[gateways.discord]
 bot_token_env = "DISCORD_BOT_TOKEN"
 `
 const ok = (text: string) => {

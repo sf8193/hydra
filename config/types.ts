@@ -126,10 +126,15 @@ export function defaultSlackApp(config: Pick<HydraConfig, 'slackApps'>): SlackAp
 /** Whether hydra.toml declares any Slack app: Slack is on. */
 export const slackConfigured = (config: Pick<HydraConfig, 'slackApps'>): boolean => Object.keys(config.slackApps).length > 0
 
+/** Event sources hydra hears from. */
 export type Connectors = {
-  discord?: { botTokenEnv: string }
   /** `repos` are `owner/repo`, lowercased. */
   github?: { repos: string[]; pollMs: number }
+}
+
+/** How the operator talks to hydra. The Slack gateway reads its tokens from `.env`, so only Discord is declared. */
+export type Gateways = {
+  discord?: { botTokenEnv: string }
 }
 
 /** Optional platform options for one place. */
@@ -226,6 +231,7 @@ export type HydraConfig = {
   /** The one person whose DMs reach `main` and who may reach every specialist. Required once anything else is declared. */
   operator?: string
   connectors: Connectors
+  gateways: Gateways
   /** Every Slack app, by id (no prototype: look one up with Object.hasOwn). `[connectors.slack]` is the app `default`. */
   slackApps: Record<string, SlackApp>
   people: Record<string, Person>

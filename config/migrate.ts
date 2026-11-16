@@ -275,7 +275,7 @@ function lookAlikes(people: Record<string, PersonDoc>): string[] {
 
 // --- TOML out ------------------------------------------------------------------------------------------------------
 
-const ORDER = ['operator', 'connectors', 'people', 'defaults', 'specialists', 'places', 'schedules', 'rules', 'guard']
+const ORDER = ['operator', 'gateways', 'connectors', 'people', 'defaults', 'specialists', 'places', 'schedules', 'rules', 'guard']
 const key = (k: string) => /^[A-Za-z0-9_-]+$/.test(k) ? k : JSON.stringify(k)
 const value = (v: unknown): string => {
   // A JSON string is a TOML basic string, once DEL is escaped and a lone surrogate (not Unicode) is replaced.

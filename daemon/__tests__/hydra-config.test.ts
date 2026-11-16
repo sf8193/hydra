@@ -159,7 +159,7 @@ describe('the daemon\'s live hydra.toml', () => {
   test('a test can stand in for the file, and subscribers hear it', () => {
     const seen: (string | undefined)[] = []
     const off = onHydraConfigLoad(c => seen.push(c.operator))
-    _setHydraConfigForTesting({ operator: 'op', connectors: {}, slackApps: {}, people: {}, specialists: {}, places: {}, schedules: {}, rules: [] })
+    _setHydraConfigForTesting({ operator: 'op', connectors: {}, gateways: {}, slackApps: {}, people: {}, specialists: {}, places: {}, schedules: {}, rules: [] })
     expect(currentHydraConfig().operator).toBe('op')
     expect(seen).toEqual(['op'])
     _setHydraConfigForTesting(undefined)

@@ -23,6 +23,14 @@ describe('hydra config check', () => {
       .toBe('$d/hydra.toml: loads, with 1 warning\nhydra.toml operator: op has no discord: address, so on discord nobody passes admin checks or reaches main by DM\n')
     expect(check(undefined).out).toBe('$d/hydra.toml: none (the old files still apply)\n')
   })
+  test('the old [connectors.discord] key loads, and the warning shows', () => {
+    const base = 'operator = "op"\n[people.op]\nids = ["discord:100000000000000001"]\n'
+    expect(check(`${base}[connectors.discord]\nbot_token_env = "DISCORD_BOT_TOKEN"\n`)).toEqual({
+      code: 0,
+      out: '$d/hydra.toml: loads, with 1 warning\nhydra.toml connectors.discord: moved to [gateways.discord]; [connectors.discord] still loads and will be removed\n',
+    })
+    expect(check(`${base}[gateways.discord]\nbot_token_env = "DISCORD_BOT_TOKEN"\n`)).toEqual({ code: 0, out: '$d/hydra.toml: loads clean\n' })
+  })
   test('agrees with the daemon: on slack a connector app naming the gateway\'s tokens does not load, on discord it does', () => {
     const toml = 'operator = "op"\n[people.op]\nids = ["slack:U0OP", "discord:100000000000000001"]\n[slack.apps.default]\nbot_token_env = "SLACK_BOT_TOKEN"\napp_token_env = "SLACK_APP_TOKEN"\n'
     const onSlack = check(toml, 'slack')
