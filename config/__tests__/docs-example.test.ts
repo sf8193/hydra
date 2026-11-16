@@ -33,7 +33,7 @@ describe('docs/slack.md: the ops specialist example', () => {
     expect(r.config.specialists.ops).toMatchObject({ access: 'workdir', tools: ['Read', 'Grep', 'Glob'], mcp: ['datadog'], listens: ['slack:#ops'], allow: ['staff'], talksTo: ['ops-deep'], workdir: '/home/op/specialists/ops' })
     expect(r.config.specialists['ops-deep']).toMatchObject({ access: 'workdir', listens: [], allow: [], talksTo: ['ops'], workdir: '/home/op/specialists/ops-deep' })
     expect(r.config.mcpServers?.datadog).toEqual({ name: 'datadog', command: '/usr/local/bin/datadog-mcp', tokenEnv: ['DD_API_KEY'], tools: ['search_logs', 'get_monitor'] })
-    expect(r.config.places['slack:#ops']).toMatchObject({ listen: 'all', linkPreviews: false })
+    expect(r.config.places['slack:#ops']).toMatchObject({ messages: 'all', linkPreviews: false })
   })
   test('with a state .env that lacks the server\'s token variable it still loads, and says which variable to add (the one warning an operator will meet)', () => {
     const r = loadHydraConfig(text, testLoadEnv({ home: '/home/op', sessionNames: ['spark'], envFileHas: v => v !== 'DD_API_KEY' }))

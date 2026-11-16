@@ -6,7 +6,7 @@ import { DiscordGateway } from '../discord'
 import { SlackGateway } from '../slack'
 import { linkPreviewsOff, placeKeysOf, registerPreviewConfig, registerSlackChannelNames } from '../../shared/link-previews'
 
-const places = (p: Record<string, boolean>) => ({ places: Object.fromEntries(Object.entries(p).map(([k, linkPreviews]) => [k, { files: false, listen: 'mentions', bots: false, linkPreviews }])) }) as any
+const places = (p: Record<string, boolean>) => ({ places: Object.fromEntries(Object.entries(p).map(([k, linkPreviews]) => [k, { files: false, messages: 'addressed', bots: false, linkPreviews }])) }) as any
 afterEach(() => { registerPreviewConfig(() => undefined); registerSlackChannelNames(() => undefined) })
 
 describe('which places turn previews off', () => {

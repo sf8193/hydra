@@ -99,7 +99,7 @@ function setup(toml: string, over: { members?: Record<string, string[]>; probeEr
   }
 }
 
-const LISTEN_ALL = `[places."slack:${CH}"]\nlisten = "all"\n`
+const LISTEN_ALL = `[places."slack:${CH}"]\nmessages = "all"\n`
 const BOTH = { default: [CH, OTHER], [SALES]: [CH] }
 
 describe('two apps in one channel: exactly one answers', () => {
@@ -137,7 +137,7 @@ describe('two apps in one channel: exactly one answers', () => {
   })
 
   test('a channel only one app is in is that app’s alone, with no one else asked', async () => {
-    const t = setup(sharedChannel(OTHER, `[places."slack:${OTHER}"]\nlisten = "all"\n`), { members: BOTH })
+    const t = setup(sharedChannel(OTHER, `[places."slack:${OTHER}"]\nmessages = "all"\n`), { members: BOTH })
     await t.start()
     t.say({ channel: OTHER, ts: '1100.000001' }, ['default'])
     await t.settle()
@@ -418,7 +418,7 @@ describe('an app that is not connected', () => {
     await t.listeners.default.start()
     t.fakes.default.handler({ channel: CH, user: 'UB', ...tagSales('1100.000001') })
     await t.settle()
-    expect(t.sent.map(s => s.to)).toEqual(['crm'])   // answered as chatter (listen = "all")
+    expect(t.sent.map(s => s.to)).toEqual(['crm'])   // answered as chatter (messages = "all")
   })
 
   test('the bot ids are written when an app joins, and read back at the next start', async () => {
@@ -503,7 +503,7 @@ describe('a thread bound through two apps', () => {
 
 describe('the owner is fixed by the first copy', () => {
   test('if who is in the channel changes between two apps’ copies of one message, still exactly one answers', async () => {
-    const t = setup(sharedChannel(CH, `[places."slack:${CH}"]\nlisten = "all"\ndefault_app = "sales"\n`), { members: { default: [CH], [SALES]: [] } })
+    const t = setup(sharedChannel(CH, `[places."slack:${CH}"]\nmessages = "all"\ndefault_app = "sales"\n`), { members: { default: [CH], [SALES]: [] } })
     await t.start()
     // `default` decides first: `sales` is not known to be in the channel, so it owns the message.
     t.fakes.default.handler({ channel: CH, user: 'UB', ts: '1100.000001', text: 'hello' })
@@ -521,7 +521,7 @@ describe('the owner is fixed by the first copy', () => {
 
 describe('bots = true never lets two of hydra’s own apps answer each other', () => {
   test('a sibling app’s message is passed over, another bot’s is heard', async () => {
-    const t = setup(sharedChannel(CH, `[places."slack:${CH}"]\nlisten = "all"\nbots = true\n`), { members: BOTH })
+    const t = setup(sharedChannel(CH, `[places."slack:${CH}"]\nmessages = "all"\nbots = true\n`), { members: BOTH })
     await t.start()
     t.say({ ts: '1100.000001', user: SALES_BOT, bot_id: 'BSAL', text: 'a post from the sales app' }, ['default'])
     t.say({ ts: '1101.000001', user: 'UOTHERBOT', bot_id: 'BOTHER', text: 'a post from somebody’s bot' }, ['default'])
@@ -534,7 +534,7 @@ describe('per-channel queues', () => {
   test('a channel waiting for a membership read does not hold up a settled one', async () => {
     let open!: () => void
     const gate = new Promise<void>(resolve => { open = resolve })
-    const t = setup(sharedChannel(CH, LISTEN_ALL + `[places."slack:${OTHER}"]\nlisten = "all"\n`), { members: BOTH, probeGate: ch => ch === OTHER ? gate : Promise.resolve(), membershipWaitMs: 2_000 })
+    const t = setup(sharedChannel(CH, LISTEN_ALL + `[places."slack:${OTHER}"]\nmessages = "all"\n`), { members: BOTH, probeGate: ch => ch === OTHER ? gate : Promise.resolve(), membershipWaitMs: 2_000 })
     await t.start()
     await t.shared.ensure(CH, 'default')
     t.say({ channel: OTHER, ts: '1100.000001' }, ['default'])   // waits on the gated read

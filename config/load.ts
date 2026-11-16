@@ -156,7 +156,9 @@ export function formatIssues(issues: ConfigIssue[]): string {
 export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   const errors: ConfigIssue[] = []
   const warnings: ConfigIssue[] = []
-  const error = (path: string, message: string) => { errors.push({ path, message }) }
+  // A value that came in under an old name is reported under that name, so the error points at a key that is in the file.
+  const viaOld = new Map<string, string>()
+  const error = (path: string, message: string) => { errors.push({ path: viaOld.get(path) ?? path, message }) }
   const warn = (path: string, message: string) => { warnings.push({ path, message }) }
 
   let doc: Table
@@ -170,6 +172,29 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
 
   const unknownKeys = (t: Table, known: readonly string[], path: string) => {
     for (const k of Object.keys(t)) if (!known.includes(k)) error(join2(path, k), `unknown key "${k}"`)
+  }
+  /**
+   * A key renamed, still read under its old name. The old name alone loads as the new one and warns, naming the new; both is an error.
+   * `values` maps an old value to its new one (only when read through the old key). Returns the table under the new names only,
+   * so `unknownKeys` stays strict.
+   */
+  const renamed = (t: Table, path: string, renames: readonly { from: string; to: string; values?: Record<string, string> }[]): Table => {
+    let out = t
+    for (const r of renames) {
+      if (!has(out, r.from)) continue
+      if (has(out, r.to)) {
+        error(join2(path, r.from), bothNames(`\`${r.from}\``, `\`${r.to}\``))
+        out = Object.fromEntries(Object.entries(out).filter(([k]) => k !== r.from))
+        continue
+      }
+      viaOld.set(join2(path, r.to), join2(path, r.from))
+      const v = out[r.from]
+      const mapped = typeof v === 'string' && r.values && has(r.values, v) ? r.values[v] : v
+      const valueNote = mapped !== v ? ` and its value "${String(v)}" is now "${String(mapped)}"` : ''
+      warn(join2(path, r.from), `is now \`${r.to}\`${valueNote}; \`${r.from}\` still loads and will be removed`)
+      out = Object.fromEntries(Object.entries(out).map(([k, x]) => k === r.from ? [r.to, mapped] : [k, x]))
+    }
+    return out
   }
   const table = (v: unknown, path: string): Table | undefined => {
     if (v === undefined) return undefined
@@ -383,7 +408,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     people[id] = { id, ids: addresses, roles, name: str(t, 'name', path) ?? id }
   }
   const declaredRoles = new Set(Object.values(people).flatMap(p => p.roles))
-  // A role named like a person would make a rule's `from` ambiguous.
+  // A role named like a person would make a rule's `person` ambiguous.
   for (const role of declaredRoles) if (has(people, role)) error(`people.${role}`, `"${role}" is both a person and a role; rename one`)
   const isRole = (r: string) => BUILTIN.includes(r) || declaredRoles.has(r)
 
@@ -612,10 +637,11 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   for (const [rawPlace, raw] of Object.entries(table(doc.places, 'places') ?? {})) {
     const path = `places."${rawPlace}"`
     const p = place(rawPlace, path)
-    const t = table(raw, path)
-    if (!p || !t) continue
+    const t0 = table(raw, path)
+    if (!p || !t0) continue
+    const t = renamed(t0, path, [{ from: 'listen', to: 'messages', values: { mentions: 'addressed' } }])
     if (has(places, p)) { error(path, `${p} is already set: places compare without case on GitHub`); continue }
-    unknownKeys(t, ['ack', 'files', 'listen', 'bots', 'default_app', 'link_previews'], path)
+    unknownKeys(t, ['ack', 'files', 'messages', 'bots', 'default_app', 'link_previews'], path)
     const ack = str(t, 'ack', path)
     // Which app answers an unmentioned message when several apps are in this channel.
     const defaultApp = str(t, 'default_app', path)
@@ -629,7 +655,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       ...(ack !== undefined && { ack }),
       ...(defaultApp !== undefined && Object.hasOwn(slackApps, defaultApp) && { defaultApp }),
       files: bool(t, 'files', path) ?? false,
-      listen: oneOf(t, 'listen', path, ['mentions', 'all'] as const) ?? 'mentions',
+      messages: oneOf(t, 'messages', path, ['addressed', 'all'] as const) ?? 'addressed',
       bots: bool(t, 'bots', path) ?? false,
       linkPreviews: bool(t, 'link_previews', path) ?? true,
     }
@@ -641,21 +667,22 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   for (const [id, raw] of Object.entries(table(doc.schedules, 'schedules') ?? {})) {
     const path = `schedules.${id}`
     if (!ID_RE.test(id)) error(path, 'a schedule\'s id must be lowercase letters, digits and dashes')
-    const t = table(raw, path)
-    if (!t) continue
-    unknownKeys(t, ['cron', 'to', 'prompt', 'check', 'cwd', 'env_file', 'runner', 'needs', 'alert_after'], path)
+    const t0 = table(raw, path)
+    if (!t0) continue
+    const t = renamed(t0, path, [{ from: 'to', to: 'target' }])
+    unknownKeys(t, ['cron', 'target', 'prompt', 'check', 'cwd', 'env_file', 'runner', 'needs', 'alert_after'], path)
     const cron = str(t, 'cron', path)
     if (t.cron === undefined) error(`${path}.cron`, 'is required: 5 fields, local time')
     else if (cron !== undefined) {
       try { parseCron(cron) } catch (e) { error(`${path}.cron`, (e as Error).message) }
     }
-    const to = str(t, 'to', path)
-    if (to !== undefined && !isTarget(to)) error(`${path}.to`, `no specialist "${to}"`)
+    const target = str(t, 'target', path)
+    if (target !== undefined && !isTarget(target)) error(`${path}.target`, `no specialist "${target}"`)
     const prompt = t.prompt === '' ? '' : str(t, 'prompt', path) ?? ''
     const check = str(t, 'check', path)
-    // No `to`: a sensor. It sends nothing, so it needs a check and takes no prompt.
-    if (t.to === undefined && check === undefined) error(`${path}.to`, 'is required unless there is a check (a sensor): a specialist, or main')
-    if (t.to === undefined && prompt !== '') error(`${path}.prompt`, 'a schedule with no to sends nothing, so it takes no prompt')
+    // No `target`: a sensor. It sends nothing, so it needs a check and takes no prompt.
+    if (t.target === undefined && check === undefined) error(`${path}.target`, 'is required unless there is a check (a sensor): a specialist, or main')
+    if (t.target === undefined && prompt !== '') error(`${path}.prompt`, 'a schedule with no target sends nothing, so it takes no prompt')
     const cwdRaw = str(t, 'cwd', path)
     const cwd = cwdRaw === undefined ? undefined : expand(cwdRaw)
     if (cwd !== undefined && !isAbsolute(cwd)) error(`${path}.cwd`, `"${cwdRaw}" must be an absolute path or start with ~`)
@@ -671,7 +698,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     for (const k of ['needs', 'alert_after']) if (t[k] !== undefined && runner !== 'daemon') error(`${path}.${k}`, 'needs runner = "daemon"')
     schedules[id] = {
       id, cron: cron ?? '', prompt, runner,
-      ...(to !== undefined && { to }),
+      ...(target !== undefined && { target }),
       ...(needs?.length && { needs: [...new Set(needs)] as 'internet'[] }),
       ...(alertAfterMs !== undefined && { alertAfterMs }),
       ...(check !== undefined && { check }),
@@ -684,41 +711,42 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
 
   const rules: Rule[] = []
   if (doc.rules !== undefined && !(Array.isArray(doc.rules) && doc.rules.every(isTable))) error('rules', 'must be [[rules]] tables')
-  else for (const [i, t] of ((doc.rules ?? []) as Table[]).entries()) {
+  else for (const [i, t0] of ((doc.rules ?? []) as Table[]).entries()) {
     const path = `rules[${i}]`
-    unknownKeys(t, ['at', 'app', 'from', 'to'], path)
-    const atRaw = str(t, 'at', path)
+    const t = renamed(t0, path, [{ from: 'at', to: 'place' }, { from: 'from', to: 'person' }, { from: 'to', to: 'target' }])
+    unknownKeys(t, ['place', 'app', 'person', 'target'], path)
+    const placeRaw = str(t, 'place', path)
     const appRaw = str(t, 'app', path)
-    if (t.at === undefined && t.app === undefined) error(path, 'a rule needs `at`, `app` or both; `from` only narrows who it applies to')
-    const at = atRaw === undefined ? undefined : place(atRaw, `${path}.at`)
+    if (t.place === undefined && t.app === undefined) error(path, 'a rule needs `place`, `app` or both; `person` only narrows who it applies to')
+    const rulePlace = placeRaw === undefined ? undefined : place(placeRaw, `${path}.place`)
     let app: string | undefined
     if (appRaw !== undefined) {
       if (!Object.hasOwn(slackApps, appRaw)) error(`${path}.app`, noSuchApp(appRaw, Object.keys(slackApps)))
       else app = appRaw
-      if (at && !at.startsWith('slack:')) error(`${path}.app`, `an app is a Slack app, but ${at} is not a Slack place: set \`at\` to a \`slack:\` place, remove \`at\`, or remove \`app\``)
+      if (rulePlace && !rulePlace.startsWith('slack:')) error(`${path}.app`, `an app is a Slack app, but ${rulePlace} is not a Slack place: set \`place\` to a \`slack:\` place, remove \`place\`, or remove \`app\``)
     }
-    const from = str(t, 'from', path)
-    if (from !== undefined && !has(people, from) && !isRole(from)) error(`${path}.from`, `"${from}" is neither a person nor a role anyone holds`)
-    const to = str(t, 'to', path)
-    if (t.to === undefined) error(`${path}.to`, 'is required: a specialist, or main')
-    else if (to !== undefined && !isTarget(to)) error(`${path}.to`, `no specialist "${to}"`)
-    // Whether `to` can ever take what the rule matches: a pinned specialist only through its apps, and an app that any specialist is pinned to delivers only to them.
-    const target = to !== undefined ? specialists[to] : undefined
-    if (target && to !== undefined) {
-      const pin = `add ${app} to ${to}'s \`apps\`, or change the rule's \`app\``
-      if (app && target.apps && !target.apps.includes(app)) error(`${path}.to`, `${to} is pinned to ${target.apps.join(', ')}, so app ${app} can never deliver to it: ${pin}`)
-      else if (app && !target.apps && pinnersOf(specialists, app).length) error(`${path}.to`, `app ${app} serves only specialists pinned to it (${pinnersOf(specialists, app).join(', ')}), and ${to} is not pinned to it: ${pin}`)
-      else if (target.apps && !app && at && !at.startsWith('slack:')) error(`${path}.to`, `${to} is pinned to Slack apps, so it can never take a message at ${at}: remove \`apps\` from ${to}, or change \`at\` to a \`slack:\` place`)
+    const person = str(t, 'person', path)
+    if (person !== undefined && !has(people, person) && !isRole(person)) error(`${path}.person`, `"${person}" is neither a person nor a role anyone holds`)
+    const ruleTarget = str(t, 'target', path)
+    if (t.target === undefined) error(`${path}.target`, 'is required: a specialist, or main')
+    else if (ruleTarget !== undefined && !isTarget(ruleTarget)) error(`${path}.target`, `no specialist "${ruleTarget}"`)
+    // Whether `target` can ever take what the rule matches: a pinned specialist only through its apps, and an app that any specialist is pinned to delivers only to them.
+    const specialist = ruleTarget !== undefined ? specialists[ruleTarget] : undefined
+    if (specialist && ruleTarget !== undefined) {
+      const pin = `add ${app} to ${ruleTarget}'s \`apps\`, or change the rule's \`app\``
+      if (app && specialist.apps && !specialist.apps.includes(app)) error(`${path}.target`, `${ruleTarget} is pinned to ${specialist.apps.join(', ')}, so app ${app} can never deliver to it: ${pin}`)
+      else if (app && !specialist.apps && pinnersOf(specialists, app).length) error(`${path}.target`, `app ${app} serves only specialists pinned to it (${pinnersOf(specialists, app).join(', ')}), and ${ruleTarget} is not pinned to it: ${pin}`)
+      else if (specialist.apps && !app && rulePlace && !rulePlace.startsWith('slack:')) error(`${path}.target`, `${ruleTarget} is pinned to Slack apps, so it can never take a message at ${rulePlace}: remove \`apps\` from ${ruleTarget}, or change \`place\` to a \`slack:\` place`)
     }
-    if ((at || app) && to) rules.push({ to, ...(at && { at }), ...(app && { app }), ...(from !== undefined && { from }) })
+    if ((rulePlace || app) && ruleTarget) rules.push({ target: ruleTarget, ...(rulePlace && { place: rulePlace }), ...(app && { app }), ...(person !== undefined && { person }) })
   }
   // A rule never matches when an earlier one takes everything it would: its place and app are the same or wider, and who `later`
   // names is a subset of who `earlier` names. Absent and `anyone` include strangers; `people` is the roster; a role, its holders.
-  const senders = (from: string | undefined): Set<string> | 'everyone' => {
-    if (from === undefined || from === 'anyone') return 'everyone'
-    if (from === 'people') return new Set(Object.keys(people))
-    if (has(people, from)) return new Set([from])
-    return new Set(Object.values(people).filter(p => p.roles.includes(from)).map(p => p.id))
+  const senders = (person: string | undefined): Set<string> | 'everyone' => {
+    if (person === undefined || person === 'anyone') return 'everyone'
+    if (person === 'people') return new Set(Object.keys(people))
+    if (has(people, person)) return new Set([person])
+    return new Set(Object.values(people).filter(p => p.roles.includes(person)).map(p => p.id))
   }
   const covers = (earlier: string | undefined, later: string | undefined): boolean => {
     const e = senders(earlier), l = senders(later)
@@ -726,12 +754,12 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (l === 'everyone') return false
     return [...l].every(id => e.has(id))
   }
-  const where = (r: Rule) => r.at && r.app ? `at ${r.at} through app ${r.app}` : r.at ? `at ${r.at}` : `through app ${r.app}`
+  const where = (r: Rule) => r.place && r.app ? `at ${r.place} through app ${r.app}` : r.place ? `at ${r.place}` : `through app ${r.app}`
   // The apps a rule applies to: its own `app`; else, to a pinned specialist, that specialist's apps; else, to anyone else, every app
   // that no specialist is pinned to (an app that has pinned specialists skips a rule to anyone else). 'any' when pins play no part.
   const appsOf = (r: Rule): string[] | 'any' => {
     if (r.app) return [r.app]
-    const target = specialists[r.to]
+    const target = specialists[r.target]
     if (target?.apps) return target.apps
     if (!target || !Object.values(specialists).some(x => x.apps)) return 'any'
     return Object.keys(slackApps).filter(a => pinnersOf(specialists, a).length === 0)
@@ -741,8 +769,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     return e === 'any' || (l !== 'any' && l.every(a => e.includes(a)))
   }
   for (const [j, later] of rules.entries()) {
-    const i = rules.findIndex((earlier, k) => k < j && (earlier.at === undefined || earlier.at === later.at) && appsCover(earlier, later) && covers(earlier.from, later.from))
-    if (i >= 0) warn(`rules[${j}]`, `never matches: rules[${i}] already takes ${later.from ? `${later.from}'s messages` : 'every message'} ${where(later)}`)
+    const i = rules.findIndex((earlier, k) => k < j && (earlier.place === undefined || earlier.place === later.place) && appsCover(earlier, later) && covers(earlier.person, later.person))
+    if (i >= 0) warn(`rules[${j}]`, `never matches: rules[${i}] already takes ${later.person ? `${later.person}'s messages` : 'every message'} ${where(later)}`)
   }
   // A rule for everyone is checked before `listens`, so a specialist that listens where it applies, and takes one of its apps, never hears it there.
   const takesAppOf = (s: Specialist, r: Rule): boolean => {
@@ -750,10 +778,10 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     return via === 'any' || via.some(a => serves(specialists, s, a))
   }
   for (const [i, r] of rules.entries()) {
-    if (senders(r.from) !== 'everyone') continue
+    if (senders(r.person) !== 'everyone') continue
     for (const s of Object.values(specialists)) {
-      if (s.id === r.to || !takesAppOf(s, r) || (r.at !== undefined && !s.listens.includes(r.at)) || !s.listens.length) continue
-      warn(`rules[${i}]`, r.at ? `takes every message ${where(r)}, so ${s.id}, which listens there, never hears it` : `takes every message ${where(r)}, so ${s.id}, which listens on ${s.listens.join(', ')}, never hears it through that app`)
+      if (s.id === r.target || !takesAppOf(s, r) || (r.place !== undefined && !s.listens.includes(r.place)) || !s.listens.length) continue
+      warn(`rules[${i}]`, r.place ? `takes every message ${where(r)}, so ${s.id}, which listens there, never hears it` : `takes every message ${where(r)}, so ${s.id}, which listens on ${s.listens.join(', ')}, never hears it through that app`)
     }
   }
 
@@ -870,8 +898,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     }
   }
 
-  const ruleTargets = new Set([...rules.map(r => r.to), ...Object.values(specialists).flatMap(s => s.talksTo ?? [])])
-  const scheduleTargets = new Set(Object.values(schedules).map(s => s.to))
+  const ruleTargets = new Set([...rules.map(r => r.target), ...Object.values(specialists).flatMap(s => s.talksTo ?? [])])
+  const scheduleTargets = new Set(Object.values(schedules).map(s => s.target))
   for (const s of Object.values(specialists)) {
     const path = `specialists.${s.id}`
     if (s.listens.length === 0 && !ruleTargets.has(s.id) && !scheduleTargets.has(s.id)) {
@@ -923,6 +951,9 @@ function shellProgram(command: string): string {
   const first = words.find(w => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) ?? ''
   return /^(['"]).*\1$/.test(first) ? first.slice(1, -1) : first
 }
+
+/** What a renamed key's old name says when the new name is also given. The names come formatted by the caller (`a`, or --a). */
+export const bothNames = (old: string, now: string): string => `is the old name of ${now}, which is also set: keep ${now} and delete ${old}`
 
 const join2 = (path: string, key: string) => path ? `${path}.${key}` : key
 

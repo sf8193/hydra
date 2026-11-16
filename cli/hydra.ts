@@ -10,7 +10,7 @@ import {
   type InstallOpts,
 } from './lifecycle.js'
 import { peek } from './peek.js'
-import { ROUTE_USAGE } from '../routing/route-request.js'
+import { ROUTE_USAGE, routeFlags } from '../routing/route-request.js'
 import { migrateCommand } from './migrate.js'
 import { peopleCommand } from './people.js'
 import { configAddCommand } from './config-add.js'
@@ -114,7 +114,7 @@ Specialists (named addresses that refill themselves):
   hydra specialist show <name> | list | rm <name>   (rm: without hydra.toml only)
 
 Routing (hydra.toml):
-  hydra route --as <person|address|stranger> --at <place> [--app <app>] [--heard-by <app,app>] [--mentioned <app,app>] [--bound <specialist> [--bound-app <app>]]
+  hydra route --person <person|address|stranger> --place <place> [--app <app>] [--heard-by <app,app>] [--mentioned <app,app>] [--bound <specialist> [--bound-app <app>]]
                                        What a new message there would do: every candidate, and why the winner won.
                                        --app is the app this check runs for, the one that heard the message (default: the app
                                        named "default"). --heard-by adds the other apps in the channel. --mentioned lists the
@@ -589,13 +589,14 @@ async function main(): Promise<void> {
     }
 
     case 'route': {
-      const flag = (name: string) => { const i = filtered.indexOf(name); return i > 0 ? filtered[i + 1] : undefined }
-      const [as, at, bound, app, heardBy, mentioned, boundApp] = [flag('--as'), flag('--at'), flag('--bound'), flag('--app'), flag('--heard-by'), flag('--mentioned'), flag('--bound-app')]
-      if (!as || !at) {
+      const flags = routeFlags(filtered)
+      if (!flags.ok) { console.error(`error: ${flags.error}`); process.exit(1) }
+      for (const n of flags.notes) console.error(`note: ${n}`)
+      if (!flags.params.person || !flags.params.place) {
         console.error(`error: ${ROUTE_USAGE}`)
         process.exit(1)
       }
-      const response = await sendRequest(socketPath(), { type: 'cli', command: 'route', id: randomUUID(), params: { as, at, ...(bound && { bound }), ...(app && { app }), ...(heardBy && { heardBy }), ...(mentioned && { mentioned }), ...(boundApp && { boundApp }) } })
+      const response = await sendRequest(socketPath(), { type: 'cli', command: 'route', id: randomUUID(), params: flags.params })
       if (!json && response.ok) { console.log((response.data as { report: string }).report); break }
       printResponse(response, json)
       break

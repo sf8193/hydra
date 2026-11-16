@@ -168,30 +168,30 @@ app_token_env = "SALES_SLACK_APP_TOKEN"
 
 *Slack connector.* **One connection per app.** Hydra opens a Socket Mode connection for each app, each with its own bot, its own tokens, and its own reconnects and catch-up pass. An app added to hydra.toml connects as soon as hydra.toml loads (no restart); one taken out disconnects. Every message records the app that heard it, and everything that follows goes through that app: its reply, its reactions, the files it downloads, the threads it rereads. A message goes in through one app and leaves through the same one.
 
-An app is a way in: a message reaches hydra through the app whose connection delivered it. Routing knows which, and three things use it. `hydra route --as <person> --at <place> --app <app>` shows each.
+An app is a way in: a message reaches hydra through the app whose connection delivered it. Routing knows which, and three things use it. `hydra route --person <person> --place <place> --app <app>` shows each.
 
-**Rules match an app, a place, or both.** A `[[rules]]` entry names `at` (a place), `app` (an app id), or both; an absent one matches every place or every app, so a rule in a hydra.toml with no `apps` or `app` keys behaves as it did. `from` only narrows who: a rule with `from` and neither `at` nor `app` is an error. The first rule in file order that matches wins.
+**Rules match an app, a place, or both.** A `[[rules]]` entry names `place`, `app` (an app id), or both; an absent one matches every place or every app, so a rule in a hydra.toml with no `apps` or `app` keys behaves as it did. `person` only narrows who: a rule with `person` and neither `place` nor `app` is an error. The first rule in file order that matches wins.
 
 ```toml
 [[rules]]
 app = "sales"                    # everything that comes through the sales app
-to = "deals"
+target = "deals"
 
 [[rules]]
-at = "slack:#help"
+place = "slack:#help"
 app = "support"                  # #help, through the support app only
-from = "staff"
-to = "desk"
+person = "staff"
+target = "desk"
 ```
 
 **A specialist can be pinned to apps.** `apps = ["sales"]` in a specialist means two things:
 
-- It answers only messages that come through those apps. A message through another app never reaches it: not through `listens` (including `slack:dm`), a rule's `to`, or a conversation bound to it.
+- It answers only messages that come through those apps. A message through another app never reaches it: not through `listens` (including `slack:dm`), a rule's `target`, or a conversation bound to it.
 - Those apps deliver only to specialists pinned to them. Once any specialist is pinned to `sales`, a message through `sales` goes to a specialist pinned to `sales`, or to nobody.
 
-A specialist with no `apps` is unpinned: it answers messages through every app that no specialist is pinned to. `allow` is separate: it governs who may reach a specialist, and still applies. `main` is exempt from pinning: the operator's DM reaches `main` through any app, and `main` still hears only the operator. A rule that would send a message to a specialist its app cannot deliver to is skipped, a binding to one is skipped and the message routed anew, and a guard redirect to one goes to the conversation's own specialist with one alert; `hydra route` says why. hydra.toml refuses a rule whose `app` and `to` can never meet, and a pinned specialist that listens on a place that is not a Slack place. Pinning an app takes it from every unpinned specialist, so hydra.toml warns when an unpinned specialist listens where no pinned specialist backs it up.
+A specialist with no `apps` is unpinned: it answers messages through every app that no specialist is pinned to. `allow` is separate: it governs who may reach a specialist, and still applies. `main` is exempt from pinning: the operator's DM reaches `main` through any app, and `main` still hears only the operator. A rule that would send a message to a specialist its app cannot deliver to is skipped, a binding to one is skipped and the message routed anew, and a guard redirect to one goes to the conversation's own specialist with one alert; `hydra route` says why. hydra.toml refuses a rule whose `app` and `target` can never meet, and a pinned specialist that listens on a place that is not a Slack place. Pinning an app takes it from every unpinned specialist, so hydra.toml warns when an unpinned specialist listens where no pinned specialist backs it up.
 
-Two specialists may `listen` on the same place only when no app reaches both: their `apps` are disjoint, or one is pinned and the other is not. Two unpinned specialists, or two whose `apps` overlap, may not.
+Two specialists may `listens` on the same place only when no app reaches both: their `apps` are disjoint, or one is pinned and the other is not. Two unpinned specialists, or two whose `apps` overlap, may not.
 
 **One app owns a message.** When two apps are in one channel, both hear every message in it, and exactly one answers. The owner is the first of these that applies, among the apps that heard it:
 
@@ -246,7 +246,7 @@ The operator's app may still route something the operator saw to a specialist, b
 | `default` | `slack:<channel id>[:<thread ts>]` | `slack:C0ABC:1793732224.093059` |
 | any other, `sales` here | `slack:<app>:<channel id>[:<thread ts>]` | `slack:sales:C0ABC:1793732224.093059` |
 
-A DM, or a top-level message where `listen = "all"`, has no thread ts: `slack:D0ABC`, `slack:C0ABC`. Copy the id from the delivery you are answering.
+A DM, or a top-level message where `messages = "all"`, has no thread ts: `slack:D0ABC`, `slack:C0ABC`. Copy the id from the delivery you are answering.
 
 The id of `default` is exactly what it was in a hydra.toml with no `apps` or `app` keys, so its sessions, transcripts, stored conversations and idempotency keys carry on; a conversation id written without an app is `default`'s, and `slack:default:C0ABC:…` names the same conversation. Another app's per-conversation session is named with the app in it (`deals_sales-c0abc-1793732224-093059`), and its attachments are kept under `<state>/slack-files/sales/<channel>/`. Stored conversations and catch-up cursors carry the app when it is not `default`; a conversation store written without apps loads as `default`'s and is not rewritten.
 
@@ -333,11 +333,11 @@ Start with `hydra health`; `hydra health --json` has every field above.
 3. **Restart the daemon:** it reads the tokens from its environment when it starts. The app connects when hydra.toml loads, with no restart, if its token variables are already in the daemon's environment.
 4. **Invite the bot** to the channels it should hear. For a channel more than one app is in, `default_app` says which answers an untagged message; `apps` on a specialist pins it to an app.
 5. **Add the membership events to every existing app.** A second app changes the first: add `member_joined_channel` and `member_left_channel` under Event Subscriptions of each app that already exists (`hydra slack manifest <app>` lists them) and reinstall each, so a join or a leave is noticed at once. Until you do, hydra alerts once, naming the app, when an invite goes unreported, and a join is noticed only when a tag asks or within ten minutes.
-6. **Check:** `hydra route --as <person> --at <place> --app <id>`, then `hydra health` (the new app's line, with its scope status; see the [runbook](#runbook-reading-hydra-health) if it is not `up`).
+6. **Check:** `hydra route --person <person> --place <place> --app <id>`, then `hydra health` (the new app's line, with its scope status; see the [runbook](#runbook-reading-hydra-health) if it is not `up`).
 
 ## A specialist other people talk to: `access = "workdir"`
 
-**A session may know what its audience can already see.** A specialist whose replies only the operator sees can run under the operator's account (`access = "operator"`, the default, and what every specialist did before). One that other people talk to should not: whoever can message it can use whatever it can use. `access = "workdir"` confines it to its own folder, the tools and servers it lists, and its own conversation. Routing does not change: places, rules, apps, pins, `listen` and `sessions` work as they did. hydra.toml warns, naming who, when someone besides the operator can talk to an `access = "operator"` specialist.
+**A session may know what its audience can already see.** A specialist whose replies only the operator sees can run under the operator's account (`access = "operator"`, the default, and what every specialist did before). One that other people talk to should not: whoever can message it can use whatever it can use. `access = "workdir"` confines it to its own folder, the tools and servers it lists, and its own conversation. Routing does not change: places, rules, apps, pins, `messages` and `sessions` work as they did. hydra.toml warns, naming who, when someone besides the operator can talk to an `access = "operator"` specialist.
 
 ### A worked example: an ops specialist in `#ops`
 
@@ -382,7 +382,7 @@ access = "workdir"
 talks_to = ["ops"]                       # the way back: its answer is a send_to_thread(type = "result") to ops
 
 [places."slack:#ops"]
-listen = "all"                            # hears every top-level post, not only tags; it answers in a thread on the post
+messages = "all"                          # hears every top-level post, not only tags; it answers in a thread on the post
 link_previews = false                     # no link previews on anything hydra posts here
 ```
 

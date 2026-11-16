@@ -26,7 +26,7 @@ export type Person = {
   id: string
   /** Addresses on each platform. */
   ids: Address[]
-  /** Labels used only by a specialist's `allow` (and a rule's `from`). */
+  /** Labels used only by a specialist's `allow` (and a rule's `person`). */
   roles: string[]
   /** Shown in the metadata a specialist receives. Default: the id. */
   name: string
@@ -143,8 +143,8 @@ export type PlaceOptions = {
   ack?: string
   /** Download attachments. Default false. */
   files: boolean
-  /** Whether an untagged message opens a conversation. Default `mentions`. */
-  listen: 'mentions' | 'all'
+  /** Which messages open a conversation: `addressed` (a DM or a tag of the app) or `all` (any top-level message). Default `addressed`. */
+  messages: 'addressed' | 'all'
   /** Hear other bots. Default false; hydra's own bot is never heard. */
   bots: boolean
   /**
@@ -166,7 +166,7 @@ export type Schedule = {
   /** 5 fields, local time. */
   cron: string
   /** A specialist or `main`. Absent: a sensor. Its check runs and its result is recorded; a failure alerts the operator. */
-  to?: string
+  target?: string
   prompt: string
   /** A script run first: empty output sends nothing; its output is appended. */
   check?: string
@@ -182,16 +182,17 @@ export type Schedule = {
 
 /**
  * An override for when the place isn't enough. Checked when hydra.toml loads, applied by `route()`. First match in file order.
- * A rule names a place, an app, or both; identity (`from`) only refines them. A rule with `from` alone is an error.
+ * A rule names a place, an app, or both; identity (`person`) only refines them. A rule with `person` alone is an error.
  */
 export type Rule = {
-  /** A place. Absent: every place. At least one of `at` and `app` is set: identity can refine them, never take them over. */
-  at?: Place
+  /** A place. Absent: every place. At least one of `place` and `app` is set: identity can refine them, never take them over. */
+  place?: Place
   /** A Slack app id (`default`, or a `[slack.apps.<id>]`). Absent: every app. */
   app?: string
   /** A person or a role. Absent: anyone there. */
-  from?: string
-  to: string
+  person?: string
+  /** A specialist or `main`. */
+  target: string
 }
 
 /** The operator's hook, run after routing and the allow check. Checked when hydra.toml loads, run by the Slack watcher after routing. */

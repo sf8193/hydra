@@ -7,7 +7,7 @@ import { DEFAULT_SLACK_APP } from '../../config/types.js'
 export const THREAD_TS = /^\d{1,12}\.\d{1,6}$/
 
 /**
- * A DM's top level, or a `listen = "all"` place's untagged top-level messages, is one conversation, under this ts.
+ * A DM's top level, or a `messages = "all"` place's untagged top-level messages, is one conversation, under this ts.
  * Never a real ts: it must not reach a Slack API call or the guard.
  */
 export const TOP_LEVEL = '0.000000'

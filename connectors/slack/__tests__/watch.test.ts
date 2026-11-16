@@ -114,8 +114,8 @@ describe('what opens and continues a conversation', () => {
     expect(sent).toHaveLength(1)
   })
 
-  test('listen = "all": an untagged top-level message opens its own conversation, its thread, delivered like a mention', async () => {
-    const { w, sent } = setup({ toml: oneListener(CH, 'helper', '["anyone"]', `[places."slack:${CH}"]\nlisten = "all"\n`) })
+  test('messages = "all": an untagged top-level message opens its own conversation, its thread, delivered like a mention', async () => {
+    const { w, sent } = setup({ toml: oneListener(CH, 'helper', '["anyone"]', `[places."slack:${CH}"]\nmessages = "all"\n`) })
     expect(w.handle(ev({ ts: '1.000001', text: 'chatter' }))).toBe('follow-up')
     expect(w.handle(ev({ ts: '2.000001', threadTs: '1.000001', text: 'a reply under it' }))).toBe('follow-up')
     await w.flush()
@@ -123,17 +123,17 @@ describe('what opens and continues a conversation', () => {
     expect(sent[0].msg).toContain(`conversation="slack:${CH}:1.000001"`)
   })
 
-  test('listen = "all": each chatter message is its own conversation, bound by its sender: no one captures the place, and a reply under it follows its binding', async () => {
-    const toml = oneListener(CH, 'food', '["anyone"]', `[places."slack:${CH}"]\nlisten = "all"\n`) + `
+  test('messages = "all": each chatter message is its own conversation, bound by its sender: no one captures the place, and a reply under it follows its binding', async () => {
+    const toml = oneListener(CH, 'food', '["anyone"]', `[places."slack:${CH}"]\nmessages = "all"\n`) + `
 [people.olive]
 ids = ["slack:UOLIVE"]
 [specialists.finance]
 workdir = "/w/finance"
 allow = ["people"]
 [[rules]]
-at = "slack:${CH}"
-from = "olive"
-to = "finance"
+place = "slack:${CH}"
+person = "olive"
+target = "finance"
 `
     const { w, sent } = setup({ toml })
     w.handle(ev({ ts: '1.000001', user: 'UOLIVE', text: 'books question' }))
@@ -149,7 +149,7 @@ to = "finance"
   })
 
   test('chatter still owed (or answered) takes at most half the table; once delivered and unanswered it holds no slot; all of it goes after a day', async () => {
-    const { w, logs, tick } = setup({ toml: oneListener(CH, 'helper', '["anyone"]', `[places."slack:${CH}"]\nlisten = "all"\n`), maxWatches: 4, coalesceMs: 60_000 })
+    const { w, logs, tick } = setup({ toml: oneListener(CH, 'helper', '["anyone"]', `[places."slack:${CH}"]\nmessages = "all"\n`), maxWatches: 4, coalesceMs: 60_000 })
     for (let i = 1; i <= 4; i++) w.handle(ev({ ts: `${i}.000001`, text: 'chatter' }))
     expect(w.list().filter(e => e.ambient)).toHaveLength(2) // two owed: half the table
     expect(logs.join()).toContain('conversations opened by untagged chatter already hold half the conversation table (2 of 4)')
@@ -906,9 +906,9 @@ ${extra}`
 workdir = "/w/books"
 allow = ["owner"]
 [[rules]]
-at = "slack:${CH2}"
-from = "olive"
-to = "${to}"
+place = "slack:${CH2}"
+person = "olive"
+target = "${to}"
 `
     const s = setup({ toml: toml('integrator') }, to => to === 'books' ? { ok: true } : { ok: false, error: 'busy' })
     const T = `${Math.floor(s.now() / 1000)}.000001`
@@ -980,7 +980,7 @@ allow = ["anyone"]
   })
 
   test('a rule at the place outranks the listener, for the person or role it names', async () => {
-    const s = setup({ toml: TWO(CH2, `[[rules]]\nat = "slack:${CH2}"\nfrom = "olive"\nto = "integrator"\n`) })
+    const s = setup({ toml: TWO(CH2, `[[rules]]\nplace = "slack:${CH2}"\nperson = "olive"\ntarget = "integrator"\n`) })
     s.w.handle(ev({ channel: CH2, ts: '1.000001', user: 'UOWNER', text: mention }))
     s.w.handle(ev({ channel: CH2, ts: '2.000001', user: 'UOP', text: mention }))
     await s.w.flush()

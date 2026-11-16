@@ -57,7 +57,7 @@ flowchart TD
   cseen -->|no| ow
   ow -->|"not the owner"| ign
   ow -->|"owner, or the only app"| rt
-  rt -->|"ignored: not addressed,<br/>no listen = all"| ign
+  rt -->|"ignored: not addressed,<br/>no messages = all"| ign
   rt -->|"refused (allow) or unrouted"| ref
   ref --> react
   rt -->|deliver| cap

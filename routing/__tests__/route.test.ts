@@ -38,11 +38,11 @@ workdir = "/a/open"
 listens = ["slack:#lobby"]
 allow = ["anyone"]
 [places."slack:#lobby"]
-listen = "all"
+messages = "all"
 [[rules]]
-at = "slack:#help"
-from = "alice"
-to = "crm-finance"
+place = "slack:#help"
+person = "alice"
+target = "crm-finance"
 `)
 
 const msg = (from: string | undefined, at: string[], extra: Partial<Inbound> = {}): Inbound =>
@@ -101,7 +101,7 @@ was = ["crm"]
     expect(route(bare, msg('slack:U0OP', ['slack:D0OP', 'slack:dm']))).toMatchObject({ fate: 'deliver', to: 'main', via: 'operator-dm' })
   })
 
-  test('a mention where nobody listens is unrouted; ambient chatter is ignored unless listen = "all"', () => {
+  test('a mention where nobody listens is unrouted; ambient chatter is ignored unless messages = "all"', () => {
     expect(route(CFG, msg('slack:U0ALICE', ['slack:C0X', 'slack:#random'])).fate).toBe('unrouted')
     expect(route(CFG, msg('slack:U0ALICE', ['slack:#help'], { addressed: false })).fate).toBe('ignored')
     expect(route(CFG, msg('slack:U0NOPE', ['slack:#lobby'], { addressed: false }))).toMatchObject({ fate: 'deliver', to: 'open' })
@@ -130,7 +130,7 @@ describe('allow', () => {
 test('explain prints every candidate and why the winner won', () => {
   const out = explain(route(CFG, msg('slack:U0ALICE', ['slack:#help'])), '/bin/guard')
   expect(out).toBe([
-    'from: alice, roles staff, people, anyone',
+    'person: alice, roles staff, people, anyone',
     '  → rule crm-finance: rules[0]: first rule that matches',
     '    listens crm: listens on slack:#help, but a rule won',
     'delivers to crm-finance (by rule), and binds the conversation to it',
@@ -216,24 +216,24 @@ ${rules}`)
   const to = (cfg: HydraConfig, m: Inbound) => { const d = route(cfg, m); return 'to' in d ? `${d.to} (${d.via})` : d.fate }
 
   test('a rule with only an app takes every place that app hears', () => {
-    const cfg = withRules('[[rules]]\napp = "sales"\nto = "sales-desk"\n')
+    const cfg = withRules('[[rules]]\napp = "sales"\ntarget = "sales-desk"\n')
     expect(to(cfg, inApp('sales'))).toBe('sales-desk (rule)')
     expect(to(cfg, msg('slack:U0ALICE', ['slack:C0ELSE', 'slack:#else'], { app: 'sales' }))).toBe('sales-desk (rule)')
     expect(to(cfg, inApp('default'))).toBe('crm (listens)')
   })
   test('a rule with only a place matches every app (and an old rule behaves as before)', () => {
-    const cfg = withRules('[[rules]]\nat = "slack:#help"\nto = "ops-desk"\n')
+    const cfg = withRules('[[rules]]\nplace = "slack:#help"\ntarget = "ops-desk"\n')
     for (const a of ['default', 'sales', 'support']) expect(to(cfg, inApp(a))).toBe('ops-desk (rule)')
     expect(to(cfg, msg('slack:U0ALICE', ['slack:#help']))).toBe('ops-desk (rule)')   // no app given: default
   })
   test('a rule with both takes that place through that app only', () => {
-    const cfg = withRules('[[rules]]\nat = "slack:#help"\napp = "sales"\nto = "sales-desk"\n')
+    const cfg = withRules('[[rules]]\nplace = "slack:#help"\napp = "sales"\ntarget = "sales-desk"\n')
     expect(to(cfg, inApp('sales'))).toBe('sales-desk (rule)')
     expect(to(cfg, inApp('default'))).toBe('crm (listens)')
     expect(to(cfg, msg('slack:U0ALICE', ['slack:#else'], { app: 'sales' }))).toBe('unrouted')
   })
   test('first match wins across kinds, in file order; from refines app and place', () => {
-    const cfg = withRules('[[rules]]\napp = "sales"\nfrom = "alice"\nto = "sales-desk"\n[[rules]]\nat = "slack:#help"\nto = "ops-desk"\n')
+    const cfg = withRules('[[rules]]\napp = "sales"\nperson = "alice"\ntarget = "sales-desk"\n[[rules]]\nplace = "slack:#help"\ntarget = "ops-desk"\n')
     expect(to(cfg, inApp('sales'))).toBe('sales-desk (rule)')
     expect(to(cfg, msg('slack:U0OP', HELP, { app: 'sales' }))).toBe('ops-desk (rule)')
     const d = route(cfg, inApp('support'))
@@ -263,8 +263,8 @@ workdir = "/a/crm"
 listens = ["slack:#help"]
 allow = ["staff"]
 [[rules]]
-at = "slack:#help"
-to = "deals"
+place = "slack:#help"
+target = "deals"
 `)
     expect(route(cfg, inApp('sales'))).toMatchObject({ fate: 'deliver', to: 'deals', via: 'rule' })
     const d = route(cfg, inApp('default'))
@@ -314,7 +314,7 @@ describe('two apps in one channel: exactly one owns it', () => {
   /** Route the same message as each hearing app sees it. */
   const asEach = (cfg: HydraConfig, extra: Partial<Inbound>) => Object.fromEntries((extra.heardBy ?? []).map(a => [a, route(cfg, inApp(a, extra))]))
   const owners = (r: Record<string, ReturnType<typeof route>>) => Object.entries(r).filter(([, d]) => d.fate !== 'ignored' || d.trace.every(s => s.via !== 'owner')).map(([a]) => a)
-  const placeDefault = (cfg: HydraConfig, defaultApp: string) => { cfg.places['slack:#help'] = { files: false, listen: 'mentions', bots: false, linkPreviews: true, defaultApp } }
+  const placeDefault = (cfg: HydraConfig, defaultApp: string) => { cfg.places['slack:#help'] = { files: false, messages: 'addressed', bots: false, linkPreviews: true, defaultApp } }
 
   test('no tag, no default_app: the app named `default` owns it, and the other stands down', () => {
     const r = asEach(TWO, both())
@@ -347,7 +347,7 @@ describe('two apps in one channel: exactly one owns it', () => {
   })
   test('a default_app on the channel\'s id applies as on its name', () => {
     const cfg = structuredClone(TWO)
-    cfg.places['slack:C0HELP'] = { files: false, listen: 'mentions', bots: false, linkPreviews: true, defaultApp: 'sales' }
+    cfg.places['slack:C0HELP'] = { files: false, messages: 'addressed', bots: false, linkPreviews: true, defaultApp: 'sales' }
     expect(owners(asEach(cfg, both()))).toEqual(['sales'])
   })
   test('a tag always wins: over default_app, `default`, and the app that opened the conversation', () => {
@@ -376,9 +376,9 @@ describe('two apps in one channel: exactly one owns it', () => {
     // the opener is gone from the channel: ownership is decided anew
     expect(owners(asEach(TWO, { heardBy: ['sales', 'support'], boundApp: 'default' }))).toEqual(['sales'])
   })
-  test('a non-owner is ignored even when addressed, listen = "all", or bound: never a second answer', () => {
+  test('a non-owner is ignored even when addressed, messages = "all", or bound: never a second answer', () => {
     const cfg = structuredClone(TWO)
-    cfg.places['slack:#help'] = { files: false, listen: 'all', bots: false, linkPreviews: true }
+    cfg.places['slack:#help'] = { files: false, messages: 'all', bots: false, linkPreviews: true }
     for (const extra of [{}, { addressed: false }, { bound: 'crm', boundApp: 'default' }]) {
       const r = asEach(cfg, both(extra))
       expect(Object.values(r).filter(d => d.fate !== 'ignored').length).toBe(1)

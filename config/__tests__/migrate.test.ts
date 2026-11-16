@@ -170,12 +170,20 @@ describe('merging steps', () => {
   test('people merge by address, unioning roles; the first id wins and a later step\'s references follow it', () => {
     const { doc, conflicts, notes } = mergeDocs([
       { operator: 'operator', people: { operator: { ids: ['slack:U0OP'] } } },
-      { people: { dan: { ids: ['slack:U0OP'], roles: ['staff'], name: 'Dan' }, ana: { ids: ['slack:U0ANA'], roles: ['staff'] } }, rules: [{ at: 'slack:#help', from: 'dan', to: 'ops' }] },
+      { people: { dan: { ids: ['slack:U0OP'], roles: ['staff'], name: 'Dan' }, ana: { ids: ['slack:U0ANA'], roles: ['staff'] } }, rules: [{ place: 'slack:#help', person: 'dan', target: 'ops' }] },
     ])
     expect(conflicts).toEqual([])
     expect(doc.people).toEqual({ operator: { ids: ['slack:U0OP'], roles: ['staff'], name: 'Dan' }, ana: { ids: ['slack:U0ANA'], roles: ['staff'] } })
-    expect(doc.rules).toEqual([{ at: 'slack:#help', from: 'operator', to: 'ops' }])
+    expect(doc.rules).toEqual([{ place: 'slack:#help', person: 'operator', target: 'ops' }])
     expect(notes).toEqual([])
+  })
+
+  test('a rule still written with `from` has its person followed too', () => {
+    const { doc } = mergeDocs([
+      { operator: 'operator', people: { operator: { ids: ['slack:U0OP'] } } },
+      { people: { lee: { ids: ['slack:U0OP'] } }, rules: [{ at: 'slack:#help', from: 'lee', to: 'ops' }] },
+    ])
+    expect(doc.rules).toEqual([{ at: 'slack:#help', from: 'operator', to: 'ops' }])
   })
 
   test('specialists merge key by key; the same key with different values conflicts', () => {
@@ -197,8 +205,8 @@ describe('toToml', () => {
       connectors: { slack: { bot_token_env: 'T' } },
       people: { op: { ids: ['slack:U0OP'], roles: ['staff'] } },
       specialists: { ops: { workdir: '/w', prompt: 'line one\n"quoted"', max: 5 } },
-      places: { 'slack:#help': { listen: 'all', files: true } },
-      rules: [{ at: 'slack:#help', from: 'staff', to: 'ops' }],
+      places: { 'slack:#help': { messages: 'all', files: true } },
+      rules: [{ place: 'slack:#help', person: 'staff', target: 'ops' }],
       guard: { command: '/bin/g', timeout: '2s' },
     }
     expect(Bun.TOML.parse(toToml(doc))).toEqual(doc)

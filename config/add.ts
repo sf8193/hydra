@@ -15,6 +15,9 @@ const SECTIONS = ['specialists', 'schedules'] as const
 type Section = typeof SECTIONS[number]
 const isTable = (v: unknown): v is Doc => typeof v === 'object' && v !== null && !Array.isArray(v)
 
+/** A fragment still written with a schedule's old `to` is added as `target`, so hydra.toml gets only the new name (the loader would warn on the old one). Both names stay as written: the loader refuses them. */
+const targetNamed = (t: Doc): Doc => 'to' in t && !('target' in t) ? Object.fromEntries(Object.entries(t).map(([k, v]) => [k === 'to' ? 'target' : k, v])) : t
+
 export type AddFragmentPlan =
   | { ok: true; text: string; from: string; added: string[]; already: string[] }
   | { ok: false; error: string }
@@ -28,7 +31,7 @@ export function planAddFragment(stateDir: string, env: LoadEnv, fragmentText: st
   if (others.length) return { ok: false, error: `${source} sets ${others.join(', ')}; hydra config add takes only [specialists.<id>] and [schedules.<id>] tables (a person: hydra people add; anything else, including an [mcp.*] server, is a hand edit)` }
   const flat = SECTIONS.flatMap(sec => {
     const v = fragment[sec]
-    return v === undefined ? [] : isTable(v) && Object.values(v).every(isTable) ? Object.entries(v).map(([id, t]) => ({ sec, id, t: t as Doc })) : [{ sec, id: '', t: {} }]
+    return v === undefined ? [] : isTable(v) && Object.values(v).every(isTable) ? Object.entries(v).map(([id, t]) => ({ sec, id, t: sec === 'schedules' ? targetNamed(t as Doc) : t as Doc })) : [{ sec, id: '', t: {} }]
   })
   const loose = flat.find(e => e.id === '')
   if (loose) return { ok: false, error: `${source}: ${loose.sec} must be [${loose.sec}.<id>] tables` }

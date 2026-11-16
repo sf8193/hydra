@@ -30,7 +30,7 @@ cron = "0 11 * * FRI"
 check = "~/Documents/ledger-agent-system/jobs/review-check.sh"
 runner = "daemon"
 needs = ["internet"]
-to = "ledger-review"
+target = "ledger-review"
 
 [schedules.ledger-review-nudge]
 cron = "0 11,19 * * 0-4,6"
@@ -42,7 +42,7 @@ cron = "*/5 * * * *"
 prompt = "🩺 Machine health check found something."
 check = "~/Workstreams/MachineHealth/check.sh"
 runner = "launchd"
-to = "main"
+target = "main"
 `
 
 // What an outside repo ships: the same tables, written its own way (comments, key order, a default left out).
@@ -56,7 +56,7 @@ idle = "4d"
 
 [schedules.ledger-review]
 cron = "0 11 * * FRI"   # owed until done
-to = "ledger-review"
+target = "ledger-review"
 runner = "daemon"
 needs = ["internet"]
 check = "~/Documents/ledger-agent-system/jobs/review-check.sh"
@@ -82,7 +82,7 @@ home = "1551794455227404371"
 
 [schedules.nightly-books]
 cron = "0 3 * * *"
-to = "books"
+target = "books"
 prompt = "Nightly run."
 `
 
@@ -97,6 +97,15 @@ const file = () => readFileSync(join(dir, 'hydra.toml'), 'utf8')
 const loaded = () => { const r = loadHydraConfig(file(), env); if (!r.ok) throw new Error('hydra.toml must load'); return r.config }
 
 describe('hydra config add', () => {
+  test('a fragment still written with a schedule\'s old `to` is added as `target`', () => {
+    const d = at(LIVE)
+    const r = addFragment(d, env, '[schedules.nightly-books]\ncron = "0 3 * * *"\nto = "main"\nprompt = "p"\n', '/repo/f.toml')
+    expect(r).toMatchObject({ ok: true, added: ['[schedules.nightly-books]'] })
+    expect(file()).toContain('target = "main"')
+    expect(file()).not.toMatch(/^to = /m)
+    expect(loaded().schedules['nightly-books'].target).toBe('main')
+  })
+
   test('appends the new tables after the live file, which stays exact, keeps its mode, and loads', () => {
     const d = at(LIVE)
     const r = addFragment(d, env, LEDGER + BACKUP + NEW_SPECIALIST, '/repo/hydra.fragment.toml')
@@ -106,7 +115,7 @@ describe('hydra config add', () => {
     expect(statSync(join(d, 'hydra.toml')).mode & 0o777).toBe(0o600)
     const cfg = loaded()
     expect(cfg.schedules['ledger-backup-pull']).toMatchObject({ runner: 'daemon', needs: ['internet'], alertAfterMs: 2 * 24 * 60 * 60_000 })
-    expect(cfg.schedules['nightly-books'].to).toBe('books')
+    expect(cfg.schedules['nightly-books'].target).toBe('books')
     expect(cfg.specialists.books.workdir).toBe('/h/Workstreams/Books')
   })
 
@@ -138,7 +147,7 @@ describe('hydra config add', () => {
     expect(planAddFragment(at(LIVE), env, 'operator = "x"\n[people.x]\nids = ["discord:3"]\n', '/f')).toMatchObject({ ok: false, error: expect.stringContaining('sets operator, people') })
     expect(planAddFragment(at(LIVE), env, 'schedules = 3\n', '/f')).toMatchObject({ ok: false, error: expect.stringContaining('must be [schedules.<id>] tables') })
     expect(planAddFragment(at(LIVE), env, '# nothing\n', '/f')).toMatchObject({ ok: false, error: expect.stringContaining('no [specialists.<id>]') })
-    expect(planAddFragment(at(LIVE), env, '[schedules.x]\ncron = "0 3 * * *"\nto = "nobody"\nprompt = "p"\n', '/f')).toMatchObject({ ok: false, error: expect.stringContaining('wouldn\'t load with [schedules.x]') })
+    expect(planAddFragment(at(LIVE), env, '[schedules.x]\ncron = "0 3 * * *"\ntarget = "nobody"\nprompt = "p"\n', '/f')).toMatchObject({ ok: false, error: expect.stringContaining('wouldn\'t load with [schedules.x]') })
     expect(file()).toBe(LIVE)
   })
 

@@ -6,7 +6,7 @@
 //   check, prompt, cwd, env_file   → the same keys
 //   runner (job or file-wide)      → runner on each schedule
 //   needs, alert_after             → the same keys (daemon runner only, as before)
-//   to = "<specialist>" / "main"   → to; mode = "main" → to = "main"; mode = "none" → no to (a sensor)
+//   to = "<specialist>" / "main"   → target; mode = "main" → target = "main"; mode = "none" → no target (a sensor)
 //   spawn = {…} / mode = "spawn"   → a per-conversation specialist of the same id, and the schedule sends to it: each
 //                                    run opens a new conversation (a fresh session in a new thread in its home), as before
 //   to = "<thread id>"             → refused: a specialist is the only pointer to a thread
@@ -22,7 +22,7 @@ import type { MigrateStep } from './migrate.js'
 
 export type ScheduleTable = {
   cron: string
-  to?: string
+  target?: string
   prompt?: string
   check?: string
   cwd?: string
@@ -116,13 +116,13 @@ export function migrateJobs(text: string, opts: JobsMigrationOpts): JobsMigratio
       // With a check, its output is the run's message and the prompt is the session's first words. With none, the
       // prompt is the only message there is, so the schedule keeps it too (the session reads it twice).
       if (!kickoff && j.check !== undefined) delete s.prompt
-      s.to = j.name
+      s.target = j.name
       note(`${j.name}: a per-conversation specialist; each run is a fresh session in a new thread, as before`)
       if (!kickoff && j.check === undefined) note(`${j.name}: no check, so the schedule sends the prompt each run, and a fresh session also starts with it`)
       note(`${j.name}: workdir ${workdir} is where its spawned sessions ran (SPAWN_CWD)${j.cwd ? `; its check still runs in ${j.cwd}` : ''}; set workdir to run them elsewhere`)
       if (r.idle === undefined) note(`${j.name}: idle ${SPAWN_IDLE}, the default its spawned sessions had`)
     } else if (target.to === 'main' || !isSessionThread(target.to)) {
-      s.to = target.to
+      s.target = target.to
       if (target.revive) note(`${j.name}: revive dropped; a specialist always revives`)
     } else {
       out.refusals.push(`${j.name}: to = "${target.to}" is a thread; declare a specialist for it and send to that`)
@@ -172,8 +172,8 @@ function equivalence(stateDir: string, id: string, s: ScheduleTable, spec: Speci
     owed = r.kind === 'missing' ? ', no record yet (nothing owed)' : r.kind === 'unreadable' ? `, record unreadable (${r.error})` : slot ? `, owed: ${slot.label}` : ', not owed'
   }
   const extras = [...(s.needs ? [`needs ${s.needs.join(', ')}`] : []), ...(s.alert_after ? [`alert_after ${s.alert_after}`] : [])]
-  const where = !s.to ? 'a sensor (no message)'
-    : spec ? `to ${s.to}: a fresh session in a new thread in ${spec.home}`
-    : `to ${s.to}`
+  const where = !s.target ? 'a sensor (no message)'
+    : spec ? `to ${s.target}: a fresh session in a new thread in ${spec.home}`
+    : `to ${s.target}`
   return `${id}: next ${next ? next.label : 'never'}${owed}; runner ${s.runner}${extras.length ? `, ${extras.join(', ')}` : ''}; ${where}; initiator ${jobInitiator(id)}`
 }
