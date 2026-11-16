@@ -2,7 +2,7 @@ import { realpathSync } from 'fs'
 import { join, sep } from 'path'
 import { gateway, STATE_DIR, STATE_WRITABLE } from './config.js'
 import { isUnder } from '../shared/path-containment.js'
-import { formatDiscordTables } from '../gateways/discord-table-format.js'
+import type { Outbound } from '../gateways/gateway.js'
 import { parseSessionLabel, type SessionLabel } from '../shared/constants.js'
 
 import { atomicWriteFileSync as writeAtomically } from '../shared/atomic-write.js'
@@ -350,42 +350,55 @@ export function editErrorOutcome(err: unknown): EditOutcome {
 export async function safeEdit(
   channelId: string, messageId: string, text: string,
 ): Promise<EditOutcome> {
-  const formatted = gateway.platform === 'discord' ? formatDiscordTables(text) : text
-  let bounded = formatted
-  if (bounded.length > gateway.maxMessageLength) {
-    const marker = '\n_…truncated_'
-    bounded = chunk(formatted, gateway.maxMessageLength - marker.length, 'markdown')[0] + marker
-  }
-  try {
-    await gateway.edit(channelId, messageId, bounded)
-    return 'ok'
-  } catch (err) {
-    const outcome = editErrorOutcome(err)
-    process.stderr.write(`daemon: safeEdit ${outcome} for message ${messageId}: ${String(err)}\n`)
-    return outcome
-  }
+  return withOutbound(text, 0, async ({ text: formatted }) => {
+    let bounded = formatted
+    if (bounded.length > gateway.maxMessageLength) {
+      const marker = '\n_…truncated_'
+      bounded = chunk(formatted, gateway.maxMessageLength - marker.length, 'markdown')[0] + marker
+    }
+    try {
+      await gateway.edit(channelId, messageId, bounded)
+      return 'ok'
+    } catch (err) {
+      const outcome = editErrorOutcome(err)
+      process.stderr.write(`daemon: safeEdit ${outcome} for message ${messageId}: ${String(err)}\n`)
+      return outcome
+    }
+  })
 }
 
 export async function safeSend(
   channelId: string, text: string, opts?: { replyTo?: string; unfurl?: boolean },
 ): Promise<string[]> {
-  const formatted = gateway.platform === 'discord' ? formatDiscordTables(text) : text
-  const chunks = chunk(formatted, gateway.maxMessageLength, 'markdown')
-  const sentIds: string[] = []
-  for (let i = 0; i < chunks.length; i++) {
-    try {
-      const sent = await gateway.send(channelId, chunks[i], {
-        ...(i === 0 && opts?.replyTo ? { replyTo: opts.replyTo } : {}),
-        ...(opts?.unfurl !== undefined ? { unfurl: opts.unfurl } : {}),
-      })
-      sentIds.push(sent.id)
-    } catch (err) {
-      process.stderr.write(`daemon: safeSend failed on chunk ${i + 1}/${chunks.length}: ${String(err)}\n`)
-      if (sentIds.length > 0 && i < chunks.length - 1) {
-        try { await gateway.send(channelId, '_[message truncated]_') } catch {}
+  return withOutbound(text, gateway.maxAttachments, async ({ text: formatted, files }) => {
+    const chunks = chunk(formatted, gateway.maxMessageLength, 'markdown')
+    const sentIds: string[] = []
+    for (let i = 0; i < chunks.length; i++) {
+      try {
+        const sent = await gateway.send(channelId, chunks[i], {
+          ...(i === 0 && files.length ? { files } : {}),
+          ...(i === 0 && opts?.replyTo ? { replyTo: opts.replyTo } : {}),
+          ...(opts?.unfurl !== undefined ? { unfurl: opts.unfurl } : {}),
+        })
+        sentIds.push(sent.id)
+      } catch (err) {
+        process.stderr.write(`daemon: safeSend failed on chunk ${i + 1}/${chunks.length}: ${String(err)}\n`)
+        if (sentIds.length > 0 && i < chunks.length - 1) {
+          try { await gateway.send(channelId, '_[message truncated]_') } catch {}
+        }
+        break
       }
-      break
     }
-  }
-  return sentIds
+    return sentIds
+  })
+}
+
+/**
+ * A post's text on its way to the gateway (reply, send_to_thread, edit_message, safeSend, safeEdit): shaped by the
+ * platform first (ChatGateway.shapeOutbound), then handed to `post` with any files that made, at most `maxFiles`. The
+ * gateway removes those files once `post` settles, so `post` owns the whole send, retries included. Called before the
+ * text is chunked, so a table in it is shaped whole.
+ */
+export function withOutbound<R>(text: string, maxFiles: number, post: (out: Outbound) => Promise<R>): Promise<R> {
+  return gateway.shapeOutbound ? gateway.shapeOutbound(text, maxFiles, post) : post({ text, files: [] })
 }

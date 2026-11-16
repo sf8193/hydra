@@ -101,6 +101,7 @@ export class SlackGateway implements ChatGateway {
   readonly dmThreadsAreExclusive = true
   readonly healthCheckUrl = 'https://slack.com/api/api.test'
   readonly maxMessageLength = 4000 // block-kit section text limit
+  readonly maxAttachments = 10 // what the daemon has always capped a message at
   private app: App | null = null
   private _botId: string | null = null
   private _botUserId: string | null = null

@@ -36,7 +36,9 @@ import type {
   AttachmentInfo,
   ReactionEvent,
   SessionVisualOpts,
+  Outbound,
 } from './gateway.js'
+import { shapeDiscordOutbound } from './discord-format.js'
 import { ThrottledQueue } from '../throttled-queue.js'
 
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
@@ -118,6 +120,11 @@ export class DiscordGateway implements ChatGateway {
   readonly dmThreadsAreExclusive = false
   readonly healthCheckUrl = 'https://discord.com/api/v10/gateway'
   readonly maxMessageLength = 2000 // Discord API hard limit
+  readonly maxAttachments = 10
+
+  shapeOutbound<R>(text: string, maxFiles: number, post: (out: Outbound) => Promise<R>): Promise<R> {
+    return shapeDiscordOutbound(text, maxFiles, post)
+  }
   private client: Client
   private messageHandler: ((msg: InboundMessage) => Promise<void>) | null = null
   private threadDeleteHandler: ((threadId: string) => void) | null = null
@@ -311,7 +318,8 @@ export class DiscordGateway implements ChatGateway {
     const ch = await this.fetchTextChannel(channelId)
     if (!('send' in ch)) throw new Error('channel is not sendable')
 
-    const payload: Record<string, unknown> = { content: opts?.subtext ? discordSubtext(text) : text }
+    // A message that is only attachments (a reply that was only a table) carries no content: Discord takes files alone.
+    const payload: Record<string, unknown> = text || !opts?.files?.length ? { content: opts?.subtext ? discordSubtext(text) : text } : {}
     if (opts?.files?.length) {
       for (const f of opts.files) {
         const st = statSync(f)
@@ -319,7 +327,7 @@ export class DiscordGateway implements ChatGateway {
           throw new Error(`file too large: ${f} (${(st.size / 1024 / 1024).toFixed(1)}MB, max 25MB)`)
         }
       }
-      if (opts.files.length > 10) throw new Error('Discord allows max 10 attachments per message')
+      if (opts.files.length > this.maxAttachments) throw new Error(`Discord allows max ${this.maxAttachments} attachments per message`)
       payload.files = opts.files
     }
     if (opts?.replyTo) {
