@@ -1,4 +1,4 @@
-import { SlackWatcher, namedChannels, cantRead, cmpTs, slackWatchesPath, unresolvedPlaces, conversationId, placeName, isDm, appOfEntry, TOP_LEVEL, NO_DIRECTORY, SLACK_LIMITS, type Asker, type SlackWatchConfig, type SlackWatchEntry, type SlackWatchStats } from './watch.js'
+import { SlackWatcher, namedChannels, cantRead, cmpTs, slackWatchesPath, unresolvedPlaces, conversationId, placeName, isDm, appOfEntry, TOP_LEVEL, NO_DIRECTORY, SLACK_LIMITS, type SlackWatchConfig, type SlackWatchEntry, type SlackWatchStats } from './watch.js'
 import { parseConversation } from './conversation.js'
 import { ConnectedApps, type AppIdentity } from './apps.js'
 import { getSpecialist, conversationSpecialistOf, specialistOf, boundAs } from '../../specialists/specialists.js'
@@ -488,14 +488,6 @@ export function slackConversationLink(conversation: string): string | undefined 
     const url = config(appOfEntry(c))?.workspaceUrl
     if (!url) return undefined
     return `${url}/archives/${c.channel}${c.threadTs === TOP_LEVEL ? '' : `/p${c.threadTs.replace('.', '')}`}`
-  } catch { return undefined }
-}
-
-/** Who sent the last message hydra delivered in this conversation, as hydra.toml says; undefined when it has delivered none since it started (or the id is not a Slack conversation). */
-export function askerOfConversation(conversation: unknown): Asker | undefined {
-  try {
-    const c = parseConversation(conversation)
-    return getSlackWatcher().askerOf(c.channel, c.threadTs, appOfEntry(c))
   } catch { return undefined }
 }
 

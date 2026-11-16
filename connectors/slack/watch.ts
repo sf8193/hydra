@@ -356,9 +356,6 @@ const insertTs = (list: string[] | undefined, ts: string, keep: number): string[
 // Event subtypes that are ordinary messages. Edits, deletes, joins and the rest are not.
 const PLAIN_SUBTYPES = new Set([undefined, 'thread_broadcast', 'file_share', 'bot_message'])
 
-/** Who sent a message, as hydra.toml says: the roster person (null: not on it), their roles, and whether they are the operator. */
-export type Asker = { person: string | null; roles: string[]; operator: boolean }
-
 /** One message. `person`, `roles` and `operator` are who hydra.toml says sent it, filled in at delivery. */
 export type Item = {
   ts: string; user?: string; name?: string; person?: string; roles?: string[]; operator?: boolean
@@ -436,8 +433,6 @@ export class SlackWatcher {
   private readonly refusalTimes = new Map<string, number[]>()
   private readonly names = new Map<string, { name?: string; at: number }>()   // by `<app>:<user id>`: a user id belongs to one app's workspace
   private readonly nameFlights = new Map<string, Promise<string | undefined>>()
-  // Who sent the last message handed over in each conversation: what a session sending on its behalf names as the asker. In memory only, one entry per conversation, dropped with the conversation.
-  private readonly askers = new Map<string, Asker>()
   // Deliveries go out one at a time, in the order they were scheduled.
   private chain: Promise<void> = Promise.resolve()
   // Each thread's flushes run in order, but the work before sending (names, beforeDeliver) runs beside other threads': one slow guard holds back only its own thread.
@@ -501,8 +496,6 @@ export class SlackWatcher {
   stats(): SlackWatchStats { return structuredClone(this.stats_) }
   get(channel: string, threadTs: string, app?: string): SlackWatchEntry | undefined { return this.entries.get(watchKey(app, channel, threadTs)) }
 
-  /** Who sent the last batch delivered in this conversation (hydra.toml's word for them), or undefined: none since the daemon started, or the batch had several senders. */
-  askerOf(channel: string, threadTs: string, app?: string): Asker | undefined { return this.askers.get(watchKey(app, channel, threadTs)) }
   setBotId(id: string | undefined, app?: string): void { if (id) this.botIds.set(appOfEntry({ app }), id); else this.botIds.delete(appOfEntry({ app })) }
   /** Supplied once an app's listener has a Slack client: display names for the senders in its deliveries. */
   setNameResolver(fn: SlackWatchDeps['resolveName'], app?: string): void { if (fn) this.resolvers.set(appOfEntry({ app }), fn); else this.resolvers.delete(appOfEntry({ app })) }
@@ -553,7 +546,6 @@ export class SlackWatcher {
     if (!entry) return false
     if (entry.owed?.length) this.drop('unbound', entry, entry.owed, 'its conversation was unbound before they were delivered')
     this.entries.delete(key)
-    this.askers.delete(key)
     this.persist()
     return true
   }
@@ -572,7 +564,7 @@ export class SlackWatcher {
       // Chatter's conversations are cheap to open again: they go after a day, so a busy place frees its half of the table.
       const ambientCutoff = now - Math.min(idle, AMBIENT_IDLE_MS)
       // An entry still owed messages is not idle: its owed ts expire first (and are alerted), then it goes.
-      if (e.lastEventAt < (e.ambient ? ambientCutoff : cutoff) && !this.pending.has(key) && !e.owed?.length) { this.entries.delete(key); this.askers.delete(key); n++; continue }
+      if (e.lastEventAt < (e.ambient ? ambientCutoff : cutoff) && !this.pending.has(key) && !e.owed?.length) { this.entries.delete(key); n++; continue }
       // Owed to a specialist hydra.toml no longer declares, at a place catch-up no longer reads: no replay will come to
       // route it anew, so it is lost now, not a day from now. (Where catch-up still reads, the replay routes it as its
       // sender: delivered anew, or dropped then.) Not while a batch for it waits in the window: that delivery decides.
@@ -1221,21 +1213,9 @@ export class SlackWatcher {
         continue
       }
       if (!result.ok) this.drop('too-large', entry, batch.map(i => i.ts), `it can never be delivered: ${result.error}`)
-      else { this.ack(entry, batch, cfg); this.noteAsker(key, batch) }
+      else this.ack(entry, batch, cfg)
       this.settle(key, entry, batch.map(i => i.ts))
     }
-  }
-
-  /**
-   * After a delivery has landed: the one sender of that batch, or no one when it had several (a name for them would be a guess).
-   * Context for a session sending on the conversation's behalf, never an authorization.
-   */
-  private noteAsker(key: string, batch: Item[]): void {
-    // An item with no user and no person (a bot message) is a sender of its own: unknown, never merged with another.
-    const senders = new Set(batch.map((i, n) => i.user ?? i.person ?? `?${n}`))
-    const last = batch[batch.length - 1]
-    if (senders.size !== 1) { this.askers.delete(key); return }
-    this.askers.set(key, { person: last.person ?? null, roles: last.roles ?? ['anyone'], operator: !!last.operator })
   }
 
   /** The sender sees the message was picked up: the place's `ack` reaction on each delivered message. Best effort, never retried. */
