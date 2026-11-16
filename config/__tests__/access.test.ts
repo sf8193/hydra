@@ -30,7 +30,7 @@ operator = "op"
 [people.op]
 ids = ["slack:U0OP"]
 [connectors.slack]
-bot_token_env = "SLACK_BOT_TOKEN"
+bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"
 [mcp.datadog]
 command = "/usr/local/bin/datadog-mcp"
 token_env = ["DD_API_KEY"]
@@ -179,7 +179,7 @@ describe('workdir (access = "workdir"): what Claude Code could still reach', () 
 describe('LoadEnv: nothing is optional', () => {
   test('a test env names every probe, and the loader reads them all (a missing one is a type error, not a skipped check)', () => {
     const keys = Object.keys(testLoadEnv()).sort()
-    expect(keys).toEqual(['claudeConfigDir', 'envFileHas', 'exists', 'home', 'isCommand', 'isDir', 'isGitWorkTree', 'realpath', 'scanWorkdir', 'sessionNames', 'stateDir'])
+    expect(keys).toEqual(['claudeConfigDir', 'envFileHas', 'exists', 'home', 'isCommand', 'isDir', 'isGitWorkTree', 'platform', 'realpath', 'scanWorkdir', 'sessionNames', 'stateDir'])
   })
 })
 
@@ -264,7 +264,7 @@ describe('[mcp.*]', () => {
     expect(errorsOf(`${BASE}\n[mcp.x]\ntools = ["a"]\n`)[0]).toContain('mcp.x.command: is required')
   })
   test('hydra\'s own token variables are never a server\'s', () => {
-    expect(errorsOf(`${BASE}\n[mcp.x]\ncommand = "bun"\ntoken_env = ["SLACK_BOT_TOKEN"]\n`)).toEqual(['mcp.x.token_env[0]: "SLACK_BOT_TOKEN" is the token variable of connectors.slack.bot_token_env: a server never gets hydra\'s own tokens'])
+    expect(errorsOf(`${BASE}\n[mcp.x]\ncommand = "bun"\ntoken_env = ["CONNECTOR_SLACK_BOT_TOKEN"]\n`)).toEqual(['mcp.x.token_env[0]: "CONNECTOR_SLACK_BOT_TOKEN" is the token variable of connectors.slack.bot_token_env: a server never gets hydra\'s own tokens'])
   })
   test('a tool name is a name, not a pattern', () => {
     expect(errorsOf(`${BASE}\n[mcp.x]\ncommand = "bun"\ntools = ["search_*"]\n`)[0]).toContain('mcp.x.tools[0]')

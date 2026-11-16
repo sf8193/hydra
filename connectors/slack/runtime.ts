@@ -214,7 +214,7 @@ export function slackTokens(app: SlackApp, env: Readonly<Record<string, string>>
     if (!name) return undefined
     if (!scrubbedSpawnVars().includes(name)) {
       const why = !ENV_NAME_RE.test(name) ? 'is not an environment variable name' : tokenVarRefusal(name) ?? 'is not among the variables kept from sessions (the daemon adds the ones hydra.toml names when it loads it)'
-      warn(`daemon: slack listener: refusing to read the token in ${name}, the \`${key}\` of the app named \`${app.id}\`: it ${why}, so a token there would reach every session hydra starts. Name a variable only the daemon needs, like SLACK_BOT_TOKEN.\n`)
+      warn(`daemon: slack listener: refusing to read the token in ${name}, the \`${key}\` of the app named \`${app.id}\`: it ${why}, so a token there would reach every session hydra starts. Name a variable only the daemon needs, like CONNECTOR_SLACK_BOT_TOKEN.\n`)
       return undefined
     }
     return env[name]

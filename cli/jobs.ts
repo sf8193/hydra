@@ -272,7 +272,7 @@ export async function jobsLaunchdRun(platform: string, name: string, stateDir: s
   const file = fromSchedules ? 'hydra.toml [schedules]' : jobsToml(stateDir)
   let job: Job | undefined
   if (fromSchedules) {
-    const s = cliSchedules(stateDir)
+    const s = cliSchedules(stateDir, platform === 'slack' ? 'slack' : 'discord')
     if ('error' in s) { runIO.error(`${name}: ${s.error}; not running`); return 1 }
     // A hydra.toml read mid-save (truncated, partial) can lack the job: the daemon's record still names it, so the
     // slot runs from that instead of being skipped for good.
@@ -430,7 +430,7 @@ export function jobsList(platform: string, stateDirOverride?: string): void {
   console.log(`clock: ${tick ? `last tick ${local(tick)} (${ago(new Date(tick), now)})` : 'no tick yet'}${stale ? '  STALE: is the daemon running?' : ''}`)
   const state = readDaemonState(stateDir).state
   if (schedulesAreSource(stateDir, state)) {
-    const s = cliSchedules(stateDir)
+    const s = cliSchedules(stateDir, platform === 'slack' ? 'slack' : 'discord')
     if ('error' in s) { console.log(s.error); return }
     console.log(`hydra.toml [schedules], ${s.from}`)
     printJobs(platform, stateDir, s.jobs, now)

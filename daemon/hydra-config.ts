@@ -73,7 +73,7 @@ export function startHydraConfig(opts: { alert?: Send; env?: LoadEnv; intervalMs
   if (watch) return watch.initial
   send = opts.alert
   inUse = false
-  loadEnvInUse = opts.env ?? systemEnv(SESSION_NAMES, STATE_DIR, CLAUDE_CONFIG)
+  loadEnvInUse = opts.env ?? systemEnv(SESSION_NAMES, STATE_DIR, PLATFORM, CLAUDE_CONFIG)
   watch = watchHydraConfig({
     path: hydraConfigPath(),
     env: loadEnvInUse,
@@ -110,7 +110,7 @@ export function startHydraConfig(opts: { alert?: Send; env?: LoadEnv; intervalMs
 
 /** The probes the daemon loads hydra.toml with: what a scoped launch checks the workdir with again. */
 export function hydraLoadEnv(): LoadEnv {
-  return loadEnvInUse ?? systemEnv(SESSION_NAMES, STATE_DIR, CLAUDE_CONFIG)
+  return loadEnvInUse ?? systemEnv(SESSION_NAMES, STATE_DIR, PLATFORM, CLAUDE_CONFIG)
 }
 let loadEnvInUse: LoadEnv | undefined
 

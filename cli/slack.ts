@@ -3,7 +3,7 @@
 
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
-import { resolveConfig } from './helpers.js'
+import { resolveConfig, statePlatform } from './helpers.js'
 import { formatIssues, loadHydraConfig, systemEnv } from '../config/load.js'
 import { slackManifest } from '../connectors/slack/app.js'
 import { scanSlackEnvNames } from '../config/token-vars.js'
@@ -33,7 +33,7 @@ export function slackCommand(args: string[], stateDirOpt: string | undefined): n
     process.stdout.write(slackManifest(undefined))
     return 0
   }
-  const r = loadHydraConfig(readFileSync(path, 'utf8'), systemEnv(SESSION_NAMES, stateDir, cfg?.configDir))
+  const r = loadHydraConfig(readFileSync(path, 'utf8'), systemEnv(SESSION_NAMES, stateDir, statePlatform(stateDir, undefined, cfg?.platform), cfg?.configDir))
   if (!r.ok) {
     console.error(`${path}: doesn't load, so no manifest\n${formatIssues(r.errors)}`)
     return 1

@@ -1,8 +1,8 @@
 // `hydra config check [<platform>]`: load the state dir's hydra.toml as the daemon would, and say what's wrong.
 
 import { existsSync, readFileSync } from 'fs'
-import { basename, join } from 'path'
-import { resolveConfig } from './helpers.js'
+import { join } from 'path'
+import { resolveConfig, statePlatform } from './helpers.js'
 import { formatIssues, loadHydraConfig, systemEnv } from '../config/load.js'
 import { SESSION_NAMES } from '../shared/session-catalog.js'
 
@@ -10,10 +10,10 @@ export function configCheckCommand(platformArg: string | undefined, stateDirOpt:
   if (platformArg && platformArg !== 'discord' && platformArg !== 'slack') { console.error(`error: platform must be discord or slack, not "${platformArg}"`); return 1 }
   const cfg = resolveConfig(platformArg)
   const stateDir = stateDirOpt ?? cfg.stateDir
-  const platform = platformArg ?? (['discord', 'slack'].includes(basename(stateDir)) ? basename(stateDir) : cfg.platform)
+  const platform = statePlatform(stateDir, platformArg, cfg.platform)
   const path = join(stateDir, 'hydra.toml')
   if (!existsSync(path)) { console.log(`${path}: none (the old files still apply)`); return 0 }
-  const r = loadHydraConfig(readFileSync(path, 'utf8'), systemEnv(SESSION_NAMES, stateDir, cfg.configDir))
+  const r = loadHydraConfig(readFileSync(path, 'utf8'), systemEnv(SESSION_NAMES, stateDir, platform, cfg.configDir))
   if (!r.ok) {
     console.log(`${path}: doesn't load; a running daemon keeps its last good config\n${formatIssues(r.errors)}`)
     if (r.warnings.length) console.log(formatIssues(r.warnings))

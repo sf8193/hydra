@@ -64,7 +64,7 @@ export function jobsFromSchedules(cfg: Pick<HydraConfig, 'schedules' | 'speciali
  * as hydra.toml; otherwise hydra.toml itself, which covers the time between migrate and the daemon's first tick, and
  * an edit the daemon hasn't read. A hydra.toml that doesn't load falls back to the record.
  */
-export function cliSchedules(stateDir: string): { jobs: Job[]; from: string } | { error: string } {
+export function cliSchedules(stateDir: string, platform: 'discord' | 'slack'): { jobs: Job[]; from: string } | { error: string } {
   const state = readDaemonState(stateDir).state
   const file = join(stateDir, 'hydra.toml')
   let changed = 0
@@ -74,7 +74,7 @@ export function cliSchedules(stateDir: string): { jobs: Job[]; from: string } | 
   let text = ''
   try { text = readFileSync(file, 'utf8') } catch {}
   // The daemon's own session names aren't known here; a specialist that takes one is refused by the daemon's load.
-  const r = loadHydraConfig(text, systemEnv([], stateDir))
+  const r = loadHydraConfig(text, systemEnv([], stateDir, platform))
   if (r.ok) return { jobs: jobsFromSchedules(r.config), from: 'read from hydra.toml (newer than the daemon\'s record)' }
   if (state.scheduleJobs) return { jobs: state.scheduleJobs, from: 'as the daemon last loaded them (hydra.toml does not load)' }
   return { error: `hydra.toml does not load:\n${formatIssues(r.errors)}` }

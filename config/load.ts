@@ -6,7 +6,7 @@ import { parseEnvLine } from '../shared/env-parse.js'
 import { homedir } from 'os'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'path'
 import { parseCron } from '../shared/cron-local.js'
-import { parseIdleTtl } from '../shared/constants.js'
+import { parseIdleTtl, SLACK_GATEWAY_TOKEN_ENVS } from '../shared/constants.js'
 import { ENV_NAME_RE, tokenVarRefusal } from '../shared/spawn-env.js'
 import { offLimitRoots, workdirScopeIssues } from './workdir-scope.js'
 import { sandboxIssues, unquotablePath } from './server-sandbox.js'
@@ -72,9 +72,10 @@ const isTable = (v: unknown): v is Table => typeof v === 'object' && v !== null 
 export const defaultClaudeConfigDir = (): string => process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude')
 
 /** The machine as it is: `~` is this user's home, folders and commands are looked up for real. */
-export function systemEnv(sessionNames: readonly string[], stateDir: string, claudeConfigDir: string = defaultClaudeConfigDir()): LoadEnv {
+export function systemEnv(sessionNames: readonly string[], stateDir: string, platform: LoadEnv['platform'], claudeConfigDir: string = defaultClaudeConfigDir()): LoadEnv {
   return {
     home: homedir(),
+    platform,
     sessionNames,
     stateDir,
     claudeConfigDir,
@@ -225,10 +226,13 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
 
   const connectors: Connectors = {}
   // Which key holds each token variable: a variable on two keys (two apps, or a Slack app and Discord) is a bug.
-  const envOwner = new Map<string, string>()
+  // The Slack gateway holds its own app's two tokens, so on its daemon it owns them: one Slack app belongs to one system.
+  const GATEWAY = 'the Slack gateway (CHAT_PLATFORM=slack)'
+  const GATEWAY_HINT = '; give the connector its own Slack app, with its own variables like CONNECTOR_SLACK_BOT_TOKEN'
+  const envOwner = new Map<string, string>(env.platform === 'slack' ? Object.values(SLACK_GATEWAY_TOKEN_ENVS).map(v => [v, GATEWAY] as const) : [])
   const claimEnv = (v: string, path: string): boolean => {
     const other = envOwner.get(v)
-    if (other) { error(path, `"${v}" is already the token variable of ${other}: each token needs its own variable`); return false }
+    if (other) { error(path, `"${v}" is already the token variable of ${other}: each token needs its own variable${other === GATEWAY ? GATEWAY_HINT : ''}`); return false }
     envOwner.set(v, path)
     return true
   }
@@ -273,9 +277,9 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     const envName = (k: string, required: boolean): string | undefined => {
       const v = str(t, k, path)
       if (v === undefined) { if (required) error(join2(path, k), 'is required'); return undefined }
-      if (!ENV_NAME_RE.test(v)) { error(join2(path, k), `"${v}" must name an environment variable, like SLACK_BOT_TOKEN`); return undefined }
+      if (!ENV_NAME_RE.test(v)) { error(join2(path, k), `"${v}" must name an environment variable, like CONNECTOR_SLACK_BOT_TOKEN`); return undefined }
       const why = tokenVarRefusal(v)
-      if (why) { error(join2(path, k), `"${v}" ${why}, so it cannot hold a token; name one only the daemon needs, like SLACK_BOT_TOKEN`); return undefined }
+      if (why) { error(join2(path, k), `"${v}" ${why}, so it cannot hold a token; name one only the daemon needs, like CONNECTOR_SLACK_BOT_TOKEN`); return undefined }
       return claimEnv(v, join2(path, k)) ? v : undefined
     }
     const botTokenEnv = envName('bot_token_env', true)

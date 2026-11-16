@@ -10,7 +10,7 @@ operator = "op"
 [people.op]
 ids = ["slack:U0OP", "discord:1"]
 [connectors.slack]
-bot_token_env = "SLACK_BOT_TOKEN"
+bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"
 [connectors.discord]
 bot_token_env = "DISCORD_BOT_TOKEN"
 `

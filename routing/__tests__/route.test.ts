@@ -14,7 +14,7 @@ const load = (text: string): HydraConfig => {
 const CFG = load(`
 operator = "op"
 [connectors.slack]
-bot_token_env = "SLACK_BOT_TOKEN"
+bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"
 [people.op]
 ids = ["slack:U0OP"]
 [people.alice]

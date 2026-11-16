@@ -5,12 +5,12 @@ import { systemEnv } from '../../config/load.js'
 import { SANDBOX_EXEC } from '../../config/server-sandbox.js'
 import { offLimitRoots } from '../../config/workdir-scope.js'
 import type { LoadEnv } from '../../config/types.js'
-import { CLAUDE_CONFIG, STATE_DIR } from '../config.js'
+import { CLAUDE_CONFIG, STATE_DIR, PLATFORM } from '../config.js'
 import { SESSION_NAMES } from '../sessions.js'
 import type { ScopedConfigInput } from '../engines/claude-engine.js'
 
 export const macLike = (over: Partial<LoadEnv> = {}): LoadEnv => {
-  const real = systemEnv(SESSION_NAMES, STATE_DIR, CLAUDE_CONFIG)
+  const real = systemEnv(SESSION_NAMES, STATE_DIR, PLATFORM, CLAUDE_CONFIG)
   return { ...real, isCommand: c => c === SANDBOX_EXEC || real.isCommand(c), ...over }
 }
 

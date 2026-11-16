@@ -33,7 +33,7 @@ operator = "op"
 [people.op]
 ids = ["slack:U0OP"]
 [connectors.slack]
-bot_token_env = "SLACK_BOT_TOKEN"
+bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"
 [specialists.ops]
 workdir = "~/agents/ops"
 listens = ["slack:C0OPS"]

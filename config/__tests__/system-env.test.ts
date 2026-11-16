@@ -50,20 +50,20 @@ describe('scanWorkdirOnDisk', () => {
 describe('systemEnv: the state dir\'s .env', () => {
   test('envFileHas finds a variable the file sets, with export, quotes and comments handled, and nothing it does not', () => {
     writeFileSync(join(root, '.env'), '# comment\nexport DD_API_KEY="abc"\nOTHER=1 # note\nEMPTY=\n')
-    const env = systemEnv([], root)
+    const env = systemEnv([], root, 'discord')
     expect(env.envFileHas('DD_API_KEY')).toBe(true)
     expect(env.envFileHas('OTHER')).toBe(true)
     expect(env.envFileHas('EMPTY')).toBe(false)   // blank counts as absent, as the daemon's own env reading does
     expect(env.envFileHas('MISSING')).toBe(false)
   })
   test('no .env at all: nothing is set', () => {
-    expect(systemEnv([], join(root, 'no-such-state')).envFileHas('DD_API_KEY')).toBe(false)
+    expect(systemEnv([], join(root, 'no-such-state'), 'discord').envFileHas('DD_API_KEY')).toBe(false)
   })
 })
 
 describe('systemEnv', () => {
   test('carries the state dir and the claude config dir it is given', () => {
-    const env = systemEnv(['spark'], '/state/x', '/cfg/y')
+    const env = systemEnv(['spark'], '/state/x', 'discord', '/cfg/y')
     expect(env.stateDir).toBe('/state/x')
     expect(env.claudeConfigDir).toBe('/cfg/y')
     expect(env.sessionNames).toEqual(['spark'])
@@ -72,19 +72,19 @@ describe('systemEnv', () => {
     const saved = process.env.CLAUDE_CONFIG_DIR
     try {
       process.env.CLAUDE_CONFIG_DIR = '/elsewhere/claude'
-      expect(systemEnv([], '/s').claudeConfigDir).toBe('/elsewhere/claude')
+      expect(systemEnv([], '/s', 'discord').claudeConfigDir).toBe('/elsewhere/claude')
       delete process.env.CLAUDE_CONFIG_DIR
-      expect(systemEnv([], '/s').claudeConfigDir).toBe(join(systemEnv([], '/s').home, '.claude'))
+      expect(systemEnv([], '/s', 'discord').claudeConfigDir).toBe(join(systemEnv([], '/s', 'discord').home, '.claude'))
     } finally { if (saved === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = saved }
   })
   test('isGitWorkTree: a folder in a repository is one, a folder outside any is not', () => {
-    const env = systemEnv([], '/s')
+    const env = systemEnv([], '/s', 'discord')
     mkdirSync(join(dir, '.git')); mkdirSync(join(dir, 'sub'))
     expect(env.isGitWorkTree(join(dir, 'sub'))).toBe(true)
     expect(env.isGitWorkTree(outside)).toBe(false)
   })
   test('realpath resolves a symlink, and returns a path that does not exist as it is', () => {
-    const env = systemEnv([], '/s')
+    const env = systemEnv([], '/s', 'discord')
     symlinkSync(outside, join(dir, 'l'))
     expect(env.realpath(join(dir, 'l'))).toBe(outside)
     expect(env.realpath(join(root, 'nope'))).toBe(join(root, 'nope'))
