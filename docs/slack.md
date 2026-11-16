@@ -207,6 +207,23 @@ A message from another app's bot is another bot's message: it is passed over unl
 
 `hydra route` takes `--app <app>`: the app this check runs for, the one that heard the message (default: the app named `default`). `--heard-by <app,app>` adds the other apps in the channel. `--mentioned <app,app>` lists the apps the text tags, first tag first. `--bound-app <app>` (with `--bound`) is the app the bound conversation is bound through (if two, the one most recently active).
 
+## Which app listens
+
+Hydra serves two uses through one routing system, and which app listens follows from the use.
+
+- **The operator's harness.** The operator's own app: a bot plus `user_token_env`, the operator's read-only user token. With it, a thread in a channel the bot isn't in is still read, as the operator, and routed to the operator's own sessions (`bind_conversation`), so no bot has to join that channel. A whole channel (a place in hydra.toml) is still read through the bot today, so its bot must be in it. These sessions serve the operator, so they may see what the operator sees.
+- **Agents for other people.** A restricted app whose own bot sits in the channels its agent serves, routed to specialists, usually confined ones (`access = "workdir"`, [below](#a-specialist-other-people-talk-to-access--workdir)). It listens through its own bot.
+
+**When not to listen through the operator's app.** Give the agent an app of its own that listens through its own bot when any of these is true:
+
+1. **The agent must keep working without the operator.** A user token hears only the channels its user is in, so leaving a channel, or a refused token, would deafen it.
+2. **People tag the agent by its own name.** Slack raises a tag only where that app's bot is a member.
+3. **The agent is in a private channel the operator isn't in.**
+
+The operator's app may still route something the operator saw to a specialist, by a rule or a place in hydra.toml. An app that only speaks or reacts is allowed too. Neither is the default.
+
+**Hearing and speaking are separate.** The user token only reads, and never posts. Replies, reactions and new threads go out through a bot, and only where that bot is a member. So in a channel where only the operator's token hears, hydra can listen and route, but nothing answers there until a bot is invited.
+
 ## Conversations and replies, per app
 
 **A conversation is an app, a channel and a thread.** The same thread heard through two apps (each tagged in turn) is two conversations, each bound on its own, answered through its own app. Its id, as `hydra conversations`, `reply`, `bind_conversation` and the guard's stdin (`conversation`) write it:
