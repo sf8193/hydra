@@ -37,7 +37,7 @@ description = "Answers Acme's Slack threads it is tagged in."  # what the app sa
 [slack.apps.sales]                    # another app: its own tokens, named by its id when it sets no display_name
 bot_token_env = "SALES_SLACK_BOT_TOKEN"
 socket_token_env = "SALES_SLACK_APP_TOKEN"
-operator_token_env = "SALES_SLACK_USER_TOKEN"   # optional: read threads the bot is not in, as the operator; never posts
+operator_token_env = "SALES_SLACK_USER_TOKEN"   # optional: hear the channels, DMs and group DMs the operator is in, as the operator; never posts (a DM or group DM is delivered only where a place names it)
 
 # --- people: whom hydra recognizes. Anyone not here is a stranger. ---
 
@@ -72,7 +72,7 @@ renamed_from = ["operations"]         # old ids, so a rename keeps its thread, s
 [specialists.crm]
 workdir = "~/agents/crm"
 kickoff_file = "kickoff.md"           # instead of kickoff; relative to workdir, read at each fresh start
-listens = ["slack:#help"]             # places it answers: slack:#name, slack:C0ID, slack:dm, discord:#name, discord:<id>, discord:dm, github:owner/repo, cli
+listens = ["slack:#help"]             # places it answers: slack:#name, slack:C0ID, slack:dm (the bot's DMs only), slack:group-dm, discord:#name, discord:<id>, discord:dm, github:owner/repo, cli
 allow = ["staff"]                     # roles that may reach it (default ["people"]; [] = only the operator)
 sessions = "per-conversation"         # "shared" (default): one session for everything; "per-conversation": one per thread
 max_sessions = 5                      # per-conversation cap; extra messages stay owed, never dropped (default 20)
@@ -174,6 +174,10 @@ alert_after = "2d"                    # daemon runner only: how long a failure r
 place = "slack:#help"
 person = "finance"                    # a person or a role (absent: anyone there)
 target = "specialist:ops"            # "main", or "specialist:<name>"
+
+[[rules]]
+place = "slack:dm:alice"              # with operator_token_env: the operator's DM with the person alice (a [people] id with a Slack address); slack:dm is the DM with the bot, slack:group-dm every group DM
+target = "specialist:ops"
 
 [[rules]]
 place = "slack:#help"

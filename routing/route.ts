@@ -12,7 +12,7 @@
 // Then `allow`: the operator is always allowed, `anyone` admits strangers, `people` admits the roster, a role admits who holds it.
 
 import { whyNotServed } from '../config/pins.js'
-import { DEFAULT_SLACK_APP, type Address, type HydraConfig, type Person, type Place, type Rule, type Specialist } from '../config/types.js'
+import { DEFAULT_SLACK_APP, isDmPlace, type Address, type HydraConfig, type Person, type Place, type Rule, type Specialist } from '../config/types.js'
 import { isSessionThread } from '../shared/specialist-name.js'
 import { spelledBare } from '../shared/target-kind.js'
 export { isSessionThread }
@@ -114,7 +114,6 @@ export function listensToAll(cfg: HydraConfig, at: Place[]): boolean {
   return at.some(p => cfg.places[p]?.messages === 'all')
 }
 
-const isDmPlace = (p: Place) => p.endsWith(':dm')
 const isSlackPlace = (p: Place) => p.startsWith('slack:')
 
 /** The app that heard a message: as given, else `default` on a Slack place, else none. */
@@ -279,7 +278,7 @@ export function explain(d: Decision, guardCommand?: string): string {
     lines.push(`delivers to ${spelledBare(d.to)} (by ${d.via})${d.bind ? ', and binds the conversation to it' : ''}`)
     if (guardCommand && !d.sender.operator) lines.push(`then the guard judges it: ${guardCommand}`)
   } else if (d.fate === 'refused') lines.push(`refused (🚫): ${d.why}`)
-  else if (d.fate === 'unrouted') lines.push('unrouted (🚫): no rule or specialist hears this place')
+  else if (d.fate === 'unrouted') lines.push('unrouted: no rule or specialist hears this place (a mention gets a 🚫; a DM gets no reply)')
   else lines.push(d.owner && d.owner !== d.app ? `ignored: ${d.owner} owns this message, so ${d.app} does not answer` : 'ignored: not addressed to hydra')
   return lines.join('\n')
 }

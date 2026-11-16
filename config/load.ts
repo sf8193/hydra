@@ -16,7 +16,7 @@ import { SLACK_APP_DEFAULTS } from '../connectors/slack/app.js'
 import { invalidSpecialistName } from '../shared/specialist-name.js'
 import { bareOf, readTarget, spelled } from '../shared/target-kind.js'
 import {
-  BUILTIN_ROLES, DEFAULT_SLACK_APP, type Address, type ConfigIssue, type Connectors, type Gateways, type Guard, type HydraConfig, type LoadEnv, type LoadResult,
+  BUILTIN_ROLES, DEFAULT_SLACK_APP, SLACK_DM, SLACK_GROUP_DM, dmPerson, isDmPlace, namesAChannel, namesDmWithOthers, type Address, type ConfigIssue, type Connectors, type Gateways, type Guard, type HydraConfig, type LoadEnv, type LoadResult,
   type McpServer, type WorkdirScan, type Person, type Place, type PlaceOptions, type Platform, type Rule, type Schedule, type SessionsMode, type SlackApp, type Specialist, type Vitals,
   WORKDIR_TOOLS,
 } from './types.js'
@@ -38,7 +38,7 @@ const ADDRESS_RE: Record<Platform, RegExp> = {
 }
 const REPO_RE = /^[a-z0-9][a-z0-9-]*\/[a-z0-9._-]+$/
 // A channel by name or by the platform's own id (an app without the scopes to list channels only knows ids).
-const CHANNEL_PLACE_RE = /^(slack|discord):(dm|#[a-z0-9][a-z0-9_-]*)$|^slack:[CG][A-Z0-9]+$|^discord:\d+$/
+const CHANNEL_PLACE_RE = /^(slack|discord):(dm|#[a-z0-9][a-z0-9_-]*)$|^slack:group-dm$|^slack:dm:[a-z0-9][a-z0-9-]*$|^slack:[CG][A-Z0-9]+$|^discord:\d+$/
 const SESSIONS: readonly SessionsMode[] = ['shared', 'per-conversation']
 const ENGINES = ['claude', 'codex', 'omp'] as const
 /** Why a built-in tool is not on a restricted specialist's list. Any other name gets the generic refusal. */
@@ -267,8 +267,15 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   const expand = (p: string) => p === '~' ? env.home : p.startsWith('~/') ? join(env.home, p.slice(2)) : p
   const place = (raw: string, path: string): Place | undefined => {
     const p = normalizePlace(raw)
+    const who = p === undefined ? undefined : dmPerson(p)
+    if (p && who !== undefined) {
+      // A DM with a person is found by their Slack address, so the person must be declared and have one.
+      if (!has(people, who)) error(path, `"${raw}": ${who} is not a person: declare [people.${who}]`)
+      else if (!people[who].addresses.some(a => a.startsWith('slack:'))) error(path, `"${raw}": ${who} has no slack: address; add one to people.${who}.addresses`)
+      return p
+    }
     if (p) return p
-    error(path, `"${raw}" is not a place: use slack:#channel, slack:<channel id>, slack:dm, discord:#channel, discord:<channel id>, discord:dm, github:owner/repo or cli`)
+    error(path, `"${raw}" is not a place: use slack:#channel, slack:<channel id>, slack:dm, slack:dm:<person>, slack:group-dm, discord:#channel, discord:<channel id>, discord:dm, github:owner/repo or cli`)
     return undefined
   }
 
@@ -688,10 +695,11 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     // Which app answers an unmentioned message when several apps are in this channel.
     const defaultApp = str(t, 'default_app', path)
     if (defaultApp !== undefined) {
-      if (!p.startsWith('slack:') || p === 'slack:dm') error(`${path}.default_app`, `${p} is not a Slack channel: \`default_app\` picks among the apps in a channel`)
+      if (!p.startsWith('slack:') || !namesAChannel(p)) error(`${path}.default_app`, `${p} is not a Slack channel: \`default_app\` picks among the apps in a channel`)
       else if (!Object.hasOwn(slackApps, defaultApp)) error(`${path}.default_app`, noSuchApp(defaultApp, Object.keys(slackApps)))
     }
     // Hydra reads a Discord channel by id: a place named `discord:#name` can never be matched to a channel, so previews could not be switched off there.
+    if (namesDmWithOthers(p)) for (const key of ['link_previews', 'messages', 'bots']) if (Object.hasOwn(t, key)) error(`${path}.${key}`, `${key} does not apply to ${p}: only ack and files do. Remove it.`)
     if (p.startsWith('discord:#') && t.link_previews === false) error(`${path}.link_previews`, 'cannot be set on a Discord channel by name: hydra reads a Discord channel by id, so name it discord:<channel id>')
     places[p] = {
       ...(ack !== undefined && { ack }),
@@ -886,7 +894,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   // the thread it opens must be one that app can deliver back to the specialist: checked for every specialist with a Slack home.
   const declaredApps = Object.keys(slackApps)
   for (const s of Object.values(specialists)) {
-    const slackHome = !!s.home?.startsWith('slack:') && s.home !== 'slack:dm'
+    const slackHome = !!s.home?.startsWith('slack:') && namesAChannel(s.home)
     if (!slackHome && !s.speaksAs) continue
     const app = speaksAsOf(s, declaredApps)
     const path = `specialists.${s.id}.speaks_as`
@@ -902,7 +910,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
    * Reading its replies is not talking to it: a place others only read adds nothing here.
    */
   function reachedBy(s: Specialist): string[] {
-    const shared = s.listens.filter(p => p !== 'cli' && !p.endsWith(':dm'))
+    const shared = s.listens.filter(p => p !== 'cli' && !isDmPlace(p) && dmPerson(p) === undefined)
     const others = (people_: Person[]) => people_.filter(p => p.id !== operator).map(p => p.id)
     const who: string[] = []
     if (s.allow.includes('anyone')) {
@@ -956,16 +964,19 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     // Previews can be switched off in a Slack channel (by id or name) and a Discord channel by id; a Discord channel given by name is not one hydra can match.
     if (s.restricted && s.allow.includes('anyone')) {
       const chat = s.listens.filter(p => (p.startsWith('slack:') || p.startsWith('discord:')) && places[p]?.linkPreviews !== false)
-      const open = chat.filter(p => !p.startsWith('discord:#'))
+      const open = chat.filter(p => !p.startsWith('discord:#') && !namesDmWithOthers(p))
       const named = chat.filter(p => p.startsWith('discord:#'))
       const lead = `anyone can talk to it in`
       const why = 'where a link in its answer unfurls a preview that can show readers content they could not open themselves'
       if (open.length) warn(path, `${lead} ${listJoin(open)}, ${why}; set link_previews = false in ${open.map(p => `[places.${JSON.stringify(p)}]`).join(' and ')}`)
+      const noSwitch = chat.filter(namesDmWithOthers)
+      if (noSwitch.length) warn(path, `${lead} ${listJoin(noSwitch)}, ${why}; previews cannot be switched off there, so let it listen elsewhere or narrow \`allow\``)
       if (named.length) warn(path, `${lead} ${listJoin(named)}, ${why}; hydra can switch previews off in a Discord channel only by id, so list it as discord:<channel id> and set link_previews = false there`)
     }
     if (s.sessions === 'shared') {
       if (s.listens.length >= 2) warn(path, `one shared session hears ${s.listens.join(', ')}, so what's said in one place is remembered in the others; use sessions = "per-conversation" or one specialist per place`)
-      else if (s.listens.some(p => p.endsWith(':dm')) && s.allow.length > 0) warn(path, `one shared session hears everyone's DMs (allow = ${JSON.stringify(s.allow)}), so one person's DM is remembered in another's; use sessions = "per-conversation" or allow = []`)
+      else if (s.listens.includes(SLACK_GROUP_DM) && s.allow.length > 0) warn(path, `one shared session hears every group DM (allow = ${JSON.stringify(s.allow)}), so what one group says is remembered in another; use sessions = "per-conversation" or allow = []`)
+      else if (s.listens.some(isDmPlace) && s.allow.length > 0) warn(path, `one shared session hears everyone's DMs (allow = ${JSON.stringify(s.allow)}), so one person's DM is remembered in another's; use sessions = "per-conversation" or allow = []`)
     }
     // Without idle, a per-conversation session never ends on its own, so its slot under max_sessions never frees.
     if (s.sessions === 'per-conversation' && s.idleMs === undefined) warn(path, `conversations past max_sessions (${s.maxSessions}) will wait until a session is ended by hand; set idle`)

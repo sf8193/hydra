@@ -1,5 +1,5 @@
 %% A Slack message's path from event to delivery, derived from the code, with every refusal and drop.
-%% REFUSED / UNROUTED: logged once, counted (by sender / in all), removed from owed, never alerted; a mention or a DM gets 🚫.
+%% REFUSED / UNROUTED: logged once, counted (by sender / in all), removed from owed, never alerted; a mention, or a refused DM, gets 🚫; an unrouted DM gets none.
 %% Routing itself (binding → rules → listens → the operator's DM to main, then allow) is routing/route.ts: see flow-route.mmd.
 %% DROP: logged, counted by kind, alerted once per episode (an hour from its start), per app, kind and target. Guard drops are not alerted.
 %% One connection per Slack app (connectors/slack/connections.ts): each has its own listener, catch-up, cursors and alert episodes; a message and its reply go through the same app.
@@ -34,8 +34,10 @@ flowchart TD
     csub["own top-level: opens, bound to the listener there,<br/>ts marked delivered"]
     cseen{"already delivered?"}
     ow{"several apps heard it?<br/>one owns it: a tag outranks the bound app,<br/>then the opener, default_app, default, first<br/>the others stand down"}
-    rt{"route(): at = [slack:C…, slack:#name] or [slack:dm]<br/>addressed = DM, tag, or open conversation<br/>bound = the conversation's specialist"}
-    react["🚫 reaction, if a mention or a DM"]
+    pl{"place names (listener.ts: the bot's DM list says slack:dm, the operator's DM list names the other party):<br/>channel: slack:C…, slack:#name; bot DM: slack:dm;<br/>DM with a person: slack:dm:person; group DM: slack:G…, slack:group-dm<br/>a DM with no one in [people], or unknown: no place"}
+    og{"early gate: does a rule, listens, [places] entry<br/>or open conversation name the place?<br/>(the bot DM needs none; with the operator's token, a channel tag still passes)"}
+    rt{"route(): at = the place names<br/>addressed = DM, tag, or open conversation<br/>bound = the conversation's specialist"}
+    react["🚫 reaction, if a mention or a refused DM"]
     cap{"new conversation, not a DM: tag cap"}
     ctab{"table room?"}
     bind["bind: specialist = route's winner<br/>(new, legacy store, or its specialist is gone)"]
@@ -56,9 +58,13 @@ flowchart TD
   cseen -->|yes| ign
   cseen -->|no| ow
   ow -->|"not the owner"| ign
-  ow -->|"owner, or the only app"| rt
+  ow -->|"owner, or the only app"| pl
+  pl -->|"no place"| ign
+  pl --> og
+  og -->|"no: nobody's, nothing touched, no 🚫"| ign
+  og -->|yes| rt
   rt -->|"ignored: not addressed,<br/>no messages = all"| ign
-  rt -->|"refused (allow) or unrouted"| ref
+  rt -->|"refused (allow) or unrouted<br/>(in a DM with a person or a group DM: ignored, no 🚫)"| ref
   ref --> react
   rt -->|deliver| cap
   cap -->|over| dcap[["DROP tag-cap"]]

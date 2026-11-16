@@ -1,5 +1,5 @@
 import { route } from '../../routing/route.js'
-import { DEFAULT_SLACK_APP } from '../../config/types.js'
+import { DEFAULT_SLACK_APP, SLACK_DM } from '../../config/types.js'
 import { cmpTs, routedChannels, hearsDms, addressOf, TOP_LEVEL, OPERATOR_TOKEN_REFUSED, type SlackFile, type SlackMessageEvent, type SlackWatchConfig, type CatchUpWatch } from './watch.js'
 
 /** Where a watched thread is reread from when no specialist's channel cursor covers it (a session listening): its newest delivered message, else when it was bound. */
@@ -51,6 +51,8 @@ export type SlackApi = {
   replies(a: { channel: string; ts: string; oldest: string; inclusive: boolean; cursor?: string; limit?: number }): Promise<Page>
   /** The bot's DM conversations and who is on the other end (users.conversations, types=im). Optional: without it, only DMs already seen are scanned. */
   dms?(): Promise<{ channel: string; user?: string }[]>
+  /** Every DM the operator is in and who is on the other end (users.conversations, types=im, with the operator's user token; scope im:read). Present only with a user token: it is how a DM with a person gets its place. */
+  otherParties?(): Promise<{ channel: string; user?: string }[]>
 }
 
 /** `accepted`: messages the watcher took that it had not already handled, i.e. what the live stream did not deliver. */
@@ -160,7 +162,7 @@ export async function catchUp(watcher: CatchUpWatch, api: SlackApi, cfg: SlackWa
         return []
       })
       for (const d of listed) {
-        if (known.has(d.channel) || route(cfg.hydra, { from: addressOf(d.user), at: ['slack:dm'], addressed: true, app: cfg.app ?? DEFAULT_SLACK_APP }).fate !== 'deliver') continue
+        if (known.has(d.channel) || route(cfg.hydra, { from: addressOf(d.user), at: [SLACK_DM], addressed: true, app: cfg.app ?? DEFAULT_SLACK_APP }).fate !== 'deliver') continue
         // A new conversation has no cursor: read it back a day, the furthest an owed message is chased.
         scanned.push(d.channel)
         watcher.beginCatchUp([d.channel])

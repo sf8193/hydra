@@ -147,7 +147,7 @@ hydra.toml declares each Slack app by name, `[slack.apps.<id>]`. Tokens stay in 
 [slack.apps.default]
 bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"      # required: the bot token (xoxb-…)
 socket_token_env = "CONNECTOR_SLACK_APP_TOKEN"      # the Socket Mode token (xapp-…, the app-level token): required for Slack to connect, not for `hydra slack manifest`
-operator_token_env = "SLACK_USER_TOKEN"    # optional: read threads the bot is not in, as the operator; never posts
+operator_token_env = "SLACK_USER_TOKEN"    # optional: hear the channels, DMs and group DMs the operator is in, as the operator; never posts
 display_name = "Acme helper"           # the app's name in `hydra slack manifest` (default: `hydra` for `default`, else the id; at most 35 characters)
 description = "Answers Acme's threads it is tagged in."   # at most 140 characters
 
@@ -224,7 +224,7 @@ A message from another app's bot is another bot's message: it is passed over unl
 
 *Slack connector.* Hydra serves two uses through one routing system, and which app listens follows from the use.
 
-- **The operator's harness.** The operator's own app: a bot plus `operator_token_env`, the operator's read-only token (a Slack user token). With it, a thread in a channel the bot isn't in is still read, as the operator, and routed to the operator's own sessions (`bind_conversation`), so no bot has to join that channel. A whole channel (a place in hydra.toml) is still read through the bot today, so its bot must be in it. These sessions serve the operator, so they may see what the operator sees.
+- **The operator's harness.** The operator's own app: a bot plus `operator_token_env`, the operator's read-only token (a Slack user token). With it, a thread in a channel the bot isn't in is still read, as the operator, and routed to the operator's own sessions (`bind_conversation`), so no bot has to join that channel; the operator's DMs and group DMs are heard too, and delivered only where a place names them ([below](#dms-and-group-dms-the-operators-app-hears)). A whole channel (a place in hydra.toml) is still read through the bot today, so its bot must be in it. These sessions serve the operator, so they may see what the operator sees.
 - **Agents for other people.** A restricted app whose own bot sits in the channels its agent serves, routed to specialists, usually restricted specialists (`restricted = true`, [below](#a-specialist-other-people-talk-to-restricted--true)). It listens through its own bot.
 
 **When not to listen through the operator's app.** Give the agent an app of its own that listens through its own bot when any of these is true:
@@ -236,6 +236,35 @@ A message from another app's bot is another bot's message: it is passed over unl
 The operator's app may still route something the operator saw to a specialist, by a rule or a place in hydra.toml. An app that only speaks or reacts is allowed too. Neither is the default.
 
 **Hearing and speaking are separate.** The operator token only reads, and never posts. Replies, reactions and new threads go out through a bot, and only where that bot is a member. So in a channel where only the operator's token hears, hydra can listen and route, but nothing answers there until a bot is invited.
+
+## DMs and group DMs the operator's app hears
+
+*Slack connector.* With `operator_token_env`, the operator's app hears the operator's DMs and group DMs as well as its channels. The manifest (`hydra slack manifest`) adds user scopes `im:history`, `mpim:history` and `im:read` (these are the three this connector needs; the manifest names no `mpim:read`), and user events `message.im` and `message.mpim`; for group DMs that include the bot it also adds bot scope `mpim:history` and bot event `message.mpim`. The workspace admin approves these at install (and a reinstall adds them to an app that exists). Finding who is on the other end of a DM with a person needs the user scope `im:read`. An app installed without it still hears the DM with the bot (that comes from the bot's own DM list, which needs `im:read` on the bot), but a DM with a person names no place and is dropped, and the log says why, until the app is reinstalled with the new user scope. The manifest always lists `mpim:history` and `message.mpim`; the startup scope check asks for them only where `slack:group-dm` is named. The token can then read all of the operator's DMs: keep it in `.env`, and use it only in the operator's own app. A user token without `im:history` or `mpim:history` receives no DM events, and says nothing.
+
+**Hearing is not delivering.** A place no rule, `listens`, `[places]` entry or open conversation names is dropped first, before it opens a conversation or thread, reaches a session, or counts or reacts to anything. Every place name means one thing:
+
+| Where it happened | Place | What delivers it |
+|---|---|---|
+| The operator's DM with the bot | `slack:dm` | a specialist that `listens` on it, or a rule; with neither, the operator's goes to `main` |
+| The operator's DM with one person | `slack:dm:<person>` | a specialist that `listens` on it, or a rule for it |
+| One group DM | `slack:G0…` (its channel id) | the same |
+| Every group DM | `slack:group-dm` | the same |
+
+`<person>` is an id in `[people]` with a Slack address. Naming one that is missing, or has no Slack address, is an error when hydra.toml loads. A DM with someone not in `[people]` goes by no name, so it is dropped. A DM with a person does not reach the specialist that listens on `slack:dm`, and `main` takes only the operator's DM with the bot. A DM with the bot that nothing hears (a stranger's, with no rule or `listens` on `slack:dm`) is logged and counted and gets no reply. One that a rule or specialist routes but `allow` does not admit gets the 🚫, so a colleague told no still learns it. The 🚫 applies to a DM with the bot only (and to a tag in a channel): a DM with a person or a group DM that a place names, but that no rule routes or `allow` refuses, is logged (ids only, no text) and counted and gets no 🚫; one that no place names is dropped first, without a log.
+
+```toml
+[[rules]]
+place = "slack:dm:alice"   # the operator's DM with alice
+target = "specialist:deals"
+
+[[rules]]
+place = "slack:group-dm"   # every group DM the operator is in
+target = "specialist:deals"
+```
+
+`hydra route --person alice --place slack:dm:alice` shows what a DM with Alice would do. Only `ack` and `files` apply to `[places."slack:dm:alice"]` and `[places."slack:group-dm"]`; `link_previews`, `messages` and `bots` there are errors when hydra.toml loads. A `[places]` entry alone counts as naming a place, so untagged chatter in a channel only `[places]` names is heard.
+
+**How a DM gets its place.** Two lists answer two questions. The bot's own DMs (`users.conversations`, types `im`, with the bot token) say which DM is `slack:dm`. For any other DM, the operator's DMs (the same call with the user token, scope `im:read`) say who is on the other end: a person in `[people]` is `slack:dm:<person>`. Each list is read at connect and for a DM it has not seen, once at a time; the user list is capped at 25 pages of 200 DMs, so a DM beyond the first 5,000 is not named and is dropped; a DM on neither list goes by no name and is dropped, and a failed read is not tried again for a minute. A group DM's id looks like a channel's, so it is told by the event's `channel_type` (`mpim`). Read-only calls against a real install showed each DM from `users.conversations` carries its other party in `user`, on both tokens (one page, no cursor, for 138 DMs; the pagination stays). **Not yet proven:** the `message.im` and `message.mpim` user-event shapes, and a live drop of a real DM (the go-live check). DMs with people and group DMs are heard live only: catch-up does not rescan them, and the bot answers only where it is a member.
 
 ## Conversations and replies, per app
 
@@ -289,6 +318,7 @@ An app removed from hydra.toml while its connection is still shutting down shows
 - channel history, when it reads a named channel, serves a rule that has no place (it reaches every place), or serves a specialist with no `listens` (that one answers only threads bound to it);
 - the channel-name read, only for a `#name` among its places; files, only when a place it reaches has `files`;
 - DMs (`im:*`), when a specialist or rule it serves names `slack:dm`, or the operator has a Slack address (their DM reaches `main` through any app);
+- group DMs (`mpim:history`), when a specialist or rule it serves names `slack:group-dm`;
 - the membership reads (`channels:read`, and `groups:read` only when one of its places is a `slack:G…` channel), only with several apps and only for an app that reads channels.
 
 A missing scope is always logged and shown in `hydra health` (`missing <scope> (<option>)`), and alerted once per episode for what hydra.toml declared, naming the app (a lone `default` says no app), the scope, and the fix: `hydra slack manifest <app>` prints the full list, then reinstall the app, put the new bot token in the variable its `bot_token_env` names, and restart the daemon. An episode lasts until the token is complete again, so a restart does not say it twice (what was said is kept in `<state>/slack-scopes-told.json`). The one exception: `im:*` asked only because the operator has a Slack address, with no specialist or rule naming `slack:dm`, is logged and shown in health but never alerted, since nothing declared a DM.

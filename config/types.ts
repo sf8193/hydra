@@ -12,11 +12,26 @@ export type Platform = 'discord' | 'slack' | 'github'
 export type Address = `${Platform}:${string}`
 
 /**
- * An address hydra can hear: `slack:#help`, `slack:dm`, `discord:#feed`, `discord:dm`, `github:owner/repo` (lowercased), `cli`.
+ * An address hydra can hear: `slack:#help`, `slack:dm`, `slack:dm:<person>`, `slack:group-dm`, `discord:#feed`, `discord:dm`, `github:owner/repo` (lowercased), `cli`.
  * A Slack or Discord channel may also be named by its platform id: `slack:C0TEST`, `discord:1234567890`.
  * A place is data hydra keeps, not something declared: specialists name the ones they listen on.
  */
 export type Place = string
+
+/** The operator's DM with the bot. */
+export const SLACK_DM = 'slack:dm'
+/** Every group DM. One group DM is also named by its channel id, `slack:G0…`. */
+export const SLACK_GROUP_DM = 'slack:group-dm'
+/** The operator's DM with one person, `slack:dm:<person>`: the person is a `[people]` id. */
+export const dmWith = (person: string): Place => `slack:dm:${person}`
+/** The person a `slack:dm:<person>` place names, or undefined for any other place. */
+export const dmPerson = (p: Place): string | undefined => p.startsWith('slack:dm:') ? p.slice('slack:dm:'.length) : undefined
+/** A DM with the bot on any platform (`slack:dm`, `discord:dm`). Exact: no other place ends or starts like it. */
+export const isDmPlace = (p: Place): boolean => p === SLACK_DM || p === 'discord:dm'
+/** A place that is a DM with other people: with one person (`slack:dm:<person>`), or every group DM. The bot is not part of the first. */
+export const namesDmWithOthers = (p: Place): boolean => p === SLACK_GROUP_DM || dmPerson(p) !== undefined
+/** A place that is a channel, by id or name (and any place of another platform), not a DM or a group DM: something to read, join and post to. */
+export const namesAChannel = (p: Place): boolean => p !== SLACK_DM && !namesDmWithOthers(p)
 
 /** Labels anyone holds without declaring them: everyone on the roster holds `people`; anyone at all holds `anyone`. */
 export const BUILTIN_ROLES = ['people', 'anyone'] as const

@@ -2,11 +2,11 @@ import { describe, test, expect, afterEach } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'fs'
 import { tmpdir } from 'os'
 import { join, dirname } from 'path'
-import { SlackWatcher } from '../watch.js'
+import { SlackWatcher, placesOf } from '../watch.js'
 import { hydra as load, oneListener, view, BASE } from './slack-config.js'
 import { EMPTY_CONFIG } from '../../../config/load.js'
 import type { HydraConfig } from '../../../config/types.js'
-import { SlackListener, postPayload, DOWN_ALERT_AFTER_MS, implicitScopeOptions, type ToldScopes, CATCH_UP_STALE_AFTER_MS, explainSlackError, readReplies, type SlackAppLike, type RawEvent } from '../listener.js'
+import { SlackListener, DM_LIST_BACKOFF_MS, postPayload, DOWN_ALERT_AFTER_MS, implicitScopeOptions, type ToldScopes, CATCH_UP_STALE_AFTER_MS, explainSlackError, readReplies, type SlackAppLike, type RawEvent } from '../listener.js'
 import type { SlackApi, RawMessage } from '../catchup.js'
 import type { SocketEmitter } from '../../../shared/socket-supervisor.js'
 import { createResumeDetector, type LastSleep } from '../../../shared/resume.js'
@@ -29,7 +29,9 @@ const dirs: string[] = []
 const listeners: SlackListener[] = []
 afterEach(() => { for (const l of listeners.splice(0)) l.stop(); for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
 
-function setup(over: { tokens?: { app?: string; bot?: string }; toml?: string | null; failStart?: boolean; firstRetryBaseMs?: number; scopes?: string[]; historyError?: string; history?: RawMessage[]; threads?: Record<string, RawMessage[]>; duringStart?: (deliverLive: (e: RawEvent) => void) => void; channels?: { id: string; name: string }[]; channelsError?: string; told?: ToldScopes } = {}) {
+type Lister = { channel: string; user?: string }[] | Error | (() => Promise<{ channel: string; user?: string }[]>)
+const lister = (name: string, calls: string[], l: Lister | undefined) => l && (async () => { calls.push(name); if (l instanceof Error) throw l; return typeof l === 'function' ? l() : l })
+function setup(over: { tokens?: { app?: string; bot?: string }; toml?: string | null; failStart?: boolean; firstRetryBaseMs?: number; scopes?: string[]; historyError?: string; history?: RawMessage[]; threads?: Record<string, RawMessage[]>; duringStart?: (deliverLive: (e: RawEvent) => void) => void; channels?: { id: string; name: string }[]; channelsError?: string; told?: ToldScopes; otherParties?: Lister; dms?: Lister } = {}) {
   const toml = over.toml === undefined ? TOML : over.toml
   const h: HydraConfig = toml === null ? EMPTY_CONFIG : load(toml)
   const dir = mkdtempSync(join(tmpdir(), 'slack-listener-'))
@@ -67,6 +69,8 @@ function setup(over: { tokens?: { app?: string; bot?: string }; toml?: string | 
       apps.push(rec)
       const api: SlackApi = {
         async history(a) { rec.apiCalls.push(`history:${a.oldest}`); state.duringHistory?.(); if (state.historyError) throw new Error(state.historyError); return { messages: state.history.filter(m => parseFloat(m.ts!) > parseFloat(a.oldest)) } },
+        ...(over.otherParties && { otherParties: lister('otherParties', rec.apiCalls, over.otherParties) }),
+        ...(over.dms && { dms: lister('dms', rec.apiCalls, over.dms) }),
         async replies(a) { rec.apiCalls.push(`replies:${a.ts}`); return { messages: (state.threads[`${a.channel}:${a.ts}`] ?? []).filter(m => a.inclusive ? parseFloat(m.ts!) >= parseFloat(a.oldest) : parseFloat(m.ts!) > parseFloat(a.oldest)) } },
       }
       return {
@@ -649,5 +653,140 @@ describe('the scope check alerts for what was declared, once per episode', () =>
     t.apps[0].client.emit('connected')
     await Bun.sleep(10)
     expect(t.alerts.filter(a => a.includes('bot token'))).toHaveLength(1)
+  })
+})
+
+describe("the operator's own app hears DMs and group DMs", () => {
+  const USER = (toml: string) => toml.replace('socket_token_env = "SLOPBOT_SLACK_APP_TOKEN"', 'socket_token_env = "SLOPBOT_SLACK_APP_TOKEN"\noperator_token_env = "HYDRA_SLACK_USER_TOKEN"')
+  const CONF = (rules: string) => USER(oneListener(CH, 'helper', '["anyone"]', `[people.alice]\naddresses = ["slack:UALICE"]\n[specialists.desk]\nworkdir = "/w/desk"\nallow = ["anyone"]\n${rules}`))
+  const BOT_LIST = [{ channel: 'D0BOT0001', user: 'UOP' }]
+  const USER_LIST = [{ channel: 'D0BOT0001', user: BOT }, { channel: 'D0ALICE01', user: 'UALICE' }, { channel: 'D0NOBODY1', user: 'UNOBODY' }]
+  const reads = (t: ReturnType<typeof setup>, name: string) => t.apps[0].apiCalls.filter(c => c === name).length
+  const live = (t: ReturnType<typeof setup>, e: Partial<RawEvent>) => { t.apps[0].handler({ ts: '1793000001.000001', user: 'UALICE', text: 'hi', ...e } as RawEvent) }
+  const settle = async (t: ReturnType<typeof setup>) => { await Bun.sleep(5); await t.watcher.flush() }
+  const RULE = '[[rules]]\nplace = "slack:dm:alice"\ntarget = "specialist:desk"\n'
+
+  test("the bot's own DM list says which DM is the bot's (the operator's goes to main); the user's list names a DM with a person, or nobody", async () => {
+    const t = setup({ toml: CONF(RULE), dms: BOT_LIST, otherParties: USER_LIST })
+    await t.listener.start()
+    const opened = t.watcher.list().length
+    live(t, { channel: 'D0BOT0001', user: 'UOP', channel_type: 'im', text: 'to the bot' })
+    live(t, { channel: 'D0ALICE01', ts: '1793000002.000001', channel_type: 'im', text: 'from alice' })
+    live(t, { channel: 'D0NOBODY1', ts: '1793000003.000001', user: 'UNOBODY', channel_type: 'im', text: 'from someone not in people' })
+    await settle(t)
+    expect(t.sent.filter(m => m.includes('place="slack:dm"'))).toHaveLength(1)
+    expect(t.sent.filter(m => m.includes('place="slack:dm:alice"'))).toHaveLength(1)
+    expect(t.sent.some(m => m.includes('not in people'))).toBe(false)
+    expect(t.watcher.list().length).toBe(opened + 2)
+    expect(reads(t, 'otherParties')).toBe(1)
+    expect(t.apps[0].apiCalls.filter(c => c.startsWith('react:'))).toEqual([])
+  })
+
+  test("without the user scope the lookup fails: the DM with the bot still works, a DM with a person is dropped, and the log says why", async () => {
+    const t = setup({ toml: CONF(RULE), dms: BOT_LIST, otherParties: new Error('missing_scope') })
+    await t.listener.start()
+    live(t, { channel: 'D0BOT0001', user: 'UOP', channel_type: 'im', text: 'to the bot' })
+    live(t, { channel: 'D0ALICE01', ts: '1793000002.000001', channel_type: 'im', text: 'from alice' })
+    await settle(t)
+    expect(t.sent.some(m => m.includes('to the bot') && m.includes('place="slack:dm"'))).toBe(true)
+    expect(t.sent.some(m => m.includes('from alice'))).toBe(false)
+    expect(t.logs.join()).toContain('needs im:read on the user token')
+  })
+
+  test('a failed user list is read once a minute however many DMs ask; the next window reads again', async () => {
+    const t = setup({ toml: CONF(''), dms: BOT_LIST, otherParties: new Error('missing_scope') })
+    await t.listener.start()
+    const base = reads(t, 'otherParties')   // the read at connect failed
+    live(t, { channel: 'D0ALICE01', channel_type: 'im', text: 'one' })
+    live(t, { channel: 'D0BOB00001', ts: '1793000002.000001', channel_type: 'im', text: 'two' })
+    await settle(t)
+    expect(reads(t, 'otherParties') - base).toBe(0)
+    // A failed lookup never names a DM as the bot's: the operator's own message there goes nowhere, opens nothing, and is not slack:dm.
+    const opened = t.watcher.list().length
+    live(t, { channel: 'D0ALICE01', ts: '1793000003.000001', user: 'UOP', channel_type: 'im', text: 'the operator, in a DM the lookup could not name' })
+    await settle(t)
+    expect(t.sent.some(m => m.includes('the operator, in a DM'))).toBe(false)
+    expect(t.watcher.list().length).toBe(opened)
+    expect(placesOf(t.listener.view()!, 'D0ALICE01')).not.toContain('slack:dm')
+    t.tick(DM_LIST_BACKOFF_MS + 1)
+    live(t, { channel: 'D0CARA0001', ts: '1793000004.000001', channel_type: 'im', text: 'three' })
+    live(t, { channel: 'D0FOUR0001', ts: '1793000005.000001', channel_type: 'im', text: 'four' })
+    await settle(t)
+    expect(reads(t, 'otherParties') - base).toBe(1)
+  })
+
+  test('a DM on neither list is read for once on each, then dropped without another read', async () => {
+    const t = setup({ toml: CONF(''), dms: BOT_LIST, otherParties: USER_LIST })
+    await t.listener.start()
+    const bots = reads(t, 'dms'), users = reads(t, 'otherParties')
+    live(t, { channel: 'D0NEW00001', channel_type: 'im', text: 'a DM on neither list' })
+    live(t, { channel: 'D0NEW00001', ts: '1793000002.000001', channel_type: 'im', text: 'and again' })
+    await settle(t)
+    expect(t.sent.some(m => m.includes('neither list') || m.includes('and again'))).toBe(false)
+    expect(reads(t, 'dms') - bots).toBe(1)
+    expect(reads(t, 'otherParties') - users).toBe(1)
+  })
+
+  test("a DM opened while the bot's list is being read is read for again: a brand-new DM with the bot is never left nameless", async () => {
+    const ctl: { fn: () => Promise<{ channel: string; user?: string }[]> } = { fn: async () => [] }
+    const t = setup({ toml: CONF(''), dms: () => ctl.fn(), otherParties: [] })
+    await t.listener.start()
+    const base = reads(t, 'dms')
+    let release!: (v: { channel: string }[]) => void
+    ctl.fn = () => new Promise(r => { release = r })
+    live(t, { channel: 'D0ALICE01', channel_type: 'im', text: 'from alice' })
+    await Bun.sleep(2)
+    t.tick(5)   // the operator opens a DM with the bot after that read began
+    live(t, { channel: 'D0BOT0001', ts: '1793000002.000001', user: 'UOP', channel_type: 'im', text: 'first message to the bot' })
+    ctl.fn = async () => [{ channel: 'D0BOT0001' }]
+    release([])   // the read in flight began before it, and lacks it
+    await settle(t)
+    expect(t.sent.some(m => m.includes('first message to the bot'))).toBe(true)
+    expect(reads(t, 'dms') - base).toBe(2)
+  })
+
+  test("a DM with a person opened while the user's list is being read is read for again, and named", async () => {
+    const ctl: { fn: () => Promise<{ channel: string; user?: string }[]> } = { fn: async () => [] }
+    const t = setup({ toml: CONF(RULE), dms: [], otherParties: () => ctl.fn() })
+    await t.listener.start()
+    const base = reads(t, 'otherParties')
+    let release!: (v: { channel: string }[]) => void
+    ctl.fn = () => new Promise(r => { release = r })
+    live(t, { channel: 'D0OTHER001', user: 'UOTHER', channel_type: 'im', text: 'first read starts here' })
+    await Bun.sleep(2)
+    t.tick(5)
+    live(t, { channel: 'D0ALICE01', ts: '1793000002.000001', channel_type: 'im', text: 'alice, a new DM' })
+    ctl.fn = async () => [{ channel: 'D0ALICE01', user: 'UALICE' }]
+    release([])
+    await settle(t)
+    expect(t.sent.some(m => m.includes('alice, a new DM') && m.includes('place="slack:dm:alice"'))).toBe(true)
+    expect(reads(t, 'otherParties') - base).toBe(2)
+  })
+
+  test("a group DM is told by its channel_type (its id looks like a channel's), and is delivered only where a rule or listener names slack:group-dm or its id", async () => {
+    const t = setup({ toml: CONF('[[rules]]\nplace = "slack:group-dm"\ntarget = "specialist:desk"\n'), dms: [], otherParties: [] })
+    await t.listener.start()
+    const base = reads(t, 'otherParties')
+    live(t, { channel: 'G0GROUP01', channel_type: 'mpim', text: 'group hello' })
+    live(t, { channel: 'C0GROUP02', ts: '1793000002.000001', channel_type: 'mpim', text: 'a newer group DM, whose id starts with C' })
+    await settle(t)
+    expect(t.sent.filter(m => m.includes('place="slack:group-dm"'))).toHaveLength(2)
+    expect(reads(t, 'otherParties') - base).toBe(0)
+    const none = setup({ toml: USER(TOML), dms: [], otherParties: [] })
+    await none.listener.start()
+    live(none, { channel: 'G0GROUP01', channel_type: 'mpim', text: 'group hello' })
+    await settle(none)
+    expect(none.sent.some(m => m.includes('group hello'))).toBe(false)
+  })
+
+  test("an app with no operator token hears only the bot's DMs: every DM is the bot's, and it reads no list", async () => {
+    const t = setup({ toml: TOML + `[people.bea]\naddresses = ["slack:UB"]\nroles = ["owner"]\n[specialists.assistant]\nworkdir = "/w/a"\nlistens = ["slack:dm"]\nallow = ["owner"]\n`, dms: [], otherParties: [] })
+    await t.listener.start()
+    const base = reads(t, 'dms')
+    live(t, { channel: 'D0BEA0001', user: 'UB', channel_type: 'im', text: 'a DM to the bot' })
+    await settle(t)
+    expect(t.sent.some(m => m.includes('a DM to the bot'))).toBe(true)
+    expect(reads(t, 'otherParties')).toBe(0)
+    expect(reads(t, 'dms') - base).toBe(0)
   })
 })
