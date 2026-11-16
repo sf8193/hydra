@@ -2,7 +2,18 @@
 
 Hydra bridges a Slack app to a Claude Code session: you DM the bot (or @mention it in a channel) and Claude replies, with the ability to spawn isolated sub-sessions in threads.
 
-**Flow:** `Slack ⇄ SlackGateway ⇄ daemon ⇄ bridge (MCP plugin) ⇄ Claude Code`. The daemon holds one Socket Mode connection per Slack app declared in hydra.toml and routes messages; the bridge is an MCP server loaded into Claude that relays messages and tool calls over a unix socket.
+**Two Slack systems.** Hydra talks to Slack in two ways. They are alike in using Slack apps over Socket Mode and in ending at Claude sessions. They differ in what they are for:
+
+| | **The Slack gateway** | **The Slack connector** |
+|---|---|---|
+| What it is | Slack as the operator's own chat surface (`slack-gateway.ts`, `CHAT_PLATFORM=slack`), as Discord is for a Discord daemon | Slack as a source of events, routed by hydra.toml (`connectors/slack/`, in every daemon, Discord's included) |
+| What it does | the operator talks to the byte, spawns sessions in threads, runs commands | delivers what its apps hear to specialists, to threads bound to sessions, and to confined specialists; it runs no commands, and routing never reads what a message says |
+| Configured by | `.env` (`SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`) and `access.json` | `[slack.apps.<id>]` (or `[connectors.slack]`), `[[rules]]`, `listens`, `allow` in hydra.toml |
+| Connections | one, on the gateway's app | one per app declared, each with an optional read-only user token |
+
+Steps 1–6 below set up the gateway. [Apps in hydra.toml](#apps-in-hydratoml) onward is the connector.
+
+**Flow (gateway):** `Slack ⇄ SlackGateway ⇄ daemon ⇄ bridge (MCP plugin) ⇄ Claude Code`. The bridge is an MCP server loaded into Claude that relays messages and tool calls over a unix socket.
 
 ## Prerequisites
 
@@ -79,15 +90,15 @@ SPAWN_CWD=~/work      # must be an existing directory
 }
 ```
 
-**How the two tokens meet hydra.toml.** `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` are plain variables in `.env`. To route Slack by specialists and rules (and to run several apps), declare the app in `<state dir>/hydra.toml` and name the two variables; hydra.toml never holds a token, only the names of the variables that do:
+**The gateway's app is not a connector app.** The gateway opens its own Socket Mode connection with `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN`. The connector opens one more for each app hydra.toml declares, in every daemon. If hydra.toml declares an app whose `bot_token_env`/`app_token_env` name those same two variables, the same Slack app gets two connections, and Slack hands each event to only one of them, unpredictably. Nothing checks for this when hydra.toml loads. So to route Slack by specialists and rules beside the gateway, create a **separate** Slack app for the connector and declare that one ([Apps in hydra.toml](#apps-in-hydratoml)), with its own variables:
 
 ```toml
 [slack.apps.default]
-bot_token_env = "SLACK_BOT_TOKEN"
-app_token_env = "SLACK_APP_TOKEN"
+bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"
+app_token_env = "CONNECTOR_SLACK_APP_TOKEN"
 ```
 
-`[connectors.slack]` with the same two keys is the same app (`default`). Keep one connection per token pair: do not point two apps, or a second daemon, at the same one.
+hydra.toml never holds a token, only the names of the variables that do. Keep one connection per token pair: do not point two apps, the gateway and an app, or a second daemon at the same one.
 
 `ackReaction` (optional) makes the bot react to every message it receives, so you know it's processing.
 
