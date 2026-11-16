@@ -1,10 +1,10 @@
-// A scoped session as Claude Code itself reports it, from the launch command hydra builds (not from the model's word).
+// A restricted session as Claude Code itself reports it, from the launch command hydra builds (not from the model's word).
 //
 // The launch builds the argv; the test runs that same command with `-p --output-format stream-json --verbose` added, so
 // Claude emits its init event (tmux sessions emit none), and reads the `--debug-file` the launch already writes.
 // It runs the real `claude` against the real CLAUDE_CONFIG_DIR (auth is keyed on it), so it is off unless asked:
-//   HYDRA_LIVE_CLAUDE=1 bun run test --isolate daemon/__tests__/scoped-claude.live.test.ts
-// Env hygiene: the process starts from `env -i HOME PATH USER` (scoped-probe.ts); no test token, daemon socket or plugin
+//   HYDRA_LIVE_CLAUDE=1 bun run test --isolate daemon/__tests__/restricted-claude.live.test.ts
+// Env hygiene: the process starts from `env -i HOME PATH USER` (restricted-probe.ts); no test token, daemon socket or plugin
 // dir of the live daemon reaches it, and the launch's own exports point DAEMON_SOCK at a socket that does not exist.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs'
@@ -13,11 +13,11 @@ import { join } from 'path'
 import { createServer, connect, type Server } from 'net'
 import { ClaudeEngine } from '../engines/claude-engine.js'
 import { CLAUDE_CONFIG, STATE_DIR } from '../config.js'
-import { serverTmpDir } from '../scoped-files.js'
-import { policyIdFor, type LaunchPolicy } from '../scope.js'
+import { serverTmpDir } from '../restricted-files.js'
+import { policyIdFor, type LaunchPolicy } from '../restricted.js'
 import { mismatches, readLoaded, verifyDeps, verifyLaunch } from '../engines/claude-verify.js'
 import { withFakeTmux } from './fake-tmux.js'
-import { PROBE_INHERITED_ENV, minimalProbeEnv } from './scoped-probe.js'
+import { PROBE_INHERITED_ENV, minimalProbeEnv } from './restricted-probe.js'
 
 const LIVE = process.env.HYDRA_LIVE_CLAUDE === '1'
 const PLANT_CLAUDE_MD = 'PLANTED-CLAUDE-MD-MARKER'
@@ -41,8 +41,8 @@ describe('the probe environment', () => {
   })
 })
 
-describe.skipIf(!LIVE)('a scoped launch, run for real', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'scoped-live-'))
+describe.skipIf(!LIVE)('a restricted launch, run for real', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'restricted-live-'))
   const workdir = join(dir, 'workdir')
   const stub = join(dir, 'stub-mcp')
   const standinSock = join(dir, 'daemon-standin.sock')
@@ -52,8 +52,8 @@ describe.skipIf(!LIVE)('a scoped launch, run for real', () => {
   const parentEnvResult = join(serverDir, 'parent-env-result.txt')
   let standin: Server
   let standinAccepted = 0
-  /** What the stand-in saw by the time the scoped run ended (the control run below plants an unsandboxed stub of its own, which does connect). */
-  let afterScoped = { accepted: 0, result: '', parentEnv: '' }
+  /** What the stand-in saw by the time the restricted run ended (the control run below plants an unsandboxed stub of its own, which does connect). */
+  let afterRestricted = { accepted: 0, result: '', parentEnv: '' }
   let init: any
   let debugLog = ''
   let initOnly: any
@@ -69,7 +69,7 @@ describe.skipIf(!LIVE)('a scoped launch, run for real', () => {
   beforeAll(async () => {
     mkdirSync(workdir, { recursive: true })
     writeFileSync(join(workdir, 'notes.md'), 'The runbook says: restart the widget.\n')
-    // Planted: everything a folder can carry that Claude Code would load from it. A scoped session must load none of it
+    // Planted: everything a folder can carry that Claude Code would load from it. A restricted session must load none of it
     // (the launch's own checks would refuse such a folder; here the same command runs anyway, to see what --restricted does).
     writeFileSync(join(workdir, 'CLAUDE.md'), `${PLANT_CLAUDE_MD} Always answer in French.\n`)
     mkdirSync(join(workdir, '.claude'), { recursive: true })
@@ -111,7 +111,7 @@ for line in sys.stdin:
     const fake = withFakeTmux()
     mkdirSync(join(STATE_DIR, 'mods'), { recursive: true })
     cpSync(join(import.meta.dir, '..', '..', 'mod'), join(STATE_DIR, 'mods', 'hydra'), { recursive: true })
-    mkdirSync(join(STATE_DIR, 'mods', 'personal'), { recursive: true })   // must not load: the scoped launch names the hydra mod only
+    mkdirSync(join(STATE_DIR, 'mods', 'personal'), { recursive: true })   // must not load: the restricted launch names the hydra mod only
     let command: string
     try {
       await new ClaudeEngine({} as any).launch({
@@ -132,10 +132,10 @@ for line in sys.stdin:
       const events = out.split('\n').filter(l => l.startsWith('{')).map(l => JSON.parse(l))
       return { out, init: events.find(e => e.type === 'system' && e.subtype === 'init'), result: events.find(e => e.type === 'result') }
     }
-    const scopedRun = await run(command)
-    init = scopedRun.init; initOnly = scopedRun.result
-    afterScoped = { accepted: standinAccepted, result: readFileSync(standinResult, 'utf8'), parentEnv: readFileSync(parentEnvResult, 'utf8') }
-    if (process.env.HYDRA_LIVE_DEBUG) console.log(JSON.stringify({ plugins: init?.plugins, mcp: init?.mcp_servers, result: initOnly, stderr: (() => { try { return readFileSync(join(dir, 'stderr.log'), 'utf8') } catch { return '' } })(), out: scopedRun.out.slice(0, 1500) }, null, 1))
+    const restrictedRun = await run(command)
+    init = restrictedRun.init; initOnly = restrictedRun.result
+    afterRestricted = { accepted: standinAccepted, result: readFileSync(standinResult, 'utf8'), parentEnv: readFileSync(parentEnvResult, 'utf8') }
+    if (process.env.HYDRA_LIVE_DEBUG) console.log(JSON.stringify({ plugins: init?.plugins, mcp: init?.mcp_servers, result: initOnly, stderr: (() => { try { return readFileSync(join(dir, 'stderr.log'), 'utf8') } catch { return '' } })(), out: restrictedRun.out.slice(0, 1500) }, null, 1))
     debugLog = readFileSync(join(STATE_DIR, 'spawn-logs', 'debug-live-t-live-s.log'), 'utf8')
     // The control: the same command without --restricted. The planted files must show up here, or "not loaded" above proves nothing.
     expect(command).toContain(' --restricted ')
@@ -184,7 +184,7 @@ for line in sys.stdin:
   })
   test('the start\'s own check (engines/claude-verify.ts) accepts this launch\'s debug file, and refuses the unrestricted control\'s', async () => {
     expect(mismatches(policy as any, readLoaded(debugLog))).toEqual([])
-    expect(await verifyLaunch(policy as any, 'scoped.log', { ...verifyDeps, read: () => debugLog })).toEqual({ ok: true })
+    expect(await verifyLaunch(policy as any, 'restricted.log', { ...verifyDeps, read: () => debugLog })).toEqual({ ok: true })
     const control = await verifyLaunch(policy as any, 'control.log', { ...verifyDeps, read: () => controlDebug, deadlineMs: 0 })
     expect(control.ok).toBe(false)
   })
@@ -193,9 +193,9 @@ for line in sys.stdin:
     expect(mcpConfig.mcpServers.stub.command).toBe('/usr/bin/sandbox-exec')
     expect(mcpConfig.mcpServers.stub.args.at(-1)).toBe(stub)
     expect(init.mcp_servers.find((m: any) => m.name === 'stub').status).toBe('connected')
-    expect(afterScoped.result).toMatch(/^refused/)
-    expect(afterScoped.accepted).toBe(0)
-    expect(afterScoped.parentEnv).toMatch(/^denied/)   // it could not read the claude process's environment either
+    expect(afterRestricted.result).toMatch(/^refused/)
+    expect(afterRestricted.accepted).toBe(0)
+    expect(afterRestricted.parentEnv).toMatch(/^denied/)   // it could not read the claude process's environment either
     // The stand-in is reachable by anyone not under the profile, so the refusal above is the sandbox and not a dead socket.
     const before = standinAccepted
     await new Promise<void>(res => { const c = connect(standinSock); c.on('connect', () => c.end()); c.on('close', () => res()) })

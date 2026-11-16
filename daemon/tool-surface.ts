@@ -45,22 +45,22 @@ export function sessionCapabilities(info: Pick<SessionInfo, 'capabilities' | 'en
  * Session ids whose bridge declared `scoped` when it registered (HYDRA_SESSION_TYPE, set by the launch). A bridge can only
  * narrow itself this way: a declaration of `scoped` is believed whether or not the registry knows the id, and never undone.
  */
-const declaredScoped = new Set<string>()
+const declaredRestricted = new Set<string>()
 
 /** Records what a registering bridge says it is. Only `scoped` matters: the one declaration that takes tools away. */
 export function noteDeclaredSessionType(sessionId: string, declared: unknown): void {
-  if (declared === 'scoped' && sessionId !== 'main') declaredScoped.add(sessionId)
+  if (declared === 'scoped' && sessionId !== 'main') declaredRestricted.add(sessionId)
 }
 
-/** Whether this session runs as a scoped specialist: its record says so, or its bridge declared it (an unregistered id never falls back to a wider surface). */
-export const isScopedSession = (sessionId: string): boolean => declaredScoped.has(sessionId) || registry.get(sessionId)?.sessionType === 'scoped'
+/** Whether this session runs as a restricted specialist: its record says so, or its bridge declared it (an unregistered id never falls back to a wider surface). */
+export const isRestrictedSession = (sessionId: string): boolean => declaredRestricted.has(sessionId) || registry.get(sessionId)?.sessionType === 'scoped'
 
 export function getToolsForSession(sessionId: string): SessionTool[] {
   if (sessionId === 'main') {
     return computeToolsForSession('master_orchestrator', new Set<Capability>(['main_handoff']))
   }
   const info = registry.get(sessionId)
-  if (isScopedSession(sessionId)) {
+  if (isRestrictedSession(sessionId)) {
     const tools = computeToolsForSession('scoped', new Set(), { descriptions: info?.toolDescriptions, inputSchemas: info?.toolInputSchemas })
     // send_to_thread is advertised only to a specialist with someone to send to; the call is held to the list at the gate either way.
     return talksToOf(info).length ? tools : tools.filter(t => t.name !== 'send_to_thread')
@@ -84,8 +84,8 @@ export function isToolAllowed(sessionId: string, toolName: string): boolean {
   if (sessionId === 'main') {
     return BASE_TOOLS.master_orchestrator.has(toolName) || ALL_CAPABILITY_TOOLS.main_handoff.has(toolName)
   }
-  // Before the registry lookup: a scoped caller whose record is missing must not be handed thread_owner's tools.
-  if (isScopedSession(sessionId)) return BASE_TOOLS.scoped.has(toolName)
+  // Before the registry lookup: a restricted caller whose record is missing must not be handed thread_owner's tools.
+  if (isRestrictedSession(sessionId)) return BASE_TOOLS.scoped.has(toolName)
   const info = registry.get(sessionId)
   if (!info) return BASE_TOOLS.thread_owner.has(toolName)
   if (BASE_TOOLS[info.sessionType].has(toolName)) return true
@@ -95,11 +95,11 @@ export function isToolAllowed(sessionId: string, toolName: string): boolean {
   return false
 }
 
-/** What a refused tool call says: a scoped session is told what it has, anyone else the plain refusal. */
+/** What a refused tool call says: a restricted session is told what it has, anyone else the plain refusal. */
 export function refusalText(sessionId: string, name: string): string {
   const hasTalks = talksToOf(registry.get(sessionId)).length > 0
-  return isScopedSession(sessionId)
-    ? `${name} is not available to a scoped session: it has set_description (on itself) and, each only in its own conversation, ${[...BASE_TOOLS.scoped].filter(t => t !== 'set_description' && (hasTalks || t !== 'send_to_thread')).join(', ')}`
+  return isRestrictedSession(sessionId)
+    ? `${name} is not available to a restricted session: it has set_description (on itself) and, each only in its own conversation, ${[...BASE_TOOLS.scoped].filter(t => t !== 'set_description' && (hasTalks || t !== 'send_to_thread')).join(', ')}`
     : `${name} is not available to this session`
 }
 

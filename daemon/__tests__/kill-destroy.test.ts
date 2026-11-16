@@ -21,7 +21,7 @@ import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import { registry, threadRegistry } from '../sessions.js'
 import type { SessionInfo } from '../sessions.js'
 import { gateway } from '../config.js'
-import type { InboundMessage } from '../../gateway.js'
+import type { InboundMessage } from '../../gateways/gateway.js'
 
 const THREAD = 'thread-kd-1'
 const PARENT = 'parent-channel-kd'

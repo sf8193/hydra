@@ -17,7 +17,7 @@ import { handleResumeIntercept } from '../commands/thread.js'
 import { projectDirName } from '../usage.js'
 import { buildForkPrompt, buildHandoffPrompt } from '../prompts/session.js'
 import { hydraPrompt } from '../prompts/request.js'
-import type { InboundMessage } from '../../gateway.js'
+import type { InboundMessage } from '../../gateways/gateway.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 
 process.stderr.write = (() => true) as any

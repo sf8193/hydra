@@ -23,7 +23,7 @@ import { refreshDashboard } from './dashboard.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './artifacts.js'
 import { fetchPrTitle, parsePrUrl } from '../connectors/github/pr-watch.js'
 import { ASK_PREDECESSOR_TIMEOUT_MS, normalizeReviewRounds, resolveCodexModelAlias, resolveOmpModelAlias } from '../shared/constants.js'
-import { isScopedSession, isToolAllowed, predecessorAsker, refusalText } from './tool-surface.js'
+import { isRestrictedSession, isToolAllowed, predecessorAsker, refusalText } from './tool-surface.js'
 import { parseRateLimits, reportUsage } from './usage-alerts.js'
 import { markYourTurn } from './home-status.js'
 
@@ -147,26 +147,26 @@ const handoffChecksInFlight = new Set<string>()
 
 const askingPredecessor = new Set<string>()  // session ids with an ask_predecessor fork running
 
-/** The argument that names where a scoped session's tool acts, by tool. */
-const SCOPED_PLACE_ARG: Readonly<Record<string, string>> = {
+/** The argument that names where a restricted session's tool acts, by tool. */
+const RESTRICTED_PLACE_ARG: Readonly<Record<string, string>> = {
   reply: 'chat_id', send_to_thread: 'chat_id', react: 'chat_id', edit_message: 'chat_id', delete_message: 'chat_id', download_attachment: 'chat_id', fetch_messages: 'channel',
 }
 
 /**
- * Why a scoped session may not make this call, or undefined. The tools it keeps work only where it speaks: its own session
+ * Why a restricted session may not make this call, or undefined. The tools it keeps work only where it speaks: its own session
  * thread, or a Slack conversation bound to its specialist (not its home channel). It never posts files. `send_to_thread` also goes
  * only to a specialist its `talks_to` names (talks-to.ts). isToolAllowed has already refused the tools it does not keep.
  */
-export function scopedRefusal(callerSessionId: string, name: string, args: Record<string, unknown>): string | undefined {
-  if (name === 'set_description') return args.session_id === callerSessionId ? undefined : "set_description: a scoped session describes only itself; session_id must be this session's own"
-  if (name === 'reply' && Array.isArray(args.files) && args.files.length) return 'reply: a scoped session posts text only, so remove files (attachments are not sent)'
+export function restrictedRefusal(callerSessionId: string, name: string, args: Record<string, unknown>): string | undefined {
+  if (name === 'set_description') return args.session_id === callerSessionId ? undefined : "set_description: a restricted session describes only itself; session_id must be this session's own"
+  if (name === 'reply' && Array.isArray(args.files) && args.files.length) return 'reply: a restricted session posts text only, so remove files (attachments are not sent)'
   if (name === 'send_to_thread') { const why = talksToRefusal(callerSessionId, args); if (why) return why }
-  const arg = SCOPED_PLACE_ARG[name]
+  const arg = RESTRICTED_PLACE_ARG[name]
   const target = arg ? args[arg] : undefined
   const own = registry.get(callerSessionId)
   if (typeof target === 'string' && ((!!own && target === own.threadId) || conversationBelongsTo(callerSessionId, target))) return undefined
   if (typeof target !== 'string' || !target) return `${name}: ${arg ?? 'chat_id'} is required: pass the ${arg ?? 'chat_id'} of ${arg === 'channel' ? 'the conversation you are reading' : 'the message you are answering'}`
-  return `${name}: ${arg} ${target} is not this session's own conversation; a scoped session acts only in its own thread or in a Slack conversation bound to its specialist`
+  return `${name}: ${arg} ${target} is not this session's own conversation; a restricted session acts only in its own thread or in a Slack conversation bound to its specialist`
 }
 
 export async function executeTool(name: string, args: Record<string, unknown>, callerSessionId?: string): Promise<ToolResult> {
@@ -177,9 +177,9 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
     if (callerSessionId && !isToolAllowed(callerSessionId, name)) {
       throw new Error(refusalText(callerSessionId, name))
     }
-    // A scoped session keeps the tools it has only for its own conversation.
-    if (callerSessionId && isScopedSession(callerSessionId)) {
-      const refusal = scopedRefusal(callerSessionId, name, args)
+    // A restricted session keeps the tools it has only for its own conversation.
+    if (callerSessionId && isRestrictedSession(callerSessionId)) {
+      const refusal = restrictedRefusal(callerSessionId, name, args)
       if (refusal) throw new Error(refusal)
     }
     // A private protocol helper must not bypass send_to_thread's visibility
@@ -625,8 +625,8 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       }
 
       case 'send_to_thread': {
-        // A scoped caller was held to its talks_to above (scopedRefusal): what it sends is rendered and landed by talks-to.ts, not by the route below.
-        if (callerSessionId && isScopedSession(callerSessionId)) return { content: [{ type: 'text', text: await sendTalk(callerSessionId, args) }] }
+        // A restricted caller was held to its talks_to above (restrictedRefusal): what it sends is rendered and landed by talks-to.ts, not by the route below.
+        if (callerSessionId && isRestrictedSession(callerSessionId)) return { content: [{ type: 'text', text: await sendTalk(callerSessionId, args) }] }
         const target = (args.target as string)?.trim()
         const msgType = (args.type as string)?.trim()
         const text = args.text as string
@@ -753,12 +753,12 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const replyInstruction = msgType === 'question'
           ? `\nRespond via send_to_thread(target="${senderName}", type="result", text="...").`
           : ''
-        // Into a scoped session, whoever sends: quoted, cut and labelled by hydra (talks-to.ts), never behind a header the sender can write into.
-        const intoScoped = isScopedSession(targetSession.sessionId)
+        // Into a restricted session, whoever sends: quoted, cut and labelled by hydra (talks-to.ts), never behind a header the sender can write into.
+        const intoRestricted = isRestrictedSession(targetSession.sessionId)
         transport.sendOrQueue(targetSession.sessionId, {
           type: 'notification',
           // The recipient learns what the human already saw, so its reply can add rather than repeat.
-          content: intoScoped
+          content: intoRestricted
             ? await envelopeFor({ from: senderName, type: msgType, ...(caller?.threadId && { conversation: caller.threadId }), text: delivered })
             : `[${msgType} from ${senderName}${quietOutcome?.posted ? ` · your thread shows: ${JSON.stringify(quietOutcome.headline)}` : ''}] ${delivered}${replyInstruction}`,
           meta: {

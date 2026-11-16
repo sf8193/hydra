@@ -2,7 +2,7 @@ import { chmodSync } from 'fs'
 import { homedir } from 'os'
 import { basename, join } from 'path'
 
-import type { ChatGateway } from '../gateway.js'
+import type { ChatGateway } from '../gateways/gateway.js'
 import { sourceEnvFiles } from '../shared/env-parse.js'
 import { captureSpawnVars } from '../shared/spawn-env.js'
 import { scrubTokenVarsInFile } from '../config/token-vars.js'
@@ -185,10 +185,10 @@ export const heartbeatPath = join(STATE_DIR, 'daemon.alive')
 export let gateway: ChatGateway
 
 if (PLATFORM === 'slack') {
-  const { SlackGateway } = await import('../slack-gateway.js')
+  const { SlackGateway } = await import('../gateways/slack.js')
   gateway = new SlackGateway(SLACK_APP_TOKEN!, { heartbeatPath })
 } else {
-  const { DiscordGateway } = await import('../discord-gateway.js')
+  const { DiscordGateway } = await import('../gateways/discord.js')
   // DiscordGateway owns its heartbeat via GatewayHealth — written only while the
   // socket is actually connected, so a wedged transport goes stale for the watchdog.
   gateway = new DiscordGateway({ heartbeatPath })

@@ -20,9 +20,9 @@ import {
 } from 'discord.js'
 import { readFileSync, writeFileSync, mkdirSync, statSync } from 'fs'
 import { sanitizeFilename, COUNT_EMOJI, SUPERSCRIPT } from './gateway.js'
-import { GatewayHealth } from './daemon/gateway-health.js'
-import { planReactionReconciliation } from './shared/reaction-reconcile.js'
-import { linkPreviewsOff } from './shared/link-previews.js'
+import { GatewayHealth } from '../daemon/gateway-health.js'
+import { planReactionReconciliation } from '../shared/reaction-reconcile.js'
+import { linkPreviewsOff } from '../shared/link-previews.js'
 import type {
   ChatGateway,
   InboundMessage,
@@ -37,7 +37,7 @@ import type {
   ReactionEvent,
   SessionVisualOpts,
 } from './gateway.js'
-import { ThrottledQueue } from './throttled-queue.js'
+import { ThrottledQueue } from '../throttled-queue.js'
 
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 const RECENT_SENT_CAP = 200

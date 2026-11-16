@@ -22,8 +22,8 @@ import { resolveEngine } from './engines/instances.js'
 import type { ProviderId } from './engines/engine-adapter.js'
 import { activeBackoff, clearBackoff, recordFailure, type Backoff } from './recovery-backoff.js'
 import { targetKeyForThread, withThreadLock } from '../specialists/specialists.js'
-import { PolicyRefusal } from './scope.js'
-import type { InboundMessage } from '../gateway.js'
+import { PolicyRefusal } from './restricted.js'
+import type { InboundMessage } from '../gateways/gateway.js'
 
 // ---------------------------------------------------------------------------
 // reviveThread — the one cascade: resume → fork → respawn

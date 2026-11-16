@@ -3,7 +3,7 @@ import { byteTmuxName } from '../shared/constants.js'
 import { readMainRecord } from '../shared/main-record.js'
 import { tmuxSync } from './tmux.js'
 import { claudeEngine } from './engines/instances.js'
-import type { InboundMessage } from '../gateway.js'
+import type { InboundMessage } from '../gateways/gateway.js'
 
 // Main (the byte) is launched by `hydra up`, not spawned by the daemon, so it has no registry record,
 // and a registered one would run every registry loop's thread/lifecycle logic on it. These are the few

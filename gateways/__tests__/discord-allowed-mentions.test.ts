@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { MessagePayload } from 'discord.js'
-import { DISCORD_ALLOWED_MENTIONS, DiscordGateway } from '../discord-gateway.js'
+import { DISCORD_ALLOWED_MENTIONS, DiscordGateway } from '../discord.js'
 
 test('Discord sends ping users and the replied-to author, never @everyone, @here or roles', () => {
   expect(DISCORD_ALLOWED_MENTIONS).toEqual({ parse: ['users'], repliedUser: true })

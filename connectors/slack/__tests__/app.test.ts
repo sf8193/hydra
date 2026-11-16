@@ -26,9 +26,9 @@ describe('slackManifest for an app other than default', () => {
 
 describe('slackManifest', () => {
   test('the name and description are the ones hydra.toml gives, quoted so any text stays a string', () => {
-    const m = manifestOf(withSlack('app_name = "Krust: #1"\napp_description = "Answers threads # in Slack."'))
-    expect(m.display_information).toEqual({ name: 'Krust: #1', description: 'Answers threads # in Slack.' })
-    expect(m.features.bot_user).toEqual({ display_name: 'Krust: #1', always_online: true })
+    const m = manifestOf(withSlack('app_name = "Acme helper: #1"\napp_description = "Answers threads # in Slack."'))
+    expect(m.display_information).toEqual({ name: 'Acme helper: #1', description: 'Answers threads # in Slack.' })
+    expect(m.features.bot_user).toEqual({ display_name: 'Acme helper: #1', always_online: true })
     expect(m.settings).toMatchObject({ socket_mode_enabled: true, org_deploy_enabled: false })
   })
 
@@ -53,7 +53,7 @@ describe('slackManifest', () => {
 
   test('the bot scopes are exactly the ones the startup scope check asks for, with every option on', () => {
     // Channels by name, DMs (the operator has a slack: address) and files: every option scopesNeeded knows.
-    const h = hydra(oneListener('#food', 'slopbot', '["anyone"]', '[places."slack:#food"]\nfiles = true\n'))
+    const h = hydra(oneListener('#food', 'helper', '["anyone"]', '[places."slack:#food"]\nfiles = true\n'))
     const checked = scopesNeeded(h)
     expect(checked).toEqual(Object.values(SLACK_APP_NEEDS.botScopes))
     const manifest = Bun.YAML.parse(slackManifest(h.slackApps.default)) as Manifest

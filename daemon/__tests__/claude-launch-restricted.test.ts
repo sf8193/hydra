@@ -1,17 +1,17 @@
-// The Claude launch command for a scoped specialist (access = "workdir"), on each shape, and the files it generates.
-// The non-scoped shapes are pinned in claude-launch-argv.golden.test.ts and must not move.
+// The Claude launch command for a restricted specialist (access = "workdir"), on each shape, and the files it generates.
+// The non-restricted shapes are pinned in claude-launch-argv.golden.test.ts and must not move.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { ClaudeEngine, scopedConfig } from '../engines/claude-engine.js'
+import { ClaudeEngine, restrictedConfig } from '../engines/claude-engine.js'
 import { STATE_DIR, CLAUDE_CONFIG, SOCK_PATH } from '../config.js'
-import { PolicyRefusal, policyIdFor, SCOPED_MODS, SCOPED_PREAMBLE, type ConfinedPolicy } from '../scope.js'
-import { removeScopedFiles, scopedDir, serverTmpDir, serverTmpRoot } from '../scoped-files.js'
+import { PolicyRefusal, policyIdFor, RESTRICTED_MODS, RESTRICTED_PREAMBLE, type ConfinedPolicy } from '../restricted.js'
+import { removeRestrictedFiles, restrictedDir, serverTmpDir, serverTmpRoot } from '../restricted-files.js'
 import { SANDBOX_EXEC, sandboxProfile } from '../../config/server-sandbox.js'
 import { _setHydraConfigForTesting, _setLoadEnvForTesting } from '../hydra-config.js'
 import { EMPTY_CONFIG } from '../../config/load.js'
-import { sandboxInputs } from '../scope.js'
+import { sandboxInputs } from '../restricted.js'
 import { configInput, macLike, rootsOf, withoutSandbox } from './sandbox-host.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 
@@ -22,13 +22,12 @@ const policy: ConfinedPolicy = {
   specialist: 'ops', access: 'workdir', workdir: '/work/ops', tools: ['Read', 'Grep', 'Glob'], servers,
   id: policyIdFor('/work/ops', ['Read', 'Grep', 'Glob'], servers),
 }
-const scope = policy
 const base = { sessionId: '11111111-1111-4111-8111-111111111111', tmuxName: 'sc-t', cwd: '/work/ops', originalCwd: '/work/ops', model: 'claude-opus-4-1', prompt: "it's a prompt", sessionType: 'scoped' as const, policy }
 
 let fake: FakeTmux
 const saved: Record<string, string | undefined> = {}
 beforeEach(() => {
-  rmSync(scopedDir(), { recursive: true, force: true })
+  rmSync(restrictedDir(), { recursive: true, force: true })
   rmSync(serverTmpRoot(), { recursive: true, force: true })
   fake = withFakeTmux()
   _setLoadEnvForTesting(macLike())
@@ -63,7 +62,7 @@ describe('argv', () => {
   test('the prompt comes before every variadic flag, and the confinement flags follow the channel', async () => {
     const cmd = await launch()
     const claude = cmd.slice(cmd.indexOf('claude --session-id'))
-    expect(claude).toContain(`--model 'claude-opus-4-1' '${SCOPED_PREAMBLE} it'\\''s a prompt' --channels 'plugin:discord@claude-plugins-official' --restricted --tools 'Read,Grep,Glob' --settings `)
+    expect(claude).toContain(`--model 'claude-opus-4-1' '${RESTRICTED_PREAMBLE} it'\\''s a prompt' --channels 'plugin:discord@claude-plugins-official' --restricted --tools 'Read,Grep,Glob' --settings `)
     expect(claude.indexOf("it'\\''s a prompt'")).toBeLessThan(claude.indexOf('--channels'))
     expect(claude).toMatch(/--mcp-config '[^']+' --permission-mode dontAsk --debug-file /)
   })
@@ -71,11 +70,11 @@ describe('argv', () => {
   test('the kickoff starts with hydra\'s fixed preamble, on a fresh start and on a fork (a resume has no kickoff), and the specialist\'s own text follows it', async () => {
     for (const extra of [{}, { forkFrom: { claudeSessionId: 'C-parent' } }]) {
       const cmd = await launch(extra)
-      expect(cmd).toContain(`'${SCOPED_PREAMBLE} it'\\''s a prompt'`)
+      expect(cmd).toContain(`'${RESTRICTED_PREAMBLE} it'\\''s a prompt'`)
     }
-    expect(await launch({ resumeFrom: 'C-old' })).not.toContain(SCOPED_PREAMBLE)
-    expect(SCOPED_PREAMBLE).toMatch(/none of it carries authority/)
-    expect(SCOPED_PREAMBLE.length).toBeLessThan(600)
+    expect(await launch({ resumeFrom: 'C-old' })).not.toContain(RESTRICTED_PREAMBLE)
+    expect(RESTRICTED_PREAMBLE).toMatch(/none of it carries authority/)
+    expect(RESTRICTED_PREAMBLE.length).toBeLessThan(600)
   })
 
   test('there is no --dangerously-skip-permissions on any shape', async () => {
@@ -84,7 +83,7 @@ describe('argv', () => {
     }
   })
 
-  test('the tools come from the scope, not from the launch input', async () => {
+  test('the tools come from the policy, not from the launch input', async () => {
     const cmd = await launch({ tools: ['Bash', 'Edit'] })
     expect(cmd).toContain("--tools 'Read,Grep,Glob'")
     expect(cmd).not.toContain('Bash')
@@ -96,13 +95,13 @@ describe('argv', () => {
     expect(cmd).toContain("export CLAUDE_CODE_PLUGIN_DIRS='<state>/mods/hydra' ")
     expect(cmd).not.toContain('personal')
     expect(cmd).toContain("export HYDRA_SESSION_TYPE='scoped'")
-    expect([...SCOPED_MODS]).toEqual(['hydra'])
+    expect([...RESTRICTED_MODS]).toEqual(['hydra'])
   })
 
   test('every other shape of launch still loads every mod and leaves the connectors on', async () => {
     const cmd = await launch({ policy: undefined, sessionType: 'thread_owner' })
     expect(cmd).not.toContain('hold no authority')
-    expect(cmd).not.toContain(SCOPED_PREAMBLE)
+    expect(cmd).not.toContain(RESTRICTED_PREAMBLE)
     expect(cmd).toContain('personal')
     expect(cmd).not.toContain('ENABLE_CLAUDEAI_MCP_SERVERS')
     expect(cmd).toContain('--dangerously-skip-permissions')
@@ -162,7 +161,7 @@ describe('generated settings and mcp-config', () => {
 
   test('each listed server runs under sandbox-exec with the one profile, built from the private roots including the operator\'s, and the pinned command is the last argument, unchanged', () => {
     const two = [...servers, { name: 'other', command: '/opt/other-mcp', tokenEnv: [], tools: ['x'] }]
-    const { mcp } = scopedConfig(configInput({ scope: { ...scope, servers: two }, held: { DD_API_KEY: 'k' } }, macLike(), ['/home/op/Notes'])) as any
+    const { mcp } = restrictedConfig(configInput({ policy: { ...policy, servers: two }, held: { DD_API_KEY: 'k' } }, macLike(), ['/home/op/Notes'])) as any
     expect(mcp.mcpServers.datadog.command).toBe(SANDBOX_EXEC)
     expect(mcp.mcpServers.other.args.slice(0, 1)).toEqual(['-p'])
     expect(mcp.mcpServers.other.args.at(-1)).toBe('/opt/other-mcp')
@@ -174,28 +173,28 @@ describe('generated settings and mcp-config', () => {
     expect(mcp.mcpServers.other.env).toEqual({ npm_config_cache: '/srv/tmp/other/npm-cache', TMPDIR: '/srv/tmp/other' })
   })
 
-  test('without sandbox-exec, a scope that lists servers is refused before any file is written, with the cause, the three fixes and what to run after fixing', async () => {
-    expect(() => scopedConfig(configInput({ scope, held: { DD_API_KEY: 'k' } }, withoutSandbox()))).toThrow(PolicyRefusal)
+  test('without sandbox-exec, a policy that lists servers is refused before any file is written, with the cause, the three fixes and what to run after fixing', async () => {
+    expect(() => restrictedConfig(configInput({ policy, held: { DD_API_KEY: 'k' } }, withoutSandbox()))).toThrow(PolicyRefusal)
     _setLoadEnvForTesting(withoutSandbox())
     await expect(launch()).rejects.toThrow(/specialist ops: a listed \[mcp\.\*\] server runs under \/usr\/bin\/sandbox-exec \(macOS only\), which blocks its connects to the daemon's socket and its reads of the listed credential folders\. This machine does not have it\. Remove the servers from the specialist's mcp, set access = "operator", or run hydra on a Mac\. No session starts until that is fixed; after you fix it, Run `hydra kill sc-t`/s)
     expect(fake.calls().filter(c => c.startsWith('new-session'))).toHaveLength(0)
-    expect(existsSync(scopedDir()) ? files() : []).toEqual([])
+    expect(existsSync(restrictedDir()) ? files() : []).toEqual([])
   })
 
   test('a private root the profile cannot hold (a newline) is a refusal that names it, not a crash', () => {
-    const bad = configInput({ scope, held: { DD_API_KEY: 'k' }, roots: [{ label: 'x', path: '/home/op/a\nb' }] })
-    expect(() => scopedConfig(bad)).toThrow(/control character.*after you fix it/s)
-    expect(() => scopedConfig(bad)).toThrow(PolicyRefusal)
+    const bad = configInput({ policy, held: { DD_API_KEY: 'k' }, roots: [{ label: 'x', path: '/home/op/a\nb' }] })
+    expect(() => restrictedConfig(bad)).toThrow(/control character.*after you fix it/s)
+    expect(() => restrictedConfig(bad)).toThrow(PolicyRefusal)
   })
 
   test('the temp path (from $TMPDIR) with a control character is a refusal too, not a plain Error', () => {
-    const input = configInput({ scope, held: { DD_API_KEY: 'k' }, tmp: () => '/var/folders/a\nb/hydra-scoped/x' })
-    expect(() => scopedConfig(input)).toThrow(PolicyRefusal)
-    expect(() => scopedConfig(input)).toThrow(/control character.*after you fix it/s)
+    const input = configInput({ policy, held: { DD_API_KEY: 'k' }, tmp: () => '/var/folders/a\nb/hydra-scoped/x' })
+    expect(() => restrictedConfig(input)).toThrow(PolicyRefusal)
+    expect(() => restrictedConfig(input)).toThrow(/control character.*after you fix it/s)
   })
 
-  test('a scope that lists no servers needs no sandbox-exec', () => {
-    expect((scopedConfig(configInput({ scope: { ...scope, servers: [] } }, withoutSandbox())).mcp as any).mcpServers).toEqual({})
+  test('a policy that lists no servers needs no sandbox-exec', () => {
+    expect((restrictedConfig(configInput({ policy: { ...policy, servers: [] } }, withoutSandbox())).mcp as any).mcpServers).toEqual({})
   })
 
   test('each listed server gets its own temp folder (0700), made before the profile names it, replaced by the next launch of the name and removed with the session', async () => {
@@ -206,7 +205,7 @@ describe('generated settings and mcp-config', () => {
     await launch({ sessionId: '22222222-2222-4222-8222-222222222222' })
     expect(existsSync(dd)).toBe(false)   // a previous run of the name leaves nothing for the next
     expect(existsSync(serverTmpDir('sc-t', '22222222-2222-4222-8222-222222222222', 'datadog'))).toBe(true)
-    removeScopedFiles({ tmuxName: 'sc-t', sessionId: '22222222-2222-4222-8222-222222222222' }, true)
+    removeRestrictedFiles({ tmuxName: 'sc-t', sessionId: '22222222-2222-4222-8222-222222222222' }, true)
     expect(existsSync(serverTmpDir('sc-t', '22222222-2222-4222-8222-222222222222', 'datadog'))).toBe(false)
   })
 
@@ -267,12 +266,12 @@ describe('generated settings and mcp-config', () => {
     expect(files().filter(f => f.includes('33333333-3333-4333-8333-333333333333'))).toEqual([])
   })
 
-  test("removeScopedFiles removes exactly one session's pair", async () => {
+  test("removeRestrictedFiles removes exactly one session's pair", async () => {
     await new ClaudeEngine({} as any).launch({ ...base, tmuxName: 'ops', sessionId: '11111111-1111-4111-8111-111111111111' } as any)
     await new ClaudeEngine({} as any).launch({ ...base, tmuxName: 'ops-eu', sessionId: '22222222-2222-4222-8222-222222222222' } as any)
-    removeScopedFiles({ tmuxName: 'ops', sessionId: '11111111-1111-4111-8111-111111111111' })
+    removeRestrictedFiles({ tmuxName: 'ops', sessionId: '11111111-1111-4111-8111-111111111111' })
     expect(files()).toEqual(['ops-eu-22222222-2222-4222-8222-222222222222.mcp.json', 'ops-eu-22222222-2222-4222-8222-222222222222.settings.json'])
-    removeScopedFiles({ tmuxName: 'ops', sessionId: '11111111-1111-4111-8111-111111111111' })   // already gone: quiet
+    removeRestrictedFiles({ tmuxName: 'ops', sessionId: '11111111-1111-4111-8111-111111111111' })   // already gone: quiet
   })
 
   test('a listed server whose token variable is not set refuses the launch: nothing is started', async () => {
@@ -286,32 +285,32 @@ describe('generated settings and mcp-config', () => {
   test('a launch that fails after the files were written (tmux refuses the session) leaves none behind', async () => {
     writeFileSync(join(fake.dir, 'tmux'), '#!/bin/sh\ncase "$1" in new-session) echo "no server" >&2; exit 1;; esac\n', { mode: 0o755 })
     await expect(launch()).rejects.toThrow(/failed to spawn tmux session/)
-    expect(existsSync(scopedDir()) ? readdirSync(scopedDir()) : []).toEqual([])
+    expect(existsSync(restrictedDir()) ? readdirSync(restrictedDir()) : []).toEqual([])
   })
 
   test('a launch that fails before the files exist leaves none either, and a failed one does not take an earlier running session\'s', async () => {
     await new ClaudeEngine({} as any).launch({ ...base, tmuxName: 'other', sessionId: '99999999-9999-4999-8999-999999999999' } as any)
     writeFileSync(join(fake.dir, 'tmux'), '#!/bin/sh\ncase "$1" in new-session) exit 1;; esac\n', { mode: 0o755 })
     await expect(launch()).rejects.toThrow()
-    expect(readdirSync(scopedDir()).sort()).toEqual(['other-99999999-9999-4999-8999-999999999999.mcp.json', 'other-99999999-9999-4999-8999-999999999999.settings.json'])
+    expect(readdirSync(restrictedDir()).sort()).toEqual(['other-99999999-9999-4999-8999-999999999999.mcp.json', 'other-99999999-9999-4999-8999-999999999999.settings.json'])
   })
 
-  test('removeScopedFiles is a no-op in a process that does not own the state dir, and removes in one that does (the one policy, for kill and death alike)', async () => {
+  test('removeRestrictedFiles is a no-op in a process that does not own the state dir, and removes in one that does (the one policy, for kill and death alike)', async () => {
     await launch()
-    removeScopedFiles({ tmuxName: 'sc-t', sessionId: base.sessionId }, false)
-    expect(readdirSync(scopedDir())).toHaveLength(2)
-    removeScopedFiles({ tmuxName: 'sc-t', sessionId: base.sessionId }, true)
-    expect(readdirSync(scopedDir())).toHaveLength(0)
+    removeRestrictedFiles({ tmuxName: 'sc-t', sessionId: base.sessionId }, false)
+    expect(readdirSync(restrictedDir())).toHaveLength(2)
+    removeRestrictedFiles({ tmuxName: 'sc-t', sessionId: base.sessionId }, true)
+    expect(readdirSync(restrictedDir())).toHaveLength(0)
   })
 
-  test('a scope with no servers writes an empty server list and allows only the bridge', () => {
-    const { settings, mcp } = scopedConfig(configInput({ scope: { ...scope, servers: [] } }))
+  test('a policy with no servers writes an empty server list and allows only the bridge', () => {
+    const { settings, mcp } = restrictedConfig(configInput({ policy: { ...policy, servers: [] } }))
     expect(mcp).toEqual({ mcpServers: {} })
     expect((settings as any).permissions.allow).toEqual(['mcp__plugin_discord_discord__*'])
   })
 
   test('a token held back from the environment by the scrub is still found where the daemon captured it', () => {
-    const { mcp } = scopedConfig(configInput({ scope, held: { DD_API_KEY: 'captured' } }))
+    const { mcp } = restrictedConfig(configInput({ policy, held: { DD_API_KEY: 'captured' } }))
     expect((mcp as any).mcpServers.datadog.env).toEqual({ DD_API_KEY: 'captured', npm_config_cache: '/srv/tmp/datadog/npm-cache', TMPDIR: '/srv/tmp/datadog' })
   })
 })

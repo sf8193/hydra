@@ -6,7 +6,7 @@ import {
 } from '../typed-delivery.js'
 import { emit } from '../event-bus.js'
 import { _setHydraConfigForTesting } from '../hydra-config.js'
-import { bornPolicy } from '../scope.js'
+import { bornPolicy } from '../restricted.js'
 import type { SessionInfo } from '../sessions.js'
 
 process.stderr.write = (() => true) as any

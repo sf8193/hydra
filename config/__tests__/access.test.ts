@@ -4,7 +4,7 @@ import { loadHydraConfig } from '../load.js'
 import type { HydraConfig, LoadEnv } from '../types.js'
 import { testLoadEnv } from './load-env.js'
 import { SANDBOX_EXEC } from '../server-sandbox.js'
-import { offLimitRoots, workdirScopeIssues } from '../workdir-scope.js'
+import { offLimitRoots, workdirRestrictionIssues } from '../restricted-workdir.js'
 
 const HOME = '/home/op'
 const STATE = '/home/op/.claude/channels/discord'
@@ -103,19 +103,19 @@ describe('tools (access = "workdir")', () => {
 describe('workdir (access = "workdir")', () => {
   const wd = (path: string) => errorsOf(spec('access = "workdir"', path))
   test('the home folder itself is refused', () => {
-    expect(wd('~')).toEqual(['specialists.ops.workdir: /home/op is your whole home folder: a scoped specialist\'s folder must be its own'])
+    expect(wd('~')).toEqual(['specialists.ops.workdir: /home/op is your whole home folder: a restricted specialist\'s folder must be its own'])
   })
   test.each([
     ['~/.ssh', '~/.ssh'], ['~/.config/app', '~/.config'], ['~/.claude/projects', '~/.claude'],
     ['~/.aws', '~/.aws'], ['~/.kube/cache', '~/.kube'], ['~/.gnupg', '~/.gnupg'], ['~/Library/Keychains', '~/Library/Keychains'],
     ['~/.docker', '~/.docker'], ['~/.claude.json', '~/.claude.json'], ['~/Library/Safari', '~/Library/Safari'], ['~/Library/Application Support/Firefox/profiles', '~/Library/Application Support/Firefox'], ['~/Library/Cookies', '~/Library/Cookies'],
   ])('%s is inside a private home folder', (path, root) => {
-    expect(wd(path)).toEqual([`specialists.ops.workdir: ${HOME}${path.slice(1)} is inside ${root}, which holds what a scoped specialist must not know`])
+    expect(wd(path)).toEqual([`specialists.ops.workdir: ${HOME}${path.slice(1)} is inside ${root}, which holds what a restricted specialist must not know`])
   })
   test('the state folder, and a folder inside it', () => {
     expect(wd(STATE)[0]).toContain('is inside ~/.claude')   // the state dir lives under ~/.claude/channels
     const apart: LoadEnv = { ...env, home: '/other', stateDir: '/srv/hydra-state', isDir: p => ['/srv/hydra-state', '/srv/hydra-state/sub'].includes(p) }
-    expect(errorsOf(spec('access = "workdir"', '/srv/hydra-state/sub'), apart)).toEqual(['specialists.ops.workdir: /srv/hydra-state/sub is inside the state folder /srv/hydra-state, which holds what a scoped specialist must not know'])
+    expect(errorsOf(spec('access = "workdir"', '/srv/hydra-state/sub'), apart)).toEqual(['specialists.ops.workdir: /srv/hydra-state/sub is inside the state folder /srv/hydra-state, which holds what a restricted specialist must not know'])
   })
   test('a folder that contains the state folder (or any private root) is refused', () => {
     const apart: LoadEnv = { ...env, home: '/other', stateDir: '/srv/hydra-state/x', isDir: p => p === '/srv/hydra-state' }
@@ -128,7 +128,7 @@ describe('workdir (access = "workdir")', () => {
   })
   test('an operator-configured private root, which lives in config and not in code', () => {
     const text = spec('access = "workdir"', '~/notes/hydra').replace('operator = "op"', 'operator = "op"\n[defaults]\nprivate_roots = ["~/notes"]')
-    expect(errorsOf(text)).toEqual(['specialists.ops.workdir: /home/op/notes/hydra is inside /home/op/notes (a private root in [defaults]), which holds what a scoped specialist must not know'])
+    expect(errorsOf(text)).toEqual(['specialists.ops.workdir: /home/op/notes/hydra is inside /home/op/notes (a private root in [defaults]), which holds what a restricted specialist must not know'])
     // The same folder with no private root configured loads: the loader knows no operator's paths.
     expect(ok(spec('access = "workdir"', '~/notes/hydra')).config.specialists.ops.access).toBe('workdir')
   })
@@ -139,7 +139,7 @@ describe('workdir (access = "workdir")', () => {
     expect(wd('~/agents/repo')[0]).toContain('is a git work tree')
   })
   test('a symlink that resolves outside it is refused', () => {
-    expect(wd('~/agents/links')).toEqual([`specialists.ops.workdir: /home/op/agents/links/notes -> /etc is a symlink that resolves outside /home/op/agents/links: a scoped specialist's folder must not lead anywhere else`])
+    expect(wd('~/agents/links')).toEqual([`specialists.ops.workdir: /home/op/agents/links/notes -> /etc is a symlink that resolves outside /home/op/agents/links: a restricted specialist's folder must not lead anywhere else`])
   })
   test('a symlinked path to a private folder is judged by where it resolves', () => {
     const viaLink: LoadEnv = { ...env, isDir: p => p === `${HOME}/agents/ops`, realpath: p => (p === `${HOME}/agents/ops` ? `${HOME}/.ssh` : p) }
@@ -161,7 +161,7 @@ describe('workdir (access = "workdir"): what Claude Code could still reach', () 
   test('a git repository nested inside it is refused, and the refusal says why although --restricted would not read it', () => {
     expect(wd('~/agents/nested')).toEqual(['specialists.ops.workdir: /home/op/agents/nested holds a git repository (/home/op/agents/nested/vendor/lib/.git): its history is in reach of anyone who can talk to this specialist; remove it, or give the specialist a folder with no repository in it'])
   })
-  test('a .mcp.json in a folder above it is refused (--restricted ignores it, but a scoped folder sits under none)', () => {
+  test('a .mcp.json in a folder above it is refused (--restricted ignores it, but a restricted folder sits under none)', () => {
     expect(wd('~/agents/under-mcp/work')).toEqual(['specialists.ops.workdir: /home/op/agents/under-mcp/work sits under a .mcp.json (/home/op/agents/under-mcp/.mcp.json): Claude Code reads that file for sessions started below it, and --restricted only happens to ignore it; move the folder, or remove the file'])
   })
   test('a folder too big to check its symlinks is refused, not trusted', () => {
@@ -215,7 +215,7 @@ describe('one list of off-limits roots, for the workdir check and the sandbox pr
     const roots = offLimitRoots(env, ['/home/op/Notes'])
     expect(roots.length).toBeGreaterThanOrEqual(12)
     // Some roots sit inside others here (the state dir is under ~/.claude), so the place named may be the outer one.
-    for (const r of roots) expect([r.label, workdirScopeIssues(env, `${r.path}/work`, ['/home/op/Notes'])[0]]).toEqual([r.label, expect.stringMatching(new RegExp(`^${r.path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/work is inside .*, which holds what a scoped specialist must not know$`))])
+    for (const r of roots) expect([r.label, workdirRestrictionIssues(env, `${r.path}/work`, ['/home/op/Notes'])[0]]).toEqual([r.label, expect.stringMatching(new RegExp(`^${r.path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/work is inside .*, which holds what a restricted specialist must not know$`))])
   })
 })
 

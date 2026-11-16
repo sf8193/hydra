@@ -1,7 +1,7 @@
 import { transport } from './bridge-transport.js'
 import { loadAccess, operatorIds } from './access.js'
 import { on } from './event-bus.js'
-import type { ChatGateway, ButtonDef } from '../gateway.js'
+import type { ChatGateway, ButtonDef } from '../gateways/gateway.js'
 
 // ---------------------------------------------------------------------------
 // Pending permissions store

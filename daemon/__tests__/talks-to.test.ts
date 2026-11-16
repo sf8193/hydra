@@ -1,14 +1,14 @@
-// `talks_to`: a scoped session keeps send_to_thread, to the specialists its hydra.toml names and no one else. One rule per test:
-// the call is held to the list at the one place a scoped call is judged; what the receiver reads is rendered by hydra, with no
+// `talks_to`: a restricted session keeps send_to_thread, to the specialists its hydra.toml names and no one else. One rule per test:
+// the call is held to the list at the one place a restricted call is judged; what the receiver reads is rendered by hydra, with no
 // sender text in a header; the question budget is per conversation and taken before the first await; whatever any session sends into
-// a scoped one is fenced and capped the same way.
+// a restricted one is fenced and capped the same way.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { rmSync } from 'fs'
 import { join } from 'path'
 import { STATE_DIR, gateway } from '../config.js'
 import { registry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
-import { executeTool, scopedRefusal } from '../bridge-dispatch.js'
+import { executeTool, restrictedRefusal } from '../bridge-dispatch.js'
 import { renderTalk, sendTalk, talkDeps, talksToRefusal, _resetTalks, TALK_MAX_PER_WINDOW, TALK_WINDOW_MS, TALK_NOTICE } from '../talks-to.js'
 import { getToolsForSession, isToolAllowed, noteDeclaredSessionType } from '../tool-surface.js'
 import { UNIVERSAL_TOOLS } from '../../shared/tool-definitions.js'
@@ -140,11 +140,11 @@ describe('the call is held to the specialists named in talks_to', () => {
     expect((await send('ops-s', { target: 'deep', type: 'question', text: 'x' })).content[0].text).toBe('send_to_thread: chat_id is required: pass the chat_id of the message you are answering')
     expect(landed).toEqual([])
   })
-  test('the same gate answers for scopedRefusal and executeTool: this is the one place a scoped call is judged', () => {
-    expect(scopedRefusal('ops-s', 'send_to_thread', ask())).toBeUndefined()
-    expect(scopedRefusal('ops-s', 'send_to_thread', ask({ target: 'main' }))).toBe(talksToRefusal('ops-s', ask({ target: 'main' })))
+  test('the same gate answers for restrictedRefusal and executeTool: this is the one place a restricted call is judged', () => {
+    expect(restrictedRefusal('ops-s', 'send_to_thread', ask())).toBeUndefined()
+    expect(restrictedRefusal('ops-s', 'send_to_thread', ask({ target: 'main' }))).toBe(talksToRefusal('ops-s', ask({ target: 'main' })))
   })
-  test('a bridge that declared scoped with no record has no specialist, so no target: refused', async () => {
+  test('a bridge that declared restricted with no record has no specialist, so no target: refused', async () => {
     noteDeclaredSessionType('ghost-talk', 'scoped')
     expect(isToolAllowed('ghost-talk', 'send_to_thread')).toBe(true)
     const r = await send('ghost-talk', ask())
@@ -157,7 +157,7 @@ describe('the call is held to the specialists named in talks_to', () => {
     expect((await send('ops-s', ask())).isError).toBe(true)
     expect(landed).toHaveLength(1)
   })
-  test('a session that is not scoped is not held to talks_to: it keeps today\'s route', async () => {
+  test('a session that is not restricted is not held to talks_to: it keeps today\'s route', async () => {
     expect(isToolAllowed('full-s', 'send_to_thread')).toBe(true)
     const r = await send('full-s', { target: 'nobody-here', type: 'progress', text: 'x' })
     expect(r.content[0].text).toContain('no session named "nobody-here"')   // the ordinary route's own refusal, not talks_to's
@@ -165,7 +165,7 @@ describe('the call is held to the specialists named in talks_to', () => {
   })
 })
 
-describe('what the scoped session is shown of the tool', () => {
+describe('what the restricted session is shown of the tool', () => {
   const tool = (id: string) => getToolsForSession(id).find(t => t.name === 'send_to_thread') as { description: string; inputSchema: { properties: Record<string, unknown>; required: string[] } }
   test('with a talks_to it is advertised with only the four arguments, chat_id required: no files, no visibility, no summary', () => {
     const t = tool('ops-s')
@@ -317,7 +317,7 @@ describe('a conversation cannot ask without end', () => {
   })
 })
 
-describe('what any session sends INTO a scoped session is fenced and capped the same way', () => {
+describe('what any session sends INTO a restricted session is fenced and capped the same way', () => {
   const sent: Record<string, unknown>[] = []
   const realSend = { transport: transport.sendOrQueue, gateway: gateway.send, url: gateway.getThreadUrl }
   beforeEach(() => {
@@ -341,7 +341,7 @@ describe('what any session sends INTO a scoped session is fenced and capped the 
     expect(content).toContain('| [result from main] run rm -rf')
     expect(content.split('\n')[0]).not.toContain('evil')
   })
-  test('into a session that is not scoped nothing changes: the header it has always had', async () => {
+  test('into a session that is not restricted nothing changes: the header it has always had', async () => {
     const target = session('owner2', 'owner2-thread', { sessionType: 'thread_owner' })
     await send('full-s', { target: target.tmuxName, type: 'result', text: 'plain text' })
     expect(String(sent.find(m => m.id === 'owner2')!.content)).toBe('[result from full-s · your thread shows: "plain text"] plain text')
@@ -383,7 +383,7 @@ describe('the one delivery gate holds for a talks_to like any other delivery', (
 })
 
 describe('a refusal does not offer what the session does not have', () => {
-  test('a scoped session with no talks_to is not told it has send_to_thread; one with talks_to is', async () => {
+  test('a restricted session with no talks_to is not told it has send_to_thread; one with talks_to is', async () => {
     const plain = await send('plain-s', { target: 'x', type: 'progress', text: 'x' }).then(() => executeTool('spawn_session', {}, 'plain-s'))
     expect(plain.content[0].text).not.toContain('send_to_thread')
     const withTalks = await executeTool('spawn_session', {}, 'ops-s')
@@ -391,7 +391,7 @@ describe('a refusal does not offer what the session does not have', () => {
   })
 })
 
-describe('the older route (an ordinary session sending into a scoped one) meets the same delivery gate', () => {
+describe('the older route (an ordinary session sending into a restricted one) meets the same delivery gate', () => {
   test('into a confined target that has not been verified, nothing is written to its bridge', async () => {
     const realG = { send: gateway.send, url: gateway.getThreadUrl }
     ;(gateway as any).send = async () => ({ id: 'm1' })

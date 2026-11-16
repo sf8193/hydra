@@ -8,8 +8,8 @@ flowchart TD
     end
 
     subgraph gateway["Gateway Process"]
-        dg["discord-gateway.ts"]
-        sg["slack-gateway.ts"]
+        dg["gateways/discord.ts"]
+        sg["gateways/slack.ts"]
         gwh["gateway-health.ts<br/>shard lifecycle + reconnect"]
     end
 

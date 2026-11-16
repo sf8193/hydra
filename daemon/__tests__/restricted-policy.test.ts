@@ -2,7 +2,7 @@
 // believed, the one remedy sentence, and the one rate limit behind every notice a thread is sent.
 import { describe, expect, test } from 'bun:test'
 import { NoticeLimiter } from '../notice-limit.js'
-import { bornPolicy, OPERATOR_SCOPE, policyDrifted, policyIdFor, policyProblem, remedy, type LaunchPolicy } from '../scope.js'
+import { bornPolicy, OPERATOR_POLICY_ID, policyDrifted, policyIdFor, policyProblem, remedy, type LaunchPolicy } from '../restricted.js'
 import type { HydraConfig } from '../../config/types.js'
 
 const server = (over: Partial<LaunchPolicy['servers'] extends (infer S)[] | undefined ? S : never> = {}) => ({ name: 'datadog', command: '/usr/local/bin/datadog-mcp', tokenEnv: ['DD_API_KEY'], tools: ['a'], ...over })
@@ -10,7 +10,7 @@ const confinedPolicy = (over: Partial<LaunchPolicy> = {}): LaunchPolicy => {
   const base = { specialist: 'ops', access: 'workdir' as const, workdir: '/w/ops', tools: ['Read', 'Grep'], servers: [server()], ...over }
   return { ...base, id: policyIdFor(base.workdir!, base.tools!, base.servers!) }
 }
-const operatorPolicy: LaunchPolicy = { specialist: 'ops', access: 'operator', id: OPERATOR_SCOPE }
+const operatorPolicy: LaunchPolicy = { specialist: 'ops', access: 'operator', id: OPERATOR_POLICY_ID }
 
 describe('policyDrifted says what differs, field by field', () => {
   test('nothing differs: empty', () => {

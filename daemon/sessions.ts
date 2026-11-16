@@ -4,8 +4,8 @@ import { occupancy, occupied } from './session-reachability.js'
 import { join } from 'path'
 import { STATE_DIR, STATE_WRITABLE } from './config.js'
 import { emit } from './event-bus.js'
-import { removeScopedFiles } from './scoped-files.js'
-import type { LaunchPolicy } from './scope.js'
+import { removeRestrictedFiles } from './restricted-files.js'
+import type { LaunchPolicy } from './restricted.js'
 import { atomicWriteFileSync, baseNameFromBranch } from './util.js'
 import { tmuxSessionState, tmuxSync } from './tmux.js'
 import { CAPABILITY_TOOLS } from '../shared/constants.js'
@@ -90,12 +90,12 @@ export type SessionInfo = {
   contextUsage?: { usedTokens: number; contextWindow: number; percent: number; updatedAt: number }
   sessionType: SessionType
   /**
-   * What a specialist's session may reach, decided once when it was born (scope.ts): access and, for `workdir`, the one folder it
+   * What a specialist's session may reach, decided once when it was born (restricted.ts): access and, for `workdir`, the one folder it
    * runs in, its tools and servers, with an id that changes when any of them does. `launch()` builds the folder, argv, env and files
    * from it; birth re-checks the folder; delivery compares it with hydra.toml. Absent: no specialist fills it.
    */
   policy?: LaunchPolicy
-  /** A confined session's start was checked against its policy (engines/claude-verify.ts) and passed. Persisted. Without it a confined session takes no message (scope.ts `unverified`). */
+  /** A confined session's start was checked against its policy (engines/claude-verify.ts) and passed. Persisted. Without it a confined session takes no message (restricted.ts `unverified`). */
   verified?: true
   label?: SessionLabel
   capabilities?: Capability[]
@@ -275,7 +275,7 @@ export type SpawnOpts = {
   cwd?: string                // a fresh launch's working dir (a specialist's workdir) in place of SPAWN_CWD; a fork, resume or worktree wins
   tools?: string[]            // Claude --tools whitelist (must include MCP tools with prefix)
   sessionType?: SessionType  // declared at spawn — determines base tool set (a specialist with access = "workdir" is always `scoped`)
-  specialist?: string        // the specialist a caller names as the one this session acts for (a fill, a conversation's own session); its launch policy is decided from hydra.toml at birth (scope.ts)
+  specialist?: string        // the specialist a caller names as the one this session acts for (a fill, a conversation's own session); its launch policy is decided from hydra.toml at birth (restricted.ts)
   worktree?: string           // git repo subdirectory to create a worktree from (structural alternative to topic prefix)
   worktreeBranchSuffix?: string // appended to `wt/<name>` to avoid branch collisions between same-named builders
   preserveWorktree?: boolean  // recovery: reuse the dead session's on-disk worktree instead of destroying+recreating it (keeps unpushed work + lets --resume find the transcript)
@@ -762,8 +762,8 @@ export const threadRegistry = new ThreadRegistry()
 export function markDead(info: SessionInfo, at = Date.now()): void {
   const fresh = info.deadAt === undefined
   info.deadAt ??= at
-  // A scoped session's generated config holds token values: gone with the session (a resume writes its own).
-  removeScopedFiles(info)
+  // A restricted session's generated config holds token values: gone with the session (a resume writes its own).
+  removeRestrictedFiles(info)
   registry.persist()
   threadRegistry.closeHistoryEntry(info.threadId, info)
   if (fresh) emit('session:marked-dead', { sessionId: info.sessionId, tmuxName: info.tmuxName })

@@ -1,13 +1,13 @@
-// `talks_to`: how a scoped session speaks to another session, and how any session's words are shown to a scoped one.
+// `talks_to`: how a restricted session speaks to another session, and how any session's words are shown to a restricted one.
 //
 // A confined specialist answers only the conversation it was asked in. Where hydra.toml gives it `talks_to = ["ops-deep"]`, it
 // also keeps send_to_thread, to those specialists and no one else (never `main`, byte or a session by name). The gate is
-// `talksToRefusal`, called from bridge-dispatch `scopedRefusal`: the one place a scoped call is judged, before any handler runs.
+// `talksToRefusal`, called from bridge-dispatch `restrictedRefusal`: the one place a restricted call is judged, before any handler runs.
 //
 // What the receiver reads is rendered here, never by the sender. Every line of the sender's text is quoted and cut (shared/
 // untrusted-text.ts, the same primitives the Slack delivery uses); who sent it and where that conversation is
 // ride on one header line as attributes hydra fills in, so no sender text can reach a header. The header names the sender only.
-// Everything a session sends INTO a scoped session is rendered this way (renderTalk), whoever sent it.
+// Everything a session sends INTO a restricted session is rendered this way (renderTalk), whoever sent it.
 
 import { randomBytes } from 'crypto'
 import { registry, sessionEmoji } from './sessions.js'
@@ -22,7 +22,7 @@ import { slackConversationLink } from '../connectors/slack/runtime.js'
 import { parseConversation, conversationId } from '../connectors/slack/conversation.js'
 import { attr, fence, quoteBody, UNTRUSTED_TEXT_MAX_CHARS } from '../shared/untrusted-text.js'
 
-/** What a scoped session may send: a question, or the answer to one. (`progress` has no place in a hand-off.) */
+/** What a restricted session may send: a question, or the answer to one. (`progress` has no place in a hand-off.) */
 export const TALK_TYPES = ['question', 'result'] as const
 
 /** At most this many questions, and this many results, per conversation in the window: one conversation, a hijacked specialist or two specialists answering each other cannot send without end. */
@@ -78,7 +78,7 @@ export function renderTalk(t: Talk): string {
   return fence('SESSION-UNTRUSTED', nonce, attrs, [TALK_NOTICE, quoteBody(t.text, UNTRUSTED_TEXT_MAX_CHARS, cut => ` […truncated ${cut} chars; ask the sender for the rest]`)])
 }
 
-/** What any session's words into a scoped session look like: the envelope, with its link looked up. */
+/** What any session's words into a restricted session look like: the envelope, with its link looked up. */
 export async function envelopeFor(t: Omit<Talk, 'link'>): Promise<string> {
   const link = t.conversation ? await talkDeps.linkOf(t.conversation).catch(() => undefined) : undefined
   return renderTalk({ ...t, ...(link && { link }) })
@@ -88,9 +88,9 @@ export async function envelopeFor(t: Omit<Talk, 'link'>): Promise<string> {
 const listed = (names: readonly string[]): string => names.join(', ')
 
 /**
- * Why a scoped session may not make this send_to_thread, or undefined. Called with the caller already known to be scoped (a
- * scoped call is judged in `scopedRefusal`, ahead of every handler). Holds: a specialist that lists the target, a question or a
- * result, text, no files, and the public route (a scoped session has no parent to send privately to). The conversation it is about is
+ * Why a restricted session may not make this send_to_thread, or undefined. Called with the caller already known to be restricted (a
+ * restricted call is judged in `restrictedRefusal`, ahead of every handler). Holds: a specialist that lists the target, a question or a
+ * result, text, no files, and the public route (a restricted session has no parent to send privately to). The conversation it is about is
  * held to its own by the caller's place check.
  */
 export function talksToRefusal(callerSessionId: string, args: Record<string, unknown>): string | undefined {
@@ -101,8 +101,8 @@ export function talksToRefusal(callerSessionId: string, args: Record<string, unk
   const type = typeof args.type === 'string' ? args.type.trim() : ''
   if (!(TALK_TYPES as readonly string[]).includes(type)) return `send_to_thread: type must be one of ${TALK_TYPES.join(', ')}`
   if (typeof args.text !== 'string' || !args.text.trim()) return 'send_to_thread: the text is empty: say what you need (question) or your answer (result)'
-  if (Array.isArray(args.files) && args.files.length) return 'send_to_thread: a scoped session sends text only, so remove files (attachments are not sent)'
-  if (args.visibility !== undefined && args.visibility !== 'public') return 'send_to_thread: a scoped session has no private route; leave visibility out'
+  if (Array.isArray(args.files) && args.files.length) return 'send_to_thread: a restricted session sends text only, so remove files (attachments are not sent)'
+  if (args.visibility !== undefined && args.visibility !== 'public') return 'send_to_thread: a restricted session has no private route; leave visibility out'
   return undefined
 }
 
@@ -116,7 +116,7 @@ function canonicalConversation(raw: string): string {
 export function _resetTalks(): void { asked.clear() }
 
 /**
- * Sends a scoped caller's question or result. The gate has run (`talksToRefusal`, and the place check for `chat_id`); this holds the
+ * Sends a restricted caller's question or result. The gate has run (`talksToRefusal`, and the place check for `chat_id`); this holds the
  * rest: a question takes a slot in its conversation's budget (checked and taken in one synchronous step, before the first await, so
  * concurrent calls cannot all see room; the slot is never given back), then the envelope is rendered and landed. Errors are written for
  * the model that reads them; what the operator needs goes to the log.

@@ -5,7 +5,7 @@
 // callers just call info.adapter.deliver(...) — no dispatch logic needed.
 
 import type { SessionInfo, SpawnOpts } from '../sessions.js'
-import type { ConfinedPolicy, LaunchPolicy } from '../scope.js'
+import type { ConfinedPolicy, LaunchPolicy } from '../restricted.js'
 import type { BlockingState } from '../pane-probe.js'
 import type { PhaseTotals, TokenTotals } from '../usage.js'
 import type { LatchPhase, UsagePhase } from '../usage-phase.js'
@@ -129,7 +129,7 @@ export type LaunchInput = {
   readonly resumeOmp?: { fromSessionId: string }                 // omp: continue the session file of this dead hydra session
   readonly threadId?: string                                     // the chat thread this session serves; exported to its env
   readonly sessionType?: SessionInfo['sessionType']              // and its role there; exported to its env
-  readonly policy?: LaunchPolicy                                 // what a specialist's session may reach, decided at its birth (scope.ts). In launch() alone, access = "workdir" decides the folder, argv, env and files (confined, in policy.workdir); absent or operator: as ever
+  readonly policy?: LaunchPolicy                                 // what a specialist's session may reach, decided at its birth (restricted.ts). In launch() alone, access = "workdir" decides the folder, argv, env and files (confined, in policy.workdir); absent or operator: as ever
 }
 
 export type LaunchResult = {

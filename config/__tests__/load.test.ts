@@ -458,8 +458,8 @@ to = "desk"
 describe('[connectors.slack] app_name and app_description', () => {
   const slack = (lines: string) => `${BASE}\n[connectors.slack]\nbot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"\n${lines}\n`
   test('are kept as given, and defaulted when unset', () => {
-    expect(ok(slack('app_name = "Krust"\napp_description = "Answers the threads it is tagged in."')).config.slackApps.default)
-      .toEqual({ id: 'default', botTokenEnv: 'CONNECTOR_SLACK_BOT_TOKEN', displayName: 'Krust', description: 'Answers the threads it is tagged in.' })
+    expect(ok(slack('app_name = "Acme helper"\napp_description = "Answers the threads it is tagged in."')).config.slackApps.default)
+      .toEqual({ id: 'default', botTokenEnv: 'CONNECTOR_SLACK_BOT_TOKEN', displayName: 'Acme helper', description: 'Answers the threads it is tagged in.' })
     expect(ok(slack('')).config.slackApps.default).toEqual({ id: 'default', botTokenEnv: 'CONNECTOR_SLACK_BOT_TOKEN', displayName: 'hydra', description: SLACK_APP_DEFAULTS.description })
   })
   test('past Slack\'s limits (35 and 140 characters) are refused', () => {
@@ -486,8 +486,8 @@ display_name = "Sales helper"
 description = "Answers sales threads."
 `
   test('[connectors.slack] loads as the app `default`, with every default filled in; there is no second copy', () => {
-    const c = ok(single('user_token_env = "HYDRA_SLACK_USER_TOKEN"\napp_name = "Krust"\napp_description = "Hears threads."')).config
-    expect(c.slackApps).toEqual({ default: { id: 'default', botTokenEnv: 'SLOPBOT_SLACK_BOT_TOKEN', appTokenEnv: 'SLOPBOT_SLACK_APP_TOKEN', userTokenEnv: 'HYDRA_SLACK_USER_TOKEN', displayName: 'Krust', description: 'Hears threads.' } })
+    const c = ok(single('user_token_env = "HYDRA_SLACK_USER_TOKEN"\napp_name = "Acme helper"\napp_description = "Hears threads."')).config
+    expect(c.slackApps).toEqual({ default: { id: 'default', botTokenEnv: 'SLOPBOT_SLACK_BOT_TOKEN', appTokenEnv: 'SLOPBOT_SLACK_APP_TOKEN', userTokenEnv: 'HYDRA_SLACK_USER_TOKEN', displayName: 'Acme helper', description: 'Hears threads.' } })
     expect(c.connectors).toEqual({})
     expect(defaultSlackApp(c)).toBe(c.slackApps.default)
   })

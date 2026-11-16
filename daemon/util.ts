@@ -2,7 +2,7 @@ import { realpathSync } from 'fs'
 import { join, sep } from 'path'
 import { gateway, STATE_DIR, STATE_WRITABLE } from './config.js'
 import { isUnder } from '../shared/path-containment.js'
-import { formatDiscordTables } from '../discord-table-format.js'
+import { formatDiscordTables } from '../gateways/discord-table-format.js'
 import { parseSessionLabel, type SessionLabel } from '../shared/constants.js'
 
 import { atomicWriteFileSync as writeAtomically } from '../shared/atomic-write.js'

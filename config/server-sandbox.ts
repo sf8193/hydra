@@ -2,7 +2,7 @@
 // `/usr/bin/sandbox-exec`); where it is missing, a specialist that lists servers is refused, never run without it.
 //
 // BEST-EFFORT HYGIENE, NOT CONTAINMENT. A listed server is code the operator trusts with their own privileges (SERVER_TRUST_SENTENCE in
-// daemon/scope.ts); the per-server `tools` list is the control. This profile is a layer proven by probes on one macOS version, written
+// daemon/restricted.ts); the per-server `tools` list is the control. This profile is a layer proven by probes on one macOS version, written
 // to stop a buggy or unsophisticated server from doing the obvious damage. It does not stop a hostile one.
 //
 // The profile is one fixed text for every operator, which the server's own children inherit. It starts from "allow everything" and
@@ -13,7 +13,7 @@
 //     or ~/.claude.json;
 //   - reading the contents of the other servers' temp folders (the parent folder, except its own; their names and sizes stay visible,
 //     since `mkdir -p` has to look at its parents);
-//   - reads and writes of the places a scoped specialist must not know (workdir-scope.ts `offLimitRoots`, the one list; a floor, not a
+//   - reads and writes of the places a restricted specialist must not know (restricted-workdir.ts `offLimitRoots`, the one list; a floor, not a
 //     complete inventory);
 //   - another process's environment: `kern.procargs*` together with process-info on anything but itself and its children. BOTH are
 //     needed, and `(target others)` is not enough: it leaves out the server's own process group, where claude sits;
@@ -33,7 +33,7 @@
 
 import { resolve } from 'path'
 import type { LoadEnv } from './types.js'
-import type { PrivateRoot } from './workdir-scope.js'
+import type { PrivateRoot } from './restricted-workdir.js'
 
 export const SANDBOX_EXEC = '/usr/bin/sandbox-exec'
 /** The one local socket a server needs: name lookup. */
@@ -70,11 +70,11 @@ function literal(path: string): string {
 /** The only devices a server may write besides its own temp folder: the null device and what dtrace-aware runtimes open at start. */
 const WRITABLE_DEVICES = ['/dev/null', '/dev/dtracehelper']
 
-/** Where a server may write: its own folder, which sits under `root`, the folder all scoped servers' folders share. */
+/** Where a server may write: its own folder, which sits under `root`, the folder all restricted servers' folders share. */
 export type ServerFolders = { root: string; dir: string }
 
 /**
- * The profile text for one server. `roots` (workdir-scope.ts `offLimitRoots`) are denied for reading and writing, each by its path
+ * The profile text for one server. `roots` (restricted-workdir.ts `offLimitRoots`) are denied for reading and writing, each by its path
  * and by its resolved path (Seatbelt matches the resolved one); `dir` is the one folder the server may write in, also by both, and
  * `root` is unreadable except for it. A later rule wins, so the allowances come after the denials they carve out.
  */

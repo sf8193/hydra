@@ -1,15 +1,15 @@
 // Verifying a start from its own debug file (hydra#608): what Claude Code says it loaded, against the policy the launch was built from.
-// The fixture is the relevant lines of a real launch's --debug-file (claude 2.1.323, from the live test in scoped-claude.live.test.ts);
+// The fixture is the relevant lines of a real launch's --debug-file (claude 2.1.323, from the live test in restricted-claude.live.test.ts);
 // each refusal is that file with one thing added or taken away, so a test that passes proves a line of it is what the verdict reads.
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { expectedLoad, mismatches, readLoaded, verifyDeps, verifyLaunch } from '../engines/claude-verify.js'
 import { BRIDGE_MCP_SERVER_KEY } from '../plugin-manifest.js'
-import { serverToolRule } from '../scope.js'
-import type { ConfinedPolicy } from '../scope.js'
+import { serverToolRule } from '../restricted.js'
+import type { ConfinedPolicy } from '../restricted.js'
 
-const REAL = readFileSync(join(import.meta.dir, 'fixtures', 'scoped-debug.txt'), 'utf8')
+const REAL = readFileSync(join(import.meta.dir, 'fixtures', 'restricted-debug.txt'), 'utf8')
 const policy = { servers: [{ name: 'stub', command: '/bin/stub', tokenEnv: ['STUB_KEY'], tools: ['search_logs'] }] } as Pick<ConfinedPolicy, 'servers'>
 const t = (n: number) => `2026-11-13T04:34:${String(n).padStart(2, '0')}.000Z [DEBUG] `
 const withLines = (...lines: string[]) => REAL + lines.map(l => `${t(30)}${l}\n`).join('')

@@ -6,7 +6,7 @@
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { withHydraTomlLock, writeIfUnchanged } from './append.js'
-import { formatIssues, loadHydraConfig, SCOPE_KEYS } from './load.js'
+import { formatIssues, loadHydraConfig, RESTRICTION_KEYS } from './load.js'
 import { appendOnly, appendText, HYDRA_TOML, hydraTomlInUse, toToml } from './migrate.js'
 import type { LoadEnv } from './types.js'
 
@@ -33,8 +33,8 @@ export function planAddFragment(stateDir: string, env: LoadEnv, fragmentText: st
   const loose = flat.find(e => e.id === '')
   if (loose) return { ok: false, error: `${source}: ${loose.sec} must be [${loose.sec}.<id>] tables` }
   // What a session may reach is the operator's to set by hand: a fragment comes from another repo, and a table it names can't widen or narrow that.
-  const scoped = flat.flatMap(e => e.sec === 'specialists' ? SCOPE_KEYS.filter(k => k in e.t).map(k => `[specialists.${e.id}] ${k}`) : [])
-  if (scoped.length) return { ok: false, error: `${source} sets ${scoped.join(', ')}: access, tools, mcp and talks_to say what a specialist's session may reach, and only a hand edit of hydra.toml sets them (and the [mcp.*] servers they name)` }
+  const restricted = flat.flatMap(e => e.sec === 'specialists' ? RESTRICTION_KEYS.filter(k => k in e.t).map(k => `[specialists.${e.id}] ${k}`) : [])
+  if (restricted.length) return { ok: false, error: `${source} sets ${restricted.join(', ')}: access, tools, mcp and talks_to say what a specialist's session may reach, and only a hand edit of hydra.toml sets them (and the [mcp.*] servers they name)` }
   if (!flat.length) return { ok: false, error: `${source} has no [specialists.<id>] or [schedules.<id>] table to add` }
 
   const existingText = readFileSync(path, 'utf8')

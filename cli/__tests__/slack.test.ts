@@ -16,10 +16,10 @@ const OP = 'operator = "op"\n[people.op]\nids = ["slack:U0OP"]\n'
 
 describe('hydra slack manifest', () => {
   test('prints the manifest for the name hydra.toml gives, and only the manifest', () => {
-    const r = manifest(`${OP}[connectors.slack]\nbot_token_env = "HYDRA_SLACK_BOT_TOKEN"\napp_name = "Krust"\n`)
+    const r = manifest(`${OP}[connectors.slack]\nbot_token_env = "HYDRA_SLACK_BOT_TOKEN"\napp_name = "Acme helper"\n`)
     expect(r.code).toBe(0)
     expect(r.err).toBe('')
-    expect(Bun.YAML.parse(r.out)).toMatchObject({ display_information: { name: 'Krust' }, features: { bot_user: { display_name: 'Krust' } } })
+    expect(Bun.YAML.parse(r.out)).toMatchObject({ display_information: { name: 'Acme helper' }, features: { bot_user: { display_name: 'Acme helper' } } })
   })
   test('without hydra.toml, the defaults (said on stderr); a hydra.toml that does not load, no manifest', () => {
     const none = manifest()

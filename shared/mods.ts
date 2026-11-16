@@ -32,7 +32,7 @@ export function syncMods(repoDir: string, stateDir: string): string[] {
 
 /**
  * The `export` line that hands a session the mods the daemon synced at boot. `only` names the mods a session may load
- * (a scoped specialist gets the tracked `hydra` mod and none of the operator's `mods.local`).
+ * (a restricted specialist gets the tracked `hydra` mod and none of the operator's `mods.local`).
  */
 export function modsExport(stateDir: string, only?: readonly string[]): string {
   const dest = join(stateDir, 'mods')

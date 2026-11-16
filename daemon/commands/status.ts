@@ -11,7 +11,7 @@ import { getWatchesBySession } from '../../connectors/github/pr-watch.js'
 import { getActiveRuns } from '../protocol-runner.js'
 import { raindropStatusLine } from '../raindrop.js'
 import { isForMain, mainAlive, mainContext, mainStartedAt, mainTmux } from '../main-session.js'
-import type { InboundMessage } from '../../gateway.js'
+import type { InboundMessage } from '../../gateways/gateway.js'
 
 export const daemonStartedAt = Date.now()
 

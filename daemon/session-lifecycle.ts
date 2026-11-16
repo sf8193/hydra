@@ -8,11 +8,11 @@ import { safeSend, formatSpawnLine, atomicWriteFileSync } from './util.js'
 import { tmuxHasSession, tmuxSync, tmuxTimedOut } from './tmux.js'
 import { nameHeldByAnother, occupancy, occupied } from './session-reachability.js'
 import { withThreadLock } from '../specialists/specialists.js'
-import { endVerifying, startVerifying, verifyBackoff, verifyRefusal, confined, describePolicy, missingTokenRefusal, PolicyRefusal, remedy, resolvePolicy, type LaunchPolicy } from './scope.js'
+import { endVerifying, startVerifying, verifyBackoff, verifyRefusal, confined, describePolicy, missingTokenRefusal, PolicyRefusal, remedy, resolvePolicy, type LaunchPolicy } from './restricted.js'
 import { threadNotices } from './notice-limit.js'
 import { hydraLoadEnv, currentHydraConfig } from './hydra-config.js'
-import { workdirScopeIssues } from '../config/workdir-scope.js'
-import { removeScopedFiles } from './scoped-files.js'
+import { workdirRestrictionIssues } from '../config/restricted-workdir.js'
+import { removeRestrictedFiles } from './restricted-files.js'
 import { capturedSpawnVars } from '../shared/spawn-env.js'
 import { authorityId, markDead, parentSessionOf, registry, repointChildren, sessionEmoji, threadRegistry } from './sessions.js'
 import type { Predecessor, SessionInfo, SessionMetadata, SpawnOpts, SpawnResult } from './sessions.js'
@@ -669,7 +669,7 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
       registry.removeMember(info.threadId, info.sessionId)
     }
 
-    removeScopedFiles(info)
+    removeRestrictedFiles(info)
     emitSessionDeath(info)
     runKillHook(info, reason)
 
@@ -749,7 +749,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   // Authority: the spawner, or (resume/recovery/handoff) the dead record's parent, carried.
   let carriedParentId: string | null | undefined = opts?.parentId ?? opts?.carryOver?.parentId
   let carriedInitiator: string | undefined = opts?.initiator ?? opts?.carryOver?.initiator
-  // The launch policy of the conversation this start continues or replaces (resume, fork): see scope.ts.
+  // The launch policy of the conversation this start continues or replaces (resume, fork): see restricted.ts.
   // The records it continues or replaces, for resolvePolicy: what a recovery carries, then the record in the thread.
   const actingRecords: Array<Pick<SessionInfo, 'policy'> | undefined> = [opts?.carryOver]
   let replacedName: string | undefined = opts?.carryOver?.sessionName   // the record's own session name, for the remedy a refusal ends with
@@ -1004,7 +1004,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     if (worktreeTarget || reuseWorktree) await refuse(`specialist ${confinedPolicy.specialist} runs only in its workdir ${confinedPolicy.workdir}: a confined session never gets a git worktree: start it without one`)
     if (!existsSync(confinedPolicy.workdir)) await refuse(`specialist ${confinedPolicy.specialist}: its workdir ${confinedPolicy.workdir} does not exist, so no confined session starts: create it (or change workdir in hydra.toml). ${remedy(sessionName)}`)
     // The folder can change after hydra.toml loaded (a repository cloned into it, a symlink added): the load's checks run again.
-    const why = workdirScopeIssues(hydraLoadEnv(), confinedPolicy.workdir, currentHydraConfig().privateRoots ?? [])
+    const why = workdirRestrictionIssues(hydraLoadEnv(), confinedPolicy.workdir, currentHydraConfig().privateRoots ?? [])
     if (why.length) await refuse(`specialist ${confinedPolicy.specialist}: its workdir no longer passes the checks hydra.toml was loaded with, so no confined session starts: ${why.join('; ')}. ${remedy(sessionName)}`)
     // A listed server's token variable must be set: checked here, with the other refusals, so the thread hears it.
     const noToken = missingTokenRefusal(confinedPolicy, ENV_FILE, sessionName, process.env, capturedSpawnVars())
@@ -1125,7 +1125,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   }
   const url = await gateway.getThreadUrl(threadId!)
 
-  if (confinedPolicy) startVerifying(sessionId)   // the record below is refused every message until its start passes (scope.ts `unverified`)
+  if (confinedPolicy) startVerifying(sessionId)   // the record below is refused every message until its start passes (restricted.ts `unverified`)
   registry.set(sessionId, {
     sessionId, topic, threadId: threadId!, anchorMessageId, anchorChannelId, createdAt: now, lastActive: now,
     tmuxName, listening: resolveListenState(threadId!, chatId), originType, originFrom, sessionMetadata,
@@ -1289,7 +1289,7 @@ export async function tryResume(dead: {
   reuseName?: string
   /** A specialist's name, claimed rather than picked. */
   name?: string
-  /** The specialist it acts for (its id): carried so the resumed session is scoped as it was. */
+  /** The specialist it acts for (its id): carried so the resumed session is restricted as it was. */
   specialist?: string
   topic: string
   threadId: string

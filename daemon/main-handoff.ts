@@ -9,7 +9,7 @@ import { handoffRequest, runPreHandoffHook, type HookSubject } from './session-l
 import { transcriptPathFor } from './usage.js'
 import { mainAlive, mainChannel, mainSubject, mainTmux } from './main-session.js'
 import { reportError, safeSend } from './util.js'
-import type { InboundMessage } from '../gateway.js'
+import type { InboundMessage } from '../gateways/gateway.js'
 
 // Handoff for main: the claude process, its bridge and the 'main' id stay. Main writes a letter and
 // calls the handoff tool; the pre-handoff hook may refuse. Then, once main is idle, only `/clear` is typed

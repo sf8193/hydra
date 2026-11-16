@@ -1,5 +1,5 @@
-// A specialist with access = "workdir" launches scoped on every shape, derived from the one place (doSpawnSession) and the
-// record it replaces; a conversation that ran under another scope is never resumed or forked; the engine is checked again
+// A specialist with access = "workdir" launches restricted on every shape, derived from the one place (doSpawnSession) and the
+// record it replaces; a conversation that ran under another policy is never resumed or forked; the engine is checked again
 // at launch. Through the real spawn and recovery paths: fake engine, fake tmux, no daemon I/O.
 import { macLike } from './sandbox-host.js'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
@@ -11,7 +11,7 @@ import { setSpecialistThread, _reloadSpecialists } from '../../specialists/speci
 import { toThread } from '../../specialists/targets.js'
 import { _resetBackoff, activeBackoff } from '../recovery-backoff.js'
 import { _resetRefusalNotices, _resetVerifyBackoff, doSpawnSession, handoffSpawnOpts, killSession, tryRespawn, tryResume } from '../session-lifecycle.js'
-import { scopedDir, writeScopedFiles } from '../scoped-files.js'
+import { restrictedDir, writeRestrictedFiles } from '../restricted-files.js'
 import { markDead, registry, threadRegistry, type SessionInfo } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { engines } from '../engines/instances.js'
@@ -19,7 +19,7 @@ import { ClaudeEngine } from '../engines/claude-engine.js'
 import type { LaunchInput } from '../engines/engine-adapter.js'
 import { _resetRecoveryDeps, _setRecoveryDeps, reviveThread } from '../recovery.js'
 import { _setHydraConfigForTesting, _setLoadEnvForTesting } from '../hydra-config.js'
-import { bornPolicy, deliveryRefusal, isVerifying, verifyBackoff, OPERATOR_SCOPE, PolicyRefusal, resolvePolicy, unverified, type LaunchPolicy } from '../scope.js'
+import { bornPolicy, deliveryRefusal, isVerifying, verifyBackoff, OPERATOR_POLICY_ID, PolicyRefusal, resolvePolicy, unverified, type LaunchPolicy } from '../restricted.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import { debugLogFor, verifyLaunchesAgainst } from './verified-launch.js'
 import { verifyDeps, verifyLaunch as verifyLoaded } from '../engines/claude-verify.js'
@@ -29,7 +29,7 @@ process.stderr.write = (() => true) as any
 
 const THREAD = 'sl-thread'
 const PARENT = 'sl-parent'
-const workdir = mkdtempSync(join(tmpdir(), 'scoped-launch-'))
+const workdir = mkdtempSync(join(tmpdir(), 'restricted-launch-'))
 afterAll(() => rmSync(workdir, { recursive: true, force: true }))
 
 const spec = (id: string, over: Partial<Specialist> = {}): Specialist => ({
@@ -107,7 +107,7 @@ afterEach(() => {
 })
 
 let seq = 0
-/** A dead Claude record owning THREAD, with its history entry. `ranAs` is the scope it recorded. */
+/** A dead Claude record owning THREAD, with its history entry. `ranAs` is the policy it recorded. */
 function seedDead(extra: Partial<SessionInfo> = {}): SessionInfo {
   const n = ++seq
   const info = {
@@ -122,13 +122,13 @@ function seedDead(extra: Partial<SessionInfo> = {}): SessionInfo {
 }
 const live = () => registry.get(registry.getByThread(THREAD)!)!
 const opsPolicy = (): LaunchPolicy => bornPolicy('ops')!
-const operatorPolicy = (id = 'ops'): LaunchPolicy => ({ specialist: id, access: 'operator', id: OPERATOR_SCOPE })
+const operatorPolicy = (id = 'ops'): LaunchPolicy => ({ specialist: id, access: 'operator', id: OPERATOR_POLICY_ID })
 const opsLabel = () => opsPolicy().id
 const revive = (extra: Record<string, unknown> = {}) => reviveThread({ thread: threadRegistry.get(THREAD)!, respawnTopic: 'kickoff', ...extra } as any)
 
 describe('the launch policy of a specialist', () => {
   test('is decided from hydra.toml: operator access is the operator policy; workdir has its folder, tools and servers', () => {
-    expect(bornPolicy('desk')).toEqual({ specialist: 'desk', access: 'operator', id: OPERATOR_SCOPE })
+    expect(bornPolicy('desk')).toEqual({ specialist: 'desk', access: 'operator', id: OPERATOR_POLICY_ID })
     expect(bornPolicy('nobody')).toBeUndefined()
     expect(bornPolicy('ops')).toMatchObject({ specialist: 'ops', access: 'workdir', workdir, tools: ['Read', 'Grep'], servers: [{ name: 'datadog', tools: ['search_logs'], tokenEnv: ['DD_API_KEY'] }] })
   })
@@ -158,14 +158,14 @@ describe('the launch policy of a specialist', () => {
   })
 })
 
-describe('every launch shape is scoped', () => {
-  const scopedInput = (l: LaunchInput | undefined) => ({ type: l?.sessionType as string | undefined, scoped: l?.policy?.access === 'workdir' ? l.policy.specialist : undefined, tools: l?.policy?.tools, servers: l?.policy?.servers?.map(s => s.name) })
-  const SCOPED = { type: 'scoped', scoped: 'ops', tools: ['Read', 'Grep'], servers: ['datadog'] }
+describe('every launch shape is restricted', () => {
+  const restrictedInput = (l: LaunchInput | undefined) => ({ type: l?.sessionType as string | undefined, restricted: l?.policy?.access === 'workdir' ? l.policy.specialist : undefined, tools: l?.policy?.tools, servers: l?.policy?.servers?.map(s => s.name) })
+  const RESTRICTED = { type: 'scoped', restricted: 'ops', tools: ['Read', 'Grep'], servers: ['datadog'] }
 
-  test('fresh: opts.specialist scopes the launch and records specialist and scope on the session and its history entry', async () => {
+  test('fresh: opts.specialist restricts the launch and records specialist and policy on the session and its history entry', async () => {
     seedDead()
     await doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, specialist: 'ops' })
-    expect(scopedInput(launches[0])).toEqual(SCOPED)
+    expect(restrictedInput(launches[0])).toEqual(RESTRICTED)
     expect(live()).toMatchObject({ sessionType: 'scoped', policy: opsPolicy() })
     // The history entry keeps the policy too: it is what a revive reads once a kill has deleted the record.
     expect(threadRegistry.get(THREAD)!.sessionHistory.at(-1)!.policy).toEqual(opsPolicy())
@@ -174,66 +174,66 @@ describe('every launch shape is scoped', () => {
   test('fresh with no one named: found by where it sits (its thread is the specialist\'s)', async () => {
     seedDead({ policy: opsPolicy() })
     await doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD })
-    expect(scopedInput(launches[0])).toEqual(SCOPED)
+    expect(restrictedInput(launches[0])).toEqual(RESTRICTED)
   })
 
-  test('resume (same scope): --resume, scoped', async () => {
+  test('resume (same policy): --resume, restricted', async () => {
     seedDead({ policy: opsPolicy() })
     const r = await revive({ name: undefined })
     expect(r).toMatchObject({ ok: true, method: 'resumed' })
     expect(launches[0].resumeFrom).toMatch(/^C-/)
-    expect(scopedInput(launches[0])).toEqual(SCOPED)
+    expect(restrictedInput(launches[0])).toEqual(RESTRICTED)
     expect(live()).toMatchObject({ policy: opsPolicy() })
   })
 
-  test('fork (resume failed, same scope): --fork-session, scoped', async () => {
+  test('fork (resume failed, same policy): --fork-session, restricted', async () => {
     seedDead({ policy: opsPolicy() })
     failResume = true
     const r = await revive()
     expect(r).toMatchObject({ ok: true, method: 'forked' })
     expect(launches.at(-1)!.forkFrom?.claudeSessionId).toMatch(/^C-/)
-    expect(scopedInput(launches.at(-1))).toEqual(SCOPED)
+    expect(restrictedInput(launches.at(-1))).toEqual(RESTRICTED)
   })
 
-  test('respawn (resume and fork failed): fresh, scoped', async () => {
+  test('respawn (resume and fork failed): fresh, restricted', async () => {
     seedDead({ policy: opsPolicy() })
     failResume = true; failFork = true
     const r = await revive()
     expect(r).toMatchObject({ ok: true, method: 'respawned' })
     expect(launches.at(-1)!.resumeFrom).toBeUndefined()
-    expect(scopedInput(launches.at(-1))).toEqual(SCOPED)
+    expect(restrictedInput(launches.at(-1))).toEqual(RESTRICTED)
   })
 
-  test('respawn by tryRespawn (the `respawn` command): scoped', async () => {
+  test('respawn by tryRespawn (the `respawn` command): restricted', async () => {
     seedDead({ policy: opsPolicy() })
     await tryRespawn(THREAD, 'again', undefined, undefined, { specialist: 'ops' })
-    expect(scopedInput(launches[0])).toEqual(SCOPED)
+    expect(restrictedInput(launches[0])).toEqual(RESTRICTED)
   })
 
-  test('boot recovery (a dead record, nobody naming the specialist, the name reused): scoped from the record', async () => {
+  test('boot recovery (a dead record, nobody naming the specialist, the name reused): restricted from the record', async () => {
     seedDead({ policy: opsPolicy(), tmuxName: 'ops' })
     const r = await revive({ reuseName: true })
     expect(r).toMatchObject({ ok: true, method: 'resumed' })
-    expect(scopedInput(launches[0])).toEqual(SCOPED)
+    expect(restrictedInput(launches[0])).toEqual(RESTRICTED)
   })
 
-  test('handoff successor: handoffSpawnOpts carries the specialist, and the successor is scoped', async () => {
+  test('handoff successor: handoffSpawnOpts carries the specialist, and the successor is restricted', async () => {
     const info = seedDead({ policy: opsPolicy() })
     const opts = handoffSpawnOpts(info, '/h.md')
     expect(opts.carryOver).toMatchObject({ policy: opsPolicy() })
     await doSpawnSession('t', undefined, undefined, { ...opts, handedOffFrom: info.tmuxName })
-    expect(scopedInput(launches[0])).toEqual(SCOPED)
+    expect(restrictedInput(launches[0])).toEqual(RESTRICTED)
     expect(live()).toMatchObject({ sessionType: 'scoped', policy: { specialist: 'ops' } })
   })
 
-  test('a per-conversation session (<id>_<conversation>) is scoped by its name', async () => {
+  test('a per-conversation session (<id>_<conversation>) is restricted by its name', async () => {
     await doSpawnSession('t', undefined, undefined, { name: 'crm_c1' })
-    expect(scopedInput(launches[0])).toEqual({ type: 'scoped', scoped: 'crm', tools: ['Read', 'Grep', 'Glob'], servers: [] })
+    expect(restrictedInput(launches[0])).toEqual({ type: 'scoped', restricted: 'crm', tools: ['Read', 'Grep', 'Glob'], servers: [] })
     expect(registry.findByName('crm_c1')).toMatchObject({ policy: { specialist: 'crm', access: 'workdir' } })
     for (const s of [...registry.values()]) if (s.tmuxName === 'crm_c1') { registry.delete(s.sessionId); registry.deleteThread(s.threadId) }
   })
 
-  test('an operator-access specialist is not scoped, and its record holds the operator policy', async () => {
+  test('an operator-access specialist is not restricted, and its record holds the operator policy', async () => {
     seedDead()
     await doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, specialist: 'desk' })
     expect(launches[0].policy?.access === 'workdir').toBe(false)
@@ -259,8 +259,8 @@ describe('every launch shape is scoped', () => {
   })
 })
 
-describe('a scope change starts fresh', () => {
-  test('a conversation that ran as the operator is not resumed or forked once the specialist is workdir: it respawns, scoped', async () => {
+describe('a policy change starts fresh', () => {
+  test('a conversation that ran as the operator is not resumed or forked once the specialist is workdir: it respawns, restricted', async () => {
     seedDead({ policy: operatorPolicy() })
     const r = await revive()
     expect(r).toMatchObject({ ok: true, method: 'respawned' })
@@ -275,7 +275,7 @@ describe('a scope change starts fresh', () => {
     expect(launches).toHaveLength(1)
     expect(launches.every(l => l.resumeFrom === undefined && l.forkFrom === undefined)).toBe(true)
   })
-  test('a record from before scopes existed (no scope at all) counts as the operator\'s', async () => {
+  test('a record from before policies existed (no policy at all) counts as the operator\'s', async () => {
     seedDead({})
     expect(await revive({ specialist: 'ops' })).toMatchObject({ ok: true, method: 'respawned' })
     expect(launches.every(l => l.resumeFrom === undefined && l.forkFrom === undefined)).toBe(true)
@@ -286,7 +286,7 @@ describe('a scope change starts fresh', () => {
     expect(await revive()).toMatchObject({ ok: true, method: 'respawned' })
     expect(launches[0].resumeFrom).toBeUndefined()
   })
-  test('the same scope still resumes (the control)', async () => {
+  test('the same policy still resumes (the control)', async () => {
     seedDead({ policy: opsPolicy() })
     expect(await revive()).toMatchObject({ ok: true, method: 'resumed' })
   })
@@ -296,13 +296,13 @@ describe('a scope change starts fresh', () => {
     expect(await revive()).toMatchObject({ ok: true, method: 'respawned' })
     expect(launches[0].policy?.access === 'workdir').toBe(false)
   })
-  test('doSpawnSession itself refuses a resume or fork across a scope change, whoever calls it', async () => {
+  test('doSpawnSession itself refuses a resume or fork across a policy change, whoever calls it', async () => {
     seedDead({ policy: operatorPolicy() })
     await expect(doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, resumeFrom: 'C-1', carryOver: { policy: operatorPolicy() } })).rejects.toThrow(/not resumed or forked/)
     await expect(doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, forkFrom: { claudeSessionId: 'C-1', parentName: 'x' }, carryOver: { policy: operatorPolicy() } })).rejects.toThrow(/not resumed or forked/)
     expect(launches).toHaveLength(0)
   })
-  test('a scoped specialist hydra.toml no longer declares starts nothing', async () => {
+  test('a restricted specialist hydra.toml no longer declares starts nothing', async () => {
     seedDead({ policy: opsPolicy() })
     use(DESK)
     const r = await revive()
@@ -311,12 +311,12 @@ describe('a scope change starts fresh', () => {
   })
 })
 
-describe('a scoped launch always runs in its workdir, whatever the caller passes (or does not)', () => {
-  const OTHER = mkdtempSync(join(tmpdir(), 'scoped-other-'))   // stands for the operator's spawn dir (SPAWN_CWD)
+describe('a restricted launch always runs in its workdir, whatever the caller passes (or does not)', () => {
+  const OTHER = mkdtempSync(join(tmpdir(), 'restricted-other-'))   // stands for the operator's spawn dir (SPAWN_CWD)
   beforeEach(() => { process.env.SPAWN_CWD = OTHER })
   afterAll(() => rmSync(OTHER, { recursive: true, force: true }))
-  const ranIn = () => launches.map(l => ({ cwd: l.cwd, scoped: l.policy?.access === 'workdir' }))
-  const inWorkdir = (n = 1) => expect(ranIn().slice(-n)).toEqual(Array(n).fill({ cwd: workdir, scoped: true }))
+  const ranIn = () => launches.map(l => ({ cwd: l.cwd, restricted: l.policy?.access === 'workdir' }))
+  const inWorkdir = (n = 1) => expect(ranIn().slice(-n)).toEqual(Array(n).fill({ cwd: workdir, restricted: true }))
 
   test('tier-3 respawn in reviveThread (resume and fork failed, no cwd passed)', async () => {
     seedDead({ policy: opsPolicy() })
@@ -334,7 +334,7 @@ describe('a scoped launch always runs in its workdir, whatever the caller passes
     expect(await revive({ respawnOnly: true })).toMatchObject({ ok: true, method: 'respawned' })
     inWorkdir()
   })
-  test('a scope change forcing a fresh start, no cwd passed', async () => {
+  test('a policy change forcing a fresh start, no cwd passed', async () => {
     seedDead({ policy: operatorPolicy() })
     expect(await revive()).toMatchObject({ ok: true, method: 'respawned' })
     inWorkdir()
@@ -436,11 +436,11 @@ describe('a scoped launch always runs in its workdir, whatever the caller passes
   })
 })
 
-describe("a scoped session's generated files go when it ends", () => {
-  const present = (info: SessionInfo) => existsSync(join(scopedDir(), `${info.tmuxName}-${info.sessionId}.mcp.json`)) || existsSync(join(scopedDir(), `${info.tmuxName}-${info.sessionId}.settings.json`))
+describe("a restricted session's generated files go when it ends", () => {
+  const present = (info: SessionInfo) => existsSync(join(restrictedDir(), `${info.tmuxName}-${info.sessionId}.mcp.json`)) || existsSync(join(restrictedDir(), `${info.tmuxName}-${info.sessionId}.settings.json`))
   const withFiles = () => {
     const info = seedDead({ policy: opsPolicy(), sessionId: '55555555-5555-4555-8555-555555555555', tmuxName: 'ops', deadAt: undefined })
-    writeScopedFiles(info.tmuxName, info.sessionId, { settings: {}, mcp: { mcpServers: { x: { env: { K: 'secret' } } } } })
+    writeRestrictedFiles(info.tmuxName, info.sessionId, { settings: {}, mcp: { mcpServers: { x: { env: { K: 'secret' } } } } })
     expect(present(info)).toBe(true)
     return info
   }
@@ -456,14 +456,14 @@ describe("a scoped session's generated files go when it ends", () => {
   })
   test("and only its own: another session's files stay", () => {
     const info = withFiles()
-    writeScopedFiles('ops-eu', '66666666-6666-4666-8666-666666666666', { settings: {}, mcp: {} })
+    writeRestrictedFiles('ops-eu', '66666666-6666-4666-8666-666666666666', { settings: {}, mcp: {} })
     markDead(info)
-    expect(existsSync(join(scopedDir(), 'ops-eu-66666666-6666-4666-8666-666666666666.mcp.json'))).toBe(true)
+    expect(existsSync(join(restrictedDir(), 'ops-eu-66666666-6666-4666-8666-666666666666.mcp.json'))).toBe(true)
   })
 })
 
-describe('a launch path that passes nothing for a specialist session: scoped from the stored policy, or a refusal in the thread', () => {
-  const SPAWN = mkdtempSync(join(tmpdir(), 'scoped-spawn-'))   // the operator's spawn dir: where an unscoped start would land
+describe('a launch path that passes nothing for a specialist session: restricted from the stored policy, or a refusal in the thread', () => {
+  const SPAWN = mkdtempSync(join(tmpdir(), 'restricted-spawn-'))   // the operator's spawn dir: where an unrestricted start would land
   const told: string[] = []
   beforeEach(() => {
     process.env.SPAWN_CWD = SPAWN
@@ -664,7 +664,7 @@ describe('the engine is checked at launch', () => {
     expect(r.ok).toBe(false)
     expect(launches.filter(l => l.policy?.access === 'workdir')).toHaveLength(0)
   })
-  test('an operator specialist may still run on codex: the check is the scope\'s', async () => {
+  test('an operator specialist may still run on codex: the check is the policy\'s', async () => {
     seedDead()
     await doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, specialist: 'desk', engine: 'claude' })
     expect(launches).toHaveLength(1)

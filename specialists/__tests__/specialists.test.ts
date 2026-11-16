@@ -11,7 +11,7 @@ import { executeTool } from '../../daemon/bridge-dispatch.js'
 import { _resetDelivery, _setDeliveryDeps, deliverUserMessage } from '../../daemon/typed-delivery.js'
 import { engines } from '../../daemon/engines/instances.js'
 import { removeSpecialist, setSpecialist, setSpecialistThread, getSpecialist, withTargetLock, listSpecialists } from '../specialists.js'
-import { bornPolicy, deliveryRefusal, type LaunchPolicy } from '../../daemon/scope.js'
+import { bornPolicy, deliveryRefusal, type LaunchPolicy } from '../../daemon/restricted.js'
 import { gateway } from '../../daemon/config.js'
 import { _resetBackoff, _reloadBackoff, backoffClock, getBackoff, BACKOFF_BASE_MS as SPAWN_BACKOFF_BASE_MS, BACKOFF_STALE_MS } from '../../daemon/recovery-backoff.js'
 import { _setRecoveryDeps, _resetRecoveryDeps } from '../../daemon/recovery.js'
@@ -53,7 +53,7 @@ describe('specialists', () => {
   const specialist = (thread: string, extra: Record<string, unknown> = {}) => {
     const name = `t-specialist-${++n}`
     names.push(name)
-    setSpecialist(name, { threadId: thread, kickoff: 'be the slopbot', ...extra })
+    setSpecialist(name, { threadId: thread, kickoff: 'be the helper', ...extra })
     return name
   }
   function occupy(thread: string, over: Record<string, unknown> = {}) {
@@ -161,7 +161,7 @@ describe('specialists', () => {
       expect(calls).toHaveLength(1)
       expect((calls[0][3] as any).specialist).toBe(name)
       const fresh = (revived.data as any).sessionId as string
-      registry.get(fresh)!.policy = bornPolicy(name)                              // what a real scoped launch records
+      registry.get(fresh)!.policy = bornPolicy(name)                              // what a real restricted launch records
       expect((await deliver(name, { idempotencyKey: `scope-k-${++n}` })).ok).toBe(true)
       expect(queued(fresh)).toBeGreaterThan(0)
     })
@@ -353,7 +353,7 @@ describe('specialists', () => {
     expect(res.ok).toBe(true)
     expect((res.data as any).spawned).toBe(true)
     expect(calls).toHaveLength(1)
-    expect(calls[0][0]).toBe('be the slopbot')
+    expect(calls[0][0]).toBe('be the helper')
     expect((calls[0][3] as any).existingThreadId).toBe('thread-known')
     expect(getSpecialist(name)!.threadId).toBe('thread-known')
   })
@@ -376,7 +376,7 @@ describe('specialists', () => {
     expect(res.ok).toBe(true)
     expect(getSpecialist(name)!.threadId).toBe((res.data as any).threadId)
     expect(getSpecialist(name)!.threadId).not.toBe('thread-deleted')
-    expect(getSpecialist(name)!.kickoff).toBe('be the slopbot')
+    expect(getSpecialist(name)!.kickoff).toBe('be the helper')
   })
 
   test('a gone thread with no channel, no kickoff, and unknown specialist each fail clearly and spawn nothing', async () => {
@@ -436,7 +436,7 @@ describe('specialists', () => {
     const calls = fakeSpawn()
     const name = `t-specialist-${++n}`
     names.push(name)
-    expect(await cli('set', name, { channel: 'chan-new', kickoff: 'be the slopbot' })).toMatchObject({ ok: true })
+    expect(await cli('set', name, { channel: 'chan-new', kickoff: 'be the helper' })).toMatchObject({ ok: true })
     expect(getSpecialist(name)!.threadId).toBeUndefined()
     expect((await deliver(name)).ok).toBe(true)
     expect(calls).toHaveLength(1)
@@ -452,12 +452,12 @@ describe('specialists', () => {
     _setHydraConfigForTesting({
       operator: 'op', connectors: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
       people: { op: { id: 'op', ids: ['discord:100000000000000001'], roles: [], name: 'op' } },
-      specialists: { [name]: { id: name, workdir: '/srv/x', prompt: 'be the slopbot', home: '555', listens: [], allow: ['people'], sessions: 'shared', max: 20, was: [], access: 'operator' } },
+      specialists: { [name]: { id: name, workdir: '/srv/x', prompt: 'be the helper', home: '555', listens: [], allow: ['people'], sessions: 'shared', max: 20, was: [], access: 'operator' } },
     })
     try {
       expect((await deliver(name)).ok).toBe(true)
       expect(calls).toHaveLength(1)
-      expect(calls[0][0]).toBe('be the slopbot')
+      expect(calls[0][0]).toBe('be the helper')
       expect(calls[0][1]).toBe('555')
       const first = getSpecialist(name)!.threadId
       expect(first).toMatch(/^fresh-thread-/)
@@ -467,7 +467,7 @@ describe('specialists', () => {
       expect(await cli('set', name, { thread: 'thread-moved' })).toMatchObject({ ok: false, exitCode: 3 })
       registry.delete(registry.threadToSession.get(first!)!)
       expect(await cli('set', name, { thread: 'thread-moved' })).toMatchObject({ ok: true })
-      expect(getSpecialist(name)).toMatchObject({ threadId: 'thread-moved', kickoff: 'be the slopbot', workdir: '/srv/x' })
+      expect(getSpecialist(name)).toMatchObject({ threadId: 'thread-moved', kickoff: 'be the helper', workdir: '/srv/x' })
     } finally {
       _setHydraConfigForTesting(undefined)
     }
@@ -523,7 +523,7 @@ describe('specialists', () => {
     _setHydraConfigForTesting({
       operator: 'op', connectors: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
       people: { op: { id: 'op', ids: ['discord:100000000000000001'], roles: [], name: 'op' } },
-      specialists: { [name]: { id: name, workdir: '/srv/ops', prompt: 'be the slopbot', home: '555', listens: [], allow: ['people'], sessions: 'shared', max: 20, was: [], access: 'operator' } },
+      specialists: { [name]: { id: name, workdir: '/srv/ops', prompt: 'be the helper', home: '555', listens: [], allow: ['people'], sessions: 'shared', max: 20, was: [], access: 'operator' } },
     })
     try {
       expect((await deliver(name)).ok).toBe(true)
@@ -551,7 +551,7 @@ describe('specialists', () => {
     const calls = fakeSpawn()
     const name = `t-specialist-${++n}`
     names.push(name)
-    await cli('set', name, { channel: 'chan-up', kickoff: 'be the slopbot' })
+    await cli('set', name, { channel: 'chan-up', kickoff: 'be the helper' })
     const results = await Promise.all([spawnAs(name), spawnAs(name)]) as any[]
     expect(calls).toHaveLength(1) // one spawn, however many callers
     const ok = results.find(r => r.ok)
@@ -873,7 +873,7 @@ describe('specialists', () => {
     try {
       const name = 'opswtown' // no dash: a branch's base name is the text before its first one
       names.push(name)
-      setSpecialist(name, { threadId: 'thread-wt-own', kickoff: 'be the slopbot' })
+      setSpecialist(name, { threadId: 'thread-wt-own', kickoff: 'be the helper' })
       occupy('thread-wt-own', { tmuxName: `${name}-old`, adapter: fakeAdapter({ isAlive: () => false }), worktreeRepo: '/repo', worktreePath: wt, worktreeBranch: `wt/${name}` })
       expect(await deliver(name)).toMatchObject({ ok: true, data: { spawned: true } })
       expect(registry.reservedNames.has(name)).toBe(false)

@@ -1,6 +1,6 @@
 // How other people's words are shown to a model: cleaned, one clean line per attribute, and the body quoted line by line.
 //
-// The Slack delivery (connectors/slack/watch.ts renderItem) and a scoped session's envelope (daemon/talks-to.ts) both
+// The Slack delivery (connectors/slack/watch.ts renderItem) and a restricted session's envelope (daemon/talks-to.ts) both
 // render text that a sender controls, so they share these primitives and nothing else: each keeps its own header, because
 // what a header claims differs (who wrote a Slack message, versus who a session was serving when it wrote).
 

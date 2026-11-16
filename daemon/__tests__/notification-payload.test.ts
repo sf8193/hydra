@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import type { InboundMessage } from '../../gateway.js'
+import type { InboundMessage } from '../../gateways/gateway.js'
 import { gateway } from '../config.js'
 import { INBOX_DIR } from '../config.js'
 import { buildNotificationPayload } from '../router.js'

@@ -1,10 +1,10 @@
-// The folders a scoped session's listed servers write in (scoped-files.ts): where they are made, who owns them, and what a pre-existing
+// The folders a restricted session's listed servers write in (restricted-files.ts): where they are made, who owns them, and what a pre-existing
 // parent does to that. TMPDIR is pointed at a fresh folder per test, so nothing here touches the real temp dir.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { makeServerTmpDirs, removeScopedFiles, serverTmpDir, serverTmpRoot } from '../scoped-files.js'
+import { makeServerTmpDirs, removeRestrictedFiles, serverTmpDir, serverTmpRoot } from '../restricted-files.js'
 
 const SID = '11111111-1111-4111-8111-111111111111'
 const SID2 = '22222222-2222-4222-8222-222222222222'
@@ -70,7 +70,7 @@ describe('the folders for a session\'s servers', () => {
   test('the session\'s end removes its folders and only its own', () => {
     makeServerTmpDirs('ops', SID, ['datadog'])
     makeServerTmpDirs('desk', SID2, ['datadog'])
-    removeScopedFiles({ tmuxName: 'ops', sessionId: SID }, true)
+    removeRestrictedFiles({ tmuxName: 'ops', sessionId: SID }, true)
     expect(existsSync(serverTmpDir('ops', SID, 'datadog'))).toBe(false)
     expect(existsSync(serverTmpDir('desk', SID2, 'datadog'))).toBe(true)
   })

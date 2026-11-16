@@ -1,5 +1,5 @@
 // A confined session is unreachable until its start has been verified (hydra#619.1, .2): the one delivery gate (the Claude adapter's
-// `deliver`, and the queue flush behind it) refuses a scoped session that carries no `verified` marker, whichever route a message took:
+// `deliver`, and the queue flush behind it) refuses a restricted session that carries no `verified` marker, whichever route a message took:
 // by id, by name, send_to_thread, a second conversation's message, a typed paste. The marker is persisted, so a record restored at boot
 // without it (a crash inside the wait, or a session started before hydra verified starts) is not delivered to and is not killed.
 import { afterEach, describe, expect, test } from 'bun:test'
@@ -10,7 +10,7 @@ import { transport } from '../bridge-transport.js'
 import { registry } from '../sessions.js'
 import { engines } from '../engines/instances.js'
 import { _setHydraConfigForTesting } from '../hydra-config.js'
-import { endVerifying, policyIdFor, sessionDrift, startVerifying, unverified, type LaunchPolicy } from '../scope.js'
+import { endVerifying, policyIdFor, sessionDrift, startVerifying, unverified, type LaunchPolicy } from '../restricted.js'
 import { threadNotices } from '../notice-limit.js'
 import type { HydraConfig, Specialist } from '../../config/types.js'
 

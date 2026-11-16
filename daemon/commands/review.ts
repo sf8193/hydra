@@ -3,7 +3,7 @@ import { registry } from '../sessions.js'
 import { startProtocolRun, getRunByThread, cancelRun } from '../protocol-runner.js'
 import { isThreadOccupied } from '../protocol-registry.js'
 import { resolveModifiers, partitionFlagModifiers, listLensNames } from '../modifiers.js'
-import type { InboundMessage } from '../../gateway.js'
+import type { InboundMessage } from '../../gateways/gateway.js'
 import { normalizeReviewRounds } from '../../shared/constants.js'
 import type { ProviderId } from '../engines/engine-adapter.js'
 

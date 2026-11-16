@@ -3,7 +3,7 @@ import { gateway } from '../config.js'
 import * as access from '../access.js'
 import * as global from '../commands/global.js'
 import * as status from '../commands/status.js'
-import { reactionPlace } from '../../discord-gateway.js'
+import { reactionPlace } from '../../gateways/discord.js'
 import { ChannelType } from 'discord.js'
 
 // An operator's command acts only in channels this daemon is allowed in. Two daemons can share a guild

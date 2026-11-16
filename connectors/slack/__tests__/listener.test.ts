@@ -137,7 +137,7 @@ describe('diagnosing a refused token', () => {
   })
 
   test('startup names the scopes each enabled option needs, and warns for each one the token lacks', async () => {
-    const t = setup({ toml: oneListener('#food', 'slopbot', '["anyone"]', `[places."slack:#food"]\nfiles = true\nack = "eyes"\n`), scopes: ['channels:history', 'users:read', 'im:history'] })
+    const t = setup({ toml: oneListener('#food', 'helper', '["anyone"]', `[places."slack:#food"]\nfiles = true\nack = "eyes"\n`), scopes: ['channels:history', 'users:read', 'im:history'] })
     await t.listener.start()
     const log = t.logs.join()
     expect(log).toContain('enabled options need: channels → channels:history or groups:history; channel names (slack:#name) → channels:read or groups:read; sender names → users:read; dms → im:history; catching up DMs opened while disconnected → im:read; files → files:read; ack and 🚫 reactions → reactions:write; replies → chat:write')
@@ -552,10 +552,10 @@ describe('an old single-app config runs unchanged', () => {
     const t = setup({ scopes: ALL })
     await t.listener.start()
     const d = route(t.listener.view()!.hydra, { from: 'slack:UB', at: [`slack:${CH}`], addressed: true, app: 'default' })
-    expect(d).toMatchObject({ fate: 'deliver', to: 'slopbot', via: 'listens' })
+    expect(d).toMatchObject({ fate: 'deliver', to: 'helper', via: 'listens' })
     t.apps[0].handler(message({ ts: '1100.000001' }))
     await t.watcher.flush()
-    expect(t.watcher.get(CH, '1100.000001')).toMatchObject({ specialist: 'slopbot' })
+    expect(t.watcher.get(CH, '1100.000001')).toMatchObject({ specialist: 'helper' })
     expect(t.watcher.get(CH, '1100.000001')!.app).toBeUndefined()
   })
 
@@ -608,7 +608,7 @@ describe('the scope check alerts for what was declared, once per episode', () =>
   })
 
   test('the same DM scopes, when a specialist names slack:dm, are declared: they alert', async () => {
-    const t = setup({ scopes: without('im:history', 'im:read'), toml: oneListener(CH, 'slopbot', '["anyone"]').replace(`listens = ["slack:${CH}"]`, `listens = ["slack:${CH}", "slack:dm"]`) })
+    const t = setup({ scopes: without('im:history', 'im:read'), toml: oneListener(CH, 'helper', '["anyone"]').replace(`listens = ["slack:${CH}"]`, `listens = ["slack:${CH}", "slack:dm"]`) })
     await t.listener.start()
     expect(t.alerts).toHaveLength(1)
     expect(t.alerts[0]).toContain('im:history (dms)')

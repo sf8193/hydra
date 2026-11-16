@@ -8,7 +8,7 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from 'path'
 import { parseCron } from '../shared/cron-local.js'
 import { parseIdleTtl, SLACK_GATEWAY_TOKEN_ENVS } from '../shared/constants.js'
 import { ENV_NAME_RE, tokenVarRefusal } from '../shared/spawn-env.js'
-import { offLimitRoots, workdirScopeIssues } from './workdir-scope.js'
+import { offLimitRoots, workdirRestrictionIssues } from './restricted-workdir.js'
 import { sandboxIssues, unquotablePath } from './server-sandbox.js'
 import { engineConfinesAccess } from '../shared/engine-capabilities.js'
 import { noSuchApp, pinnersOf, serves, speaksAsOf, whyNotServed } from './pins.js'
@@ -61,7 +61,7 @@ const BUILTIN: readonly string[] = BUILTIN_ROLES
 const TOP_KEYS = ['operator', 'connectors', 'slack', 'people', 'specialists', 'defaults', 'places', 'schedules', 'rules', 'guard', 'vitals', 'mcp']
 const SPECIALIST_KEYS = ['workdir', 'prompt', 'prompt_file', 'listens', 'apps', 'speaks_as', 'allow', 'sessions', 'max', 'idle', 'home', 'model', 'engine', 'env_file', 'was', 'access', 'tools', 'mcp', 'talks_to']
 /** Keys only a hand edit of one specialist's own table sets: a default would reach every specialist, a fragment's table is someone else's. */
-export const SCOPE_KEYS = ['access', 'tools', 'mcp', 'talks_to'] as const
+export const RESTRICTION_KEYS = ['access', 'tools', 'mcp', 'talks_to'] as const
 
 type Table = Record<string, unknown>
 /** Own keys only: a name like `constructor` must not resolve through the prototype. */
@@ -403,7 +403,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   const defaults = table(defaultsTable.specialist, 'defaults.specialist') ?? {}
   unknownKeys(defaults, SPECIALIST_KEYS, 'defaults.specialist')
   // A default reaches every specialist, including ones nobody meant to scope: these are set on one specialist's own table.
-  for (const k of SCOPE_KEYS) if (has(defaults, k)) error(`defaults.specialist.${k}`, `can't be a default: ${k} says what one specialist's session may reach. Set it under [specialists.<id>] by editing hydra.toml`)
+  for (const k of RESTRICTION_KEYS) if (has(defaults, k)) error(`defaults.specialist.${k}`, `can't be a default: ${k} says what one specialist's session may reach. Set it under [specialists.<id>] by editing hydra.toml`)
   if (defaults.workdir !== undefined && typeof defaults.workdir === 'string' && !defaults.workdir.includes('{id}')) {
     warn('defaults.specialist.workdir', 'has no {id}, so every specialist without its own workdir shares one folder')
   }
@@ -411,7 +411,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   // Defaults are type-checked once, here, so a bad default is reported once, not once per specialist.
   const goodDefaults: Table = {}
   for (const k of Object.keys(defaults)) {
-    if (!SPECIALIST_KEYS.includes(k) || (SCOPE_KEYS as readonly string[]).includes(k)) continue
+    if (!SPECIALIST_KEYS.includes(k) || (RESTRICTION_KEYS as readonly string[]).includes(k)) continue
     const n = errors.length
     readSpecialistKeyTypes({ [k]: defaults[k] }, 'defaults.specialist')
     if (errors.length === n && k === 'idle') checkIdle(defaults.idle as string, 'defaults.specialist.idle')
@@ -445,7 +445,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     return undefined
   }
 
-  const checkWorkdirScope = (at: string, workdir: string) => { for (const why of workdirScopeIssues(env, workdir, privateRoots)) error(at, why) }
+  const checkWorkdirRestriction = (at: string, workdir: string) => { for (const why of workdirRestrictionIssues(env, workdir, privateRoots)) error(at, why) }
 
   const specialists: Record<string, Specialist> = {}
   /** Who listens on each place, with the apps they are pinned to (undefined: unpinned). */
@@ -571,7 +571,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       }
       // The engine actually used comes from thread history and `handoff <model>` can switch it, so launch checks it again.
       if (engine !== undefined && !engineConfinesAccess(engine)) error(`${path}.engine`, `${engine} can't run an access = "workdir" specialist: that engine cannot confine its tools; set engine = "claude", or set access = "operator"`)
-      if (workdirRaw !== undefined && isAbsolute(workdir) && env.isDir(workdir)) checkWorkdirScope(at('workdir'), workdir)
+      if (workdirRaw !== undefined && isAbsolute(workdir) && env.isDir(workdir)) checkWorkdirRestriction(at('workdir'), workdir)
     }
     specialists[id] = {
       id, workdir, listens, allow,

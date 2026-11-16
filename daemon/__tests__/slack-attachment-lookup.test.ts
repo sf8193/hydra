@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { mkdtempSync, rmSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { SlackGateway } from '../../slack-gateway.js'
+import { SlackGateway } from '../../gateways/slack.js'
 
 const CHANNEL = 'D0BE3RB4Y00'
 const THREAD_TS = '1789186105.789699'

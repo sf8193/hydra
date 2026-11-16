@@ -271,7 +271,7 @@ export type LoadEnv = {
   envFileHas(name: string): boolean
   /** Whether the path is, or sits inside, a git work tree. */
   isGitWorkTree(path: string): boolean
-  /** What lies under the folder that a scoped session must not be able to reach. */
+  /** What lies under the folder that a restricted session must not be able to reach. */
   scanWorkdir(dir: string): WorkdirScan
   /** The chat platform this daemon runs. On `slack` the gateway holds `SLACK_GATEWAY_TOKEN_ENVS`, so no connector app may name them. */
   platform: 'discord' | 'slack'

@@ -18,7 +18,7 @@ import type { SessionInfo } from '../sessions.js'
 import { gateway } from '../config.js'
 import { transport } from '../bridge-transport.js'
 import type { LaunchInput } from '../engines/engine-adapter.js'
-import type { InboundMessage } from '../../gateway.js'
+import type { InboundMessage } from '../../gateways/gateway.js'
 
 
 // ---------------------------------------------------------------------------

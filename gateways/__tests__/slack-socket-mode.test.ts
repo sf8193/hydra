@@ -7,7 +7,7 @@ import { EventEmitter } from 'events'
 import { WebSocketServer } from 'ws'
 import { LogLevel } from '@slack/socket-mode'
 import { SlackWebSocket } from '@slack/socket-mode/dist/src/SlackWebSocket.js'
-import { SLACK_CLIENT_PING_TIMEOUT_MS, SLACK_SOCKET_SAFE_BLOCK_MS } from '../shared/constants.js'
+import { SLACK_CLIENT_PING_TIMEOUT_MS, SLACK_SOCKET_SAFE_BLOCK_MS } from '../../shared/constants.js'
 
 /** Bolt's App, reduced to what the two connections touch, keeping its one rule about a custom receiver. */
 class FakeApp {
@@ -28,8 +28,8 @@ class FakeApp {
 }
 mock.module('@slack/bolt', () => ({ ...bolt, App: FakeApp }))
 
-const { boltApp } = await import('../connectors/slack/listener.js')
-const { SlackGateway } = await import('../slack-gateway.js')
+const { boltApp } = await import('../../connectors/slack/listener.js')
+const { SlackGateway } = await import('../slack.js')
 
 /** The SDK client's ping timeout; it pings every third of it (SlackWebSocket.monitorPingToSlack). */
 const pingTimeout = (client: unknown) => (client as { clientPingTimeoutMS: number }).clientPingTimeoutMS

@@ -3,7 +3,7 @@
  * network-aware backoff, and tells its owner when it has been gone long enough that
  * events were missed.
  *
- * Lifted out of slack-gateway.ts so a second Socket Mode consumer (the Slack-watch
+ * Lifted out of gateways/slack.ts so a second Socket Mode consumer (the Slack-watch
  * listener) uses the same supervision instead of growing its own. It is Slack's: it
  * listens for the Socket Mode client's lifecycle events by name, and its timings are set
  * against that client's ping timeout (SLACK_CLIENT_PING_TIMEOUT_MS). It does not import

@@ -1,4 +1,4 @@
-// What a test or probe that really runs `claude` for a scoped session may pass it: HOME, PATH and USER, and nothing else.
+// What a test or probe that really runs `claude` for a restricted session may pass it: HOME, PATH and USER, and nothing else.
 // Everything else the session needs (CLAUDE_CONFIG_DIR, DAEMON_SOCK, CLAUDE_CODE_PLUGIN_DIRS, HYDRA_*, ENABLE_CLAUDEAI_MCP_SERVERS)
 // is exported by the launch command itself, so a run starts from `env -i HOME PATH USER` and never inherits the live
 // daemon's DISCORD_BOT_TOKEN, DAEMON_SOCK or CLAUDE_CODE_PLUGIN_DIRS.

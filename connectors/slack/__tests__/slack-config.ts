@@ -50,7 +50,7 @@ allow = ["anyone"]
 ${place}`
 
 /** One specialist listening on one channel, open to `allow`. */
-export const oneListener = (channel: string, to = 'slopbot', allow = '["anyone"]', extra = '') => `${BASE}
+export const oneListener = (channel: string, to = 'helper', allow = '["anyone"]', extra = '') => `${BASE}
 [specialists.${to}]
 workdir = "/w/${to}"
 listens = ["slack:${channel}"]

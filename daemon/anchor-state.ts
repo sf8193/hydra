@@ -1,7 +1,7 @@
 import { gateway, DEFAULT_SESSION_CHANNEL } from './config.js'
 import { registry, sessionEmoji } from './sessions.js'
 import { occupancy } from './session-reachability.js'
-import { COUNT_EMOJI, SUPERSCRIPT, SUBSCRIPT } from '../gateway.js'
+import { COUNT_EMOJI, SUPERSCRIPT, SUBSCRIPT } from '../gateways/gateway.js'
 
 export type AnchorState = 'live' | 'crashed' | 'killed' | 'zombie'
 

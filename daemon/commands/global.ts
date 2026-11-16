@@ -12,7 +12,7 @@ import { debouncedRefreshListDisplay } from './status.js'
 import { getActiveRuns } from '../protocol-runner.js'
 import type { SpawnTemplate } from '../templates.js'
 import { buildTemplateSpawnOpts, runTemplateAction } from '../templates.js'
-import type { InboundMessage } from '../../gateway.js'
+import type { InboundMessage } from '../../gateways/gateway.js'
 import { type Access } from '../access.js'
 import type { ProviderId } from '../engines/engine-adapter.js'
 

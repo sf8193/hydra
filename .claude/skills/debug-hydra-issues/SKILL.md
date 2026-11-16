@@ -84,7 +84,7 @@ tail -100 ~/hydra-${PLATFORM}-daemon.log | grep -i "error\|warn\|crash\|fail"
 
 2. **Check sessions.json fields.** `claudeSessionId: null` → bridge never connected. `listening: false` → session is muted. These explain "not responding" without a crash.
 
-3. **Trace the message path.** Gateway (`{platform}-gateway.ts`) → `router.ts` → `bridge-transport.ts` → bridge → CC/Codex. Find where it stops. If the daemon log shows delivery but the session doesn't respond, check bridge MCP logs (keyed by Claude session UUID): macOS `~/Library/Caches/claude-cli-nodejs/{project-slug}/mcp-logs-plugin-discord-discord/*.jsonl`, Linux `${XDG_CACHE_HOME:-~/.cache}/claude-cli-nodejs/...`.
+3. **Trace the message path.** Gateway (`gateways/{platform}.ts`) → `router.ts` → `bridge-transport.ts` → bridge → CC/Codex. Find where it stops. If the daemon log shows delivery but the session doesn't respond, check bridge MCP logs (keyed by Claude session UUID): macOS `~/Library/Caches/claude-cli-nodejs/{project-slug}/mcp-logs-plugin-discord-discord/*.jsonl`, Linux `${XDG_CACHE_HOME:-~/.cache}/claude-cli-nodejs/...`.
 
 ## Step 3 — Spawn & Resume Failures
 

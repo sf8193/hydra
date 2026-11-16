@@ -108,7 +108,7 @@ export function startHydraConfig(opts: { alert?: Send; env?: LoadEnv; intervalMs
   return watch.initial
 }
 
-/** The probes the daemon loads hydra.toml with: what a scoped launch checks the workdir with again. */
+/** The probes the daemon loads hydra.toml with: what a restricted launch checks the workdir with again. */
 export function hydraLoadEnv(): LoadEnv {
   return loadEnvInUse ?? systemEnv(SESSION_NAMES, STATE_DIR, PLATFORM, CLAUDE_CONFIG)
 }

@@ -1,4 +1,4 @@
-import { serverTrustLine } from '../scope.js'
+import { serverTrustLine } from '../restricted.js'
 import { describe, test, expect, afterEach } from 'bun:test'
 import { mkdirSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'

@@ -1,7 +1,7 @@
 // Claude's way of checking a confined session against its policy (the adapter's `verifyLaunch`): Claude Code's own record of what it loaded: the `--debug-file` of the
 // launch itself (tmux sessions emit no init event).
 //
-// The policy decides what a confined session may reach (scope.ts); the argv, settings and MCP config are built from it
+// The policy decides what a confined session may reach (restricted.ts); the argv, settings and MCP config are built from it
 // (claude-engine.ts). That is what hydra asked for. This reads what Claude Code did: the launch's debug file says which MCP servers it
 // started and connected, which plugins it loaded, which permission rules it applied, and whether claude.ai's connectors were off.
 // Any difference from the policy refuses the start. Claude Code loaded a different set from the same argv before (hydra#600: claude.ai
@@ -11,7 +11,7 @@
 // of the right name running another command passes here. The launch's own MCP config is what names the command, and it is written by hydra.
 //
 // What the debug file does not carry is the built-in tool list: `--tools` is verified by the init event in the live test
-// (scoped-claude.live.test.ts); here, a tool beyond the policy shows as a permission rule Claude Code applied for it. And what
+// (restricted-claude.live.test.ts); here, a tool beyond the policy shows as a permission rule Claude Code applied for it. And what
 // is checked is Claude Code 2.1.32x's wording of those lines: a version that words them differently reads as "did not load as
 // asked" and refuses (fail closed), and the live test is what notices.
 //
@@ -20,7 +20,7 @@
 
 import { readFileSync } from 'fs'
 import { BRIDGE_MCP_SERVER_KEY, BRIDGE_PLUGIN_ID, BRIDGE_TOOLS_PERMISSION } from '../plugin-manifest.js'
-import { HYDRA_MOD, serverToolRule, type ConfinedPolicy } from '../scope.js'
+import { HYDRA_MOD, serverToolRule, type ConfinedPolicy } from '../restricted.js'
 
 /** What a launch's debug file says Claude Code loaded. Each field is read from the lines that say it, and nothing is inferred. */
 export type Loaded = {
