@@ -3,13 +3,12 @@
  * network-aware backoff, and tells its owner when it has been gone long enough that
  * events were missed.
  *
- * Lifted out of gateways/slack.ts so a second Socket Mode consumer (the Slack-watch
- * listener) uses the same supervision instead of growing its own. It is Slack's: it
+ * Lifted out of gateways/slack.ts so a second Socket Mode consumer (the Slack connector, one connection per app) uses the same supervision instead of growing its own. It is Slack's: it
  * listens for the Socket Mode client's lifecycle events by name, and its timings are set
  * against that client's ping timeout (SLACK_CLIENT_PING_TIMEOUT_MS). It does not import
  * the SDK: the owner supplies how to (re)start the connection and an event emitter for
  * the current connection's lifecycle, and decides what "give up" means.
- * The gateway exits the process (a supervisor restarts it); the listener degrades and
+ * The gateway exits the process (a supervisor restarts it); the Slack connector degrades and
  * keeps trying, because a dead Slack token must not take the Discord daemon with it.
  */
 

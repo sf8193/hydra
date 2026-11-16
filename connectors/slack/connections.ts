@@ -81,7 +81,7 @@ export class SlackConnections {
   start(): Promise<void> {
     if (!this.watching) {
       this.watching = true
-      this.d.onConfigLoad(() => { void this.start().catch(err => this.d.log(`daemon: slack listeners: ${err instanceof Error ? err.stack ?? err.message : err}\n`)) })
+      this.d.onConfigLoad(() => { void this.start().catch(err => this.d.log(`daemon: slack connector: ${err instanceof Error ? err.stack ?? err.message : err}\n`)) })
     }
     const run = this.reconciling.then(() => this.reconcile())
     this.reconciling = run.catch(() => {})
@@ -104,7 +104,7 @@ export class SlackConnections {
       if (this.byApp.has(app.id)) continue
       const why = missingTokens(app, this.d.tokens(app))
       if (why) {
-        this.d.log(`daemon: slack listener for the app named ${app.id} off (${why})\n`)
+        this.d.log(`daemon: slack connector for the app named ${app.id} off (${why})\n`)
         if (this.skipped.get(app.id) !== why) { this.skipped.set(app.id, why); this.d.alert(`⚠️ ${app.id === 'default' && declared <= 1 ? 'Slack' : `The app named \`${app.id}\``} is not connected: ${why}. Put the token in that variable (in \`.env\`) and restart the daemon.`, app.id) }
         continue
       }
@@ -115,7 +115,7 @@ export class SlackConnections {
       // Connected side by side: one app's slow or refused connection does not hold another's.
       // A start that resolves after `stop()` (or after the app was replaced) is stale: it must not mark the app given up.
       const drop = () => { if (this.byApp.get(app.id) !== l) return; this.shared.failedToJoin(app.id); this.gaveUp.add(app.id); this.byApp.delete(app.id) }
-      starting.push(l.start().then(ok => { if (!ok) drop() }).catch(err => { this.d.log(`daemon: slack listener${appSuffix(app.id, declared)} failed to start: ${err instanceof Error ? err.stack ?? err.message : err}\n`); drop() }))
+      starting.push(l.start().then(ok => { if (!ok) drop() }).catch(err => { this.d.log(`daemon: slack connector${appSuffix(app.id, declared)} failed to start: ${err instanceof Error ? err.stack ?? err.message : err}\n`); drop() }))
     }
     await Promise.all(starting)
   }

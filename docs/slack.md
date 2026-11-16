@@ -22,7 +22,7 @@ Steps 1–6 below set up the gateway. [Apps in hydra.toml](#apps-in-hydratoml) o
 
 ## 1. Create the Slack app
 
-Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From a manifest**, pick your workspace, and paste this JSON. **Give it a unique name** (app names must be unique in a workspace):
+*Slack gateway.* Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From a manifest**, pick your workspace, and paste this JSON. **Give it a unique name** (app names must be unique in a workspace):
 
 ```json
 {
@@ -58,16 +58,18 @@ Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** �
 
 ## 2. Generate the two tokens
 
+*Slack gateway.*
+
 - **App-level token** (Socket Mode): Basic Information → App-Level Tokens → **Generate** → name it `socket-mode`, scope `connections:write`. Copy the `xapp-…` token.
 - **Bot token**: OAuth & Permissions → **Bot User OAuth Token** (appears after install, step 3). Copy the `xoxb-…` token.
 
 ## 3. Install to workspace
 
-Install App → **Install to Workspace** → Authorize. (Org-restricted workspaces may need admin approval of the scopes.)
+*Slack gateway.* Install App → **Install to Workspace** → Authorize. (Org-restricted workspaces may need admin approval of the scopes.)
 
 ## 4. Config files
 
-Both live in the daemon's **state dir** — default `~/.claude/channels/slack/` (override with `HYDRA_STATE_DIR`).
+*Slack gateway.* Both live in the daemon's **state dir** — default `~/.claude/channels/slack/` (override with `HYDRA_STATE_DIR`).
 
 `.env` (see [`.env.example`](../.env.example)):
 
@@ -104,7 +106,7 @@ hydra.toml never holds a token, only the names of the variables that do. Keep on
 
 ## 5. Enable the bridge plugin — and the channels gate
 
-The bridge runs as the `discord@claude-plugins-official` plugin (the name is historical; it's platform-agnostic). Install it **into the config dir the daemon will use** (see step 6 — `CLAUDE_CONFIG_DIR`):
+*Slack gateway.* The bridge runs as the `discord@claude-plugins-official` plugin (the name is historical; it's platform-agnostic). Install it **into the config dir the daemon will use** (see step 6 — `CLAUDE_CONFIG_DIR`):
 
 ```bash
 claude plugin install discord@claude-plugins-official
@@ -121,7 +123,7 @@ claude plugin install discord@claude-plugins-official
 
 ## 6. Run
 
-Run `claude` once in a terminal first. Accept the onboarding screens and log in, or a detached bot hangs on them.
+*Slack gateway.* Run `claude` once in a terminal first. Accept the onboarding screens and log in, or a detached bot hangs on them.
 
 ```bash
 bun install
@@ -131,11 +133,11 @@ hydra up slack                                  # daemon + bot
 
 Fix every ✗ that preflight reports before `hydra up`. `hydra preflight slack` re-runs the checks. See [ONBOARDING_TIPS.md](ONBOARDING_TIPS.md) for the gotcha behind each step.
 
-Healthy = daemon log shows `slack gateway: connected as <bot>` **and** `bridge registered for session main`. With an app declared in hydra.toml, also expect `daemon: slack catch-up (boot, deep): done` once for each app; an app that did not connect logs `slack listener for the app named <id> off (…)` and says which key to fix. Then DM the bot.
+Healthy = daemon log shows `slack gateway: connected as <bot>` **and** `bridge registered for session main`. With an app declared in hydra.toml, also expect `daemon: slack connector: catch-up (boot, deep): done` once for each app; an app that did not connect logs `slack connector for the app named <id> off (…)` and says which key to fix. Then DM the bot.
 
 ## Apps in hydra.toml
 
-Three words mean one thing each from here on. An app **serves** a specialist when it is pinned to it, or when it is unpinned and no specialist is pinned to that app; a message **heard** by an app arrived through its connection. A message is **owed** from the moment it is accepted until a delivery lands. An **episode** is one run of one trouble (an app down, a scope missing): it is said once when it starts, and not again until it has ended and starts anew; drops and gaps count an hour from the first.
+*Slack connector.* Three words mean one thing each from here on. An app **serves** a specialist when it is pinned to it, or when it is unpinned and no specialist is pinned to that app; a message **heard** by an app arrived through its connection. A message is **owed** from the moment it is accepted until a delivery lands. An **episode** is one run of one trouble (an app down, a scope missing): it is said once when it starts, and not again until it has ended and starts anew; drops and gaps count an hour from the first.
 
 The sections from here to *Known limits* tell one story, in the order an app lives it: you **declare** it, print its **manifest**, put its **tokens** in `.env`, and it **connects**; **routing** and **pins** decide what it hears; one app **owns** each message; **conversations** and **replies** follow the app that heard them; **health and alerts** are kept for each app on its own; the **runbook** and **adding an app** are how you act on it.
 
@@ -158,13 +160,13 @@ app_token_env = "SALES_SLACK_APP_TOKEN"
 - `[connectors.slack]` still works: it is the app named `default`, and spells the two text keys `app_name` and `app_description`. Declaring `default` in both tables is an error.
 - Each token needs its own variable: one variable on two keys (two apps, one app, or an app and `[gateways.discord]`) is an error.
 - Token variable names are uppercase. Hydra keeps every variable hydra.toml names as a token from the sessions it starts, so name only variables the daemon needs. These are refused when hydra.toml loads: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMUX`, `TERM`, `PWD`, `TMPDIR`, `LANG`, `ANTHROPIC_API_KEY`, `GH_TOKEN`, `SSH_AUTH_SOCK`, and anything starting `HYDRA_` (except `HYDRA_SLACK_`), `CLAUDE_`, `LC_` or `XDG_`.
-- Every app declared connects, whatever it is named, when hydra.toml loads, with no restart, if its token variables are already in the daemon's environment (a variable that is new needs one). An app whose tokens are not set is skipped: the daemon says which key to fix, in the thread of each specialist that app serves and that hears Slack (main's channel when none does), and logs `slack listener for the app named <id> off (…)`; the others connect.
+- Every app declared connects, whatever it is named, when hydra.toml loads, with no restart, if its token variables are already in the daemon's environment (a variable that is new needs one). An app whose tokens are not set is skipped: the daemon says which key to fix, in the thread of each specialist that app serves and that hears Slack (main's channel when none does), and logs `slack connector for the app named <id> off (…)`; the others connect.
 
 `hydra slack manifest [<app>]` prints one app's manifest. Leave the name out when hydra.toml declares one app; with several, a missing or unknown name lists the ones declared.
 
 ## Apps and routing
 
-**One connection per app.** Hydra opens a Socket Mode connection for each app, each with its own bot, its own tokens, and its own reconnects and catch-up pass. An app added to hydra.toml connects as soon as hydra.toml loads (no restart); one taken out disconnects. Every message records the app that heard it, and everything that follows goes through that app: its reply, its reactions, the files it downloads, the threads it rereads. A message goes in through one app and leaves through the same one.
+*Slack connector.* **One connection per app.** Hydra opens a Socket Mode connection for each app, each with its own bot, its own tokens, and its own reconnects and catch-up pass. An app added to hydra.toml connects as soon as hydra.toml loads (no restart); one taken out disconnects. Every message records the app that heard it, and everything that follows goes through that app: its reply, its reactions, the files it downloads, the threads it rereads. A message goes in through one app and leaves through the same one.
 
 An app is a way in: a message reaches hydra through the app whose connection delivered it. Routing knows which, and three things use it. `hydra route --as <person> --at <place> --app <app>` shows each.
 
@@ -199,7 +201,7 @@ Two specialists may `listen` on the same place only when no app reaches both: th
 4. The app named `default`, if it delivers to someone at this place.
 5. The first app, in hydra.toml order, that delivers to someone at this place.
 
-An app "delivers to someone at this place" when a specialist it serves listens there, or a rule that matches there sends to one (or to `main`), or it is a DM. If no app that heard the message does, 4 and 5 pick among all that heard it. So a channel whose only listener is pinned to `sales` is answered by `sales` with no `default_app` set; set one only to choose between apps that all deliver.
+An app "delivers to someone at this place" when a specialist it serves listens there, or a rule that matches there sends to one (or to `main`), or it is a DM. If no app that heard the message does, 4 and 5 pick among all that heard it. So a channel whose only app is pinned to `sales` is answered by `sales` with no `default_app` set; set one only to choose between apps that all deliver.
 
 The other apps do nothing: `hydra route` shows them as `ignored`, with the app that owns it. Ownership is decided before any specialist, and never hands a message on: if the owner reaches no one (an explicit `default_app` that delivers to nobody there), the message is unrouted.
 
@@ -220,7 +222,7 @@ A message from another app's bot is another bot's message: it is passed over unl
 
 ## Which app listens
 
-Hydra serves two uses through one routing system, and which app listens follows from the use.
+*Slack connector.* Hydra serves two uses through one routing system, and which app listens follows from the use.
 
 - **The operator's harness.** The operator's own app: a bot plus `user_token_env`, the operator's read-only user token. With it, a thread in a channel the bot isn't in is still read, as the operator, and routed to the operator's own sessions (`bind_conversation`), so no bot has to join that channel. A whole channel (a place in hydra.toml) is still read through the bot today, so its bot must be in it. These sessions serve the operator, so they may see what the operator sees.
 - **Agents for other people.** A restricted app whose own bot sits in the channels its agent serves, routed to specialists, usually confined ones (`access = "workdir"`, [below](#a-specialist-other-people-talk-to-access--workdir)). It listens through its own bot.
@@ -237,7 +239,7 @@ The operator's app may still route something the operator saw to a specialist, b
 
 ## Conversations and replies, per app
 
-**A conversation is an app, a channel and a thread.** The same thread heard through two apps (each tagged in turn) is two conversations, each bound on its own, answered through its own app. Its id, as `hydra conversations`, `reply`, `bind_conversation` and the guard's stdin (`conversation`) write it:
+*Slack connector.* **A conversation is an app, a channel and a thread.** The same thread heard through two apps (each tagged in turn) is two conversations, each bound on its own, answered through its own app. Its id, as `hydra conversations`, `reply`, `bind_conversation` and the guard's stdin (`conversation`) write it:
 
 | App | Conversation id | Example |
 |---|---|---|
@@ -263,17 +265,17 @@ home = "slack:#sales-ops"
 
 ## Health and alerts, per app
 
-**Health is kept for each app on its own.** Each app has its own connection, its own catch-up pass, and its own record of what it has told you, so one app's trouble neither raises, hides, nor repeats another's. `hydra health` prints one line per app, with the app's id (a lone `default` prints the single `slack:` line it always did):
+*Slack connector.* **Health is kept for each app on its own.** Each app has its own connection, its own catch-up pass, and its own record of what it has told you, so one app's trouble neither raises, hides, nor repeats another's. `hydra health` prints one line per app, with the app's id (a lone `default` prints the single `slack connector:` line):
 
 ```
-slack: 2 apps · 14 conversations · 0 owed
+slack connector: 2 apps · 14 conversations · 0 owed
   default: up · last event 1 min ago · catch-up ok 3 min ago · scopes ok
   sales: down 12 min · last event 14 min ago · catch-up failing (…) 40 min ago · missing chat:write (replies)
 ```
 
 In `hydra health --json`, `slack.apps.<id>` holds each declared app's:
 
-- `state`: `off` (no listener: its tokens are missing, or it failed to start), `connecting`, `up`, `down`, or `exhausted` (reconnect attempts keep failing; hydra keeps trying);
+- `state`: `off` (no connection: its tokens are missing, or it failed to start), `connecting`, `up`, `down`, or `exhausted` (reconnect attempts keep failing; hydra keeps trying);
 - `downMin`, `lastActivityAgeMin`, and the last catch-up (`ok`, `accepted`, `reason`) with `lastOkCatchUpAgeMin`;
 - `missingScopes`: what the bot token lacks of what hydra.toml has the app do (empty when complete; `null` until Slack has said what the token holds, which the line prints as `scopes unchecked`);
 - `tokens`: `{ ok: true }`, or `{ ok: false, why }` naming the key to fix;
@@ -293,7 +295,7 @@ A missing scope is always logged and shown in `hydra health` (`missing <scope> (
 
 **Alerts, per app.** Each of these has its own episode for each app, so app A's outage neither suppresses nor duplicates app B's:
 
-- the listener is down for 5 minutes awake, and back up;
+- the app's connection is down for 5 minutes awake, and back up;
 - the catch-up pass has not completed for 25 minutes awake, or Slack refuses it for a reason retrying cannot fix (`missing_scope`, `invalid_auth`, `not_in_channel`, which names the channel);
 - the periodic pass finds messages the live stream never delivered (at most hourly);
 - a thread is let go because no token can read it any more, or the operator's token is refused (each at most hourly);
@@ -312,7 +314,7 @@ Start with `hydra health`; `hydra health --json` has every field above.
 | You see | It means, and what to do |
 |---|---|
 | `<app>: off · bot_token_env … names X, which has no value` | The variable is not in the daemon's environment. Put the token in `.env` and restart the daemon: new variables are read only at start. |
-| `<app>: off` and no key named | Its tokens are there but the listener failed to start (see `slack listener … failed to start` in the daemon log). Fix what the log says and save hydra.toml: the next load tries again. |
+| `<app>: off` and no key named | Its tokens are there but its connection failed to start (see `slack connector … failed to start` in the daemon log). Fix what the log says and save hydra.toml: the next load tries again. |
 | `<app>: down`, or `exhausted` | Its connection is lost. Check both tokens and the app's Socket Mode setting at api.slack.com/apps. A first connection that fails is retried (10 s doubling to 5 min) until it connects, then a catch-up pass runs. Other apps are unaffected. |
 | `missing <scope> (<option>)` | Add the scope to that app (`hydra slack manifest <app>` lists them), reinstall it, update its bot token, restart the daemon. |
 | `scopes unchecked` | The app has connected but Slack did not say what its token holds, or it has not connected yet. Check again after the next reconnect. |
@@ -323,6 +325,8 @@ Start with `hydra health`; `hydra health --json` has every field above.
 | Slack is not connected, and a `slack-watch.json` is in the state dir | hydra.toml declares no app and the old file is no longer read: run `hydra migrate`. |
 
 ## Adding an app
+
+*Slack connector.*
 
 1. **Declare it:** `[slack.apps.<id>]` in hydra.toml with `bot_token_env` and `app_token_env` (and `user_token_env` if it should read threads as the operator).
 2. **Create it:** `hydra slack manifest <id>` prints its manifest. Create the app from it at api.slack.com/apps, install it, and put its tokens in the variables the keys name, in `.env`.
@@ -468,6 +472,8 @@ If hydra.toml later gives a running specialist another `access`, `workdir`, `too
 
 ## Known limits
 
+*Slack connector.*
+
 - A confined session that was already running when it was last checked is not checked again while it runs (#617); only a new start is. The check also reads Claude Code 2.1.32x's wording of its debug file: a version that words those lines differently refuses starts until the check is updated.
 - Slack edits are not covered by `link_previews` (`chat.update` takes no unfurl argument).
 - Where two apps are in one channel and who is in it is not yet known (a membership read has not answered, or an app has not joined), each app may answer what it receives, so a channel two apps are in may be answered by both until the read lands.
@@ -477,6 +483,8 @@ If hydra.toml later gives a running specialist another `access`, `workdir`, `too
 - An app created while only one app was declared lacks the membership events (step 5 of [Adding an app](#adding-an-app)) until they are added.
 
 ## Troubleshooting
+
+*Slack gateway.*
 
 | Symptom | Cause / fix |
 |---|---|
@@ -488,7 +496,7 @@ If hydra.toml later gives a running specialist another `access`, `workdir`, `too
 
 ## Message formatting
 
-Plain replies are sent via Slack's `markdown_text` field, so the bot can use the **full GitHub-flavored Markdown palette** and it renders natively:
+*Slack gateway.* Plain replies are sent via Slack's `markdown_text` field, so the bot can use the **full GitHub-flavored Markdown palette** and it renders natively:
 
 - **bold** (`**x**`), _italic_ (`_x_`), ~strike~ (`~~x~~`), `inline code`
 - fenced ```code blocks```, `> blockquotes`, `---` dividers
@@ -499,4 +507,4 @@ Constraints: `markdown_text` caps at ~12k chars (longer messages fall back to cl
 
 ## Spawned sessions
 
-DM `spawn: <anything, multi-paragraph ok>` to fork an isolated Claude session in a thread. The confirmation includes `tmux attach -t <name>` so you can view/drive it from any terminal. Replies in that thread route back to the spawned session; the rest of your DMs go to the main session.
+*Slack gateway.* DM `spawn: <anything, multi-paragraph ok>` to fork an isolated Claude session in a thread. The confirmation includes `tmux attach -t <name>` so you can view/drive it from any terminal. Replies in that thread route back to the spawned session; the rest of your DMs go to the main session.

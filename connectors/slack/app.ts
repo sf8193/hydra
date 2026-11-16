@@ -6,7 +6,7 @@ import type { SlackApp } from '../../config/types.js'
 export type ScopeNeed = { option: string; any: readonly string[] }
 
 /**
- * Every scope and event the Slack connector uses. The listener's startup check (`scopesNeeded`) and
+ * Every scope and event the Slack connector uses. Each app's startup check (`scopesNeeded`) and
  * `hydra slack manifest` both read this, so the app the manifest creates is the app the check expects.
  */
 export const SLACK_APP_NEEDS = {

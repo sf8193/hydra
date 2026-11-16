@@ -199,7 +199,7 @@ export class ConnectedApps {
         // An error is not an answer: the last good one stands, and Slack is asked again later.
         this.facts.set(key, { ...(f?.good && { good: f.good }), retryAt: this.now() + PROBE_RETRY_MS, probedAt: this.now() })
         if (!f?.good) this.cantRead(app, why)
-        else this.deps.log?.(`daemon: slack apps: reading whether the app named ${app} is in ${channel} failed (${why}); the last answer stands\n`)
+        else this.deps.log?.(`daemon: slack connector: reading whether the app named ${app} is in ${channel} failed (${why}); the last answer stands\n`)
       } finally { release() }
     }).finally(() => { this.flights.delete(key) })
     this.flights.set(key, flight)
@@ -243,7 +243,7 @@ export class ConnectedApps {
 
   /** Said once per app: which apps are in a channel can't be read, so in a channel several are in, the one that receives a message answers it. */
   private cantRead(app: string, why: string): void {
-    this.deps.log?.(`daemon: slack apps: can't tell whether the app named ${app} is in a channel: ${why}\n`)
+    this.deps.log?.(`daemon: slack connector: can't tell whether the app named ${app} is in a channel: ${why}\n`)
     if (this.said.has(`read:${app}`)) return
     this.said.add(`read:${app}`)
     this.deps.alert?.(`⚠️ Hydra can't tell which channels the app named \`${app}\` is in (${why}), so in a channel that several apps are in, each may answer. Add the scopes channels:read (public channels) and groups:read (private ones) to that app (\`hydra slack manifest ${app}\` lists them), reinstall it, put the new bot token in the variable the ${appKey(app, 'bot_token_env')} names (in \`.env\`), and restart the daemon.`, app)

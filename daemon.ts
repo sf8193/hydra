@@ -401,7 +401,7 @@ void startGateway().then(async () => {
   )
   // After recovery, so a specialist refill never races it. Never throws, never blocks the boot.
   void startSlackListener().catch(err =>
-    process.stderr.write(`daemon: slack listener failed to start: ${err instanceof Error ? err.message : err}\n`),
+    process.stderr.write(`daemon: slack connector failed to start: ${err instanceof Error ? err.message : err}\n`),
   )
 })
 

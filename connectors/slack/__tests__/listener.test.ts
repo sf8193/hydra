@@ -189,6 +189,8 @@ describe('starting', () => {
     const noBot = setup({ tokens: { app: TOKENS.app } })
     expect(await noBot.listener.start()).toBe(false)
     expect(noBot.logs.join()).toContain('SLOPBOT_SLACK_BOT_TOKEN is not set')
+    expect(noBot.logs.join()).toContain('daemon: slack connector off (')   // the connector's name; "listener" names one app's connection, never the system
+    expect(noBot.logs.join()).not.toMatch(/slack listener/i)
     for (const t of [noCfg, noApp, noBot]) { expect(t.logs.join()).not.toContain('SECRET'); expect(t.apps).toHaveLength(0) }
     expect(noCfg.listener.health().state).toBe('off')
   })
@@ -339,7 +341,7 @@ describe('catch-up', () => {
     await t.listener.runCatchUp(true, 'periodic') // the wake: the pass starts before the dead socket is replaced
     expect(t.alerts).toHaveLength(0)
     await Bun.sleep(20) // the reconnect's catch-up, queued behind it, closes the window
-    expect(t.logs.some(l => l.includes('slack catch-up (queued'))).toBe(true)
+    expect(t.logs.some(l => l.includes('slack connector: catch-up (queued'))).toBe(true)
     t.tick(10 * 60_000)
     t.state.history = [...t.state.history, { ts: '2100.000001', user: 'UB', text: mention }]
     await t.listener.runCatchUp(true, 'periodic') // no gap since that pass started
@@ -356,7 +358,7 @@ describe('catch-up', () => {
     t.state.history = [{ ts: '2000.000001', user: 'UB', text: mention }] // posted during the gap
     t.apps[0].client.emit('connected') // the gap and the reconnect's catch-up start in the same moment
     await Bun.sleep(20)
-    expect(t.logs.some(l => l.includes('slack catch-up (reconnected') && l.includes('1 message(s)'))).toBe(true)
+    expect(t.logs.some(l => l.includes('slack connector: catch-up (reconnected') && l.includes('1 message(s)'))).toBe(true)
     t.tick(10 * 60_000)
     t.state.history = [...t.state.history, { ts: '2100.000001', user: 'UB', text: mention }] // after that pass read, socket up
     await t.listener.runCatchUp(true, 'periodic')
@@ -406,7 +408,7 @@ describe('catch-up', () => {
     expect(queued).toBeNull()
     await slow
     await Bun.sleep(20)
-    expect(t.logs.filter(l => l.includes('slack catch-up (queued')).length).toBe(1)
+    expect(t.logs.filter(l => l.includes('slack connector: catch-up (queued')).length).toBe(1)
   })
 })
 
@@ -447,7 +449,7 @@ describe('health and alerts', () => {
     t.sleep(99 * 60_000)
     await Bun.sleep(20)
     expect(t.logs).toContain('daemon: resumed after 99m (the machine was asleep for 99m)\n')
-    expect(t.logs.some(l => l.includes('slack catch-up (resumed, deep): incomplete'))).toBe(true)
+    expect(t.logs.some(l => l.includes('slack connector: catch-up (resumed, deep): incomplete'))).toBe(true)
     await t.listener.checkAlerts()
     expect(t.alerts.filter(a => a.includes('catch-up pass has not completed'))).toHaveLength(0) // 5 min awake, not 104
     t.tick(CATCH_UP_STALE_AFTER_MS - 5 * 60_000 - 60_000)
@@ -481,8 +483,8 @@ describe('health and alerts', () => {
     t.sleep(99 * 60_000)
     await Bun.sleep(20)
     expect(t.apps).toHaveLength(2) // a fresh socket, before any timer noticed the old one
-    expect(t.logs.filter(l => l.includes('slack catch-up (resumed, deep): done'))).toHaveLength(1)
-    expect(t.logs.some(l => l.includes('slack catch-up (reconnected'))).toBe(false)
+    expect(t.logs.filter(l => l.includes('slack connector: catch-up (resumed, deep): done'))).toHaveLength(1)
+    expect(t.logs.some(l => l.includes('slack connector: catch-up (reconnected'))).toBe(false)
   })
 
   test('health before start and after stop is off', async () => {
@@ -564,8 +566,23 @@ describe('an old single-app config runs unchanged', () => {
     await t.listener.start()
     const h = t.listener.health()
     expect(h).toMatchObject({ state: 'up', downMin: null, catchUp: { ok: true }, missingScopes: [] })
-    expect(slackHealthLines({ listener: h, apps: { default: h }, conversations: 1, readAsOperator: 0, owed: 0, oldestOwedAgeMin: null })).toEqual(['slack: listener up · catch-up ok 0 min ago · 1 conversation · 0 owed'])
-    expect(slackHealthLines({ conversations: 0, readAsOperator: 0, owed: 3, oldestOwedAgeMin: 12 })).toEqual(['slack: listener off · 0 conversations · 3 owed, oldest 12 min'])
+    expect(slackHealthLines({ listener: h, apps: { default: h }, conversations: 1, readAsOperator: 0, owed: 0, oldestOwedAgeMin: null })).toEqual(['slack connector: up · catch-up ok 0 min ago · 1 conversation · 0 owed'])
+    expect(slackHealthLines({ conversations: 0, readAsOperator: 0, owed: 3, oldestOwedAgeMin: 12 })).toEqual(['slack connector: off · 0 conversations · 3 owed, oldest 12 min'])
+  })
+
+  test('nothing the connector logs or alerts calls it a listener, and every "slack" log prefix says "slack connector"', async () => {
+    const off = setup({ tokens: { app: TOKENS.app } })
+    await off.listener.start()
+    const t = setup({ scopes: [] })
+    await t.listener.start()
+    await t.listener.runCatchUp(true, 'retry')
+    t.apps[0].client.emit('disconnected')
+    t.tick(DOWN_ALERT_AFTER_MS + 60_000)
+    await t.listener.checkAlerts()
+    const said = [...off.logs, ...t.logs, ...t.alerts]
+    expect(said.length).toBeGreaterThan(3)
+    for (const l of said) expect(l).not.toMatch(/slack listener/i)
+    for (const l of [...off.logs, ...t.logs]) if (/^daemon: slack/.test(l)) expect(l).toStartWith('daemon: slack connector')
   })
 
   test('alert wording: no app is named', async () => {
@@ -577,8 +594,8 @@ describe('an old single-app config runs unchanged', () => {
     t.apps[0].client.emit('connected')
     await t.listener.checkAlerts()
     expect(t.alerts).toEqual([
-      '⚠️ The Slack listener has been down for 6 min awake. Mentions are not arriving live; the catch-up pass replays them once it reconnects. Check the tokens and the app\'s Socket Mode setting at api.slack.com/apps; `hydra health` shows its state.',
-      '✅ The Slack listener is connected again.',
+      '⚠️ The Slack connector has been down for 6 min awake. Mentions are not arriving live; the catch-up pass replays them once it reconnects. Check the tokens and the app\'s Socket Mode setting at api.slack.com/apps; `hydra health` shows its state.',
+      '✅ The Slack connector is connected again.',
     ])
   })
 

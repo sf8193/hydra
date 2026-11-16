@@ -155,7 +155,7 @@ export async function catchUp(watcher: CatchUpWatch, api: SlackApi, cfg: SlackWa
         // Once an hour, not every pass: the cause (a missing im:read) does not change between passes.
         if (opts.now() - dmListFailLoggedAt >= 60 * 60_000) {
           dmListFailLoggedAt = opts.now()
-          opts.log(`daemon: slack catch-up: listing DM conversations failed, scanning only those already seen: ${err instanceof Error ? err.message : err}\n`)
+          opts.log(`daemon: slack connector: catch-up: listing DM conversations failed, scanning only those already seen: ${err instanceof Error ? err.message : err}\n`)
         }
         return []
       })
@@ -239,7 +239,7 @@ export async function catchUp(watcher: CatchUpWatch, api: SlackApi, cfg: SlackWa
       readTs.length = 0
     }
 
-    if (skipped.size) opts.log(`daemon: slack catch-up: ${skipped.size} DM conversation(s) left for the next pass (call budget); their cursors stay held until one reads them\n`)
+    if (skipped.size) opts.log(`daemon: slack connector: catch-up: ${skipped.size} DM conversation(s) left for the next pass (call budget); their cursors stay held until one reads them\n`)
 
     // 4. Read the threads (owed, deep, and those the scans found).
     for (const t of threads.values()) {
@@ -253,13 +253,13 @@ export async function catchUp(watcher: CatchUpWatch, api: SlackApi, cfg: SlackWa
           const why = err instanceof Error ? err.message : String(err)
           // The operator's token, not the thread, is at fault: the thread is kept for when it is replaced.
           if (why.startsWith(OPERATOR_TOKEN_REFUSED)) {
-            opts.log(`daemon: slack catch-up: thread ${t.channel}:${t.threadTs} skipped (${why})\n`)
+            opts.log(`daemon: slack connector: catch-up: thread ${t.channel}:${t.threadTs} skipped (${why})\n`)
             watcher.operatorTokenRefused(why)
             break
           }
           // One thread Slack says isn't there (a made-up or deleted ts) must not cost every other thread its pass.
           if (!GONE_THREAD.test(why)) throw err
-          opts.log(`daemon: slack catch-up: thread ${t.channel}:${t.threadTs} can't be read (${why}); skipped\n`)
+          opts.log(`daemon: slack connector: catch-up: thread ${t.channel}:${t.threadTs} can't be read (${why}); skipped\n`)
           watcher.threadGone(t.channel, t.threadTs, why)
           break
         }
@@ -276,7 +276,7 @@ export async function catchUp(watcher: CatchUpWatch, api: SlackApi, cfg: SlackWa
   } catch (err) {
     // The cursor stays held where it was, so the next pass starts from the same place.
     const reason = err instanceof Error ? err.message : String(err)
-    opts.log(`daemon: slack catch-up incomplete after ${calls} call(s): ${reason}\n`)
+    opts.log(`daemon: slack connector: catch-up incomplete after ${calls} call(s): ${reason}\n`)
     return { complete: false, calls: Math.min(calls, maxCalls), handled, accepted, reason }
   }
 

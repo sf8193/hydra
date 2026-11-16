@@ -158,7 +158,7 @@ export function specialistStatus(name: string): { occupant?: { session: string; 
 }
 
 /**
- * `hydra deliver --specialist <name>` and the Slack listener: the specialist's target, in the shape those callers read.
+ * `hydra deliver --specialist <name>` and the Slack connector: the specialist's target, in the shape those callers read.
  */
 export async function deliverToSpecialist(p: { specialist: string; message: string; initiator?: string; idempotencyKey?: string; source?: string }): Promise<SpecialistDeliverResult> {
   const r = await deliverToTarget({ to: p.specialist }, p.message, {
