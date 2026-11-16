@@ -55,8 +55,8 @@ export function formatDuration(ms: number): string {
 // The statusLine renders below the input box's bottom rule, so only the lines
 // after the LAST full-width rule are the footer; anything above is conversation
 // text, where a stray "34%" must never read as context usage. Two footer shapes
-// count: the README's `ctx: N%` and a progress bar followed by `N%` (the GSD
-// statusline). A bare `N%` is not enough — Claude Code's own "Context left until
+// count: `ctx: N%` (hydra's mod, mod/hooks/register.ts) and a progress bar followed
+// by `N%` (an operator's own statusline). A bare `N%` is not enough — Claude Code's own "Context left until
 // auto-compact: N%" shares the footer and reports REMAINING, not used.
 const INPUT_RULE_RE = /^\s*─{8,}\s*$/
 const CTX_LABEL_RE = /\bctx:\s*(\d+)%/

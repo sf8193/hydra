@@ -497,8 +497,8 @@ export class ClaudeEngine implements EngineAdapter {
   // From the transcript: the last turn's context tokens over the window the session was launched with. The id comes
   // from the status file (a /clear starts a new transcript; the stored id goes stale). The pane's footer number is
   // the fallback (no or unknown launch model; no transcript yet). Only a `ctx:` footer is cross-checked,
-  // at most every CONTEXT_CHECK_EVERY_MS: the README's hook prints Claude Code's used percentage as is, while a bar may
-  // be rescaled (GSD's reads 100% at auto-compact).
+  // at most every CONTEXT_CHECK_EVERY_MS: hydra's mod (mod/hooks/register.ts) prints Claude Code's used percentage as is,
+  // while an operator's own statusline bar may be rescaled (one that reads 100% at auto-compact).
   usage(info: ClaudeSubject): ContextUsage | null {
     const window = contextWindowOf(info.sessionMetadata?.model)
     const path = window ? transcriptPathFor(readClaudeStatus(info.tmuxName)?.sessionId ?? info.claudeSessionId) : undefined
