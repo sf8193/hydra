@@ -10,7 +10,7 @@ import { getSpecialist } from '../specialists/specialists.js'
 import { ensureSpecialist } from '../specialists/specialist-deliver.js'
 import { envelopeFor, sendTalk, talksToRefusal } from './talks-to.js'
 import { READ_ONLY_DISALLOWED_TOOLS, claudeLaunchCwd, doSpawnSession, handOff, handoffNoteFate, killSession, predecessorOf, runPreHandoffHook, sessionDir, type PreHandoffVerdict } from './session-lifecycle.js'
-import { fallbackDescription, formatDuration, chunk, assertSendable, parseDuration } from './util.js'
+import { fallbackDescription, formatDuration, chunk, assertSendable, parseDuration, withOutbound } from './util.js'
 import { tmuxHasSession } from './tmux.js'
 import { occupancy, occupied } from './session-reachability.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
@@ -154,12 +154,13 @@ const RESTRICTED_PLACE_ARG: Readonly<Record<string, string>> = {
 
 /**
  * Why a restricted session may not make this call, or undefined. The tools it keeps work only where it speaks: its own session
- * thread, or a Slack conversation bound to its specialist (not its home channel). It never posts files. `send_to_thread` also goes
- * only to a specialist its `talks_to` names (talks-to.ts). isToolAllowed has already refused the tools it does not keep.
+ * thread, or a Slack conversation bound to its specialist (not its home channel). It attaches no files of its own (the
+ * gateway may attach pictures it drew from the session's text). `send_to_thread` also goes only to a specialist its
+ * `talks_to` names (talks-to.ts). isToolAllowed has already refused the tools it does not keep.
  */
 export function restrictedRefusal(callerSessionId: string, name: string, args: Record<string, unknown>): string | undefined {
   if (name === 'set_description') return args.session_id === callerSessionId ? undefined : "set_description: a restricted session describes only itself; session_id must be this session's own"
-  if (name === 'reply' && Array.isArray(args.files) && args.files.length) return 'reply: a restricted session posts text only, so remove files (attachments are not sent)'
+  if (name === 'reply' && Array.isArray(args.files) && args.files.length) return 'reply: a restricted session may not attach files of its own, so remove files (attachments are not sent)'
   if (name === 'send_to_thread') { const why = talksToRefusal(callerSessionId, args); if (why) return why }
   const arg = RESTRICTED_PLACE_ARG[name]
   const target = arg ? args[arg] : undefined
@@ -218,31 +219,35 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
             throw new Error(`file too large: ${f} (${(st.size / 1024 / 1024).toFixed(1)}MB, max 25MB)`)
           }
         }
-        if (files.length > 10) throw new Error('max 10 attachments per message')
+        if (files.length > gateway.maxAttachments) throw new Error(`max ${gateway.maxAttachments} attachments per message`)
 
         const limit = Math.max(1, Math.min(access.textChunkLimit ?? maxChunkLimit(), maxChunkLimit()))
         const mode = access.chunkMode ?? 'markdown'
         const replyMode = access.replyToMode ?? 'first'
 
-        const chunks = chunk(text, limit, mode)
+        // The gateway shapes the text first (its pictures go beside the session's own files) and keeps any files it
+        // made until this whole send, retries included, has settled.
         const sentIds: string[] = []
-
-        try {
-          for (let i = 0; i < chunks.length; i++) {
-            const shouldReplyTo =
-              reply_to != null &&
-              replyMode !== 'off' &&
-              (replyMode === 'all' || i === 0)
-            const sent = await retrySend(() => gateway.send(chat_id, chunks[i], {
-              ...(i === 0 && files.length > 0 ? { files } : {}),
-              ...(shouldReplyTo ? { replyTo: reply_to } : {}),
-            }))
-            sentIds.push(sent.id)
+        await withOutbound(text, gateway.maxAttachments - files.length, async out => {
+          const all = [...files, ...out.files]
+          const chunks = chunk(out.text, limit, mode)
+          try {
+            for (let i = 0; i < chunks.length; i++) {
+              const shouldReplyTo =
+                reply_to != null &&
+                replyMode !== 'off' &&
+                (replyMode === 'all' || i === 0)
+              const sent = await retrySend(() => gateway.send(chat_id, chunks[i], {
+                ...(i === 0 && all.length > 0 ? { files: all } : {}),
+                ...(shouldReplyTo ? { replyTo: reply_to } : {}),
+              }))
+              sentIds.push(sent.id)
+            }
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err)
+            throw new Error(`reply failed after ${sentIds.length} of ${chunks.length} chunk(s) sent: ${msg}`)
           }
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err)
-          throw new Error(`reply failed after ${sentIds.length} of ${chunks.length} chunk(s) sent: ${msg}`)
-        }
+        })
 
         if (callerSessionId && sentIds.length > 0) {
           const info = registry.get(callerSessionId)
@@ -316,7 +321,8 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       }
 
       case 'edit_message': {
-        const edited = await retrySend(() => gateway.edit(args.chat_id as string, args.message_id as string, args.text as string))
+        // An edit cannot add files: the gateway shapes the text with no room for any.
+        const edited = await withOutbound(args.text as string, 0, out => retrySend(() => gateway.edit(args.chat_id as string, args.message_id as string, out.text)))
         return { content: [{ type: 'text', text: `edited (id: ${edited})` }] }
       }
 
@@ -698,7 +704,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
             throw new Error(`file too large: ${f} (${(st.size / 1024 / 1024).toFixed(1)}MB, max 25MB)`)
           }
         }
-        if (files.length > 10) throw new Error('max 10 attachments per message')
+        if (files.length > gateway.maxAttachments) throw new Error(`max ${gateway.maxAttachments} attachments per message`)
 
         const access = loadAccess()
         const sendLimit = Math.max(1, Math.min(access.textChunkLimit ?? maxChunkLimit(), maxChunkLimit()))
@@ -727,20 +733,22 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
             ))
           : undefined
         const quiet = wantsQuiet
-        const chunks = quiet ? [] : chunk(text, sendLimit, access.chunkMode ?? 'markdown')
         const sentIds: string[] = []
-
-        try {
-          for (let i = 0; i < chunks.length; i++) {
-            const sent = await retrySend(() => gateway.send(threadId, chunks[i], {
-              ...(i === 0 && files.length > 0 ? { files } : {}),
-            }))
-            sentIds.push(sent.id)
+        if (!quiet) await withOutbound(text, gateway.maxAttachments - files.length, async out => {
+          const all = [...files, ...out.files]
+          const chunks = chunk(out.text, sendLimit, access.chunkMode ?? 'markdown')
+          try {
+            for (let i = 0; i < chunks.length; i++) {
+              const sent = await retrySend(() => gateway.send(threadId, chunks[i], {
+                ...(i === 0 && all.length > 0 ? { files: all } : {}),
+              }))
+              sentIds.push(sent.id)
+            }
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err)
+            throw new Error(`send failed after ${sentIds.length} of ${chunks.length} chunk(s) sent: ${msg}`)
           }
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err)
-          throw new Error(`send failed after ${sentIds.length} of ${chunks.length} chunk(s) sent: ${msg}`)
-        }
+        })
 
         // A reviewer result counts as complete only once it was actually posted
         // to the parent thread; failed sends must not unlock step_passed.

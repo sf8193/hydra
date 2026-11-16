@@ -104,7 +104,7 @@ describe('a kept tool works only in the session\'s own conversation', () => {
   })
   test('reply never carries files, even into its own thread', () => {
     const id = restricted()
-    expect(restrictedRefusal(id, 'reply', { chat_id: own(id), text: 'x', files: ['/etc/passwd'] })).toBe('reply: a restricted session posts text only, so remove files (attachments are not sent)')
+    expect(restrictedRefusal(id, 'reply', { chat_id: own(id), text: 'x', files: ['/etc/passwd'] })).toBe('reply: a restricted session may not attach files of its own, so remove files (attachments are not sent)')
     expect(restrictedRefusal(id, 'reply', { chat_id: own(id), text: 'x', files: [] })).toBeUndefined()
   })
   test('set_description changes only its own description', () => {

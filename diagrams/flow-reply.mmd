@@ -1,0 +1,54 @@
+%% A post's text on its way to the chat: a session's reply, send_to_thread or edit_message, and the daemon's own
+%% safeSend and safeEdit. Each calls withOutbound (daemon/util.ts) before chunking (a raw gateway.send elsewhere does
+%% not); the gateway's optional shapeOutbound shapes the text and owns any files it made until the caller's whole
+%% send, retries included, has settled.
+%% Only gateways/discord.ts implements shapeOutbound; a gateway without it posts text as written.
+
+sequenceDiagram
+    participant model as Claude Code<br/>(session)
+    participant mod as mod/hooks/register.ts
+    participant bridge as bridge.ts
+    participant disp as daemon/bridge-dispatch.ts
+    participant util as daemon/util.ts
+    participant gw as gateways/discord.ts
+    participant fmt as gateways/discord-format.ts
+    participant tab as gateways/tables.ts
+
+    alt the session calls reply (or send_to_thread, posted in full)
+        model->>bridge: reply {chat_id, text, files?}
+    else the turn ends without a reply (one chat waiting)
+        model->>mod: classic.Stop
+        mod->>bridge: reply {chat_id, text: last answer}, as written
+    end
+    bridge->>disp: executeTool over the daemon socket
+    Note over disp: restrictedRefusal: a restricted session's own files refused<br/>allowlist, assertSendable, ≤10 files
+    Note over util: also enter here: edit_message and safeEdit (no room), safeSend (room 10)
+    disp->>util: withOutbound(text, room = 10 − own files, post)
+    util->>gw: shapeOutbound(text, room, post)
+    gw->>fmt: shapeDiscordOutbound
+    fmt->>tab: findTables(lines)
+    alt no table, or no room (an edit, ten files already)
+        Note over fmt: each table → tableCodeBlock in its place
+    else /usr/bin/sips missing (not macOS)
+        Note over fmt: one stderr line, then code blocks
+    else draw
+        Note over fmt: mkdtemp $TMPDIR/hydra-tables-*
+        loop each table, while room is left
+            fmt->>tab: drawTablePng: tableSvg → sips → table-n.png (10 s each, 30 s in all)
+            alt drawn
+                Note over fmt: table lines → its links as text, PNG into files
+            else failed
+                Note over fmt: stderr "table n sent as a code block: why" → tableCodeBlock
+            end
+        end
+    end
+    Note over fmt: fenceArt: runs of two or more box-art lines fenced
+    fmt->>disp: post({text, files})
+    Note over disp: chunk(text), own files + drawn files on chunk 0
+    disp->>gw: retrySend(send(chunk i, {files on 0}))
+    Note over gw: text empty (a reply that was only a table): no content, files alone
+    gw-->>disp: sent ids
+    disp-->>fmt: post settles
+    Note over fmt: rm -rf the folder (also when post throws)
+    disp-->>bridge: "sent (id: …)"
+    bridge-->>model: tool result
