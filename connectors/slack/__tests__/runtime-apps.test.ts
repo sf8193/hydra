@@ -27,7 +27,7 @@ allow = ["anyone"]
 home = "slack:C9"
 [specialists.${DEALS}]
 workdir = "/w/deals"
-apps = ["sales"]
+pinned_to = ["sales"]
 listens = ["slack:C1"]
 allow = ["anyone"]
 home = "slack:C8"
@@ -117,7 +117,7 @@ describe('a post with no incoming message speaks as the specialist’s app', () 
   })
 
   test('speaks_as overrides it, and the sales home can be named in the app’s own form', async () => {
-    configure(TOML.replace(`[specialists.${CRM}]\nworkdir = "/w/crm"\nlistens = ["slack:C1"]`, `[specialists.${CRM}]\nworkdir = "/w/crm"\napps = ["default"]\nlistens = ["slack:C2"]`).replace(`apps = ["sales"]`, `apps = ["sales", "default"]\nspeaks_as = "default"`))
+    configure(TOML.replace(`[specialists.${CRM}]\nworkdir = "/w/crm"\nlistens = ["slack:C1"]`, `[specialists.${CRM}]\nworkdir = "/w/crm"\npinned_to = ["default"]\nlistens = ["slack:C2"]`).replace(`pinned_to = ["sales"]`, `pinned_to = ["sales", "default"]\nspeaks_as = "default"`))
     await replyInConversation('deals-session', 'slack:C8', 'hello')
     expect(posts.map(p => p.app)).toEqual(['default'])
     posts.length = 0
@@ -221,7 +221,7 @@ describe('an alert about one app goes to the specialists that app can reach', ()
     // A lone `default` serves every specialist, as the alert always did.
     expect(slackSpecialistsOf(lone, 'default')).toEqual([CRM, DEALS])
     // A rule for one app pages that app’s target, not the other app’s.
-    const ruled = hydra(`${TWO_APPS}\n[specialists.${CRM}]\nworkdir = "/w"\nlistens = ["slack:C1"]\nallow = ["anyone"]\n[specialists.${DEALS}]\nworkdir = "/w"\napps = ["sales"]\nallow = ["anyone"]\n[[rules]]\napp = "sales"\ntarget = "${DEALS}"\n`)
+    const ruled = hydra(`${TWO_APPS}\n[specialists.${CRM}]\nworkdir = "/w"\nlistens = ["slack:C1"]\nallow = ["anyone"]\n[specialists.${DEALS}]\nworkdir = "/w"\npinned_to = ["sales"]\nallow = ["anyone"]\n[[rules]]\napp = "sales"\ntarget = "${DEALS}"\n`)
     expect(slackSpecialistsOf(ruled, 'sales')).toEqual([DEALS])
     expect(slackSpecialistsOf(ruled, 'default')).toEqual([CRM])
   })

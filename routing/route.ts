@@ -96,16 +96,16 @@ export function refusal(cfg: HydraConfig, to: string, sender: Sender, opts?: { a
   return s.allow.length ? `${to} allows ${s.allow.join(', ')}; ${who} holds ${sender.roles.join(', ')}` : `${to} allows only the operator`
 }
 
-/** Whether a binding still has somewhere to go: main, a specialist hydra.toml declares (after `was` renames), or a session's own thread. */
+/** Whether a binding still has somewhere to go: main, a specialist hydra.toml declares (after `renamed_from` renames), or a session's own thread. */
 export function isLive(cfg: HydraConfig, id: string): boolean {
   const to = currentId(cfg, id)
   return to === MAIN || !!cfg.specialists[to] || isSessionThread(to)
 }
 
-/** A binding names the specialist as it was called then; a rename lists the old id in `was`. */
+/** A binding names the specialist as it was called then; a rename lists the old id in `renamed_from`. */
 export function currentId(cfg: HydraConfig, id: string): string {
   if (id === MAIN || cfg.specialists[id]) return id
-  return Object.values(cfg.specialists).find(s => s.was.includes(id))?.id ?? id
+  return Object.values(cfg.specialists).find(s => s.renamedFrom.includes(id))?.id ?? id
 }
 
 /** Whether an unaddressed message at this place may open a conversation (`[places]` `messages = "all"`). */

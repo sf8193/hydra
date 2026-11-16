@@ -268,9 +268,9 @@ describe('bind_conversation / unbind_conversation', () => {
     expect(await bindConversation(food, 'slack:C1:3.000001')).toContain('is bound to') // one it holds already is fine
   })
 
-  test('a rename through `was` keeps a specialist\'s hold on its conversations', async () => {
+  test('a rename through `renamed_from` keeps a specialist\'s hold on its conversations', async () => {
     getSlackWatcher().bind('C1', '7.000001', 'old-food')
-    configure(TOML.replace(`[specialists.${FOOD}]`, `[specialists.${FOOD}]\nwas = ["old-food"]`))
+    configure(TOML.replace(`[specialists.${FOOD}]`, `[specialists.${FOOD}]\nrenamed_from = ["old-food"]`))
     expect(await bindConversation(food, 'slack:C1:7.000001')).toContain(`is bound to ${FOOD}`)
     sessionIds.push('sw-rn')
     registry.set('sw-rn', { sessionId: 'sw-rn', tmuxName: 'sw-rn', threadId: FOOD_THREAD, sessionType: 'thread_owner', engine: 'claude', createdAt: Date.now() } as any)
@@ -414,11 +414,11 @@ describe('replies: posted only into the conversation they answer', () => {
     } finally { (gateway as any).send = realSend }
   })
 
-  test('a rename through `was` keeps the right to answer', async () => {
+  test('a rename through `renamed_from` keeps the right to answer', async () => {
     fakePost()
     session('r-food', FOOD_THREAD)
     getSlackWatcher().bind('C1', '8.000001', 'old-food')
-    configure(TOML.replace(`[specialists.${FOOD}]`, `[specialists.${FOOD}]\nwas = ["old-food"]`))
+    configure(TOML.replace(`[specialists.${FOOD}]`, `[specialists.${FOOD}]\nrenamed_from = ["old-food"]`))
     expect(await replyInConversation('r-food', 'slack:C1:8.000001', 'still mine')).toContain('posted 1')
   })
 
@@ -446,7 +446,7 @@ describe('replies: posted only into the conversation they answer', () => {
 
 describe('sessions = "per-conversation"', () => {
   test('first come, first served: a newer conversation waits behind older waiters, and a freed place wakes them', async () => {
-    configure(TOML.replace(`allow = ["anyone"]\n`, `allow = ["anyone"]\nsessions = "per-conversation"\nmax = 1\n`))
+    configure(TOML.replace(`allow = ["anyone"]\n`, `allow = ["anyone"]\nsessions = "per-conversation"\nmax_sessions = 1\n`))
     const w = getSlackWatcher()
     w.bind('C1', '1.000001', FOOD)
     const old = w.get('C1', '1.000001')!
@@ -470,7 +470,7 @@ describe('sessions = "per-conversation"', () => {
   })
 
   test("first come, first served only when places are short: with a place to spare, a newer conversation doesn't wait", async () => {
-    configure(TOML.replace(`allow = ["anyone"]\n`, `allow = ["anyone"]\nsessions = "per-conversation"\nmax = 3\n`))
+    configure(TOML.replace(`allow = ["anyone"]\n`, `allow = ["anyone"]\nsessions = "per-conversation"\nmax_sessions = 3\n`))
     const w = getSlackWatcher()
     w.bind('C1', '1.000001', FOOD)
     const old = w.get('C1', '1.000001')!
@@ -495,7 +495,7 @@ describe('sessions = "per-conversation"', () => {
     await expect(replyInConversation('pc-own', 'slack:C1:5.000001', 'a sibling\'s')).rejects.toThrow("and from a conversation's own session only to that conversation")
   })
 
-  const PER = TOML.replace(`allow = ["anyone"]\n`, `allow = ["anyone"]\nsessions = "per-conversation"\nmax = 2\n`)
+  const PER = TOML.replace(`allow = ["anyone"]\n`, `allow = ["anyone"]\nsessions = "per-conversation"\nmax_sessions = 2\n`)
   const live = (name: string) => {
     const id = `pc-${name}`
     sessionIds.push(id)
@@ -511,7 +511,7 @@ describe('sessions = "per-conversation"', () => {
   })
 
   test("a conversation's own session answers its conversation, and no other; a renamed one still does", async () => {
-    configure(PER.replace(`[specialists.${FOOD}]`, `[specialists.${FOOD}]\nwas = ["old-food"]`))
+    configure(PER.replace(`[specialists.${FOOD}]`, `[specialists.${FOOD}]\nrenamed_from = ["old-food"]`))
     fakePost()
     getSlackWatcher().bind('C1', '4.000001', FOOD)
     getSlackWatcher().bind('C1', '5.000001', FOOD)

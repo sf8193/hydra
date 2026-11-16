@@ -217,7 +217,7 @@ describe('a conversation session\'s thread', () => {
   })
 
   test("a hydra.toml specialist's conversations take its recipe: its idle, its home channel", async () => {
-    _setHydraConfigForTesting(hydra(`operator = "op"\n[people.op]\nids = ["slack:UOP"]\n[specialists.hid]\nworkdir = "/w"\nprompt = "k"\nhome = "123456"\nsessions = "per-conversation"\nidle = "90m"\n`))
+    _setHydraConfigForTesting(hydra(`operator = "op"\n[people.op]\nids = ["slack:UOP"]\n[specialists.hid]\nworkdir = "/w"\nkickoff = "k"\nhome = "123456"\nsessions = "per-conversation"\nidle = "90m"\n`))
     const r = await deliverToTarget({ perConversation: 'hid', conversation: 'slack:C0T:1.000001' }, 'x', opts)
     expect(r).toMatchObject({ ok: true, sessionName: 'hid_c0t-1-000001' })
     expect(spawns[0][1]).toBe('123456')
@@ -226,7 +226,7 @@ describe('a conversation session\'s thread', () => {
 })
 
 describe('max: counted under one lock per specialist, from the sessions running under its names', () => {
-  const PER = (extra = '') => hydra(`operator = "op"\n[people.op]\nids = ["slack:UOP"]\n[specialists.mx]\nworkdir = "/w"\nprompt = "k"\nsessions = "per-conversation"\nmax = 2\n${extra}\n[specialists.mx-c1]\nworkdir = "/w"\nprompt = "k"\n`)
+  const PER = (extra = '') => hydra(`operator = "op"\n[people.op]\nids = ["slack:UOP"]\n[specialists.mx]\nworkdir = "/w"\nkickoff = "k"\nsessions = "per-conversation"\nmax_sessions = 2\n${extra}\n[specialists.mx-c1]\nworkdir = "/w"\nkickoff = "k"\n`)
   beforeEach(() => { setSpecialist('mx', { channel: 'chan-mx', kickoff: 'k' }); names.push('mx') })
 
   test('past max, a conversation without a running session waits (exit 5, atMax); one with a session goes', async () => {
@@ -235,7 +235,7 @@ describe('max: counted under one lock per specialist, from the sessions running 
     occupy('t-mx-2', { tmuxName: 'mx_c1-2-000001' })
     occupy('t-other', { tmuxName: 'other_c1-9-000001' }) // another specialist's: not counted
     expect(await deliverToTarget({ perConversation: 'mx', conversation: 'slack:C1:3.000001' }, 'x', opts))
-      .toMatchObject({ ok: false, exit: 5, atMax: true, reason: expect.stringContaining('mx already runs 2 conversation sessions (max 2); slack:C1:3.000001 waits for one to end, and none ends on its own: give the specialist an idle') })
+      .toMatchObject({ ok: false, exit: 5, atMax: true, reason: expect.stringContaining('mx already runs 2 conversation sessions (max_sessions 2); slack:C1:3.000001 waits for one to end, and none ends on its own: give the specialist an idle') })
     expect(await deliverToTarget({ perConversation: 'mx', conversation: 'slack:C1:1.000001' }, 'x', opts)).toMatchObject({ ok: true, sessionName: 'mx_c1-1-000001' })
     expect(spawns).toHaveLength(0)
   })
@@ -247,8 +247,8 @@ describe('max: counted under one lock per specialist, from the sessions running 
     expect(r).toMatchObject({ ok: true, sessionName: 'mx_c1', revived: true })
   })
 
-  test('a rename through `was` keeps the conversation in the session it runs in, and its sessions still count', async () => {
-    _setHydraConfigForTesting(PER('was = ["old-mx"]'))
+  test('a rename through `renamed_from` keeps the conversation in the session it runs in, and its sessions still count', async () => {
+    _setHydraConfigForTesting(PER('renamed_from = ["old-mx"]'))
     occupy('t-old-1', { tmuxName: 'old-mx_c1-1-000001' })
     occupy('t-old-2', { tmuxName: 'old-mx_c1-2-000001' })
     expect(await deliverToTarget({ perConversation: 'mx', conversation: 'slack:C1:1.000001' }, 'x', opts)).toMatchObject({ ok: true, sessionName: 'old-mx_c1-1-000001' })
@@ -273,14 +273,14 @@ describe('max: counted under one lock per specialist, from the sessions running 
   })
 
   test("a conversation's own live session is found even when a dead predecessor's record is listed first", async () => {
-    _setHydraConfigForTesting(hydra(`operator = "op"\n[people.op]\nids = ["slack:UOP"]\n[specialists.mx]\nworkdir = "/w"\nprompt = "k"\nsessions = "per-conversation"\nmax = 1\n`))
+    _setHydraConfigForTesting(hydra(`operator = "op"\n[people.op]\nids = ["slack:UOP"]\n[specialists.mx]\nworkdir = "/w"\nkickoff = "k"\nsessions = "per-conversation"\nmax_sessions = 1\n`))
     occupy('t-dead', { tmuxName: 'mx_c1-1-000001', alive: false, connected: false })
     occupy('t-alive', { tmuxName: 'mx_c1-1-000001' })
     expect(await deliverToTarget({ perConversation: 'mx', conversation: 'slack:C1:1.000001' }, 'x', opts)).toMatchObject({ ok: true, threadId: 't-alive' })
   })
 
   test('two conversations at once cannot both take the last place', async () => {
-    _setHydraConfigForTesting(hydra(`operator = "op"\n[people.op]\nids = ["slack:UOP"]\n[specialists.mx]\nworkdir = "/w"\nprompt = "k"\nsessions = "per-conversation"\nmax = 1\n`))
+    _setHydraConfigForTesting(hydra(`operator = "op"\n[people.op]\nids = ["slack:UOP"]\n[specialists.mx]\nworkdir = "/w"\nkickoff = "k"\nsessions = "per-conversation"\nmax_sessions = 1\n`))
     const [a, b] = await Promise.all([
       deliverToTarget({ perConversation: 'mx', conversation: 'slack:C1:1.000001' }, 'x', opts),
       deliverToTarget({ perConversation: 'mx', conversation: 'slack:C1:2.000001' }, 'x', opts),
@@ -414,7 +414,7 @@ describe('specialists.json', () => {
 
 describe('hydra deliver --conversation: a per-conversation specialist opens that conversation (a schedule run)', () => {
   const cli = (params: Record<string, unknown>) => handleCLIRequest({ type: 'cli', command: 'deliver', id: `tg-conv-${++n}`, params } as CLIRequest)
-  const CFG = `operator = "op"\n[people.op]\nids = ["slack:UOP"]\n[specialists.rev]\nworkdir = "/w"\nprompt = "Weekly review."\nhome = "777"\nsessions = "per-conversation"\nidle = "4d"\n[specialists.shared]\nworkdir = "/w"\nprompt = "k"\n`
+  const CFG = `operator = "op"\n[people.op]\nids = ["slack:UOP"]\n[specialists.rev]\nworkdir = "/w"\nkickoff = "Weekly review."\nhome = "777"\nsessions = "per-conversation"\nidle = "4d"\n[specialists.shared]\nworkdir = "/w"\nkickoff = "k"\n`
 
   test("its own session, a fresh thread in the specialist's home, run as the sender (jobs:<name>); the same key reaches it again", async () => {
     _setHydraConfigForTesting(hydra(CFG))

@@ -111,7 +111,7 @@ export type SlackWatchEntry = {
   ambient?: true
   /** When the guard first said "not now" (exit 75) to an owed ts: `owed_max` counts from here. */
   heldSince?: Record<string, number>
-  /** Since when it has waited for a session of its own (its specialist at `max`): its owed messages don't expire meanwhile, and the oldest waiter takes the next freed place. */
+  /** Since when it has waited for a session of its own (its specialist at `max_sessions`): its owed messages don't expire meanwhile, and the oldest waiter takes the next freed place. */
   waitingSince?: number
   /** Read with the operator's user token, because the bot is not in the channel: heard live through the app's events as the operator, and reread by every deep catch-up. Absent: the bot reads it. */
   via?: 'user'
@@ -135,7 +135,7 @@ export type DeliverResult =
   | { ok: true; duplicate?: boolean }
   // `permanent`: this message can never be delivered (too large). It is dropped, not retried.
   // `exit` 8: the binding names no such specialist. Kept owed (a fixed config delivers it) and alerted.
-  // `wait`: its specialist runs `max` conversation sessions already. Kept owed, and never expires while it waits.
+  // `wait`: its specialist runs `max_sessions` conversation sessions already. Kept owed, and never expires while it waits.
   | { ok: false; error: string; permanent?: boolean; exit?: number; wait?: true }
 
 export type SlackWatchDeps = {
@@ -819,7 +819,7 @@ export class SlackWatcher {
       return 'ignored'
     }
     if (ambient) { entry.ambient = true; this.persist() }
-    // A new conversation, one whose specialist is gone (routed anew), or a rename through `was`: the binding takes the current id.
+    // A new conversation, one whose specialist is gone (routed anew), or a rename through `renamed_from`: the binding takes the current id.
     if ((d.bind || d.via === 'binding') && entry.specialist !== d.to) { entry.specialist = d.to; this.persist() }
     entry.lastEventAt = this.deps.now()
     const kind = dm ? 'dm' : tagged ? 'mention' : 'follow-up'

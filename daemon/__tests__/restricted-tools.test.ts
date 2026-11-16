@@ -1,4 +1,4 @@
-// The `scoped` session type: a specialist set to access = "workdir". Each removed tool is refused where it is enforced
+// The `scoped` session type: a specialist set to restricted = true. Each removed tool is refused where it is enforced
 // (isToolAllowed, and executeTool behind it), each kept tool is refused outside the session's own conversation, and no
 // shape of an unregistered or half-registered caller falls back to a wider surface.
 import { afterEach, describe, expect, test } from 'bun:test'

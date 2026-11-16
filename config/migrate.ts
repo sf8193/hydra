@@ -120,11 +120,11 @@ export const specialistsStep: MigrateStep = {
       const spec: Doc = { workdir: spawnCwd }
       // kickoffFile won over kickoff in specialists.json.
       if (s.kickoffFile) {
-        // hydra.toml reads a relative prompt_file under the workdir; the old daemon read it from its own cwd.
+        // hydra.toml reads a relative kickoff_file under the workdir; the old daemon read it from its own cwd.
         const absolute = isAbsolute(s.kickoffFile) || s.kickoffFile.startsWith('~') || !daemonCwd ? s.kickoffFile : resolve(daemonCwd, s.kickoffFile)
         if (absolute !== s.kickoffFile) notes.push(`specialist "${name}": kickoffFile ${s.kickoffFile} was relative to the daemon's folder; written as ${absolute}`)
-        spec.prompt_file = absolute
-      } else if (s.kickoff) spec.prompt = s.kickoff
+        spec.kickoff_file = absolute
+      } else if (s.kickoff) spec.kickoff = s.kickoff
       if (s.model) spec.model = s.model
       if (s.idle) {
         if (parseIdleTtl(s.idle) !== null) spec.idle = s.idle

@@ -14,7 +14,7 @@
 export type SlackWatchMigration = {
   connectors: { slack: { bot_token_env: string; app_token_env: string } }
   people: Record<string, { ids: string[]; roles?: string[]; name?: string }>
-  /** Only the keys this file decides; the specialist's workdir and prompt come from specialists.json. */
+  /** Only the keys this file decides; the specialist's workdir and kickoff come from specialists.json. */
   specialists: Record<string, { listens: string[]; allow: string[] }>
   places: Record<string, { files?: true; ack?: string }>
   guard?: { command: string; timeout?: string; include_text?: true }

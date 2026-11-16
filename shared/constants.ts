@@ -212,7 +212,7 @@ export function claudeConfigDir(): string {
 export type { ToolName }
 
 /**
- * `scoped`: a restricted specialist, one set to `access = "workdir"`. The stored value `scoped` is historical (from before
+ * `scoped`: a restricted specialist, one set to `restricted = true`. The stored value `scoped` is historical (from before
  * "restricted specialist"): it sits in session records and in HYDRA_SESSION_TYPE, so renaming it needs a read alias first.
  * It speaks only in its own conversation, so it has none of the tools
  * that reach another thread, watch or the operator's account (spawn, kill, peek, list, handoff, bind, watch, ask_predecessor),

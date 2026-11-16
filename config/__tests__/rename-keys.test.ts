@@ -38,10 +38,10 @@ ids = ["slack:U0OP"]
 ids = ["slack:U0ALICE"]
 [specialists.ops]
 workdir = "/home/op/ops"
-access = "workdir"
+restricted = true
 [specialists.crm]
 workdir = "/home/op/crm"
-access = "workdir"
+restricted = true
 `
 
 describe('a full config in the old names', () => {
@@ -55,13 +55,20 @@ describe('a full config in the old names', () => {
     rules: c.rules.map((r: Json) => rename(rename(rename(r, 'at', 'place'), 'from', 'person'), 'to', 'target')),
     schedules: Object.fromEntries(Object.entries(c.schedules as Json).map(([id, s]) => [id, rename(s as Json, 'to', 'target')])),
     places: Object.fromEntries(Object.entries(c.places as Json).map(([p, o]) => [p, { ...rename(o as Json, 'listen', 'messages'), messages: (o as Json).listen === 'mentions' ? 'addressed' : (o as Json).listen }])),
+    // The specialist keys renamed after this test was written (rename-specialist-keys.test.ts has their own).
+    specialists: Object.fromEntries(Object.entries(c.specialists as Json).map(([id, s]) => {
+      const { access, ...rest } = s as Json
+      let o: Json = { ...rest, restricted: access === 'workdir' }
+      for (const [from, to] of [['prompt', 'kickoff'], ['promptFile', 'kickoffFile'], ['max', 'maxSessions'], ['was', 'renamedFrom'], ['apps', 'pinnedTo']]) o = rename(o, from, to)
+      return [id, o]
+    })),
   })
 
   test('loads to the same config, under the new internal names, and the old names warn once each', () => {
     const r = ok(text('old-names.toml'))
     expect(r.config).toEqual(inNewNames(before.config) as HydraConfig)
     // Every warning the file gave before is still given, unchanged; the rest are the renames.
-    expect(r.warnings.filter(w => !renameWarnings([w]).length)).toEqual(before.warnings.map(line))
+    expect(r.warnings.filter(w => !renameWarnings([w]).length)).toEqual(before.warnings.map(line).map(w => w.replace('set access = "workdir"', 'set restricted = true')))
     // One per old key written: 2 places, 1 schedule, and 3 `at`, 3 `from`, 4 `to` across four rules.
     expect(renameWarnings(r.warnings).length).toBe(13)
   })

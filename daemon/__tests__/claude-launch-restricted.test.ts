@@ -1,4 +1,4 @@
-// The Claude launch command for a restricted specialist (access = "workdir"), on each shape, and the files it generates.
+// The Claude launch command for a restricted specialist (restricted = true), on each shape, and the files it generates.
 // The non-restricted shapes are pinned in claude-launch-argv.golden.test.ts and must not move.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs'
@@ -176,7 +176,7 @@ describe('generated settings and mcp-config', () => {
   test('without sandbox-exec, a policy that lists servers is refused before any file is written, with the cause, the three fixes and what to run after fixing', async () => {
     expect(() => restrictedConfig(configInput({ policy, held: { DD_API_KEY: 'k' } }, withoutSandbox()))).toThrow(PolicyRefusal)
     _setLoadEnvForTesting(withoutSandbox())
-    await expect(launch()).rejects.toThrow(/specialist ops: a listed \[mcp\.\*\] server runs under \/usr\/bin\/sandbox-exec \(macOS only\), which blocks its connects to the daemon's socket and its reads of the listed credential folders\. This machine does not have it\. Remove the servers from the specialist's mcp, set access = "operator", or run hydra on a Mac\. No session starts until that is fixed; after you fix it, Run `hydra kill sc-t`/s)
+    await expect(launch()).rejects.toThrow(/specialist ops: a listed \[mcp\.\*\] server runs under \/usr\/bin\/sandbox-exec \(macOS only\), which blocks its connects to the daemon's socket and its reads of the listed credential folders\. This machine does not have it\. Remove the servers from the specialist's mcp, set restricted = false, or run hydra on a Mac\. No session starts until that is fixed; after you fix it, Run `hydra kill sc-t`/s)
     expect(fake.calls().filter(c => c.startsWith('new-session'))).toHaveLength(0)
     expect(existsSync(restrictedDir()) ? files() : []).toEqual([])
   })

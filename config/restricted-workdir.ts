@@ -1,4 +1,4 @@
-// What an `access = "workdir"` specialist's folder may not be. Run when hydra.toml loads (so `hydra config check` and the
+// What a restricted specialist's folder may not be. Run when hydra.toml loads (so `hydra config check` and the
 // daemon agree) and again at every restricted launch (the folder can change after the load).
 
 import { dirname, join, resolve, sep } from 'path'

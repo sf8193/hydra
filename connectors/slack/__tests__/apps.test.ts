@@ -287,7 +287,7 @@ describe('catching up, one pass per app', () => {
 
   test('an app is asked to read only the channels it can deliver to', async () => {
     // deals (pinned to sales) listens on C0OTHER alone: the app `default` has nothing to do there.
-    const toml = sharedChannel(CH).replace(`apps = ["sales"]\nlistens = ["slack:${CH}"]`, `apps = ["sales"]\nlistens = ["slack:${OTHER}"]`)
+    const toml = sharedChannel(CH).replace(`pinned_to = ["sales"]\nlistens = ["slack:${CH}"]`, `pinned_to = ["sales"]\nlistens = ["slack:${OTHER}"]`)
     expect(toml).toContain(`listens = ["slack:${OTHER}"]`)
     const t = setup(toml, { members: BOTH, cursors: { [CH]: '1000.000001', [`${SALES}:${OTHER}`]: '1000.000001', [`${SALES}:${CH}`]: '1000.000001' } })
     await t.start()
@@ -624,7 +624,7 @@ listens = ["slack:G0PRIV"]
 allow = ["anyone"]
 [specialists.deals]
 workdir = "/w/deals"
-apps = ["sales"]
+pinned_to = ["sales"]
 listens = ["slack:dm", "slack:${CH}"]
 allow = ["anyone"]
 `)
@@ -733,7 +733,7 @@ describe('a two-app config routes, replies and catches up per app', () => {
 
 describe('a pinned specialist cannot be reached through any other app', () => {
   test('where only a specialist pinned to sales listens, a tag of the app `default` reaches no one, and a tag of sales reaches it', async () => {
-    const toml = `${TWO_APPS}\n[specialists.deals]\nworkdir = "/w/deals"\napps = ["sales"]\nlistens = ["slack:${CH}"]\nallow = ["anyone"]\n`
+    const toml = `${TWO_APPS}\n[specialists.deals]\nworkdir = "/w/deals"\npinned_to = ["sales"]\nlistens = ["slack:${CH}"]\nallow = ["anyone"]\n`
     const t = setup(toml, { members: BOTH })
     await t.start()
     t.say({ ts: '1100.000001', text: `<@${BOT}> hello?` })

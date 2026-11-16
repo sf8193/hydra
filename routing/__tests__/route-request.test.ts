@@ -18,7 +18,7 @@ workdir = "/a/crm"
 listens = ["slack:#help"]
 [specialists.deals]
 workdir = "/a/deals"
-apps = ["sales"]
+pinned_to = ["sales"]
 listens = ["slack:#help"]
 `, env)
 if (!r.ok) throw new Error(JSON.stringify(r.errors))

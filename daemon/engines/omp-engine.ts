@@ -35,7 +35,7 @@ export class OmpEngine implements EngineAdapter {
 
   async launch(input: LaunchInput): Promise<LaunchResult> {
     // This engine cannot confine a session (confinesAccess); it would run one as the operator.
-    if (input.policy?.access === 'workdir') throw new Error(`specialist ${input.policy.specialist} has access = "workdir", which this engine cannot give: set engine = "claude", or set access = "operator"`)
+    if (input.policy?.access === 'workdir') throw new Error(`specialist ${input.policy.specialist} has restricted = true, which this engine cannot give: set engine = "claude", or set restricted = false`)
     const { sessionId, tmuxName, model } = input
     // CLAUDE_CONFIG_DIR unset and the claude providers disabled (OMP_CONFIG): omp must not load Claude's plugins or a cwd .mcp.json.
     const stderrLog = join(SPAWN_LOGS_DIR, `stderr-${tmuxName}-${sessionId}.log`)

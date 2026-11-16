@@ -33,7 +33,7 @@ export type ScheduleTable = {
 }
 
 export type SpecialistTable = {
-  workdir: string; home: string; sessions: 'per-conversation'; idle: string; prompt?: string; prompt_file?: string; model?: string
+  workdir: string; home: string; sessions: 'per-conversation'; idle: string; kickoff?: string; kickoff_file?: string; model?: string
 }
 
 export type JobsMigration = {
@@ -108,9 +108,9 @@ export function migrateJobs(text: string, opts: JobsMigrationOpts): JobsMigratio
         home: r.channel,
         sessions: 'per-conversation',
         idle: r.idle ?? SPAWN_IDLE,
-        ...(r.kickoff !== undefined && { prompt: r.kickoff }),
-        ...(r.kickoffFile !== undefined && { prompt_file: r.kickoffFile }),
-        ...(!kickoff && j.prompt !== undefined && { prompt: j.prompt }),
+        ...(r.kickoff !== undefined && { kickoff: r.kickoff }),
+        ...(r.kickoffFile !== undefined && { kickoff_file: r.kickoffFile }),
+        ...(!kickoff && j.prompt !== undefined && { kickoff: j.prompt }),
         ...(r.model !== undefined && { model: r.model }),
       }
       // With a check, its output is the run's message and the prompt is the session's first words. With none, the

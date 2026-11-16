@@ -16,8 +16,8 @@ ids = ["slack:U0OP"]
 [connectors.slack]
 bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"
 `
-const ops = (body = 'talks_to = ["deep"]') => `[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:C0OPS"]\nallow = ["staff"]\naccess = "workdir"\n${body}\n`
-const deep = (body = '') => `[specialists.deep]\nworkdir = "~/agents/deep"\nallow = []\naccess = "workdir"\n${body}\n`
+const ops = (body = 'talks_to = ["deep"]') => `[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:C0OPS"]\nallow = ["staff"]\nrestricted = true\n${body}\n`
+const deep = (body = '') => `[specialists.deep]\nworkdir = "~/agents/deep"\nallow = []\nrestricted = true\n${body}\n`
 const people = `[people.alice]\nids = ["slack:U0A"]\nroles = ["staff"]\n`
 const text = (...parts: string[]) => [BASE, people, ...parts].join('\n')
 
@@ -42,9 +42,9 @@ describe('talks_to', () => {
     expect(ok(text(deep(), ops())).config.specialists.ops.talksTo).toEqual(['deep'])
     expect(ok(text(ops(), deep())).warnings).toEqual([])
   })
-  test('on an access = "operator" specialist it is refused: that session already has send_to_thread to any session', () => {
+  test('on a restricted = false specialist it is refused: that session already has send_to_thread to any session', () => {
     const t = text(`[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:C0OPS"]\nallow = ["staff"]\ntalks_to = ["deep"]\n`, deep())
-    expect(errorsOf(t)).toEqual(['specialists.ops.talks_to: has no effect while access = "operator": it already has every tool and server the operator does, and send_to_thread to any session; set access = "workdir" to choose them'])
+    expect(errorsOf(t)).toEqual(['specialists.ops.talks_to: has no effect while restricted = false: it already has every tool and server the operator does, and send_to_thread to any session; set restricted = true to choose them'])
   })
   test('it is refused in [defaults.specialist]: a default would reach every specialist', () => {
     expect(errorsOf(text('[defaults.specialist]\ntalks_to = ["deep"]\nworkdir = "~/agents/{id}"\n', deep())).some(e => e.startsWith("defaults.specialist.talks_to: can't be a default"))).toBe(true)
@@ -64,8 +64,8 @@ describe('talks_to', () => {
     expect(errorsOf(text(ops('talks_to = ["ops"]'), deep()))).toEqual(['specialists.ops.talks_to[0]: ops cannot talk to itself'])
     expect(errorsOf(text(ops('talks_to = ["main"]'), deep()))).toEqual(["specialists.ops.talks_to[0]: main is the operator's own session: talks_to names specialists only"])
   })
-  test('an old id (`was`) is not a target: it names no specialist', () => {
-    expect(errorsOf(text(ops('talks_to = ["old"]'), deep('was = ["old"]')))).toEqual(['specialists.ops.talks_to[0]: no [specialists.old]: talks_to names a specialist declared in hydra.toml'])
+  test('an old id (`renamed_from`) is not a target: it names no specialist', () => {
+    expect(errorsOf(text(ops('talks_to = ["old"]'), deep('renamed_from = ["old"]')))).toEqual(['specialists.ops.talks_to[0]: no [specialists.old]: talks_to names a specialist declared in hydra.toml'])
   })
   test('a per-conversation target is refused: a hand-off needs one session to land in', () => {
     expect(errorsOf(text(ops(), deep('sessions = "per-conversation"')))).toEqual(['specialists.ops.talks_to[0]: deep has sessions = "per-conversation": a hand-off needs one session to land in; talk to a shared specialist'])
@@ -77,7 +77,7 @@ describe('talks_to', () => {
     const t = text(ops(), `[specialists.deep]\nworkdir = "~/agents/deep"\nlistens = ["slack:C0DEEP"]\nallow = []\n`)
     const { config, warnings } = ok(t)
     expect(config.specialists.ops.talksTo).toEqual(['deep'])
-    expect(warnings).toEqual(["specialists.ops.talks_to[0]: deep runs under the operator's account (access = \"operator\"): whatever ops is talked into sending reaches that account, quoted and labelled but read by a session that can act as the operator; give deep access = \"workdir\" with the broader folder it needs"])
+    expect(warnings).toEqual(["specialists.ops.talks_to[0]: deep runs under the operator's account (restricted = false): whatever ops is talked into sending reaches that account, quoted and labelled but read by a session that can act as the operator; make deep restricted = true, with the broader folder it needs"])
   })
   test('a specialist only a talks_to reaches is reachable: no "nobody can reach it" warning', () => {
     expect(ok(text(ops(), deep())).warnings).toEqual([])
@@ -100,8 +100,8 @@ describe('a workdir inside a workstream loads, through the real loader on a real
   const disk = { ...systemEnv(['spark'], stateDir, 'discord', join(home, '.claude')), home }
   const t = (privateRoots = '') => text(
     privateRoots,
-    `[specialists.ops]\nworkdir = "~/specialists/ops"\nlistens = ["slack:C0OPS"]\nallow = ["staff"]\naccess = "workdir"\ntalks_to = ["ops-deep"]\n`,
-    `[specialists.ops-deep]\nworkdir = "~/Workstreams/ops/runbooks"\nallow = []\naccess = "workdir"\n`,
+    `[specialists.ops]\nworkdir = "~/specialists/ops"\nlistens = ["slack:C0OPS"]\nallow = ["staff"]\nrestricted = true\ntalks_to = ["ops-deep"]\n`,
+    `[specialists.ops-deep]\nworkdir = "~/Workstreams/ops/runbooks"\nallow = []\nrestricted = true\n`,
   )
   mkdirSync(join(home, 'specialists', 'ops'), { recursive: true })
 

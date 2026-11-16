@@ -960,20 +960,20 @@ allow = ["anyone"]
     expect(s.w.stats().dropped).toEqual({ unrouted: 1 })
   })
 
-  test('a rename through `was` rewrites the binding to the current id', async () => {
+  test('a rename through `renamed_from` rewrites the binding to the current id', async () => {
     const s = setup({ toml: TWO() })
     s.w.handle(ev({ channel: CH2, ts: '10.000001', user: 'UOWNER', text: mention }))
     await s.w.flush()
-    s.setConfig(cfg({ toml: TWO().replace('[specialists.ops]', '[specialists.desk]\nwas = ["ops"]') }))
+    s.setConfig(cfg({ toml: TWO().replace('[specialists.ops]', '[specialists.desk]\nrenamed_from = ["ops"]') }))
     s.w.handle(ev({ channel: CH2, ts: '11.000001', threadTs: '10.000001', user: 'UOWNER', text: 'again' }))
     expect(s.w.get(CH2, '10.000001')!.specialist).toBe('desk')
   })
 
-  test('a rename through `was` keeps the conversation', async () => {
+  test('a rename through `renamed_from` keeps the conversation', async () => {
     const s = setup({ toml: TWO() })
     s.w.handle(ev({ channel: CH2, ts: '10.000001', user: 'UOWNER', text: mention }))
     await s.w.flush()
-    s.setConfig(cfg({ toml: TWO().replace('[specialists.ops]', '[specialists.desk]\nwas = ["ops"]') }))
+    s.setConfig(cfg({ toml: TWO().replace('[specialists.ops]', '[specialists.desk]\nrenamed_from = ["ops"]') }))
     s.w.handle(ev({ channel: CH2, ts: '11.000001', threadTs: '10.000001', user: 'UOWNER', text: 'again' }))
     await s.w.flush()
     expect(s.sent.map(x => x.specialist)).toEqual(['ops', 'desk'])
@@ -1248,7 +1248,7 @@ roles = ["finance"]
   })
 
   test('a redirect to a specialist pinned to another app goes to the binding instead, alerted once, in words that need no context', async () => {
-    const toml = GUARDED() + '[slack.apps.sales]\nbot_token_env = "SALES_BOT_TOKEN"\n[specialists.deals]\nworkdir = "/w/deals"\napps = ["sales"]\nallow = ["anyone"]\n'
+    const toml = GUARDED() + '[slack.apps.sales]\nbot_token_env = "SALES_BOT_TOKEN"\n[specialists.deals]\nworkdir = "/w/deals"\npinned_to = ["sales"]\nallow = ["anyone"]\n'
     const s = setup({ toml }, undefined, undefined, async () => ({ fate: 'deliver', to: 'deals' }))
     s.w.handle(ev({ ts: '1.000001', text: mention }))
     await s.w.flush()
@@ -1565,7 +1565,7 @@ describe('alert episodes are per app', () => {
 
 describe('what an app hears of DMs and channels is its own', () => {
   test('hearsDms for an app counts only a specialist or rule that app can deliver to; the operator’s DM counts for every app', () => {
-    const toml = `operator = "op"\n[connectors.slack]\nbot_token_env = "A_BOT"\n[slack.apps.sales]\nbot_token_env = "S_BOT"\n[people.op]\nids = ["github:op"]\n[specialists.deals]\nworkdir = "/w/d"\napps = ["sales"]\nlistens = ["slack:dm"]\nallow = ["anyone"]\n`
+    const toml = `operator = "op"\n[connectors.slack]\nbot_token_env = "A_BOT"\n[slack.apps.sales]\nbot_token_env = "S_BOT"\n[people.op]\nids = ["github:op"]\n[specialists.deals]\nworkdir = "/w/d"\npinned_to = ["sales"]\nlistens = ["slack:dm"]\nallow = ["anyone"]\n`
     expect(hearsDms(view(toml, { app: 'sales' }))).toBe(true)
     expect(hearsDms(view(toml, { app: 'default' }))).toBe(false)
     expect(hearsDms(view(toml.replace('ids = ["github:op"]', 'ids = ["slack:UOP"]'), { app: 'default' }))).toBe(true)

@@ -1,9 +1,9 @@
 // The shape of `<state>/hydra.toml` once loaded: who Hydra recognizes, the specialists that answer, and where.
 // Every default is filled in and every reference checked (config/load.ts), so a consumer reads these as facts.
-// Keys are camelCase here; the file's are snake_case (`prompt_file` → `promptFile`).
+// Keys are camelCase here; the file's are snake_case (`kickoff_file` → `kickoffFile`).
 // Content (what may be said, approvals) is out of scope: it belongs to each specialist. What a specialist's session may
-// reach is not: `access` says whose account it runs under, `tools` and `mcp` (with `[mcp.*]`) list what a
-// `workdir` specialist may use, and `talks_to` names the specialists it may send to.
+// reach is not: `restricted` says whether it runs in its folder alone, `tools` and `mcp` (with `[mcp.*]`) list what a restricted
+// specialist may use, and `talks_to` names the specialists it may send to.
 
 /** A platform hydra can connect to. A person's address and most places start with one. */
 export type Platform = 'discord' | 'slack' | 'github'
@@ -34,13 +34,7 @@ export type Person = {
 
 export type SessionsMode = 'shared' | 'per-conversation'
 
-/**
- * Whose account a specialist's session runs under. `operator`: the operator's (all their tools, servers and files; today's
- * behaviour). `workdir`: its folder and the tools and servers it lists, and it can answer only its own conversation.
- */
-export type Access = 'operator' | 'workdir'
-
-/** The built-in tools an `access = "workdir"` specialist may list. Anything else runs code or reaches past its folder. */
+/** The built-in tools a restricted specialist (`restricted = true`) may list. Anything else runs code or reaches past its folder. */
 export const WORKDIR_TOOLS = ['Read', 'Grep', 'Glob'] as const
 
 /** A server specialists may list in `mcp`, declared `[mcp.<name>]`. Per-operator: only hydra.toml declares one. */
@@ -59,42 +53,45 @@ export type Specialist = {
   /** The folder it runs in, `~` expanded. Its knowledge and tools live there. */
   workdir: string
   /** What it is told on a fresh start (a revive resumes instead). At most one of the two is set. */
-  prompt?: string
+  kickoff?: string
   /** `~` expanded; a relative path is under `workdir`. Read when it's needed, so it's not checked on load. */
-  promptFile?: string
-  /** Places it answers. Two specialists share a place only when no app reaches both: their `apps` are disjoint, or one is pinned and one is not. */
+  kickoffFile?: string
+  /** Places it answers. Two specialists share a place only when no app reaches both: their `pinned_to` apps are disjoint, or one is pinned and one is not. */
   listens: Place[]
   /**
    * Pins it to Slack apps (ids). It answers only messages that come through those apps. Those apps deliver only to specialists pinned to them.
    * Absent: unpinned. It answers messages through every app that no specialist is pinned to.
    */
-  apps?: string[]
-  /** The Slack app it posts as when no message came in (its `home`, a new thread). Absent: its first pinned app, else `default`. If pinned, one of `apps`. */
+  pinnedTo?: string[]
+  /** The Slack app it posts as when no message came in (its `home`, a new thread). Absent: its first pinned app, else `default`. If pinned, one of `pinned_to`. */
   speaksAs?: string
   /** Roles that may reach it. Default `['people']`. The operator is always allowed. */
   allow: string[]
   /** `shared`: one session for everything (default). `per-conversation`: one per thread. */
   sessions: SessionsMode
   /** Per-conversation cap. Extra messages stay owed. Default 20. */
-  max: number
+  maxSessions: number
   /** End a session after this long without activity, and resume on the next message. Absent: never. */
   idleMs?: number
   /** Where you watch it (its threads open there), and where replies with no conversation go: a place or a channel id. Absent: the operator's channel. */
   home?: string
   model?: string
   engine?: 'claude' | 'codex' | 'omp'
-  /** Whose account it runs under. Default `operator`. */
-  access: Access
-  /** `access = "workdir"` only: the built-in tools it may use (default Read, Grep, Glob). */
+  /**
+   * `true`: its session runs in its folder with only the tools and servers it lists, and it can answer only its own conversation.
+   * `false` (default): the operator's account, with all their tools, servers and files.
+   */
+  restricted: boolean
+  /** `restricted` only: the built-in tools it may use (default Read, Grep, Glob). */
   tools?: string[]
-  /** `access = "workdir"` only: the `[mcp.<name>]` servers it may use (default none). */
+  /** `restricted` only: the `[mcp.<name>]` servers it may use (default none). */
   mcp?: string[]
-  /** `access = "workdir"` only: the specialists its session may send to with `send_to_thread` (default none). Shared-session specialists; never `main`. */
+  /** `restricted` only: the specialists its session may send to with `send_to_thread` (default none). Shared-session specialists; never `main`. */
   talksTo?: string[]
   /** `~` expanded; a relative path is under `workdir`. */
   envFile?: string
   /** Old ids, so a rename keeps its thread, session and owed messages. */
-  was: string[]
+  renamedFrom: string[]
 }
 
 /**
@@ -242,7 +239,7 @@ export type HydraConfig = {
   rules: Rule[]
   /** The servers specialists may list in `mcp`. Absent when none is declared. */
   mcpServers?: Record<string, McpServer>
-  /** Folders (`~` expanded) no `access = "workdir"` specialist's workdir may be, hold or sit inside, beyond the built-in ones. Absent: none. */
+  /** Folders (`~` expanded) no `restricted = true` specialist's workdir may be, hold or sit inside, beyond the built-in ones. Absent: none. */
   privateRoots?: string[]
   guard?: Guard
   /** Absent: `VITALS_DEFAULTS`. */
@@ -265,7 +262,7 @@ export type LoadEnv = {
   isCommand(command: string): boolean
   /** The daemon's default session names, which no specialist may take. */
   sessionNames: readonly string[]
-  // What an `access = "workdir"` check needs. All required: a load on a machine that cannot answer is not one that skips the question,
+  // What a restricted check needs. All required: a load on a machine that cannot answer is not one that skips the question,
   // so `hydra config check` and `hydra config add` pass the same real probes the daemon does (systemEnv).
   /** The state dir: hydra.toml, `.env` and the daemon's records live there. */
   stateDir: string

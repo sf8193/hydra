@@ -6,7 +6,7 @@
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { withHydraTomlLock, writeIfUnchanged } from './append.js'
-import { formatIssues, loadHydraConfig, RESTRICTION_KEYS } from './load.js'
+import { formatIssues, loadHydraConfig, RESTRICTION_KEYS, RESTRICTION_OLD_KEYS, SPECIALIST_RENAMES } from './load.js'
 import { appendOnly, appendText, HYDRA_TOML, hydraTomlInUse, toToml } from './migrate.js'
 import type { LoadEnv } from './types.js'
 
@@ -17,6 +17,15 @@ const isTable = (v: unknown): v is Doc => typeof v === 'object' && v !== null &&
 
 /** A fragment still written with a schedule's old `to` is added as `target`, so hydra.toml gets only the new name (the loader would warn on the old one). Both names stay as written: the loader refuses them. */
 const targetNamed = (t: Doc): Doc => 'to' in t && !('target' in t) ? Object.fromEntries(Object.entries(t).map(([k, v]) => [k === 'to' ? 'target' : k, v])) : t
+
+/**
+ * A fragment still written with a specialist's old key names is added under the new ones, so hydra.toml gets only the new names (the loader would
+ * warn on the old). Both names stay as written: the loader refuses them. `access` is left as written: a fragment may not set it (a restriction), so it is refused below.
+ */
+const specialistNamed = (t: Doc): Doc => Object.fromEntries(Object.entries(t).map(([k, v]) => {
+  const r = SPECIALIST_RENAMES.find(x => x.from === k && !x.values && !(x.to in t))
+  return [r ? r.to : k, v]
+}))
 
 export type AddFragmentPlan =
   | { ok: true; text: string; from: string; added: string[]; already: string[] }
@@ -31,13 +40,13 @@ export function planAddFragment(stateDir: string, env: LoadEnv, fragmentText: st
   if (others.length) return { ok: false, error: `${source} sets ${others.join(', ')}; hydra config add takes only [specialists.<id>] and [schedules.<id>] tables (a person: hydra people add; anything else, including an [mcp.*] server, is a hand edit)` }
   const flat = SECTIONS.flatMap(sec => {
     const v = fragment[sec]
-    return v === undefined ? [] : isTable(v) && Object.values(v).every(isTable) ? Object.entries(v).map(([id, t]) => ({ sec, id, t: sec === 'schedules' ? targetNamed(t as Doc) : t as Doc })) : [{ sec, id: '', t: {} }]
+    return v === undefined ? [] : isTable(v) && Object.values(v).every(isTable) ? Object.entries(v).map(([id, t]) => ({ sec, id, t: sec === 'schedules' ? targetNamed(t as Doc) : specialistNamed(t as Doc) })) : [{ sec, id: '', t: {} }]
   })
   const loose = flat.find(e => e.id === '')
   if (loose) return { ok: false, error: `${source}: ${loose.sec} must be [${loose.sec}.<id>] tables` }
   // What a session may reach is the operator's to set by hand: a fragment comes from another repo, and a table it names can't widen or narrow that.
-  const restricted = flat.flatMap(e => e.sec === 'specialists' ? RESTRICTION_KEYS.filter(k => k in e.t).map(k => `[specialists.${e.id}] ${k}`) : [])
-  if (restricted.length) return { ok: false, error: `${source} sets ${restricted.join(', ')}: access, tools, mcp and talks_to say what a specialist's session may reach, and only a hand edit of hydra.toml sets them (and the [mcp.*] servers they name)` }
+  const restricted = flat.flatMap(e => e.sec === 'specialists' ? [...RESTRICTION_KEYS, ...RESTRICTION_OLD_KEYS].filter(k => k in e.t).map(k => `[specialists.${e.id}] ${k}`) : [])
+  if (restricted.length) return { ok: false, error: `${source} sets ${restricted.join(', ')}: restricted, tools, mcp and talks_to say what a specialist's session may reach, and only a hand edit of hydra.toml sets them (and the [mcp.*] servers they name)` }
   if (!flat.length) return { ok: false, error: `${source} has no [specialists.<id>] or [schedules.<id>] table to add` }
 
   const existingText = readFileSync(path, 'utf8')

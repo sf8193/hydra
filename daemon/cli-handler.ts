@@ -358,10 +358,10 @@ async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
 
 async function handleSpecialist(req: CLIRequest): Promise<CLIResponse> {
   const p = req.params as { action?: string; name?: string; thread?: string; channel?: string; kickoff?: string; kickoffFile?: string; model?: string; idle?: string }
-  // hydra.toml's access (with the tools and servers a workdir specialist may use) and sessions mode, and max only where it applies (per-conversation).
+  // hydra.toml's restricted (with the tools and servers a restricted specialist may use) and sessions mode, and maxSessions only where it applies (per-conversation).
   const mode = (name: string) => {
     const d = Object.hasOwn(currentHydraConfig().specialists, name) ? currentHydraConfig().specialists[name] : undefined
-    return d && { access: d.access, ...(d.access === 'workdir' && { tools: d.tools, mcp: d.mcp }), sessions: d.sessions, ...(d.sessions === 'per-conversation' && { max: d.max }) }
+    return d && { restricted: d.restricted, ...(d.restricted && { tools: d.tools, mcp: d.mcp }), sessions: d.sessions, ...(d.sessions === 'per-conversation' && { maxSessions: d.maxSessions }) }
   }
   const view = (name: string, s: Specialist & { invalid?: string }) => ({ name, ...s, ...mode(name), ...specialistStatus(name) })
   switch (p.action) {

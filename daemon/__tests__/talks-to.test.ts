@@ -38,18 +38,18 @@ bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"
 workdir = "~/agents/ops"
 listens = ["slack:C0OPS"]
 allow = ["anyone"]
-access = "workdir"
+restricted = true
 talks_to = ["deep"]
 [specialists.deep]
 workdir = "~/agents/deep"
 allow = []
-access = "workdir"
+restricted = true
 talks_to = ["ops"]
 [specialists.plain]
 workdir = "~/agents/plain"
 listens = ["slack:C0PLAIN"]
 allow = ["anyone"]
-access = "workdir"
+restricted = true
 [specialists.full]
 workdir = "~/agents/full"
 listens = ["slack:C0FULL"]

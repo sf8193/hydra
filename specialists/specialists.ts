@@ -68,14 +68,14 @@ function homeChannel(s: DeclaredSpecialist): string | undefined {
   return (s.home !== undefined ? homeChannelId(s.home) : undefined) ?? (DEFAULT_SESSION_CHANNEL || undefined)
 }
 
-/** Its pointer: one under an old id (`was`) not yet moved wins, since a rename means that thread; else its own. */
+/** Its pointer: one under an old id (`renamed_from`) not yet moved wins, since a rename means that thread; else its own. */
 function pointerFor(s: DeclaredSpecialist): Pointer | undefined {
-  return s.was.map(old => pointers.get(old)).find(p => p !== undefined) ?? pointers.get(s.id)
+  return s.renamedFrom.map(old => pointers.get(old)).find(p => p !== undefined) ?? pointers.get(s.id)
 }
 
 /**
- * On each hydra.toml load, from the config that loaded: a renamed specialist's pointer moves from its `was` id to
- * its new id, so dropping `was` later keeps its thread. Nothing is deleted for being absent: a pointer for an id
+ * On each hydra.toml load, from the config that loaded: a renamed specialist's pointer moves from its `renamed_from` id to
+ * its new id, so dropping `renamed_from` later keeps its thread. Nothing is deleted for being absent: a pointer for an id
  * not declared is inert, and survives a load caught mid-save or a table commented out for a while; an id declared
  * again later finds its thread. A `home` that can't be used is reported here, once per load.
  */
@@ -83,10 +83,10 @@ function reconcilePointers(config: HydraConfig): void {
   if (!declaredInToml()) return
   let moved = false
   for (const s of Object.values(config.specialists)) {
-    const old = s.was.find(o => pointers.has(o))
+    const old = s.renamedFrom.find(o => pointers.has(o))
     if (old) {
       pointers.set(s.id, pointers.get(old)!)
-      for (const o of s.was) pointers.delete(o)
+      for (const o of s.renamedFrom) pointers.delete(o)
       moved = true
     }
     if (s.home !== undefined && !homeChannelId(s.home)) {
@@ -102,8 +102,8 @@ function fromToml(s: DeclaredSpecialist): Specialist {
   return {
     ...(p && { threadId: p.threadId }),
     ...(channel && { channel }),
-    ...(s.prompt !== undefined && { kickoff: s.prompt }),
-    ...(s.promptFile !== undefined && { kickoffFile: s.promptFile }),
+    ...(s.kickoff !== undefined && { kickoff: s.kickoff }),
+    ...(s.kickoffFile !== undefined && { kickoffFile: s.kickoffFile }),
     ...(s.model !== undefined && { model: s.model }),
     // hydra.toml durations are whole minutes (m, h or d), so this round-trips through parseIdleTtl.
     ...(s.idleMs !== undefined && { idle: `${s.idleMs / 60_000}m` }),
@@ -184,7 +184,7 @@ export function setSpecialistThread(name: string, threadId: string): Specialist 
     const declared = currentHydraConfig().specialists[name]
     if (!declared || !Object.hasOwn(currentHydraConfig().specialists, name)) throw new Error(`no such specialist: ${name}`)
     pointers.set(name, { threadId, updatedAt: Date.now() })
-    for (const old of declared.was) pointers.delete(old)
+    for (const old of declared.renamedFrom) pointers.delete(old)
     persistPointers()
     return fromToml(declared)
   }
@@ -258,14 +258,14 @@ onHydraConfigLoad(config => {
 
 /**
  * The per-conversation specialist a session named `<id>_<conversation>` belongs to, by its current id (a rename through
- * `was` followed). No specialist name holds `_`, so the part before the first one is the id.
+ * `renamed_from` followed). No specialist name holds `_`, so the part before the first one is the id.
  */
 export function conversationSpecialistOf(tmuxName: string | undefined): string | undefined {
   const i = tmuxName?.indexOf('_') ?? -1
   if (!tmuxName || i <= 0) return undefined
   const id = tmuxName.slice(0, i)
   const declared = currentHydraConfig().specialists
-  const s = declared[id] ?? Object.values(declared).find(d => d.was.includes(id))
+  const s = declared[id] ?? Object.values(declared).find(d => d.renamedFrom.includes(id))
   return s?.sessions === 'per-conversation' ? s.id : undefined
 }
 

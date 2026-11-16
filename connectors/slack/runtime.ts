@@ -146,7 +146,7 @@ export function getSlackWatcher(): SlackWatcher {
   })
 }
 
-/** A per-conversation specialist gives the conversation its own session (targets.ts counts `max`); any other is one target. */
+/** A per-conversation specialist gives the conversation its own session (targets.ts counts `max_sessions`); any other is one target. */
 export function targetFor(to: string, conversation: string | undefined): Target {
   const s = hydraConfig().specialists[to]
   return s?.sessions === 'per-conversation' && conversation ? { perConversation: to, conversation } : { to }
@@ -409,7 +409,7 @@ const POST_BACKSTOP_MS = POST_TIMEOUT_MS + 5_000
  * shared session, any conversation bound to its specialist. `bound` is who the conversation is bound to (current id), `me` who the caller acts for.
  */
 function mayAnswerConversation(h: HydraConfig, caller: SessionInfo | undefined, me: string | undefined, bound: string | undefined, id: string): boolean {
-  const ownSession = !!caller && !!bound && [bound, ...(h.specialists[bound]?.was ?? [])].some(sid => caller.tmuxName === conversationSessionName(sid, id))
+  const ownSession = !!caller && !!bound && [bound, ...(h.specialists[bound]?.renamedFrom ?? [])].some(sid => caller.tmuxName === conversationSessionName(sid, id))
   return isConversationSession(caller) ? ownSession : (!!me && bound === me)
 }
 

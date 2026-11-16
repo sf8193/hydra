@@ -16,7 +16,7 @@ import { SLACK_APP_DEFAULTS } from '../connectors/slack/app.js'
 import { invalidSpecialistName } from '../shared/specialist-name.js'
 import {
   BUILTIN_ROLES, DEFAULT_SLACK_APP, type Address, type ConfigIssue, type Connectors, type Gateways, type Guard, type HydraConfig, type LoadEnv, type LoadResult,
-  type Access, type McpServer, type WorkdirScan, type Person, type Place, type PlaceOptions, type Platform, type Rule, type Schedule, type SessionsMode, type SlackApp, type Specialist, type Vitals,
+  type McpServer, type WorkdirScan, type Person, type Place, type PlaceOptions, type Platform, type Rule, type Schedule, type SessionsMode, type SlackApp, type Specialist, type Vitals,
   WORKDIR_TOOLS,
 } from './types.js'
 
@@ -40,8 +40,7 @@ const REPO_RE = /^[a-z0-9][a-z0-9-]*\/[a-z0-9._-]+$/
 const CHANNEL_PLACE_RE = /^(slack|discord):(dm|#[a-z0-9][a-z0-9_-]*)$|^slack:[CG][A-Z0-9]+$|^discord:\d+$/
 const SESSIONS: readonly SessionsMode[] = ['shared', 'per-conversation']
 const ENGINES = ['claude', 'codex', 'omp'] as const
-const ACCESS: readonly Access[] = ['operator', 'workdir']
-/** Why a built-in tool is not on an `access = "workdir"` specialist's list. Any other name gets the generic refusal. */
+/** Why a built-in tool is not on a restricted specialist's list. Any other name gets the generic refusal. */
 const TOOL_REFUSALS: Readonly<Record<string, string>> = {
   Bash: 'runs code outside the workdir', PowerShell: 'runs code outside the workdir', Monitor: 'runs code outside the workdir',
   Edit: 'writes files', Write: 'writes files', NotebookEdit: 'writes files',
@@ -59,11 +58,21 @@ const MAX_ALERT_AFTER_MS = 30 * MAX_DAY_MS
 const BUILTIN: readonly string[] = BUILTIN_ROLES
 
 const TOP_KEYS = ['operator', 'gateways', 'connectors', 'slack', 'people', 'specialists', 'defaults', 'places', 'schedules', 'rules', 'guard', 'vitals', 'mcp']
-const SPECIALIST_KEYS = ['workdir', 'prompt', 'prompt_file', 'listens', 'apps', 'speaks_as', 'allow', 'sessions', 'max', 'idle', 'home', 'model', 'engine', 'env_file', 'was', 'access', 'tools', 'mcp', 'talks_to']
+const SPECIALIST_KEYS = ['workdir', 'kickoff', 'kickoff_file', 'listens', 'pinned_to', 'speaks_as', 'allow', 'sessions', 'max_sessions', 'idle', 'home', 'model', 'engine', 'env_file', 'renamed_from', 'restricted', 'tools', 'mcp', 'talks_to']
+/** A specialist's keys under their old names, read as the new ones (`restricted = true` is `restricted = true`). */
+export const SPECIALIST_RENAMES: readonly Rename[] = [
+  { from: 'access', to: 'restricted', values: { workdir: true, operator: false }, badValue: 'must be "workdir" or "operator"; `restricted = true` or `restricted = false` says the same' },
+  { from: 'prompt', to: 'kickoff' }, { from: 'prompt_file', to: 'kickoff_file' },
+  { from: 'max', to: 'max_sessions' }, { from: 'was', to: 'renamed_from' }, { from: 'apps', to: 'pinned_to' },
+]
 /** Keys only a hand edit of one specialist's own table sets: a default would reach every specialist, a fragment's table is someone else's. */
-export const RESTRICTION_KEYS = ['access', 'tools', 'mcp', 'talks_to'] as const
+export const RESTRICTION_KEYS = ['restricted', 'tools', 'mcp', 'talks_to'] as const
+/** The old name of one of them, still read: a fragment may not set it either. */
+export const RESTRICTION_OLD_KEYS = ['access'] as const
 
 type Table = Record<string, unknown>
+/** A key renamed: `values` maps an old value to its new one; `badValue`, when set, is the error for an old value it does not map. */
+export type Rename = { from: string; to: string; values?: Record<string, unknown>; badValue?: string }
 /** Own keys only: a name like `constructor` must not resolve through the prototype. */
 const has = (t: object, k: string) => Object.hasOwn(t, k)
 const isTable = (v: unknown): v is Table => typeof v === 'object' && v !== null && !Array.isArray(v) && !(v instanceof Date)
@@ -158,7 +167,11 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   const warnings: ConfigIssue[] = []
   // A value that came in under an old name is reported under that name, so the error points at a key that is in the file.
   const viaOld = new Map<string, string>()
-  const error = (path: string, message: string) => { errors.push({ path: viaOld.get(path) ?? path, message }) }
+  const oldPath = (path: string): string => {
+    for (const [now, old] of viaOld) if (path === now || path.startsWith(`${now}[`)) return old + path.slice(now.length)
+    return path
+  }
+  const error = (path: string, message: string) => { errors.push({ path: oldPath(path), message }) }
   const warn = (path: string, message: string) => { warnings.push({ path, message }) }
 
   let doc: Table
@@ -178,7 +191,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
    * `values` maps an old value to its new one (only when read through the old key). Returns the table under the new names only,
    * so `unknownKeys` stays strict.
    */
-  const renamed = (t: Table, path: string, renames: readonly { from: string; to: string; values?: Record<string, string> }[]): Table => {
+  const renamed = (t: Table, path: string, renames: readonly Rename[]): Table => {
     let out = t
     for (const r of renames) {
       if (!has(out, r.from)) continue
@@ -189,8 +202,13 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       }
       viaOld.set(join2(path, r.to), join2(path, r.from))
       const v = out[r.from]
+      if (r.badValue !== undefined && !(typeof v === 'string' && r.values && has(r.values, v))) {
+        error(join2(path, r.to), r.badValue)
+        out = Object.fromEntries(Object.entries(out).filter(([k]) => k !== r.from))
+        continue
+      }
       const mapped = typeof v === 'string' && r.values && has(r.values, v) ? r.values[v] : v
-      const valueNote = mapped !== v ? ` and its value "${String(v)}" is now "${String(mapped)}"` : ''
+      const valueNote = mapped !== v ? ` and its value ${JSON.stringify(v)} is now ${JSON.stringify(mapped)}` : ''
       warn(join2(path, r.from), `is now \`${r.to}\`${valueNote}; \`${r.from}\` still loads and will be removed`)
       out = Object.fromEntries(Object.entries(out).map(([k, x]) => k === r.from ? [r.to, mapped] : [k, x]))
     }
@@ -427,7 +445,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
 
   const defaultsTable = table(doc.defaults, 'defaults') ?? {}
   unknownKeys(defaultsTable, ['specialist', 'private_roots'], 'defaults')
-  // Folders no `access = "workdir"` specialist may use, beyond the built-in ones: per-operator, so they live here and never in code.
+  // Folders no restricted specialist may use, beyond the built-in ones: per-operator, so they live here and never in code.
   const privateRoots: string[] = []
   for (const [i, raw] of (strList(defaultsTable, 'private_roots', 'defaults') ?? []).entries()) {
     const root = expand(raw)
@@ -435,14 +453,17 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     else if (unquotablePath(root)) error(`defaults.private_roots[${i}]`, unquotablePath(root)!)
     else privateRoots.push(root)
   }
-  const defaults = table(defaultsTable.specialist, 'defaults.specialist') ?? {}
+  const defaults0 = table(defaultsTable.specialist, 'defaults.specialist') ?? {}
+  const defaults = renamed(defaults0, 'defaults.specialist', SPECIALIST_RENAMES)
+  // The old name a default was written under, so an error about it later names a key that is in the file.
+  const defaultsOld = new Map(SPECIALIST_RENAMES.filter(r => has(defaults0, r.from) && !has(defaults0, r.to)).map(r => [r.to, r.from]))
   unknownKeys(defaults, SPECIALIST_KEYS, 'defaults.specialist')
   // A default reaches every specialist, including ones nobody meant to scope: these are set on one specialist's own table.
   for (const k of RESTRICTION_KEYS) if (has(defaults, k)) error(`defaults.specialist.${k}`, `can't be a default: ${k} says what one specialist's session may reach. Set it under [specialists.<id>] by editing hydra.toml`)
   if (defaults.workdir !== undefined && typeof defaults.workdir === 'string' && !defaults.workdir.includes('{id}')) {
     warn('defaults.specialist.workdir', 'has no {id}, so every specialist without its own workdir shares one folder')
   }
-  if (defaults.prompt !== undefined && defaults.prompt_file !== undefined) error('defaults.specialist', 'set prompt or prompt_file, not both')
+  if (defaults.kickoff !== undefined && defaults.kickoff_file !== undefined) error('defaults.specialist', 'set kickoff or kickoff_file, not both')
   // Defaults are type-checked once, here, so a bad default is reported once, not once per specialist.
   const goodDefaults: Table = {}
   for (const k of Object.keys(defaults)) {
@@ -467,10 +488,10 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   }
 
   function readSpecialistKeyTypes(t: Table, path: string) {
-    str(t, 'workdir', path); str(t, 'prompt', path); str(t, 'prompt_file', path); strList(t, 'listens', path); strList(t, 'apps', path); str(t, 'speaks_as', path); strList(t, 'allow', path)
-    oneOf(t, 'sessions', path, SESSIONS); positiveInt(t, 'max', path); str(t, 'idle', path); str(t, 'home', path); str(t, 'model', path)
-    oneOf(t, 'engine', path, ENGINES); str(t, 'env_file', path); strList(t, 'was', path)
-    oneOf(t, 'access', path, ACCESS); strList(t, 'tools', path); strList(t, 'mcp', path); strList(t, 'talks_to', path)
+    str(t, 'workdir', path); str(t, 'kickoff', path); str(t, 'kickoff_file', path); strList(t, 'listens', path); strList(t, 'pinned_to', path); str(t, 'speaks_as', path); strList(t, 'allow', path)
+    oneOf(t, 'sessions', path, SESSIONS); positiveInt(t, 'max_sessions', path); str(t, 'idle', path); str(t, 'home', path); str(t, 'model', path)
+    oneOf(t, 'engine', path, ENGINES); str(t, 'env_file', path); strList(t, 'renamed_from', path)
+    bool(t, 'restricted', path); strList(t, 'tools', path); strList(t, 'mcp', path); strList(t, 'talks_to', path)
   }
   function positiveInt(t: Table, k: string, path: string): number | undefined {
     const v = t[k]
@@ -484,23 +505,24 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
 
   const specialists: Record<string, Specialist> = {}
   /** Who listens on each place, with the apps they are pinned to (undefined: unpinned). */
-  const listener = new Map<Place, { id: string; apps?: string[] }[]>()
+  const listener = new Map<Place, { id: string; pinnedTo?: string[] }[]>()
   const formerly = new Map<string, string>()
   const specialistTables = table(doc.specialists, 'specialists') ?? {}
   for (const [id, raw] of Object.entries(specialistTables)) {
     const path = `specialists.${id}`
     const why = invalidSpecialistName(id, env.sessionNames)
     if (why) error(path, why)
-    const own = table(raw, path)
-    if (!own) continue
+    const own0 = table(raw, path)
+    if (!own0) continue
+    const own = renamed(own0, path, SPECIALIST_RENAMES)
     unknownKeys(own, SPECIALIST_KEYS, path)
-    if (own.prompt !== undefined && own.prompt_file !== undefined) error(path, 'set prompt or prompt_file, not both')
-    // Its own keys win; its own prompt or prompt_file replaces both defaults.
+    if (own.kickoff !== undefined && own.kickoff_file !== undefined) error(path, 'set kickoff or kickoff_file, not both')
+    // Its own keys win; its own kickoff or kickoff_file replaces both defaults.
     const inherited = Object.fromEntries(Object.entries(goodDefaults)
-      .filter(([k]) => !((k === 'prompt' || k === 'prompt_file') && (own.prompt !== undefined || own.prompt_file !== undefined)))
+      .filter(([k]) => !((k === 'kickoff' || k === 'kickoff_file') && (own.kickoff !== undefined || own.kickoff_file !== undefined)))
       .map(([k, v]) => [k, fillId(v, id)]))
     const t: Table = { ...inherited, ...own }
-    const at = (k: string) => has(own, k) ? `${path}.${k}` : `${path}.${k} (from defaults.specialist)`
+    const at = (k: string) => has(own, k) ? `${path}.${k}` : `${path}.${defaultsOld.get(k) ?? k} (from defaults.specialist)`
 
     const workdirRaw = str(t, 'workdir', path)
     let workdir = ''
@@ -512,45 +534,45 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       // Its sessions run there, where today's spawns run too (SPAWN_CWD), but hydra won't mark a whole home folder trusted.
       else if (resolve(workdir) === resolve(env.home) || resolve(workdir) === '/') warn(at('workdir'), `${workdir} is ${resolve(workdir) === '/' ? 'the whole disk' : 'your whole home folder'}: its sessions can read everything there, and hydra won't pre-approve Claude's trust for it; give the specialist a folder of its own`)
     }
-    const prompt = str(t, 'prompt', path)
-    const promptFileRaw = str(t, 'prompt_file', path)
+    const kickoff = str(t, 'kickoff', path)
+    const kickoffFileRaw = str(t, 'kickoff_file', path)
     const underWorkdir = (p: string) => isAbsolute(expand(p)) ? expand(p) : join(workdir, p)
-    const promptFile = promptFileRaw === undefined ? undefined : underWorkdir(promptFileRaw)
+    const kickoffFile = kickoffFileRaw === undefined ? undefined : underWorkdir(kickoffFileRaw)
 
-    // `apps` pins it: it takes only messages that come through those Slack apps, and those apps deliver only to specialists pinned to them. Absent: unpinned.
-    let apps: string[] | undefined
-    const appsRaw = strList(t, 'apps', path)
-    if (appsRaw !== undefined) {
-      if (appsRaw.length === 0) error(at('apps'), 'must name at least one app; leave `apps` out to take every app that no specialist is pinned to')
-      for (const [i, a] of appsRaw.entries()) {
-        if (!Object.hasOwn(slackApps, a)) error(`${at('apps')}[${i}]`, noSuchApp(a, Object.keys(slackApps)))
+    // `pinned_to` pins it: it takes only messages that come through those Slack apps, and those apps deliver only to specialists pinned to them. Absent: unpinned.
+    let pinnedTo: string[] | undefined
+    const pinnedRaw = strList(t, 'pinned_to', path)
+    if (pinnedRaw !== undefined) {
+      if (pinnedRaw.length === 0) error(at('pinned_to'), 'must name at least one app; leave `pinned_to` out to take every app that no specialist is pinned to')
+      for (const [i, a] of pinnedRaw.entries()) {
+        if (!Object.hasOwn(slackApps, a)) error(`${at('pinned_to')}[${i}]`, noSuchApp(a, Object.keys(slackApps)))
       }
-      if (appsRaw.length) apps = [...new Set(appsRaw)]
+      if (pinnedRaw.length) pinnedTo = [...new Set(pinnedRaw)]
     }
 
     // `speaks_as`: the app it posts as when no message came in (its `home`, a new thread). It names a declared app, one it is pinned to if it is pinned.
     const speaksAs = str(t, 'speaks_as', path)
     if (speaksAs !== undefined) {
       if (!Object.hasOwn(slackApps, speaksAs)) error(at('speaks_as'), noSuchApp(speaksAs, Object.keys(slackApps)))
-      else if (apps && !apps.includes(speaksAs)) error(at('speaks_as'), `${speaksAs} is not one of the apps ${id} is pinned to (${apps.join(', ')}): a pinned specialist speaks only through its own apps`)
+      else if (pinnedTo && !pinnedTo.includes(speaksAs)) error(at('speaks_as'), `${speaksAs} is not one of the apps ${id} is pinned to (${pinnedTo.join(', ')}): a pinned specialist speaks only through its own apps`)
     }
 
     const listens: Place[] = []
     for (const [i, rawPlace] of (strList(t, 'listens', path) ?? []).entries()) {
       const p = place(rawPlace, `${at('listens')}[${i}]`)
       if (!p) continue
-      if (apps && !p.startsWith('slack:')) error(`${at('listens')}[${i}]`, `${p} is not a Slack place, and \`apps\` pins this specialist to Slack apps: remove \`apps\`, or listen on a \`slack:\` place`)
+      if (pinnedTo && !p.startsWith('slack:')) error(`${at('listens')}[${i}]`, `${p} is not a Slack place, and \`pinned_to\` pins this specialist to Slack apps: remove \`pinned_to\`, or listen on a \`slack:\` place`)
       const here = listener.get(p) ?? []
       if (here.some(o => o.id === id)) continue
       // An unpinned specialist takes only apps nobody is pinned to, so a pinned one and an unpinned one never share an app.
-      const mine = apps
-      const bothUnpinned = (o: { apps?: string[] }) => !o.apps && !mine
-      const shareAnApp = (o: { apps?: string[] }) => !!o.apps && !!mine && o.apps.some(a => mine.includes(a))
+      const mine = pinnedTo
+      const bothUnpinned = (o: { pinnedTo?: string[] }) => !o.pinnedTo && !mine
+      const shareAnApp = (o: { pinnedTo?: string[] }) => !!o.pinnedTo && !!mine && o.pinnedTo.some(a => mine.includes(a))
       const clash = here.find(o => bothUnpinned(o) || shareAnApp(o))
       if (clash) {
-        const via = clash.apps && apps ? `app ${apps.filter(a => clash.apps!.includes(a)).join(', ')}` : 'every app nobody is pinned to'
-        error(`${at('listens')}[${i}]`, `${clash.id} already listens on ${p}, and ${via} reaches both: two specialists may share a place only when no app reaches both: give one \`apps\` the other lacks, or pin only one of them`)
-      } else listener.set(p, [...here, { id, ...(apps && { apps }) }])
+        const via = clash.pinnedTo && pinnedTo ? `app ${pinnedTo.filter(a => clash.pinnedTo!.includes(a)).join(', ')}` : 'every app nobody is pinned to'
+        error(`${at('listens')}[${i}]`, `${clash.id} already listens on ${p}, and ${via} reaches both: two specialists may share a place only when no app reaches both: give one a \`pinned_to\` app the other lacks, or pin only one of them`)
+      } else listener.set(p, [...here, { id, ...(pinnedTo && { pinnedTo }) }])
       listens.push(p)
     }
 
@@ -561,12 +583,12 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     // An inherited idle was checked once, at the default.
     const idleMs = idleRaw === undefined ? undefined : has(own, 'idle') ? checkIdle(idleRaw, `${path}.idle`) : parseIdleTtl(idleRaw) ?? undefined
 
-    const was = strList(t, 'was', path) ?? []
-    for (const [i, old] of was.entries()) {
+    const renamedFrom = strList(t, 'renamed_from', path) ?? []
+    for (const [i, old] of renamedFrom.entries()) {
       const bad = invalidSpecialistName(old, env.sessionNames)
-      if (bad) { error(`${at('was')}[${i}]`, bad); continue }
-      if (has(specialistTables, old)) error(`${at('was')}[${i}]`, `"${old}" is a current specialist; an old id can't be in use`)
-      else if (formerly.has(old) && formerly.get(old) !== id) error(`${at('was')}[${i}]`, `"${old}" is already an old id of ${formerly.get(old)}`)
+      if (bad) { error(`${at('renamed_from')}[${i}]`, bad); continue }
+      if (has(specialistTables, old)) error(`${at('renamed_from')}[${i}]`, `"${old}" is a current specialist; an old id can't be in use`)
+      else if (formerly.has(old) && formerly.get(old) !== id) error(`${at('renamed_from')}[${i}]`, `"${old}" is already an old id of ${formerly.get(old)}`)
       else formerly.set(old, id)
     }
 
@@ -577,21 +599,21 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     const model = str(t, 'model', path)
     const engine = oneOf(t, 'engine', path, ENGINES)
 
-    // `access`: whose account its session runs under. Everything below it refuses what would let a `workdir` session reach past its folder.
-    const access: Access = oneOf(t, 'access', path, ACCESS) ?? 'operator'
+    // `restricted`: its session runs in its folder, with only what it lists. Everything below refuses what would let a restricted session reach past its folder.
+    const restricted = bool(t, 'restricted', path) ?? false
     const toolsRaw = strList(t, 'tools', path)
     const mcpRaw = strList(t, 'mcp', path)
     const talksToRaw = strList(t, 'talks_to', path)
     let tools: string[] | undefined
     let mcp: string[] | undefined
-    if (access === 'operator') {
-      for (const k of ['tools', 'mcp', 'talks_to'] as const) if (t[k] !== undefined) error(`${path}.${k}`, `has no effect while access = "operator": it already has every tool and server the operator does${k === 'talks_to' ? ', and send_to_thread to any session' : ''}; set access = "workdir" to choose them`)
+    if (!restricted) {
+      for (const k of ['tools', 'mcp', 'talks_to'] as const) if (t[k] !== undefined) error(`${path}.${k}`, `has no effect while restricted = false: it already has every tool and server the operator does${k === 'talks_to' ? ', and send_to_thread to any session' : ''}; set restricted = true to choose them`)
     } else {
       tools = [...new Set(toolsRaw ?? WORKDIR_TOOLS)]
       for (const [i, name] of (toolsRaw ?? []).entries()) {
         if ((WORKDIR_TOOLS as readonly string[]).includes(name)) continue
         if (Object.hasOwn(TOOL_WARNINGS, name)) { warn(`${path}.tools[${i}]`, `${name} ${TOOL_WARNINGS[name]}`); continue }
-        error(`${path}.tools[${i}]`, `${name} ${Object.hasOwn(TOOL_REFUSALS, name) ? TOOL_REFUSALS[name] : `is not a tool a workdir specialist may use (${WORKDIR_TOOLS.join(', ')})`}; remove it or set access = "operator"`)
+        error(`${path}.tools[${i}]`, `${name} ${Object.hasOwn(TOOL_REFUSALS, name) ? TOOL_REFUSALS[name] : `is not a tool a restricted specialist may use (${WORKDIR_TOOLS.join(', ')})`}; remove it or set restricted = false`)
       }
       mcp = [...new Set(mcpRaw ?? [])]
       for (const [i, name] of (mcpRaw ?? []).entries()) {
@@ -605,26 +627,26 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
         if (why) error(`${path}.mcp`, why)
       }
       // The engine actually used comes from thread history and `handoff <model>` can switch it, so launch checks it again.
-      if (engine !== undefined && !engineConfinesAccess(engine)) error(`${path}.engine`, `${engine} can't run an access = "workdir" specialist: that engine cannot confine its tools; set engine = "claude", or set access = "operator"`)
+      if (engine !== undefined && !engineConfinesAccess(engine)) error(`${path}.engine`, `${engine} can't run a restricted specialist: that engine cannot confine its tools; set engine = "claude", or set restricted = false`)
       if (workdirRaw !== undefined && isAbsolute(workdir) && env.isDir(workdir)) checkWorkdirRestriction(at('workdir'), workdir)
     }
     specialists[id] = {
       id, workdir, listens, allow,
-      ...(apps && { apps }),
+      ...(pinnedTo && { pinnedTo }),
       ...(speaksAs !== undefined && Object.hasOwn(slackApps, speaksAs) && { speaksAs }),
       sessions: oneOf(t, 'sessions', path, SESSIONS) ?? 'shared',
-      max: positiveInt(t, 'max', path) ?? 20,
-      was,
-      ...(prompt !== undefined && { prompt }),
-      ...(promptFile !== undefined && { promptFile }),
+      maxSessions: positiveInt(t, 'max_sessions', path) ?? 20,
+      renamedFrom,
+      ...(kickoff !== undefined && { kickoff }),
+      ...(kickoffFile !== undefined && { kickoffFile }),
       ...(idleMs !== undefined && { idleMs }),
       ...(home !== undefined && { home: normalizePlace(home) ?? home }),
       ...(model !== undefined && { model }),
       ...(engine !== undefined && { engine }),
-      access,
+      restricted,
       ...(tools && { tools }),
       ...(mcp && { mcp }),
-      ...(talksToRaw && access === 'workdir' && { talksTo: [...new Set(talksToRaw)] }),
+      ...(talksToRaw && restricted && { talksTo: [...new Set(talksToRaw)] }),
       ...(envFile !== undefined && { envFile: underWorkdir(envFile) }),
     }
   }
@@ -730,13 +752,13 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     const ruleTarget = str(t, 'target', path)
     if (t.target === undefined) error(`${path}.target`, 'is required: a specialist, or main')
     else if (ruleTarget !== undefined && !isTarget(ruleTarget)) error(`${path}.target`, `no specialist "${ruleTarget}"`)
-    // Whether `target` can ever take what the rule matches: a pinned specialist only through its apps, and an app that any specialist is pinned to delivers only to them.
+    // Whether `target` can ever take what the rule matches: a pinned specialist only through its `pinned_to` apps, and an app that any specialist is pinned to delivers only to them.
     const specialist = ruleTarget !== undefined ? specialists[ruleTarget] : undefined
     if (specialist && ruleTarget !== undefined) {
-      const pin = `add ${app} to ${ruleTarget}'s \`apps\`, or change the rule's \`app\``
-      if (app && specialist.apps && !specialist.apps.includes(app)) error(`${path}.target`, `${ruleTarget} is pinned to ${specialist.apps.join(', ')}, so app ${app} can never deliver to it: ${pin}`)
-      else if (app && !specialist.apps && pinnersOf(specialists, app).length) error(`${path}.target`, `app ${app} serves only specialists pinned to it (${pinnersOf(specialists, app).join(', ')}), and ${ruleTarget} is not pinned to it: ${pin}`)
-      else if (specialist.apps && !app && rulePlace && !rulePlace.startsWith('slack:')) error(`${path}.target`, `${ruleTarget} is pinned to Slack apps, so it can never take a message at ${rulePlace}: remove \`apps\` from ${ruleTarget}, or change \`place\` to a \`slack:\` place`)
+      const pin = `add ${app} to ${ruleTarget}'s \`pinned_to\`, or change the rule's \`app\``
+      if (app && specialist.pinnedTo && !specialist.pinnedTo.includes(app)) error(`${path}.target`, `${ruleTarget} is pinned to ${specialist.pinnedTo.join(', ')}, so app ${app} can never deliver to it: ${pin}`)
+      else if (app && !specialist.pinnedTo && pinnersOf(specialists, app).length) error(`${path}.target`, `app ${app} serves only specialists pinned to it (${pinnersOf(specialists, app).join(', ')}), and ${ruleTarget} is not pinned to it: ${pin}`)
+      else if (specialist.pinnedTo && !app && rulePlace && !rulePlace.startsWith('slack:')) error(`${path}.target`, `${ruleTarget} is pinned to Slack apps, so it can never take a message at ${rulePlace}: remove \`pinned_to\` from ${ruleTarget}, or change \`place\` to a \`slack:\` place`)
     }
     if ((rulePlace || app) && ruleTarget) rules.push({ target: ruleTarget, ...(rulePlace && { place: rulePlace }), ...(app && { app }), ...(person !== undefined && { person }) })
   }
@@ -760,8 +782,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   const appsOf = (r: Rule): string[] | 'any' => {
     if (r.app) return [r.app]
     const target = specialists[r.target]
-    if (target?.apps) return target.apps
-    if (!target || !Object.values(specialists).some(x => x.apps)) return 'any'
+    if (target?.pinnedTo) return target.pinnedTo
+    if (!target || !Object.values(specialists).some(x => x.pinnedTo)) return 'any'
     return Object.keys(slackApps).filter(a => pinnersOf(specialists, a).length === 0)
   }
   const appsCover = (earlier: Rule, later: Rule): boolean => {
@@ -849,8 +871,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     const app = speaksAsOf(s, declaredApps)
     const path = `specialists.${s.id}.speaks_as`
     if (!app) { if (declaredApps.length) error(path, `${s.id} has a Slack home, and ${declaredApps.length} Slack apps are declared and none is \`default\`: set \`speaks_as\` to the app it posts as`); continue }
-    // A pinned specialist's own `speaks_as` was checked against its `apps` above.
-    const apart = s.apps && s.speaksAs ? undefined : whyNotServed(specialists, s, app, 'it would post through')
+    // A pinned specialist's own `speaks_as` was checked against its `pinned_to` above.
+    const apart = s.pinnedTo && s.speaksAs ? undefined : whyNotServed(specialists, s, app, 'it would post through')
     if (apart) error(path, `${apart}: set \`speaks_as\` to an app ${s.id} can be reached through, or pin ${s.id} to ${app}`)
   }
 
@@ -884,9 +906,9 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   }
   const listJoin = (items: string[]) => items.length <= 2 ? items.join(' and ') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
 
-  // `talks_to`: the specialists a confined session may send to (send_to_thread). Only specialists: never `main`, byte or a session by name. The
+  // `talks_to`: the specialists a restricted session may send to (send_to_thread). Only specialists: never `main`, byte or a session by name. The
   // target must be a shared-session specialist, which has one session to land in. A target that runs under the operator's account is a way in for
-  // whatever a confined session was talked into saying, so it loads with a warning that says so.
+  // whatever a restricted session was talked into saying, so it loads with a warning that says so.
   for (const s of Object.values(specialists)) {
     for (const [i, target] of (s.talksTo ?? []).entries()) {
       const id = s.id
@@ -894,7 +916,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       if (target === id) { error(at, `${id} cannot talk to itself`); continue }
       if (target === 'main' || !has(specialists, target)) { error(at, target === 'main' ? 'main is the operator\'s own session: talks_to names specialists only' : `no [specialists.${target}]: talks_to names a specialist declared in hydra.toml`); continue }
       if (specialists[target].sessions !== 'shared') { error(at, `${target} has sessions = "per-conversation": a hand-off needs one session to land in; talk to a shared specialist`); continue }
-      if (specialists[target].access === 'operator') warn(at, `${target} runs under the operator's account (access = "operator"): whatever ${id} is talked into sending reaches that account, quoted and labelled but read by a session that can act as the operator; give ${target} access = "workdir" with the broader folder it needs`)
+      if (!specialists[target].restricted) warn(at, `${target} runs under the operator's account (restricted = false): whatever ${id} is talked into sending reaches that account, quoted and labelled but read by a session that can act as the operator; make ${target} restricted = true, with the broader folder it needs`)
     }
   }
 
@@ -905,14 +927,14 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (s.listens.length === 0 && !ruleTargets.has(s.id) && !scheduleTargets.has(s.id)) {
       warn(path, 'nobody can reach it: it listens nowhere, and no rule or schedule sends to it')
     }
-    // An `access = "operator"` session runs under the operator's account, so whoever can talk to it can use that account through it.
-    if (s.access === 'operator') {
+    // An unrestricted session runs under the operator's account, so whoever can talk to it can use that account through it.
+    if (!s.restricted) {
       const who = reachedBy(s)
-      if (who.length) warn(path, `${listJoin(who)} can reach the operator's account through it; set access = "workdir"`)
+      if (who.length) warn(path, `${listJoin(who)} can reach the operator's account through it; set restricted = true`)
     }
-    // A confined specialist's answer can carry a link; where previews are on, the preview shows readers content they could not open themselves.
+    // A restricted specialist's answer can carry a link; where previews are on, the preview shows readers content they could not open themselves.
     // Previews can be switched off in a Slack channel (by id or name) and a Discord channel by id; a Discord channel given by name is not one hydra can match.
-    if (s.access === 'workdir' && s.allow.includes('anyone')) {
+    if (s.restricted && s.allow.includes('anyone')) {
       const chat = s.listens.filter(p => (p.startsWith('slack:') || p.startsWith('discord:')) && places[p]?.linkPreviews !== false)
       const open = chat.filter(p => !p.startsWith('discord:#'))
       const named = chat.filter(p => p.startsWith('discord:#'))
@@ -925,10 +947,10 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       if (s.listens.length >= 2) warn(path, `one shared session hears ${s.listens.join(', ')}, so what's said in one place is remembered in the others; use sessions = "per-conversation" or one specialist per place`)
       else if (s.listens.some(p => p.endsWith(':dm')) && s.allow.length > 0) warn(path, `one shared session hears everyone's DMs (allow = ${JSON.stringify(s.allow)}), so one person's DM is remembered in another's; use sessions = "per-conversation" or allow = []`)
     }
-    // Without idle, a per-conversation session never ends on its own, so its slot under max never frees.
-    if (s.sessions === 'per-conversation' && s.idleMs === undefined) warn(path, `conversations past max (${s.max}) will wait until a session is ended by hand; set idle`)
+    // Without idle, a per-conversation session never ends on its own, so its slot under max_sessions never frees.
+    if (s.sessions === 'per-conversation' && s.idleMs === undefined) warn(path, `conversations past max_sessions (${s.maxSessions}) will wait until a session is ended by hand; set idle`)
     // Pinning an app takes it from every unpinned specialist: one that listens where no pinned specialist does has lost that app there.
-    if (!s.apps) for (const app of Object.keys(slackApps)) {
+    if (!s.pinnedTo) for (const app of Object.keys(slackApps)) {
       const by = pinnersOf(specialists, app)
       const lost = s.listens.find(p => p.startsWith('slack:') && !by.some(y => specialists[y].listens.includes(p)))
       if (by.length && lost) warn(path, `${s.id} is unpinned, and app ${app} is pinned by ${by.join(', ')}, so ${s.id} no longer hears ${app} on ${lost}`)

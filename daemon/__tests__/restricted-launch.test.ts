@@ -1,4 +1,4 @@
-// A specialist with access = "workdir" launches restricted on every shape, derived from the one place (doSpawnSession) and the
+// A specialist with restricted = true launches restricted on every shape, derived from the one place (doSpawnSession) and the
 // record it replaces; a conversation that ran under another policy is never resumed or forked; the engine is checked again
 // at launch. Through the real spawn and recovery paths: fake engine, fake tmux, no daemon I/O.
 import { macLike } from './sandbox-host.js'
@@ -33,7 +33,7 @@ const workdir = mkdtempSync(join(tmpdir(), 'restricted-launch-'))
 afterAll(() => rmSync(workdir, { recursive: true, force: true }))
 
 const spec = (id: string, over: Partial<Specialist> = {}): Specialist => ({
-  id, workdir, listens: [], allow: [], sessions: 'shared', max: 20, was: [], access: 'operator', ...over,
+  id, workdir, listens: [], allow: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false, ...over,
 })
 const configWith = (specialists: Specialist[]): HydraConfig => ({
   operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
@@ -41,9 +41,9 @@ const configWith = (specialists: Specialist[]): HydraConfig => ({
   specialists: Object.fromEntries(specialists.map(s => [s.id, s])),
   mcpServers: { datadog: { name: 'datadog', command: '/usr/local/bin/datadog-mcp', tokenEnv: ['DD_API_KEY'], tools: ['search_logs'] } },
 })
-const OPS = spec('ops', { access: 'workdir', tools: ['Read', 'Grep'], mcp: ['datadog'] })
+const OPS = spec('ops', { restricted: true, tools: ['Read', 'Grep'], mcp: ['datadog'] })
 const DESK = spec('desk')
-const CRM = spec('crm', { access: 'workdir', tools: ['Read', 'Grep', 'Glob'], mcp: [], sessions: 'per-conversation' })
+const CRM = spec('crm', { restricted: true, tools: ['Read', 'Grep', 'Glob'], mcp: [], sessions: 'per-conversation' })
 const use = (...s: Specialist[]) => _setHydraConfigForTesting(configWith(s))
 
 let fake: FakeTmux
@@ -142,7 +142,7 @@ describe('the launch policy of a specialist', () => {
     expect(bornPolicy('ops')!.id).not.toBe(base)
   })
   test('an old id (was) finds the renamed specialist', () => {
-    use({ ...OPS, id: 'ops2', was: ['ops'] })
+    use({ ...OPS, id: 'ops2', renamedFrom: ['ops'] })
     expect(bornPolicy('ops')?.specialist).toBe('ops2')
   })
   test('a confined specialist no longer declared refuses instead of reading as the operator', () => {
@@ -292,7 +292,7 @@ describe('a policy change starts fresh', () => {
   })
   test('a specialist flipped from workdir back to operator is not resumed either', async () => {
     seedDead({ policy: opsPolicy() })
-    use({ ...OPS, access: 'operator', tools: undefined, mcp: undefined })
+    use({ ...OPS, restricted: false, tools: undefined, mcp: undefined })
     expect(await revive()).toMatchObject({ ok: true, method: 'respawned' })
     expect(launches[0].policy?.access === 'workdir').toBe(false)
   })
@@ -554,7 +554,7 @@ describe('a launch path that passes nothing for a specialist session: restricted
     }
     beforeEach(() => { _resetBackoff() })   // a refused revive counts toward the thread's back-off; each case starts clear
     const removed = () => use(DESK)                                  // the specialist is no longer declared
-    const renamed = () => use({ ...OPS, id: 'ops2' })                // renamed with no `was`: 'ops' resolves to nothing
+    const renamed = () => use({ ...OPS, id: 'ops2' })                // renamed with no `renamed_from`: 'ops' resolves to nothing
     const SHAPES: [string, () => Promise<unknown>][] = [
       ['reviveThread (deliver --revive for a thread, every tier)', () => revive()],
       ['reviveThread with the fork tier reached (resume fails)', async () => { failResume = true; return revive() }],
@@ -655,7 +655,7 @@ describe('a launch path that passes nothing for a specialist session: restricted
 describe('the engine is checked at launch', () => {
   test.each(['codex', 'omp'] as const)('%s for a workdir specialist (a handoff <model> switch, or history) is refused before anything launches', async engine => {
     seedDead({ policy: opsPolicy() })
-    await expect(doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, specialist: 'ops', engine })).rejects.toThrow(/which the \w+ engine cannot give: set engine = "claude", or set access = "operator"/)
+    await expect(doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, specialist: 'ops', engine })).rejects.toThrow(/which the \w+ engine cannot give: set engine = "claude", or set restricted = false/)
     expect(launches).toHaveLength(0)
   })
   test('a revive whose history says codex does not launch a workdir specialist', async () => {
