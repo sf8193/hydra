@@ -14,7 +14,7 @@ operator = "op"
 [people.op]
 ids = ["slack:U0OP"]
 [connectors.slack]
-bot_token_env = "SLACK_BOT_TOKEN"
+bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"
 `
 const ops = (body = 'talks_to = ["deep"]') => `[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:C0OPS"]\nallow = ["staff"]\naccess = "workdir"\n${body}\n`
 const deep = (body = '') => `[specialists.deep]\nworkdir = "~/agents/deep"\nallow = []\naccess = "workdir"\n${body}\n`
@@ -97,7 +97,7 @@ describe('a workdir inside a workstream loads, through the real loader on a real
   mkdirSync(runbooks, { recursive: true })
   mkdirSync(stateDir, { recursive: true })
   writeFileSync(join(runbooks, 'restart.md'), 'restart the widget')
-  const disk = { ...systemEnv(['spark'], stateDir, join(home, '.claude')), home }
+  const disk = { ...systemEnv(['spark'], stateDir, 'discord', join(home, '.claude')), home }
   const t = (privateRoots = '') => text(
     privateRoots,
     `[specialists.ops]\nworkdir = "~/specialists/ops"\nlistens = ["slack:C0OPS"]\nallow = ["staff"]\naccess = "workdir"\ntalks_to = ["ops-deep"]\n`,

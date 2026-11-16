@@ -273,6 +273,8 @@ export type LoadEnv = {
   isGitWorkTree(path: string): boolean
   /** What lies under the folder that a scoped session must not be able to reach. */
   scanWorkdir(dir: string): WorkdirScan
+  /** The chat platform this daemon runs. On `slack` the gateway holds `SLACK_GATEWAY_TOKEN_ENVS`, so no connector app may name them. */
+  platform: 'discord' | 'slack'
 }
 
 /** What looking through a folder found. `truncated`: it stopped at its entry cap, so the rest is unseen. */

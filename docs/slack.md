@@ -90,7 +90,7 @@ SPAWN_CWD=~/work      # must be an existing directory
 }
 ```
 
-**The gateway's app is not a connector app.** The gateway opens its own Socket Mode connection with `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN`. The connector opens one more for each app hydra.toml declares, in every daemon. If hydra.toml declares an app whose `bot_token_env`/`app_token_env` name those same two variables, the same Slack app gets two connections, and Slack hands each event to only one of them, unpredictably. Nothing checks for this when hydra.toml loads. So to route Slack by specialists and rules beside the gateway, create a **separate** Slack app for the connector and declare that one ([Apps in hydra.toml](#apps-in-hydratoml)), with its own variables:
+**The gateway's app is not a connector app.** The gateway opens its own Socket Mode connection with `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN`. The connector opens one more for each app hydra.toml declares, in every daemon. If hydra.toml declares an app whose `bot_token_env`/`app_token_env` name those same two variables, the same Slack app gets two connections, and Slack hands each event to only one of them, unpredictably. On a Slack daemon (`CHAT_PLATFORM=slack`) hydra.toml refuses such an app when it loads, naming the key; `hydra config check slack` says the same. So to route Slack by specialists and rules beside the gateway, create a **separate** Slack app for the connector and declare that one ([Apps in hydra.toml](#apps-in-hydratoml)), with its own variables:
 
 ```toml
 [slack.apps.default]
@@ -143,8 +143,8 @@ hydra.toml declares each Slack app by name, `[slack.apps.<id>]`. Tokens stay in 
 
 ```toml
 [slack.apps.default]
-bot_token_env = "SLACK_BOT_TOKEN"      # required: the bot token (xoxb-…)
-app_token_env = "SLACK_APP_TOKEN"      # Socket Mode's app-level token (xapp-…): required for Slack to connect, not for `hydra slack manifest`
+bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"      # required: the bot token (xoxb-…)
+app_token_env = "CONNECTOR_SLACK_APP_TOKEN"      # Socket Mode's app-level token (xapp-…): required for Slack to connect, not for `hydra slack manifest`
 user_token_env = "SLACK_USER_TOKEN"    # optional: read threads the bot is not in, as the operator; never posts
 display_name = "Acme helper"           # the app's name in `hydra slack manifest` (default: `hydra` for `default`, else the id; at most 35 characters)
 description = "Answers Acme's threads it is tagged in."   # at most 140 characters
@@ -343,8 +343,8 @@ One channel, one specialist. Staff post in `#ops`; it answers from its runbooks 
 operator = "op"
 
 [slack.apps.default]
-bot_token_env = "SLACK_BOT_TOKEN"
-app_token_env = "SLACK_APP_TOKEN"
+bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"
+app_token_env = "CONNECTOR_SLACK_APP_TOKEN"
 
 [people.op]
 ids = ["slack:U0OP"]

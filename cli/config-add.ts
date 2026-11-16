@@ -2,7 +2,7 @@
 
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
-import { resolveConfig } from './helpers.js'
+import { resolveConfig, statePlatform } from './helpers.js'
 import { addFragment } from '../config/add.js'
 import { systemEnv } from '../config/load.js'
 import { SESSION_NAMES } from '../shared/session-catalog.js'
@@ -20,7 +20,7 @@ export function configAddCommand(args: string[], stateDirOpt: string | undefined
   const cfg = stateDirOpt ? undefined : resolveConfig()
   const stateDir = stateDirOpt ?? cfg!.stateDir
   const dryRun = args.includes('--dry-run')
-  const plan = addFragment(stateDir, systemEnv(SESSION_NAMES, stateDir, cfg?.configDir), text, file, { dryRun })
+  const plan = addFragment(stateDir, systemEnv(SESSION_NAMES, stateDir, statePlatform(stateDir, undefined, cfg?.platform), cfg?.configDir), text, file, { dryRun })
   if (!plan.ok) { console.error(`error: ${plan.error}`); console.error('hydra.toml was not changed'); return 1 }
   const already = plan.already.length ? `already there: ${plan.already.join(', ')}` : ''
   if (!plan.added.length) { console.log(`${already}; hydra.toml was not changed`); return 0 }

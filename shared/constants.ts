@@ -364,3 +364,6 @@ export const SESSION_INSTRUCTIONS = [
   ].join('\n')
 
 export const HOME_STATUS_ACTION_PREFIX = 'home:status:'
+
+/** The variables the Slack gateway (`CHAT_PLATFORM=slack`) reads its own Slack app's tokens from. A connector app never names them. */
+export const SLACK_GATEWAY_TOKEN_ENVS = { bot: 'SLACK_BOT_TOKEN', app: 'SLACK_APP_TOKEN' } as const

@@ -41,8 +41,8 @@ describe('a full file', () => {
   const text = `
 operator = "op"
 [connectors.slack]
-bot_token_env = "SLACK_BOT_TOKEN"
-app_token_env = "SLACK_APP_TOKEN"
+bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"
+app_token_env = "CONNECTOR_SLACK_APP_TOKEN"
 [connectors.github]
 repos = ["Acme/Widget"]
 [people.op]
@@ -90,7 +90,7 @@ timeout = "2s"
     expect(warnings).toEqual([])
     expect(config.operator).toBe('op')
     expect(config.connectors).toEqual({ github: { repos: ['acme/widget'], pollMs: 180_000 } })
-    expect(config.slackApps.default).toEqual({ id: 'default', botTokenEnv: 'SLACK_BOT_TOKEN', appTokenEnv: 'SLACK_APP_TOKEN', displayName: 'hydra', description: SLACK_APP_DEFAULTS.description })
+    expect(config.slackApps.default).toEqual({ id: 'default', botTokenEnv: 'CONNECTOR_SLACK_BOT_TOKEN', appTokenEnv: 'CONNECTOR_SLACK_APP_TOKEN', displayName: 'hydra', description: SLACK_APP_DEFAULTS.description })
     expect(config.people.op).toEqual({ id: 'op', ids: ['slack:U0OP', 'github:op-login'], roles: [], name: 'op' })
     expect(config.people.alice.name).toBe('Alice')
     expect(config.specialists.crm).toEqual({
@@ -456,11 +456,11 @@ to = "desk"
 })
 
 describe('[connectors.slack] app_name and app_description', () => {
-  const slack = (lines: string) => `${BASE}\n[connectors.slack]\nbot_token_env = "SLACK_BOT_TOKEN"\n${lines}\n`
+  const slack = (lines: string) => `${BASE}\n[connectors.slack]\nbot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"\n${lines}\n`
   test('are kept as given, and defaulted when unset', () => {
     expect(ok(slack('app_name = "Krust"\napp_description = "Answers the threads it is tagged in."')).config.slackApps.default)
-      .toEqual({ id: 'default', botTokenEnv: 'SLACK_BOT_TOKEN', displayName: 'Krust', description: 'Answers the threads it is tagged in.' })
-    expect(ok(slack('')).config.slackApps.default).toEqual({ id: 'default', botTokenEnv: 'SLACK_BOT_TOKEN', displayName: 'hydra', description: SLACK_APP_DEFAULTS.description })
+      .toEqual({ id: 'default', botTokenEnv: 'CONNECTOR_SLACK_BOT_TOKEN', displayName: 'Krust', description: 'Answers the threads it is tagged in.' })
+    expect(ok(slack('')).config.slackApps.default).toEqual({ id: 'default', botTokenEnv: 'CONNECTOR_SLACK_BOT_TOKEN', displayName: 'hydra', description: SLACK_APP_DEFAULTS.description })
   })
   test('past Slack\'s limits (35 and 140 characters) are refused', () => {
     // Characters, not UTF-16 units: 34 letters and an emoji is 35.
@@ -513,6 +513,30 @@ description = "Answers sales threads."
     expect(Object.keys(r.config.slackApps)).toEqual(['sales'])
     expect(r.warnings).toEqual([])
   })
+  describe('on the Slack gateway\'s daemon, the gateway\'s own app is not a connector app', () => {
+    const slackEnv: LoadEnv = testLoadEnv({ platform: 'slack' })
+    const errs = (text: string) => { const r = loadHydraConfig(text, slackEnv); if (r.ok) throw new Error('expected the load to fail'); return r.errors.map(x => `${x.path}: ${x.message}`) }
+    const gateway = 'is already the token variable of the Slack gateway (CHAT_PLATFORM=slack): each token needs its own variable; give the connector its own Slack app, with its own variables like CONNECTOR_SLACK_BOT_TOKEN'
+    test('a connector app naming either of the gateway\'s variables is refused, naming the key and the fix', () => {
+      expect(errs(`${BASE}\n[slack.apps.default]\nbot_token_env = "SLACK_BOT_TOKEN"\napp_token_env = "SLACK_APP_TOKEN"\n`)).toEqual([
+        `slack.apps.default.bot_token_env: "SLACK_BOT_TOKEN" ${gateway}`,
+        `slack.apps.default.app_token_env: "SLACK_APP_TOKEN" ${gateway}`,
+      ])
+      expect(errs(`${BASE}\n[connectors.slack]\nbot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"\napp_token_env = "SLACK_APP_TOKEN"\n`)).toEqual([
+        `connectors.slack.app_token_env: "SLACK_APP_TOKEN" ${gateway}`,
+      ])
+    })
+    test('a connector app with its own variables loads', () => {
+      expect(loadHydraConfig(`${BASE}\n[slack.apps.default]\nbot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"\napp_token_env = "CONNECTOR_SLACK_APP_TOKEN"\n`, slackEnv).ok).toBe(true)
+    })
+    test('an MCP server never gets the gateway\'s variables either', () => {
+      expect(errs(`${BASE}\n[mcp.x]\ncommand = "bun"\ntoken_env = ["SLACK_APP_TOKEN"]\n`))
+        .toEqual(['mcp.x.token_env[0]: "SLACK_APP_TOKEN" is the token variable of the Slack gateway (CHAT_PLATFORM=slack): a server never gets hydra\'s own tokens'])
+    })
+    test('on a Discord daemon the same file loads: its gateway holds no Slack tokens', () => {
+      expect(loadHydraConfig(`${BASE}\n[slack.apps.default]\nbot_token_env = "SLACK_BOT_TOKEN"\napp_token_env = "SLACK_APP_TOKEN"\n`, env).ok).toBe(true)
+    })
+  })
   test('both [connectors.slack] and [slack.apps.default] is an error', () => {
     expect(errorsOf(`${single()}[slack.apps.default]\nbot_token_env = "OTHER_BOT_TOKEN"\n`)).toEqual(['slack.apps.default: is the same app as [connectors.slack]: declare it once, in either table'])
   })
@@ -531,7 +555,7 @@ description = "Answers sales threads."
     ])
   })
   test('a variable sessions need cannot hold a token, however the app is declared', () => {
-    const sessions = 'is a variable sessions need, so it cannot hold a token; name one only the daemon needs, like SLACK_BOT_TOKEN'
+    const sessions = 'is a variable sessions need, so it cannot hold a token; name one only the daemon needs, like CONNECTOR_SLACK_BOT_TOKEN'
     expect(errorsOf(`${BASE}\n[slack.apps.default]\nbot_token_env = "PATH"\n`)).toEqual([`slack.apps.default.bot_token_env: "PATH" ${sessions}`])
     expect(errorsOf(`${BASE}\n[connectors.slack]\nbot_token_env = "OK_BOT"\napp_token_env = "HYDRA_SESSION_ID"\n`)).toEqual([`connectors.slack.app_token_env: "HYDRA_SESSION_ID" ${sessions}`])
     for (const v of ['ANTHROPIC_API_KEY', 'GH_TOKEN', 'SSH_AUTH_SOCK', 'LOGNAME', 'CLAUDE_CONFIG_DIR', 'LC_ALL', 'XDG_RUNTIME_DIR']) {
@@ -548,7 +572,7 @@ description = "Answers sales threads."
     ])
     expect(ok(`${BASE}\n[slack.apps.a-1_b]\nbot_token_env = "X"\n`).config.slackApps['a-1_b']).toBeDefined()
     expect(errorsOf(`${BASE}\n[slack.apps.sales]\nbot_token_env = "lower"\n`)).toEqual([
-      'slack.apps.sales.bot_token_env: "lower" must name an environment variable, like SLACK_BOT_TOKEN',
+      'slack.apps.sales.bot_token_env: "lower" must name an environment variable, like CONNECTOR_SLACK_BOT_TOKEN',
     ])
     expect(errorsOf(`${BASE}\n[slack.apps.sales]\napp_token_env = "A"\nflavor = "x"\ndisplay_name = "${'n'.repeat(36)}"\n`)).toEqual([
       'slack.apps.sales.flavor: unknown key "flavor"',

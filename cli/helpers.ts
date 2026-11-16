@@ -1,6 +1,6 @@
 import { connect } from 'net'
 import { existsSync, readdirSync, statSync, unlinkSync, readFileSync, writeFileSync } from 'fs'
-import { join, dirname } from 'path'
+import { join, dirname, basename } from 'path'
 import { homedir } from 'os'
 import { execSync, execFileSync } from 'child_process'
 import { spawnModel, TRANSCRIBE_TMUX, byteTmuxName, claudeConfigDir, platformStateDir } from '../shared/constants.js'
@@ -624,4 +624,10 @@ export function slackHealthLines(s: SlackHealthView): string[] {
     lines.push(`  ${id}: ${parts.join(' · ')}`)
   }
   return lines
+}
+
+/** The chat platform a state dir belongs to: the one named, else the one the dir is called, else what the caller resolved (`cfg.platform`), else CHAT_PLATFORM. */
+export function statePlatform(stateDir: string, explicit?: string, resolved?: string): 'discord' | 'slack' {
+  const named = ['discord', 'slack'].includes(basename(stateDir)) ? basename(stateDir) : undefined
+  return (explicit ?? named ?? resolved ?? process.env.CHAT_PLATFORM) === 'slack' ? 'slack' : 'discord'
 }

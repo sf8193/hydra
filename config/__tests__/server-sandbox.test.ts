@@ -120,7 +120,7 @@ describe('a place that does not exist yet, under a symlinked parent', () => {
   test('the daemon\'s and `hydra config check`\'s own probe (systemEnv) resolves that way too: the wiring is pinned, not only the function', () => {
     mkdirSync(join(dir, 'real2'))
     symlinkSync(join(dir, 'real2'), join(dir, 'link2'))
-    expect(systemEnv([], dir, dir).realpath(join(dir, 'link2', 'missing', 'x'))).toBe(join(dir, 'real2', 'missing', 'x'))
+    expect(systemEnv([], dir, 'discord', dir).realpath(join(dir, 'link2', 'missing', 'x'))).toBe(join(dir, 'real2', 'missing', 'x'))
   })
   test.skipIf(process.platform !== 'darwin')('on macOS /tmp/x is /private/tmp/x whether or not x exists, and the profile names the resolved one', () => {
     const missing = `/tmp/hydra-nr-${process.pid}-does-not-exist/x`

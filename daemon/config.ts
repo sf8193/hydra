@@ -6,7 +6,7 @@ import type { ChatGateway } from '../gateway.js'
 import { sourceEnvFiles } from '../shared/env-parse.js'
 import { captureSpawnVars } from '../shared/spawn-env.js'
 import { scrubTokenVarsInFile } from '../config/token-vars.js'
-import { claudeConfigDir, platformStateDir } from '../shared/constants.js'
+import { claudeConfigDir, platformStateDir, SLACK_GATEWAY_TOKEN_ENVS } from '../shared/constants.js'
 import { isUnder } from '../shared/path-containment.js'
 
 // ---------------------------------------------------------------------------
@@ -135,8 +135,8 @@ let TOKEN: string | undefined
 let SLACK_APP_TOKEN: string | undefined
 
 if (PLATFORM === 'slack') {
-  TOKEN = process.env.SLACK_BOT_TOKEN
-  SLACK_APP_TOKEN = process.env.SLACK_APP_TOKEN
+  TOKEN = process.env[SLACK_GATEWAY_TOKEN_ENVS.bot]
+  SLACK_APP_TOKEN = process.env[SLACK_GATEWAY_TOKEN_ENVS.app]
   if (!TOKEN || !SLACK_APP_TOKEN) {
     process.stderr.write(
       `daemon: SLACK_BOT_TOKEN and SLACK_APP_TOKEN required for slack platform\n` +
