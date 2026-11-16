@@ -99,7 +99,7 @@ describe('where the sandbox cannot be set up', () => {
   const roots = placesOf('/home/op')
   test('without sandbox-exec: says what blocks what, that this machine lacks it, and all three ways out', () => {
     const why = sandboxIssues(() => false, roots)!
-    expect(why).toBe(`a listed [mcp.*] server runs under ${SANDBOX_EXEC} (macOS only), which blocks its connects to the daemon's socket and its reads of the listed credential folders. This machine does not have it. Remove the servers from the specialist's mcp, set access = "operator", or run hydra on a Mac`)
+    expect(why).toBe(`a listed [mcp.*] server runs under ${SANDBOX_EXEC} (macOS only), which blocks its connects to the daemon's socket and its reads of the listed credential folders. This machine does not have it. Remove the servers from the specialist's mcp, set restricted = false, or run hydra on a Mac`)
   })
   test('with a place the profile cannot name: the path and the fix', () => {
     expect(sandboxIssues(c => c === SANDBOX_EXEC, [...roots, { label: 'x', path: '/home/op/a\nb' }])).toMatch(/control character.*remove it from the path/)

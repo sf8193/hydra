@@ -35,9 +35,9 @@ describe('hydra migrate', () => {
     expect(loaded.config.operator).toBe('operator')
     expect(loaded.config.people.operator.ids).toEqual(['discord:100000000000000001'])
     expect(loaded.config.people['person-2'].ids).toEqual(['discord:100000000000000002'])
-    expect(loaded.config.specialists.ops).toMatchObject({ workdir: '/home/op/work', promptFile: '/home/op/ops.md', model: 'm1', idleMs: 4 * 3_600_000, home: '555' })
-    expect(loaded.config.specialists.ops.prompt).toBeUndefined()
-    expect(loaded.config.specialists.desk).toMatchObject({ prompt: 'be the desk', home: '556' })
+    expect(loaded.config.specialists.ops).toMatchObject({ workdir: '/home/op/work', kickoffFile: '/home/op/ops.md', model: 'm1', idleMs: 4 * 3_600_000, home: '555' })
+    expect(loaded.config.specialists.ops.kickoff).toBeUndefined()
+    expect(loaded.config.specialists.desk).toMatchObject({ kickoff: 'be the desk', home: '556' })
     expect(Object.keys(loaded.config.specialists)).toEqual(['ops', 'desk'])
     expect(plan.notes.join('\n')).toContain('discord:100000000000000002 (now people.person-2) was in allowFrom but isn\'t the operator')
     expect(plan.notes.join('\n')).toContain('specialist "123" left out')
@@ -153,7 +153,7 @@ describe('hydra migrate: found in review', () => {
   test('a relative kickoffFile is made absolute from the old daemon\'s folder; an unnameable channel is left out, both with a note', () => {
     const input = state({ 'access.json': { allowFrom: ['U0OP'] }, 'specialists.json': { ops: { kickoffFile: 'prompts/k.md', channel: 'D0123ABC' } } })
     const plan = okPlan({ ...input, platform: 'slack', daemonCwd: '/opt/hydra' })
-    expect(plan.text).toContain('prompt_file = "/opt/hydra/prompts/k.md"')
+    expect(plan.text).toContain('kickoff_file = "/opt/hydra/prompts/k.md"')
     expect(plan.text).not.toContain('home =')
     expect(plan.notes.join('\n')).toContain('was relative to the daemon\'s folder')
     expect(plan.notes.join('\n')).toContain('channel D0123ABC isn\'t a channel hydra.toml can name')
@@ -162,7 +162,7 @@ describe('hydra migrate: found in review', () => {
   test('kickoffs with DEL or a lone surrogate still write TOML that loads', () => {
     const plan = okPlan(state({ 'access.json': ACCESS, 'specialists.json': { ops: { kickoff: 'a\u007fb\ud800c' } } }))
     const loaded = loadHydraConfig(plan.text, env)
-    expect(loaded.ok && loaded.config.specialists.ops.prompt).toBe('a\u007fb\ufffdc')
+    expect(loaded.ok && loaded.config.specialists.ops.kickoff).toBe('a\u007fb\ufffdc')
   })
 })
 
@@ -311,7 +311,7 @@ describe('incremental migrate: what\'s pending is appended to an existing hydra.
     expect(plan.ok).toBe(false)
     if (!plan.ok) {
       expect(plan.errors[0]).toContain('Make these edits by hand, then run hydra migrate again:')
-      expect(plan.errors[0]).toContain('- under [specialists.ops]: add prompt = "be ops"')
+      expect(plan.errors[0]).toContain('- under [specialists.ops]: add kickoff = "be ops"')
       expect(plan.errors[0]).toContain('- under [specialists.ops]: add home = "555"')
     }
   })

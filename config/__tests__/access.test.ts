@@ -55,32 +55,32 @@ const ok = (text: string, e: LoadEnv = env) => {
 describe('access', () => {
   test('defaults to operator, which keeps every key as it was', () => {
     const { config } = ok(spec(''))
-    expect(config.specialists.ops.access).toBe('operator')
+    expect(config.specialists.ops.restricted).toBe(false)
     expect(config.specialists.ops.tools).toBeUndefined()
     expect(config.specialists.ops.mcp).toBeUndefined()
   })
 
   test('workdir gets the default tools Read, Grep, Glob and no servers', () => {
-    const { config } = ok(spec('access = "workdir"'))
-    expect(config.specialists.ops).toMatchObject({ access: 'workdir', tools: ['Read', 'Grep', 'Glob'], mcp: [] })
+    const { config } = ok(spec('restricted = true'))
+    expect(config.specialists.ops).toMatchObject({ restricted: true, tools: ['Read', 'Grep', 'Glob'], mcp: [] })
   })
 
-  test('a value other than operator or workdir is an error', () => {
-    expect(errorsOf(spec('access = "admin"'))).toEqual(['specialists.ops.access: must be one of "operator", "workdir"'])
+  test('a value other than true or false is an error', () => {
+    expect(errorsOf(spec('restricted = "admin"'))).toEqual(['specialists.ops.restricted: must be true or false'])
   })
 
   test('tools and mcp on an operator specialist are refused: nothing passes silently', () => {
     const errs = errorsOf(spec('tools = ["Read"]\nmcp = ["datadog"]'))
     expect(errs).toEqual([
-      'specialists.ops.tools: has no effect while access = "operator": it already has every tool and server the operator does; set access = "workdir" to choose them',
-      'specialists.ops.mcp: has no effect while access = "operator": it already has every tool and server the operator does; set access = "workdir" to choose them',
+      'specialists.ops.tools: has no effect while restricted = false: it already has every tool and server the operator does; set restricted = true to choose them',
+      'specialists.ops.mcp: has no effect while restricted = false: it already has every tool and server the operator does; set restricted = true to choose them',
     ])
   })
 })
 
-describe('tools (access = "workdir")', () => {
+describe('tools (restricted = true)', () => {
   test('a subset of Read, Grep, Glob loads', () => {
-    expect(ok(spec('access = "workdir"\ntools = ["Read", "Glob"]')).config.specialists.ops.tools).toEqual(['Read', 'Glob'])
+    expect(ok(spec('restricted = true\ntools = ["Read", "Glob"]')).config.specialists.ops.tools).toEqual(['Read', 'Glob'])
   })
   test.each([
     ['Bash', 'runs code outside the workdir'],
@@ -88,20 +88,20 @@ describe('tools (access = "workdir")', () => {
     ['Write', 'writes files'],
     ['Task', 'starts agents that carry other tools'],
   ])('%s is refused with its reason', (tool, why) => {
-    expect(errorsOf(spec(`access = "workdir"\ntools = ["Read", "Grep", "${tool}"]`))).toEqual([`specialists.ops.tools[2]: ${tool} ${why}; remove it or set access = "operator"`])
+    expect(errorsOf(spec(`restricted = true\ntools = ["Read", "Grep", "${tool}"]`))).toEqual([`specialists.ops.tools[2]: ${tool} ${why}; remove it or set restricted = false`])
   })
   test('a tool outside the allowlist with no special reason gets the generic refusal', () => {
-    expect(errorsOf(spec('access = "workdir"\ntools = ["Frobnicate"]'))).toEqual(['specialists.ops.tools[0]: Frobnicate is not a tool a workdir specialist may use (Read, Grep, Glob); remove it or set access = "operator"'])
+    expect(errorsOf(spec('restricted = true\ntools = ["Frobnicate"]'))).toEqual(['specialists.ops.tools[0]: Frobnicate is not a tool a restricted specialist may use (Read, Grep, Glob); remove it or set restricted = false'])
   })
   test('WebFetch loads, with a warning', () => {
-    const { config, warnings } = ok(spec('access = "workdir"\ntools = ["Read", "WebFetch"]'))
-    expect(config.specialists.ops.access).toBe('workdir')
+    const { config, warnings } = ok(spec('restricted = true\ntools = ["Read", "WebFetch"]'))
+    expect(config.specialists.ops.restricted).toBe(true)
     expect(warnings).toEqual(['specialists.ops.tools[1]: WebFetch can fetch an outside URL with data in it; anyone who can talk to this specialist can choose that URL'])
   })
 })
 
-describe('workdir (access = "workdir")', () => {
-  const wd = (path: string) => errorsOf(spec('access = "workdir"', path))
+describe('workdir (restricted = true)', () => {
+  const wd = (path: string) => errorsOf(spec('restricted = true', path))
   test('the home folder itself is refused', () => {
     expect(wd('~')).toEqual(['specialists.ops.workdir: /home/op is your whole home folder: a restricted specialist\'s folder must be its own'])
   })
@@ -115,22 +115,22 @@ describe('workdir (access = "workdir")', () => {
   test('the state folder, and a folder inside it', () => {
     expect(wd(STATE)[0]).toContain('is inside ~/.claude')   // the state dir lives under ~/.claude/channels
     const apart: LoadEnv = { ...env, home: '/other', stateDir: '/srv/hydra-state', isDir: p => ['/srv/hydra-state', '/srv/hydra-state/sub'].includes(p) }
-    expect(errorsOf(spec('access = "workdir"', '/srv/hydra-state/sub'), apart)).toEqual(['specialists.ops.workdir: /srv/hydra-state/sub is inside the state folder /srv/hydra-state, which holds what a restricted specialist must not know'])
+    expect(errorsOf(spec('restricted = true', '/srv/hydra-state/sub'), apart)).toEqual(['specialists.ops.workdir: /srv/hydra-state/sub is inside the state folder /srv/hydra-state, which holds what a restricted specialist must not know'])
   })
   test('a folder that contains the state folder (or any private root) is refused', () => {
     const apart: LoadEnv = { ...env, home: '/other', stateDir: '/srv/hydra-state/x', isDir: p => p === '/srv/hydra-state' }
-    expect(errorsOf(spec('access = "workdir"', '/srv/hydra-state'), apart)[0]).toContain('contains the state folder /srv/hydra-state/x')
+    expect(errorsOf(spec('restricted = true', '/srv/hydra-state'), apart)[0]).toContain('contains the state folder /srv/hydra-state/x')
     expect(wd('/')[0]).toContain('contains ~/.claude')
   })
   test('hydra.toml and the token file are covered through the state folder', () => {
     const apart: LoadEnv = { ...env, home: '/other', stateDir: '/srv/s/state', isDir: p => p === '/srv/s' }
-    expect(errorsOf(spec('access = "workdir"', '/srv/s'), apart)[0]).toContain('contains the state folder /srv/s/state')
+    expect(errorsOf(spec('restricted = true', '/srv/s'), apart)[0]).toContain('contains the state folder /srv/s/state')
   })
   test('an operator-configured private root, which lives in config and not in code', () => {
-    const text = spec('access = "workdir"', '~/notes/hydra').replace('operator = "op"', 'operator = "op"\n[defaults]\nprivate_roots = ["~/notes"]')
+    const text = spec('restricted = true', '~/notes/hydra').replace('operator = "op"', 'operator = "op"\n[defaults]\nprivate_roots = ["~/notes"]')
     expect(errorsOf(text)).toEqual(['specialists.ops.workdir: /home/op/notes/hydra is inside /home/op/notes (a private root in [defaults]), which holds what a restricted specialist must not know'])
     // The same folder with no private root configured loads: the loader knows no operator's paths.
-    expect(ok(spec('access = "workdir"', '~/notes/hydra')).config.specialists.ops.access).toBe('workdir')
+    expect(ok(spec('restricted = true', '~/notes/hydra')).config.specialists.ops.restricted).toBe(true)
   })
   test('private_roots must be absolute', () => {
     expect(errorsOf(`${BASE}\n[defaults]\nprivate_roots = ["notes"]`)).toEqual(['defaults.private_roots[0]: "notes" must be an absolute path or start with ~'])
@@ -143,21 +143,21 @@ describe('workdir (access = "workdir")', () => {
   })
   test('a symlinked path to a private folder is judged by where it resolves', () => {
     const viaLink: LoadEnv = { ...env, isDir: p => p === `${HOME}/agents/ops`, realpath: p => (p === `${HOME}/agents/ops` ? `${HOME}/.ssh` : p) }
-    expect(errorsOf(spec('access = "workdir"'), viaLink)[0]).toContain('is inside ~/.ssh')
+    expect(errorsOf(spec('restricted = true'), viaLink)[0]).toContain('is inside ~/.ssh')
   })
   test('a .mcp.json in the workdir is refused', () => {
     expect(wd('~/agents/mcpjson')[0]).toContain('holds a .mcp.json')
   })
-  test('the same folders load under access = "operator": the rules are the seal\'s, not the loader\'s', () => {
-    expect(ok(spec('', '~/agents/repo')).config.specialists.ops.access).toBe('operator')
+  test('the same folders load under restricted = false: the rules are the seal\'s, not the loader\'s', () => {
+    expect(ok(spec('', '~/agents/repo')).config.specialists.ops.restricted).toBe(false)
   })
   test('a clean folder loads', () => {
-    expect(ok(spec('access = "workdir"')).warnings).toEqual([])
+    expect(ok(spec('restricted = true')).warnings).toEqual([])
   })
 })
 
-describe('workdir (access = "workdir"): what Claude Code could still reach', () => {
-  const wd = (path: string, e: LoadEnv = env) => errorsOf(spec('access = "workdir"', path), e)
+describe('workdir (restricted = true): what Claude Code could still reach', () => {
+  const wd = (path: string, e: LoadEnv = env) => errorsOf(spec('restricted = true', path), e)
   test('a git repository nested inside it is refused, and the refusal says why although --restricted would not read it', () => {
     expect(wd('~/agents/nested')).toEqual(['specialists.ops.workdir: /home/op/agents/nested holds a git repository (/home/op/agents/nested/vendor/lib/.git): its history is in reach of anyone who can talk to this specialist; remove it, or give the specialist a folder with no repository in it'])
   })
@@ -172,7 +172,7 @@ describe('workdir (access = "workdir"): what Claude Code could still reach', () 
     expect(wd('~/cfg/claude/projects', moved)[0]).toContain(`is inside ${HOME}/cfg/claude (Claude's config folder, CLAUDE_CONFIG_DIR)`)
   })
   test('an operator specialist is not subject to any of it', () => {
-    expect(ok(spec('', '~/agents/nested')).config.specialists.ops.access).toBe('operator')
+    expect(ok(spec('', '~/agents/nested')).config.specialists.ops.restricted).toBe(false)
   })
 })
 
@@ -183,30 +183,30 @@ describe('LoadEnv: nothing is optional', () => {
   })
 })
 
-describe('mcp (access = "workdir")', () => {
+describe('mcp (restricted = true)', () => {
   test('a declared server with tools loads, in file order', () => {
-    expect(ok(spec('access = "workdir"\nmcp = ["datadog"]')).config.specialists.ops.mcp).toEqual(['datadog'])
+    expect(ok(spec('restricted = true\nmcp = ["datadog"]')).config.specialists.ops.mcp).toEqual(['datadog'])
   })
   test('a name with no [mcp.<name>] is refused', () => {
-    expect(errorsOf(spec('access = "workdir"\nmcp = ["datadog", "nope"]'))).toEqual(['specialists.ops.mcp[1]: no [mcp.nope]: declare the server in hydra.toml first'])
+    expect(errorsOf(spec('restricted = true\nmcp = ["datadog", "nope"]'))).toEqual(['specialists.ops.mcp[1]: no [mcp.nope]: declare the server in hydra.toml first'])
   })
   test('a server with no tools is refused', () => {
-    expect(errorsOf(spec('access = "workdir"\nmcp = ["empty"]'))).toEqual(['specialists.ops.mcp[0]: [mcp.empty] lists no tools, so a specialist could call none of them: set its `tools`'])
+    expect(errorsOf(spec('restricted = true\nmcp = ["empty"]'))).toEqual(['specialists.ops.mcp[0]: [mcp.empty] lists no tools, so a specialist could call none of them: set its `tools`'])
   })
 })
 
 describe('a machine without sandbox-exec (a listed server runs under it)', () => {
   const noSandbox = testLoadEnv({ ...env, isCommand: c => c !== SANDBOX_EXEC && env.isCommand(c) })
   test('a workdir specialist listing a server is refused, naming the cause and both fixes', () => {
-    const e = errorsOf(spec('access = "workdir"\nmcp = ["datadog"]'), noSandbox)
+    const e = errorsOf(spec('restricted = true\nmcp = ["datadog"]'), noSandbox)
     expect(e).toHaveLength(1)
-    expect(e[0]).toMatch(/^specialists\.ops\.mcp: a listed \[mcp\.\*\] server runs under \/usr\/bin\/sandbox-exec \(macOS only\), which blocks its connects to the daemon's socket and its reads of the listed credential folders\. This machine does not have it\. Remove the servers from the specialist's mcp, set access = "operator", or run hydra on a Mac$/)
+    expect(e[0]).toMatch(/^specialists\.ops\.mcp: a listed \[mcp\.\*\] server runs under \/usr\/bin\/sandbox-exec \(macOS only\), which blocks its connects to the daemon's socket and its reads of the listed credential folders\. This machine does not have it\. Remove the servers from the specialist's mcp, set restricted = false, or run hydra on a Mac$/)
   })
   test('a workdir specialist listing none loads as before', () => {
-    expect(ok(spec('access = "workdir"'), noSandbox).config.specialists.ops.access).toBe('workdir')
+    expect(ok(spec('restricted = true'), noSandbox).config.specialists.ops.restricted).toBe(true)
   })
   test('an operator specialist is not asked', () => {
-    expect(ok(spec('access = "operator"'), noSandbox).config.specialists.ops.access).toBe('operator')
+    expect(ok(spec('restricted = false'), noSandbox).config.specialists.ops.restricted).toBe(false)
   })
 })
 
@@ -229,23 +229,23 @@ describe('a path the sandbox profile cannot hold (a control character), refused 
     expect(ok(`${BASE}\n[defaults]\nprivate_roots = ["/home/op/a\\"b)c(d\\\\e"]`).config.privateRoots).toEqual(['/home/op/a"b)c(d\\e'])
   })
   test('a state dir or Claude config dir with a newline refuses a specialist that lists a server (it is in the profile), and no one else', () => {
-    const e = errorsOf(spec('access = "workdir"\nmcp = ["datadog"]'), testLoadEnv({ ...env, stateDir: '/srv/hy\ndra' }))
+    const e = errorsOf(spec('restricted = true\nmcp = ["datadog"]'), testLoadEnv({ ...env, stateDir: '/srv/hy\ndra' }))
     expect(e.some(m => /^specialists\.ops\.mcp: .*control character/.test(m))).toBe(true)
-    expect(ok(spec('access = "workdir"'), testLoadEnv({ ...env, stateDir: '/srv/hy\ndra', isDir: p => DIRS.includes(p) })).config.specialists.ops.access).toBe('workdir')
+    expect(ok(spec('restricted = true'), testLoadEnv({ ...env, stateDir: '/srv/hy\ndra', isDir: p => DIRS.includes(p) })).config.specialists.ops.restricted).toBe(true)
   })
 })
 
 describe('a listed server whose token variable the state .env does not set (a warning: .env can change, the launch is the hard check)', () => {
   const noDdKey = testLoadEnv({ ...env, envFileHas: n => n !== 'DD_API_KEY' })
   test('a workdir specialist listing it warns, naming the variable, the file and the restart', () => {
-    const r = ok(spec('access = "workdir"\nmcp = ["datadog"]'), noDdKey)
+    const r = ok(spec('restricted = true\nmcp = ["datadog"]'), noDdKey)
     expect(r.warnings).toEqual([`specialists.ops.mcp[0]: [mcp.datadog] needs DD_API_KEY, and ${STATE}/.env does not set it, so no session of this specialist can start until it does: add DD_API_KEY=<value> there and restart the daemon`])
   })
   test('it loads (a warning, not an error)', () => {
-    expect(ok(spec('access = "workdir"\nmcp = ["datadog"]'), noDdKey).config.specialists.ops.mcp).toEqual(['datadog'])
+    expect(ok(spec('restricted = true\nmcp = ["datadog"]'), noDdKey).config.specialists.ops.mcp).toEqual(['datadog'])
   })
   test('with the variable set, no warning; a server nobody lists, or a server with no token variable, warns about nothing', () => {
-    expect(ok(spec('access = "workdir"\nmcp = ["datadog"]')).warnings).toEqual([])
+    expect(ok(spec('restricted = true\nmcp = ["datadog"]')).warnings).toEqual([])
     expect(ok(spec(''), noDdKey).warnings.filter(w => w.includes('DD_API_KEY'))).toEqual([])
   })
   test('an operator-access specialist lists no servers, so there is nothing to check', () => {
@@ -275,16 +275,16 @@ describe('[mcp.*]', () => {
 })
 
 describe('engine', () => {
-  test.each(['codex', 'omp'])('%s is refused with access = "workdir"', engine => {
-    expect(errorsOf(spec(`access = "workdir"\nengine = "${engine}"`))[0]).toContain(`specialists.ops.engine: ${engine} can't run an access = "workdir" specialist: that engine cannot confine its tools; set engine = "claude", or set access = "operator"`)
+  test.each(['codex', 'omp'])('%s is refused with restricted = true', engine => {
+    expect(errorsOf(spec(`restricted = true\nengine = "${engine}"`))[0]).toContain(`specialists.ops.engine: ${engine} can't run a restricted specialist: that engine cannot confine its tools; set engine = "claude", or set restricted = false`)
   })
   test('claude, or no engine, loads', () => {
-    expect(ok(spec('access = "workdir"\nengine = "claude"')).config.specialists.ops.engine).toBe('claude')
+    expect(ok(spec('restricted = true\nengine = "claude"')).config.specialists.ops.engine).toBe('claude')
   })
 })
 
 describe('[defaults.specialist]', () => {
-  test.each(['access = "workdir"', 'tools = ["Read"]', 'mcp = ["datadog"]', 'talks_to = ["y"]'])('%s is refused as a default', line => {
+  test.each(['restricted = true', 'tools = ["Read"]', 'mcp = ["datadog"]', 'talks_to = ["y"]'])('%s is refused as a default', line => {
     const key = line.split(' ')[0]
     const text = `${BASE}\n[defaults.specialist]\nworkdir = "~/agents/ops"\n${line}\n[specialists.ops]\nlistens = ["slack:dm"]\nallow = []\n`
     expect(errorsOf(text)).toEqual([`defaults.specialist.${key}: can't be a default: ${key} says what one specialist's session may reach. Set it under [specialists.<id>] by editing hydra.toml`])
@@ -295,7 +295,7 @@ describe('the warning for an operator-access specialist someone else can talk to
   const WITH_ALICE = BASE.replace('[mcp.datadog]', '[people.alice]\nids = ["slack:U0ALICE"]\nroles = ["staff"]\n[people.bob]\nids = ["slack:U0BOB"]\n[mcp.datadog]')
   const text = (base: string, extra: string, body: string) => `${base}\n[specialists.ops]\nworkdir = "~/agents/ops"\n${body}\n${extra}`
   const warnings = (extra: string, body = '', base = BASE): string[] => ok(text(base, extra, body)).warnings.filter(w => w.includes("the operator's account"))
-  const WARN = (who: string) => [`specialists.ops: ${who} can reach the operator's account through it; set access = "workdir"`]
+  const WARN = (who: string) => [`specialists.ops: ${who} can reach the operator's account through it; set restricted = true`]
 
   describe('who can talk to it', () => {
     test('allow = []: only the operator, whatever place it is in', () => {
@@ -338,8 +338,8 @@ describe('the warning for an operator-access specialist someone else can talk to
     })
   })
 
-  test('access = "workdir" has nothing to warn about', () => {
-    expect(warnings('', 'access = "workdir"\nlistens = ["slack:C0CF123"]\nallow = ["anyone"]')).toEqual([])
+  test('restricted = true has nothing to warn about', () => {
+    expect(warnings('', 'restricted = true\nlistens = ["slack:C0CF123"]\nallow = ["anyone"]')).toEqual([])
   })
 })
 
@@ -359,7 +359,7 @@ describe('hydra config add refuses what only a hand edit sets', () => {
       return { r, after: readFileSync(join(dir, 'hydra.toml'), 'utf8') }
     } finally { rmSync(dir, { recursive: true, force: true }) }
   }
-  test.each(['access = "workdir"', 'tools = ["Read"]', 'mcp = ["datadog"]'])('a specialist table with %s is refused and nothing is written', line => {
+  test.each(['restricted = true', 'tools = ["Read"]', 'mcp = ["datadog"]'])('a specialist table with %s is refused and nothing is written', line => {
     const { r, after } = run(`[specialists.x]\nworkdir = "~/x"\n${line}\n`)
     expect(r.ok).toBe(false)
     expect(!r.ok && r.error).toContain(`[specialists.x] ${line.split(' ')[0]}`)

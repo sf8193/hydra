@@ -106,6 +106,25 @@ describe('hydra config add', () => {
     expect(loaded().schedules['nightly-books'].target).toBe('main')
   })
 
+  test('a fragment still written with a specialist\'s old keys is added under the new ones', () => {
+    const d = at(LIVE)
+    const r = addFragment(d, env, '[specialists.books]\nworkdir = "~/Workstreams/Books"\nprompt = "Keep the books."\nsessions = "per-conversation"\nmax = 3\nwas = ["ledger"]\nlistens = ["slack:dm"]\n', '/repo/f.toml')
+    expect(r).toMatchObject({ ok: true, added: ['[specialists.books]'] })
+    const text = file()
+    expect(text).toContain('kickoff = "Keep the books."')
+    expect(text).toContain('max_sessions = 3')
+    expect(text).toContain('renamed_from = ["ledger"]')
+    expect(text.slice(text.indexOf('[specialists.books]'))).not.toMatch(/^(prompt|max|was) = /m)
+    expect(loaded().specialists.books).toMatchObject({ kickoff: 'Keep the books.', maxSessions: 3, renamedFrom: ['ledger'] })
+  })
+
+  test('a fragment may not set restricted, nor its old name access', () => {
+    for (const key of ['restricted = true', 'access = "workdir"']) {
+      const r = planAddFragment(at(LIVE), env, `[specialists.books]\nworkdir = "~/Workstreams/Books"\n${key}\n`, '/repo/f.toml')
+      expect(r).toMatchObject({ ok: false, error: expect.stringContaining(`[specialists.books] ${key.split(' ')[0]}: restricted, tools, mcp and talks_to say`) })
+    }
+  })
+
   test('appends the new tables after the live file, which stays exact, keeps its mode, and loads', () => {
     const d = at(LIVE)
     const r = addFragment(d, env, LEDGER + BACKUP + NEW_SPECIALIST, '/repo/hydra.fragment.toml')

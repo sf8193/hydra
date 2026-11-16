@@ -1,6 +1,6 @@
 // What a specialist's session may reach, decided once when the session is born and stored on its record.
 //
-// A LaunchPolicy is that decision: whose account (`access`), and for `access = "workdir"` the one folder it runs in, its
+// A LaunchPolicy is that decision: whether it is restricted (the stored `access`: `workdir` or `operator`), and for `restricted = true` the one folder it runs in, its
 // built-in tools and its MCP servers. It is made here from hydra.toml, at birth (a fresh start, a respawn, a handoff
 // successor) and kept on `SessionInfo.policy`. The folder, argv, env and generated files of a launch come from it in
 // `launch()` alone; birth (doSpawnSession) decides it and re-checks the folder; delivery compares it. A resume or fork
@@ -15,7 +15,7 @@ import { createHash } from 'crypto'
 import { isAbsolute } from 'path'
 import { currentHydraConfig } from './hydra-config.js'
 import { specialistOf } from '../specialists/specialists.js'
-import { WORKDIR_TOOLS, type Access, type HydraConfig, type LoadEnv } from '../config/types.js'
+import { WORKDIR_TOOLS, type HydraConfig, type LoadEnv } from '../config/types.js'
 import { offLimitRoots, type PrivateRoot } from '../config/restricted-workdir.js'
 import { hydraLoadEnv, onHydraConfigLoad } from './hydra-config.js'
 import type { SessionInfo } from './sessions.js'
@@ -25,15 +25,18 @@ import { safeSend } from './util.js'
 
 export type PolicyServer = { name: string; command: string; tokenEnv: string[]; tools: string[] }
 
+/** Stored in a session record, so the values stay: `workdir` is a restricted specialist, `operator` the operator's account. */
+export type PolicyAccess = 'operator' | 'workdir'
+
 export type LaunchPolicy = {
   /** The specialist's id when the session was born. */
   specialist: string
-  access: Access
-  /** `access = "workdir"`: the only folder the session runs in. */
+  access: PolicyAccess
+  /** `restricted = true`: the only folder the session runs in. */
   workdir?: string
-  /** `access = "workdir"`: built-in tools, `--tools`. */
+  /** `restricted = true`: built-in tools, `--tools`. */
   tools?: string[]
-  /** `access = "workdir"`: the MCP servers it may use, each with the tools it may call. */
+  /** `restricted = true`: the MCP servers it may use, each with the tools it may call. */
   servers?: PolicyServer[]
   /** Changes whenever the access, workdir, a tool or a server (or its tools) does, and with nothing else. */
   id: string
@@ -42,7 +45,7 @@ export type LaunchPolicy = {
 /** A policy that confines: its workdir, tools and servers are all there (checked, never assumed). */
 export type ConfinedPolicy = LaunchPolicy & { access: 'workdir'; workdir: string; tools: string[]; servers: PolicyServer[] }
 
-/** The id of the account every non-specialist session, and every `access = "operator"` specialist, runs under. */
+/** The id of the account every non-specialist session, and every `restricted = false` specialist, runs under. */
 export const OPERATOR_POLICY_ID = 'operator'
 
 /** The id a confining policy's facts give: changes whenever the folder, a tool or a server (its command, token variables or tools) does, and with nothing else. */
@@ -106,14 +109,14 @@ export function confined(p: LaunchPolicy | undefined, sessionName: string): Conf
 export class PolicyRefusal extends Error {}
 
 /**
- * The policy hydra.toml gives a specialist now, found by its current id or an old one (`was`): undefined when none is
+ * The policy hydra.toml gives a specialist now, found by its current id or an old one (`renamed_from`): undefined when none is
  * declared. This is what a birth stores.
  */
 export function bornPolicy(specialistId: string | undefined, h: HydraConfig = currentHydraConfig(), sessionName = '<session name>'): LaunchPolicy | undefined {
   const declared = specialistId === undefined ? undefined
-    : (Object.hasOwn(h.specialists, specialistId) ? h.specialists[specialistId] : undefined) ?? Object.values(h.specialists).find(s => s.was.includes(specialistId))
+    : (Object.hasOwn(h.specialists, specialistId) ? h.specialists[specialistId] : undefined) ?? Object.values(h.specialists).find(s => s.renamedFrom.includes(specialistId))
   if (!declared) return undefined
-  if (declared.access !== 'workdir') return { specialist: declared.id, access: 'operator', id: OPERATOR_POLICY_ID }
+  if (!declared.restricted) return { specialist: declared.id, access: 'operator', id: OPERATOR_POLICY_ID }
   const servers = (declared.mcp ?? []).map((name): PolicyServer => {
     const s = h.mcpServers?.[name]
     // Checked at load; a config that got here without it must not start the specialist with fewer servers than it lists.
@@ -152,7 +155,7 @@ export const serverTrustLine = (specialist: string, servers: readonly string[]):
 
 // Once per load, one line for each specialist that lists servers: the load log, not a warning (nothing is wrong).
 onHydraConfigLoad(config => {
-  for (const s of Object.values(config.specialists)) if (s.access === 'workdir' && s.mcp?.length) process.stderr.write(`daemon: hydra.toml: ${serverTrustLine(s.id, s.mcp)}\n`)
+  for (const s of Object.values(config.specialists)) if (s.restricted && s.mcp?.length) process.stderr.write(`daemon: hydra.toml: ${serverTrustLine(s.id, s.mcp)}\n`)
 })
 
 /** What a restricted launch builds the listed servers' sandbox from, as the daemon has it now: the probes and the places to keep servers out of. */
@@ -161,8 +164,8 @@ export const sandboxInputs = (h: HydraConfig = currentHydraConfig()): SandboxInp
 
 /** What a policy says in words, for a log line or a message (the id is a hash). */
 export function describePolicy(p: LaunchPolicy | undefined): string {
-  if (!p || p.access !== 'workdir') return 'access = "operator"'
-  return `access = "workdir" (folder ${p.workdir ?? '?'}; tools ${(p.tools ?? []).join(',') || 'none'}; mcp ${(p.servers ?? []).map(s => s.name).join(',') || 'none'})`
+  if (!p || p.access !== 'workdir') return 'restricted = false'
+  return `restricted = true (folder ${p.workdir ?? '?'}; tools ${(p.tools ?? []).join(',') || 'none'}; mcp ${(p.servers ?? []).map(s => s.name).join(',') || 'none'})`
 }
 
 const csv = (a: readonly string[] | undefined): string => (a ?? []).join(',')
@@ -176,7 +179,7 @@ const sameSet = (a: readonly string[] | undefined, b: readonly string[] | undefi
 export function policyDrifted(stored: LaunchPolicy | undefined, current: LaunchPolicy | undefined): string[] {
   const was = stored?.access === 'workdir'
   const now = current?.access === 'workdir'
-  if (was !== now) return [`access: ${was ? 'workdir' : 'operator'} -> ${now ? 'workdir' : 'operator'}`]
+  if (was !== now) return [`restricted: ${was} -> ${now}`]
   if (!was || !stored || !current) return []
   const out: string[] = []
   if (stored.workdir !== current.workdir) out.push(`folder: ${stored.workdir} -> ${current.workdir}`)
@@ -230,7 +233,7 @@ export function resolvePolicy(from: {
   const specialistId = from.named ?? stored?.specialist ?? (from.sits ? specialistOf(from.sits, h) : undefined)
   const current = bornPolicy(specialistId, h, sessionName)
   if (specialistId !== undefined && !current && stored?.access === 'workdir') {
-    throw new PolicyRefusal(`specialist ${specialistId} ran with ${describePolicy(stored)} and hydra.toml no longer declares it: restore [specialists.${specialistId}] (access = "workdir"). ${remedy(sessionName)}`)
+    throw new PolicyRefusal(`specialist ${specialistId} ran with ${describePolicy(stored)} and hydra.toml no longer declares it: restore [specialists.${specialistId}] (restricted = true). ${remedy(sessionName)}`)
   }
   return { specialistId, stored, current, drift: specialistId !== undefined ? policyDrifted(stored, current) : [] }
 }

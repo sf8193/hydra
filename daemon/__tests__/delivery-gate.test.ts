@@ -16,14 +16,14 @@ import type { HydraConfig, Specialist } from '../../config/types.js'
 
 process.stderr.write = (() => true) as any
 
-const spec = (over: Partial<Specialist> = {}): Specialist => ({ id: 'ops', workdir: '/srv/ops', listens: [], allow: [], sessions: 'shared', max: 20, was: [], access: 'operator', ...over })
+const spec = (over: Partial<Specialist> = {}): Specialist => ({ id: 'ops', workdir: '/srv/ops', listens: [], allow: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false, ...over })
 const configure = (over: Partial<Specialist> = {}): void => _setHydraConfigForTesting({
   operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
   people: { op: { id: 'op', ids: ['discord:100000000000000001'], roles: [], name: 'op' } },
   specialists: { ops: spec(over) },
 } as HydraConfig)
 const operatorPolicy: LaunchPolicy = { specialist: 'ops', access: 'operator', id: 'operator' }
-const flip = () => configure({ access: 'workdir', tools: ['Read'], mcp: [] })
+const flip = () => configure({ restricted: true, tools: ['Read'], mcp: [] })
 
 const ids: string[] = []
 /** The real Claude adapter (the gate is in its `deliver`), reported alive, for a session of the operator-access specialist `ops`. */
@@ -131,7 +131,7 @@ describe('every engine is held to it: a Codex session in a specialist\'s thread'
     const r = await adapter.deliver(info as any, { type: 'notification', content: 'hello' })
     expect(r).toMatchObject({ status: 'rejected', retryable: false })
     expect((r as any).reason).toContain(REMEDY(info.tmuxName))
-    expect((r as any).reason).toContain('access: operator -> workdir')
+    expect((r as any).reason).toContain('restricted: false -> true')
   })
   test('a Codex session of an operator-access specialist, or of no specialist, is not refused by the gate', async () => {
     configure()

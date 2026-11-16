@@ -19,7 +19,7 @@ workdir = "/home/op/agents/ops"
 listens = ["slack:dm"]
 [specialists.deals]
 workdir = "/home/op/agents/deals"
-apps = ["sales"]
+pinned_to = ["sales"]
 [places."slack:#help"]
 listen = "all"
 ack = "eyes"

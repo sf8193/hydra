@@ -23,8 +23,8 @@ describe('policyDrifted says what differs, field by field', () => {
     expect(diff).toEqual(['mcp datadog tools: a -> a,b'])
   })
   test.each([
-    ['access', operatorPolicy, confinedPolicy(), ['access: operator -> workdir']],
-    ['access back', confinedPolicy(), operatorPolicy, ['access: workdir -> operator']],
+    ['restricted', operatorPolicy, confinedPolicy(), ['restricted: false -> true']],
+    ['restricted back', confinedPolicy(), operatorPolicy, ['restricted: true -> false']],
     ['folder', confinedPolicy(), confinedPolicy({ workdir: '/w/other' }), ['folder: /w/ops -> /w/other']],
     ['tools', confinedPolicy(), confinedPolicy({ tools: ['Read'] }), ['tools: Read,Grep -> Read']],
     ['a server command', confinedPolicy(), confinedPolicy({ servers: [server({ command: '/opt/dd' })] }), ['mcp datadog command: /usr/local/bin/datadog-mcp -> /opt/dd']],
@@ -101,7 +101,7 @@ describe('NoticeLimiter: at most once a minute per cause, and bounded', () => {
 describe('bornPolicy from a config that skipped the loader', () => {
   const config = (over: Record<string, unknown>): HydraConfig => ({
     connectors: {}, gateways: {}, slackApps: {}, people: {}, places: {}, schedules: {}, rules: [],
-    specialists: { ops: { id: 'ops', workdir: '/w/ops', listens: [], allow: [], sessions: 'shared', max: 20, was: [], access: 'workdir', ...over } as any },
+    specialists: { ops: { id: 'ops', workdir: '/w/ops', listens: [], allow: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: true, ...over } as any },
   })
   test('a workdir specialist with no tools list gets Read, Grep, Glob: the narrowest set, never every tool', () => {
     expect(bornPolicy('ops', config({}))!.tools).toEqual(['Read', 'Grep', 'Glob'])

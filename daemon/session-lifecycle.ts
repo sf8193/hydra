@@ -975,7 +975,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     policy = continuing ? (r.stored ?? r.current) : r.current
     // The engine comes from the thread's history, and `handoff <model>` can change it: only an engine that confines can run a confined session.
     if (policy?.access === 'workdir' && !resolveEngine(opts?.engine ?? 'claude').confinesAccess) {
-      throw new PolicyRefusal(`specialist ${policy.specialist} has access = "workdir", which the ${opts?.engine} engine cannot give: set engine = "claude", or set access = "operator". ${remedy(sessionName)}`)
+      throw new PolicyRefusal(`specialist ${policy.specialist} has restricted = true, which the ${opts?.engine} engine cannot give: set engine = "claude", or set restricted = false. ${remedy(sessionName)}`)
     }
   } catch (err) {
     if (err instanceof PolicyRefusal && threadId) await tellThread(threadId, err.message)

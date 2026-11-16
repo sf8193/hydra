@@ -345,7 +345,7 @@ export class ClaudeEngine implements EngineAdapter {
     const disallowed = input.disallowedTools?.length ? ` --disallowedTools ${shq(input.disallowedTools.join(','))}` : ''
     const toolsFlag = input.tools?.length ? ` --tools ${shq(input.tools.join(','))}` : ''
     if (restricted) {
-      // A specialist with access = "workdir": no --dangerously-skip-permissions (--permission-mode dontAsk instead), the
+      // A specialist with restricted = true: no --dangerously-skip-permissions (--permission-mode dontAsk instead), the
       // prompt positional before the variadic flags, and the generated settings and MCP config (see restrictedConfig).
       const files = writeRestrictedConfig(restricted, tmuxName, sessionId)
       const confinement = ` --restricted --tools ${shq(restricted.tools.join(','))} --settings ${shq(files.settings)} --mcp-config ${shq(files.mcp)} --permission-mode dontAsk`

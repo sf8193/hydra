@@ -28,7 +28,7 @@ export type Target =
   | { spawn: Recipe }
   /**
    * `sessions = "per-conversation"`: the conversation's own session, made from the specialist's recipe and never stored,
-   * at most hydra.toml's `max` at once (past that: exit 5 with `atMax`).
+   * at most hydra.toml's `max_sessions` at once (past that: exit 5 with `atMax`).
    */
   | { perConversation: string; conversation: string }
 export type DeliverOutcome =
@@ -37,7 +37,7 @@ export type DeliverOutcome =
   /** 3 gone/refused, 4 orphaned, 5 not now (booting, busy, or stuck), 6 backing off or failed, 7 a delivery with this key
    *  is still in flight, 8 no such specialist. `permanent`: this message can never be delivered (too large); drop it,
    *  alert, never retry. */
-  /** `atMax`: a per-conversation specialist already runs `max` sessions; this conversation waits its turn (exit 5). */
+  /** `atMax`: a per-conversation specialist already runs `max_sessions` sessions; this conversation waits its turn (exit 5). */
   | { ok: false; exit: 3 | 4 | 5 | 6 | 7 | 8; reason: string; permanent?: true; atMax?: true }
 
 /** `lowPriority`: an engine where every delivery is a priced turn (Codex) may hold it for the next turn. `wanted`: a sender
@@ -221,9 +221,9 @@ function toMain(text: string, opts: DeliverOpts): DeliverOutcome {
 /** A live session under this name, the live one first: a dead predecessor's record may still be listed before it. */
 const liveNamed = (name: string): SessionInfo | undefined => [...registry.values()].find(i => i.tmuxName === name && occupied(occupancy(i)))
 
-/** The names a conversation's session may run under: the specialist's current id, then its old ones (`was`). */
+/** The names a conversation's session may run under: the specialist's current id, then its old ones (`renamed_from`). */
 function conversationNames(to: string, conversation: string): string[] {
-  return [to, ...(currentHydraConfig().specialists[to]?.was ?? [])].map(id => conversationSessionName(id, conversation))
+  return [to, ...(currentHydraConfig().specialists[to]?.renamedFrom ?? [])].map(id => conversationSessionName(id, conversation))
 }
 
 /** Whether this conversation's own session is running now (under the current id or an old one). */
@@ -235,17 +235,17 @@ function landRunning(info: SessionInfo, text: string, opts: DeliverOpts): Promis
   return land(info, text, { ...opts, queue: true }, false, info.tmuxName)
 }
 
-/** How many more conversation sessions `to` may start now: `max` less those running and those starting. Infinity without a max. */
+/** How many more conversation sessions `to` may start now: `max_sessions` less those running and those starting. Infinity without a max_sessions. */
 export function placesFree(to: string): number {
   const s = currentHydraConfig().specialists[to]
   if (!s) return Infinity
-  const prefixes = [to, ...s.was].map(id => `${id}_`)
+  const prefixes = [to, ...s.renamedFrom].map(id => `${id}_`)
   const live = new Set([...registry.values()].filter(i => prefixes.some(p => i.tmuxName.startsWith(p)) && occupied(occupancy(i))).map(i => i.tmuxName))
   const starting = [...(reserved.get(to)?.keys() ?? [])].filter(n => !live.has(n)).length
-  return Math.max(0, s.max - live.size - starting)
+  return Math.max(0, s.maxSessions - live.size - starting)
 }
 
-/** Cold spawns decided but not yet settled, per specialist: they count against `max` like a running session. */
+/** Cold spawns decided but not yet settled, per specialist: they count against `max_sessions` like a running session. */
 const reserved = new Map<string, Map<string, number>>()
 const reserve = (to: string, name: string, by: 1 | -1) => {
   const r = reserved.get(to) ?? new Map<string, number>()
@@ -257,8 +257,8 @@ const reserve = (to: string, name: string, by: 1 | -1) => {
 /**
  * A conversation's own session of a per-conversation specialist, healed by the rule under its own name: the specialist's
  * recipe (kickoff, model, channel or its thread's channel, its idle else hydra.toml's), a fresh thread, never stored.
- * At most `max` run at once, counted from the sessions running under the specialist's names (`<id>_…`, and an old id's
- * through `was`) plus the cold spawns already decided. Only that decision takes the specialist's lock: a conversation
+ * At most `max_sessions` run at once, counted from the sessions running under the specialist's names (`<id>_…`, and an old id's
+ * through `renamed_from`) plus the cold spawns already decided. Only that decision takes the specialist's lock: a conversation
  * whose session runs goes straight to it, and the spawn and the landing happen outside, so one slow start holds up no one else.
  */
 async function toConversation(to: string, conversation: string, text: string, opts: DeliverOpts): Promise<DeliverOutcome> {
@@ -278,12 +278,12 @@ async function toConversation(to: string, conversation: string, text: string, op
     const now = names.map(liveNamed).find(Boolean)
     if (now) return { live: now }
     if (s) {
-      const prefixes = [to, ...s.was].map(id => `${id}_`)
+      const prefixes = [to, ...s.renamedFrom].map(id => `${id}_`)
       const live = [...registry.values()].filter(i => prefixes.some(p => i.tmuxName.startsWith(p)) && occupied(occupancy(i))).map(i => i.tmuxName)
       const pending = [...(reserved.get(to)?.keys() ?? [])].filter(n => n !== names[0] && !live.includes(n))
       const n = new Set(live).size + pending.length
-      if (n >= s.max) {
-        return { ok: false, exit: 5, atMax: true, reason: `${to} already runs ${n} conversation session${n === 1 ? '' : 's'} (max ${s.max}); ${conversation} waits for one to end${s.idleMs ? '' : ', and none ends on its own: give the specialist an idle'}` }
+      if (n >= s.maxSessions) {
+        return { ok: false, exit: 5, atMax: true, reason: `${to} already runs ${n} conversation session${n === 1 ? '' : 's'} (max_sessions ${s.maxSessions}); ${conversation} waits for one to end${s.idleMs ? '' : ', and none ends on its own: give the specialist an idle'}` }
       }
     }
     reserve(to, names[0], 1)

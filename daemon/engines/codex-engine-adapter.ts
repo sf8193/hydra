@@ -146,7 +146,7 @@ export class CodexEngineAdapter implements EngineAdapter {
 
   async launch(input: LaunchInput): Promise<LaunchResult> {
     // This engine cannot confine a session (confinesAccess); it would run one as the operator.
-    if (input.policy?.access === 'workdir') throw new Error(`specialist ${input.policy.specialist} has access = "workdir", which this engine cannot give: set engine = "claude", or set access = "operator"`)
+    if (input.policy?.access === 'workdir') throw new Error(`specialist ${input.policy.specialist} has restricted = true, which this engine cannot give: set engine = "claude", or set restricted = false`)
     const { sessionId, tmuxName, model, prompt, resumeCodex } = input
     // Resume reuses the ORIGINAL home: the rollout lives there, and a fresh home cannot see it.
     const codexHomeName = resumeCodex?.homeName ?? tmuxName

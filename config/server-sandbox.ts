@@ -1,4 +1,4 @@
-// The sandbox a listed `[mcp.*]` server of an `access = "workdir"` specialist runs under. A macOS implementation (Seatbelt, through
+// The sandbox a listed `[mcp.*]` server of a restricted specialist runs under. A macOS implementation (Seatbelt, through
 // `/usr/bin/sandbox-exec`); where it is missing, a specialist that lists servers is refused, never run without it.
 //
 // BEST-EFFORT HYGIENE, NOT CONTAINMENT. A listed server is code the operator trusts with their own privileges (SERVER_TRUST_SENTENCE in
@@ -29,7 +29,7 @@
 // files, any other folder); the server still receives claude's own environment at launch and runs with the operator's HOME;
 // shortcuts (and Apple Events to apps other than the ones probed) can still reach other apps; task_for_pid on hardened targets was
 // not tested; the keychain's daemon is reached by a mach service. A server that needs another unix socket, a denied folder, a
-// terminal, or to signal its process group or a grandchild stops working: it belongs under access = "operator".
+// terminal, or to signal its process group or a grandchild stops working: it belongs under restricted = false.
 
 import { resolve } from 'path'
 import type { LoadEnv } from './types.js'
@@ -46,7 +46,7 @@ const RESOLVER_SOCKET = '/private/var/run/mDNSResponder'
  */
 export function sandboxIssues(isCommand: (command: string) => boolean, roots: readonly { path: string }[]): string | undefined {
   if (!isCommand(SANDBOX_EXEC)) {
-    return `a listed [mcp.*] server runs under ${SANDBOX_EXEC} (macOS only), which blocks its connects to the daemon's socket and its reads of the listed credential folders. This machine does not have it. Remove the servers from the specialist's mcp, set access = "operator", or run hydra on a Mac`
+    return `a listed [mcp.*] server runs under ${SANDBOX_EXEC} (macOS only), which blocks its connects to the daemon's socket and its reads of the listed credential folders. This machine does not have it. Remove the servers from the specialist's mcp, set restricted = false, or run hydra on a Mac`
   }
   return roots.map(r => unquotablePath(r.path)).find(Boolean)
 }

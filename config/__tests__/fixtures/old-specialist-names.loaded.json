@@ -1,0 +1,137 @@
+{
+  "config": {
+    "operator": "op",
+    "connectors": {},
+    "gateways": {},
+    "slackApps": {
+      "default": {
+        "id": "default",
+        "botTokenEnv": "CONNECTOR_SLACK_BOT_TOKEN",
+        "displayName": "hydra",
+        "description": "Answers the Slack threads it is tagged in, and its DMs, using Claude."
+      },
+      "sales": {
+        "id": "sales",
+        "botTokenEnv": "SALES_SLACK_BOT_TOKEN",
+        "displayName": "sales",
+        "description": "Answers the Slack threads it is tagged in, and its DMs, using Claude."
+      }
+    },
+    "people": {
+      "op": {
+        "id": "op",
+        "ids": [
+          "slack:U0OP"
+        ],
+        "roles": [],
+        "name": "op"
+      }
+    },
+    "specialists": {
+      "crm": {
+        "id": "crm",
+        "workdir": "/home/op/agents/crm",
+        "listens": [
+          "slack:#help"
+        ],
+        "allow": [
+          "people"
+        ],
+        "sessions": "per-conversation",
+        "max": 3,
+        "was": [
+          "old-crm"
+        ],
+        "promptFile": "/home/op/agents/crm/kickoff.md",
+        "idleMs": 7200000,
+        "access": "workdir",
+        "tools": [
+          "Read",
+          "Grep",
+          "Glob"
+        ],
+        "mcp": [],
+        "talksTo": [
+          "ops"
+        ]
+      },
+      "ops": {
+        "id": "ops",
+        "workdir": "/home/op/agents/ops",
+        "listens": [
+          "slack:dm"
+        ],
+        "allow": [
+          "people"
+        ],
+        "sessions": "shared",
+        "max": 7,
+        "was": [],
+        "prompt": "Default kickoff.",
+        "idleMs": 7200000,
+        "access": "operator"
+      },
+      "deals": {
+        "id": "deals",
+        "workdir": "/home/op/agents/deals",
+        "listens": [
+          "slack:#deals"
+        ],
+        "allow": [
+          "people"
+        ],
+        "apps": [
+          "sales"
+        ],
+        "speaksAs": "sales",
+        "sessions": "shared",
+        "max": 7,
+        "was": [],
+        "prompt": "Deals kickoff.",
+        "idleMs": 7200000,
+        "access": "operator"
+      },
+      "plain": {
+        "id": "plain",
+        "workdir": "/home/op/agents/plain",
+        "listens": [
+          "slack:#plain"
+        ],
+        "allow": [
+          "people"
+        ],
+        "sessions": "shared",
+        "max": 7,
+        "was": [],
+        "prompt": "Default kickoff.",
+        "idleMs": 7200000,
+        "access": "operator"
+      }
+    },
+    "places": {},
+    "schedules": {},
+    "rules": []
+  },
+  "warnings": [
+    {
+      "path": "specialists.crm.talks_to[0]",
+      "message": "ops runs under the operator's account (access = \"operator\"): whatever crm is talked into sending reaches that account, quoted and labelled but read by a session that can act as the operator; give ops access = \"workdir\" with the broader folder it needs"
+    },
+    {
+      "path": "specialists.crm",
+      "message": "crm is unpinned, and app sales is pinned by deals, so crm no longer hears sales on slack:#help"
+    },
+    {
+      "path": "specialists.ops",
+      "message": "one shared session hears everyone's DMs (allow = [\"people\"]), so one person's DM is remembered in another's; use sessions = \"per-conversation\" or allow = []"
+    },
+    {
+      "path": "specialists.ops",
+      "message": "ops is unpinned, and app sales is pinned by deals, so ops no longer hears sales on slack:dm"
+    },
+    {
+      "path": "specialists.plain",
+      "message": "plain is unpinned, and app sales is pinned by deals, so plain no longer hears sales on slack:#plain"
+    }
+  ]
+}

@@ -71,7 +71,7 @@ describe('where: the order', () => {
     expect(d.trace.find(s => s.via === 'listens')).toMatchObject({ to: 'crm', matched: false })
   })
 
-  test('a binding outranks rules and listens, and follows a rename through `was`', () => {
+  test('a binding outranks rules and listens, and follows a rename through `renamed_from`', () => {
     expect(route(CFG, msg('slack:U0ALICE', ['slack:#help'], { bound: 'crm' }))).toMatchObject({ fate: 'deliver', to: 'crm', via: 'binding', bind: false })
     const renamed = load(`
 operator = "op"
@@ -80,7 +80,7 @@ ids = ["slack:U0OP"]
 [specialists.desk]
 workdir = "/a/desk"
 listens = ["slack:#help"]
-was = ["crm"]
+renamed_from = ["crm"]
 `)
     expect(route(renamed, msg('slack:U0OP', ['slack:#help'], { bound: 'crm' }))).toMatchObject({ fate: 'deliver', to: 'desk', via: 'binding' })
   })
@@ -164,12 +164,12 @@ listens = ["slack:#help", "slack:#lobby"]
 allow = ["staff"]
 [specialists.deals]
 workdir = "/a/deals"
-apps = ["sales"]
+pinned_to = ["sales"]
 listens = ["slack:#help"]
 allow = ["staff"]
 [specialists.desk]
 workdir = "/a/desk"
-apps = ["support"]
+pinned_to = ["support"]
 allow = ["staff"]
 [specialists.triage]
 workdir = "/a/triage"
@@ -256,7 +256,7 @@ describe('a specialist pinned to apps', () => {
     const cfg = load(`${APPS}
 [specialists.deals]
 workdir = "/a/deals"
-apps = ["sales"]
+pinned_to = ["sales"]
 allow = ["staff"]
 [specialists.crm]
 workdir = "/a/crm"
@@ -284,7 +284,7 @@ target = "deals"
     const cfg = load(`${APPS}
 [specialists.deals]
 workdir = "/a/deals"
-apps = ["sales"]
+pinned_to = ["sales"]
 listens = ["slack:dm"]
 allow = []
 `)

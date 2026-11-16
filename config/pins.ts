@@ -4,17 +4,17 @@
 
 import { DEFAULT_SLACK_APP, type Specialist } from './types.js'
 
-export type Pinnable = Pick<Specialist, 'id' | 'apps'>
+export type Pinnable = Pick<Specialist, 'id' | 'pinnedTo'>
 export type Specialists = Record<string, Pinnable>
 
 /** The specialists pinned to `app`. */
 export function pinnersOf(specialists: Specialists, app: string): string[] {
-  return Object.values(specialists).filter(s => s.apps?.includes(app)).map(s => s.id)
+  return Object.values(specialists).filter(s => s.pinnedTo?.includes(app)).map(s => s.id)
 }
 
 /** Whether a message that came through `app` (none: it did not come through a Slack app) can be delivered to `s`. */
 export function serves(specialists: Specialists, s: Pinnable, app: string | undefined): boolean {
-  if (s.apps) return app !== undefined && s.apps.includes(app)
+  if (s.pinnedTo) return app !== undefined && s.pinnedTo.includes(app)
   return app === undefined || pinnersOf(specialists, app).length === 0
 }
 
@@ -26,7 +26,7 @@ export function serves(specialists: Specialists, s: Pinnable, app: string | unde
 export function whyNotServed(specialists: Specialists, s: Pinnable, app: string | undefined, what = 'this message came through'): string | undefined {
   if (serves(specialists, s, app)) return undefined
   const via = app === undefined ? 'no Slack app' : `app ${app}`
-  if (s.apps) return `${s.id} is pinned to app${s.apps.length > 1 ? 's' : ''} ${s.apps.join(', ')}, and ${what} ${via}`
+  if (s.pinnedTo) return `${s.id} is pinned to app${s.pinnedTo.length > 1 ? 's' : ''} ${s.pinnedTo.join(', ')}, and ${what} ${via}`
   return `app ${app} serves only specialists pinned to it (${pinnersOf(specialists, app!).join(', ')}), and ${s.id} is not pinned`
 }
 
@@ -39,6 +39,6 @@ export function noSuchApp(id: string, declared: string[]): string {
  * The app a specialist posts as when no message came in (its `home`, a new thread): `speaks_as`, else the first app it is pinned
  * to, else `default`, else the one app there is. Undefined when none of those names one: `speaks_as` is then required.
  */
-export function speaksAsOf(s: Pick<Specialist, 'apps' | 'speaksAs'>, declared: string[]): string | undefined {
-  return s.speaksAs ?? s.apps?.[0] ?? (declared.includes(DEFAULT_SLACK_APP) ? DEFAULT_SLACK_APP : declared.length === 1 ? declared[0] : undefined)
+export function speaksAsOf(s: Pick<Specialist, 'pinnedTo' | 'speaksAs'>, declared: string[]): string | undefined {
+  return s.speaksAs ?? s.pinnedTo?.[0] ?? (declared.includes(DEFAULT_SLACK_APP) ? DEFAULT_SLACK_APP : declared.length === 1 ? declared[0] : undefined)
 }

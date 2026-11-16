@@ -60,7 +60,7 @@ describe('migrate jobs.toml → [schedules]', () => {
       health: { cron: '*/5 * * * *', check: '~/health/check.sh', prompt: 'Health check found something.', runner: 'launchd', target: 'main' },
     })
     // The fresh session's first words are today's message: the prompt, with the check output after it.
-    expect(m.specialists).toEqual({ review: { workdir: '/home/u/work', home: '1551794455227404370', sessions: 'per-conversation', idle: '4d', prompt: 'Weekly review.' } })
+    expect(m.specialists).toEqual({ review: { workdir: '/home/u/work', home: '1551794455227404370', sessions: 'per-conversation', idle: '4d', kickoff: 'Weekly review.' } })
     expect(m.notes).toEqual([
       'review: a per-conversation specialist; each run is a fresh session in a new thread, as before',
       'review: workdir /home/u/work is where its spawned sessions ran (SPAWN_CWD); set workdir to run them elsewhere',
@@ -173,7 +173,7 @@ describe('migrate jobs.toml → [schedules]', () => {
 
   test("a spawn table carries its kickoff and model; the session stays in SPAWN_CWD, the check in its cwd; no idle is today's 30m", () => {
     const m = migrateJobs(`[s]\nschedule="0 6 * * *"\ncwd="/srv/s"\ncheck="c.sh"\nprompt="Triage."\nspawn={ channel="c1", kickoff_file="/k.md", model="haiku" }\n`, opts)
-    expect(m.specialists.s).toEqual({ workdir: '/home/u/work', home: 'c1', sessions: 'per-conversation', idle: '30m', prompt_file: '/k.md', model: 'haiku' })
+    expect(m.specialists.s).toEqual({ workdir: '/home/u/work', home: 'c1', sessions: 'per-conversation', idle: '30m', kickoff_file: '/k.md', model: 'haiku' })
     expect(m.schedules.s).toMatchObject({ target: 's', cwd: '/srv/s', prompt: 'Triage.' })
     expect(m.notes).toEqual([
       's: a per-conversation specialist; each run is a fresh session in a new thread, as before',
@@ -185,7 +185,7 @@ describe('migrate jobs.toml → [schedules]', () => {
   test('a spawn job with a prompt and no check keeps its prompt on the schedule: it is the only message a run has', () => {
     const m = migrateJobs(`[s]\nschedule="0 9 * * MON"\nprompt="Run the retro."\nspawn={ channel="c1" }\n`, opts)
     expect(m.schedules.s).toEqual({ cron: '0 9 * * MON', prompt: 'Run the retro.', runner: 'launchd', target: 's' })
-    expect(m.specialists.s.prompt).toBe('Run the retro.')
+    expect(m.specialists.s.kickoff).toBe('Run the retro.')
     expect(m.notes).toContain('s: no check, so the schedule sends the prompt each run, and a fresh session also starts with it')
   })
 

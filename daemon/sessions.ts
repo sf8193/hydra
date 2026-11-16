@@ -274,7 +274,7 @@ export type SpawnOpts = {
   launchCwd?: string          // fork: launch from the source's launch dir, where --resume finds its transcript (no worktree)
   cwd?: string                // a fresh launch's working dir (a specialist's workdir) in place of SPAWN_CWD; a fork, resume or worktree wins
   tools?: string[]            // Claude --tools whitelist (must include MCP tools with prefix)
-  sessionType?: SessionType  // declared at spawn — determines base tool set (a specialist with access = "workdir" is always `scoped`)
+  sessionType?: SessionType  // declared at spawn — determines base tool set (a specialist with restricted = true is always `scoped`)
   specialist?: string        // the specialist a caller names as the one this session acts for (a fill, a conversation's own session); its launch policy is decided from hydra.toml at birth (restricted.ts)
   worktree?: string           // git repo subdirectory to create a worktree from (structural alternative to topic prefix)
   worktreeBranchSuffix?: string // appended to `wt/<name>` to avoid branch collisions between same-named builders

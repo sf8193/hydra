@@ -116,9 +116,9 @@ describe('the daemon\'s live hydra.toml', () => {
     const write = process.stderr.write
     process.stderr.write = ((t: string) => { lines.push(String(t)); return true }) as typeof process.stderr.write
     try {
-      writeFileSync(hydraConfigPath(), config('op') + '[specialists.ops]\nworkdir = "/tmp"\nallow = []\n[specialists.desk]\nworkdir = "/tmp"\nallow = []\naccess = "workdir"\n')
+      writeFileSync(hydraConfigPath(), config('op') + '[specialists.ops]\nworkdir = "/tmp"\nallow = []\n[specialists.desk]\nworkdir = "/tmp"\nallow = []\nrestricted = true\n')
       startHydraConfig({ env })
-      expect(lines.filter(l => l.includes('access ='))).toEqual(['daemon: hydra.toml: specialist ops access = operator\n', 'daemon: hydra.toml: specialist desk access = workdir (tools Read,Grep,Glob; mcp none)\n'])
+      expect(lines.filter(l => l.includes('restricted ='))).toEqual(['daemon: hydra.toml: specialist ops restricted = false\n', 'daemon: hydra.toml: specialist desk restricted = true (tools Read,Grep,Glob; mcp none)\n'])
     } finally {
       process.stderr.write = write
     }
@@ -129,7 +129,7 @@ describe('the daemon\'s live hydra.toml', () => {
     const write = process.stderr.write
     process.stderr.write = ((t: string) => { lines.push(String(t)); return true }) as typeof process.stderr.write
     try {
-      writeFileSync(hydraConfigPath(), config('op') + '[mcp.datadog]\ncommand = "/bin/sh"\ntools = ["search_logs"]\n[specialists.ops]\nworkdir = "/tmp"\nallow = []\naccess = "workdir"\nmcp = ["datadog"]\n[specialists.desk]\nworkdir = "/tmp"\nallow = []\naccess = "workdir"\n')
+      writeFileSync(hydraConfigPath(), config('op') + '[mcp.datadog]\ncommand = "/bin/sh"\ntools = ["search_logs"]\n[specialists.ops]\nworkdir = "/tmp"\nallow = []\nrestricted = true\nmcp = ["datadog"]\n[specialists.desk]\nworkdir = "/tmp"\nallow = []\nrestricted = true\n')
       startHydraConfig({ env: { ...env, isCommand: () => true } })
       const trust = lines.filter(l => l.includes('Listing a server means'))
       expect(trust).toEqual([`daemon: hydra.toml: ${serverTrustLine('ops', ['datadog'])}\n`])
@@ -142,7 +142,7 @@ describe('the daemon\'s live hydra.toml', () => {
 
   test("the daemon's own load knows its state dir: a workdir inside it is refused (no test env passed)", () => {
     mkdirSync(join(STATE_DIR, 'inside'), { recursive: true })
-    writeFileSync(hydraConfigPath(), config('op') + `[specialists.ops]\nworkdir = "${join(STATE_DIR, 'inside')}"\nallow = []\naccess = "workdir"\n`)
+    writeFileSync(hydraConfigPath(), config('op') + `[specialists.ops]\nworkdir = "${join(STATE_DIR, 'inside')}"\nallow = []\nrestricted = true\n`)
     const r = startHydraConfig()
     expect(r.ok).toBe(false)
     expect(!r.ok && r.errors.map(e => e.message).join('\n')).toContain(`is inside the state folder ${STATE_DIR}`)
@@ -150,7 +150,7 @@ describe('the daemon\'s live hydra.toml', () => {
 
   test("and Claude's config folder, as the daemon's sessions get it, is private too", () => {
     mkdirSync(join(CLAUDE_CONFIG, 'projects-x'), { recursive: true })
-    writeFileSync(hydraConfigPath(), config('op') + `[specialists.ops]\nworkdir = "${join(CLAUDE_CONFIG, 'projects-x')}"\nallow = []\naccess = "workdir"\n`)
+    writeFileSync(hydraConfigPath(), config('op') + `[specialists.ops]\nworkdir = "${join(CLAUDE_CONFIG, 'projects-x')}"\nallow = []\nrestricted = true\n`)
     const r = startHydraConfig()
     expect(r.ok).toBe(false)
     expect(!r.ok && r.errors.map(e => e.message).join('\n')).toContain('CLAUDE_CONFIG_DIR')

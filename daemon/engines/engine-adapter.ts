@@ -129,7 +129,7 @@ export type LaunchInput = {
   readonly resumeOmp?: { fromSessionId: string }                 // omp: continue the session file of this dead hydra session
   readonly threadId?: string                                     // the chat thread this session serves; exported to its env
   readonly sessionType?: SessionInfo['sessionType']              // and its role there; exported to its env
-  readonly policy?: LaunchPolicy                                 // what a specialist's session may reach, decided at its birth (restricted.ts). In launch() alone, access = "workdir" decides the folder, argv, env and files (confined, in policy.workdir); absent or operator: as ever
+  readonly policy?: LaunchPolicy                                 // what a specialist's session may reach, decided at its birth (restricted.ts). In launch() alone, restricted = true decides the folder, argv, env and files (confined, in policy.workdir); absent or operator: as ever
 }
 
 export type LaunchResult = {
@@ -183,7 +183,7 @@ export interface EngineAdapter {
   // Boot, once, over this provider's persisted records; never rejects. Claude:
   // nothing to do. Codex: reconnect the live records to their app-servers.
   start(records: readonly SessionInfo[]): Promise<void>
-  /** Whether this engine can run a session confined to a folder, a tool list and a server list (`access = "workdir"`). Read from shared/engine-capabilities.ts. */
+  /** Whether this engine can run a session confined to a folder, a tool list and a server list (`restricted = true`). Read from shared/engine-capabilities.ts. */
   readonly confinesAccess: boolean
   launch(input: LaunchInput): Promise<LaunchResult>
   /** A confined launch's check, from the engine's own record of what it loaded: refuse (with the cause) or pass. Absent: the engine cannot say, so it cannot run a confined session. */

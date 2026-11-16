@@ -48,7 +48,7 @@ describe('hydra config add', () => {
     mkdirSync(state)
     writeFileSync(join(state, 'hydra.toml'), 'operator = "op"\n[people.op]\nids = ["slack:U0OP", "discord:100000000000000001"]\n[slack.apps.default]\nbot_token_env = "SLACK_BOT_TOKEN"\napp_token_env = "SLACK_APP_TOKEN"\n')
     const frag = join(dir, 'frag.toml')
-    writeFileSync(frag, `[specialists.books]\nworkdir = "${dir}"\nprompt = "Keep the books."\n`)
+    writeFileSync(frag, `[specialists.books]\nworkdir = "${dir}"\nkickoff = "Keep the books."\n`)
     const p = Bun.spawnSync(['bun', join(root, 'cli', 'hydra.ts'), '--state-dir', state, 'config', 'add', frag, '--dry-run'], { cwd: root, env: { ...process.env, CHAT_PLATFORM: '' } })
     return { code: p.exitCode, err: p.stderr.toString(), out: p.stdout.toString() }
   }

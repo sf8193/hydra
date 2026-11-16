@@ -102,7 +102,7 @@ describe('specialists', () => {
     const configure = (name: string, over: Record<string, unknown> = {}) => _setHydraConfigForTesting({
       operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [], mcpServers: MCP,
       people: { op: { id: 'op', ids: ['discord:100000000000000001'], roles: [], name: 'op' } },
-      specialists: { [name]: { id: name, workdir: '/srv/x', prompt: 'k', home: '555', listens: [], allow: [], sessions: 'shared', max: 20, was: [], access: 'operator', ...over } as any },
+      specialists: { [name]: { id: name, workdir: '/srv/x', kickoff: 'k', home: '555', listens: [], allow: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false, ...over } as any },
     })
     afterEach(() => _setHydraConfigForTesting(undefined))
     /** The real Claude adapter (its `deliver` is where every delivery is gated), reported alive: the session is running, with no bridge. */
@@ -132,18 +132,18 @@ describe('specialists', () => {
       const before = queued(sid)
       expect(before).toBeGreaterThan(0)
 
-      configure(name, { access: 'workdir', tools: ['Read', 'Grep', 'Glob'], mcp: [] })   // the operator edits hydra.toml
+      configure(name, { restricted: true, tools: ['Read', 'Grep', 'Glob'], mcp: [] })   // the operator edits hydra.toml
       const r = await quiet(() => deliver(name, { idempotencyKey: `scope-k-${++n}` }))
       expect(r.out).toMatchObject({ ok: false, exitCode: 3 })
       expect((r.out as any).error).toContain(`hydra kill ${sid}-tmux`)
-      expect((r.out as any).error).toContain('access = "operator"')
-      expect((r.out as any).error).toContain('access = "workdir"')
+      expect((r.out as any).error).toContain('restricted = false')
+      expect((r.out as any).error).toContain('restricted = true')
       expect(queued(sid)).toBe(before)                                             // nothing delivered
       expect(calls).toHaveLength(0)                                                // nothing killed or restarted by hydra
       expect(registry.get(sid)).toBeDefined()
       expect(r.log).toContain(`specialist ${name}`)
-      expect(r.log).toContain('access = "operator"')
-      expect(r.log).toContain('access = "workdir" (folder /srv/x; tools Read,Grep,Glob; mcp none)')
+      expect(r.log).toContain('restricted = false')
+      expect(r.log).toContain('restricted = true (folder /srv/x; tools Read,Grep,Glob; mcp none)')
       expect(r.log).not.toMatch(/workdir:[0-9a-f]{12}/)                            // words, not a hash
       expect(r.posted).toHaveLength(1)
       expect(r.posted[0]).toContain(`hydra kill ${sid}-tmux`)
@@ -168,11 +168,11 @@ describe('specialists', () => {
 
     test('a tools-only change refuses too', async () => {
       const name = nameOf()
-      configure(name, { access: 'workdir', tools: ['Read', 'Grep', 'Glob'], mcp: [] })
+      configure(name, { restricted: true, tools: ['Read', 'Grep', 'Glob'], mcp: [] })
       const sid = occupy('thread-scope-2', { policy: bornPolicy(name), sessionType: 'scoped', verified: true, adapter: gated() })
       setSpecialistThread(name, 'thread-scope-2')
       expect((await deliver(name)).ok).toBe(true)                                  // same scope: delivered
-      configure(name, { access: 'workdir', tools: ['Read'], mcp: [] })
+      configure(name, { restricted: true, tools: ['Read'], mcp: [] })
       const r = await quiet(() => deliver(name, { idempotencyKey: `scope-k-${++n}` }))
       expect(r.out).toMatchObject({ ok: false, exitCode: 3 })
       expect(r.log).toContain('tools Read,Grep,Glob')                              // the old tools are in the words
@@ -182,11 +182,11 @@ describe('specialists', () => {
 
     test('an mcp-only change refuses too', async () => {
       const name = nameOf()
-      configure(name, { access: 'workdir', tools: ['Read'], mcp: ['datadog'] })
+      configure(name, { restricted: true, tools: ['Read'], mcp: ['datadog'] })
       const sid = occupy('thread-scope-3', { policy: bornPolicy(name), sessionType: 'scoped', verified: true, adapter: gated() })
       setSpecialistThread(name, 'thread-scope-3')
       expect((await deliver(name)).ok).toBe(true)
-      configure(name, { access: 'workdir', tools: ['Read'], mcp: ['datadog', 'loki'] })
+      configure(name, { restricted: true, tools: ['Read'], mcp: ['datadog', 'loki'] })
       const r = await quiet(() => deliver(name, { idempotencyKey: `scope-k-${++n}` }))
       expect(r.out).toMatchObject({ ok: false, exitCode: 3 })
       expect(r.log).toContain('mcp datadog,loki')
@@ -195,7 +195,7 @@ describe('specialists', () => {
 
     test('a listed server gaining a tool: the refusal and the thread say what changed (the old and new tools differ in the words)', async () => {
       const name = nameOf()
-      configure(name, { access: 'workdir', tools: ['Read'], mcp: ['datadog'] })
+      configure(name, { restricted: true, tools: ['Read'], mcp: ['datadog'] })
       const sid = occupy('thread-scope-7', { policy: bornPolicy(name), sessionType: 'scoped', verified: true, adapter: gated() })
       setSpecialistThread(name, 'thread-scope-7')
       _setHydraConfigForTesting({ ...currentHydraConfig(), mcpServers: { ...MCP, datadog: { ...MCP.datadog, tools: ['search_logs', 'get_monitor'] } } })
@@ -210,10 +210,10 @@ describe('specialists', () => {
 
     test('workdir back to operator refuses as well (the session still holds the narrower scope)', async () => {
       const name = nameOf()
-      configure(name, { access: 'workdir', tools: ['Read'], mcp: [] })
+      configure(name, { restricted: true, tools: ['Read'], mcp: [] })
       const sid = occupy('thread-scope-4', { policy: bornPolicy(name), sessionType: 'scoped', verified: true, adapter: gated() })
       setSpecialistThread(name, 'thread-scope-4')
-      configure(name, { access: 'operator' })
+      configure(name, { restricted: false })
       const r = await quiet(() => deliver(name, { idempotencyKey: `scope-k-${++n}` }))
       expect(r.out).toMatchObject({ ok: false, exitCode: 3 })
       expect(queued(sid)).toBe(0)
@@ -225,7 +225,7 @@ describe('specialists', () => {
       setSpecialistThread(name, 'thread-scope-5')
       const sid = occupy('thread-scope-5', { sessionType: 'thread_owner', adapter: gated() })       // no specialist, no scopeId: an old record
       expect((await deliver(name)).ok).toBe(true)
-      configure(name, { access: 'workdir', tools: ['Read'], mcp: [] })
+      configure(name, { restricted: true, tools: ['Read'], mcp: [] })
       const r = await quiet(() => deliver(name, { idempotencyKey: `scope-k-${++n}` }))
       expect(r.out).toMatchObject({ ok: false, exitCode: 3 })
       expect(queued(sid)).toBe(1)
@@ -237,7 +237,7 @@ describe('specialists', () => {
       function drifted(thread: string) {
         const name = nameOf()
         const sid = running(name, thread, operatorPolicy(name))
-        configure(name, { access: 'workdir', tools: ['Read'], mcp: [] })
+        configure(name, { restricted: true, tools: ['Read'], mcp: [] })
         return { name, sid }
       }
       const heard = (r: { posted: string[] }, sid: string) => { expect(r.posted.join('\n')).toContain(REMEDY(sid)) }
@@ -307,7 +307,7 @@ describe('specialists', () => {
 
     test('a conversation\'s running session is refused through deliverToTarget (perConversation), the check that landRunning used to hold alone', async () => {
       const name = nameOf()
-      configure(name, { access: 'workdir', tools: ['Read'], mcp: [], sessions: 'per-conversation' })
+      configure(name, { restricted: true, tools: ['Read'], mcp: [], sessions: 'per-conversation' })
       const conv = 'slack:C1:1.000001'
       const tmux = conversationSessionName(name, conv)
       const sid = occupy('thread-conv-route', { tmuxName: tmux, policy: operatorPolicy(name), sessionType: 'thread_owner', adapter: gated() })
@@ -318,20 +318,20 @@ describe('specialists', () => {
     })
     test('a specialist moved or renamed since the session started is still found by the id the session was born with', async () => {
       const name = nameOf()
-      configure(name, { access: 'workdir', tools: ['Read'], mcp: [] })
+      configure(name, { restricted: true, tools: ['Read'], mcp: [] })
       // The session sits in a thread the specialist no longer owns (its pointer moved): only the stored policy still names it.
       const session = { sessionId: 's-moved', tmuxName: 'moved-tmux', threadId: 'thread-nobody-owns', policy: operatorPolicy(name), sessionType: 'thread_owner' } as any
       const reason = (await quiet(async () => deliveryRefusal(session))).out
       expect(reason).toContain(`specialist ${name}`)
-      expect(reason).toContain('access: operator -> workdir')
+      expect(reason).toContain('restricted: false -> true')
     })
     test("a conversation's own session (crm_<conversation>) is held to the same rule", async () => {
       const name = nameOf()
-      configure(name, { access: 'workdir', tools: ['Read'], mcp: [], sessions: 'per-conversation' })
+      configure(name, { restricted: true, tools: ['Read'], mcp: [], sessions: 'per-conversation' })
       const conv = { sessionId: 'conv-1', tmuxName: `${name}_c1`, threadId: 'thread-conv-1', policy: operatorPolicy(name), sessionType: 'thread_owner' } as any
       const reason = (await quiet(async () => deliveryRefusal(conv))).out
       expect(reason).toContain(`hydra kill ${name}_c1`)
-      expect(reason).toContain('access = "operator"')
+      expect(reason).toContain('restricted = false')
       expect(deliveryRefusal({ ...conv, policy: bornPolicy(name), sessionType: 'scoped', verified: true })).toBeUndefined()
     })
 
@@ -452,7 +452,7 @@ describe('specialists', () => {
     _setHydraConfigForTesting({
       operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
       people: { op: { id: 'op', ids: ['discord:100000000000000001'], roles: [], name: 'op' } },
-      specialists: { [name]: { id: name, workdir: '/srv/x', prompt: 'be the helper', home: '555', listens: [], allow: ['people'], sessions: 'shared', max: 20, was: [], access: 'operator' } },
+      specialists: { [name]: { id: name, workdir: '/srv/x', kickoff: 'be the helper', home: '555', listens: [], allow: ['people'], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false } },
     })
     try {
       expect((await deliver(name)).ok).toBe(true)
@@ -475,13 +475,13 @@ describe('specialists', () => {
 
   test('specialist list shows each hydra.toml specialist\'s sessions mode, and max when it is per-conversation', async () => {
     const [a, b] = [`t-specialist-${++n}`, `t-specialist-${++n}`]
-    const base = { workdir: '/srv/x', prompt: 'k', home: '555', listens: [], allow: ['people'], was: [], access: 'operator' as const }
+    const base = { workdir: '/srv/x', kickoff: 'k', home: '555', listens: [], allow: ['people'], renamedFrom: [], restricted: false }
     _setHydraConfigForTesting({
       operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
       people: { op: { id: 'op', ids: ['discord:100000000000000001'], roles: [], name: 'op' } },
       specialists: {
-        [a]: { id: a, ...base, sessions: 'shared', max: 20 },
-        [b]: { id: b, ...base, sessions: 'per-conversation', max: 3 },
+        [a]: { id: a, ...base, sessions: 'shared', maxSessions: 20 },
+        [b]: { id: b, ...base, sessions: 'per-conversation', maxSessions: 3 },
       },
     })
     try {
@@ -489,8 +489,8 @@ describe('specialists', () => {
       const [sa, sb] = [list.find(s => s.name === a)!, list.find(s => s.name === b)!]
       expect(sa.sessions).toBe('shared')
       expect(sa).not.toHaveProperty('max')
-      expect(sb).toMatchObject({ sessions: 'per-conversation', max: 3 })
-      expect((await cli('show', b)).data).toMatchObject({ sessions: 'per-conversation', max: 3 })
+      expect(sb).toMatchObject({ sessions: 'per-conversation', maxSessions: 3 })
+      expect((await cli('show', b)).data).toMatchObject({ sessions: 'per-conversation', maxSessions: 3 })
     } finally {
       _setHydraConfigForTesting(undefined)
     }
@@ -498,20 +498,37 @@ describe('specialists', () => {
 
   test('specialist show and list print each hydra.toml specialist\'s effective access, with its tools and servers when it is workdir', async () => {
     const [a, b] = [`t-specialist-${++n}`, `t-specialist-${++n}`]
-    const base = { workdir: '/srv/x', prompt: 'k', home: '555', listens: [], allow: ['people'], was: [], sessions: 'shared' as const, max: 20 }
+    const base = { workdir: '/srv/x', kickoff: 'k', home: '555', listens: [], allow: ['people'], renamedFrom: [], sessions: 'shared' as const, maxSessions: 20 }
     _setHydraConfigForTesting({
       operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
       people: { op: { id: 'op', ids: ['discord:100000000000000001'], roles: [], name: 'op' } },
       specialists: {
-        [a]: { id: a, ...base, access: 'operator' },
-        [b]: { id: b, ...base, access: 'workdir', tools: ['Read'], mcp: ['datadog'] },
+        [a]: { id: a, ...base, restricted: false },
+        [b]: { id: b, ...base, restricted: true, tools: ['Read'], mcp: ['datadog'] },
       },
     })
     try {
       const list = (await cli('list', undefined)).data as Record<string, unknown>[]
-      expect(list.find(s => s.name === a)).toMatchObject({ access: 'operator' })
+      expect(list.find(s => s.name === a)).toMatchObject({ restricted: false })
       expect(list.find(s => s.name === a)).not.toHaveProperty('tools')
-      expect((await cli('show', b)).data).toMatchObject({ access: 'workdir', tools: ['Read'], mcp: ['datadog'] })
+      expect((await cli('show', b)).data).toMatchObject({ restricted: true, tools: ['Read'], mcp: ['datadog'] })
+    } finally {
+      _setHydraConfigForTesting(undefined)
+    }
+  })
+
+  test('specialist show and list print restricted and maxSessions (not access or max): the output shape is pinned', async () => {
+    const name = `t-specialist-${++n}`
+    _setHydraConfigForTesting({
+      operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
+      people: { op: { id: 'op', ids: ['discord:100000000000000001'], roles: [], name: 'op' } },
+      specialists: { [name]: { id: name, workdir: '/srv/x', kickoff: 'k', home: '555', listens: [], allow: ['people'], renamedFrom: [], sessions: 'per-conversation', maxSessions: 3, restricted: true, tools: ['Read'], mcp: [] } },
+    })
+    try {
+      const pick = (d: any) => ({ restricted: d.restricted, maxSessions: d.maxSessions, sessions: d.sessions, tools: d.tools, mcp: d.mcp, access: d.access, max: d.max })
+      const shown = (await cli('show', name)).data
+      const listed = ((await cli('list', undefined)).data as Record<string, unknown>[]).find(s => s.name === name)
+      for (const d of [shown, listed]) expect(pick(d)).toEqual({ restricted: true, maxSessions: 3, sessions: 'per-conversation', tools: ['Read'], mcp: [], access: undefined, max: undefined })
     } finally {
       _setHydraConfigForTesting(undefined)
     }
@@ -523,7 +540,7 @@ describe('specialists', () => {
     _setHydraConfigForTesting({
       operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
       people: { op: { id: 'op', ids: ['discord:100000000000000001'], roles: [], name: 'op' } },
-      specialists: { [name]: { id: name, workdir: '/srv/ops', prompt: 'be the helper', home: '555', listens: [], allow: ['people'], sessions: 'shared', max: 20, was: [], access: 'operator' } },
+      specialists: { [name]: { id: name, workdir: '/srv/ops', kickoff: 'be the helper', home: '555', listens: [], allow: ['people'], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false } },
     })
     try {
       expect((await deliver(name)).ok).toBe(true)

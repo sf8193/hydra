@@ -30,8 +30,8 @@ describe('docs/slack.md: the ops specialist example', () => {
   test('is the confined specialist, its server, its place, and the specialist it hands off to', () => {
     const r = loadHydraConfig(text, env)
     if (!r.ok) throw new Error(formatIssues(r.errors))
-    expect(r.config.specialists.ops).toMatchObject({ access: 'workdir', tools: ['Read', 'Grep', 'Glob'], mcp: ['datadog'], listens: ['slack:#ops'], allow: ['staff'], talksTo: ['ops-deep'], workdir: '/home/op/specialists/ops' })
-    expect(r.config.specialists['ops-deep']).toMatchObject({ access: 'workdir', listens: [], allow: [], talksTo: ['ops'], workdir: '/home/op/specialists/ops-deep' })
+    expect(r.config.specialists.ops).toMatchObject({ restricted: true, tools: ['Read', 'Grep', 'Glob'], mcp: ['datadog'], listens: ['slack:#ops'], allow: ['staff'], talksTo: ['ops-deep'], workdir: '/home/op/specialists/ops' })
+    expect(r.config.specialists['ops-deep']).toMatchObject({ restricted: true, listens: [], allow: [], talksTo: ['ops'], workdir: '/home/op/specialists/ops-deep' })
     expect(r.config.mcpServers?.datadog).toEqual({ name: 'datadog', command: '/usr/local/bin/datadog-mcp', tokenEnv: ['DD_API_KEY'], tools: ['search_logs', 'get_monitor'] })
     expect(r.config.places['slack:#ops']).toMatchObject({ messages: 'all', linkPreviews: false })
   })
@@ -51,6 +51,6 @@ describe('docs/slack.md: the ops specialist example', () => {
       expect(r.ok).toBe(false)
       if (!r.ok) expect(formatIssues(r.errors)).toContain('specialists.ops.talks_to[0]')
     }
-    expect(loadHydraConfig(text.replace('allow = []\naccess = "workdir"', 'allow = []\naccess = "workdir"\nsessions = "per-conversation"'), env).ok).toBe(false)
+    expect(loadHydraConfig(text.replace('allow = []\nrestricted = true', 'allow = []\nrestricted = true\nsessions = "per-conversation"'), env).ok).toBe(false)
   })
 })

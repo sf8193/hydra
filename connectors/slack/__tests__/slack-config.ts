@@ -44,7 +44,7 @@ listens = ["slack:${channel}"]
 allow = ["anyone"]
 [specialists.deals]
 workdir = "/w/deals"
-apps = ["sales"]
+pinned_to = ["sales"]
 listens = ["slack:${channel}"]
 allow = ["anyone"]
 ${place}`

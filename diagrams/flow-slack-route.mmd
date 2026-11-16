@@ -70,7 +70,7 @@ flowchart TD
   h0 -.-> cur
 
   subgraph deliver["deliverBatches, once per burst"]
-    r0{"binding declared in hydra.toml?<br/>(was = renames followed)"}
+    r0{"binding declared in hydra.toml?<br/>(renamed_from renames followed)"}
     unr(["no: stays owed;<br/>its replay is routed anew"])
     r1{"allow re-judged, current config"}
     nm["who: person, roles, operator from hydra.toml;<br/>a stranger's Slack name without mentions"]

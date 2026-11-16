@@ -1,0 +1,31 @@
+# A full config in the specialist key names before the rename: access, prompt, prompt_file, max, was, apps. Loaded on the commit before and after.
+operator = "op"
+[connectors.slack]
+bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"
+[slack.apps.sales]
+bot_token_env = "SALES_SLACK_BOT_TOKEN"
+[people.op]
+ids = ["slack:U0OP"]
+[defaults.specialist]
+workdir = "/home/op/agents/{id}"
+prompt = "Default kickoff."
+max = 7
+idle = "2h"
+[specialists.crm]
+access = "workdir"
+prompt_file = "kickoff.md"
+sessions = "per-conversation"
+max = 3
+was = ["old-crm"]
+listens = ["slack:#help"]
+talks_to = ["ops"]
+[specialists.ops]
+access = "operator"
+listens = ["slack:dm"]
+[specialists.deals]
+apps = ["sales"]
+speaks_as = "sales"
+prompt = "Deals kickoff."
+listens = ["slack:#deals"]
+[specialists.plain]
+listens = ["slack:#plain"]
