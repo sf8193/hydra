@@ -40,14 +40,14 @@ socket_token_env = "SALES_SLACK_APP_TOKEN"
 export const sharedChannel = (channel: string, place = '') => `${TWO_APPS}
 [specialists.crm]
 workdir = "/w/crm"
-reachable_by = ["anyone"]
+reachable_by = ["role:anyone"]
 [[rules]]
 place = "slack:${channel}"
 target = "specialist:crm"
 [specialists.deals]
 workdir = "/w/deals"
-pinned_to = ["sales"]
-reachable_by = ["anyone"]
+pinned_to = ["app:sales"]
+reachable_by = ["role:anyone"]
 ${place}
 [[rules]]
 place = "slack:${channel}"

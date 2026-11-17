@@ -36,20 +36,20 @@ workdir = "/home/op/ops"
 workdir = "/home/op/crm"
 [specialists.deals]
 workdir = "/home/op/deals"
-pinned_to = ["sales"]
+pinned_to = ["app:sales"]
 [specialists.kitchen]
 workdir = "/home/op/kitchen"
 `
 const OLD = `${HEAD}${SPECIALISTS}`
   .replace('[specialists.ops]\nworkdir = "/home/op/ops"', '[specialists.ops]\nworkdir = "/home/op/ops"\nlistens = ["slack:#help"]')
   .replace('[specialists.crm]\nworkdir = "/home/op/crm"', '[specialists.crm]\nworkdir = "/home/op/crm"\nlistens = ["slack:C0HELP", "slack:#crm"]')
-  .replace('pinned_to = ["sales"]', 'pinned_to = ["sales"]\nlistens = ["slack:#help", "slack:dm"]')
+  .replace('pinned_to = ["app:sales"]', 'pinned_to = ["app:sales"]\nlistens = ["slack:#help", "slack:dm"]')
   .replace('[specialists.kitchen]\nworkdir = "/home/op/kitchen"', '[specialists.kitchen]\nworkdir = "/home/op/kitchen"\nlistens = ["slack:dm", "github:acme/w"]')
-  + '[[rules]]\nplace = "slack:#ops"\nperson = "alice"\ntarget = "main"\n'
+  + '[[rules]]\nplace = "slack:#ops"\nperson = "person:alice"\ntarget = "main"\n'
 const NEW = `${HEAD}${SPECIALISTS}
 [[rules]]
 place = "slack:#ops"
-person = "alice"
+person = "person:alice"
 target = "main"
 [[rules]]
 place = "slack:C0HELP"
@@ -151,22 +151,22 @@ describe('where a specialist is heard is read off its rules', () => {
   const { config } = load(`${HEAD}${SPECIALISTS}
 [[rules]]
 place = "slack:#help"
-person = "alice"
+person = "person:alice"
 target = "specialist:ops"
 [[rules]]
 place = "slack:#help"
 target = "specialist:crm"
 [[rules]]
 place = "slack:#help"
-app = "sales"
-person = "staff"
+app = "app:sales"
+person = "role:staff"
 target = "specialist:deals"
 [[rules]]
-app = "sales"
+app = "app:sales"
 target = "specialist:deals"
 [[rules]]
 place = "slack:#help"
-app = "sales"
+app = "app:sales"
 target = "specialist:deals"
 `)
 
@@ -179,9 +179,9 @@ target = "specialist:deals"
 
   test('hydra config and hydra route print "<specialist> answers: ..." for each, with who and which app a rule narrows to', () => {
     expect(answersLines(config)).toEqual([
-      'ops answers: slack:#help for alice',
+      'ops answers: slack:#help for person:alice',
       'crm answers: slack:#help',
-      'deals answers: slack:#help via app sales for staff, every place via app sales, slack:#help via app sales',
+      'deals answers: slack:#help via app:sales for role:staff, every place via app:sales, slack:#help via app:sales',
       'kitchen answers: no place (only a conversation bound to it)',
     ])
   })
@@ -200,19 +200,19 @@ describe('two rules that take every message at one place through one app', () =>
   const errors = (text: string) => { const r = loadHydraConfig(text, env); return r.ok ? [] : r.errors.map(e => `${e.path}: ${e.message}`) }
   test('are an error that names both, whatever order they are written in', () => {
     expect(errors(two('place = "slack:#a"\ntarget = "specialist:ops"', 'place = "slack:#a"\ntarget = "specialist:crm"'))).toEqual([
-      'rules[1]: sends every message at slack:#a through app default to specialist:crm, but rules[0] already sends them to specialist:ops: give rules[1] a `person`, or remove it',
+      'rules[1]: sends every message at slack:#a through app:default to specialist:crm, but rules[0] already sends them to specialist:ops: give rules[1] a `person`, or remove it',
     ])
     // the same app named twice
-    expect(errors(two('place = "slack:#a"\napp = "default"\ntarget = "specialist:ops"', 'place = "slack:#a"\napp = "default"\ntarget = "specialist:crm"'))[0])
-      .toBe('rules[1]: sends every message at slack:#a through app default to specialist:crm, but rules[0] already sends them to specialist:ops: give rules[1] a `person`, or remove it')
+    expect(errors(two('place = "slack:#a"\napp = "app:default"\ntarget = "specialist:ops"', 'place = "slack:#a"\napp = "app:default"\ntarget = "specialist:crm"'))[0])
+      .toBe('rules[1]: sends every message at slack:#a through app:default to specialist:crm, but rules[0] already sends them to specialist:ops: give rules[1] a `person`, or remove it')
   })
   test('the same target twice is a redundant rule, not a clash: a warning', () => {
     const r = load(two('place = "slack:#a"\ntarget = "specialist:ops"', 'place = "slack:#a"\ntarget = "specialist:ops"'))
     expect(r.warnings.filter(w => w.includes('never matches'))).toEqual(['rules[1]: never matches: rules[0] already takes every message at slack:#a'])
   })
   test('are fine when a person, an app or a pin tells them apart', () => {
-    expect(errors(two('place = "slack:#a"\nperson = "alice"\ntarget = "specialist:ops"', 'place = "slack:#a"\ntarget = "specialist:crm"'))).toEqual([])
-    expect(errors(two('place = "slack:#a"\napp = "default"\ntarget = "specialist:ops"', 'place = "slack:#a"\napp = "sales"\ntarget = "specialist:deals"'))).toEqual([])
+    expect(errors(two('place = "slack:#a"\nperson = "person:alice"\ntarget = "specialist:ops"', 'place = "slack:#a"\ntarget = "specialist:crm"'))).toEqual([])
+    expect(errors(two('place = "slack:#a"\napp = "app:default"\ntarget = "specialist:ops"', 'place = "slack:#a"\napp = "app:sales"\ntarget = "specialist:deals"'))).toEqual([])
     expect(errors(two('place = "slack:#a"\ntarget = "specialist:deals"', 'place = "slack:#a"\ntarget = "specialist:crm"'))).toEqual([])
   })
   test('a rule for a place after a rule for the same place with no app is an error only when it is wholly covered', () => {

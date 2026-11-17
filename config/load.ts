@@ -16,6 +16,7 @@ import { SLACK_APP_DEFAULTS } from '../connectors/slack/app.js'
 import { emojiProblem } from '../shared/emoji.js'
 import { invalidSpecialistName } from '../shared/specialist-name.js'
 import { bareOf, readTarget, spelled } from '../shared/target-kind.js'
+import { kindsFor, readValue, spelledApp, spelledPerson, spelledRole, whoSpelled } from '../shared/value-kind.js'
 import {
   BUILTIN_ROLES, DEFAULT_SLACK_APP, SLACK_DM, SLACK_GROUP_DM, dmPerson, isDmPlace, namesAChannel, namesDmWithOthers, placesAnsweredBy, type Address, type ConfigIssue, type Connectors, type Gateways, type Guard, type HydraConfig, type LoadEnv, type LoadResult, type MainOptions,
   type McpServer, type WorkdirScan, type Person, type Place, type PlaceOptions, type Platform, type Rule, type Schedule, type SessionsMode, type SlackApp, type Specialist, type Vitals,
@@ -455,8 +456,49 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   }
   const declaredRoles = new Set(Object.values(people).flatMap(p => p.roles))
   // A role named like a person would make a rule's `person` ambiguous.
-  for (const role of declaredRoles) if (has(people, role)) error(`people.${role}`, `"${role}" is both a person and a role; rename one`)
+  for (const role of declaredRoles) if (has(people, role)) error(`people.${role}`, `"${role}" is both a person and a role (${spelledPerson(role)} and ${spelledRole(role)}); rename one`)
   const isRole = (r: string) => BUILTIN.includes(r) || declaredRoles.has(r)
+
+  // --- named values --------------------------------------------------------------------------------------------------
+  // A value that names a person, a role or an app says its kind: `person:alice`, `role:finance`, `app:sales`. A bare name still loads, as the same
+  // name, with a warning that says how to write it (once per key). The reader is shared/value-kind.ts, as `hydra route` reads it; the loaded
+  // config holds the bare name, which routing compares with. A person and a role never share a name (above), so a bare name has one kind.
+  const kindWarned = new Set<string>()
+  const bareValue = (path: string, raw: string, spelledAs: string) => {
+    if (kindWarned.has(path)) return
+    kindWarned.add(path)
+    warn(path, `write "${spelledAs}" instead of "${raw}": a value says its kind; the bare name still works and will be removed`)
+  }
+  const noRole = (r: string, key = '') => `no one holds the role "${r}": ${key}give a person that role in [people.<id>] roles`
+  /** A role someone holds, or a built-in one: `role:<name>`. For a key that lists roles only (`reachable_by`). */
+  const roleValue = (raw: string, path: string): string | undefined => {
+    const r = readValue(raw, ['role'])
+    if (!r.ok) { error(path, r.error); return undefined }
+    if (r.bare && has(people, r.name)) { error(path, `"${raw}" is a person, and reachable_by lists roles: give them a role in [people.${raw}] and list role:<name>`); return undefined }
+    if (!isRole(r.name)) { error(path, noRole(r.name, 'reachable_by lists roles, so ')); return undefined }
+    if (r.bare) bareValue(path, raw, spelledRole(r.name))
+    return r.name
+  }
+  /** A person from `[people]` or a role someone holds: `person:<id>` or `role:<name>`. For a rule's `person`. */
+  const whoValue = (raw: string, path: string): string | undefined => {
+    const r = readValue(raw, ['person', 'role'])
+    if (!r.ok) { error(path, r.error); return undefined }
+    const [person, role] = [has(people, r.name), isRole(r.name)]
+    if (r.kind === 'person' && !person) { error(path, `"${raw}" is not a person: declare [people.${r.name}]`); return undefined }
+    if (r.kind === 'role' && !role) { error(path, noRole(r.name)); return undefined }
+    if (r.bare && !person && !role) { error(path, `"${raw}" is neither a person nor a role anyone holds: write ${kindsFor(['person', 'role'])}`); return undefined }
+    if (r.bare) bareValue(path, raw, person ? spelledPerson(r.name) : spelledRole(r.name))
+    return r.name
+  }
+  /** A declared Slack app: `app:<id>`. */
+  const appValue = (raw: string, path: string): string | undefined => {
+    const r = readValue(raw, ['app'])
+    if (!r.ok) { error(path, r.error); return undefined }
+    if (!Object.hasOwn(slackApps, r.name)) { error(path, noSuchApp(r.name, Object.keys(slackApps))); return undefined }
+    if (r.bare) bareValue(path, raw, spelledApp(r.name))
+    return r.name
+  }
+  const appList = (l: readonly string[]) => l.map(spelledApp).join(', ')
 
   // --- operator ------------------------------------------------------------------------------------------------------
 
@@ -522,7 +564,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     const n = errors.length
     readSpecialistKeyTypes({ [k]: defaults[k] }, 'defaults.specialist')
     if (errors.length === n && k === 'idle') checkIdle(defaults.idle as string, 'defaults.specialist.idle')
-    if (errors.length === n && k === 'reachable_by') checkReachableBy(defaults.reachable_by as string[], 'defaults.specialist.reachable_by')
+    if (errors.length === n && k === 'reachable_by') { goodDefaults[k] = readReachableBy(defaults.reachable_by as string[], 'defaults.specialist.reachable_by'); continue }
     if (errors.length === n) goodDefaults[k] = defaults[k]
   }
 
@@ -531,11 +573,9 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (ms === null) error(path, `"${raw}" must be a duration like 90m, 12h or 4d, at most 7d`)
     return ms ?? undefined
   }
-  function checkReachableBy(roles: string[], path: string) {
-    for (const [i, r] of roles.entries()) {
-      if (isRole(r)) continue
-      error(`${path}[${i}]`, has(people, r) ? `"${r}" is a person, and reachable_by lists roles: give them a role in [people.${r}] and list that role` : `no one holds the role "${r}": reachable_by lists roles, so give a person that role in [people.<id>] roles`)
-    }
+  /** `reachable_by` as the loaded config holds it: bare role names, each checked. */
+  function readReachableBy(roles: string[], path: string): string[] {
+    return roles.flatMap((r, i) => roleValue(r, `${path}[${i}]`) ?? [])
   }
 
   function readSpecialistKeyTypes(t: Table, path: string) {
@@ -595,17 +635,15 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     const pinnedRaw = strList(t, 'pinned_to', path)
     if (pinnedRaw !== undefined) {
       if (pinnedRaw.length === 0) error(at('pinned_to'), 'must name at least one app; leave `pinned_to` out to take every app that no specialist is pinned to')
-      for (const [i, a] of pinnedRaw.entries()) {
-        if (!Object.hasOwn(slackApps, a)) error(`${at('pinned_to')}[${i}]`, noSuchApp(a, Object.keys(slackApps)))
-      }
-      if (pinnedRaw.length) pinnedTo = [...new Set(pinnedRaw)]
+      const apps = pinnedRaw.flatMap((a, i) => appValue(a, `${at('pinned_to')}[${i}]`) ?? [])
+      if (pinnedRaw.length) pinnedTo = [...new Set(apps)]
     }
 
     // `speaks_as`: the app it posts as when no message came in (its `home`, a new thread). It names a declared app, one it is pinned to if it is pinned.
-    const speaksAs = str(t, 'speaks_as', path)
+    const speaksAsRaw = str(t, 'speaks_as', path)
+    const speaksAs = speaksAsRaw === undefined ? undefined : appValue(speaksAsRaw, at('speaks_as'))
     if (speaksAs !== undefined) {
-      if (!Object.hasOwn(slackApps, speaksAs)) error(at('speaks_as'), noSuchApp(speaksAs, Object.keys(slackApps)))
-      else if (pinnedTo && !pinnedTo.includes(speaksAs)) error(at('speaks_as'), `${speaksAs} is not one of the apps ${id} is pinned to (${pinnedTo.join(', ')}): a pinned specialist speaks only through its own apps`)
+      if (pinnedTo && !pinnedTo.includes(speaksAs)) error(at('speaks_as'), `${spelledApp(speaksAs)} is not one of the apps ${id} is pinned to (${appList(pinnedTo)}): a pinned specialist speaks only through its own apps`)
     }
 
     // `listens` (the old form): each place is read as a `[[rules]]` entry `{place, target = this specialist}`, added after the explicit rules.
@@ -623,8 +661,9 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       if (heard.length) warn(at('listens'), `\`listens\` is now \`[[rules]]\`: add a \`[[rules]]\` table for each place, with \`place = "x"\` and \`target = "specialist:${id}"\` on separate lines (places: ${heard.join(', ')}); \`listens\` still loads as those rules, after the explicit ones, and will be removed`)
     }
 
-    const reachableBy = strList(t, 'reachable_by', path) ?? ['people']
-    if (has(own, 'reachable_by')) checkReachableBy(reachableBy, `${path}.reachable_by`)
+    // An inherited `reachable_by` was read once, at the default.
+    const reachableByRaw = strList(t, 'reachable_by', path) ?? ['people']
+    const reachableBy = has(own, 'reachable_by') ? readReachableBy(reachableByRaw, `${path}.reachable_by`) : reachableByRaw
 
     const idleRaw = str(t, 'idle', path)
     // An inherited idle was checked once, at the default.
@@ -725,17 +764,18 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     unknownKeys(t, ['ack', 'files', 'messages', 'bots', 'default_app', 'link_previews'], path)
     const ack = str(t, 'ack', path)
     // Which app answers an unmentioned message when several apps are in this channel.
-    const defaultApp = str(t, 'default_app', path)
-    if (defaultApp !== undefined) {
+    const defaultAppRaw = str(t, 'default_app', path)
+    let defaultApp: string | undefined
+    if (defaultAppRaw !== undefined) {
       if (!p.startsWith('slack:') || !namesAChannel(p)) error(`${path}.default_app`, `${p} is not a Slack channel: \`default_app\` picks among the apps in a channel`)
-      else if (!Object.hasOwn(slackApps, defaultApp)) error(`${path}.default_app`, noSuchApp(defaultApp, Object.keys(slackApps)))
+      else defaultApp = appValue(defaultAppRaw, `${path}.default_app`)
     }
     // Hydra reads a Discord channel by id: a place named `discord:#name` can never be matched to a channel, so previews could not be switched off there.
     if (namesDmWithOthers(p)) for (const key of ['link_previews', 'messages', 'bots']) if (Object.hasOwn(t, key)) error(`${path}.${key}`, `${key} does not apply to ${p}: only ack and files do. Remove it.`)
     if (p.startsWith('discord:#') && t.link_previews === false) error(`${path}.link_previews`, 'cannot be set on a Discord channel by name: hydra reads a Discord channel by id, so name it discord:<channel id>')
     places[p] = {
       ...(ack !== undefined && { ack }),
-      ...(defaultApp !== undefined && Object.hasOwn(slackApps, defaultApp) && { defaultApp }),
+      ...(defaultApp !== undefined && { defaultApp }),
       files: bool(t, 'files', path) ?? false,
       messages: oneOf(t, 'messages', path, ['addressed', 'all'] as const) ?? 'addressed',
       bots: bool(t, 'bots', path) ?? false,
@@ -805,21 +845,20 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     const rulePlace = placeRaw === undefined ? undefined : place(placeRaw, at('place'))
     let app: string | undefined
     if (appRaw !== undefined) {
-      if (!Object.hasOwn(slackApps, appRaw)) error(at('app'), noSuchApp(appRaw, Object.keys(slackApps)))
-      else app = appRaw
+      app = appValue(appRaw, at('app'))
       if (rulePlace && !rulePlace.startsWith('slack:')) error(at('app'), `an app is a Slack app, but ${rulePlace} is not a Slack place: set \`place\` to a \`slack:\` place, remove \`place\`, or remove \`app\``)
     }
-    const person = str(t, 'person', path)
-    if (person !== undefined && !has(people, person) && !isRole(person)) error(at('person'), `"${person}" is neither a person nor a role anyone holds`)
+    const personRaw = str(t, 'person', path)
+    const person = personRaw === undefined ? undefined : whoValue(personRaw, at('person'))
     const ruleTargetRaw = str(t, 'target', path)
     if (t.target === undefined) error(at('target'), 'is required: specialist:<name>, or main')
     const ruleTarget = ruleTargetRaw === undefined ? undefined : targetOf(ruleTargetRaw, at('target'), 'rule')
     // Whether `target` can ever take what the rule matches: a pinned specialist only through its `pinned_to` apps, and an app that any specialist is pinned to delivers only to them.
     const specialist = ruleTarget !== undefined ? specialists[ruleTarget] : undefined
     if (specialist && ruleTarget !== undefined) {
-      const pin = `add ${app} to ${ruleTarget}'s \`pinned_to\`, or change the rule's \`app\``
-      if (app && specialist.pinnedTo && !specialist.pinnedTo.includes(app)) error(at('target'), `${ruleTarget} is pinned to ${specialist.pinnedTo.join(', ')}, so app ${app} can never deliver to it: ${pin}`)
-      else if (app && !specialist.pinnedTo && pinnersOf(specialists, app).length) error(at('target'), `app ${app} serves only specialists pinned to it (${pinnersOf(specialists, app).join(', ')}), and ${ruleTarget} is not pinned to it: ${pin}`)
+      const pin = !app ? '' : `add ${spelledApp(app)} to ${ruleTarget}'s \`pinned_to\`, or change the rule's \`app\``
+      if (app && specialist.pinnedTo && !specialist.pinnedTo.includes(app)) error(at('target'), `${ruleTarget} is pinned to ${appList(specialist.pinnedTo)}, so ${spelledApp(app)} can never deliver to it: ${pin}`)
+      else if (app && !specialist.pinnedTo && pinnersOf(specialists, app).length) error(at('target'), `${spelledApp(app)} serves only specialists pinned to it (${pinnersOf(specialists, app).join(', ')}), and ${ruleTarget} is not pinned to it: ${pin}`)
       else if (specialist.pinnedTo && !app && rulePlace && !rulePlace.startsWith('slack:')) error(at('target'), `${ruleTarget} is pinned to Slack apps, so it can never take a message at ${rulePlace}: remove \`pinned_to\` from ${ruleTarget}, or send it a \`slack:\` place instead`)
     }
     if ((rulePlace || app) && ruleTarget) {
@@ -853,7 +892,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (l === 'everyone') return false
     return [...l].every(id => e.has(id))
   }
-  const where = (r: Rule) => r.place && r.app ? `at ${r.place} through app ${r.app}` : r.place ? `at ${r.place}` : `through app ${r.app}`
+  const where = (r: Rule) => r.place && r.app ? `at ${r.place} through ${spelledApp(r.app)}` : r.place ? `at ${r.place}` : `through ${spelledApp(r.app!)}`
   // The apps a rule applies to: its own `app`; else, to a pinned specialist, that specialist's apps; else, to anyone else, every app
   // that no specialist is pinned to (an app that has pinned specialists skips a rule to anyone else). 'any' when pins play no part.
   const appsOf = (r: Rule): string[] | 'any' => {
@@ -874,7 +913,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     const e = appsOf(earlier), l = appsOf(later)
     const shared = e === 'any' ? l : l === 'any' ? e : l.filter(a => e.includes(a))
     // Both name apps (a pin, or an `app`): sharing one is a clash even if each also has another. 'any' on one side clashes only when the other is wholly covered.
-    if (e !== 'any' && l !== 'any') return shared.length ? `app ${(shared as string[]).join(', ')}` : undefined
+    if (e !== 'any' && l !== 'any') return shared.length ? appList(shared as string[]) : undefined
     return appsCover(earlier, later) && !(l !== 'any' && l.length === 0) ? 'any app' : undefined
   }
   /** The apps both rules apply to (an empty list: none; `any` pins play no part on a side, so the other side's apps). */
@@ -900,11 +939,11 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (clashed.has(j)) continue
     // An old `listens` an earlier rule to the same target already covers is redundant, not shadowed: said nowhere.
     const i = rules.findIndex((earlier, k) => k < j && !(fromListens.has(j) && earlier.target === later.target) && (earlier.place === undefined || earlier.place === later.place) && appsCover(earlier, later) && covers(earlier.person, later.person))
-    if (i >= 0) { warn(ruleAt[j], `never matches: ${ruleAt[i]} already takes ${later.person ? `${later.person}'s messages` : 'every message'} ${where(later)}`); continue }
+    if (i >= 0) { warn(ruleAt[j], `never matches: ${ruleAt[i]} already takes ${later.person ? `${whoSpelled(people, later.person)}'s messages` : 'every message'} ${where(later)}`); continue }
     // An old `listens` is not told apart from a rule for everyone by who it takes: when an explicit rule for everyone takes some of its apps (not all), it still loses those.
     if (!fromListens.has(j)) continue
     const k = rules.findIndex((earlier, m) => m < j && !fromListens.has(m) && earlier.target !== later.target && takesEveryone(earlier) && (earlier.place === undefined || earlier.place === later.place) && sharedApps(earlier, later).length > 0)
-    if (k >= 0) warn(ruleAt[j], `gets only some apps: ${ruleAt[k]} already takes every message ${where(rules[k])}, so ${later.target} does not answer it through app ${sharedApps(rules[k], later).join(', ')}`)
+    if (k >= 0) warn(ruleAt[j], `gets only some apps: ${ruleAt[k]} already takes every message ${where(rules[k])}, so ${later.target} does not answer it through ${appList(sharedApps(rules[k], later))}`)
   }
   /** Where a specialist answers every message (see `placesAnsweredBy`). */
   const answered = (id: string): Place[] => placesAnsweredBy({ rules }, id)
@@ -975,7 +1014,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (!app) { if (declaredApps.length) error(path, `${s.id} has a Slack home, and ${declaredApps.length} Slack apps are declared and none is \`default\`: set \`speaks_as\` to the app it posts as`); continue }
     // A pinned specialist's own `speaks_as` was checked against its `pinned_to` above.
     const apart = s.pinnedTo && s.speaksAs ? undefined : whyNotServed(specialists, s, app, 'it would post through')
-    if (apart) error(path, `${apart}: set \`speaks_as\` to an app ${s.id} can be reached through, or pin ${s.id} to ${app}`)
+    if (apart) error(path, `${apart}: set \`speaks_as\` to an app ${s.id} can be reached through, or pin ${s.id} to ${spelledApp(app)}`)
   }
 
   /**
@@ -985,7 +1024,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
    */
   function reachedBy(s: Specialist): string[] {
     const shared = answered(s.id).filter(p => p !== 'cli' && !isDmPlace(p) && dmPerson(p) === undefined)
-    const others = (people_: Person[]) => people_.filter(p => p.id !== operator).map(p => p.id)
+    const others = (people_: Person[]) => people_.filter(p => p.id !== operator).map(p => spelledPerson(p.id))
     const who: string[] = []
     if (s.reachableBy.includes('anyone')) {
       const where = shared.map(p => p.startsWith('github:') ? `who can comment on ${p}` : `in ${p}`)
@@ -1000,7 +1039,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
         const fresh = holders.filter(id => !named.has(id))
         if (!fresh.length) continue
         fresh.forEach(id => named.add(id))
-        who.push(role === 'people' ? `${listJoin(fresh)} (reachable_by = ${JSON.stringify(s.reachableBy)})` : `${listJoin(fresh)} (role "${role}")`)
+        who.push(role === 'people' ? `${listJoin(fresh)} (reachable_by = ${JSON.stringify(s.reachableBy.map(spelledRole))})` : `${listJoin(fresh)} (${spelledRole(role)})`)
       }
     }
     for (const p of answered(s.id)) if (p !== 'cli' && places[p]?.bots) who.push(`any other bot in ${p}`)
@@ -1048,8 +1087,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     }
     if (s.sessions === 'shared') {
       if (answeredAt.length >= 2) warn(path, `one shared session hears ${answeredAt.join(', ')}, so what's said in one place is remembered in the others; use sessions = "per-conversation" or one specialist per place`)
-      else if (answeredAt.includes(SLACK_GROUP_DM) && s.reachableBy.length > 0) warn(path, `one shared session hears every group DM (reachable_by = ${JSON.stringify(s.reachableBy)}), so what one group says is remembered in another; use sessions = "per-conversation" or reachable_by = []`)
-      else if (answeredAt.some(isDmPlace) && s.reachableBy.length > 0) warn(path, `one shared session hears everyone's DMs (reachable_by = ${JSON.stringify(s.reachableBy)}), so one person's DM is remembered in another's; use sessions = "per-conversation" or reachable_by = []`)
+      else if (answeredAt.includes(SLACK_GROUP_DM) && s.reachableBy.length > 0) warn(path, `one shared session hears every group DM (reachable_by = ${JSON.stringify(s.reachableBy.map(spelledRole))}), so what one group says is remembered in another; use sessions = "per-conversation" or reachable_by = []`)
+      else if (answeredAt.some(isDmPlace) && s.reachableBy.length > 0) warn(path, `one shared session hears everyone's DMs (reachable_by = ${JSON.stringify(s.reachableBy.map(spelledRole))}), so one person's DM is remembered in another's; use sessions = "per-conversation" or reachable_by = []`)
     }
     // Without idle, a per-conversation session never ends on its own, so its slot under max_sessions never frees.
     if (s.sessions === 'per-conversation' && s.idleMs === undefined) warn(path, `conversations past max_sessions (${s.maxSessions}) will wait until a session is ended by hand; set idle`)
@@ -1059,7 +1098,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (!s.pinnedTo) for (const app of Object.keys(slackApps)) {
       const by = pinnersOf(specialists, app)
       const lost = answeredViaEveryApp(s.id).find(p => p.startsWith('slack:') && !by.some(y => answeredViaEveryApp(y).includes(p)))
-      if (by.length && lost) warn(path, `${s.id} is unpinned, and app ${app} is pinned by ${by.join(', ')}, so ${s.id} no longer hears ${app} on ${lost}`)
+      if (by.length && lost) warn(path, `${s.id} is unpinned, and ${spelledApp(app)} is pinned by ${by.join(', ')}, so ${s.id} no longer hears ${spelledApp(app)} on ${lost}`)
     }
     for (const p of answeredAt) {
       const platform = p.split(':')[0] as Platform | 'cli'

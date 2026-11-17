@@ -1,5 +1,6 @@
 // A target says its kind: `main`, `specialist:<name>`, `thread:<id>`. A bare specialist name still loads, as the same target, with a warning that
 // names both spellings; the value must fit its kind; a thread is not a rule's or a schedule's target (only a delivery or a binding takes one).
+import { isValueWarning, unkinded } from './value-kinds.js'
 import { describe, test, expect } from 'bun:test'
 import { readFileSync } from 'fs'
 import { join } from 'path'
@@ -39,8 +40,8 @@ describe('a full config of bare targets', () => {
     const r = ok(text('bare-targets.toml'))
     expect(r.config).toEqual(listensAsRules(before.config as any) as any)
     // An explicit rule now counts as where a specialist is heard, so crm (unpinned; `sales` is pinned by deals) is told it lost `sales` at its rule's place: the one added warning.
-    const lost = 'specialists.crm: crm is unpinned, and app sales is pinned by deals, so crm no longer hears sales on slack:#sales-help'
-    expect(r.warnings.filter(w => !kindWarning(w) && !isListensWarning(w) && w !== lost)).toEqual(before.warnings.map(line))
+    const lost = 'specialists.crm: crm is unpinned, and app:sales is pinned by deals, so crm no longer hears app:sales on slack:#sales-help'
+    expect(r.warnings.filter(w => !kindWarning(w) && !isValueWarning(w) && !isListensWarning(w) && w !== lost).map(unkinded)).toEqual(before.warnings.map(line).map(unkinded))
     expect(r.warnings).toContain(lost)
     // Two rules and one schedule name a specialist bare; `main` (twice) is never bare.
     expect(r.warnings.filter(kindWarning).sort()).toEqual([

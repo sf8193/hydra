@@ -52,7 +52,7 @@ name = "Op"                           # shown to specialists (default: the sende
 
 [people.alice]
 addresses = ["slack:U0ALICE"]
-roles = ["staff"]                     # labels for `reachable_by` and a rule's `person`. Built in: `people` (everyone here), `anyone`
+roles = ["staff"]                     # labels for `reachable_by` and a rule's `person`, written `role:staff` there. Built in: `role:people` (everyone here), `role:anyone`
 
 [people.bob]
 addresses = ["slack:U0BOB", "github:bob"]
@@ -78,7 +78,7 @@ renamed_from = ["operations"]         # old ids, so a rename keeps its thread, s
 [specialists.crm]
 workdir = "~/agents/crm"
 kickoff_file = "kickoff.md"           # instead of kickoff; relative to workdir, read at each fresh start
-reachable_by = ["staff"]               # roles (never people) that may reach it (default ["people"]; [] = only the operator)
+reachable_by = ["role:staff"]          # roles (never people), each `role:<name>`, that may reach it (default ["role:people"]; [] = only the operator)
 sessions = "per-conversation"         # "shared" (default): one session for everything; "per-conversation": one per thread
 max_sessions = 5                      # per-conversation cap (default 20); a conversation past it waits, its messages owed, for at most 3 days, then they are dropped and alerted
 idle = "2h"                           # end a quiet session and resume it on the next message (without it, per-conversation slots never free)
@@ -87,8 +87,8 @@ idle = "2h"                           # end a quiet session and resume it on the
 # It shares #help with crm (which answers every app nobody is pinned to, here `default`) because no app reaches both: see the rules below.
 [specialists.deals]
 workdir = "~/agents/ops"
-pinned_to = ["sales"]                 # Slack app ids (declared above). Absent: unpinned. Only Slack places: a pinned specialist can't be sent a discord: or github: place
-speaks_as = "sales"                   # the app it posts as when it answers no message (its home, a new thread); one of `pinned_to` if pinned.
+pinned_to = ["app:sales"]             # Slack apps (declared above), each `app:<id>`. Absent: unpinned. Only Slack places: a pinned specialist can't be sent a discord: or github: place
+speaks_as = "app:sales"               # the app it posts as when it answers no message (its home, a new thread); one of `pinned_to` if pinned.
                                       # Absent: its first pinned app; if unpinned, `default`, else the only app declared. With several apps and no `default`, required for a specialist with a Slack home. A `#name` home is resolved through that app's workspace.
 
 # A specialist other people talk to, restricted: it knows only its workdir, uses only the tools and servers it lists, and answers only its own
@@ -98,8 +98,8 @@ speaks_as = "sales"                   # the app it posts as when it answers no m
 # which shows the same kind of specialist as a file of its own, named `ops`). Its `.env` variables are read when the daemon starts.
 [specialists.helpdesk]
 workdir = "~/agents/helpdesk"
-pinned_to = ["sales"]                 # pinned, because the `sales` app is pinned by deals: an unpinned specialist would lose it (hydra.toml warns)
-reachable_by = ["staff"]
+pinned_to = ["app:sales"]             # pinned, because the `sales` app is pinned by deals: an unpinned specialist would lose it (hydra.toml warns)
+reachable_by = ["role:staff"]
 restricted = true
 tools = ["Read", "Grep", "Glob"]      # built-in tools; these three are the default and all it may list
 mcp_servers = ["datadog"]             # names from [mcp.*] below
@@ -141,7 +141,7 @@ messages = "all"                      # "addressed" (default): only a DM or a ta
 ack = "eyes"                          # a reaction added once a message is delivered
 files = true                          # download attachments (default false)
 bots = false                          # hear other bots (default false; hydra's own bot is never heard)
-default_app = "default"               # a Slack channel only: when two apps are in it, the app that answers a message that tags neither (a tag always picks the app).
+default_app = "app:default"           # a Slack channel only: when two apps are in it, the app that answers a message that tags neither (a tag always picks the app).
                                       # Absent: the app named `default`, else the first app above, among those that deliver to someone here. An untagged follow-up stays with the app that opened the conversation.
 link_previews = true                  # false: no link previews (Slack unfurl_links/unfurl_media, Discord suppress-embeds) on what hydra posts here: replies, new threads, DMs, alerts; not Slack edits (default true)
 
@@ -181,18 +181,18 @@ alert_after = "2d"                    # daemon runner only: how long a failure r
 
 [[rules]]
 place = "slack:#help"
-person = "finance"                    # a person or a role (absent: anyone there)
+person = "role:finance"               # `person:<id>` or `role:<name>` (absent: anyone there)
 target = "specialist:ops"            # "main", or "specialist:<name>"
 
 [[rules]]
 place = "slack:dm:alice"              # with operator_token_env: the operator's DM with the person alice (a [people] id with a Slack address); slack:dm is the DM with the bot, slack:group-dm every group DM
-app = "default"                    # only through this app: the `sales` app is pinned, so it never delivers to ops
+app = "app:default"                # only through this app: the `sales` app is pinned, so it never delivers to ops
 target = "specialist:ops"
 
 [[rules]]
 place = "slack:#help"
-app = "sales"                         # an app alone matches every message that comes through it (which would include a restricted specialist's home: hydra.toml refuses that); with `place`, that place through that app only
-person = "finance"
+app = "app:sales"                     # an app alone matches every message that comes through it (which would include a restricted specialist's home: hydra.toml refuses that); with `place`, that place through that app only
+person = "role:finance"
 target = "specialist:deals"          # must be a specialist the app can reach: pinned to sales, or any specialist while no one pins sales
 
 # Everyone's messages at a place, to the specialist that answers there.

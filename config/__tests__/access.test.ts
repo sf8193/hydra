@@ -302,29 +302,29 @@ describe('the warning for an operator-access specialist someone else can talk to
       expect(warnings('', 'listens = ["slack:dm"]\nreachable_by = []')).toEqual([])
       expect(warnings('', 'listens = ["slack:C0CF123"]\nreachable_by = []')).toEqual([])
     })
-    test('the default reachable_by = ["people"] with a roster of only the operator: no one else, no warning', () => {
+    test('the default reachable_by = ["role:people"] with a roster of only the operator: no one else, no warning', () => {
       expect(warnings('', 'listens = ["slack:dm"]')).toEqual([])
       expect(warnings('', 'listens = ["slack:C0CF123"]')).toEqual([])
     })
-    test('reachable_by = ["people"] with others on the roster names them', () => {
-      expect(warnings('', 'listens = ["slack:dm"]\nreachable_by = ["people"]', WITH_ALICE)).toEqual(WARN('alice and bob (reachable_by = ["people"])'))
+    test('reachable_by = ["role:people"] with others on the roster names them', () => {
+      expect(warnings('', 'listens = ["slack:dm"]\nreachable_by = ["role:people"]', WITH_ALICE)).toEqual(WARN('person:alice and person:bob (reachable_by = ["role:people"])'))
     })
     test('a role names its holders other than the operator', () => {
-      expect(warnings('', 'listens = ["slack:dm"]\nreachable_by = ["staff"]', WITH_ALICE)).toEqual(WARN('alice (role "staff")'))
+      expect(warnings('', 'listens = ["slack:dm"]\nreachable_by = ["role:staff"]', WITH_ALICE)).toEqual(WARN('person:alice (role:staff)'))
     })
-    test('reachable_by = ["anyone"]', () => {
-      expect(warnings('', 'listens = ["slack:dm"]\nreachable_by = ["anyone"]')).toEqual(WARN('anyone'))
+    test('reachable_by = ["role:anyone"]', () => {
+      expect(warnings('', 'listens = ["slack:dm"]\nreachable_by = ["role:anyone"]')).toEqual(WARN('anyone'))
     })
     test('anyone in a shared or public place says which', () => {
-      expect(warnings('', 'listens = ["slack:C0CF123"]\nreachable_by = ["anyone"]')).toEqual(WARN('anyone in slack:C0CF123'))
+      expect(warnings('', 'listens = ["slack:C0CF123"]\nreachable_by = ["role:anyone"]')).toEqual(WARN('anyone in slack:C0CF123'))
     })
     test('anyone, named once, however many roles and places say it', () => {
-      expect(warnings('', 'listens = ["slack:C0CF123", "slack:C0CF456"]\nreachable_by = ["anyone", "people", "staff"]\nsessions = "per-conversation"\nidle = "1h"', WITH_ALICE)).toEqual(WARN('anyone in slack:C0CF123 and slack:C0CF456'))
+      expect(warnings('', 'listens = ["slack:C0CF123", "slack:C0CF456"]\nreachable_by = ["role:anyone", "role:people", "role:staff"]\nsessions = "per-conversation"\nidle = "1h"', WITH_ALICE)).toEqual(WARN('anyone in slack:C0CF123 and slack:C0CF456'))
     })
     test('a github: place, for anyone', () => {
-      const t = `${BASE}\n[connectors.github]\nrepos = ["acme/widget"]\n[specialists.ops]\nworkdir = "~/agents/ops"\nreachable_by = ["anyone"]\n[[rules]]\nplace = "github:acme/widget"\ntarget = "specialist:ops"\n`
+      const t = `${BASE}\n[connectors.github]\nrepos = ["acme/widget"]\n[specialists.ops]\nworkdir = "~/agents/ops"\nreachable_by = ["role:anyone"]\n[[rules]]\nplace = "github:acme/widget"\ntarget = "specialist:ops"\n`
       expect(ok(t).warnings.filter(w => w.includes("the operator's account"))).toEqual(WARN('anyone who can comment on github:acme/widget'))
-      const alone = t.replace('reachable_by = ["anyone"]', 'reachable_by = []')
+      const alone = t.replace('reachable_by = ["role:anyone"]', 'reachable_by = []')
       expect(ok(alone).warnings.filter(w => w.includes("the operator's account"))).toEqual([])
     })
     test('a bots = true place: other bots talk to it whatever allow says', () => {
@@ -339,7 +339,7 @@ describe('the warning for an operator-access specialist someone else can talk to
   })
 
   test('restricted = true has nothing to warn about', () => {
-    expect(warnings('', 'restricted = true\nlistens = ["slack:C0CF123"]\nreachable_by = ["anyone"]')).toEqual([])
+    expect(warnings('', 'restricted = true\nlistens = ["slack:C0CF123"]\nreachable_by = ["role:anyone"]')).toEqual([])
   })
 })
 

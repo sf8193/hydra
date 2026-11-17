@@ -2,11 +2,12 @@
 import { bothNames, normalizeAddress } from '../config/load.js'
 import { noSuchApp } from '../config/pins.js'
 import { DEFAULT_SLACK_APP, type Address, type HydraConfig } from '../config/types.js'
+import { readValue, spelledApp } from '../shared/value-kind.js'
 import { explain, answersLines, route } from './route.js'
 
-export const ROUTE_USAGE = 'usage: hydra route --person <person|address|stranger> --place <place> [--app <app>] [--heard-by <app,app>] [--mentioned <app,app>] [--bound <specialist> [--bound-app <app>]]'
+export const ROUTE_USAGE = 'usage: hydra route --person <person:id|address|stranger> --place <place> [--app <app:id>] [--heard-by <app:id,app:id>] [--mentioned <app:id,app:id>] [--bound <specialist> [--bound-app <app:id>]]'
 
-/** What `hydra route` asks. The app lists are comma-separated app ids. */
+/** What `hydra route` asks. The app lists are comma-separated apps, each `app:<id>` (a bare id still reads). */
 export type RouteParams = { person?: string; place?: string; bound?: string; app?: string; heardBy?: string; mentioned?: string; boundApp?: string }
 
 /** The flags of `hydra route`, read from its arguments. `--as` and `--at` are the old names of `--person` and `--place`: they still work, with a note for stderr. Giving both names of one flag is an error. */
@@ -28,28 +29,43 @@ export function routeFlags(args: string[]): { ok: true; params: RouteParams; not
 }
 
 /**
- * `hydra route --person <person|address|stranger> --place <place> [--app <app>]`: what routing would do with a new message there, every
+ * `hydra route --person <person:id|address|stranger> --place <place> [--app <app:id>]`: what routing would do with a new message there, every
  * candidate and why the winner won. `--app` is the app this check runs for, the one that heard the message (default: the app named
  * `default`); `--heard-by` adds the other apps in the channel, and `--mentioned` lists the apps the text tags, first tag first, so
  * ownership shows too. It reads the config and binds nothing.
  */
 export function routeFor(h: HydraConfig, p: RouteParams, aliases: (place: string, app?: string) => string[]): { ok: true; fate: string; to?: string; report: string } | { ok: false; error: string } {
   if (!p.person || !p.place) return { ok: false, error: ROUTE_USAGE }
+  // An app is `app:<id>`; a bare id still reads. A person is `person:<id>`, an address (`slack:U0ABC`) or `stranger`.
+  const appName = (flag: string, v: string): string | Error => { const r = readValue(v, ['app']); return r.ok ? r.name : new Error(`${flag}: ${r.error}`) }
+  const named0: [string, string | undefined][] = [['`--app`', p.app], ['`--bound-app`', p.boundApp]]
+  for (const [flag, v] of named0) if (v) { const r = appName(flag, v); if (r instanceof Error) return { ok: false, error: r.message } }
+  const listFlag = (flag: string, v: string | undefined): string[] | Error | undefined => {
+    if (!v) return undefined
+    const out: string[] = []
+    for (const a of v.split(',').map(x => x.trim()).filter(Boolean)) { const r = appName(flag, a); if (r instanceof Error) return r; out.push(r) }
+    return out
+  }
+  const [heardBy, mentioned] = [listFlag('`--heard-by`', p.heardBy), listFlag('`--mentioned`', p.mentioned)]
+  if (heardBy instanceof Error) return { ok: false, error: heardBy.message }
+  if (mentioned instanceof Error) return { ok: false, error: mentioned.message }
+  const bare = (v: string | undefined) => v === undefined ? undefined : (appName('', v) as string)
+  const [person, place] = [p.person, p.place]
+  p = { ...p, ...(p.app && { app: bare(p.app) }), ...(p.boundApp && { boundApp: bare(p.boundApp) }) }
   if (p.boundApp && !p.bound) return { ok: false, error: '--bound-app goes with --bound: it names the app the conversation bound to that specialist is bound through' }
   let from: Address | undefined
-  if (p.person !== 'stranger') {
-    const known = h.people[p.person]
-    from = known ? known.addresses[0] : normalizeAddress(p.person)
-    if (!from) return { ok: false, error: `"${p.person}" is neither a person in hydra.toml nor an address like slack:U0ABC` }
+  if (person !== 'stranger') {
+    const personId = person.startsWith('person:') ? person.slice('person:'.length) : person
+    const known = h.people[personId]
+    from = known ? known.addresses[0] : normalizeAddress(personId)
+    if (!from) return { ok: false, error: `"${person}" is neither a person in hydra.toml (person:<id>) nor an address like slack:U0ABC` }
   }
-  const list = (v: string | undefined) => v ? v.split(',').map(a => a.trim()).filter(Boolean) : undefined
-  const at = aliases(p.place, p.app)   // channel names are read per app: each reads its own workspace's
+  const at = aliases(place, p.app)   // channel names are read per app: each reads its own workspace's
   // An app only means something on a Slack place; elsewhere the message came through no app.
   const slack = at.some(x => x.startsWith('slack:'))
   const app = p.app || DEFAULT_SLACK_APP
-  const heardBy = list(p.heardBy), mentioned = list(p.mentioned)
   const named: [string, string][] = [
-    ...(slack ? [[p.app ? '`--app`' : `\`--app\` (default \`${DEFAULT_SLACK_APP}\`)`, app] as [string, string]] : []),
+    ...(slack ? [[p.app ? '`--app`' : `\`--app\` (default \`${spelledApp(DEFAULT_SLACK_APP)}\`)`, app] as [string, string]] : []),
     ...(heardBy ?? []).map(a => ['`--heard-by`', a] as [string, string]),
     ...(mentioned ?? []).map(a => ['`--mentioned`', a] as [string, string]),
     ...(p.boundApp ? [['`--bound-app`', p.boundApp] as [string, string]] : []),

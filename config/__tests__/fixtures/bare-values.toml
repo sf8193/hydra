@@ -1,0 +1,45 @@
+# A full config with every named value written bare: a rule's person (a person, then a role) and app, a specialist's reachable_by, pinned_to and speaks_as, a place's default_app.
+# Loaded before and after values said their kind.
+operator = "op"
+[connectors.slack]
+bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"
+[slack.apps.sales]
+bot_token_env = "SALES_SLACK_BOT_TOKEN"
+[people.op]
+addresses = ["slack:U0OP"]
+[people.alice]
+addresses = ["slack:U0ALICE"]
+roles = ["finance"]
+[people.bob]
+addresses = ["slack:U0BOB"]
+[defaults.specialist]
+reachable_by = ["people"]
+[specialists.ops]
+workdir = "/home/op/ops"
+reachable_by = ["finance", "anyone"]
+[specialists.deals]
+workdir = "/home/op/deals"
+pinned_to = ["sales"]
+speaks_as = "sales"
+reachable_by = ["finance"]
+[specialists.crm]
+workdir = "/home/op/crm"
+sessions = "per-conversation"
+reachable_by = []
+[places."slack:#sales"]
+default_app = "sales"
+[[rules]]
+place = "slack:#sales"
+person = "alice"
+target = "specialist:crm"
+[[rules]]
+place = "slack:#sales"
+person = "finance"
+target = "specialist:ops"
+[[rules]]
+app = "sales"
+target = "specialist:deals"
+[[rules]]
+place = "slack:#oncall"
+person = "anyone"
+target = "main"

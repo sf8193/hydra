@@ -443,7 +443,7 @@ describe('a pinned specialist is not reached through another app, even by the gu
     await t.settle()
     expect(t.sent.map(s => s.to)).toEqual(['crm'])
     expect(t.logs.join()).toContain('the guard redirected')
-    expect(t.alerts.some(a => a.includes('deals is pinned to app sales, and this message came through app default'))).toBe(true)
+    expect(t.alerts.some(a => a.includes('deals is pinned to app:sales, and this message came through app:default'))).toBe(true)
   })
 
   test('through its own app the same redirect is honoured', async () => {
@@ -755,7 +755,7 @@ describe('a thread bound through two apps', () => {
 
 describe('the owner is fixed by the first copy', () => {
   test('if who is in the channel changes between two apps’ copies of one message, still exactly one answers', async () => {
-    const t = setup(sharedChannel(CH, `[places."slack:${CH}"]\nmessages = "all"\ndefault_app = "sales"\n`), { members: { default: [CH], [SALES]: [] } })
+    const t = setup(sharedChannel(CH, `[places."slack:${CH}"]\nmessages = "all"\ndefault_app = "app:sales"\n`), { members: { default: [CH], [SALES]: [] } })
     await t.start()
     // `default` decides first: `sales` is not known to be in the channel, so it owns the message.
     t.fakes.default.handler({ channel: CH, user: 'UB', ts: '1100.000001', text: 'hello' })
@@ -851,7 +851,7 @@ describe('health is per app: scopes', () => {
   })
 
   test('a lone `default` says no app, and names the manifest command without one', async () => {
-    const t = setup(`${TWO_APPS}`.split('[slack.apps.sales]')[0] + '[specialists.crm]\nworkdir = "/w/crm"\nreachable_by = ["anyone"]\n[[rules]]\nplace = "slack:C0FOOD"\ntarget = "specialist:crm"\n', { scopes: { default: ['channels:history'] } })
+    const t = setup(`${TWO_APPS}`.split('[slack.apps.sales]')[0] + '[specialists.crm]\nworkdir = "/w/crm"\nreachable_by = ["role:anyone"]\n[[rules]]\nplace = "slack:C0FOOD"\ntarget = "specialist:crm"\n', { scopes: { default: ['channels:history'] } })
     await t.listeners.default.start()
     const said = t.alerts.filter(a => a.includes('bot token'))
     expect(said).toHaveLength(1)
@@ -872,14 +872,14 @@ socket_token_env = "S_APP"
 addresses = ["github:op"]
 [specialists.crm]
 workdir = "/w/crm"
-reachable_by = ["anyone"]
+reachable_by = ["role:anyone"]
 [[rules]]
 place = "slack:G0PRIV"
 target = "specialist:crm"
 [specialists.deals]
 workdir = "/w/deals"
-pinned_to = ["sales"]
-reachable_by = ["anyone"]
+pinned_to = ["app:sales"]
+reachable_by = ["role:anyone"]
 [[rules]]
 place = "slack:dm"
 target = "specialist:deals"
@@ -994,7 +994,7 @@ describe('a two-app config routes, replies and catches up per app', () => {
 
 describe('a pinned specialist cannot be reached through any other app', () => {
   test('where only a specialist pinned to sales listens, a tag of the app `default` reaches no one, and a tag of sales reaches it', async () => {
-    const toml = `${TWO_APPS}\n[specialists.deals]\nworkdir = "/w/deals"\npinned_to = ["sales"]\nreachable_by = ["anyone"]\n[[rules]]\nplace = "slack:${CH}"\ntarget = "specialist:deals"\n`
+    const toml = `${TWO_APPS}\n[specialists.deals]\nworkdir = "/w/deals"\npinned_to = ["app:sales"]\nreachable_by = ["role:anyone"]\n[[rules]]\nplace = "slack:${CH}"\ntarget = "specialist:deals"\n`
     const t = setup(toml, { members: BOTH })
     await t.start()
     t.say({ ts: '1100.000001', text: `<@${BOT}> hello?` })

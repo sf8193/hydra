@@ -84,7 +84,7 @@ export function migrateSlackWatch(raw: unknown): SlackWatchMigration {
     }
     // from → reachable_by. A user id has no role to name, so it gets one: `<to>-reach`.
     const from = r.from ?? 'people'
-    const reachableBy = from === 'anyone' ? ['anyone'] : from === 'people' ? ['people'] : Array.isArray(from) ? from.flatMap(x => {
+    const roleNames = from === 'anyone' ? ['anyone'] : from === 'people' ? ['people'] : Array.isArray(from) ? from.flatMap(x => {
       if (typeof x !== 'string') return []
       if (roleOf.has(x)) return [roleOf.get(x)!]
       if (SLACK_ID.test(x)) {
@@ -98,6 +98,7 @@ export function migrateSlackWatch(raw: unknown): SlackWatchMigration {
       note(`routes[${i}].from: "${x}" is neither a role in people nor a user id; left out`)
       return []
     }) : []
+    const reachableBy = roleNames.map(r => `role:${r}`)
     if (s.reachable_by.length && JSON.stringify([...s.reachable_by].sort()) !== JSON.stringify([...new Set(reachableBy)].sort())) {
       note(`routes[${i}]: ${to} is reached from several routes with different "from"; its reachable_by is now their union, since one specialist has one reachable_by`)
     }

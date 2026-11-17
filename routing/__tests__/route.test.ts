@@ -24,17 +24,17 @@ roles = ["staff"]
 addresses = ["slack:U0BOB"]
 [[rules]]
 place = "slack:#help"
-person = "alice"
+person = "person:alice"
 target = "specialist:crm-finance"
 [specialists.crm]
 workdir = "/a/crm"
-reachable_by = ["staff"]
+reachable_by = ["role:staff"]
 [[rules]]
 place = "slack:#help"
 target = "specialist:crm"
 [specialists.crm-finance]
 workdir = "/a/fin"
-reachable_by = ["staff"]
+reachable_by = ["role:staff"]
 [specialists.assistant]
 workdir = "/a/asst"
 reachable_by = []
@@ -43,7 +43,7 @@ place = "slack:dm"
 target = "specialist:assistant"
 [specialists.open]
 workdir = "/a/open"
-reachable_by = ["anyone"]
+reachable_by = ["role:anyone"]
 [[rules]]
 place = "slack:#lobby"
 target = "specialist:open"
@@ -137,7 +137,7 @@ describe('allow', () => {
 test('explain prints every candidate and why the winner won', () => {
   const out = explain(route(CFG, msg('slack:U0ALICE', ['slack:#help'])), '/bin/guard')
   expect(out).toBe([
-    'person: alice, roles staff, people, anyone',
+    'sender: person:alice, roles role:staff, role:people, role:anyone',
     '  → rule specialist:crm-finance: rules[0]: first rule that matches',
     '    rule specialist:crm: rules[1] matches, but an earlier rule won',
     '    rule specialist:assistant: rules[2] is for place slack:dm',
@@ -169,7 +169,7 @@ roles = ["staff"]
 const TWO = load(`${APPS}
 [specialists.crm]
 workdir = "/a/crm"
-reachable_by = ["staff"]
+reachable_by = ["role:staff"]
 [[rules]]
 place = "slack:#help"
 target = "specialist:crm"
@@ -178,18 +178,18 @@ place = "slack:#lobby"
 target = "specialist:crm"
 [specialists.deals]
 workdir = "/a/deals"
-pinned_to = ["sales"]
-reachable_by = ["staff"]
+pinned_to = ["app:sales"]
+reachable_by = ["role:staff"]
 [[rules]]
 place = "slack:#help"
 target = "specialist:deals"
 [specialists.desk]
 workdir = "/a/desk"
-pinned_to = ["support"]
-reachable_by = ["staff"]
+pinned_to = ["app:support"]
+reachable_by = ["role:staff"]
 [specialists.triage]
 workdir = "/a/triage"
-reachable_by = ["staff"]
+reachable_by = ["role:staff"]
 `)
 const HELP = ['slack:C0HELP', 'slack:#help']
 const inApp = (app: string, extra: Partial<Inbound> = {}) => msg('slack:U0ALICE', HELP, { app, ...extra })
@@ -219,17 +219,17 @@ describe('old configs route as before', () => {
 describe('rules match an app, a place, or both', () => {
   // `crm` is sent #help unless a test names a rule for #help itself: two rules that take everything at one place are an error.
   const withRules = (rules: string, baseline = '[[rules]]\nplace = "slack:#help"\ntarget = "specialist:crm"\n') => load(`${APPS}
-${rules}[specialists.crm]\nworkdir = "/a/crm"\nreachable_by = ["staff"]\n${baseline}[specialists.sales-desk]
+${rules}[specialists.crm]\nworkdir = "/a/crm"\nreachable_by = ["role:staff"]\n${baseline}[specialists.sales-desk]
 workdir = "/a/sd"
-reachable_by = ["staff"]
+reachable_by = ["role:staff"]
 [specialists.ops-desk]
 workdir = "/a/od"
-reachable_by = ["staff"]
+reachable_by = ["role:staff"]
 `)
   const to = (cfg: HydraConfig, m: Inbound) => { const d = route(cfg, m); return 'to' in d ? `${d.to} (${d.via})` : d.fate }
 
   test('a rule with only an app takes every place that app hears', () => {
-    const cfg = withRules('[[rules]]\napp = "sales"\ntarget = "specialist:sales-desk"\n')
+    const cfg = withRules('[[rules]]\napp = "app:sales"\ntarget = "specialist:sales-desk"\n')
     expect(to(cfg, inApp('sales'))).toBe('sales-desk (rule)')
     expect(to(cfg, msg('slack:U0ALICE', ['slack:C0ELSE', 'slack:#else'], { app: 'sales' }))).toBe('sales-desk (rule)')
     expect(to(cfg, inApp('default'))).toBe('crm (rule)')
@@ -240,17 +240,17 @@ reachable_by = ["staff"]
     expect(to(cfg, msg('slack:U0ALICE', ['slack:#help']))).toBe('ops-desk (rule)')   // no app given: default
   })
   test('a rule with both takes that place through that app only', () => {
-    const cfg = withRules('[[rules]]\nplace = "slack:#help"\napp = "sales"\ntarget = "specialist:sales-desk"\n')
+    const cfg = withRules('[[rules]]\nplace = "slack:#help"\napp = "app:sales"\ntarget = "specialist:sales-desk"\n')
     expect(to(cfg, inApp('sales'))).toBe('sales-desk (rule)')
     expect(to(cfg, inApp('default'))).toBe('crm (rule)')
     expect(to(cfg, msg('slack:U0ALICE', ['slack:#else'], { app: 'sales' }))).toBe('unrouted')
   })
   test('first match wins across kinds, in file order; from refines app and place', () => {
-    const cfg = withRules('[[rules]]\napp = "sales"\nperson = "alice"\ntarget = "specialist:sales-desk"\n[[rules]]\nplace = "slack:#help"\ntarget = "specialist:ops-desk"\n', '')
+    const cfg = withRules('[[rules]]\napp = "app:sales"\nperson = "person:alice"\ntarget = "specialist:sales-desk"\n[[rules]]\nplace = "slack:#help"\ntarget = "specialist:ops-desk"\n', '')
     expect(to(cfg, inApp('sales'))).toBe('sales-desk (rule)')
     expect(to(cfg, msg('slack:U0OP', HELP, { app: 'sales' }))).toBe('ops-desk (rule)')
     const d = route(cfg, inApp('support'))
-    expect(d.trace[0]).toMatchObject({ via: 'rule', matched: false, why: 'rules[0] is for app sales, and this came through support' })
+    expect(d.trace[0]).toMatchObject({ via: 'rule', matched: false, why: 'rules[0] is for app:sales, and this came through app:support' })
   })
 })
 
@@ -274,11 +274,11 @@ place = "slack:#help"
 target = "specialist:deals"
 [specialists.deals]
 workdir = "/a/deals"
-pinned_to = ["sales"]
-reachable_by = ["staff"]
+pinned_to = ["app:sales"]
+reachable_by = ["role:staff"]
 [specialists.crm]
 workdir = "/a/crm"
-reachable_by = ["staff"]
+reachable_by = ["role:staff"]
 [[rules]]
 place = "slack:#help"
 target = "specialist:crm"
@@ -292,7 +292,7 @@ target = "specialist:crm"
   test('is unreachable through another app by an existing binding: routed anew, never delivered', () => {
     const d = route(TWO, inApp('default', { bound: 'deals' }))
     expect(d.trace[0]).toMatchObject({ via: 'binding', to: 'deals', matched: false })
-    expect(d.trace[0].why).toBe('this conversation is bound to deals, but deals is pinned to app sales, and this message came through app default; routed anew')
+    expect(d.trace[0].why).toBe('this conversation is bound to deals, but deals is pinned to app:sales, and this message came through app:default; routed anew')
     expect(d).toMatchObject({ fate: 'deliver', to: 'crm', via: 'rule' })
     // through its own app the binding holds
     expect(route(TWO, inApp('sales', { bound: 'deals' }))).toMatchObject({ fate: 'deliver', to: 'deals', via: 'binding', bind: false })
@@ -301,7 +301,7 @@ target = "specialist:crm"
     const cfg = load(`${APPS}
 [specialists.deals]
 workdir = "/a/deals"
-pinned_to = ["sales"]
+pinned_to = ["app:sales"]
 reachable_by = []
 [[rules]]
 place = "slack:dm"
@@ -317,8 +317,8 @@ target = "specialist:deals"
     // sales is pinned by deals, so crm (unpinned) is unreachable through it even where a rule names crm
     const d = route(TWO, msg('slack:U0ALICE', ['slack:#lobby'], { app: 'sales' }))
     expect(d.trace.find(s => s.to === 'crm')).toMatchObject({ matched: false })
-    expect(d.trace.find(s => s.to === 'crm' && s.why.startsWith('rules[1]'))?.why).toBe('rules[1] matches, but app sales serves only specialists pinned to it (deals), and crm is not pinned; skipped')
-    expect(route(TWO, inApp('sales', { bound: 'crm' })).trace[0].why).toContain('app sales serves only specialists pinned to it')
+    expect(d.trace.find(s => s.to === 'crm' && s.why.startsWith('rules[1]'))?.why).toBe('rules[1] matches, but app:sales serves only specialists pinned to it (deals), and crm is not pinned; skipped')
+    expect(route(TWO, inApp('sales', { bound: 'crm' })).trace[0].why).toContain('app:sales serves only specialists pinned to it')
     expect(route(TWO, inApp('sales', { bound: 'crm' }))).toMatchObject({ to: 'deals', via: 'rule' })
   })
   test('a message that came through no Slack app reaches no pinned specialist', () => {
@@ -340,7 +340,7 @@ describe('two apps in one channel: exactly one owns it', () => {
     expect(owners(r)).toEqual(['default'])
     expect(r.sales.fate).toBe('ignored')
     expect(r.sales.trace[0]).toMatchObject({ via: 'owner', to: 'default', matched: false })
-    expect(r.sales.trace[0].why).toBe('sales heard it, but default owns it (no tag, and no `default_app` for this place; the app named `default` is in the channel), so only default answers')
+    expect(r.sales.trace[0].why).toBe('app:sales heard it, but app:default owns it (no tag, and no `default_app` for this place; the app named `app:default` is in the channel), so only app:default answers')
     expect(r.default).toMatchObject({ fate: 'deliver', to: 'crm', owner: 'default' })
   })
   test('no tag, no default_app, `default` not among them: the first declared app owns it', () => {
@@ -350,7 +350,7 @@ describe('two apps in one channel: exactly one owns it', () => {
     // the same message, seen by each app; `default` did not hear it
     const each = Object.fromEntries(['support', 'sales'].map(a => [a, route(cfg, { ...inApp(a), heardBy: ['support', 'sales'] })]))
     expect(owners(each)).toEqual(['sales'])   // sales is declared before support
-    expect(each.support.trace[0].why).toBe('support heard it, but sales owns it (no tag, no `default_app` for this place, and the app named `default` is not in the channel; sales is the first declared app that delivers to someone here), so only sales answers')
+    expect(each.support.trace[0].why).toBe('app:support heard it, but app:sales owns it (no tag, no `default_app` for this place, and the app named `app:default` is not in the channel; app:sales is the first declared app that delivers to someone here), so only app:sales answers')
     expect(r).toBeDefined()
   })
   test('the place\'s default_app owns it, ahead of `default` and declaration order', () => {
@@ -358,7 +358,7 @@ describe('two apps in one channel: exactly one owns it', () => {
     placeDefault(cfg, 'sales')
     const r = asEach(cfg, both())
     expect(owners(r)).toEqual(['sales'])
-    expect(r.default.trace[0].why).toBe("default heard it, but sales owns it (sales is this place's `default_app`), so only sales answers")
+    expect(r.default.trace[0].why).toBe("app:default heard it, but app:sales owns it (app:sales is this place's `default_app`), so only app:sales answers")
     expect(r.sales).toMatchObject({ fate: 'deliver', to: 'deals' })
     // a default_app that did not hear it is skipped: back to `default`
     placeDefault(cfg, 'support')
@@ -391,7 +391,7 @@ describe('two apps in one channel: exactly one owns it', () => {
     placeDefault(cfg, 'sales')
     const r = asEach(cfg, both({ bound: 'crm', boundApp: 'default' }))
     expect(owners(r)).toEqual(['default'])
-    expect(r.sales.trace[0].why).toBe('sales heard it, but default owns it (default opened this conversation, and no app is tagged), so only default answers')
+    expect(r.sales.trace[0].why).toBe('app:sales heard it, but app:default owns it (app:default opened this conversation, and no app is tagged), so only app:default answers')
     // the opener is gone from the channel: ownership is decided anew
     expect(owners(asEach(TWO, { heardBy: ['sales', 'support'], boundApp: 'default' }))).toEqual(['sales'])
   })
@@ -409,7 +409,7 @@ describe('two apps in one channel: exactly one owns it', () => {
     const r = asEach(cfg, both())
     expect(owners(r)).toEqual(['sales'])
     expect(r.sales).toMatchObject({ fate: 'deliver', to: 'deals', owner: 'sales' })
-    expect(r.default.trace[0].why).toContain('the app named `default` delivers to no one here; sales is the first declared app that delivers to someone here')
+    expect(r.default.trace[0].why).toContain('the app named `app:default` delivers to no one here; app:sales is the first declared app that delivers to someone here')
   })
   test('an explicit default_app is honored even if it reaches no one: the message is unrouted, never handed on', () => {
     const cfg = structuredClone(TWO)
@@ -434,7 +434,7 @@ describe('two apps in one channel: exactly one owns it', () => {
     expect(route(TWO, { ...m, app: 'sales', heardBy: ['default'] }).fate).toBe('ignored')
   })
   test('owningApp is a pure function of the config and the message', () => {
-    expect(owningApp(TWO, { at: HELP, app: 'sales' })).toEqual({ app: 'sales', why: 'sales is the only app that heard it', contested: false })
+    expect(owningApp(TWO, { at: HELP, app: 'sales' })).toEqual({ app: 'sales', why: 'app:sales is the only app that heard it', contested: false })
     expect(owningApp(TWO, { at: HELP, app: 'support', heardBy: ['sales'] })).toMatchObject({ app: 'sales', contested: true })
     expect(owningApp(TWO, { at: ['slack:#else'] })).toMatchObject({ app: 'default', contested: false })
     expect(owningApp(TWO, { at: ['cli'] })).toBeUndefined()
@@ -465,20 +465,20 @@ describe('refusal knows the app', () => {
   const op = identify(TWO, 'slack:U0OP')
   test('with an app, a specialist that app cannot be served by is refused, the operator too; without, only allow is judged', () => {
     expect(refusal(TWO, 'deals', alice)).toBeUndefined()
-    expect(refusal(TWO, 'deals', op, { app: 'default' })).toBe('deals is pinned to app sales, and this message came through app default')
+    expect(refusal(TWO, 'deals', op, { app: 'default' })).toBe('deals is pinned to app:sales, and this message came through app:default')
     expect(refusal(TWO, 'deals', alice, { app: 'sales' })).toBeUndefined()
-    expect(refusal(TWO, 'crm', alice, { app: 'sales' })).toBe('app sales serves only specialists pinned to it (deals), and crm is not pinned')
+    expect(refusal(TWO, 'crm', alice, { app: 'sales' })).toBe('app:sales serves only specialists pinned to it (deals), and crm is not pinned')
     expect(refusal(TWO, 'main', op, { app: 'sales' })).toBeUndefined()
   })
 })
 
 test('explain shows the app, who owns the message, and a non-owner standing down', () => {
   const own = explain(route(TWO, inApp('default', { heardBy: ['default', 'sales'] })))
-  expect(own).toContain('app: default (owns this message)')
-  expect(own).toContain('→ owner default: default owns it:')
+  expect(own).toContain('through: app:default (owns this message)')
+  expect(own).toContain('→ owner app:default: app:default owns it:')
   const other = explain(route(TWO, inApp('sales', { heardBy: ['default', 'sales'] })))
-  expect(other).toContain('app: sales (does not own it: default does)')
-  expect(other.split('\n').at(-1)).toBe('ignored: default owns this message, so sales does not answer')
+  expect(other).toContain('through: app:sales (does not own it: app:default does)')
+  expect(other.split('\n').at(-1)).toBe('ignored: app:default owns this message, so app:sales does not answer')
 })
 
 describe('DM places: one name, one meaning', () => {
@@ -492,19 +492,19 @@ ids = ["slack:U0OP"]
 ids = ["slack:U0ALICE"]
 [specialists.assistant]
 workdir = "/a/asst"
-reachable_by = ["anyone"]
+reachable_by = ["role:anyone"]
 [[rules]]
 place = "slack:dm"
 target = "specialist:assistant"
 [specialists.alices]
 workdir = "/a/alices"
-reachable_by = ["anyone"]
+reachable_by = ["role:anyone"]
 [[rules]]
 place = "slack:dm:alice"
 target = "specialist:alices"
 [specialists.huddle]
 workdir = "/a/huddle"
-reachable_by = ["anyone"]
+reachable_by = ["role:anyone"]
 [[rules]]
 place = "slack:group-dm"
 target = "specialist:huddle"

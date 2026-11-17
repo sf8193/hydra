@@ -1,6 +1,7 @@
 // A specialist's `allow`, `mcp` and `talks_to`, and `[defaults] private_roots`, are now `reachable_by`, `mcp_servers`, `sends_to` and
 // `[restricted] off_limits`. The old names still load, as the new ones, with a warning that names the new key; both names is an error;
 // unknown keys are still refused; an invalid value is reported at the key the file has.
+import { isValueWarning } from './value-kinds.js'
 import { describe, test, expect } from 'bun:test'
 import { readFileSync } from 'fs'
 import { join } from 'path'
@@ -67,7 +68,7 @@ describe('a full config in the old names', () => {
     const [a, b] = [ok(old), ok(now)]
     expect(b.config).toEqual(a.config)
     expect(renameWarnings(b.warnings)).toEqual([])
-    expect(b.warnings).toEqual(a.warnings.filter(w => !renameWarnings([w]).length))
+    expect(b.warnings.filter(w => !isValueWarning(w))).toEqual(a.warnings.filter(w => !renameWarnings([w]).length && !isValueWarning(w)))
   })
 
   test('the loaded config holds the values the old names gave', () => {
@@ -81,10 +82,10 @@ describe('a full config in the old names', () => {
 
 describe('`allow` is now `reachable_by`', () => {
   test('the new name works, and says roles', () => {
-    expect(ok(spec('reachable_by = ["staff"]')).config.specialists.ops.reachableBy).toEqual(['staff'])
-    expect(renameWarnings(ok(spec('reachable_by = ["staff"]')).warnings)).toEqual([])
-    expect(load(spec('reachable_by = ["alice"]')).errors).toEqual(['specialists.ops.reachable_by[0]: "alice" is a person, and reachable_by lists roles: give them a role in [people.alice] and list that role'])
-    expect(load(spec('reachable_by = ["ghost"]')).errors).toEqual(['specialists.ops.reachable_by[0]: no one holds the role "ghost": reachable_by lists roles, so give a person that role in [people.<id>] roles'])
+    expect(ok(spec('reachable_by = ["role:staff"]')).config.specialists.ops.reachableBy).toEqual(['staff'])
+    expect(renameWarnings(ok(spec('reachable_by = ["role:staff"]')).warnings)).toEqual([])
+    expect(load(spec('reachable_by = ["alice"]')).errors).toEqual(['specialists.ops.reachable_by[0]: "alice" is a person, and reachable_by lists roles: give them a role in [people.alice] and list role:<name>'])
+    expect(load(spec('reachable_by = ["role:ghost"]')).errors).toEqual(['specialists.ops.reachable_by[0]: no one holds the role "ghost": reachable_by lists roles, so give a person that role in [people.<id>] roles'])
   })
   test('the old name works and warns', () => {
     const r = ok(spec('allow = ["staff"]'))
@@ -92,7 +93,7 @@ describe('`allow` is now `reachable_by`', () => {
     expect(renameWarnings(r.warnings)).toEqual(['specialists.ops.allow: rename `allow` to `reachable_by`; `allow` still loads and will be removed'])
   })
   test('both names is an error', () => {
-    expect(load(spec('allow = ["staff"]\nreachable_by = ["staff"]')).errors).toEqual(['specialists.ops.allow: is the old name of `reachable_by`, which is also set: keep `reachable_by` and delete `allow`'])
+    expect(load(spec('allow = ["staff"]\nreachable_by = ["role:staff"]')).errors).toEqual(['specialists.ops.allow: is the old name of `reachable_by`, which is also set: keep `reachable_by` and delete `allow`'])
   })
   test('an invalid value is refused at the key the file has', () => {
     expect(load(spec('allow = ["ghost"]')).errors[0]).toStartWith('specialists.ops.allow[0]: no one holds the role "ghost"')
