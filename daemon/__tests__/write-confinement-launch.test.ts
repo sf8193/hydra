@@ -96,6 +96,11 @@ describe('every way a session starts gets the settings', () => {
     expect(fake.calls().slice(before).some(c => c.startsWith('new-session'))).toBe(false)
   })
 
+  test('every start tells its bridge it is write-confined (HYDRA_WRITE_CONFINED), so a record that is gone cannot widen it; no other launch does', async () => {
+    for (const extra of [{}, { resumeFrom: 'C-old' }, { forkFrom: { claudeSessionId: 'C-parent' } }]) expect(await launch(extra)).toContain("export HYDRA_WRITE_CONFINED=1")
+    expect(await launch({}, null)).not.toContain('HYDRA_WRITE_CONFINED')
+  })
+
   test('no servers listed: no --mcp-config', async () => {
     expect(await launch({}, policyOf({ servers: [] }))).not.toContain('--mcp-config')
   })

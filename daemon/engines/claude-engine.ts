@@ -142,6 +142,8 @@ function buildSpawnEnv(input: LaunchInput): string[] {
     `export HYDRA_SESSION_NAME=${shq(input.tmuxName)}`,
     `export HYDRA_THREAD_ID=${shq(input.threadId ?? '')}`,
     `export HYDRA_SESSION_TYPE=${shq(input.sessionType ?? '')}`,
+    // A write-confined launch says so to its bridge, which declares it at registration (tool-surface noteDeclaredSessionType): a record that is gone must not widen it.
+    ...(input.policy?.canOnlyWriteTo && !confined(input.policy, input.tmuxName) ? ['export HYDRA_WRITE_CONFINED=1'] : []),
     ...(forkedFromClaudeSessionId ? [`export HYDRA_FORKED_FROM_CLAUDE_SESSION_ID=${shq(forkedFromClaudeSessionId)}`] : []),
     `export DAEMON_SOCK=${shq(SOCK_PATH)}`,
     `export CLAUDE_CONFIG_DIR=${shq(CLAUDE_CONFIG)}`,

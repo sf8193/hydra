@@ -283,6 +283,13 @@ export const BASE_TOOLS: Readonly<Record<SessionType, ReadonlySet<ToolName>>> = 
   ]),
 }
 
+/**
+ * What a write-confined session (`can_only_write_to`) holds: a restricted session's tools without `send_to_thread`, and no capability adds to them.
+ * It runs on the operator's account and the daemon acts with that authority for every bridge call, so it holds nothing that starts, lists, reads,
+ * messages or ends another session. Derived from `scoped`, so the two never drift into separate lists.
+ */
+export const CONFINED_TOOLS: ReadonlySet<ToolName> = new Set([...BASE_TOOLS.scoped].filter(t => t !== 'send_to_thread'))
+
 export type Capability = 'protocol_context' | 'protocol_spawn' | 'main_handoff'
 // Derived by tool-surface from session state, never stored: not a Capability, so addCapability, a protocol phase and the loader all refuse it.
 export type DerivedCapability = 'predecessor' | 'conversations'
