@@ -339,7 +339,7 @@ export type Schedule = {
   paused?: true
   /** An IANA zone name: `cron` is that zone's wall-clock time, not the host's. Daemon runner only. */
   timezone?: string
-  /** Daemon runner only: preconditions checked before a run; unmet is "not now", and the slot stays owed. */
+  /** Daemon runner only: preconditions checked before a run; unmet is deferred, and the slot stays owed. */
   needs?: Need[]
   /** Daemon runner only: how long a failure run lasts before the operator is alerted, once. Default 1 day. */
   alertAfterMs?: number
@@ -373,7 +373,7 @@ export type Guard = {
   command: string
   timeoutMs: number
   includeText: boolean
-  /** How long a "not now" (exit 75) may keep a message owed. */
+  /** How long a deferred (exit 75) may keep a message owed. */
   owedMaxMs: number
 }
 

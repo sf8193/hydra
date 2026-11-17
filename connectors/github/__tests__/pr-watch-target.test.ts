@@ -113,7 +113,7 @@ describe('poll → target', () => {
     prWatchDeps.api = (orig => async (e: string) => e.includes('check-runs')
       ? { check_runs: [{ name: 'ci', status: 'completed', conclusion: 'failure', html_url: '' }] }
       : orig(e))(prWatchDeps.api)
-    answer = { ok: false, exit: 5, reason: 'not now' }
+    answer = { ok: false, exit: 5, reason: 'deferred' }
     await _pollForTesting(entry()!)
     expect(entry()!.lastCheckStatus).toBe('pending')
     answer = landed()

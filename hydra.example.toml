@@ -98,6 +98,7 @@ workdir = "~/agents/ops"
 pinned_to = ["app:sales"]             # Slack apps (declared above), each `app:<id>`: only these apps deliver to it, and it takes nothing from other apps. Absent: unpinned. Only Slack places: a pinned specialist can't be sent a discord: or github: place
 speaks_as = "app:sales"               # the Slack app whose bot posts for it when it answers no message (its home_place, a new thread); one of `pinned_to` if pinned.
                                       # Absent: its first pinned app; if unpinned, `default`, else the only app declared. With several apps and no `default`, required for a specialist with a Slack home_place. A `#name` home_place is resolved through that app's workspace.
+                                      # `speaks_as` is which app speaks (who); `home_place` is where it posts (a place).
 
 # A specialist other people talk to, restricted: it knows only its workdir, uses only the tools and servers it lists, and answers only its own
 # conversation. `restricted = false` (the default) is the operator's account, with every tool and server they have. A workdir must be a folder
@@ -142,14 +143,14 @@ workdir = "~/code/widget"
 engine = "claude"                     # which agent program runs its fresh sessions: claude | codex (a Codex model alias in `model` picks it too; naming both so they disagree is an error). An existing conversation keeps the engine it already ran on. omp is refused: it cannot confine a session's tools. restricted = true needs claude
 env_file = ".env.reviewer"            # extra environment for its sessions; relative to workdir
 
-# --- restricted: folders no restricted specialist's workdir may be, hold or sit inside, beyond the built-in ones ---
+# --- restricted: folders no restricted specialist's workdir may be, hold or sit inside, beyond the built-in ones. This table is not a specialist's `restricted = true` (the switch) ---
 
 [restricted]
 off_limits = ["~/notes"]               # absolute paths, or starting with ~
 # allow_unproven_macos = true          # a restricted specialist that lists servers runs under a sandbox proven only on some macOS versions
 #                                      # (docs/slack.md names them); on any other it is refused at launch unless you set this. Default: off
 
-# --- mcp_servers: servers a restricted specialist may list in `mcp_servers`. Per-operator: only hydra.toml declares one ---
+# --- mcp_servers: declared here, at the top, as [mcp_servers.<name>]; a restricted specialist lists their names in its own `mcp_servers = [...]`. Per-operator: only hydra.toml declares one ---
 
 [mcp_servers.datadog]
 command = "/usr/local/bin/datadog-mcp"   # required: a pinned binary or versioned package, not `npx -y` latest
@@ -216,7 +217,7 @@ workdir = "~/agents/ops"              # the check's working dir (absolute or ~/)
 cron = "0 * * * *"
 check = "~/bin/backup-fresh.sh"
 runner = "daemon"                     # what runs the check: "launchd" (default) tries once; "daemon" keeps trying while hydra runs
-needs = ["internet"]                  # a bare precondition name (only `internet` is known); daemon runner only: not now while offline
+needs = ["internet"]                  # a bare precondition name (only `internet` is known); daemon runner only: deferred while offline
 alert_after = "2d"                    # daemon runner only: how long a failure run lasts before it is alerted (default 1d)
 
 # Paused: still loaded and validated, shown as `paused` in `hydra schedules list`, and never fired (either runner). Remove the key to resume.
@@ -283,10 +284,10 @@ target = "specialist:reviewer"
 # --- guard: the operator's hook, run after routing and the `reachable_by` check for anyone but the operator ---
 
 [guard]
-command = "~/bin/hydra-guard"         # required: stdin {person, roles, place, conversation, target}; exit 0 delivers (print {"target": "specialist:x"} to redirect), 10 drops, 75 "not now"
+command = "~/bin/hydra-guard"         # required: stdin {person, roles, place, conversation, target}; exit 0 delivers (print {"target": "specialist:x"} to redirect), 10 drops, 75 deferred
 timeout = "5s"                        # past this, the message is delivered and the timeout logged (at most 30s)
 include_text = false
-owed_max = "1h"                       # how long "not now" may keep a message accepted but undelivered before it fails visibly
+owed_max = "1h"                       # how long deferred may keep a message accepted but undelivered before it fails visibly
 
 # --- vitals: when the once-a-minute vitals tick tells the operator the host is in trouble (every key optional) ---
 

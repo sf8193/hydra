@@ -10,6 +10,7 @@ import {
 } from '../jobs.js'
 import { awakeTimeout, jobFromWire, parseEnvFile, tccFolder, externalFile, runnerLabel, resultFile, stateFile, writeAtomic, daemonFile, attemptArgv, parseAttemptArgs, parseAlertAfter, readJobState, runWaitMs, type AttemptArgs, type Job } from '../../shared/jobs.js'
 import { parseLegacyTitle } from '../../shared/jobs-launchd.js'
+import { deliverResult } from '../../shared/exit-codes.js'
 
 const repo = join(import.meta.dir, '..', '..')
 /** The zone this file started in, captured once: restoring by name (an older bun ignores an unset TZ), never from a
@@ -311,18 +312,18 @@ describe('runWork', () => {
     expect(calls).toHaveLength(1)
   })
 
-  test('exit 75 from the check: not now, stdout dropped, no action', async () => {
+  test('exit 75 from the check: deferred, stdout dropped, no action', async () => {
     checkResult = { code: 75, out: 'would have been findings', err: 'vpn down' }
-    expect(await runWork(spawnJob, dir, KEY)).toEqual({ result: 'not-now', note: 'check exited 75: vpn down' })
+    expect(await runWork(spawnJob, dir, KEY)).toEqual({ result: 'deferred', note: 'check exited 75: vpn down' })
     expect(calls).toEqual([])
   })
 
-  test('duplicate key, spawn: pending is not now; spawned or completed is done, served by that session', async () => {
+  test('duplicate key, spawn: pending is deferred; spawned or completed is done, served by that session', async () => {
     checkResult.out = 'x'
     hydraCode = 2
     existing = { status: 'pending', sessionId: '' }
     let landed = 0
-    expect(await runWork(spawnJob, dir, KEY, () => { landed++ })).toEqual({ result: 'not-now', note: `duplicate key ${KEY} still pending` })
+    expect(await runWork(spawnJob, dir, KEY, () => { landed++ })).toEqual({ result: 'deferred', note: `duplicate key ${KEY} still pending` })
     for (const status of ['spawned', 'completed']) {
       existing = { status, sessionId: 'sess-1' }
       expect(await runWork(spawnJob, dir, KEY, () => { landed++ })).toEqual({ result: 'done', note: `duplicate key ${KEY}: already served`, servedBy: 'sess-1' })
@@ -330,30 +331,30 @@ describe('runWork', () => {
     expect(landed).toBe(2)
   })
 
-  test('duplicate key, deliver: 7 (in flight) is not now; 2 (delivered) is done', async () => {
+  test('duplicate key, deliver: 7 (in flight) is deferred; 2 (delivered) is done', async () => {
     hydraCode = 7
-    expect((await runWork(mainJob, dir, 'k')).result).toBe('not-now')
+    expect((await runWork(mainJob, dir, 'k')).result).toBe('deferred')
     hydraCode = 2
     existing = { status: 'completed', sessionId: 'main' }
     expect(await runWork(mainJob, dir, 'k')).toMatchObject({ result: 'done', servedBy: 'main' })
   })
 
-  test('the daemon is restarting (no socket, refused, or it closed on us): not now, so the slot stays owed', async () => {
+  test('the daemon is restarting (no socket, refused, or it closed on us): deferred, so the slot stays owed', async () => {
     for (const err of ['fatal: socket error: connect ENOENT /s/daemon.sock', 'fatal: socket error: connect ECONNREFUSED /s/daemon.sock', 'fatal: daemon closed connection without response']) {
       jobsIO.hydra = async () => ({ code: 1, err, out: '' })
       const w = await runWork(mainJob, dir, KEY)
-      expect(w.result).toBe('not-now')
+      expect(w.result).toBe('deferred')
       expect(w.note).toContain('daemon not reachable')
     }
     jobsIO.hydra = async () => ({ code: 1, err: 'fatal: connection timed out', out: '' })
     expect((await runWork(mainJob, dir, KEY)).result).toBe('failed')   // a daemon that is there but stuck is a failure
   })
 
-  test('the real CLI with no daemon on the state dir: not now', async () => {
+  test('the real CLI with no daemon on the state dir: deferred', async () => {
     jobsIO.hydra = real0.hydra
     const empty = mkdtempSync(join(tmpdir(), 'jobs-nodaemon-'))
     const job = parseJobs(`[s]\nschedule="0 6 * * *"\nprompt="p"\nspawn={ channel="c" }`)[0]
-    try { expect((await runWork(job, empty, KEY)).result).toBe('not-now') } finally { rmSync(empty, { recursive: true }) }
+    try { expect((await runWork(job, empty, KEY)).result).toBe('deferred') } finally { rmSync(empty, { recursive: true }) }
   })
 
   test('no JSON reply (the CLI crashed or was killed): failed, with its exit code', async () => {
@@ -403,7 +404,7 @@ describe('runWork', () => {
     expect(calls).toEqual([])
   })
 
-  test("env_file values are kept out of a failed or not-now note; short ones aren't secrets", async () => {
+  test("env_file values are kept out of a failed or deferred note; short ones aren't secrets", async () => {
     jobsIO.readFile = () => 'TOKEN=sk-live-123456\nAPI=xyzw-9\nN=1'
     const j = parseJobs(`[b]\nschedule="0 2 * * *"\ncheck="./c.sh"\nmode="none"\nenv_file="/srv/.env"`)[0]
     checkResult = { code: 2, out: '', err: 'auth failed for sk-live-123456 (key xyzw-9), retry 1' }
@@ -455,8 +456,8 @@ describe('runWork', () => {
     }
     expect(await outcome(0)).toEqual(['done', true])
     expect(await outcome(2)).toEqual(['done', true])      // the key was already delivered
-    expect(await outcome(7)).toEqual(['not-now', false])  // in flight
-    expect(await outcome(5)).toEqual(['not-now', false])  // the target can't take it yet: booting
+    expect(await outcome(7)).toEqual(['deferred', false])  // in flight
+    expect(await outcome(5)).toEqual(['deferred', false])  // the target can't take it yet: booting
     const fake = jobsIO.hydra
     jobsIO.hydra = async () => ({ code: 0, err: '', out: JSON.stringify({ ok: false, exitCode: 5, error: 'stuck: unknown_dialog' }) })
     expect(await runWork(toJob(), dir, 'k')).toEqual({ result: 'failed', note: 'hydra deliver exited 5: stuck: unknown_dialog' })   // stays stuck: alerted
@@ -466,9 +467,33 @@ describe('runWork', () => {
     expect((await runWork(toJob(), dir, 'k')).note).toBe('hydra deliver exited 8: boom')
   })
 
-  test('exit 75 from the check is not now for a to target too: nothing is delivered', async () => {
+  test('to: every deliver exit code and refusal text ends as it did before the result word, whether or not the daemon sends the word', async () => {
+    checkResult = { code: 0, out: 'x', err: '' }
+    // The runner's decision before deliver said its own word: a switch on the exit code and the `stuck:` text prefix.
+    const before = (code: number, error: string) =>
+      code === 7 || (code === 5 && !error.startsWith('stuck:')) ? 'deferred' : code === 2 ? 'done' : 'failed'
+    const fake = jobsIO.hydra
+    try {
+      for (const code of [1, 2, 3, 4, 5, 6, 7, 8, 9, 75]) {
+        for (const error of ['boom', 'stuck: unknown_dialog', 'x still booting']) {
+          const run = async (reply: object) => {
+            jobsIO.hydra = async () => ({ code: 0, err: '', out: JSON.stringify(reply) })
+            return (await runWork(toJob(), dir, 'k', () => {})).result
+          }
+          const want = before(code, error)
+          expect([code, error, await run({ ok: false, exitCode: code, error })]).toEqual([code, error, want])                                              // a daemon that predates the word
+          expect([code, error, await run({ ok: false, exitCode: code, error, result: deliverResult(code, error) })]).toEqual([code, error, want])   // one that sends it
+        }
+      }
+      // The word is what the runner reads: a daemon that says deferred is deferred, whatever the code.
+      jobsIO.hydra = async () => ({ code: 0, err: '', out: JSON.stringify({ ok: false, exitCode: 6, error: 'x', result: 'deferred' }) })
+      expect((await runWork(toJob(), dir, 'k')).result).toBe('deferred')
+    } finally { jobsIO.hydra = fake }
+  })
+
+  test('exit 75 from the check is deferred for a to target too: nothing is delivered', async () => {
     checkResult = { code: 75, out: 'ignored', err: 'offline' }
-    expect(await runWork(toJob(), dir, 'k')).toEqual({ result: 'not-now', note: 'check exited 75: offline' })
+    expect(await runWork(toJob(), dir, 'k')).toEqual({ result: 'deferred', note: 'check exited 75: offline' })
     expect(calls).toEqual([])
   })
 
@@ -599,12 +624,12 @@ describe('the attempt (in process)', () => {
     expect(killed).toBe(1)
   })
 
-  test('SIGTERM before the action: "cancelled" (not-now) is written, then the group is killed', async () => {
+  test('SIGTERM before the action: "cancelled" (deferred) is written, then the group is killed', async () => {
     jobsIO.check = () => new Promise(() => {})
     void jobsAttempt(opts())
     await Bun.sleep(5)
     sigterm()
-    expect(result()).toMatchObject({ result: 'not-now', note: 'cancelled' })
+    expect(result()).toMatchObject({ result: 'deferred', note: 'cancelled' })
     expect(killed).toBe(1)
   })
 
@@ -698,7 +723,7 @@ await jobsAttempt(JSON.parse(process.argv[2])); process.exit(0)\n`)
     const gc = Number(await waitFor(() => existsSync(pidFile) && readFileSync(pidFile, 'utf8').trim()))
     process.kill(pid, 'SIGTERM')
     const res = await waitFor(() => readJSON(resultFile(dir, 'sweep', 1, 'n')))
-    expect(res).toMatchObject({ result: 'not-now', note: 'cancelled' })
+    expect(res).toMatchObject({ result: 'deferred', note: 'cancelled' })
     await waitFor(() => !alive(gc) && !alive(pid))
   }, 15_000)
 
@@ -889,10 +914,10 @@ describe('jobs run', () => {
     expect(await new Response(p.stderr).text()).toContain('jobs commands take --state-dir <dir>, not --daemon')
   }, 15_000)
 
-  test('not now exits 75, the check contract\'s own code, so a script can tell "ran" from "not now"', async () => {
-    apply({ appliedDispatch: 3, notNow: { since: 'x', reason: 'check exited 75', dispatch: 3 } })
+  test('deferred exits 75, the check contract\'s own code, so a script can tell "ran" from "deferred"', async () => {
+    apply({ appliedDispatch: 3, deferred: { since: 'x', reason: 'check exited 75', dispatch: 3 } })
     expect(await jobsRun('test', 'sweep', dir, 0)).toBe(75)
-    expect(out.at(-1)).toBe('sweep: not now: check exited 75 [dispatch 3]')
+    expect(out.at(-1)).toBe('sweep: deferred: check exited 75 [dispatch 3]')
   })
 
   test('a failed outcome exits 1', async () => {
@@ -909,11 +934,11 @@ describe('jobs run', () => {
   test('Ctrl-C after the answer: SIGTERM to the attempt process (not its group) under the lstart guard; prints "cancelled"', async () => {
     onSleep = n => {
       if (n === 1) sigint!()
-      if (n === 2) apply({ appliedDispatch: 3, notNow: { since: 'x', reason: 'cancelled', dispatch: 3 } })
+      if (n === 2) apply({ appliedDispatch: 3, deferred: { since: 'x', reason: 'cancelled', dispatch: 3 } })
     }
     expect(await jobsRun('test', 'sweep', dir, 0)).toBe(130)
     expect(kills).toEqual([[50, 'SIGTERM']])
-    expect(out.at(-1)).toBe('sweep: not now: cancelled [dispatch 3]')
+    expect(out.at(-1)).toBe('sweep: deferred: cancelled [dispatch 3]')
   })
 
   test('Ctrl-C when the pid now belongs to another process: nothing is killed', async () => {
@@ -1077,12 +1102,12 @@ describe('jobs list lines', () => {
     expect(l).toContain(' here)')
   })
 
-  test('not owed, served, and not now (only when newer than the last result)', () => {
-    const l = line(dur, { covered: { slot: '2026-11-04 10:05', at: '2026-11-04T18:05:30Z' }, last: { at: '2026-11-04T18:05:30Z', result: 'done', servedBy: 'pull-7' }, notNow: { since: '2026-11-04T18:07:00Z', reason: 'offline' } })
+  test('not owed, served, and deferred (only when newer than the last result)', () => {
+    const l = line(dur, { covered: { slot: '2026-11-04 10:05', at: '2026-11-04T18:05:30Z' }, last: { at: '2026-11-04T18:05:30Z', result: 'done', servedBy: 'pull-7' }, deferred: { since: '2026-11-04T18:07:00Z', reason: 'offline' } })
     expect(l).toContain('not owed')
     expect(l).toContain('done (served by pull-7)')
     expect(l).toContain(': offline')
-    expect(line(dur, { last: { at: '2026-11-04T18:07:30Z', result: 'done' }, notNow: { since: '2026-11-04T18:07:00Z', reason: 'offline' } })).not.toContain('offline')
+    expect(line(dur, { last: { at: '2026-11-04T18:07:30Z', result: 'done' }, deferred: { since: '2026-11-04T18:07:00Z', reason: 'offline' } })).not.toContain('offline')
   })
 
 

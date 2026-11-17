@@ -1394,7 +1394,7 @@ roles = ["finance"]
   })
 
   test('exit 75 keeps it owed; the replay is judged again and delivered once the guard says yes', async () => {
-    let verdict: GuardVerdict = { verdict: 'later' }
+    let verdict: GuardVerdict = { verdict: 'deferred' }
     const s = setup({ toml: GUARDED() }, undefined, undefined, async () => verdict)
     const ts = `${Math.floor(s.now() / 1000)}.000001`
     s.w.handle(ev({ ts, text: mention }))
@@ -1408,23 +1408,68 @@ roles = ["finance"]
     expect(s.w.owedHints()).toEqual([])
   })
 
-  test('owed_max counts from the first "not now", not from when the message was sent', async () => {
-    let verdict: GuardVerdict = { verdict: 'later' }
+  test('owed_max counts from the first "deferred", not from when the message was sent', async () => {
+    let verdict: GuardVerdict = { verdict: 'deferred' }
     const s = setup({ toml: GUARDED('owed_max = "1h"\n') }, undefined, undefined, async () => verdict)
     const old = `${Math.floor(s.now() / 1000) - 3 * 3600}.000001` // sent 3h ago, found by catch-up now
     s.w.handle(ev({ ts: old, text: mention }))
     await s.w.flush()
     expect(s.w.owedHints()).toHaveLength(1)
-    expect(s.w.get(CH, old)!.heldSince).toEqual({ [old]: s.now() })
+    expect(s.w.get(CH, old)!.deferredSince).toEqual({ [old]: s.now() })
     verdict = { verdict: 'deliver' }
     s.w.handle(ev({ ts: old, text: mention }))
     await s.w.flush()
     expect(s.sent).toHaveLength(1)
-    expect(s.w.get(CH, old)!.heldSince).toBeUndefined()
+    expect(s.w.get(CH, old)!.deferredSince).toBeUndefined()
+  })
+
+  test('a store written with the old name heldSince keeps its owed_max clock, and the next write carries only deferredSince', async () => {
+    const s = setup({ toml: GUARDED('owed_max = "1h"\n') }, undefined, undefined, async () => ({ verdict: 'deferred' }))
+    const ts = `${Math.floor(s.now() / 1000)}.000001`
+    const since = s.now() - 61 * 60_000   // first held 61 minutes ago: already past owed_max
+    writeFileSync(s.file, JSON.stringify({ entries: [{ channel: CH, threadTs: ts, specialist: 'helper', createdAt: 0, lastEventAt: 0, owed: [ts], heldSince: { [ts]: since } }], channelCursors: {} }))
+    const w = s.make()
+    expect(w.get(CH, ts)!.deferredSince).toEqual({ [ts]: since })
+    expect(w.get(CH, ts)!.heldSince).toBeUndefined()
+    w.handle(ev({ ts, text: mention }))   // the replay: the guard still says deferred, and the old clock says it is time to give up
+    await w.flush()
+    expect(w.stats().dropped).toEqual({ expired: 1 })
+    expect(w.owedHints()).toEqual([])
+    // A store with the clock still running is rewritten under the new name only.
+    const other = `${Math.floor(s.now() / 1000) + 5}.000001`
+    writeFileSync(s.file, JSON.stringify({ entries: [{ channel: CH, threadTs: other, specialist: 'helper', createdAt: 0, lastEventAt: 0, owed: [other], heldSince: { [other]: s.now() } }], channelCursors: {} }))
+    const again = s.make()
+    again.handle(ev({ ts: other, text: mention }))
+    await again.flush()
+    const written = JSON.parse(readFileSync(s.file, 'utf8')).entries[0]
+    expect(written.deferredSince).toEqual({ [other]: s.now() })
+    expect('heldSince' in written).toBe(false)
+  })
+
+  test('a store with both names (an older build wrote it after a newer one) takes the later clock for each ts', () => {
+    const s = setup({ toml: GUARDED('owed_max = "1h"\n') })
+    const a = '1000.000001', b = '1001.000001', c = '1002.000001'
+    writeFileSync(s.file, JSON.stringify({ entries: [{ channel: CH, threadTs: a, specialist: 'helper', createdAt: 0, lastEventAt: 0, owed: [a, b, c], deferredSince: { [a]: 100, [b]: 900 }, heldSince: { [a]: 500, [b]: 300, [c]: 700 } }], channelCursors: {} }))
+    const e = s.make().get(CH, a)!
+    expect(e.deferredSince).toEqual({ [a]: 500, [b]: 900, [c]: 700 })
+    expect(e.heldSince).toBeUndefined()
+    writeFileSync(s.file, JSON.stringify({ entries: [{ channel: CH, threadTs: a, specialist: 'helper', createdAt: 0, lastEventAt: 0, heldSince: {} }], channelCursors: {} }))
+    expect(s.make().get(CH, a)!.deferredSince).toBeUndefined()   // an empty old clock is not carried as an empty new one
+  })
+
+  test('a store written under the earlier name notNowSince loads as deferredSince, and all three names merge to the latest clock', () => {
+    const s = setup({ toml: GUARDED('owed_max = "1h"\n') })
+    const a = '1000.000001', b = '1001.000001'
+    writeFileSync(s.file, JSON.stringify({ entries: [{ channel: CH, threadTs: a, specialist: 'helper', createdAt: 0, lastEventAt: 0, owed: [a, b], notNowSince: { [a]: 400 } }], channelCursors: {} }))
+    const e = s.make().get(CH, a)!
+    expect(e.deferredSince).toEqual({ [a]: 400 })
+    expect((e as { notNowSince?: unknown }).notNowSince).toBeUndefined()
+    writeFileSync(s.file, JSON.stringify({ entries: [{ channel: CH, threadTs: a, specialist: 'helper', createdAt: 0, lastEventAt: 0, owed: [a, b], heldSince: { [a]: 300, [b]: 800 }, notNowSince: { [a]: 400 }, deferredSince: { [a]: 350 } }], channelCursors: {} }))
+    expect(s.make().get(CH, a)!.deferredSince).toEqual({ [a]: 400, [b]: 800 })
   })
 
   test('exit 75 holds a message for at most owed_max, then it fails visibly', async () => {
-    const s = setup({ toml: GUARDED('owed_max = "1h"\n') }, undefined, undefined, async () => ({ verdict: 'later' }))
+    const s = setup({ toml: GUARDED('owed_max = "1h"\n') }, undefined, undefined, async () => ({ verdict: 'deferred' }))
     const ts = `${Math.floor(s.now() / 1000)}.000001`
     s.w.handle(ev({ ts, text: mention }))
     await s.w.flush()
@@ -1511,20 +1556,20 @@ roles = ["finance"]
     expect(s.alerts[0]).toContain('so it went to ops instead')
   })
 
-  test('a "not now" for a message the full owed list already cut is a counted drop, not silence', async () => {
-    const s = setup({ toml: GUARDED(), coalesceMs: 60_000 }, undefined, undefined, async () => ({ verdict: 'later' }))
+  test('a "deferred" for a message the full owed list already cut is a counted drop, not silence', async () => {
+    const s = setup({ toml: GUARDED(), coalesceMs: 60_000 }, undefined, undefined, async () => ({ verdict: 'deferred' }))
     s.w.handle(ev({ ts: '1.000001', text: mention }))
     for (let i = 2; i <= 201; i++) s.w.handle(ev({ ts: `${i}.000001`, threadTs: '1.000001', text: 'x' }))
     await s.w.flush()
-    // every one is far older than owed_max, so each "not now" fails at once; the cut one is counted as owed-full
+    // every one is far older than owed_max, so each "deferred" fails at once; the cut one is counted as owed-full
     expect(s.w.stats().dropped['owed-full']).toBe(1)
   })
 
-  test('a message held by "not now" is never delivered twice, however many later ones pass it', async () => {
+  test('a message held by "deferred" is never delivered twice, however many later ones pass it', async () => {
     let hold = true
     const base = Math.floor(1_000_000_000_000 / 1000)
     const T = (i: number) => `${base + i}.000001`
-    const s = setup({ toml: GUARDED('include_text = true\n'), coalesceMs: 60_000 }, undefined, undefined, async (_g, input) => ({ verdict: hold && input.text === 'held' ? 'later' : 'deliver' }))
+    const s = setup({ toml: GUARDED('include_text = true\n'), coalesceMs: 60_000 }, undefined, undefined, async (_g, input) => ({ verdict: hold && input.text === 'held' ? 'deferred' : 'deliver' }))
     s.w.handle(ev({ ts: T(1), text: mention }))
     s.w.handle(ev({ ts: T(2), threadTs: T(1), text: 'held' }))
     await s.w.flush()
@@ -2060,16 +2105,16 @@ describe('what hydra health says about owed messages and deliveries (#669)', () 
     expect(s.w.lateOwed(40 * MIN)).toEqual([])
   })
 
-  test('the cause is the one that holds: waiting for a place, the guard saying not now, an undeclared specialist, an app not connected', async () => {
+  test('the cause is the one that holds: waiting for a place, the guard saying deferred, an undeclared specialist, an app not connected', async () => {
     const wait = setup({}, to => ({ ok: false, error: `${to} at max`, wait: true }))
     wait.w.handle(ev({ ts: tsAgo(wait, 30), text: mention }))
     await wait.w.flush()
     expect(wait.w.lateOwed(20 * MIN)[0].cause).toContain('max_sessions')
 
-    const held = setup({ toml: oneListener(CH, 'helper', '["role:anyone"]', '[guard]\ncommand = "guard"') }, undefined, undefined, async () => ({ verdict: 'later' }))
+    const held = setup({ toml: oneListener(CH, 'helper', '["role:anyone"]', '[guard]\ncommand = "guard"') }, undefined, undefined, async () => ({ verdict: 'deferred' }))
     held.w.handle(ev({ ts: tsAgo(held, 30), text: mention }))
     await held.w.flush()
-    expect(held.w.lateOwed(20 * MIN)[0].cause).toContain('exit 75')
+    expect(held.w.lateOwed(20 * MIN)[0].cause).toBe('the guard keeps saying deferred (exit 75): check the guard')
 
     const gone = setup({}, () => ({ ok: false, error: 'x' }))
     gone.w.handle(ev({ ts: tsAgo(gone, 30), text: mention }))

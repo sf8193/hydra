@@ -17,8 +17,8 @@ Checked against code at 42721c5. Bold names are README's core abstractions or th
 | the operator, no guard, or exit 0 → send | `routing/guard.ts:104`, `:112`; `connectors/slack/watch.ts:1133` | empty stdout or no `target` → `deliver`; `to = home` |
 | another exit, a timeout, unusable output: sent anyway | `routing/guard.ts:74`, `:78-81`, `:85`, `:102`, `:106-110`, `:116`; `connectors/slack/watch.ts:1128`, `:1213-1215` | every `open` verdict is logged "delivering anyway" and sent to `home` |
 | exit 0 with a target → 4 | `routing/guard.ts:117`; `connectors/slack/watch.ts:1133` | `deliver` with `target`; `to = currentId(target)` |
-| exit 10 → dropped: guard, not alerted | `routing/guard.ts:40`, `:100`; `connectors/slack/watch.ts:1109-1112` | `GUARD_DROP = 10`; `drop('guard', …, false)`, `settle` |
-| exit 75 → stays owed until owed_max | `routing/guard.ts:41`, `:101`; `connectors/slack/watch.ts:1114-1126` | `GUARD_LATER = 75`; drawn in flow-slack-owed |
+| exit 10 → dropped: guard, not alerted | `routing/guard.ts:39`, `:98`; `connectors/slack/watch.ts:1472-1476` | `GUARD_DROP = 10`; `drop('guard', …, false)`, `settle` |
+| exit 75 → stays owed until owed_max | `routing/guard.ts:4`, `:99`; `connectors/slack/watch.ts:1477-1490` | `EX_TEMPFAIL = 75` (shared/exit-codes.ts); drawn in flow-slack-owed |
 | 4. may the sender reach the redirect? | `connectors/slack/watch.ts:1134-1154` | a session thread, or a `refusal` for `to` |
 | no: to the binding | `connectors/slack/watch.ts:1134-1139`, `:1144-1150` | `to = home`; alerted when unserved, undeclared or a session thread |
 | yes: to the redirect | `connectors/slack/watch.ts:1151-1153` | `fallbackOf.set(to, home)` |
@@ -38,4 +38,4 @@ Checked against code at 42721c5. Bold names are README's core abstractions or th
 | exit 8, alerted; or another error → stays owed | `specialists/targets.ts:182`, `:268`; `connectors/slack/watch.ts:1250-1262` | not `permanent`: stays in `owed`; exit 8 → `alertOnce('no-such-specialist')` |
 | stays owed: catch-up replays it | `connectors/slack/watch.ts:645-648`; `connectors/slack/catchup.ts:180-183` | `owedHints` tells each pass where to reread |
 
-Not drawn: a guard `later` for a ts the owed list already cut is `owed-full` (`watch.ts:1117`), and so is a failed batch whose ts was cut (`:1260-1261`).
+Not drawn: a guard `deferred` for a ts the owed list already cut is `owed-full` (`watch.ts:1480`), and so is a failed batch whose ts was cut (`:1260-1261`).

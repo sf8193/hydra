@@ -87,8 +87,9 @@ Deliver (whisper channel — message to session context, not thread):
                                        session, opened for it (a fresh thread in the specialist's home_place) if it has none
     --revive                           With --to thread:<id> or --thread: a dead session is revived in its thread first
                                        (resume, else fork, else a fresh one that reads the thread); the message queues for it.
-  Exit codes: 2 already delivered with this key · 3 gone or refused · 4 running but unreachable · 5 not now (booting,
-  busy, or stuck on a dialog) · 6 starting failed or backing off · 7 a delivery with this key is in flight · 8 no such specialist
+  Exit codes: 2 already delivered with this key · 3 gone or refused · 4 running but unreachable · 5 deferred (booting,
+  or busy; stuck on a dialog is a failure) · 6 starting failed or backing off, died during delivery, or outcome unknown · 7 a delivery with this key is in flight (deferred) · 8 no such specialist
+  --json adds "result" (done, deferred or failed) and exits 0 whenever the daemon answers (no answer: exit 1, no JSON). Every code and word: README, "Exit codes and result words"
 
 Config:
   hydra migrate [<platform>] [--dry-run]   write <state>/hydra.toml once from access.json's allowFrom, specialists.json and slack-watch.json,

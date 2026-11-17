@@ -17,14 +17,14 @@ flowchart TD
   OW -->|yes| BO{"back-off: last failure + min(2^n m, 1h, period)"}
   BO -->|waiting| IDLE
   BO -->|ready| NE{"needs internet:<br/>gateway connected OR captive probe"}
-  NE -->|offline| NN["not-now: notNow only, the slot stays owed"]
+  NE -->|offline| NN["deferred: the state field only, the slot stays owed"]
   NE -->|ok| RS["reserve, one synchronous write:<br/>re-check owed; id = appliedDispatch + 1; nonce;<br/>deadline = now + 34m"]
   RUN["hydra jobs run (manual, any runner)"] --> RS
   RS --> SP["spawnAttempt: detached, env minus hydra secrets,<br/>job JSON on stdin, log = NAME.log"]
   SP -->|throws| LOST
   SP --> AT["jobs attempt: key = jobs-NAME-slotAt (manual: the minute)<br/>self-deadline 34m awake; however it ends: write, then kill own group"]
   AT --> CK["runCheck: env_file parsed, cwd opened,<br/>/bin/sh -c in cwd, 30m awake"]
-  CK -->|"exit 75"| RNN[not-now]
+  CK -->|"exit 75"| RNN[deferred]
   CK -->|"nonzero; env_file or cwd unusable (TCC named)"| RF[failed]
   CK -->|empty stdout| RN[nothing]
   CK -->|"output, or no check"| TG{"target?"}
@@ -42,5 +42,5 @@ flowchart TD
   ST -->|result present| AO
   ST -.->|"pid gone, lstart differs, or no pid past 30s and no orphan by argv<br/>(2s grace for the final rename)"| LOST["lost: failed, ended without a result"]
   ST -.->|"alive: deadline += any gap over 2 ticks (sleep)<br/>past deadline + 1m"| KILL["SIGTERM the attempt; past + 2m SIGKILL the group"]
-  LOST --> AO["applyOutcome<br/>done / nothing: covered = slot, failures = 0<br/>failed: failures + 1, failingSince ??= at<br/>not-now: notNow only"]
+  LOST --> AO["applyOutcome<br/>done / nothing: covered = slot, failures = 0<br/>failed: failures + 1, failingSince ??= at<br/>deferred: the state field only"]
   AO --> AL["reportFailures: once per failure run (alertedFor = failingSince),<br/>when last failure - failingSince >= alert_after: main, else direct"]

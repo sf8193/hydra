@@ -18,9 +18,10 @@ import { isUnder } from '../shared/path-containment.js'
 import { cliSchedules, schedulesAreSource } from '../shared/schedules.js'
 import { latestSlot, nextSlot } from '../shared/cron-local.js'
 import { readTarget, spelledTo } from '../shared/target-kind.js'
+import { EX_TEMPFAIL, deliverResult } from '../shared/exit-codes.js'
 import {
   ACTION_TIMEOUT_MS, ATTEMPT_DEADLINE_MS, runWaitMs, CHECK_TIMEOUT_MS, STALE_TICK_MS, backoffUntil, jobInitiator, jobsDir, jobsToml, lstartOf, owedSlot, parseJobsConfig,
-  attemptEnv, awakeTimeout, isSpawn, jobFromWire, targetLabel, parseEnvFile, tccFolder, externalFile, externalResults, logFile, runnerLabel, readDaemonState, readJobState, resultFile, resultsDir, writeAtomic, EX_TEMPFAIL, type AttemptArgs, type AttemptResult,
+  attemptEnv, awakeTimeout, isSpawn, jobFromWire, targetLabel, parseEnvFile, tccFolder, externalFile, externalResults, logFile, runnerLabel, readDaemonState, readJobState, resultFile, resultsDir, writeAtomic, type AttemptArgs, type AttemptResult,
   type ExternalResult, type Job, type Outcome,
 } from '../shared/jobs.js'
 
@@ -61,7 +62,7 @@ const RESERVED_BYTES = 500   // "Check output:" header + truncation marker with 
 
 const DAEMON_AWAY = /socket error: connect (ENOENT|ECONNREFUSED)|daemon closed connection without response/
 
-type Reply = { ok?: boolean; exitCode?: number; error?: string; data?: { existing?: { status?: string; sessionId?: string } } }
+type Reply = { ok?: boolean; exitCode?: number; result?: string; error?: string; data?: { existing?: { status?: string; sessionId?: string } } }
 const parseReply = (out: string): Reply | null => { try { const o = JSON.parse(out); return typeof o === 'object' && o ? o : null } catch { return null } }
 
 // First `maxBytes` bytes of s, never cutting a character in half.
@@ -94,7 +95,7 @@ export async function runWork(job: Job, stateDir: string, key: string, onActionS
   return 'outcome' in c ? c.outcome : runAction(job, stateDir, key, c.output, onActionSent)
 }
 
-/** The check alone: its output, or the outcome that ends the work here (failed, nothing to do, not now). */
+/** The check alone: its output, or the outcome that ends the work here (failed, nothing to do, deferred). */
 export async function runCheck(job: Job): Promise<{ output: string } | { outcome: Work }> {
   if (!job.check) return { output: '' }
   let env: Record<string, string | undefined> = process.env
@@ -118,7 +119,7 @@ export async function runCheck(job: Job): Promise<{ output: string } | { outcome
     const { code, message } = e as NodeJS.ErrnoException
     return { outcome: { result: 'failed', note: `the check could not start: ${code ?? message}` } }
   }
-  if (r.code === EX_TEMPFAIL) return { outcome: { result: 'not-now', note: `check exited ${EX_TEMPFAIL}${r.err.trim() ? `: ${redact(r.err.trim()).slice(-200)}` : ''}` } }   // stdout dropped
+  if (r.code === EX_TEMPFAIL) return { outcome: { result: 'deferred', note: `check exited ${EX_TEMPFAIL}${r.err.trim() ? `: ${redact(r.err.trim()).slice(-200)}` : ''}` } }   // stdout dropped
   if (r.code !== 0) return { outcome: { result: 'failed', note: `check exited ${r.code}: ${redact((r.err || r.out).trim()).slice(-300)}` } }
   const output = r.out.trim()
   return output ? { output } : { outcome: { result: 'nothing' } }
@@ -177,18 +178,18 @@ export async function runAction(job: Job, stateDir: string, key: string, output:
   const r = await jobsIO.hydra(['--state-dir', stateDir, '--json', ...args])
   const reply = parseReply(r.out)
   if (reply?.ok) { const w: Work = { result: 'done' }; onActionSent(w); return w }
-  // No daemon to answer: it is restarting, and the watchdog brings it back. Not now; the idempotency key makes the
+  // No daemon to answer: it is restarting, and the watchdog brings it back. Deferred; the idempotency key makes the
   // retry safe even if a dying daemon took the request.
-  if (!reply && DAEMON_AWAY.test(r.err)) return { result: 'not-now', note: `daemon not reachable (${r.err.trim().slice(-120)})` }
+  if (!reply && DAEMON_AWAY.test(r.err)) return { result: 'deferred', note: `daemon not reachable (${r.err.trim().slice(-120)})` }
   const code = reply ? (reply.exitCode ?? 1) : (r.code || 1)
   const existing = reply?.data?.existing
-  // spawn answers 2 for any key it holds (status pending, spawned or completed). deliver answers 2 for a key already
-  // delivered, 7 while one is in flight, and 5 when the target can't take it yet: booting is not now, but a session
-  // stuck on a dialog (`stuck: <kind>`, specialists/targets.ts) stays stuck, so it fails, backs off and is alerted;
-  // 3, 4, 6 and 8 (no such specialist) fail.
-  if (isSpawn(target) ? code === 2 && existing?.status === 'pending' : code === 7) return { result: 'not-now', note: `duplicate key ${key} still pending` }
-  if (!isSpawn(target) && code === 5 && !reply?.error?.startsWith('stuck:')) return { result: 'not-now', note: `${target.to} can't take it yet${reply?.error ? `: ${reply.error.slice(-200)}` : ''}` }
-  if (code === 2) {
+  // spawn answers 2 for any key it holds (status pending, spawned or completed). deliver says its own word
+  // (shared/exit-codes.ts): done for a key already delivered, deferred for a key in flight or a target that can't take it
+  // yet (booting), failed for the rest, a session stuck on a dialog included. A daemon that predates the word is read by
+  // the same table.
+  const word = isSpawn(target) ? (code === 2 ? (existing?.status === 'pending' ? 'deferred' : 'done') : 'failed') : (reply?.result ?? deliverResult(code, reply?.error))
+  if (word === 'deferred') return { result: 'deferred', note: isSpawn(target) ? `duplicate key ${key} still pending` : `${target.to} can't take it yet${reply?.error ? `: ${reply.error.slice(-200)}` : ''}` }
+  if (word === 'done') {
     const w: Work = { result: 'done', note: `duplicate key ${key}: already served`, ...(existing?.sessionId && { servedBy: existing.sessionId }) }
     onActionSent(w)
     return w
@@ -230,7 +231,7 @@ export async function jobsAttempt(o: AttemptArgs): Promise<AttemptResult | null>
     if (write('failed', `attempt passed its ${ATTEMPT_DEADLINE_MS / 60_000}m deadline`)) attemptIO.killOwnGroup()
   }, ATTEMPT_DEADLINE_MS)
   attemptIO.onSigterm(() => {
-    if (write(actionSent ? 'done' : 'not-now', actionSent ? 'cancelled after the action landed' : 'cancelled')) attemptIO.killOwnGroup()
+    if (write(actionSent ? 'done' : 'deferred', actionSent ? 'cancelled after the action landed' : 'cancelled')) attemptIO.killOwnGroup()
   })
 
   const started = jobsIO.now()
@@ -311,13 +312,13 @@ export async function jobsLaunchdRun(platform: string, name: string, stateDir: s
     written = true
     writeAtomic(out, JSON.stringify({ slot: slot.label, slotAt: slot.at.toISOString(), at: now.toISOString(), ...r } satisfies ExternalResult))
   }
-  // launchd stops a running job when its entry is re-registered (bootout): the slot is then not now, never silent.
-  attemptIO.onSigterm(() => { leave({ result: 'not-now', note: 'stopped by launchd (its entry was re-registered)' }); attemptIO.killOwnGroup() })
+  // launchd stops a running job when its entry is re-registered (bootout): the slot is then deferred, never silent.
+  attemptIO.onSigterm(() => { leave({ result: 'deferred', note: 'stopped by launchd (its entry was re-registered)' }); attemptIO.killOwnGroup() })
   const c = await runCheck(job)
   const res: Outcome & { output?: string } = 'outcome' in c ? c.outcome : { result: 'done', output: c.output }
   leave(res)
   runIO.print(`${now.toISOString()} ${name} slot ${slot.label}: ${res.result}${res.note ? ` (${res.note})` : ''}`)
-  return res.result === 'failed' ? 1 : res.result === 'not-now' ? EX_TEMPFAIL : 0
+  return res.result === 'failed' ? 1 : res.result === 'deferred' ? EX_TEMPFAIL : 0
 }
 
 // ---------------------------------------------------------------------------
@@ -385,16 +386,16 @@ export async function jobsRun(platform: string, name: string, stateDirOverride?:
     }
     const r = readJobState(stateDir, name)
     if (r.kind === 'ok' && (r.state.appliedDispatch ?? 0) >= reply.id) {
-      const { last, notNow } = r.state
+      const { last, deferred } = r.state
       if (last?.dispatch === reply.id) {
         runIO.print(`${name}: ${last.result}${last.note ? ` (${last.note})` : ''} [dispatch ${reply.id}]`)
         return last.result === 'failed' ? 1 : 0
       }
-      if (notNow?.dispatch === reply.id) {
-        runIO.print(`${name}: not now: ${notNow.reason} [dispatch ${reply.id}]`)
-        return cancelling ? 130 : EX_TEMPFAIL   // the check contract's own "not now"; a cancel stays 130
+      if (deferred?.dispatch === reply.id) {
+        runIO.print(`${name}: deferred: ${deferred.reason} [dispatch ${reply.id}]`)
+        return cancelling ? 130 : EX_TEMPFAIL   // the check contract's own deferred; a cancel stays 130
       }
-      runIO.print(`${name}: superseded by dispatch ${Math.max(last?.dispatch ?? 0, notNow?.dispatch ?? 0, r.state.appliedDispatch ?? 0)}`)
+      runIO.print(`${name}: superseded by dispatch ${Math.max(last?.dispatch ?? 0, deferred?.dispatch ?? 0, r.state.appliedDispatch ?? 0)}`)
       return 1
     }
     await runIO.sleep(pollMs)
@@ -651,7 +652,7 @@ function readSpecialistNames(stateDir: string): Set<string> {
 }
 
 
-/** One `jobs list` line: next slot; owed or not and since when; the last result and its note; not-now; the failure run. */
+/** One `jobs list` line: next slot; owed or not and since when; the last result and its note; deferred; the failure run. */
 export function describeJob(j: Job, r: ReturnType<typeof readJobState>, now: Date): string {
   const next = nextSlot(j.schedule, now, j.timezone)
   // A zoned schedule is named by its zone's wall clock; the host's time follows, since that is the clock the operator reads.
@@ -664,7 +665,7 @@ export function describeJob(j: Job, r: ReturnType<typeof readJobState>, now: Dat
     if (j.runner === 'daemon' && !j.paused) parts.push(owed ? `owed since ${owed.at.toLocaleString()} (${owed.label})` : 'not owed')
     const last = s.last
     parts.push(last ? `last ${local(last.at)} ${last.result}${last.servedBy ? ` (served by ${last.servedBy})` : ''}${last.note ? ` (${last.note})` : ''}` : 'last never')
-    if (s.notNow && (!last || s.notNow.since > last.at)) parts.push(`not now since ${local(s.notNow.since)}: ${s.notNow.reason}`)
+    if (s.deferred && (!last || s.deferred.since > last.at)) parts.push(`deferred since ${local(s.deferred.since)}: ${s.deferred.reason}`)
     if (s.failingSince) parts.push(`failing since ${local(s.failingSince)} (${s.failures ?? 1}x)`)
     if (owed && j.runner === 'daemon') {
       const until = backoffUntil(j.schedule, s, owed, j.timezone)

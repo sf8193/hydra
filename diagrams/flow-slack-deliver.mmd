@@ -13,7 +13,7 @@ flowchart TD
   g3{"3. the <b>Guard</b>"}
   n3["4 messages at a time<br/>timeout: 5 s by default, at most 30 s<br/>output: at most 4096 characters"]
   d3(["dropped: guard, not alerted"])
-  later(["stays owed until owed_max:<br/>flow-slack-owed"])
+  deferred(["stays owed until owed_max:<br/>flow-slack-owed"])
   g4{"4. may the sender<br/>reach the redirect?"}
   send["grouped by <b>Target</b>, in order;<br/>files saved; packed into 8000-byte batches;<br/>sent one batch at a time"]
   nsend["files: only where the place sets files<br/>2 messages at a time, 20 MB each<br/>a file not saved is listed, with why"]
@@ -34,7 +34,7 @@ flowchart TD
   g3 -->|"another exit, a timeout,<br/>unusable output: sent anyway"| send
   g3 -->|"exit 0 with a target"| g4
   g3 -->|"exit 10"| d3
-  g3 -->|"exit 75"| later
+  g3 -->|"exit 75"| deferred
   g4 -->|"yes: to the redirect"| send
   g4 -->|"no: to the binding"| send
   send -.- nsend
@@ -52,6 +52,6 @@ flowchart TD
   classDef note fill:#f9fafb,stroke:#d1d5db,color:#4b5563
   class g1,g2,g3,g4,g5 gate
   class d1,d2,d3,big stop
-  class anew,later,waits,owed wait
+  class anew,deferred,waits,owed wait
   class ok done
   class n3,nsend note

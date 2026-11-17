@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, chmodSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { runGuard, guardEnv, type GuardInput } from '../guard.js'
+import { EX_TEMPFAIL } from '../../shared/exit-codes.js'
 
 const dir = mkdtempSync(join(tmpdir(), 'slack-guard-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
@@ -34,9 +35,15 @@ describe('the guard: the exit code is the verdict', () => {
     expect(sent).not.toHaveProperty('to')
   })
 
-  test('10 drops, 75 is not now', async () => {
+  test('the deferred exit is the shared EX_TEMPFAIL, 75, and any other nearby code is not it', async () => {
+    expect(EX_TEMPFAIL).toBe(75)
+    expect(await run(script('tempfail.sh', `exit ${EX_TEMPFAIL}`))).toEqual({ verdict: 'deferred' })
+    expect(await run(script('seventy-six.sh', 'exit 76'))).toEqual({ verdict: 'open', why: 'exited 76' })
+  })
+
+  test('10 drops, 75 is deferred', async () => {
     expect(await run(script('drop.sh', 'exit 10'))).toEqual({ verdict: 'drop' })
-    expect(await run(script('later.sh', 'exit 75'))).toEqual({ verdict: 'later' })
+    expect(await run(script('deferred.sh', 'exit 75'))).toEqual({ verdict: 'deferred' })
   })
 
   test('anything else fails open, with why: another exit, a missing command, junk or a bad "target" on stdout', async () => {

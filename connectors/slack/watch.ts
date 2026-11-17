@@ -127,8 +127,11 @@ export type SlackWatchEntry = {
   owed?: string[]
   /** Opened by untagged chatter where `messages = "all"`: while owed or answered, such conversations take at most half the table; they idle out in a day. */
   ambient?: true
-  /** When the guard first said "not now" (exit 75) to an owed ts: `owed_max` counts from here. */
+  /** When the guard first said deferred (exit 75) to an owed ts: `owed_max` counts from here. */
+  deferredSince?: Record<string, number>
+  /** `deferredSince`'s two older names, in a store written before the rename: read by `readOldNames`, never written. */
   heldSince?: Record<string, number>
+  notNowSince?: Record<string, number>
   /** Since when it has waited for a session of its own (its specialist at `max_sessions`): its owed messages don't expire meanwhile, and the oldest waiter takes the next freed place. */
   waitingSince?: number
   /** Since when no session has been in the session thread this is bound to (see `VACANT_RELEASE_MS`). Set once, kept across restarts, cleared when a session is there again; a conversation bound to an empty thread starts its clock at the next reconcile (a session's death, or the hourly sweep). */
@@ -414,6 +417,16 @@ const OWED_FULL_WHY = `more than ${OWED_KEEP} messages were owed in one thread, 
 /** A conversation's key in memory, and a channel's in a cursor, a hold or a noted fact: as they always were for `default`, the app first for any other. */
 const watchKey = (app: string | undefined, channel: string, threadTs: string) => scopeKey(app, channel, threadTs)
 const keyOf = (e: Pick<SlackWatchEntry, 'app' | 'channel' | 'threadTs'>) => watchKey(e.app, e.channel, e.threadTs)
+
+/** A store written under an older name of `deferredSince` (`heldSince`, then `notNowSince`) loads under the new name, so a message held by the guard keeps its `owed_max` clock. The next write carries only the new name.
+ *  More than one name can be present when a build that predates a rename wrote the store after one that did not: each ts then takes the latest of them. */
+function readOldNames(e: SlackWatchEntry): void {
+  const merged = { ...e.deferredSince }
+  for (const old of [e.heldSince, e.notNowSince]) for (const [ts, at] of Object.entries(old ?? {})) merged[ts] = Math.max(at, merged[ts] ?? at)
+  if (Object.keys(merged).length) e.deferredSince = merged
+  delete e.heldSince
+  delete e.notNowSince
+}
 /** How long an app's bot that was told it is not in a channel is left alone before a reaction is tried there again. */
 const NO_REACTION_RETRY_MS = 10 * 60_000
 /** A span in the unit a person reads it in: `a day`, `7 days`, `6 hours`. */
@@ -575,7 +588,7 @@ export class SlackWatcher {
       if (!existsSync(this.deps.file)) return
       const raw = JSON.parse(readFileSync(this.deps.file, 'utf8')) as Store
       // An entry with no `app` is the app named `default`'s: every store written before apps existed loads as it is, and is not rewritten.
-      for (const e of raw.entries ?? []) this.entries.set(keyOf(e), e)
+      for (const e of raw.entries ?? []) { readOldNames(e); this.entries.set(keyOf(e), e) }
       this.channelCursors = raw.channelCursors ?? {}
       // A store from before the times were kept holds keys alone; a damaged one holds neither shape: what cannot be read is left out, the rest loads.
       const t: unknown = raw.taggedIn
@@ -625,7 +638,7 @@ export class SlackWatcher {
         const h = this.deps.config(e.app)?.hydra
         const cause = !h ? `its app (${this.appName(e.app)}) has no live connection, so nothing goes through it: see its line`
           : e.waitingSince !== undefined ? `waiting for a session: its specialist is at max_sessions; end one, or raise max_sessions`
-          : e.heldSince && Object.keys(e.heldSince).length ? 'the guard keeps saying not now (exit 75): check the guard'
+          : e.deferredSince && Object.keys(e.deferredSince).length ? 'the guard keeps saying deferred (exit 75): check the guard'
           : e.specialist && !isLive(h, e.specialist) ? `its specialist ${e.specialist} is not declared in hydra.toml: declare it, or bind the conversation elsewhere`
           : this.failing.has(key) ? `delivery failing: ${this.failing.get(key)}`
           : 'not delivered yet and no failure recorded: the next catch-up pass replays it';
@@ -1018,8 +1031,8 @@ export class SlackWatcher {
     const to = entry.specialist ? currentId(cfg.hydra, entry.specialist) : undefined
     if (!to || !isLive(cfg.hydra, to)) return this.undo(entry, mark)
     const { named, verdicts } = await this.admit(entry, cfg, [item], () => to)
-    // Refused now (a role taken away), or the guard says drop or not now: nothing is sent, and the same reaction may come again. A redirect is not followed: it goes to the binding.
-    if (!named.length || verdicts[0].verdict === 'drop' || verdicts[0].verdict === 'later') return this.undo(entry, mark)
+    // Refused now (a role taken away), or the guard says drop or deferred: nothing is sent, and the same reaction may come again. A redirect is not followed: it goes to the binding.
+    if (!named.length || verdicts[0].verdict === 'drop' || verdicts[0].verdict === 'deferred') return this.undo(entry, mark)
     const send = this.chain.then(async () => {
       const result = await this.post(entry, { to }, named, cfg)
       if (result.ok) this.deps.log(`daemon: slack connector: delivered a reaction in ${key} (to ${item.ts}) to ${spelledBare(to)}${result.duplicate ? ' (already delivered)' : ''}\n`)
@@ -1455,24 +1468,24 @@ export class SlackWatcher {
     named.forEach((item, n) => {
       const v = verdicts[n]
       const home = homes.get(item.ts)!
-      if (v.verdict !== 'later' && entry.heldSince?.[item.ts] !== undefined) { delete entry.heldSince[item.ts]; this.persist() }
+      if (v.verdict !== 'deferred' && entry.deferredSince?.[item.ts] !== undefined) { delete entry.deferredSince[item.ts]; this.persist() }
       if (v.verdict === 'drop') {
         this.drop('guard', entry, [item.ts], 'the guard dropped it (exit 10)', false)
         this.settle(key, entry, [item.ts])
         return
       }
-      if (v.verdict === 'later') {
-        // Kept owed for the next pass, for at most owed_max from the first "not now": then it fails, visibly.
+      if (v.verdict === 'deferred') {
+        // Kept owed for the next pass, for at most owed_max from the first deferred: then it fails, visibly.
         // Unless the owed list was full and already cut it.
         if (!entry.owed?.includes(item.ts)) { this.drop('owed-full', entry, [item.ts], OWED_FULL_WHY); return }
-        const since = entry.heldSince?.[item.ts] ?? this.deps.now()
-        if (entry.heldSince?.[item.ts] === undefined) { (entry.heldSince ??= {})[item.ts] = since; this.persist() }
+        const since = entry.deferredSince?.[item.ts] ?? this.deps.now()
+        if (entry.deferredSince?.[item.ts] === undefined) { (entry.deferredSince ??= {})[item.ts] = since; this.persist() }
         if (this.deps.now() - since > g!.owedMaxMs) {
-          this.drop('expired', entry, [item.ts], `the guard said not now (exit 75) for longer than owed_max (${Math.round(g!.owedMaxMs / 60_000)} min)`)
+          this.drop('expired', entry, [item.ts], `the guard said deferred (exit 75) for longer than owed_max (${Math.round(g!.owedMaxMs / 60_000)} min)`)
           this.settle(key, entry, [item.ts])
           return
         }
-        this.deps.log(`daemon: slack connector: the guard said not now (exit 75) for ${key} ts ${item.ts}; it stays owed and the next catch-up pass offers it again\n`)
+        this.deps.log(`daemon: slack connector: the guard said deferred (exit 75) for ${key} ts ${item.ts}; it stays owed and the next catch-up pass offers it again\n`)
         return
       }
       if (v.verdict === 'open') this.deps.log(`daemon: slack connector: the guard ${v.why} for ${key} ts ${item.ts}; delivering anyway\n`)
@@ -1611,7 +1624,7 @@ export class SlackWatcher {
     const settled = new Set(ts)
     const owed = (entry.owed ?? []).filter(t => !settled.has(t))
     if (owed.length) entry.owed = owed; else delete entry.owed
-    if (entry.heldSince) { for (const t of ts) delete entry.heldSince[t]; if (!Object.keys(entry.heldSince).length) delete entry.heldSince }
+    if (entry.deferredSince) { for (const t of ts) delete entry.deferredSince[t]; if (!Object.keys(entry.deferredSince).length) delete entry.deferredSince }
     this.persist()
   }
 
