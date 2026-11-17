@@ -236,6 +236,14 @@ test('hydra health names a refused restricted launch, with what to do; none repo
   expect(other).not.toContain("check Claude Code's setup")
 })
 
+test('hydra health says a restricted specialist is refused on a macOS version the sandbox is not proven on, or runs there by opt-in; none reported, no line', () => {
+  const refused = capturedHealth({ ...HEALTH, macosGate: { version: '13.4', allowed: false, specialists: ['ops', 'desk'] } })
+  expect(refused).toMatch(/REFUSED: restricted specialists ops, desk: .*macOS 13\.4.*allow_unproven_macos = true/)
+  const allowed = capturedHealth({ ...HEALTH, macosGate: { version: '13.4', allowed: true, specialists: ['ops'] } })
+  expect(allowed).toMatch(/WARNING: restricted specialist ops: .*macOS 13\.4.*lets it run anyway/)
+  expect(capturedHealth(HEALTH)).not.toContain('macOS')
+})
+
 test('sourceStateDirEnv loads the .env but keeps no RAINDROP_ value in this process', () => {
   writeEnv(`${SCRUBBED_SPAWN_VARS.map(v => `${v}=seeded`).join('\n')}\nSPAWN_CWD=/tmp/x\n`)
   sourceStateDirEnv(stateDir)

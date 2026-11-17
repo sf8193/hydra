@@ -7,6 +7,7 @@ export function testLoadEnv(over: Partial<LoadEnv> = {}): LoadEnv {
     home: '/home/op',
     sessionNames: [],
     platform: 'discord',
+    macosVersion: undefined,
     stateDir: '/nonexistent/state',
     claudeConfigDir: '/nonexistent/claude',
     isDir: () => true,

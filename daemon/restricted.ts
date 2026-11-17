@@ -17,6 +17,7 @@ import { currentHydraConfig } from './hydra-config.js'
 import { specialistOf } from '../specialists/specialists.js'
 import { WORKDIR_TOOLS, type HydraConfig, type LoadEnv } from '../config/types.js'
 import { offLimitRoots, type PrivateRoot } from '../config/restricted-workdir.js'
+import { macosGateIssue, unprovenMacos } from '../config/server-sandbox.js'
 import { hydraLoadEnv, onHydraConfigLoad } from './hydra-config.js'
 import type { SessionInfo } from './sessions.js'
 import { threadNotices } from './notice-limit.js'
@@ -161,6 +162,27 @@ onHydraConfigLoad(config => {
 /** What a restricted launch builds the listed servers' sandbox from, as the daemon has it now: the probes and the places to keep servers out of. */
 export type SandboxInputs = { env: LoadEnv; roots: PrivateRoot[] }
 export const sandboxInputs = (h: HydraConfig = currentHydraConfig()): SandboxInputs => { const env = hydraLoadEnv(); return { env, roots: offLimitRoots(env, h.offLimits ?? []) } }
+
+/**
+ * Why this start must not happen on this macOS version, or undefined: a confined policy that lists servers runs them under a sandbox
+ * proven only on some macOS versions (config/server-sandbox.ts PROVEN_MACOS_MAJORS), unless `[restricted] allow_unproven_macos = true`.
+ * The one check, asked where every start passes (doSpawnSession: fresh, respawn, resume, fork, handoff successor). A confined policy
+ * without servers has no sandbox to prove, so it is not asked.
+ */
+export function macosRefusal(p: LaunchPolicy | undefined, sessionName: string, env: Pick<LoadEnv, 'macosVersion'> = hydraLoadEnv(), h: HydraConfig = currentHydraConfig()): string | undefined {
+  if (p?.access !== 'workdir' || !p.servers?.length) return undefined
+  // With the opt-in the text is only a warning (`hydra config check`, `hydra health`), not a reason to refuse.
+  const why = h.allowUnprovenMacos ? undefined : macosGateIssue(env.macosVersion, false)
+  return why ? `specialist ${p.specialist}: ${why}. ${remedy(sessionName)}` : undefined
+}
+
+/** For `hydra health`: the restricted specialists that list servers on a macOS version outside the proven list, and whether the opt-in lets them run. Undefined when none is affected. */
+export function macosGateHealth(h: HydraConfig = currentHydraConfig(), env: Pick<LoadEnv, 'macosVersion'> = hydraLoadEnv()): { version: string; allowed: boolean; specialists: string[] } | undefined {
+  const version = env.macosVersion
+  if (version === undefined || !unprovenMacos(version)) return undefined
+  const specialists = Object.values(h.specialists).filter(s => s.restricted && s.mcpServerNames?.length).map(s => s.id)
+  return specialists.length ? { version, allowed: h.allowUnprovenMacos === true, specialists } : undefined
+}
 
 /** What a policy says in words, for a log line or a message (the id is a hash). */
 export function describePolicy(p: LaunchPolicy | undefined): string {

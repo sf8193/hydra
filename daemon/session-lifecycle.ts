@@ -9,7 +9,7 @@ import { safeSend, formatSpawnLine, atomicWriteFileSync } from './util.js'
 import { tmuxHasSession, tmuxSync, tmuxTimedOut } from './tmux.js'
 import { nameHeldByAnother, occupancy, occupied } from './session-reachability.js'
 import { withThreadLock } from '../specialists/specialists.js'
-import { endVerifying, startVerifying, verifyBackoff, verifyRefusal, confined, describePolicy, missingTokenRefusal, PolicyRefusal, remedy, resolvePolicy, type LaunchPolicy } from './restricted.js'
+import { endVerifying, startVerifying, verifyBackoff, verifyRefusal, confined, describePolicy, macosRefusal, missingTokenRefusal, PolicyRefusal, remedy, resolvePolicy, type LaunchPolicy } from './restricted.js'
 import { threadNotices } from './notice-limit.js'
 import { hydraLoadEnv, currentHydraConfig } from './hydra-config.js'
 import { workdirRestrictionIssues } from '../config/restricted-workdir.js'
@@ -1006,6 +1006,9 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     if (policy?.access === 'workdir' && !resolveEngine(opts?.engine ?? 'claude').confinesAccess) {
       throw new PolicyRefusal(`specialist ${policy.specialist} has restricted = true, which the ${opts?.engine} engine cannot give: set engine = "claude", or set restricted = false. ${remedy(sessionName)}`)
     }
+    // The sandbox its servers run under is proven only on some macOS versions: refused here, where every start passes, never run on a guess.
+    const unproven = macosRefusal(policy, sessionName)
+    if (unproven) throw new PolicyRefusal(unproven)
   } catch (err) {
     if (err instanceof PolicyRefusal && threadId) await tellThread(threadId, err.message)
     throw err
