@@ -79,29 +79,18 @@ export function unreadableWorkdir(workdir: string, roots: readonly string[], rea
 export const MANAGED_MCP_FILES = ['/Library/Application Support/ClaudeCode/managed-mcp.json', '/etc/claude-code/managed-mcp.json']
 
 /**
- * The files an operator's own MCP servers are declared in, which Claude Code reads for the session: its user config (`~/.claude.json` and the one in
- * CLAUDE_CONFIG_DIR, each with the entries for the workdir's project), a `.mcp.json` in the workdir or in any folder above it (Claude Code walks up from
- * its working directory), and the managed file. Plugins' servers carry a `plugin:` key and cannot share a plain name.
+ * The listed servers whose name a managed MCP config (`managed-mcp.json`) also declares, with the file, and the files that could not be read. This is the one place a
+ * same-named server can stand in for the listed one: Claude Code admits a managed file's entries without listing them and lets the file take exclusive control of MCP
+ * servers, and its log shows names only, so the start check would pass a server of the right name running another command. (Not proven live: the file sits in a
+ * root-owned folder.) The operator's own config (`~/.claude.json`, a `.mcp.json`) is not here: the allowlist admits a stdio server by its exact command, so a same-named
+ * server with another command does not start and cannot take the listed one's place (write-confinement-mcp.live.test.ts, #774). A file that exists and cannot be read or
+ * parsed is reported, never treated as empty.
  */
-export function operatorMcpFiles(env: { home: string; claudeConfigDir: string; realpath?: (p: string) => string }, workdir: string): { file: string; projects: string[] }[] {
-  const real = env.realpath ?? ((p: string) => p)
-  const dirs = [...new Set([trim(workdir), trim(real(trim(workdir)))])]
-  const files: { file: string; projects: string[] }[] = [`${trim(env.home)}/.claude.json`, `${trim(env.claudeConfigDir)}/.claude.json`].map(file => ({ file, projects: dirs }))
-  const up = new Set<string>()
-  for (const d of dirs) for (let p = d; ; p = p.slice(0, p.lastIndexOf('/')) || '/') { up.add(`${p === '/' ? '' : p}/.mcp.json`); if (p === '/') break }
-  return [...files, ...[...up].map(file => ({ file, projects: [] as string[] })), ...MANAGED_MCP_FILES.map(file => ({ file, projects: [] as string[] }))]
-}
-
-/**
- * The listed servers whose name an operator's own MCP config also declares, with the file, and the files that could not be read. Claude Code's allowlist
- * matches by name and its log shows names only, so such a server of the operator's would be admitted too, and could take the place of the one hydra
- * starts with its own profile. A file that exists and cannot be read or parsed is reported, never treated as empty.
- */
-export function operatorMcpNameClashes(env: { home: string; claudeConfigDir: string; realpath?: (p: string) => string; mcpNamesIn(path: string, projects?: readonly string[]): string[] }, workdir: string, listed: readonly string[]): { clashes: { name: string; file: string }[]; unreadable: { file: string; why: string }[] } {
+export function managedMcpNameClashes(env: { mcpNamesIn(path: string): string[] }, listed: readonly string[]): { clashes: { name: string; file: string }[]; unreadable: { file: string; why: string }[] } {
   const clashes: { name: string; file: string }[] = [], unreadable: { file: string; why: string }[] = []
-  for (const { file, projects } of operatorMcpFiles(env, workdir)) {
+  for (const file of MANAGED_MCP_FILES) {
     let here: string[]
-    try { here = env.mcpNamesIn(file, projects) } catch (err) { unreadable.push({ file, why: err instanceof Error ? err.message : String(err) }); continue }
+    try { here = env.mcpNamesIn(file) } catch (err) { unreadable.push({ file, why: err instanceof Error ? err.message : String(err) }); continue }
     for (const name of listed) if (here.includes(name)) clashes.push({ name, file })
   }
   return { clashes, unreadable }

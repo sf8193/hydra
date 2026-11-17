@@ -178,37 +178,27 @@ describe('a start of a write-confined specialist', () => {
     } finally { process.env.BR_TOKEN = saved }
   })
 
-  test('a listed server whose name the operator\'s own MCP config also declares refuses the start in the thread, naming the file; nothing starts', async () => {
-    _setLoadEnvForTesting(macLike({ mcpNamesIn: f => (f.endsWith('.mcp.json') ? ['browser'] : []) }))
+  const MANAGED = '/Library/Application Support/ClaudeCode/managed-mcp.json'
+  test('a listed server whose name a managed MCP config also declares refuses the start in the thread, naming the file; nothing starts', async () => {
+    _setLoadEnvForTesting(macLike({ mcpNamesIn: f => (f === MANAGED ? ['browser'] : []) }))
     seedDead()
     await expect(start()).rejects.toThrow(PolicyRefusal)
     expect(launches).toHaveLength(0)
-    expect(told.join('\n')).toMatch(/\.mcp\.json already declares an MCP server named browser; Claude Code's allowlist matches by name/)
+    expect(told.join('\n')).toContain(`${MANAGED} already declares an MCP server named browser; Claude Code's own text says a managed MCP config's servers are admitted without listing them (not shown live)`)
   })
 
-  test('a real ~/.claude.json (a file in a throwaway HOME, read by the real reader) that declares the listed name refuses the start; with no such file the start goes', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'clash-home-'))
-    try {
-      _setLoadEnvForTesting(macLike({ home, claudeConfigDir: join(home, '.claude') }))
-      seedDead()
-      await start()
-      expect(launches).toHaveLength(1)   // control: nothing declares it, the same start goes
-      launches.length = 0; told.length = 0
-      writeFileSync(join(home, '.claude.json'), JSON.stringify({ mcpServers: { browser: { command: '/usr/bin/false' } } }))
-      seedDead()
-      await expect(start()).rejects.toThrow(PolicyRefusal)
-      expect(launches).toHaveLength(0)
-      expect(told.join('\n')).toContain(`${join(home, '.claude.json')} already declares an MCP server named browser; Claude Code's allowlist matches by name`)
-    } finally { rmSync(home, { recursive: true, force: true }) }
-  })
-
-  test('a parent .mcp.json or a file that cannot be read refuses the start (the probe walks up and fails closed)', async () => {
-    _setLoadEnvForTesting(macLike({ mcpNamesIn: f => (f === `${join(workdir, '..')}/.mcp.json` ? ['browser'] : []) }))
+  test('the operator\'s own config declaring the listed name does not refuse the start: only the managed files are looked up, and its server has another command, which the allowlist does not admit', async () => {
+    const asked: string[] = []
+    _setLoadEnvForTesting(macLike({ mcpNamesIn: f => { asked.push(f); return f === MANAGED || f.startsWith('/etc/claude-code/') ? [] : ['browser'] } }))
     seedDead()
-    await expect(start()).rejects.toThrow(PolicyRefusal)
-    expect(told.join('\n')).toMatch(/\.mcp\.json already declares an MCP server named browser/)
-    told.length = 0
-    _setLoadEnvForTesting(macLike({ mcpNamesIn: f => { if (f.endsWith('/.claude.json')) throw new Error(`${f} is not valid JSON (Unexpected end)`); return [] } }))
+    await start()
+    expect(launches).toHaveLength(1)
+    expect(asked.sort()).toEqual([MANAGED, '/etc/claude-code/managed-mcp.json'].sort())
+  })
+
+  test('a managed MCP config that cannot be read refuses the start (the probe fails closed)', async () => {
+    _setLoadEnvForTesting(macLike({ mcpNamesIn: f => { if (f === MANAGED) throw new Error(`${f} is not valid JSON (Unexpected end)`); return [] } }))
+    seedDead()
     await expect(start()).rejects.toThrow(PolicyRefusal)
     expect(launches).toHaveLength(0)
     expect(told.join('\n')).toMatch(/is not valid JSON \(Unexpected end\), so hydra cannot tell whether it declares an MCP server named like a listed one/)
