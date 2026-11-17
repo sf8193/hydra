@@ -310,6 +310,18 @@ addresses = ["github:alice"]
       .toEqual({ overloadLoadPerCore: 2, overloadIdlePct: 10, swapUsedPct: 90.5, ticks: 5, resumeSettleMs: 30 * 60_000, memoryCooldownMs: 12 * 3_600_000 })
   })
 
+  test('[vitals]: overload_load_per_core is a ratio, not a percentage: no cap at 100, but above 0 and finite (#781)', () => {
+    for (const v of ['100.5', '1000']) expect(ok(`${BASE}\n[vitals]\noverload_load_per_core = ${v}\n`).config.vitals?.overloadLoadPerCore).toBe(Number(v))
+    for (const v of ['0', '-1', 'inf', 'nan', '1e400', '"2"']) {
+      expect(errorsOf(`${BASE}\n[vitals]\noverload_load_per_core = ${v}\n`)).toEqual(['vitals.overload_load_per_core: must be a finite number above 0'])
+    }
+    // The two percentages keep their cap.
+    expect(errorsOf(`${BASE}\n[vitals]\noverload_idle_pct = 100.5\nswap_used_pct = 101\n`)).toEqual([
+      'vitals.overload_idle_pct: must be a number above 0, at most 100',
+      'vitals.swap_used_pct: must be a number above 0, at most 100',
+    ])
+  })
+
   test('[vitals]: a bad value or unknown key is reported at its path', () => {
     expect(errorsOf(`${BASE}\n[vitals]\nswap_used_pct = 120\nticks = 0\nresume_settle = "soon"\nidle = 3\n`)).toEqual([
       'vitals.idle: unknown key "idle"',
