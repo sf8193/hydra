@@ -642,6 +642,17 @@ describe('the operator: hydra conversations and hydra route', () => {
     w.close()
   })
 
+  test('health lists owed messages older than two catch-up passes, with the threshold it used (#669)', async () => {
+    configure(TOML)
+    const w = getSlackWatcher()
+    w.handle({ channel: 'C1', ts: '51.000001', user: 'UOWNER', text: '<@UBOT> one' })   // accepted, never delivered: it is owed, and from 1970
+    const h = ((await handleCLIRequest(req('health', {}))).data as any).slack
+    expect(h.owedLateAfterMin).toBe(20)
+    expect(h.owedLate).toHaveLength(1)
+    expect(h.owedLate[0]).toMatchObject({ count: 1, cause: expect.any(String) })
+    w.close()
+  })
+
   test('health flags a #name place no channel answers to, and omits the line without an app named default', async () => {
     configure(TOML.replace('place = "slack:C2"', 'place = "slack:#ops-room"'))
     expect(slackWatchHealth()!.places.find(p => p.to === OPS)!.note).toContain('no channel answers to this name')

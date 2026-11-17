@@ -82,6 +82,8 @@ export const DM_LIST_BACKOFF_MS = 60_000
 
 export const DOWN_ALERT_AFTER_MS = 5 * 60_000
 export const CATCH_UP_STALE_AFTER_MS = CATCH_UP_INTERVAL_MS * 2.5
+/** An owed message that two catch-up passes have not delivered is stuck: `hydra health` lists it with its cause. */
+export const OWED_LATE_AFTER_MS = CATCH_UP_INTERVAL_MS * 2
 const MISSED_LIVE_ALERT_EVERY_MS = 60 * 60_000
 /** The longest a message waits to learn which apps are in its channel. */
 export const MEMBERSHIP_WAIT_MS = 5_000
