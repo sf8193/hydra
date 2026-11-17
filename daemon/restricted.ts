@@ -34,7 +34,7 @@ export type ConfinementServer = { name: string; command: string; tokenEnv: strin
  * `can_only_write_to = "workdir"`: the operator's account and tools, with Bash and Edit/Write writes confined to `workdir` (daemon/write-confinement.ts).
  * It sits on an `operator` policy: the account is the operator's, which is what the stored `access` says.
  */
-export type ConfinementPolicy = { specialist: string; workdir: string; denyCommands: string[]; /** Every place Claude Code's tools and shell may not read, as worked out at birth (config/write-confinement.ts `readDenyRoots`). */ cannotRead: string[]; /** The built-in tools it may use (`--tools`); absent: all, as for any unrestricted session. */ tools?: string[]; servers: ConfinementServer[] }
+export type ConfinementPolicy = { specialist: string; workdir: string; denyCommands: string[]; /** Every place Claude Code's tools and shell may not read, as worked out at birth (config/write-confinement.ts `readDenyRoots`). */ cannotRead: string[]; /** The built-in tools it may use (`--tools`); absent: all, as for any unrestricted session. */ tools?: string[]; /** The folder its listed servers get as `{profile_dir}`, resolved and inside `workdir`; absent: `<workdir>/.browser/profile`. */ browserProfile?: string; servers: ConfinementServer[] }
 
 /** Stored in a session record, so the values stay: `workdir` is a restricted specialist, `operator` the operator's account. */
 export type PolicyAccess = 'operator' | 'workdir'
@@ -60,7 +60,7 @@ export type ConfinedPolicy = LaunchPolicy & { access: 'workdir'; workdir: string
 
 /** The id a write-confining policy's facts give: changes whenever the folder, a deny pattern or a server (command, token variables, profile declaration) does, and with nothing else. */
 export function confinementIdFor(w: Omit<ConfinementPolicy, 'specialist'>): string {
-  const identity = JSON.stringify({ workdir: w.workdir, deny: [...w.denyCommands].sort(), noRead: [...w.cannotRead].sort(), ...(w.tools && { tools: [...w.tools].sort() }), servers: w.servers.map(s => ({ name: s.name, command: s.command, tokenEnv: [...s.tokenEnv].sort(), args: s.profileArgs, env: Object.entries(s.profileEnv).sort(([a], [b]) => a.localeCompare(b)) })).sort((a, b) => a.name.localeCompare(b.name)) })
+  const identity = JSON.stringify({ workdir: w.workdir, deny: [...w.denyCommands].sort(), noRead: [...w.cannotRead].sort(), ...(w.tools && { tools: [...w.tools].sort() }), servers: w.servers.map(s => ({ name: s.name, command: s.command, tokenEnv: [...s.tokenEnv].sort(), args: s.profileArgs, env: Object.entries(s.profileEnv).sort(([a], [b]) => a.localeCompare(b)) })).sort((a, b) => a.name.localeCompare(b.name)), ...(w.browserProfile && { browserProfile: w.browserProfile }) })
   return `writes:${createHash('sha256').update(identity).digest('hex').slice(0, 12)}`
 }
 
@@ -116,6 +116,7 @@ export function policyProblem(p: unknown): string | undefined {
     if (typeof w.workdir !== 'string' || !isAbsolute(w.workdir)) return 'its can_only_write_to has no workdir (the one folder its writes are confined to)'
     if (!Array.isArray(w.denyCommands) || !w.denyCommands.every(c => typeof c === 'string')) return 'its can_only_write_to has no readable deny list'
     if (w.tools !== undefined && (!Array.isArray(w.tools) || !w.tools.every(t => typeof t === 'string'))) return 'its can_only_write_to has no readable tool list'
+    if (w.browserProfile !== undefined && (typeof w.browserProfile !== 'string' || !isAbsolute(w.browserProfile))) return 'its can_only_write_to has no readable browser profile folder'
     if (!Array.isArray(w.cannotRead) || !w.cannotRead.every(c => typeof c === 'string' && isAbsolute(c))) return 'its can_only_write_to has no readable list of places it may not read'
     if (!Array.isArray(w.servers) || !w.servers.every(x => x && typeof x.name === 'string' && typeof x.command === 'string' && Array.isArray(x.tokenEnv) && Array.isArray(x.profileArgs) && typeof x.profileEnv === 'object' && x.profileEnv !== null)) return 'its can_only_write_to has no readable server list'
     return q.id === confinementIdFor(w as Omit<ConfinementPolicy, 'specialist'>) ? undefined : 'its id does not match its folder, deny lists and servers'
@@ -156,7 +157,7 @@ export function bornPolicy(specialistId: string | undefined, h: HydraConfig = cu
     })
     const env = hydraLoadEnv()
     const others = Object.values(h.specialists).filter(x => x.id !== declared.id).map(x => x.workdir)
-    const canOnlyWriteTo = { workdir: declared.workdir, denyCommands: [...(declared.denyCommands ?? [])], ...(declared.tools && { tools: [...declared.tools] }), cannotRead: readDenyRoots(env, declared.workdir, others, declared.cannotRead ?? []), servers }
+    const canOnlyWriteTo = { workdir: declared.workdir, denyCommands: [...(declared.denyCommands ?? [])], ...(declared.tools && { tools: [...declared.tools] }), ...(declared.browserProfile && { browserProfile: declared.browserProfile }), cannotRead: readDenyRoots(env, declared.workdir, others, declared.cannotRead ?? []), servers }
     return { specialist: declared.id, access: 'operator', canOnlyWriteTo, id: confinementIdFor(canOnlyWriteTo) }
   }
   if (!declared.restricted) return { specialist: declared.id, access: 'operator', id: OPERATOR_POLICY_ID }
@@ -244,6 +245,7 @@ function confinementDrifted(stored: LaunchPolicy | undefined, current: LaunchPol
   const out: string[] = []
   if (a.workdir !== b.workdir) out.push(`can_only_write_to folder: ${a.workdir} -> ${b.workdir}`)
   if ((a.tools === undefined) !== (b.tools === undefined) || (a.tools && b.tools && !sameSet(a.tools, b.tools))) out.push(`tools: ${a.tools ? a.tools.join(',') : 'all'} -> ${b.tools ? b.tools.join(',') : 'all'}`)
+  if (a.browserProfile !== b.browserProfile) out.push(`browser_profile: ${a.browserProfile ?? 'default'} -> ${b.browserProfile ?? 'default'}`)
   if (!sameSet(a.cannotRead, b.cannotRead)) out.push(`cannot_read: ${a.cannotRead.join(' | ')} -> ${b.cannotRead.join(' | ')}`)
   if (!sameSet(a.denyCommands, b.denyCommands)) out.push(`deny_commands: ${a.denyCommands.join(' | ')} -> ${b.denyCommands.join(' | ')}`)
   const before = new Map(a.servers.map(s => [s.name, s]))

@@ -8,15 +8,20 @@ export type CanOnlyWriteTo = typeof CAN_ONLY_WRITE_TO_VALUES[number]
 
 /** The two folders a write-confined specialist's browser gets, inside its workdir. */
 export const BROWSER_DIR = '.browser'
-export const browserProfileDir = (workdir: string): string => `${workdir.replace(/\/+$/, '')}/${BROWSER_DIR}/profile`
-export const browserDownloadDir = (workdir: string): string => `${workdir.replace(/\/+$/, '')}/${BROWSER_DIR}/downloads`
+/** The profile folder a specialist's browser server gets: the one it names (`browser_profile`, resolved), else `<workdir>/.browser/profile`. */
+export const browserProfileDir = (workdir: string, named?: string): string => named ?? `${workdir.replace(/\/+$/, '')}/${BROWSER_DIR}/profile`
+/** Its download folder: `<workdir>/.browser/downloads` by default; beside a named profile, `<profile>-downloads` (never inside it: a profile is the browser's to rewrite). */
+export const browserDownloadDir = (workdir: string, named?: string): string => named ? `${named.replace(/\/+$/, '')}-downloads` : `${workdir.replace(/\/+$/, '')}/${BROWSER_DIR}/downloads`
 
 /** What `[mcp_servers.<name>] profile_args` and `profile_env` may name. */
 export const PROFILE_PLACEHOLDERS = ['{profile_dir}', '{download_dir}'] as const
 
 /** `text` with each placeholder replaced by the specialist's folder for it. */
-export const fillProfile = (text: string, workdir: string): string =>
-  text.replaceAll('{profile_dir}', browserProfileDir(workdir)).replaceAll('{download_dir}', browserDownloadDir(workdir))
+export const fillProfile = (text: string, workdir: string, named?: string): string => {
+  // One pass: a folder whose name happens to hold `{download_dir}` is not substituted a second time. (`unquotablePath` refuses only control characters, so braces are allowed in a name.)
+  const profile = browserProfileDir(workdir, named), downloads = browserDownloadDir(workdir, named)
+  return text.replace(/\{(profile_dir|download_dir)\}/g, (_m, k: string) => (k === 'profile_dir' ? profile : downloads))
+}
 
 /** The placeholder-looking words in `text` that are not one of the two (`{nope}`), or []. */
 export const unknownPlaceholders = (text: string): string[] =>
@@ -102,7 +107,7 @@ export const readDenyRule = (root: string): string => `Read(/${root}/**)`
  * write-confined specialist someone else can reach.
  */
 export const confinementWarning = (workdir: string): string =>
-  `can reach the operator's account: Bash and Edit/Write writes are confined to ${workdir}, and Claude Code's tools and shell cannot read the credential folders (~/.ssh, ~/.aws and the like), hydra's state folder or other specialists' workdirs; ~/Library/Keychains is one of those folders, so \`security\` and git's keychain helper fail in its shell (shown with a throwaway keychain; login keychain: not proven live; the git helper cannot be told apart on the real one without writing an item; a store the keychain service holds without a file is not separately blocked); the browser and MCP servers can read them; the daemon attaches, for it, only a file in its folder or temp folder that is in none of those places, and it holds no tool that reaches another session (spawn, list, peek, kill, send_to_thread, handoff, watch, bind) and uses its reading and reply tools only in its own conversation; and other reads, network, MCP servers' own writes and credentials are not confined; it sees only the MCP servers it lists (hydra's bridge aside), and a listed server that declares a profile folder uses its own profile in ${workdir} while one that declares none keeps its default; attachments sent to it are unreadable (the shared inbox is denied). Credential separation (run_as) is planned, not built.`
+  `can reach the operator's account: Bash and Edit/Write writes are confined to ${workdir}, and Claude Code's tools and shell cannot read the credential folders (~/.ssh, ~/.aws and the like), hydra's state folder or other specialists' workdirs; ~/Library/Keychains is one of those folders, so \`security\` and git's keychain helper fail in its shell (shown with a throwaway keychain; login keychain: not proven live; the git helper cannot be told apart on the real one without writing an item; a store the keychain service holds without a file is not separately blocked); the browser and MCP servers can read them; the daemon attaches, for it, only a file in its folder or temp folder that is in none of those places, and it holds no tool that reaches another session (spawn, list, peek, kill, send_to_thread, handoff, watch, bind) and uses its reading and reply tools only in its own conversation; and other reads, network, MCP servers' own writes and credentials are not confined; it sees only the MCP servers it lists (hydra's bridge aside), and a listed server that declares a profile folder uses its own profile in the folder browser_profile names, else ${workdir}/.browser/profile, while one that declares none keeps its default; attachments sent to it are unreadable (the shared inbox is denied). Credential separation (run_as) is planned, not built.`
 
 /** What a bridge tool's `files` check needs: the session's folder and temp folder, the places its tools are denied, and how a path resolves. */
 export type FileSendEnv = { workdir: string; tmpDir: string; deny: readonly string[]; realpath: (p: string) => string }
@@ -126,4 +131,29 @@ export function fileSendDecision(path: string, env: FileSendEnv): { path: string
   const homes = [env.workdir, env.tmpDir].map(p => { try { return trim(env.realpath(trim(p))) } catch { return trim(p) } })
   if (!homes.some(h => within(real, h))) return { refusal: fileRefusal(path) }
   return { path: real }
+}
+
+/**
+ * Why a `browser_profile` cannot be this specialist's profile folder, or undefined. It must lie inside the workdir (resolved): the folder holds the
+ * specialist's logins, and the layer's promise is that what it keeps is in its own folder; a browser server runs outside the sandbox and could write
+ * anywhere the operator can, so this key names the folder, it does not confine the browser. It may not be the workdir itself, nor hold or sit in the
+ * default `.browser` folder, nor in a place the layer denies reading (the session's own tools could not read what its browser wrote there).
+ */
+export function browserProfileProblem(workdir: string, profile: string, realpath: (p: string) => string, denied: readonly string[]): string | undefined {
+  const dir = trim(realpath(trim(profile))), root = trim(realpath(trim(workdir)))
+  if (dir === root) return `${profile} is the workdir itself: a browser profile is rewritten wholesale, so it needs a folder of its own inside it`
+  if (!within(dir, root)) return `${profile} is not inside the workdir ${workdir}: a profile outside it would keep the specialist's logins outside its own folder`
+  if (within(dir.toLowerCase(), `${root}/${BROWSER_DIR}`.toLowerCase()) || within(`${root}/${BROWSER_DIR}`.toLowerCase(), dir.toLowerCase())) return `${profile} is, holds or sits in ${root}/${BROWSER_DIR}, the folder of the default profile and downloads: name another`
+  const hit = unreadableWorkdir(dir, denied, realpath)
+  if (hit) return `${profile} is, or holds, ${hit}, which the layer denies reading`
+  return undefined
+}
+
+/** A folder as a filesystem sees it for comparing: resolved, and case-folded (APFS and most Macs are case-insensitive: `Chrome` and `chrome` are one folder). */
+export const canonicalFolder = (p: string, realpath: (p: string) => string): string => trim(realpath(trim(p))).toLowerCase()
+
+/** Two folders that are, hold or sit in one another would share what a browser locks (compared as `canonicalFolder`). */
+export const browserProfilesOverlap = (a: string, b: string, realpath: (p: string) => string = p => p): boolean => {
+  const x = canonicalFolder(a, realpath), y = canonicalFolder(b, realpath)
+  return within(x, y) || within(y, x)
 }

@@ -130,7 +130,7 @@ function writeConfinementConfig(w: NonNullable<LaunchPolicy['canOnlyWriteTo']>, 
   // An entry Claude Code's schema rejects makes it stop at an interactive "Settings Warning" and never start: refused here, never written.
   const invalid = claudeSettingsProblems(settings as { allowedMcpServers?: unknown })
   if (invalid.length) throw new PolicyRefusal(`specialist ${specialist}: the launch settings hold an entry Claude Code would reject (${invalid.join('; ')}), which stops it at a dialog and never starts the session, so no session starts. ${remedy(tmuxName)}`)
-  try { makeBrowserDirs(w.workdir) } catch (err) {
+  try { makeBrowserDirs(w.workdir, w.browserProfile) } catch (err) {
     throw new PolicyRefusal(`specialist ${specialist}: cannot make its browser folders in ${w.workdir}: ${err instanceof Error ? err.message : String(err)}. No session starts until that is fixed; after you fix it, ${remedy(tmuxName)}`)
   }
   return writeRestrictedFiles(tmuxName, sessionId, { settings, mcp })

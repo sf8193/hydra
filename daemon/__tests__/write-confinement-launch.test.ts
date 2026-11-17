@@ -1,7 +1,7 @@
 // `can_only_write_to = "workdir"`: what every start of such a specialist's session launches with, and how its stored policy is read and compared.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { createHash } from 'crypto'
-import { existsSync, realpathSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
+import { chmodSync, existsSync, realpathSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { ClaudeEngine } from '../engines/claude-engine.js'
@@ -236,6 +236,12 @@ describe('the browser', () => {
     }
   })
 
+  test('an existing profile or download folder is brought to 0700 too (adopted, not only created)', async () => {
+    for (const d of ['profile', 'downloads']) { mkdirSync(join(work, '.browser', d), { recursive: true }); chmodSync(join(work, '.browser', d), 0o755) }
+    await launch()
+    for (const d of ['profile', 'downloads']) expect(statSync(join(work, '.browser', d)).mode & 0o777).toBe(0o700)
+  })
+
   test('the listed server gets the folders through its own declaration, unsandboxed, with its token variable and nothing else of the environment', async () => {
     process.env.NOT_FOR_SERVERS = 'x'
     await launch()
@@ -246,6 +252,15 @@ describe('the browser', () => {
     } } })
     expect(readFileSync(mcpFile(), 'utf8')).not.toContain('sandbox-exec')
     delete process.env.NOT_FOR_SERVERS
+  })
+
+  test('a named browser profile is the server\'s exactly: its folder and the download folder beside it, made 0700, and no .browser default is made', async () => {
+    const named = join(work, 'deep', 'chrome')
+    await launch({}, policyOf({ browserProfile: named }))
+    expect(readJson(mcpFile()).mcpServers.browser.args).toEqual(['--user-data-dir', named, `--downloads=${named}-downloads`])
+    expect(readJson(mcpFile()).mcpServers.browser.env.BROWSER_HOME).toBe(named)
+    for (const d of [named, `${named}-downloads`]) { expect(statSync(d).isDirectory()).toBe(true); expect(statSync(d).mode & 0o077).toBe(0) }
+    expect(existsSync(join(work, '.browser'))).toBe(false)
   })
 
   test('a server that needs a token the daemon does not have refuses the start, with the file to fix, and leaves no file', async () => {
@@ -333,6 +348,8 @@ describe('the stored policy', () => {
     expect(confinementIdFor(a)).toBe(old)
     expect(policyProblem({ specialist: 'gem', access: 'operator', canOnlyWriteTo: a, id: old })).toBeUndefined()
     expect(confinementIdFor({ ...a, tools: ['Read'] })).not.toBe(old)
+    expect(confinementIdFor({ ...a, browserProfile: '/w/chrome' })).not.toBe(old)
+    expect(policyProblem({ ...policyOf(), canOnlyWriteTo: { ...a, browserProfile: 'relative' } })).toMatch(/no readable browser profile/)
   })
 
   test('a change of can_only_write_to is noticed: set, removed, a new folder, deny list or server', () => {
@@ -344,6 +361,8 @@ describe('the stored policy', () => {
     expect(policyDrifted(w, policyOf({ workdir: '/else' }))).toEqual([`can_only_write_to folder: ${work} -> /else`])
     expect(policyDrifted(w, policyOf({ denyCommands: [] }))).toEqual(['deny_commands: rm -rf * -> '])
     expect(policyDrifted(w, policyOf({ tools: ['Read'] }))).toEqual(['tools: all -> Read'])
+    expect(policyDrifted(w, policyOf({ browserProfile: '/w/chrome' }))).toEqual(['browser_profile: default -> /w/chrome'])
+    expect(policyDrifted(policyOf({ browserProfile: '/w/a' }), policyOf({ browserProfile: '/w/b' }))).toEqual(['browser_profile: /w/a -> /w/b'])
     expect(policyDrifted(policyOf({ tools: ['Read'] }), w)).toEqual(['tools: Read -> all'])
     expect(policyDrifted(policyOf({ tools: ['Read', 'Bash'] }), policyOf({ tools: ['Bash', 'Read'] }))).toEqual([])
     expect(policyDrifted(w, policyOf({ cannotRead: ['/home/op/.ssh'] }))).toEqual(['cannot_read: /home/op/.ssh | /home/op/other -> /home/op/.ssh'])

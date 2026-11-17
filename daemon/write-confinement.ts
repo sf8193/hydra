@@ -11,7 +11,7 @@
 // operator's credentials stay open. MCP servers and the browser run outside Claude Code's sandbox.
 
 import { spawnSync } from 'child_process'
-import { closeSync, constants, fstatSync, mkdirSync, mkdtempSync, openSync, readSync, realpathSync, rmSync, statSync, writeSync } from 'fs'
+import { chmodSync, closeSync, constants, fstatSync, mkdirSync, mkdtempSync, openSync, readSync, realpathSync, rmSync, statSync, writeSync } from 'fs'
 import { basename, join } from 'path'
 import { browserDownloadDir, browserProfileDir, fileRefusal, fileSendDecision, fillProfile, readDenyRule } from '../config/write-confinement.js'
 import { CONFINED_TOOLS } from '../shared/constants.js'
@@ -76,22 +76,23 @@ export function confinementMcp(policy: ConfinementPolicy, sessionName: string, e
     mcpServers: Object.fromEntries(policy.servers.map(s => [s.name, {
       type: 'stdio',
       command: s.command,
-      args: s.profileArgs.map(a => fillProfile(a, policy.workdir)),
+      args: s.profileArgs.map(a => fillProfile(a, policy.workdir, policy.browserProfile)),
       env: {
         ...Object.fromEntries(s.tokenEnv.map(v => {
           const value = env[v] ?? held[v]
           if (value === undefined) throw new PolicyRefusal(missingTokenRefusal({ specialist: policy.specialist, servers: [s] }, envFile, sessionName, env, held)!)
           return [v, value]
         })),
-        ...Object.fromEntries(Object.entries(s.profileEnv).map(([k, v]) => [k, fillProfile(v, policy.workdir)])),
+        ...Object.fromEntries(Object.entries(s.profileEnv).map(([k, v]) => [k, fillProfile(v, policy.workdir, policy.browserProfile)])),
       },
     }])),
   }
 }
 
 /** Makes the browser's own folders inside the workdir (mode 0700). A profile is the specialist's to keep across sessions: nothing here removes it. */
-export function makeBrowserDirs(workdir: string): void {
-  for (const dir of [browserProfileDir(workdir), browserDownloadDir(workdir)]) mkdirSync(dir, { recursive: true, mode: 0o700 })
+export function makeBrowserDirs(workdir: string, named?: string): void {
+  // mkdir's mode applies to a folder it makes; one that was already there (adopted) is brought to 0700 too: a profile holds logins, so no other user reads it.
+  for (const dir of [browserProfileDir(workdir, named), browserDownloadDir(workdir, named)]) { mkdirSync(dir, { recursive: true, mode: 0o700 }); chmodSync(dir, 0o700) }
 }
 
 /** `claude --version`'s answer, read once per daemon process. A test seam: `claudeVersion.read`. */
@@ -122,7 +123,7 @@ export function claudeVersionRefusal(policy: Pick<ConfinementPolicy, 'specialist
 }
 
 export const confinementLogLine = (tmuxName: string, p: ConfinementPolicy): string =>
-  `daemon: write-confined launch ${tmuxName}: specialist ${p.specialist}, writes only in ${p.workdir}, servers ${p.servers.map(s => s.name).join(',') || 'none'}, deny ${p.denyCommands.join(' | ') || 'none'}; browser folders ${join(p.workdir, '.browser')}`
+  `daemon: write-confined launch ${tmuxName}: specialist ${p.specialist}, writes only in ${p.workdir}, servers ${p.servers.map(s => s.name).join(',') || 'none'}, deny ${p.denyCommands.join(' | ') || 'none'}; browser profile ${browserProfileDir(p.workdir, p.browserProfile)}`
 
 /**
  * The bridge tools a write-confined session holds that take a `files` argument, derived from the tool schemas and its tool set (CONFINED_TOOLS), so a

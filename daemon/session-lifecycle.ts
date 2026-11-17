@@ -9,7 +9,7 @@ import { safeSend, formatSpawnLine, atomicWriteFileSync } from './util.js'
 import { tmuxHasSession, tmuxSync, tmuxTimedOut } from './tmux.js'
 import { nameHeldByAnother, occupancy, occupied } from './session-reachability.js'
 import { withThreadLock } from '../specialists/specialists.js'
-import { operatorMcpNameClashes, unreadableWorkdir } from '../config/write-confinement.js'
+import { browserProfileProblem, operatorMcpNameClashes, unreadableWorkdir } from '../config/write-confinement.js'
 import { confinementRefusal, endVerifying, startVerifying, verifyBackoff, verifyRefusal, confined, describePolicy, macosRefusal, missingTokenRefusal, PolicyRefusal, remedy, resolvePolicy, type LaunchPolicy } from './restricted.js'
 import { refusalNoticeKey, threadNotices } from './notice-limit.js'
 import { hydraLoadEnv, currentHydraConfig } from './hydra-config.js'
@@ -1080,6 +1080,9 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     if (probe.clashes.length) await refuse(`specialist ${layerPolicy.specialist}: ${probe.clashes.map(c => `${c.file} already declares an MCP server named ${c.name}`).join('; ')}; Claude Code's allowlist matches by name, so that one would be admitted too and could take the place of the server hydra starts, and no session starts: rename it in hydra.toml. ${remedy(sessionName)}`)
     // A file that cannot be read is not "no clash": the start fails closed.
     if (probe.unreadable.length) await refuse(`specialist ${layerPolicy.specialist}: ${probe.unreadable.map(u => u.why).join('; ')}, so hydra cannot tell whether it declares an MCP server named like a listed one (Claude Code's allowlist matches by name), and no session starts: fix or remove the file. ${remedy(sessionName)}`)
+    // A named browser profile must still resolve inside the workdir (a link added after the load could lead out of it).
+    const profileWhy = w.browserProfile === undefined ? undefined : browserProfileProblem(w.workdir, w.browserProfile, hydraLoadEnv().realpath, w.cannotRead)
+    if (profileWhy) await refuse(`specialist ${layerPolicy.specialist}: ${profileWhy}, so no session starts. ${remedy(sessionName)}`)
     // A listed server's token variable must be set: checked here, with the other refusals, so the thread hears it.
     const noToken = missingTokenRefusal({ specialist: layerPolicy.specialist, servers: w.servers }, ENV_FILE, sessionName, process.env, capturedSpawnVars())
     if (noToken) await refuse(noToken)
