@@ -701,7 +701,7 @@ describe('every start is verified from its own debug file (hydra#608)', () => {
   test.each([
     ['an extra MCP server', (p: any) => debugLogFor(p, ['[DEBUG] MCP server "claude.ai Slack": Starting connection with timeout of 30000ms']), 'it started MCP servers the policy does not list: `claude.ai Slack`'],
     ['an extra tool', (p: any) => debugLogFor(p, ['[DEBUG] Adding 1 allow rule(s) to destination \'flagSettings\': ["Bash(*)"]']), 'it applied permission rules the policy does not give: `Bash(*)`'],
-    ['an extra plugin', (p: any) => debugLogFor(p, ['[DEBUG] Checking plugin slack: skillsPath=exists, skillsPaths=0 paths']), 'it loaded plugins the policy does not allow: `slack`'],
+    ['an extra plugin', (p: any) => debugLogFor(p, ['[DEBUG] Checking plugin slack: skillsPath=exists, skillsPaths=0 paths']), 'it loaded plugins the policy does not allow: `slack` (a restricted session loads only the hydra mod, the bridge and Claude Code\'s built-in plugins: take these out of the launch)'],
   ])('%s in the debug file: the start refuses, the thread is told the cause and the remedy, the session is stopped, no message can reach it', async (_n, logFor, cause) => {
     seedDead()
     bystander()

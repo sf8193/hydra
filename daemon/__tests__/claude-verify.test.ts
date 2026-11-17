@@ -4,7 +4,7 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { expectedLoad, mismatches, readLoaded, verifyDeps, verifyLaunch } from '../engines/claude-verify.js'
+import { expectedLoad, mismatches, readLoaded, surplus, verifyDeps, verifyLaunch } from '../engines/claude-verify.js'
 import { BRIDGE_MCP_SERVER_KEY } from '../plugin-manifest.js'
 import { serverToolRule } from '../restricted.js'
 import type { ConfinedPolicy } from '../restricted.js'
@@ -53,8 +53,8 @@ describe('an extra thing in the debug file refuses', () => {
     expect(mismatches(policy, readLoaded(withLines("Replacing all allow rules for destination 'userSettings' with 1 rule(s): [\"mcp__runlayer__x\"]")))[0]).toContain('userSettings')
   })
   test('an extra plugin, by the skill pass or as an inline plugin directory', () => {
-    expect(mismatches(policy, readLoaded(withLines('Checking plugin slack: skillsPath=exists, skillsPaths=0 paths')))).toEqual(['it loaded plugins the policy does not allow: `slack`'])
-    expect(mismatches(policy, readLoaded(withLines('Loaded inline plugin from path: personal')))).toEqual(['it loaded plugins the policy does not allow: `personal`'])
+    expect(mismatches(policy, readLoaded(withLines('Checking plugin slack: skillsPath=exists, skillsPaths=0 paths')))).toEqual(['it loaded plugins the policy does not allow: `slack` (a restricted session loads only the hydra mod, the bridge and Claude Code\'s built-in plugins: take these out of the launch)'])
+    expect(mismatches(policy, readLoaded(withLines('Loaded inline plugin from path: personal')))).toEqual(['it loaded plugins the policy does not allow: `personal` (a restricted session loads only the hydra mod, the bridge and Claude Code\'s built-in plugins: take these out of the launch)'])
   })
   test('any claude.ai connector activity other than the environment switch-off line', () => {
     const got = readLoaded(withLines('[claudeai-mcp] Fetching connectors from the account'))
@@ -77,7 +77,7 @@ describe('the reader', () => {
     expect(mismatches(policy, readLoaded(withLines('MCP server "evil": Starting connection')))).toHaveLength(1)
   })
   test('a plugin named like one of Claude Code\'s own is not one unless Claude Code registered it as built in', () => {
-    expect(mismatches(policy, readLoaded(withLines('Checking plugin cc-plugin-evil: skillsPath=exists, skillsPaths=0 paths')))).toEqual(['it loaded plugins the policy does not allow: `cc-plugin-evil`'])
+    expect(mismatches(policy, readLoaded(withLines('Checking plugin cc-plugin-evil: skillsPath=exists, skillsPaths=0 paths')))).toEqual(['it loaded plugins the policy does not allow: `cc-plugin-evil` (a restricted session loads only the hydra mod, the bridge and Claude Code\'s built-in plugins: take these out of the launch)'])
     expect(readLoaded(REAL).builtinPlugins).toContain('cc-plugin-privacy')
     expect(mismatches(policy, readLoaded(withLines('plugin.register: cc-plugin-evil (user, cc-plugin-evil@inline), judged by cc-plugin-sec-default: admitted', 'Checking plugin cc-plugin-evil: skillsPath=none, skillsPaths=0 paths')))).toHaveLength(1)
   })
@@ -193,5 +193,58 @@ describe('verifyLaunch', () => {
     const c = clock({ [PATH]: without('[claudeai-mcp]') })
     expect(await verifyLaunch(policy, PATH, c.deps)).toEqual({ ok: false, why: 'nothing says claude.ai connectors were off (no `[claudeai-mcp] Disabled via env var` line)' })
     expect(c.sleeps()).toBe(0)
+  })
+})
+
+// Claude Code names each plugin on a `Checking plugin` line and says what it registered as ~100 ms later (a plugin's source is on that
+// later line). A launch's file read in between must not refuse Claude Code's own built-ins as surplus.
+describe('a plugin is judged by what it registered as, not by being named', () => {
+  const DIFF = ['Checking plugin cc-plugin-diff: skillsPath=none, skillsPaths=0 paths']
+  const REGISTER = [
+    'plugin.register: cc-plugin-diff (builtin, cc-plugin-diff@builtin), judged by core alone: admitted',
+    'plugin.register: discord (user, discord@claude-plugins-official), judged by cc-plugin-sec-default: admitted',
+  ]
+  // REAL up to the first register line: every plugin named, none registered, nothing connected.
+  const named = () => {
+    const lines = REAL.split('\n')
+    return lines.slice(0, lines.findIndex(l => l.includes('plugin.register:'))).join('\n') + '\n' + DIFF.map(l => `${t(18)}${l}\n`).join('')
+  }
+  const full = () => REAL + [...DIFF, ...REGISTER].map(l => `${t(19)}${l}\n`).join('')
+
+  test('six built-ins named and not yet registered are not a surplus; the same file once registered is none either', () => {
+    expect(readLoaded(named()).plugins).toContain('cc-plugin-diff')
+    expect(readLoaded(named()).builtinPlugins).toEqual([])
+    expect(surplus(policy, readLoaded(named()))).toEqual([])
+    expect(mismatches(policy, readLoaded(full()))).toEqual([])
+    expect(readLoaded(full()).builtinPlugins).toHaveLength(6)
+  })
+  test('the bridge (discord@claude-plugins-official) and the hydra mod (hydra@inline) stay allowed, registered or not', () => {
+    expect(readLoaded(full()).registeredPlugins).toEqual(expect.arrayContaining(['discord', 'hydra']))
+    expect(surplus(policy, readLoaded(full()), true)).toEqual([])
+  })
+  test('a plugin that registered as anything but built in is refused at once, without waiting', () => {
+    const why = surplus(policy, readLoaded(withLines('Checking plugin slack: skillsPath=none, skillsPaths=0 paths', 'plugin.register: slack (user, slack@some-marketplace), judged by cc-plugin-sec-default: admitted')))
+    expect(why).toEqual([expect.stringContaining('`slack`')])
+    // and one that claims a built-in's name from another source
+    expect(surplus(policy, readLoaded(withLines('Checking plugin cc-plugin-diff: skillsPath=none, skillsPaths=0 paths', 'plugin.register: cc-plugin-diff (user, cc-plugin-diff@some-marketplace), judged by cc-plugin-sec-default: admitted')))).toEqual([expect.stringContaining('`cc-plugin-diff`')])
+  })
+  test('one that is named and never registers is refused at the final judgement, with what to do', () => {
+    const got = readLoaded(withLines('Checking plugin slack: skillsPath=none, skillsPaths=0 paths'))
+    expect(surplus(policy, got)).toEqual([])
+    expect(mismatches(policy, got)).toEqual([expect.stringMatching(/`slack`.*take these out of the launch/)])
+  })
+  test('verifyLaunch: a read between naming and registering waits, and the launch passes once the file is whole', async () => {
+    let now = 0
+    let file = named()
+    const deps: typeof verifyDeps = { read: () => file, sleep: async ms => { now += ms; file = full() }, now: () => now, deadlineMs: 5_000, pollMs: 250, settleMs: 100 }
+    expect(await verifyLaunch(policy, '/state/debug.log', deps)).toEqual({ ok: true })
+  })
+  test('verifyLaunch: a plugin that never registers refuses at the final judgement', async () => {
+    let now = 0
+    const file = full() + `${t(20)}Checking plugin slack: skillsPath=none, skillsPaths=0 paths\n`
+    const deps: typeof verifyDeps = { read: () => file, sleep: async ms => { now += ms }, now: () => now, deadlineMs: 5_000, pollMs: 250, settleMs: 100 }
+    const v = await verifyLaunch(policy, '/state/debug.log', deps)
+    expect(v.ok).toBe(false)
+    expect(!v.ok && v.why).toContain('`slack`')
   })
 })
