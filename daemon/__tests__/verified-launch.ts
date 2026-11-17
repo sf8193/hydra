@@ -14,6 +14,8 @@ export function debugLogFor(policy: Pick<ConfinedPolicy, 'servers'>, extra: stri
     '[DEBUG] Loaded inline plugin from path: hydra',
     '[DEBUG] Checking plugin hydra: skillsPath=exists, skillsPaths=0 paths',
     '[DEBUG] Checking plugin discord: skillsPath=exists, skillsPaths=0 paths',
+    '[DEBUG] plugin.register: hydra (user, hydra@inline), judged by cc-plugin-sec-default: admitted',
+    '[DEBUG] plugin.register: discord (user, discord@claude-plugins-official), judged by cc-plugin-sec-default: admitted',
     '[DEBUG] plugin.register: cc-plugin-privacy (builtin, cc-plugin-privacy@builtin), judged by core alone: admitted',
     '[DEBUG] Checking plugin cc-plugin-privacy: skillsPath=none, skillsPaths=0 paths',
     ...want.servers.map(s => `[DEBUG] MCP server "${s}": Starting connection with timeout of 30000ms`),

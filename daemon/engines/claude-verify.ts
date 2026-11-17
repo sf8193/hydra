@@ -1,7 +1,7 @@
-// Claude's way of checking a confined session against its policy (the adapter's `verifyLaunch`): Claude Code's own record of what it loaded: the `--debug-file` of the
+// Claude's way of checking a restricted specialist's session against its policy (the adapter's `verifyLaunch`): Claude Code's own record of what it loaded: the `--debug-file` of the
 // launch itself (tmux sessions emit no init event).
 //
-// The policy decides what a confined session may reach (restricted.ts); the argv, settings and MCP config are built from it
+// The policy decides what a restricted specialist may reach (restricted.ts); the argv, settings and MCP config are built from it
 // (claude-engine.ts). That is what hydra asked for. This reads what Claude Code did: the launch's debug file says which MCP servers it
 // started and connected, which plugins it loaded, which permission rules it applied, and whether claude.ai's connectors were off.
 // Any difference from the policy refuses the start. Claude Code loaded a different set from the same argv before (hydra#600: claude.ai
@@ -38,11 +38,21 @@ export type Loaded = {
   connectorsOff: boolean
   /** Any other line about claude.ai connectors was logged. */
   connectorActivity: boolean
-  /** Plugins Claude Code registered as its own (`name@builtin`): the only ones allowed besides the hydra mod and the bridge. */
+  /** Plugins Claude Code registered as its own (`name@builtin`). */
   builtinPlugins: string[]
-  /** Plugins it has registered, of any source. A plugin is named on a `Checking plugin` line first and registered ~100 ms later: until then its source is unknown. */
+  /** The names of plugins it has registered, of any source. A plugin is named on a `Checking plugin` line first and registered ~100 ms later: until then its source is unknown. */
   registeredPlugins: string[]
+  /** Every `plugin.register` line, one entry each: the name, the kind Claude Code gave it and the id (`name@source`) it registered as. Not de-duplicated: a name that registers twice is two entries. */
+  registrations: Registration[]
 }
+
+export type Registration = { name: string; kind: string; id: string }
+
+/** The only registrations a restricted specialist may have: Claude Code's own (`name@builtin`, of kind builtin or prepend), the hydra mod inline, and the bridge by its exact id. */
+export const registrationAllowed = (r: Registration): boolean =>
+  (r.id === `${r.name}@builtin` && (r.kind === 'builtin' || r.kind === 'prepend'))
+  || (r.name === HYDRA_MOD && r.id === `${HYDRA_MOD}@inline`)
+  || (r.name === BRIDGE_PLUGIN_NAME && r.id === BRIDGE_PLUGIN_ID)
 
 const BRIDGE_PLUGIN_NAME = BRIDGE_PLUGIN_ID.split('@')[0]
 const flatten = (rules: unknown): string[] => (Array.isArray(rules) ? rules.filter((r): r is string => typeof r === 'string') : [])
@@ -50,6 +60,7 @@ const flatten = (rules: unknown): string[] => (Array.isArray(rules) ? rules.filt
 /** Reads a debug file's text into what it says loaded. Lines it does not recognize are ignored: the judgement rests on what it does recognize. */
 export function readLoaded(log: string): Loaded {
   const servers = new Set<string>(), connected = new Set<string>(), plugins = new Set<string>(), builtin = new Set<string>(), registered = new Set<string>()
+  const registrations: Registration[] = []
   let allow: Set<string> | undefined
   const otherAllow: Record<string, Set<string>> = {}
   let connectorsOff = false
@@ -63,8 +74,9 @@ export function readLoaded(log: string): Loaded {
   const lines = log.split('\n')
   if (!log.endsWith('\n')) lines.pop()
   for (const raw of lines) {
-    // Claude Code's own debug lines only: `<timestamp> [DEBUG] <message>`. Text a server prints reaches the file as an [ERROR] line with its
-    // newlines escaped, so it cannot begin a line of its own that reads as one of these.
+    // Claude Code's own debug lines only: `<timestamp> [DEBUG] <message>`. A line is only read when it begins that way. Text a server prints is
+    // believed to reach the file inside an [ERROR] line, not as a line of its own, but no recording shows how a newline in it is written:
+    // if one arrived raw, a forged `plugin.register: X (builtin, X@builtin)` line would be read as Claude Code's (unverified).
     const prefix = raw.match(DEBUG_LINE)
     if (!prefix) continue
     const line = raw.slice(prefix[0].length)
@@ -73,9 +85,11 @@ export function readLoaded(log: string): Loaded {
     else if ((m = line.match(/^MCP server "([^"]+)": Successfully connected/))) { servers.add(m[1]); connected.add(m[1]) }
     else if ((m = line.match(/^Checking plugin (\S+?): skillsPath=/))) plugins.add(m[1])
     else if ((m = line.match(/^Loaded inline plugin from path: (\S+)/))) plugins.add(m[1])
-    else if ((m = line.match(/^plugin\.register: (\S+) \(([^,()]+), (\S+)@(\S+)\)/)) && m[1] === m[3]) {
-      registered.add(m[1])
-      if ((m[2] === 'builtin' || m[2] === 'prepend') && m[4] === 'builtin') builtin.add(m[1])
+    else if ((m = line.match(/^plugin\.register: (\S+) \(([^,()]+), (\S+)\)/))) {
+      const r = { name: m[1], kind: m[2], id: m[3] }
+      registered.add(r.name)
+      registrations.push(r)
+      if (r.id === `${r.name}@builtin` && (r.kind === 'builtin' || r.kind === 'prepend')) builtin.add(r.name)
     }
     else if ((m = line.match(/^(?:Applying permission update: )?(Adding|Replacing all) (?:\d+ )?allow rule(?:\(s\)|s) (?:to|for) destination '([^']+)'(?: with \d+ rule\(s\))?: (\[.*\])\s*$/))) {
       try { rules(m[2], flatten(JSON.parse(m[3])), m[1] !== 'Adding') } catch { /* an unreadable list is not a rule we can name */ }
@@ -88,7 +102,7 @@ export function readLoaded(log: string): Loaded {
   return {
     servers: [...servers], connected: [...connected], plugins: [...plugins], allow: allow ? [...allow] : undefined,
     otherAllow: Object.fromEntries(Object.entries(otherAllow).filter(([, v]) => v.size).map(([k, v]) => [k, [...v]])),
-    connectorsOff, connectorActivity, builtinPlugins: [...builtin], registeredPlugins: [...registered],
+    connectorsOff, connectorActivity, builtinPlugins: [...builtin], registeredPlugins: [...registered], registrations,
   }
 }
 
@@ -118,12 +132,20 @@ export function surplus(p: Pick<ConfinedPolicy, 'servers'>, got: Loaded, final =
   const out: string[] = []
   const extraServers = [...new Set([...got.servers, ...got.connected])].filter(s => !want.servers.includes(s))
   if (extraServers.length) out.push(`it started MCP servers the policy does not list: ${list(extraServers)}`)
-  // The hydra mod and the bridge, and what Claude Code registers as its own (`name@builtin`): a plugin merely named like one is not.
-  const extraPlugins = got.plugins.filter(n => n !== HYDRA_MOD && n !== BRIDGE_PLUGIN_NAME && !got.builtinPlugins.includes(n) && (final || got.registeredPlugins.includes(n)))
-  if (extraPlugins.length) out.push(`it loaded plugins the policy does not allow: ${list(extraPlugins)} (a restricted session loads only the hydra mod, the bridge and Claude Code's built-in plugins: take these out of the launch)`)
+  // Two judgements. By registration: every `plugin.register` line is judged by its id, so a name that registers from another source
+  // (as `discord` or `hydra` from a marketplace, or once as built in and once as a user's) is refused, and so is one never named on a
+  // `Checking plugin` line. By name: a plugin named but not registered is judged only at `final`. The hydra mod and the bridge are
+  // left to `shortfall`, which needs each to have registered as its exact id: a slow register is reported there, with that reason.
+  const badRegistrations = got.registrations.filter(r => !registrationAllowed(r))
+  const badNames = new Set(badRegistrations.map(r => r.name))
+  const extraPlugins = [...new Set([
+    ...badRegistrations.map(r => r.id),
+    ...got.plugins.filter(n => !badNames.has(n) && n !== HYDRA_MOD && n !== BRIDGE_PLUGIN_NAME && !got.builtinPlugins.includes(n) && (final || got.registeredPlugins.includes(n))),
+  ])]
+  if (extraPlugins.length) out.push(`it loaded plugins the policy does not allow: ${list(extraPlugins)} (a restricted specialist loads only the hydra mod, the bridge and Claude Code's built-in plugins; hydra's launch turns on only the bridge, so anything else is enabled in Claude Code's settings (user, project or local) or loaded with --plugin-dir: turn it off there)`)
   const extraRules = (got.allow ?? []).filter(r => !want.allow.includes(r))
   if (extraRules.length) out.push(`it applied permission rules the policy does not give: ${list(extraRules)}`)
-  for (const [dest, rules] of Object.entries(got.otherAllow)) out.push(`it applied permission rules from ${safe(dest)}, which a confined session reads none of: ${list(rules)}`)
+  for (const [dest, rules] of Object.entries(got.otherAllow)) out.push(`it applied permission rules from ${safe(dest)}, which a restricted specialist reads none of: ${list(rules)}`)
   if (got.connectorActivity) out.push('claude.ai connectors were not off (the log shows connector activity)')
   return out
 }
@@ -139,7 +161,10 @@ export function shortfall(p: Pick<ConfinedPolicy, 'servers'>, got: Loaded): stri
   const missingRules = want.allow.filter(r => !(got.allow ?? []).includes(r))
   if (missingRules.length) out.push(`it did not apply these permission rules: ${list(missingRules)}`)
   if (!got.connectorsOff && !got.connectorActivity) out.push('nothing says claude.ai connectors were off (no `[claudeai-mcp] Disabled via env var` line)')
-  for (const need of [HYDRA_MOD, BRIDGE_PLUGIN_NAME]) if (!got.plugins.includes(need)) out.push(`the plugin ${list([need])} did not load`)
+  // Claude Code registers the bridge about 2-6 s before its MCP server connects (live launches), and this runs after that, so a missing line is a refusal, not a wait.
+  for (const [name, id] of [[HYDRA_MOD, `${HYDRA_MOD}@inline`], [BRIDGE_PLUGIN_NAME, BRIDGE_PLUGIN_ID]]) {
+    if (!got.registrations.some(r => r.name === name && r.id === id && registrationAllowed(r))) out.push(`the plugin ${list([name])} did not register as ${list([id])}, so it may not be the one hydra installed`)
+  }
   return out
 }
 
