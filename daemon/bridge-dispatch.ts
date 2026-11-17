@@ -444,7 +444,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           : 'not_protocol'
         if (protocolScopedSpawn && childRegistration !== 'registered') {
           const child = registry.get(result.sessionId)
-          if (child) await killSession(child, 'protocol phase ended during spawn').catch(() => {})
+          if (child) await killSession(child, 'protocol phase ended during spawn', { ended: 'killed by hydra' }).catch(() => {})
           if (allocatedSessionId) finishPrivateProtocolChildLaunch(allocatedSessionId)
           throw new Error('protocol phase ended before spawned session could be registered')
         }
@@ -578,7 +578,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         }
 
         if (!destroy) {
-          await killSession(info, reason)
+          await killSession(info, reason, { ended: 'killed' })
           return { content: [{ type: 'text', text: `killed session ${targetId}` }] }
         }
         const res = await killThenDestroy(info, reason, callerSessionId && callerSessionId !== 'main' ? (registry.get(callerSessionId)?.tmuxName ?? 'agent') : 'main')

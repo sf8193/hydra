@@ -112,7 +112,7 @@ export async function killThenDestroy(info: SessionInfo, killReason: string, by:
   const threadId = info.threadId
   const refused = destroyRefusal(threadId)
   if (refused) return { killed: false, out: refused }
-  await killSession(info, killReason)
+  await killSession(info, killReason, { ended: 'killed & destroyed' })
   return { killed: true, out: await destroyThread(threadId, by) }
 }
 

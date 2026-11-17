@@ -364,7 +364,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
               setTimeout(() => {
                 const current = registry.get(sid)
                 if (current) {
-                  void killSession(current, 'ephemeral [done]').catch(err => {
+                  void killSession(current, 'ephemeral [done]', { ended: 'finished' }).catch(err => {
                     process.stderr.write(`daemon: ephemeral kill failed: ${err}\n`)
                   })
                 }

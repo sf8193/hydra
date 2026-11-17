@@ -111,7 +111,7 @@ export async function reviveThread(req: ReviveRequest): Promise<ReviveOutcome> {
 
   if (req.orphan) {
     process.stderr.write(`daemon: revive: tearing down orphaned ${req.orphan.info.tmuxName} first\n`)
-    await killSession(req.orphan.info, req.orphan.reason, { skipWorktreeDestroy: true, keepWatches: true })
+    await killSession(req.orphan.info, req.orphan.reason, { ended: 'died from crash', skipWorktreeDestroy: true, keepWatches: true })
     markDead(req.orphan.info)
   }
 
