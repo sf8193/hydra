@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test'
 import { alsoHeard, hydra, oneListener, sharedChannel, BASE, TWO_APPS } from './slack-config.js'
-import { slackManifest, SLACK_APP_NEEDS, SLACK_APP_DEFAULTS, appKey } from '../app.js'
+import { slackManifest, SLACK_APP_NEEDS, SLACK_APP_DEFAULTS, appKey, appName, appSuffix, notConnected } from '../app.js'
 import { scopesNeeded } from '../listener.js'
 
 type Manifest = {
@@ -124,8 +124,25 @@ describe('several apps in one hydra', () => {
     expect(several.settings.event_subscriptions.bot_events).toEqual([...plain.settings.event_subscriptions.bot_events, 'member_joined_channel', 'member_left_channel'])
   })
 
-  test('a key is named for its own app', () => {
-    expect(appKey('default', 'bot_token_env')).toBe('`bot_token_env` of the app named `default` (`[slack.apps.default]`)')
-    expect(appKey('sales', 'bot_token_env')).toBe('`bot_token_env` of the app named `sales` (`[slack.apps.sales]`)')
+  test('golden: an app is named by its display_name, set or defaulted; the key appears once, as the table to edit', () => {
+    const plain = hydra(TWO_APPS).slackApps
+    const named = hydra(TWO_APPS.replace('socket_token_env = "SLOPBOT_SLACK_APP_TOKEN"', 'socket_token_env = "SLOPBOT_SLACK_APP_TOKEN"\ndisplay_name = "Acme helper"').replace('socket_token_env = "SALES_SLACK_APP_TOKEN"', 'socket_token_env = "SALES_SLACK_APP_TOKEN"\ndisplay_name = "Sales desk"')).slackApps
+    // Unset: `default` is what the manifest creates it as, any other app its id.
+    expect([appName(plain, 'default'), appName(plain, 'sales')]).toEqual(['hydra', 'sales'])
+    expect([appName(named, 'default'), appName(named, 'sales')]).toEqual(['Acme helper', 'Sales desk'])
+    expect(appName(named, 'gone')).toBe('gone')   // no longer declared: only its id is known
+    expect(appKey(plain, 'default', 'bot_token_env')).toBe('`bot_token_env` of hydra (`[slack.apps.default]`)')
+    expect(appKey(named, 'default', 'bot_token_env')).toBe('`bot_token_env` of Acme helper (`[slack.apps.default]`)')
+    expect(appKey(named, 'sales', 'operator_token_env')).toBe('`operator_token_env` of Sales desk (`[slack.apps.sales]`)')
+    expect(appSuffix(named, 'sales')).toBe(' for Sales desk')
+    expect(appSuffix(named, 'default')).toBe(' for Acme helper')
+    expect(notConnected(named, 'sales')).toBe('Slack is not connected for Sales desk (hydra.toml does not declare it, or its tokens are not set)')
+  })
+
+  test('a lone `default` is just "Slack", named or not', () => {
+    const lone = hydra(BASE.replace('socket_token_env = "SLOPBOT_SLACK_APP_TOKEN"', 'socket_token_env = "SLOPBOT_SLACK_APP_TOKEN"\ndisplay_name = "Acme helper"')).slackApps
+    expect(appSuffix(lone, 'default')).toBe('')
+    expect(appSuffix(hydra(BASE).slackApps, 'default')).toBe('')
+    expect(notConnected(lone, 'default')).toBe('Slack is not connected (hydra.toml does not declare it, or its tokens are not set)')
   })
 })

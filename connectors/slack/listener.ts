@@ -8,7 +8,7 @@ import { linkPreviewsOff } from '../../shared/link-previews.js'
 import { routedChannels, hearsDms, dmsDeclared, namedChannels, unresolvedPlaces, isDm, mentionedApps, NOT_A_MEMBER, OPERATOR_TOKEN_REFUSED, NO_DIRECTORY, SLACK_LIMITS, type AppWatch, type DmOtherParty, type SlackDirectory, type SlackWatchConfig, type SlackWatcher } from './watch.js'
 import { DEFAULT_SLACK_APP, SLACK_DM, SLACK_GROUP_DM, placesAnsweredBy, type HydraConfig, type SlackApp } from '../../config/types.js'
 import { reachableBy } from '../../routing/route.js'
-import { SLACK_APP_NEEDS, NO_SLACK_APP, appKey, appSuffix, type ScopeNeed } from './app.js'
+import { SLACK_APP_NEEDS, NO_SLACK_APP, appKey, appSuffix, type Apps, type ScopeNeed } from './app.js'
 import { ConnectedApps } from './apps.js'
 import { timed } from '../../shared/loop-watch.js'
 import { awakeSince, suspendedSince, describeCause, type ResumeDetector } from '../../shared/resume.js'
@@ -34,12 +34,11 @@ import { buildSocketApp, parseAuth, unfurlFields } from '../../shared/slack-clie
  */
 
 /** Slack errors a retry cannot fix, each with what to do about it, for one app. */
-export const permanentSlackErrors = (app: string): [RegExp, string][] => [
-  [/missing_scope/, 'the bot token lacks a scope. Add the scope named above (channels:history for public channels, groups:history for private ones), reinstall the app, put the new bot token in the variable the ' + appKey(app, 'bot_token_env') + ' names (in `.env`), and restart the daemon.'],
-  [/invalid_auth|not_authed|token_revoked|token_expired|account_inactive/, 'Slack does not accept the bot token. Put a valid bot token in the variable the ' + appKey(app, 'bot_token_env') + ' names (in `.env`), and restart the daemon.'],
+export const permanentSlackErrors = (apps: Apps, app: string): [RegExp, string][] => [
+  [/missing_scope/, 'the bot token lacks a scope. Add the scope named above (channels:history for public channels, groups:history for private ones), reinstall the app, put the new bot token in the variable the ' + appKey(apps, app, 'bot_token_env') + ' names (in `.env`), and restart the daemon.'],
+  [/invalid_auth|not_authed|token_revoked|token_expired|account_inactive/, 'Slack does not accept the bot token. Put a valid bot token in the variable the ' + appKey(apps, app, 'bot_token_env') + ' names (in `.env`), and restart the daemon.'],
   [/not_in_channel|channel_not_found/, 'the bot cannot see a channel hydra.toml names. Invite the bot to the channel named above, or correct the place in hydra.toml.'],
 ]
-export const PERMANENT_SLACK_ERRORS = permanentSlackErrors(DEFAULT_SLACK_APP)
 
 /** Slack's `missing_scope` names the scope it needed and the ones the token has; the SDK's message drops both. */
 export function explainSlackError(err: unknown): Error {
@@ -333,8 +332,11 @@ export class SlackListener {
   /** This app as hydra.toml declares it. */
   private declared(): SlackApp | undefined { const a = this.d.hydra().slackApps; return Object.hasOwn(a, this.id) ? a[this.id] : undefined }
 
-  /** ` for the app named `x``: said in alerts only when there is more than one app to tell apart. */
-  private appSuffix(): string { return appSuffix(this.id, Object.keys(this.d.hydra().slackApps).length) }
+  /** Every app hydra.toml declares: what a message needs to name this one. */
+  private declaredApps(): Apps { return this.d.hydra().slackApps }
+
+  /** ` for Sales desk`: said in alerts only when there is more than one app to tell apart. */
+  private appSuffix(): string { return appSuffix(this.declaredApps(), this.id) }
 
   /** The command that prints this app's manifest: a lone `default` needs no name. */
   private manifestCommand(): string { return this.id === DEFAULT_SLACK_APP && Object.keys(this.d.hydra().slackApps).length <= 1 ? 'hydra slack manifest' : `hydra slack manifest ${this.id}` }
@@ -379,7 +381,7 @@ export class SlackListener {
       const why = err instanceof Error ? err.message : String(err)
       this.d.log(`daemon: slack connector: WARN channel names can't be read (${why}): add channels:read and groups:read and reinstall the app, or name channels by id (slack:C…)${needed.length ? `; ${needed.join(', ')} ${needed.length === 1 ? 'hears' : 'hear'} nothing until then` : ''}\n`)
       // Said to the specialists this app serves only when a `#name` it needs is unresolved: otherwise the ids work without names.
-      if (needed.length) this.d.alert(`⚠️ Hydra can't read channel names${this.appSuffix()} (${why}), so ${needed.join(', ')} ${needed.length === 1 ? 'hears' : 'hear'} nothing. Add channels:read and groups:read to the app (\`${this.manifestCommand()}\` prints them), reinstall it, put the new bot token in the variable the ${appKey(this.id, 'bot_token_env')} names (in \`.env\`), and restart the daemon; or name the channels by id (slack:C…).`)
+      if (needed.length) this.d.alert(`⚠️ Hydra can't read channel names${this.appSuffix()} (${why}), so ${needed.join(', ')} ${needed.length === 1 ? 'hears' : 'hear'} nothing. Add channels:read and groups:read to the app (\`${this.manifestCommand()}\` prints them), reinstall it, put the new bot token in the variable the ${appKey(this.declaredApps(), this.id, 'bot_token_env')} names (in \`.env\`), and restart the daemon; or name the channels by id (slack:C…).`)
     }
   }
 
@@ -388,7 +390,7 @@ export class SlackListener {
     const slack = this.declared()
     const t = slack ? this.d.tokens(slack) : {}
     if (!slack || !t.app || !t.bot) {
-      this.d.log(`daemon: slack connector${this.appSuffix()} off (${!slack ? (Object.keys(this.d.hydra().slackApps).length ? `hydra.toml has no app named \`${this.id}\`` : NO_SLACK_APP) : !t.bot ? `${slack.botTokenEnv} is not set` : slack.socketTokenEnv ? `${slack.socketTokenEnv} is not set` : `the app named \`${this.id}\` needs socket_token_env for Socket Mode`})\n`)
+      this.d.log(`daemon: slack connector${this.appSuffix()} off (${!slack ? (Object.keys(this.d.hydra().slackApps).length ? `hydra.toml has no app named \`${this.id}\`` : NO_SLACK_APP) : !t.bot ? `${slack.botTokenEnv} is not set` : slack.socketTokenEnv ? `${slack.socketTokenEnv} is not set` : `${appKey(this.declaredApps(), this.id, 'socket_token_env')} is not set, and Socket Mode needs it`})\n`)
       return false
     }
     if (this.started) return true
@@ -717,12 +719,12 @@ export class SlackListener {
     if (key === (this.told.get(this.id) ?? null)) return
     this.told.set(this.id, key)
     if (!missing.length) return
-    this.d.alert(`⚠️ The Slack bot token${this.appSuffix()} lacks ${missing.map(n => `${n.any.join(' or ')} (${n.option})`).join('; ')}. Add ${missing.length === 1 ? 'it' : 'them'} to the app (\`${this.manifestCommand()}\` prints the full list), reinstall it, put the new bot token in the variable the ${appKey(this.id, 'bot_token_env')} names (in \`.env\`), and restart the daemon.`)
+    this.d.alert(`⚠️ The Slack bot token${this.appSuffix()} lacks ${missing.map(n => `${n.any.join(' or ')} (${n.option})`).join('; ')}. Add ${missing.length === 1 ? 'it' : 'them'} to the app (\`${this.manifestCommand()}\` prints the full list), reinstall it, put the new bot token in the variable the ${appKey(this.declaredApps(), this.id, 'bot_token_env')} names (in \`.env\`), and restart the daemon.`)
   }
 
   /** A refusal that retrying cannot fix is said once, at once, in the specialist's thread, with what to do. */
   private alertIfPermanent(reason: string | undefined): void {
-    const hit = reason ? permanentSlackErrors(this.id).find(([re]) => re.test(reason)) : undefined
+    const hit = reason ? permanentSlackErrors(this.declaredApps(), this.id).find(([re]) => re.test(reason)) : undefined
     if (!hit || this.alerted.permanent === hit[1]) return
     this.alerted.permanent = hit[1]
     this.d.alert(`⚠️ Slack refused the catch-up read${this.appSuffix()}: ${reason}. Retrying will not fix it: ${hit[1]}`)

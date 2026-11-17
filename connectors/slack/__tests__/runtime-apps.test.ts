@@ -104,7 +104,7 @@ describe('replies leave through the app that heard the conversation', () => {
   test('an app that is not connected is said by name, and posts nothing through another', async () => {
     slackRuntimeDeps.post = realPost
     getSlackWatcher().bind('C1', '5.000001', DEALS, 'tool', 'sales')
-    await expect(replyInConversation('deals-session', 'slack:sales:C1:5.000001', 'x')).rejects.toThrow('Slack is not connected for the app named `sales`')
+    await expect(replyInConversation('deals-session', 'slack:sales:C1:5.000001', 'x')).rejects.toThrow('Slack is not connected for sales')
   })
 })
 
@@ -198,8 +198,8 @@ describe('connecting one listener per app', () => {
       await Bun.sleep(5)
       const said = told.filter(([, t]) => t.includes('is not connected: '))
       // Each app is told to the specialists it can reach, once: `sales` to `deals` (pinned to it), `default` to `crm` (unpinned).
-      expect(said.filter(([, t]) => t.includes('`sales`') && t.includes('`bot_token_env` of the app named `sales` (`[slack.apps.sales]`) names SALES_SLACK_BOT_TOKEN')).map(([c]) => c)).toEqual([DEALS_THREAD])
-      expect(said.filter(([, t]) => t.includes('app named `default`') && t.includes('SLOPBOT_SLACK_BOT_TOKEN')).map(([c]) => c)).toEqual([CRM_THREAD])
+      expect(said.filter(([, t]) => t.includes('sales is not connected') && t.includes('`bot_token_env` of sales (`[slack.apps.sales]`) names SALES_SLACK_BOT_TOKEN')).map(([c]) => c)).toEqual([DEALS_THREAD])
+      expect(said.filter(([, t]) => t.includes('hydra is not connected') && t.includes('SLOPBOT_SLACK_BOT_TOKEN')).map(([c]) => c)).toEqual([CRM_THREAD])
     } finally { (gateway as any).send = realSend }
   })
 })

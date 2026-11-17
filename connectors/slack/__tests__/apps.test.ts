@@ -49,12 +49,12 @@ function setup(toml: string, over: { members?: Record<string, string[]>; probeEr
   // Cursors laid down before the daemon starts: what each pass reads from.
   if (over.cursors || over.entries) writeFileSync(file, JSON.stringify({ entries: over.entries ?? [], channelCursors: over.cursors ?? {} }))
   const watcher = new SlackWatcher({
-    now: () => now, file, filesDir: join(dir, 'files'), log: l => logs.push(l), config: app => byId[app ?? 'default']?.view() ?? null,
+    now: () => now, file, filesDir: join(dir, 'files'), log: l => logs.push(l), config: app => byId[app ?? 'default']?.view() ?? null, apps: () => h.slackApps,
     alert: (t, to) => { alerts.push(t); alertTo.push(to) },
     ...(over.guard && { guard: async (_g, input) => over.guard!(input.target) }),
     deliver: async (t, msg, key) => { sent.push({ to: t.to, ...(t.conversation && { conversation: t.conversation }), key, msg }); return { ok: true } },
   })
-  const shared = new ConnectedApps({ now: () => now, log: l => logs.push(l), alert: (t, app) => { alerts.push(t); alertApps.push(app) } })
+  const shared = new ConnectedApps({ apps: () => h.slackApps, now: () => now, log: l => logs.push(l), alert: (t, app) => { alerts.push(t); alertApps.push(app) } })
   if (over.seed) shared.seedIdentities(over.seed)
   if (over.expectJoin) shared.expectJoin(['default', SALES])
   for (const id of ['default', SALES]) {
@@ -321,7 +321,7 @@ describe('two apps in one channel: exactly one answers', () => {
     t.say(tag('1202.000001'), ['default'])
     await t.settle()
     expect(t.sent).toEqual([])   // the residual: the tagged app was not shown to hear it, and did not
-    expect(t.logs.filter(l => l.includes('a tag of the app named sales') && l.includes('could not be read'))).toHaveLength(1)
+    expect(t.logs.filter(l => l.includes('a tag of sales') && l.includes('could not be read'))).toHaveLength(1)
     t.say(tag('1203.000001'))
     await t.settle()
     expect(t.sent.map(s => [s.to, s.conversation])).toEqual([['deals', `slack:${SALES}:${CH}:1200.000001`]])
@@ -334,7 +334,7 @@ describe('two apps in one channel: exactly one answers', () => {
     t.say({ ts: '1201.000001', text: `<@${SALES_BOT}> another` }, ['default'])
     await t.settle()
     expect(t.sent).toEqual([])
-    const said = t.logs.filter(l => l.includes('a tag of the app named sales') && l.includes('could not be read'))
+    const said = t.logs.filter(l => l.includes('a tag of sales') && l.includes('could not be read'))
     expect(said).toHaveLength(1)
     expect(said[0]).toContain('channels:read and groups:read')
   })
@@ -423,10 +423,10 @@ describe('membership', () => {
     await t.settle()
     const said = t.alerts.filter(a => a.includes("can't tell which channels"))
     expect(said).toHaveLength(2)   // once per app
-    expect(said[0]).toContain('`default`')
-    expect(said[1]).toContain('`sales`')
+    expect(said[0]).toContain('which channels hydra is in')
+    expect(said[1]).toContain('which channels sales is in')
     expect(said[0]).toContain('channels:read')
-    expect(said[0]).toContain('`bot_token_env` of the app named `default`')
+    expect(said[0]).toContain('`bot_token_env` of hydra (`[slack.apps.default]`)')
     // The alert names its app to the sink, so only the specialists that app serves hear it.
     expect(t.alertApps).toEqual(['default', SALES])
     // Each app is alone in what it knows: the one that received it answers, the other has nothing to answer.
@@ -564,8 +564,8 @@ describe('alerts name the app once there are several', () => {
     t.tick(60 * 60_000)
     await t.listeners[SALES].checkAlerts()
     await t.listeners.default.checkAlerts()
-    expect(t.alerts.some(a => a.startsWith('⚠️ The Slack catch-up pass for the app named `sales` has not completed'))).toBe(true)
-    expect(t.alerts.some(a => a.startsWith('⚠️ The Slack catch-up pass for the app named `default` has not completed'))).toBe(true)
+    expect(t.alerts.some(a => a.startsWith('⚠️ The Slack catch-up pass for sales has not completed'))).toBe(true)
+    expect(t.alerts.some(a => a.startsWith('⚠️ The Slack catch-up pass for hydra has not completed'))).toBe(true)
   })
 })
 
@@ -802,7 +802,7 @@ describe('per-channel queues', () => {
 // -- Health is per app ---------------------------------------------------------------------------------------------------
 
 const ALL_SCOPES = ['channels:history', 'channels:read', 'users:read', 'im:history', 'im:read', 'reactions:write', 'chat:write']
-const perApp = (text: string, app: string) => (a: string) => a.includes(text) && a.includes(`app named \`${app}\``)
+const perApp = (text: string, app: string) => (a: string) => a.includes(text) && a.includes(` for ${app}`)
 
 describe('health is per app: A down while B is fine', () => {
   test('a down app is alerted once, by name, and its recovery said once; the other app’s state, catch-up and alerts are untouched', async () => {
@@ -814,11 +814,11 @@ describe('health is per app: A down while B is fine', () => {
     expect(t.listeners[SALES].health().state).toBe('down')
     expect(t.listeners.default.health()).toMatchObject({ state: 'up', downMin: null })
     expect(t.alerts.filter(perApp('has been down', SALES))).toHaveLength(1)
-    expect(t.alerts.filter(a => a.includes('has been down') && a.includes('`default`'))).toHaveLength(0)
+    expect(t.alerts.filter(a => a.includes('has been down') && a.includes(' for hydra'))).toHaveLength(0)
     t.fakes[SALES].client!.emit('connected')
     for (const l of Object.values(t.listeners)) await l.checkAlerts()
     expect(t.alerts.filter(perApp('connected again', SALES))).toHaveLength(1)
-    expect(t.alerts.filter(a => a.includes('connected again') && a.includes('`default`'))).toHaveLength(0)
+    expect(t.alerts.filter(a => a.includes('connected again') && a.includes(' for hydra'))).toHaveLength(0)
   })
 
   test('both down is two alerts, one each: one app’s episode neither hides nor repeats the other’s', async () => {
@@ -832,7 +832,7 @@ describe('health is per app: A down while B is fine', () => {
     for (const l of Object.values(t.listeners)) { await l.checkAlerts(); await l.checkAlerts() }
     expect(t.alerts.filter(a => a.includes('has been down'))).toHaveLength(2)
     expect(t.alerts.filter(perApp('has been down', SALES))).toHaveLength(1)
-    expect(t.alerts.filter(perApp('has been down', 'default'))).toHaveLength(1)
+    expect(t.alerts.filter(perApp('has been down', 'hydra'))).toHaveLength(1)
   })
 })
 
@@ -843,7 +843,7 @@ describe('health is per app: scopes', () => {
     await t.listeners[SALES].runCatchUp(true, 'again')
     const said = t.alerts.filter(a => a.includes('bot token'))
     expect(said).toHaveLength(1)
-    expect(said[0]).toContain('The Slack bot token for the app named `sales` lacks chat:write (replies)')
+    expect(said[0]).toContain('The Slack bot token for sales lacks chat:write (replies)')
     expect(said[0]).toContain('`hydra slack manifest sales`')
     expect(said[0]).toContain('reinstall')
     expect(t.listeners[SALES].health().missingScopes).toEqual([{ option: 'replies', any: ['chat:write'] }])
@@ -857,7 +857,7 @@ describe('health is per app: scopes', () => {
     expect(said).toHaveLength(1)
     expect(said[0]).toMatch(/^⚠️ The Slack bot token lacks /)
     expect(said[0]).toContain('`hydra slack manifest`')
-    expect(said[0]).not.toContain('for the app named')
+    expect(said[0]).not.toMatch(/ for (hydra|sales)\b/)
   })
 
   test('each app is asked only for what it does: no private-channel read without a private place, no im:* without a DM listener', () => {
@@ -916,13 +916,13 @@ describe('health is per app: catch-up', () => {
     t.tick(CATCH_UP_STALE_AFTER_MS + 60_000)
     for (const l of Object.values(t.listeners)) { await l.checkAlerts(); await l.checkAlerts() }
     expect(t.alerts.filter(perApp('catch-up pass', SALES))).toHaveLength(1)
-    expect(t.alerts.filter(perApp('catch-up pass', 'default')).length).toBe(1)   // default is overdue too: nothing ran for it since boot
+    expect(t.alerts.filter(perApp('catch-up pass', 'hydra')).length).toBe(1)   // default is overdue too: nothing ran for it since boot
     // The failing app’s alarm is its own: a complete pass of `default` clears default’s, not sales’s.
     await t.listeners.default.runCatchUp(true, 'periodic')
     t.tick(CATCH_UP_STALE_AFTER_MS + 60_000)
     for (const l of Object.values(t.listeners)) await l.checkAlerts()
     expect(t.alerts.filter(perApp('catch-up pass', SALES))).toHaveLength(1)
-    expect(t.alerts.filter(perApp('catch-up pass', 'default'))).toHaveLength(2)
+    expect(t.alerts.filter(perApp('catch-up pass', 'hydra'))).toHaveLength(2)
   })
 
   test('a permanent refusal on one app is alerted for that app alone, and the other app’s cursor still advances', async () => {
@@ -931,7 +931,7 @@ describe('health is per app: catch-up', () => {
     await t.start()
     const refused = t.alerts.filter(a => a.includes('Slack refused the catch-up read'))
     expect(refused).toHaveLength(1)
-    expect(refused[0]).toContain('for the app named `sales`')
+    expect(refused[0]).toContain('for sales')
     expect(t.watcher.channelCursor(CH, SALES)).toBe('1000.000001')
     expect(t.watcher.channelCursor(CH)).toBe('1060.000001')
   })
@@ -1004,5 +1004,38 @@ describe('a pinned specialist cannot be reached through any other app', () => {
     t.say({ ts: '1200.000001', text: `<@${SALES_BOT}> hello?` })
     await t.settle()
     expect(t.sent.map(s => [s.to, s.conversation])).toEqual([['deals', `slack:${SALES}:${CH}:1200.000001`]])
+  })
+})
+
+// -- A message names an app by its Slack name, not its key -------------------------------------------------------------------
+
+/** The two apps again, each with the name it has in Slack. */
+const NAMED = TWO_APPS.replace('socket_token_env = "SLOPBOT_SLACK_APP_TOKEN"', 'socket_token_env = "SLOPBOT_SLACK_APP_TOKEN"\ndisplay_name = "Acme helper"')
+  .replace('socket_token_env = "SALES_SLACK_APP_TOKEN"', 'socket_token_env = "SALES_SLACK_APP_TOKEN"\ndisplay_name = "Sales desk"')
+
+describe('alerts name an app by its display_name', () => {
+  test('golden: with display_name, the name leads and the key appears once, as the table to edit', async () => {
+    const named = setup(NAMED, { members: BOTH })
+    await named.start()
+    named.fakes.default.client!.emit('disconnected')
+    named.tick(DOWN_ALERT_AFTER_MS + 60_000)
+    await named.listeners.default.checkAlerts()
+    named.fakes.default.client!.emit('connected')
+    await named.listeners.default.checkAlerts()
+    expect(named.alerts).toEqual([
+      '⚠️ The Slack connector for Acme helper has been down for 6 min awake. Mentions are not arriving live; the catch-up pass replays them once it reconnects. Check the tokens and the app\'s Socket Mode setting at api.slack.com/apps; `hydra health` shows its state.',
+      '✅ The Slack connector for Acme helper is connected again.',
+    ])
+  })
+
+  test('golden: a missing scope and an unreadable membership say the name, then the one place to edit', async () => {
+    const t = setup(NAMED, { members: BOTH, scopes: { default: ALL_SCOPES, [SALES]: ALL_SCOPES.filter(s => s !== 'chat:write') }, probeError: { [SALES]: 'missing_scope: the token needs channels:read' } })
+    await t.start()
+    t.say({ ts: '1101.000001', text: `<@${SALES_BOT}> ping` })
+    await t.settle()
+    await t.listeners[SALES].runCatchUp(true, 'again')
+    expect(t.alerts.find(a => a.includes('bot token'))).toBe("⚠️ The Slack bot token for Sales desk lacks chat:write (replies). Add it to the app (`hydra slack manifest sales` prints the full list), reinstall it, put the new bot token in the variable the `bot_token_env` of Sales desk (`[slack.apps.sales]`) names (in `.env`), and restart the daemon.")
+    expect(t.alerts.find(a => a.includes("can't tell which channels"))).toContain("Hydra can't tell which channels Sales desk is in (missing_scope: the token needs channels:read)")
+    expect(t.alerts.join('\n')).not.toContain('app named')
   })
 })

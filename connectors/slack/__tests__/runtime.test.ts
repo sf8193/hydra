@@ -726,7 +726,7 @@ describe('a live session is told, as input, what the connector says about its ow
     await settle()
     expect(heard).toHaveLength(1)
     expect(heard[0]).toStartWith('[system] ℹ️ ')
-    expect(heard[0]).toContain(`${FOOD} now answers this thread through the app named other`)
+    expect(heard[0]).toContain(`${FOOD} now answers this thread through other`)
   })
 
   test('a tag of the bot in a thread the session listens to: the session is told the specialist took it', async () => {
@@ -811,8 +811,13 @@ describe('tokens', () => {
     const warned: string[] = []
     const leaky = appOf(TOML.replace('bot_token_env = "SLOPBOT_SLACK_BOT_TOKEN"', 'bot_token_env = "SLACK_BOT_TOKEN"'))
     expect(slackTokens(leaky, { ...env, SLACK_BOT_TOKEN: 'xoxb-leak' }, l => warned.push(l))).toEqual({ bot: undefined, app: 'xapp-1' })
-    expect(warned[0]).toContain('refusing to read the token in SLACK_BOT_TOKEN, the `bot_token_env` of the app named `default`')
+    expect(warned[0]).toContain('refusing to read the token in SLACK_BOT_TOKEN, the `bot_token_env` of hydra (`[slack.apps.default]`)')
     expect(warned[0]).not.toContain('xoxb')
+    // With a display_name the name leads, and the table to edit is still named once.
+    const named: string[] = []
+    const krust = appOf(TOML.replace('bot_token_env = "SLOPBOT_SLACK_BOT_TOKEN"', 'bot_token_env = "SLACK_BOT_TOKEN"\ndisplay_name = "Acme helper"'))
+    slackTokens(krust, { ...env, SLACK_BOT_TOKEN: 'xoxb-leak' }, l => named.push(l))
+    expect(named[0]).toContain('refusing to read the token in SLACK_BOT_TOKEN, the `bot_token_env` of Acme helper (`[slack.apps.default]`):')
   })
 })
 
@@ -831,7 +836,7 @@ describe('tokens: any variable the config names', () => {
     const app = { ...appOf(TOML), botTokenEnv: 'PATH' }
     expect(registerSpawnVars(['PATH'], {}).refused).toEqual([{ name: 'PATH', reason: 'is a variable sessions need' }])
     expect(slackTokens(app, { PATH: '/bin' }, l => warned.push(l)).bot).toBeUndefined()
-    expect(warned[0]).toContain('refusing to read the token in PATH, the `bot_token_env` of the app named `default`: it is a variable sessions need')
+    expect(warned[0]).toContain('refusing to read the token in PATH, the `bot_token_env` of hydra (`[slack.apps.default]`): it is a variable sessions need')
   })
 })
 

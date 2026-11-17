@@ -5,7 +5,7 @@
 // connection decides for itself, from the same facts, and the first connection to decide a message fixes its owner for the
 // others (`decideOwner`), so "exactly one" holds by construction, not by the facts staying still between two copies.
 
-import { appKey } from './app.js'
+import { appKey, appName, type Apps } from './app.js'
 
 export type AppIdentity = { botUserId: string; botId?: string }
 
@@ -41,6 +41,8 @@ type Fact = {
 
 export type ConnectedAppsDeps = {
   now?: () => number
+  /** The apps hydra.toml declares now, to name one in a message. Absent: each is named by its id. */
+  apps?: () => Apps
   /** `app`: the app the trouble is about, so only the specialists it serves hear it. */
   alert?: (text: string, app?: string) => void
   log?: (line: string) => void
@@ -67,6 +69,9 @@ export class ConnectedApps {
   private slotWaiters: (() => void)[] = []
 
   constructor(private readonly deps: ConnectedAppsDeps = {}) {}
+
+  /** What a message calls an app. */
+  private name(app: string): string { return appName(this.deps.apps?.() ?? {}, app) }
   private now(): number { return this.deps.now?.() ?? Date.now() }
 
   // -- who has joined ------------------------------------------------------------------------------------------------
@@ -210,7 +215,7 @@ export class ConnectedApps {
         // An error is not an answer: the last good one stands, and Slack is asked again later.
         this.facts.set(key, { ...(f?.good && { good: f.good }), retryAt: this.now() + PROBE_RETRY_MS, probedAt: this.now() })
         if (!f?.good) this.cantRead(app, why)
-        else this.deps.log?.(`daemon: slack connector: reading whether the app named ${app} is in ${channel} failed (${why}); the last answer stands\n`)
+        else this.deps.log?.(`daemon: slack connector: reading whether ${this.name(app)} is in ${channel} failed (${why}); the last answer stands\n`)
       } finally { release() }
     }).finally(() => { this.flights.delete(key) })
     this.flights.set(key, flight)
@@ -254,15 +259,15 @@ export class ConnectedApps {
 
   /** Said once per app: which apps are in a channel can't be read, so in a channel several are in, the one that receives a message answers it. */
   private cantRead(app: string, why: string): void {
-    this.deps.log?.(`daemon: slack connector: can't tell whether the app named ${app} is in a channel: ${why}\n`)
+    this.deps.log?.(`daemon: slack connector: can't tell whether ${this.name(app)} is in a channel: ${why}\n`)
     if (this.said.has(`read:${app}`)) return
     this.said.add(`read:${app}`)
-    this.deps.alert?.(`⚠️ Hydra can't tell which channels the app named \`${app}\` is in (${why}), so in a channel that several apps are in, each may answer. Add the scopes channels:read (public channels) and groups:read (private ones) to that app (\`hydra slack manifest ${app}\` lists them), reinstall it, put the new bot token in the variable the ${appKey(app, 'bot_token_env')} names (in \`.env\`), and restart the daemon.`, app)
+    this.deps.alert?.(`⚠️ Hydra can't tell which channels ${this.name(app)} is in (${why}), so in a channel that several apps are in, each may answer. Add the scopes channels:read (public channels) and groups:read (private ones) to that app (\`hydra slack manifest ${app}\` lists them), reinstall it, put the new bot token in the variable the ${appKey(this.deps.apps?.() ?? {}, app, 'bot_token_env')} names (in \`.env\`), and restart the daemon.`, app)
   }
 
   private noReports(app: string): void {
     if (this.said.has(`events:${app}`)) return
     this.said.add(`events:${app}`)
-    this.deps.alert?.(`⚠️ The app named \`${app}\` was invited to a channel and Hydra was not told: it does not send member_joined_channel and member_left_channel. Add both under Event Subscriptions of that app (\`hydra slack manifest ${app}\` lists them) and of every other app that was created while only one app was declared, and reinstall each (docs/slack.md, Adding an app). Until then a join is noticed only when a tag asks, or within ${MEMBER_TTL_MS / 60_000} minutes.`, app)
+    this.deps.alert?.(`⚠️ ${this.name(app)} was invited to a channel and Hydra was not told: it does not send member_joined_channel and member_left_channel. Add both under Event Subscriptions of that app (\`hydra slack manifest ${app}\` lists them) and of every other app that was created while only one app was declared, and reinstall each (docs/slack.md, Adding an app). Until then a join is noticed only when a tag asks, or within ${MEMBER_TTL_MS / 60_000} minutes.`, app)
   }
 }

@@ -133,7 +133,7 @@ hydra up slack                                  # daemon + bot
 
 Fix every ✗ that preflight reports before `hydra up`. `hydra preflight slack` re-runs the checks. See [ONBOARDING_TIPS.md](ONBOARDING_TIPS.md) for the gotcha behind each step.
 
-Healthy = daemon log shows `slack gateway: connected as <bot>` **and** `bridge registered for session main`. With an app declared in hydra.toml, also expect `daemon: slack connector: catch-up (boot, deep): done` once for each app; an app that did not connect logs `slack connector for the app named <id> off (…)` and says which key to fix. Then DM the bot.
+Healthy = daemon log shows `slack gateway: connected as <bot>` **and** `bridge registered for session main`. With an app declared in hydra.toml, also expect `daemon: slack connector: catch-up (boot, deep): done` once for each app; an app that did not connect logs `slack connector for <name> (<id>) off (…)` and says which key to fix. Then DM the bot.
 
 ## Apps in hydra.toml
 
@@ -148,7 +148,7 @@ hydra.toml declares each Slack app by name, `[slack.apps.<id>]`. Tokens stay in 
 bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"      # required: the bot token (xoxb-…)
 socket_token_env = "CONNECTOR_SLACK_APP_TOKEN"      # the Socket Mode token (xapp-…, the app-level token): required for Slack to connect, not for `hydra slack manifest`
 operator_token_env = "SLACK_USER_TOKEN"    # optional: hear the channels, DMs and group DMs the operator is in, as the operator; never posts
-display_name = "Acme helper"           # the app's name in `hydra slack manifest` (default: `hydra` for `default`, else the id; at most 35 characters)
+display_name = "Acme helper"           # the app's name: in `hydra slack manifest`, and in every alert, health line and notice hydra says about it (default: `hydra` for `default`, else the id; at most 35 characters)
 description = "Answers Acme's threads it is tagged in."   # at most 140 characters
 
 [slack.apps.sales]
@@ -159,7 +159,7 @@ socket_token_env = "SALES_SLACK_APP_TOKEN"
 - An app's id is lowercase letters, digits, `-` and `_`, starting with a letter, at most 35 characters. Uppercase is reserved for Slack's own ids (`C0TEST`).
 - Each token needs its own variable: one variable on two keys (two apps, one app, or an app and `[gateways.discord]`) is an error.
 - Token variable names are uppercase. Hydra keeps every variable hydra.toml names as a token from the sessions it starts, so name only variables the daemon needs. These are refused when hydra.toml loads: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMUX`, `TERM`, `PWD`, `TMPDIR`, `LANG`, `ANTHROPIC_API_KEY`, `GH_TOKEN`, `SSH_AUTH_SOCK`, and anything starting `HYDRA_` (except `HYDRA_SLACK_`), `CLAUDE_`, `LC_` or `XDG_`.
-- Every app declared connects, whatever it is named, when hydra.toml loads, with no restart, if its token variables are already in the daemon's environment (a variable that is new needs one). An app whose tokens are not set is skipped: the daemon says which key to fix, in the thread of each specialist that app serves and that hears Slack (main's channel when none does), and logs `slack connector for the app named <id> off (…)`; the others connect.
+- Every app declared connects, whatever it is named, when hydra.toml loads, with no restart, if its token variables are already in the daemon's environment (a variable that is new needs one). An app whose tokens are not set is skipped: the daemon says which key to fix, in the thread of each specialist that app serves and that hears Slack (main's channel when none does), and logs `slack connector for <name> (<id>) off (…)`; the others connect.
 
 `hydra slack manifest [<app>]` prints one app's manifest. Leave the name out when hydra.toml declares one app; with several, a missing or unknown name lists the ones declared. The manifest turns on the app's Messages tab and leaves it writable (`features.app_home`: `messages_tab_enabled: true`, `messages_tab_read_only_enabled: false`); without that, Slack refuses the operator's DM to the app (`restricted_action_read_only_channel`).
 
@@ -295,7 +295,7 @@ home = "slack:#sales-ops"
 
 ## Health and alerts, per app
 
-*Slack connector.* **Health is kept for each app on its own.** Each app has its own connection, its own catch-up pass, and its own record of what it has told you, so one app's trouble neither raises, hides, nor repeats another's. `hydra health` prints one line per app, with the app's id (a lone `default` prints the single `slack connector:` line):
+*Slack connector.* **Health is kept for each app on its own.** Each app has its own connection, its own catch-up pass, and its own record of what it has told you, so one app's trouble neither raises, hides, nor repeats another's. `hydra health` prints one line per app, with the app's name (its `display_name`; a lone `default` prints the single `slack connector:` line):
 
 ```
 slack connector: 2 apps · 14 conversations · 0 owed
@@ -305,6 +305,7 @@ slack connector: 2 apps · 14 conversations · 0 owed
 
 In `hydra health --json`, `slack.apps.<id>` holds each declared app's:
 
+- `name`: what messages call the app (its `display_name`, set or defaulted);
 - `state`: `off` (no connection: its tokens are missing, or it failed to start), `connecting`, `up`, `down`, or `exhausted` (reconnect attempts keep failing; hydra keeps trying);
 - `downMin`, `lastActivityAgeMin`, and the last catch-up (`ok`, `accepted`, `reason`) with `lastOkCatchUpAgeMin`;
 - `missingScopes`: what the bot token lacks of what hydra.toml has the app do (empty when complete; `null` until Slack has said what the token holds, which the line prints as `scopes unchecked`);

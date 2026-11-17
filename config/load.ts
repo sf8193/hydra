@@ -323,6 +323,13 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     const app = slackApp(id, t, path)
     if (app) slackApps[id] = app
   }
+  // Messages name an app by its display_name alone, so two apps with one name would read as one.
+  const nameOwner = new Map<string, string>()
+  for (const app of Object.values(slackApps)) {
+    const first = nameOwner.get(app.displayName.toLowerCase())
+    if (first) error(`slack.apps.${app.id}.display_name`, `"${app.displayName}" is already the name of [slack.apps.${first}]: alerts and \`hydra health\` name an app by it, so each app needs its own`)
+    else nameOwner.set(app.displayName.toLowerCase(), app.id)
+  }
 
   // --- MCP servers specialists may list ------------------------------------------------------------------------------
 

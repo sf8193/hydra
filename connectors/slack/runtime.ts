@@ -22,7 +22,7 @@ import { chunk } from '../../daemon/util.js'
 import { DEFAULT_SLACK_APP, namesAChannel, placesAnsweredBy, slackConfigured, type HydraConfig, type SlackApp } from '../../config/types.js'
 import { speaksAsOf, noSuchApp } from '../../config/pins.js'
 import { notServedBy } from '../../routing/route.js'
-import { NO_SLACK_APP, notConnected } from './app.js'
+import { NO_SLACK_APP, appKey, notConnected } from './app.js'
 import { timed } from '../../shared/loop-watch.js'
 import { registerSlackChannelNames } from '../../shared/link-previews.js'
 import { bareOf, readTarget } from '../../shared/target-kind.js'
@@ -40,7 +40,7 @@ export const slackRuntimeDeps = {
   wake: (apps?: string[], why = 'a place freed'): void => { for (const [id, l] of connections.listeners()) if (!apps || apps.includes(id)) void l.runCatchUp(false, why) },
   post: (channel: string, threadTs: string | undefined, text: string, app: string = DEFAULT_SLACK_APP): Promise<string> => {
     const l = connections.listener(app)
-    if (!l) return Promise.reject(new Error(notConnected(app, Object.keys(hydraConfig().slackApps).length)))
+    if (!l) return Promise.reject(new Error(notConnected(hydraConfig().slackApps, app)))
     return l.post(channel, threadTs, text)
   },
   /**
@@ -130,6 +130,7 @@ export function getSlackWatcher(): SlackWatcher {
     filesDir: join(STATE_DIR, 'slack-files'),
     log,
     config: app => config(app),
+    apps: () => hydraConfig().slackApps,
     alert,
     deliver: async (target, message, idempotencyKey) => {
       const t = targetFor(target.to, target.conversation)
@@ -163,6 +164,7 @@ function savedIdentities(): Record<string, AppIdentity> {
 }
 const newSharedApps = () => {
   const apps = new ConnectedApps({
+    apps: () => hydraConfig().slackApps,
     alert: (text, app) => alert(text, undefined, app), log,
     persist: ids => { try { atomicWriteFileSync(identitiesPath(), JSON.stringify(ids, null, 2) + '\n') } catch (err) { log(`daemon: slack connector: saving bot ids failed: ${err}\n`) } },
   })
@@ -218,7 +220,7 @@ export function slackTokens(app: SlackApp, env: Readonly<Record<string, string>>
     if (!name) return undefined
     if (!scrubbedSpawnVars().includes(name)) {
       const why = !ENV_NAME_RE.test(name) ? 'is not an environment variable name' : tokenVarRefusal(name) ?? 'is not among the variables kept from sessions (the daemon adds the ones hydra.toml names when it loads it)'
-      warn(`daemon: slack connector: refusing to read the token in ${name}, the \`${key}\` of the app named \`${app.id}\`: it ${why}, so a token there would reach every session hydra starts. Name a variable only the daemon needs, like CONNECTOR_SLACK_BOT_TOKEN.\n`)
+      warn(`daemon: slack connector: refusing to read the token in ${name}, the ${appKey({ [app.id]: app }, app.id, key)}: it ${why}, so a token there would reach every session hydra starts. Name a variable only the daemon needs, like CONNECTOR_SLACK_BOT_TOKEN.\n`)
       return undefined
     }
     return env[name]
@@ -394,7 +396,7 @@ export async function bindConversation(caller: Partial<Pick<SessionInfo, 'thread
   // Asked of Slack, not assumed: a bind nobody can read would say "listening" and deliver nothing.
   const via = await slackRuntimeDeps.readThread(c.channel, c.threadTs, app).catch((err: unknown) => {
     const why = err instanceof Error ? err.message : String(err)
-    throw new Error(`not bound: ${conversationId(c)}: ${cantRead(v.hydra.slackApps[app], placeName(v, c.channel), why, config(app)?.botUserId)}`)
+    throw new Error(`not bound: ${conversationId(c)}: ${cantRead(v.hydra.slackApps, app, placeName(v, c.channel), why, config(app)?.botUserId)}`)
   })
   // A specialist answers in its threads: one only the operator can read is one it could never post in.
   if (via === 'user' && !isSessionThread(me)) throw new Error(`not bound: ${conversationId(c)}: the bot isn't in ${placeName(v, c.channel)}, so ${me} could not answer there. Ask the operator to invite it, then bind again`)

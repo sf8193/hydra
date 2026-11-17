@@ -544,6 +544,11 @@ describe('a Slack app\'s display_name and description', () => {
       .toEqual({ id: 'default', botTokenEnv: 'CONNECTOR_SLACK_BOT_TOKEN', displayName: 'Acme helper', description: 'Answers the threads it is tagged in.' })
     expect(ok(slack('')).config.slackApps.default).toEqual({ id: 'default', botTokenEnv: 'CONNECTOR_SLACK_BOT_TOKEN', displayName: 'hydra', description: SLACK_APP_DEFAULTS.description })
   })
+  test('one name for two apps is refused: a message names an app by it alone', () => {
+    const two = (name: string) => `${slack('')}\n[slack.apps.sales]\nbot_token_env = "SALES_SLACK_BOT_TOKEN"\ndisplay_name = "${name}"\n`
+    expect(errorsOf(two('Hydra'))).toEqual(['slack.apps.sales.display_name: "Hydra" is already the name of [slack.apps.default]: alerts and `hydra health` name an app by it, so each app needs its own'])
+    expect(ok(two('Sales desk')).config.slackApps.sales.displayName).toBe('Sales desk')
+  })
   test('past Slack\'s limits (35 and 140 characters) are refused', () => {
     // Characters, not UTF-16 units: 34 letters and an emoji is 35.
     expect(ok(slack(`display_name = "${'k'.repeat(34)}🦀"\ndescription = "${'d'.repeat(140)}"`)).config.slackApps.default.displayName).toBe(`${'k'.repeat(34)}🦀`)

@@ -121,7 +121,7 @@ export type SlackApp = {
   socketTokenEnv?: string
   /** The operator's token (a Slack user token), used only to read threads the bot is not in; never to post. */
   operatorTokenEnv?: string
-  /** The name `hydra slack manifest` gives the app: as set, else `hydra` for `default` and the id for any other. */
+  /** What the app is called: in `hydra slack manifest`, and in every alert, health line and notice hydra says about it. As set, else `hydra` for `default` and the id for any other. */
   displayName: string
   /** What the manifest says the app does: as set, else a default (which mentions the operator token when there is one). */
   description: string

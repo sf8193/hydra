@@ -5,7 +5,7 @@
 import type { HydraConfig, SlackApp } from '../../config/types.js'
 import type { ConnectedApps } from './apps.js'
 import type { ListenerHealth, SlackListener } from './listener.js'
-import { appKey, appSuffix } from './app.js'
+import { appKey, appName, appSuffix, type Apps } from './app.js'
 
 /** Where an app's connection is: `pending` (not yet up), `up`, `down` (lost, or never possible: no tokens), `gaveUp` (its first connection failed and was let go, or the supervisor ran out of reconnect attempts). */
 export type AppConnection = 'pending' | 'up' | 'down' | 'gaveUp'
@@ -26,13 +26,13 @@ export type AppRecord = {
 }
 
 /** One app's health: what its listener reports (an app with no listener reports `off`), and its record. */
-export type AppHealth = ListenerHealth & Pick<AppRecord, 'tokens' | 'connection' | 'probeError'>
+export type AppHealth = ListenerHealth & Pick<AppRecord, 'tokens' | 'connection' | 'probeError'> & { /** What messages call the app (`appName`). */ name: string }
 
 /** Why an app can't connect for want of tokens, naming the key to fix; undefined when it has both. */
-export function missingTokens(app: SlackApp, t: { app?: string; bot?: string }): string | undefined {
-  if (!t.bot) return `${appKey(app.id, 'bot_token_env')} names ${app.botTokenEnv}, which has no value in the daemon's environment`
-  if (!app.socketTokenEnv) return `${appKey(app.id, 'socket_token_env')} is not set, and Socket Mode needs it`
-  if (!t.app) return `${appKey(app.id, 'socket_token_env')} names ${app.socketTokenEnv}, which has no value in the daemon's environment`
+export function missingTokens(apps: Apps, app: SlackApp, t: { app?: string; bot?: string }): string | undefined {
+  if (!t.bot) return `${appKey(apps, app.id, 'bot_token_env')} names ${app.botTokenEnv}, which has no value in the daemon's environment`
+  if (!app.socketTokenEnv) return `${appKey(apps, app.id, 'socket_token_env')} is not set, and Socket Mode needs it`
+  if (!t.app) return `${appKey(apps, app.id, 'socket_token_env')} names ${app.socketTokenEnv}, which has no value in the daemon's environment`
   return undefined
 }
 
@@ -98,14 +98,14 @@ export class SlackConnections {
       this.d.alert('⚠️ <state>/slack-watch.json is no longer read, and hydra.toml declares no Slack app, so Slack is not connected. Run `hydra migrate` to carry its routes into hydra.toml; Slack connects as soon as hydra.toml loads it.')
     }
     const starting: Promise<void>[] = []
-    const fresh = Object.values(h.slackApps).filter(a => !this.byApp.has(a.id) && !missingTokens(a, this.d.tokens(a))).map(a => a.id)
+    const fresh = Object.values(h.slackApps).filter(a => !this.byApp.has(a.id) && !missingTokens(h.slackApps, a, this.d.tokens(a))).map(a => a.id)
     this.shared.expectJoin(fresh)   // who is in a channel is not settled until each has joined, failed to, or taken too long
     for (const app of Object.values(h.slackApps)) {
       if (this.byApp.has(app.id)) continue
-      const why = missingTokens(app, this.d.tokens(app))
+      const why = missingTokens(h.slackApps, app, this.d.tokens(app))
       if (why) {
-        this.d.log(`daemon: slack connector for the app named ${app.id} off (${why})\n`)
-        if (this.skipped.get(app.id) !== why) { this.skipped.set(app.id, why); this.d.alert(`⚠️ ${app.id === 'default' && declared <= 1 ? 'Slack' : `The app named \`${app.id}\``} is not connected: ${why}. Put the token in that variable (in \`.env\`) and restart the daemon.`, app.id) }
+        this.d.log(`daemon: slack connector for ${appName(h.slackApps, app.id)} (${app.id}) off (${why})\n`)
+        if (this.skipped.get(app.id) !== why) { this.skipped.set(app.id, why); this.d.alert(`⚠️ ${app.id === 'default' && declared <= 1 ? 'Slack' : appName(h.slackApps, app.id)} is not connected: ${why}. Put the token in that variable (in \`.env\`) and restart the daemon.`, app.id) }
         continue
       }
       this.skipped.delete(app.id)
@@ -115,7 +115,7 @@ export class SlackConnections {
       // Connected side by side: one app's slow or refused connection does not hold another's.
       // A start that resolves after `stop()` (or after the app was replaced) is stale: it must not mark the app given up.
       const drop = () => { if (this.byApp.get(app.id) !== l) return; this.shared.failedToJoin(app.id); this.gaveUp.add(app.id); this.byApp.delete(app.id) }
-      starting.push(l.start().then(ok => { if (!ok) drop() }).catch(err => { this.d.log(`daemon: slack connector${appSuffix(app.id, declared)} failed to start: ${err instanceof Error ? err.stack ?? err.message : err}\n`); drop() }))
+      starting.push(l.start().then(ok => { if (!ok) drop() }).catch(err => { this.d.log(`daemon: slack connector${appSuffix(h.slackApps, app.id)} failed to start: ${err instanceof Error ? err.stack ?? err.message : err}\n`); drop() }))
     }
     await Promise.all(starting)
   }
@@ -137,7 +137,7 @@ export class SlackConnections {
     const h = this.d.hydra()
     const declared = Object.hasOwn(h.slackApps, app)
     const l = this.byApp.get(app)
-    const missing = declared ? missingTokens(h.slackApps[app], this.d.tokens(h.slackApps[app])) : undefined
+    const missing = declared ? missingTokens(h.slackApps, h.slackApps[app], this.d.tokens(h.slackApps[app])) : undefined
     const state = l?.health().state
     const connection: AppConnection = missing ? 'down'
       : this.gaveUp.has(app) || state === 'exhausted' ? 'gaveUp'
@@ -156,7 +156,7 @@ export class SlackConnections {
     return Object.fromEntries(this.ids().map(id => {
       const r = this.record(id)
       const l = this.byApp.get(id)?.health() ?? { state: 'off', downMin: null, lastActivityAgeMin: null, catchUp: null, lastOkCatchUpAgeMin: null, missingScopes: null } satisfies ListenerHealth
-      return [id, { ...l, tokens: r.tokens, connection: r.connection, ...(r.probeError && { probeError: r.probeError }) }]
+      return [id, { ...l, name: appName(this.d.hydra().slackApps, id), tokens: r.tokens, connection: r.connection, ...(r.probeError && { probeError: r.probeError }) }]
     }))
   }
 }
