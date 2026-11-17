@@ -2,7 +2,8 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
-import { attemptIO, jobsIO, jobsLaunchdRun, jobsList, launchdIO, parseJobs, runIO, syncLaunchd } from '../jobs.js'
+import { attemptIO, jobsIO, jobsLaunchdRun, jobsList, launchdIO, launchdNotes, parseJobs, runIO, syncLaunchd } from '../jobs.js'
+import { platformStateDir } from '../../shared/constants.js'
 import { LAUNCH_AGENTS_DIR, launchdCalendar, launchdPlist, stableBun } from '../../shared/jobs-launchd.js'
 import { daemonFile, externalFile } from '../../shared/jobs.js'
 
@@ -79,6 +80,27 @@ describe('jobs sync registers launchd-runner jobs', () => {
     expect(readdirSync(agents).sort()).toEqual(['com.hydra.job.other.scan.plist', 'com.hydra.watchdog.test.plist'])
   })
 
+  test('a paused job is unregistered like one gone from the file, and registered again when unpaused', async () => {
+    await sync(jobs(LD))
+    calls = []
+    const paused = [{ ...jobs(LD)[0], paused: true as const }]
+    expect(await sync(paused)).toEqual({ ok: true, lines: ['launchd: unregistered scan'] })
+    expect(existsSync(plist('scan'))).toBe(false)
+    expect(calls).toEqual([['bootout', 'gui/501/com.hydra.job.test.scan']])
+    expect(await sync(paused)).toEqual({ ok: true, lines: [] })                   // paused again: nothing to do
+    expect(await sync(jobs(LD))).toEqual({ ok: true, lines: [`launchd: registered scan (runs ${ENTRY})`] })
+  })
+
+  test('launchd notes: a paused job is not asked to register, and is told to sync if its entry is still there', async () => {
+    const live = platformStateDir('test')                                         // the notes read launchd only for the live state dir
+    const paused = { ...jobs(LD)[0], paused: true as const }
+    expect(launchdNotes('test', live, paused)).toEqual([])                        // paused, no entry: as it should be
+    expect(launchdNotes('test', live, jobs(LD)[0])).toEqual([expect.stringContaining('not registered with launchd')])
+    await sync(jobs(LD))
+    expect(launchdNotes('test', live, paused)).toEqual([expect.stringContaining('still has a launchd entry')])
+    expect(launchdNotes('test', live, jobs(LD)[0])).toEqual([])
+  })
+
   test("the old runner's entries for this platform are moved onto the new plists", async () => {
     for (const f of ['bun.cron.hydra-job-test-scan.plist', 'bun.cron.hydra-job-other-scan.plist']) writeFileSync(join(agents, f), '')
     const r = await sync(jobs(LD))
@@ -152,6 +174,15 @@ describe('jobs launchd-run: what the plist runs', () => {
     expect(JSON.parse(readFileSync(externalFile(dir, 'scan', slot), 'utf8'))).toMatchObject({ slotAt: slot, result: 'done', output: 'CVE-1' })
     expect(await jobsLaunchdRun('test', 'scan', dir)).toBe(0)
     expect(checks).toBe(1)
+  })
+
+  test('a paused job is not run from a launchd entry that is still loaded: no check, no result', async () => {
+    const job = { name: 'scan', schedule: '0 * * * *', check: 's.sh', runner: 'launchd', runnerFrom: 'job', alertAfterMs: 0, fromSchedule: true, paused: true }
+    mkdirSync(dirname(daemonFile(dir)), { recursive: true })
+    writeFileSync(daemonFile(dir), JSON.stringify({ scheduleJobs: [job], scheduleJobsAt: new Date(Date.now() + 60_000).toISOString() }))
+    expect(await jobsLaunchdRun('test', 'scan', dir)).toBe(0)
+    expect(checks).toBe(0)
+    expect(existsSync(externalFile(dir, 'scan', slot))).toBe(false)
   })
 
   test('a daemon-runner job is never run from launchd: no check, no result (a stale entry only says so)', async () => {

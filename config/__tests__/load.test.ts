@@ -271,6 +271,16 @@ addresses = ["github:alice"]
     ])
   })
 
+  test('paused = true keeps a schedule defined and validated; anything else is refused', () => {
+    const { config } = ok(`${BASE}\n[schedules.pull]\ncron = "23 * * * *"\ncheck = "pull.sh"\nrunner = "daemon"\npaused = true\n[schedules.live]\ncron = "@daily"\ncheck = "c.sh"\npaused = false\n`)
+    expect(config.schedules.pull).toEqual({ id: 'pull', cron: '23 * * * *', message: '', check: 'pull.sh', runner: 'daemon', paused: true })
+    expect(config.schedules.live.paused).toBeUndefined()
+    expect(errorsOf(`${BASE}\n[schedules.a]\ncron = "not a cron"\ncheck = "c.sh"\npaused = true\n[schedules.b]\ncron = "@daily"\ncheck = "c.sh"\npaused = "yes"\n`)).toEqual([
+      expect.stringContaining('schedules.a.cron'),
+      'schedules.b.paused: must be true or false',
+    ])
+  })
+
   test('main is a target for a schedule or a rule, though never declared', () => {
     const { config } = ok(`${BASE}\n[schedules.digest]\ncron = "@daily"\ntarget = "main"\n[[rules]]\nplace = "slack:#ops"\ntarget = "main"\n`)
     expect(config.schedules.digest.target).toBe('main')

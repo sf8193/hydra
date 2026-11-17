@@ -191,6 +191,7 @@ export class JobsClock {
    * else dispatch. A slot is owed until it is done.
    */
   private async decide(job: Job, cfg: JobsConfig, isOnline: () => Promise<boolean>): Promise<void> {
+    if (job.paused) return this.skipPaused(job)
     if (job.runner !== 'daemon') return   // launchd triggers it: the clock only delivers its results (applyExternal)
     const now = this.d.now()
     const state = this.ensureState(job, now)
@@ -221,7 +222,8 @@ export class JobsClock {
     const now = this.d.now()
     const watchedAt = now.toISOString()
     for (const job of cfg.jobs) {
-      if (job.runner !== 'launchd') continue
+      // A paused job has no entry, so nothing is expected of it; its watch lapses, and unpausing restarts it at the latest slot.
+      if (job.runner !== 'launchd' || job.paused) continue
       const r = readJobState(this.d.stateDir, job.name, job.schedule)
       const first = (latestSlot(job.schedule, now)?.at ?? now).toISOString()
       // Never seen: record only where to start watching. No baseline outcome, which would claim a run that never was.
@@ -247,6 +249,29 @@ export class JobsClock {
       })
       for (const slot of missed) this.d.log(`jobs: ${job.name}: no report for ${slot.label}`)
     }
+  }
+
+  /**
+   * A paused job, either runner. Its slots pass unrun, and each is covered, so unpausing starts at the next slot rather
+   * than at one that was missed. An open failure run, a standing not-now and unanswered missed reports are closed: their alert and back-off are
+   * about a time before the pause. `last` stays, so `list` still shows what happened.
+   */
+  private skipPaused(job: Job): void {
+    const now = this.d.now()
+    const daemon = job.runner === 'daemon'
+    const r = readJobState(this.d.stateDir, job.name, job.schedule)
+    const st = daemon ? this.ensureState(job, now) : r.kind === 'ok' ? r.state : null
+    if (!st) return
+    const slot = daemon && !st.dispatch ? owedSlot(job.schedule, st, now) : null
+    if (!slot && !st.failures && !st.failingSince && !st.notNow && !st.unreported) return
+    this.update(job.name, job.schedule, s => {
+      if (s.failures) s.failures = 0
+      delete s.failingSince
+      delete s.notNow   // "not now since…" is about a slot that is no longer owed
+      delete s.unreported   // missed reports of a time before the pause: a late result must not bring the run back
+      if (slot) s.covered = { slot: slot.label, at: now.toISOString() }
+    })
+    if (slot) this.d.log(`jobs: ${job.name}: paused, skipped ${slot.label}`)
   }
 
   /** Online if either witness says so: a VPN that blocks the probe can't hold every job, and a captive portal fails both. */

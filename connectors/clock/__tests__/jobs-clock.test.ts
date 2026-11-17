@@ -1940,6 +1940,99 @@ describe("hydra.toml [schedules]: run once migrate has moved jobs.toml; until th
     expect(w.spawns.map(s => s.args[6])).toEqual(['sweep'])
   })
 
+  test('a paused daemon schedule is not dispatched across a fire slot, and unpausing does not run the slot it missed', async () => {
+    let paused = true
+    const c = clock({ schedules: () => jobsFromSchedules(cfg(schedule({ id: 'sweep', check: 'sweep.sh', ...(paused && { paused: true as const }) }))) })
+    at('2026-11-04T09:59:00-08:00'); await c.tick()
+    for (const t of ['10:00:30', '10:05:30', '10:10:30']) { at(`2026-11-04T${t}-08:00`); await c.tick() }
+    expect(w.spawns).toEqual([])                                                  // three slots passed, none ran
+    expect(existsSync(stateFile(w.dir, 'sweep'))).toBe(true)                      // its state file is kept
+    paused = false
+    at('2026-11-04T10:10:50-08:00'); await c.tick()
+    expect(w.spawns).toEqual([])                                                  // 10:10 passed while paused: not owed now
+    at('2026-11-04T10:15:30-08:00'); await c.tick()
+    expect(w.spawns).toHaveLength(1)                                              // the first slot after unpausing runs
+  })
+
+  test('a failure that opened before the pause is closed by it: no alert on unpause, and the next slot is not held back', async () => {
+    let paused = false
+    const sweep = () => cfg(schedule({ id: 'sweep', check: 'sweep.sh', alertAfterMs: 0, ...(paused && { paused: true as const }) }))
+    const c = clock({ schedules: () => jobsFromSchedules(sweep()), toMain: () => false, direct: async () => false })
+    at('2026-11-04T09:59:00-08:00'); await c.tick()
+    // three failures in a row, the last at 10:00:40: back-off would hold the 10:05 slot until 10:05:40
+    setState('sweep', { covered: { slot: '2026-11-04 09:55', at: '2026-11-04T17:55:30Z' }, failures: 3, failingSince: '2026-11-04T17:50:00Z', last: { at: '2026-11-04T18:00:40Z', result: 'failed', note: 'boom' }, notNow: { since: '2026-11-04T17:58:00Z', reason: 'offline' } })
+    paused = true
+    at('2026-11-04T10:01:30-08:00'); await c.tick()
+    expect(state('sweep')).toMatchObject({ failures: 0, last: { result: 'failed', note: 'boom' } })
+    expect(state('sweep').failingSince).toBeUndefined()
+    expect(state('sweep').notNow).toBeUndefined()
+    paused = false
+    const heard: string[] = []
+    const d = clock({ schedules: () => jobsFromSchedules(sweep()), toMain: t => { heard.push(t); return true } })
+    c.stop()
+    at('2026-11-04T10:02:30-08:00'); await d.tick()
+    expect(heard).toEqual([])
+    at('2026-11-04T10:05:30-08:00'); await d.tick()
+    expect(w.spawns).toHaveLength(1)                                              // inside the old back-off window, and it runs
+  })
+
+  test('a failure that opened before a launchd pause is closed by it, and a paused launchd job lists its last result still', async () => {
+    let paused = false
+    const job = () => cfg(schedule({ id: 'sync', cron: '0 * * * *', check: 'sync.sh', runner: 'launchd', ...(paused && { paused: true as const }) }))
+    const c = clock({ schedules: () => jobsFromSchedules(job()), toMain: () => false, direct: async () => false })
+    at('2026-11-04T09:50:30-08:00'); await c.tick()
+    writeAtomic(externalFile(w.dir, 'sync', new Date('2026-11-04T10:00:00-08:00').toISOString()), JSON.stringify({ slot: '2026-11-04 10:00', slotAt: new Date('2026-11-04T10:00:00-08:00').toISOString(), at: '2026-11-04T18:00:20Z', result: 'failed', note: 'boom' }))
+    paused = true
+    at('2026-11-04T10:01:30-08:00'); await c.tick()                               // applied, undeliverable, then closed by the pause
+    expect(state('sync')).toMatchObject({ failures: 0, last: { result: 'failed', note: 'boom' } })
+    paused = false
+    const heard: string[] = []
+    c.stop()
+    const d = clock({ schedules: () => jobsFromSchedules(job()), toMain: t => { heard.push(t); return true } })
+    at('2026-11-04T10:02:30-08:00'); await d.tick()
+    expect(heard).toEqual([])
+  })
+
+  test('a paused launchd schedule is never a missed report, and unpausing watches from its latest slot, not the old ones', async () => {
+    let paused = true
+    const c = clock({ schedules: () => jobsFromSchedules(cfg(schedule({ id: 'sync', cron: '0 * * * *', check: 'sync.sh', runner: 'launchd', ...(paused && { paused: true as const }) }))) })
+    const run = async (hhmm: string) => {                                         // a tick a minute, as the daemon runs
+      const target = new Date(`2026-11-04T${hhmm}:30-08:00`)
+      while (w.t < target) { w.t = new Date(Math.min(w.t.getTime() + 60_000, target.getTime())); await c.tick() }
+    }
+    at('2026-11-04T09:49:30-08:00'); await c.tick()
+    await run('12:50')                                                            // 10:00, 11:00 and 12:00 pass, paused
+    expect(existsSync(stateFile(w.dir, 'sync')) && state('sync').failures).toBeFalsy()
+    expect(w.logs.some(l => l.includes('no report'))).toBe(false)                 // not even counted and cleared
+    paused = false
+    await run('13:40')
+    expect(state('sync')).toMatchObject({ failures: 1, last: { note: expect.stringContaining('2026-11-04 13:00') } })   // the first slot after unpausing
+    expect(state('sync').unreported).toHaveLength(1)
+    expect(w.main).toHaveLength(1)
+  })
+
+  test('a pause closes the missed reports of a launchd schedule, so a late result cannot bring the run back', async () => {
+    let paused = false
+    const job = () => cfg(schedule({ id: 'sync', cron: '0 * * * *', check: 'sync.sh', runner: 'launchd', ...(paused && { paused: true as const }) }))
+    const c = clock({ schedules: () => jobsFromSchedules(job()), toMain: () => false, direct: async () => false })
+    at('2026-11-04T09:50:30-08:00'); await c.tick()
+    setState('sync', { failures: 2, failingSince: '2026-11-04T17:00:00Z', last: { at: '2026-11-04T17:40:00Z', result: 'failed', note: 'no report' }, unreported: ['2026-11-04T16:00:00Z', '2026-11-04T17:00:00Z'], expectedThrough: '2026-11-04T17:00:00Z', expectedCron: '0 * * * *', watchedAt: '2026-11-04T17:50:00Z' })
+    paused = true
+    at('2026-11-04T09:51:30-08:00'); await c.tick()
+    expect(state('sync')).toMatchObject({ failures: 0 })
+    expect(state('sync').unreported).toBeUndefined()
+    expect(state('sync').failingSince).toBeUndefined()
+  })
+
+  test('schedules run still runs a paused schedule once, on request', async () => {
+    const c = clock({ schedules: () => jobsFromSchedules(cfg(schedule({ id: 'sweep', check: 'sweep.sh', paused: true }))) })
+    at('2026-11-04T09:59:00-08:00'); await c.tick()
+    expect(c.requestRun('sweep')).toMatchObject({ ok: true })
+    expect(w.spawns).toHaveLength(1)
+    at('2026-11-04T10:05:30-08:00'); await c.tick()
+    expect(w.spawns).toHaveLength(1)                                              // the clock itself still fires nothing
+  })
+
   test("a schedule's failure alerts the operator, never its target", async () => {
     const targets: string[] = []
     const c = clock({ schedules: () => jobsFromSchedules(cfg(schedule({ id: 'sweep', check: 'sweep.sh', target: 'ops', alertAfterMs: 0 }))), toTarget: async to => { targets.push(to); return true } })

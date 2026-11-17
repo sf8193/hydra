@@ -40,6 +40,7 @@ export type Job = {
   alertAfterMs: number // how long a failure run lasts before it is alerted, once (alert_after, default 1d)
   notes?: string[]   // what jobs list says about keys that are kept only for old files
   fromSchedule?: true // read from hydra.toml's [schedules]: a failure alerts the operator only, never the target
+  paused?: true      // never fires: no dispatch, no launchd entry, no failure alert (a manual run still works)
 }
 
 /**

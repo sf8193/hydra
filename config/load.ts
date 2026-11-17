@@ -699,7 +699,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (!ID_RE.test(id)) error(path, 'a schedule\'s id must be lowercase letters, digits and dashes')
     const t = table(raw, path)
     if (!t) continue
-    unknownKeys(t, ['cron', 'target', 'message', 'check', 'workdir', 'env_file', 'runner', 'needs', 'alert_after'], path)
+    unknownKeys(t, ['cron', 'target', 'message', 'check', 'workdir', 'env_file', 'runner', 'needs', 'alert_after', 'paused'], path)
     const cron = str(t, 'cron', path)
     if (t.cron === undefined) error(`${path}.cron`, 'is required: 5 fields, local time')
     else if (cron !== undefined) {
@@ -725,8 +725,10 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     for (const [i, n] of (needs ?? []).entries()) if (!(NEEDS as readonly string[]).includes(n)) error(`${path}.needs[${i}]`, `unknown precondition "${n}" (known: ${NEEDS.join(', ')})`)
     const alertAfterMs = duration(t, 'alert_after', path, MAX_ALERT_AFTER_MS)
     for (const k of ['needs', 'alert_after']) if (t[k] !== undefined && runner !== 'daemon') error(`${path}.${k}`, 'needs runner = "daemon"')
+    const paused = bool(t, 'paused', path)
     schedules[id] = {
       id, cron: cron ?? '', message, runner,
+      ...(paused && { paused: true as const }),
       ...(target !== undefined && { target }),
       ...(needs?.length && { needs: [...new Set(needs)] as Need[] }),
       ...(alertAfterMs !== undefined && { alertAfterMs }),
