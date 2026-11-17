@@ -77,8 +77,10 @@ export type SlackWatchConfig = {
   app?: string
   /** Every connected app's bot ids, by app id (each connection's auth.test): `<@id>` of any of them in a text is a tag of that app. Absent: only this app. */
   identities?: Record<string, { botUserId: string; botId?: string }>
-  /** The apps whose bot is in this channel (this one included), read from a cache the connections share. Absent: only this app. */
+  /** The apps whose bot is in this channel (this one included), read from a cache the connections share; Absent: only this app. */
   heardBy?: (channel: string) => string[]
+  /** Of these apps, the ones whose membership in this channel was never read. Absent: none. */
+  unread?: (channel: string, apps: string[]) => string[]
   /** The apps with a live connection. A tagged app with none will catch the message up itself, so no other answers it. Absent: all. */
   connected?: () => string[]
   /** Which app owns a message, fixed by whichever connection asks first, so the other connections' copies agree. Absent (one app): decided on the spot. */
@@ -357,6 +359,10 @@ const OWED_FULL_WHY = `more than ${OWED_KEEP} messages were owed in one thread, 
 /** A conversation's key in memory, and a channel's in a cursor, a hold or a noted fact: as they always were for `default`, the app first for any other. */
 const watchKey = (app: string | undefined, channel: string, threadTs: string) => scopeKey(app, channel, threadTs)
 const keyOf = (e: Pick<SlackWatchEntry, 'app' | 'channel' | 'threadTs'>) => watchKey(e.app, e.channel, e.threadTs)
+/** How long an app's bot that was told it is not in a channel is left alone before a reaction is tried there again. */
+const NO_REACTION_RETRY_MS = 10 * 60_000
+/** How many channels an app's bot is remembered as not being in, for reactions. */
+const NO_REACTION_KEEP = 500
 const scoped = (app: string | undefined, channel: string) => scopeKey(app, channel)
 
 /** The apps whose bot a text tags, first tag first. `identities` is every known app's bot ids. */
@@ -483,7 +489,9 @@ export class SlackWatcher {
   private readonly held = new Set<string>()
   // Refusals and drops already logged, so a catch-up replay neither logs nor counts them twice. Insertion-ordered; oldest go first.
   // Two sets, so a flood of refusals cannot evict the drops (and re-count them on replay).
-  private readonly noted = { refused: new Set<string>(), dropped: new Set<string>() }
+  private readonly noted = { refused: new Set<string>(), dropped: new Set<string>(), guessed: new Set<string>() }
+  // Channels where an app's bot answered a reaction with "not in channel", by app and channel: no reaction is tried there again until the time here has passed.
+  private readonly cannotReact = new Map<string, number>()
   private readonly stats_: SlackWatchStats = { refused: 0, refusedBy: {}, unrouted: 0, dropped: {} }
   private readonly episodeStart = new Map<string, number>()
 
@@ -778,7 +786,16 @@ export class SlackWatcher {
     const through = dm ? [] : this.boundThrough(cfg, ev.channel, ev.threadTs ?? ev.ts)
     const connected = cfg.connected?.()
     const unreachable = connected ? mentioned.filter(m => m !== app && !connected.includes(m)) : []
-    const heardBy = dm ? [app] : [...new Set([app, ...(cfg.heardBy?.(ev.channel) ?? []), ...through, ...unreachable])]
+    // A tagged app with the operator's token hears every channel the operator is in, its bot a member or not: its tag reaches it.
+    const viaOperator = dm ? [] : mentioned.filter(m => m !== app && !!cfg.hydra.slackApps[m]?.operatorTokenEnv)
+    const heardBy = dm ? [app] : [...new Set([app, ...(cfg.heardBy?.(ev.channel) ?? []), ...through, ...unreachable, ...viaOperator])]
+    // A tagged app whose membership was never read may or may not receive the message. It owns the tag only when no tagged app is known to
+    // hear it and no thread binding holds: a tag then reaches it rather than vanishing, and a known hearer is never outranked by a guess.
+    const unread = dm || own ? [] : (cfg.unread?.(ev.channel, mentioned.filter(m => m !== app)) ?? [])
+    const guessed = mentioned.some(m => heardBy.includes(m)) || through.length ? [] : unread
+    heardBy.push(...guessed)
+    // Tagged apps known unable to hear it: bot read as not in the channel, and no operator token.
+    const unheard = dm || own ? [] : mentioned.filter(m => m !== app && !heardBy.includes(m) && !unread.includes(m))
     const at = placesOf(cfg, ev.channel)
     // A DM with a person, or a group DM: the bot is not (or only) a member, and nothing has said it should answer there.
     const inNoBotDm = dm && !at.includes(SLACK_DM)
@@ -830,9 +847,15 @@ export class SlackWatcher {
     // Past that the message is this app's alone, and routes as if no other app had heard it.
     const decide = () => owningApp(cfg.hydra, { app, heardBy, mentioned, ...(boundApp && { boundApp }), at })?.app ?? app
     const owner = dm ? app : cfg.decideOwner ? cfg.decideOwner(ev.channel, ev.ts, decide) : decide()
+    // Standing down for a tagged app that was only guessed to hear it: if its bot is not in the channel, nobody answers. Said once per app and channel.
+    if (owner !== app && guessed.includes(owner) && this.firstTime(this.noted.guessed, `${scoped(owner, ev.channel)}`)) this.deps.log(`daemon: slack connector: a tag of the app named ${owner} in ${ev.channel} is left to it, but whether its bot is in the channel could not be read; if it is not, nobody answers. Add channels:read and groups:read to that app and reinstall it\n`)
     if (owner !== app) return 'ignored'
     const d = route(cfg.hydra, { from: addressOf(ev.user), at, addressed, app, ...(existing?.specialist && { bound: existing.specialist }) })
-    if (d.fate === 'ignored') return 'ignored'
+    if (d.fate === 'ignored') {
+      // A tag of an app that can't hear it, with nothing here to answer it instead: counted, logged and reacted to, never silent.
+      if (unheard.length) this.refuse({ ...ev, app }, threadTs, `it tags the app named ${unheard.join(', ')}, whose bot is not in this channel and which has no operator token, so no app can take it: invite that bot to the channel`, 'unrouted', true)
+      return 'ignored'
+    }
     // Refused or unrouted before anything is counted, watched or owed: a sender `reachable_by` does not admit costs nothing.
     // Only a mention or a DM gets the 🚫: chatter in a bound thread by someone not allowed is passed over quietly.
     if (d.fate === 'unrouted' || d.fate === 'refused') {
@@ -968,11 +991,34 @@ export class SlackWatcher {
     }
     const slack = this.actions.get(appOfEntry(ev))
     if (react && slack) {
-      void slack.react(ev.channel, ev.ts, REFUSED_REACTION).catch(err => {
-        const e = err instanceof Error ? err.message : String(err)
-        if (!/already_reacted/.test(e)) this.deps.log(`daemon: slack connector: 🚫 on ${ev.channel} ts ${ev.ts} failed: ${e}\n`)
-      })
+      this.reactAs(slack, ev.app, ev.channel, ev.ts, REFUSED_REACTION)
     }
+  }
+
+  /** A bot joined (or left) a channel: its reactions there are tried again at the next message, whoever it was. */
+  reactionsMayWork(channel: string): void {
+    for (const k of [...this.cannotReact.keys()]) if (unscopeKey(k).rest === channel) this.cannotReact.delete(k)
+  }
+
+  /**
+   * A reaction through the app that heard the message, best effort. An app can hear a channel its bot is not in (with the operator's token), and there Slack
+   * answers "not in channel": that is said once, and no reaction is tried there again for a while (the bot may be invited).
+   */
+  private reactAs(slack: SlackActions, app: string | undefined, channel: string, ts: string, name: string): void {
+    const where = scoped(app, channel)
+    if ((this.cannotReact.get(where) ?? 0) > this.deps.now()) return
+    void slack.react(channel, ts, name).catch(err => {
+      const why = err instanceof Error ? err.message : String(err)
+      if (/already_reacted/.test(why)) return
+      if (/channel_not_found|not_in_channel/.test(why)) {
+        this.cannotReact.delete(where)   // re-added last: the map is kept in the order of telling, so the oldest go first
+        this.cannotReact.set(where, this.deps.now() + NO_REACTION_RETRY_MS)
+        if (this.cannotReact.size > NO_REACTION_KEEP) this.cannotReact.delete(this.cannotReact.keys().next().value!)
+        this.deps.log(`daemon: slack connector: the bot of the app named ${app ?? DEFAULT_SLACK_APP} is not in ${channel}, so it adds no reactions there (invite it to the channel to have them)\n`)
+        return
+      }
+      this.deps.log(`daemon: slack connector: ${name} on ${channel} ts ${ts} failed: ${why}\n`)
+    })
   }
 
   /** A message that will never be delivered: logged every time, counted, and alerted once per episode of its kind. */
@@ -1273,10 +1319,7 @@ export class SlackWatcher {
     const slack = this.actions.get(appOfEntry(entry))   // the reaction goes through the app that heard the message
     if (!name || !slack) return
     for (const i of batch) {
-      void slack.react(entry.channel, i.ts, name).catch(err => {
-        const why = err instanceof Error ? err.message : String(err)
-        if (!/already_reacted/.test(why)) this.deps.log(`daemon: slack connector: ack ${name} on ${entry.channel} ts ${i.ts} failed: ${why}\n`)
-      })
+      this.reactAs(slack, entry.app, entry.channel, i.ts, name)
     }
   }
 
@@ -1317,6 +1360,7 @@ export class AppWatch {
   setBotId(id: string | undefined): void { this.w.setBotId(id, this.app) }
   setNameResolver(fn: SlackWatchDeps['resolveName']): void { this.w.setNameResolver(fn, this.app) }
   setSlackActions(actions: SlackActions | undefined): void { this.w.setSlackActions(actions, this.app) }
+  reactionsMayWork(channel: string): void { this.w.reactionsMayWork(channel) }
 }
 
 /** What a catch-up pass needs of the watcher: the whole watcher (the app `default`), or one app's side of it. */

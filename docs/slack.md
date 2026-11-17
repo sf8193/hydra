@@ -352,7 +352,7 @@ Start with `hydra health`; `hydra health --json` has every field above.
 | `scopes unchecked` | The app has connected but Slack did not say what its token holds, or it has not connected yet. Check again after the next reconnect. |
 | `catch-up failing (…)` | Read the reason. A budget or a rate limit: the next pass resumes from the held cursor. A permanent error: the alert says what to do. |
 | `up`, and `catchUp.accepted > 0` in `hydra health --json` pass after pass | A second connection holds this app (Slack splits events). Stop the other process. |
-| `membership unreadable` | The app lacks `channels:read` (public) or `groups:read` (private): where several apps share a channel, each may answer. Add the scope and reinstall. |
+| `membership unreadable` | The app could not read whether its bot is in a channel. The line gives Slack's reason, and the kind of channel (public or private) when Slack names the scope it needed (`channels:read` or `groups:read`). Where several apps share a channel, a top-level tag of that app is left to it when no other tagged app is known to hear it, and nobody answers if its bot is not in the channel (the log says so once). Untagged messages may be answered by more than one app. Add the scope and reinstall. |
 | A join was not noticed | An app lacks `member_joined_channel` and `member_left_channel`: add them to its Event Subscriptions and reinstall (the *Add the membership events* step of [Adding an app](#adding-an-app)). |
 | Slack is not connected, and a `slack-watch.json` is in the state dir | hydra.toml declares no app and the old file is no longer read: run `hydra migrate`. |
 

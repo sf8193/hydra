@@ -125,6 +125,75 @@ describe('two apps in one channel: exactly one answers', () => {
     expect(t.sent).toHaveLength(2)
   })
 
+  test('a tag reaches the tagged app even when its membership cannot be read: the tagged app owns it, whichever copy is decided first', async () => {
+    const t = setup(sharedChannel(CH), { members: BOTH, probeError: { [SALES]: 'missing_scope: the token needs groups:read' } })
+    await t.start()
+    t.say({ ts: '1200.000001', text: `<@${SALES_BOT}> a quote` }, ['default'])   // the other app's copy decides first
+    await t.settle()
+    t.say({ ts: '1200.000001', text: `<@${SALES_BOT}> a quote` }, [SALES])
+    await t.settle()
+    expect(t.sent.map(s => [s.to, s.conversation])).toEqual([['deals', `slack:${SALES}:${CH}:1200.000001`]])
+  })
+
+  test('a tagged app whose bot is not in the channel but that hears it through the operator token owns the tag, though another app decides first', async () => {
+    const withOperator = sharedChannel(CH).replace('socket_token_env = "SALES_SLACK_APP_TOKEN"', 'socket_token_env = "SALES_SLACK_APP_TOKEN"\noperator_token_env = "SALES_SLACK_USER_TOKEN"')
+    const t = setup(withOperator, { members: { default: [CH], [SALES]: [] } })
+    await t.start()
+    t.say({ ts: '1200.000001', text: `<@${SALES_BOT}> a quote` }, ['default'])
+    await t.settle()
+    t.say({ ts: '1200.000001', text: `<@${SALES_BOT}> a quote` }, [SALES])
+    await t.settle()
+    expect(t.sent.map(s => [s.to, s.conversation])).toEqual([['deals', `slack:${SALES}:${CH}:1200.000001`]])
+  })
+
+  test('a tag no app can take is never silent: counted as unrouted, logged, and answered with the 🚫', async () => {
+    const t = setup(sharedChannel(CH), { members: { default: [CH], [SALES]: [] } })   // the tagged app: bot not in the channel, no operator token
+    await t.start()
+    t.say({ ts: '1200.000001', text: `<@${SALES_BOT}> a quote` }, ['default'])
+    await t.settle()
+    expect(t.sent).toEqual([])
+    expect(t.watcher.stats()).toMatchObject({ unrouted: 1 })
+    expect(t.logs.join()).toContain('whose bot is not in this channel and which has no operator token')
+    expect(t.fakes.default.calls.some(c => c.startsWith(`react:${CH}:1200.000001:`))).toBe(true)
+  })
+
+  test('a guess never outranks a known hearer: with two apps tagged, the first an unreadable app and the second the app that heard it, the second answers', async () => {
+    const t = setup(sharedChannel(CH), { members: BOTH, probeError: { [SALES]: 'missing_scope: the token needs groups:read' } })
+    await t.start()
+    t.say({ ts: '1200.000001', text: `<@${SALES_BOT}> <@${BOT}> both of you` }, ['default'])
+    await t.settle()
+    expect(t.sent.map(s => [s.to, s.conversation])).toEqual([['crm', `slack:${CH}:1200.000001`]])
+  })
+
+  test('in a thread bound to the app that heard it, a tag of an unreadable app does not take the thread: the bound app answers, as before', async () => {
+    const t = setup(sharedChannel(CH), { members: BOTH, probeError: { [SALES]: 'missing_scope: the token needs groups:read' } })
+    await t.start()
+    t.watcher.bind(CH, '1200.000001', 'crm', 'tool', 'default')
+    t.say({ ts: '1201.000001', thread_ts: '1200.000001', user: 'UC', text: `<@${SALES_BOT}> over to you` }, ['default'])
+    await t.settle()
+    expect(t.sent.map(s => [s.to, s.conversation])).toEqual([['crm', `slack:${CH}:1200.000001`]])
+  })
+
+  test('a top-level tag left to an app that cannot be shown to hear it is said once, naming the app and the scopes', async () => {
+    const t = setup(sharedChannel(CH), { members: { default: [CH], [SALES]: [] }, probeError: { [SALES]: 'missing_scope: the token needs groups:read' } })
+    await t.start()
+    t.say({ ts: '1200.000001', text: `<@${SALES_BOT}> a quote` }, ['default'])
+    t.say({ ts: '1201.000001', text: `<@${SALES_BOT}> another` }, ['default'])
+    await t.settle()
+    expect(t.sent).toEqual([])
+    const said = t.logs.filter(l => l.includes('a tag of the app named sales') && l.includes('could not be read'))
+    expect(said).toHaveLength(1)
+    expect(said[0]).toContain('channels:read and groups:read')
+  })
+
+  test('an untagged message with an unreadable app is answered as before: by the app that can be counted', async () => {
+    const t = setup(sharedChannel(CH, LISTEN_ALL), { members: BOTH, probeError: { [SALES]: 'missing_scope: the token needs groups:read' } })
+    await t.start()
+    t.say({ ts: '1100.000001' })
+    await t.settle()
+    expect(t.sent.map(s => [s.to, s.conversation])).toEqual([['crm', `slack:${CH}:1100.000001`]])
+  })
+
   test('a thread stays with the app that opened it: an untagged follow-up goes there and nowhere else', async () => {
     const t = setup(sharedChannel(CH), { members: BOTH })
     await t.start()
@@ -264,6 +333,35 @@ describe('apps that are still connecting', () => {
     t.fakes.default.handler({ channel: CH, ts: '1201.000001', thread_ts: '1200.000001', user: 'UB', text: 'and another' })
     await t.settle()
     expect(t.sent).toEqual([])
+  })
+})
+
+describe('a tag of an app whose membership cannot be read', () => {
+  test('a catch-up pass gives it to the tagged app as a live copy does', async () => {
+    const t = setup(sharedChannel(CH), { members: BOTH, probeError: { [SALES]: 'missing_scope: the token needs groups:read' }, cursors: { [CH]: '1000.000001', [`${SALES}:${CH}`]: '1000.000001' } })
+    const said = { ts: '1050.000001', user: 'UB', text: `<@${SALES_BOT}> sent while down` }
+    await t.start()   // nothing to read yet: the boot pass finds the history empty
+    t.fakes.default.history = [said]
+    t.fakes[SALES].history = [said]
+    await t.listeners.default.runCatchUp(true, 'periodic')
+    await t.listeners[SALES].runCatchUp(true, 'periodic')
+    await t.settle()
+    expect(t.sent.map(s => [s.to, s.conversation])).toEqual([['deals', `slack:${SALES}:${CH}:1050.000001`]])
+  })
+})
+
+describe('a tag missed while the tagged app was down', () => {
+  test('the other app leaves it, and the tagged app answers it in its catch-up pass once it is up, though its membership cannot be read', async () => {
+    const t = setup(sharedChannel(CH), { members: BOTH, probeError: { [SALES]: 'missing_scope: the token needs groups:read' }, seed: { [SALES]: { botUserId: SALES_BOT } }, cursors: { [CH]: '1000.000001', [`${SALES}:${CH}`]: '1000.000001' } })
+    await t.listeners.default.start()   // `sales` is down
+    t.fakes.default.handler({ channel: CH, user: 'UB', ts: '1100.000001', text: `<@${SALES_BOT}> a quote` })
+    await t.settle()
+    expect(t.sent).toEqual([])
+    t.fakes[SALES].history = [{ ts: '1100.000001', user: 'UB', text: `<@${SALES_BOT}> a quote` }]
+    await t.listeners[SALES].start()
+    await t.listeners[SALES].runCatchUp(true, 'periodic')
+    await t.settle()
+    expect(t.sent.map(s => [s.to, s.conversation])).toEqual([['deals', `slack:${SALES}:${CH}:1100.000001`]])
   })
 })
 
@@ -708,7 +806,9 @@ describe('health is per app: what an operator reads', () => {
     await t.start()
     await t.listeners.default.runCatchUp(true, 'periodic')   // asks whether sales is in the channels it reads
     expect(t.shared.probeError(SALES)).toContain('missing_scope')
+    expect(t.shared.probeError(SALES)).toMatch(/^public channel: /)   // Slack named channels:read
     expect(t.shared.probeError('default')).toBeUndefined()
+    expect(t.shared.probeError(SALES)).toMatch(/^public channel: /)   // the kind of channel it failed on
   })
 })
 

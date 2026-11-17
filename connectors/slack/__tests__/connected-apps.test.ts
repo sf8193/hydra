@@ -162,3 +162,58 @@ describe('the owner of a message', () => {
     expect(apps.decideOwner('C1', '1.000001', () => 'b')).toBe('b')
   })
 })
+
+describe('which apps have never been read: the ones a tag may still reach', () => {
+  test('an app whose membership cannot be read is unread, and is not counted in heardBy', async () => {
+    const t = make()
+    t.answers.b.C1 = new Error('missing_scope: the token needs groups:read')
+    await t.apps.ensure('C1', 'a', ['b'])
+    expect(t.apps.unread('C1', ['b'])).toEqual(['b'])
+    expect(t.apps.heardBy('C1', 'a')).toEqual(['a'])
+  })
+
+  test('an app read as in the channel, or as not in it, is not unread', async () => {
+    const t = make()
+    await t.apps.ensure('C1', 'a', ['b'])
+    t.answers.b.C2 = false
+    await t.apps.ensure('C2', 'a', ['b'])
+    expect(t.apps.unread('C1', ['b'])).toEqual([])
+    expect(t.apps.unread('C2', ['b'])).toEqual([])
+  })
+
+  test('before anything is read, an app is unread; an app that is not connected is not', () => {
+    const t = make()
+    expect(t.apps.unread('C1', ['b', 'ghost'])).toEqual(['b'])
+  })
+
+  test('with one app connected nothing is asked', () => {
+    const apps = new ConnectedApps()
+    apps.join('a', ID('A'), async () => true)
+    expect(apps.unread('C1', ['b'])).toEqual([])
+  })
+})
+
+describe('why a membership read failed', () => {
+  test('the kind of channel comes from the scope Slack names; with none named, no kind is claimed', async () => {
+    const t = make()
+    t.answers.b.C1 = new Error('missing_scope: the token needs groups:read and has chat:write')
+    t.answers.b.C2 = new Error('ratelimited')
+    await t.apps.ensure('C1', 'a')
+    expect(t.apps.probeError('b')).toBe('private channel: missing_scope: the token needs groups:read and has chat:write')
+    await t.apps.ensure('C2', 'a')
+    expect(t.apps.probeError('b')).toBe('private channel: missing_scope: the token needs groups:read and has chat:write; ratelimited')
+    expect(t.apps.probeError('a')).toBeUndefined()
+  })
+
+  test('a read of the channel that works clears its own failure and no other', async () => {
+    const t = make()
+    t.answers.b.C1 = new Error('missing_scope: the token needs groups:read')
+    t.answers.b.C2 = new Error('missing_scope: the token needs channels:read')
+    await t.apps.ensure('C1', 'a')
+    await t.apps.ensure('C2', 'a')
+    t.answers.b.C1 = true
+    t.tick(NOT_MEMBER_TTL_MS + PROBE_RETRY_MS + 1)
+    await t.apps.ensure('C1', 'a')
+    expect(t.apps.probeError('b')).toBe('public channel: missing_scope: the token needs channels:read')
+  })
+})
