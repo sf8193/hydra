@@ -9,7 +9,7 @@ import { testLoadEnv } from './load-env.js'
 import { KNOWN_BUILTIN_TOOLS, confinementWarning, readDenyRoots, unreadableWorkdir } from '../write-confinement.js'
 
 const HOME = '/home/op'
-const env: LoadEnv = testLoadEnv({ home: HOME, stateDir: `${HOME}/.claude/channels/discord`, claudeConfigDir: `${HOME}/.claude`, isCommand: c => c === '/usr/local/bin/browser-mcp' || c === '/usr/local/bin/datadog-mcp' })
+const env: LoadEnv = testLoadEnv({ home: HOME, stateDir: `${HOME}/.claude/channels/discord`, claudeConfigDir: `${HOME}/.claude`, isCommand: c => c === '/usr/local/bin/browser-mcp' || c === '/home/op/bin/setup' || c === '/usr/local/bin/datadog-mcp' })
 
 const BASE = `
 operator = "op"
@@ -292,6 +292,16 @@ describe('[mcp_servers.<name>] login_command and profile_locks (hydra specialist
     const r = load('login_command = ["/usr/local/bin/browser-mcp", "--user-data-dir={profile_dir}"]\nprofile_locks = ["SingletonLock", ".parentlock"]')
     expect(r.ok).toBe(true)
     expect((r as any).config.mcpServers.browser).toMatchObject({ loginCommand: ['/usr/local/bin/browser-mcp', '--user-data-dir={profile_dir}'], profileLocks: ['SingletonLock', '.parentlock'] })
+  })
+  test('setup_command loads with the executable ~-expanded; it takes no placeholder, is not empty, names an executable that exists, and needs a login_command', () => {
+    const r = load('login_command = ["/usr/local/bin/browser-mcp", "--user-data-dir={profile_dir}"]\nsetup_command = ["/usr/local/bin/browser-mcp", "install-browser", "pinned"]')
+    expect(r.ok).toBe(true)
+    expect((r as any).config.mcpServers.browser.setupCommand).toEqual(['/usr/local/bin/browser-mcp', 'install-browser', 'pinned'])
+    expect((load('login_command = ["/usr/local/bin/browser-mcp", "{profile_dir}"]\nsetup_command = ["~/bin/setup", "~/keep"]') as any).config.mcpServers.browser.setupCommand).toEqual(['/home/op/bin/setup', '~/keep'])
+    expect(errs('setup_command = ["/usr/local/bin/browser-mcp"]')).toEqual(['mcp_servers.browser: setup_command runs only as part of `hydra specialist browser`, which needs login_command: declare how to open the browser too'])
+    expect(errs('login_command = ["/usr/local/bin/browser-mcp", "{profile_dir}"]\nsetup_command = []')).toEqual(['mcp_servers.browser.setup_command: is empty: it is the command that installs what the server needs, its first element the executable'])
+    expect(errs('login_command = ["/usr/local/bin/browser-mcp", "{profile_dir}"]\nsetup_command = ["/usr/local/bin/browser-mcp", "{profile_dir}"]')[0]).toContain('takes no placeholder')
+    expect(errs('login_command = ["/usr/local/bin/browser-mcp", "{profile_dir}"]\nsetup_command = ["/no/such/installer"]')[0]).toContain('is not an executable file or a command on PATH')
   })
   test('errors: no {profile_dir}, an unknown placeholder, an empty command, an executable that does not exist, a lock name with a slash', () => {
     expect(errs('login_command = ["/usr/local/bin/browser-mcp"]')).toEqual(["mcp_servers.browser: login_command holds no {profile_dir}, so it would not open the specialist's own profile"])

@@ -4,7 +4,7 @@
 //
 // Run by the operator at their own terminal, never by a session (a session's environment names it; this refuses). It never reads the profile: it looks for the lock files
 // the server declares (`profile_locks`) by name, and says so. A browser using the profile holds those; the command refuses and says to `hydra kill` the specialist's
-// session first. It spawns the command detached and prints exactly what it ran.
+// session first. If the server declares a `setup_command` (installing what it needs on this machine), that runs first, in the foreground. It spawns the login command detached and prints exactly what it ran.
 
 import { spawn } from 'child_process'
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'fs'
@@ -26,7 +26,7 @@ export type BrowserProbes = {
   /** Whether the folder is missing, empty, holds the marker, or holds anything else: it lists nothing more than whether it is empty, and reads no file. */
   profileState?: (dir: string) => ProfileState
 }
-export type BrowserPlan = { ok: true; server: string; profile: string; downloads: string; argv: string[]; state: ProfileState } | { ok: false; error: string }
+export type BrowserPlan = { ok: true; server: string; profile: string; downloads: string; argv: string[]; setup?: string[]; state: ProfileState } | { ok: false; error: string }
 export const UNTRUSTED_NOTE = 'this profile folder is writable by the specialist\'s session: treat it as untrusted (an extension, a startup page or a native-messaging host planted in it would run as you when you open it); run hydra specialist browser before the specialist\'s first session, and hydra kill its session before and while you use it'
 
 export function planBrowser(config: HydraConfig, id: string, opts: { server?: string; trustExisting?: boolean }, probes: BrowserProbes): BrowserPlan {
@@ -55,10 +55,10 @@ export function planBrowser(config: HydraConfig, id: string, opts: { server?: st
   }
   const state = probes.profileState ? probes.profileState(profile) : 'missing'
   if (state === 'populated' && !opts.trustExisting) return fail(`${profile} already holds files and hydra did not make it (it has no ${LOGIN_MARKER}): something else, possibly a session of ${id}, filled it first, and what is in it would run as you in a headed browser. If you have looked at it and it is yours, run again with --trust-existing; otherwise remove the folder and run hydra specialist browser before the first session`)
-  return { ok: true, server: name, profile, downloads, state, argv: server.loginCommand!.map(a => fillProfile(a, s.workdir, s.browserProfile)) }
+  return { ok: true, server: name, profile, downloads, state, argv: server.loginCommand!.map(a => fillProfile(a, s.workdir, s.browserProfile)), ...(server.setupCommand && { setup: server.setupCommand }) }
 }
 
-export type BrowserIO = { config: HydraConfig; probes: BrowserProbes; mkdir: (dir: string) => void; mark: (profile: string) => void; spawn: (argv: string[]) => Promise<void>; log: (line: string) => void; error: (line: string) => void }
+export type BrowserIO = { config: HydraConfig; probes: BrowserProbes; mkdir: (dir: string) => void; mark: (profile: string) => void; setup: (argv: string[]) => Promise<void>; spawn: (argv: string[]) => Promise<void>; log: (line: string) => void; error: (line: string) => void }
 
 export async function browserCommand(args: string[], io: BrowserIO): Promise<number> {
   const opts: { server?: string; trustExisting?: boolean } = {}
@@ -76,12 +76,22 @@ export async function browserCommand(args: string[], io: BrowserIO): Promise<num
   const plan = planBrowser(io.config, id, opts, io.probes)
   if (!plan.ok) { io.error(`error: ${plan.error}`); return 1 }
   const shown = plan.argv.join(' ')
-  if (dry) { io.log(`would open: ${shown}`); io.log(`profile folder: ${plan.profile} (downloads: ${plan.downloads})`); io.log(`note: ${UNTRUSTED_NOTE}`); return 0 }
-  io.mkdir(plan.profile); io.mkdir(plan.downloads)
-  if (plan.state !== 'marked') io.mark(plan.profile)
-  try { await io.spawn(plan.argv) } catch (err) { io.error(`error: could not start ${plan.argv[0]}: ${err instanceof Error ? err.message : String(err)}`); return 1 }
+  const setupShown = plan.setup?.join(' ')
+  if (dry) { if (setupShown) io.log(`would first run: ${setupShown}`); io.log(`would open: ${shown}`); io.log(`profile folder: ${plan.profile} (downloads: ${plan.downloads})`); io.log(`note: ${UNTRUSTED_NOTE}`); return 0 }
+  // Setup can take minutes (a download), so the plan is made again after it: the lock files and the profile's state are read immediately before the folders are made and the window opens.
+  let go = plan
+  if (plan.setup) {
+    io.log(`setting up: ${setupShown}`)
+    try { await io.setup(plan.setup) } catch (err) { io.error(`error: setup failed: ${setupShown}: ${err instanceof Error ? err.message : String(err)}`); return 1 }
+    const again = planBrowser(io.config, id, opts, io.probes)
+    if (!again.ok) { io.error(`error: ${again.error}`); return 1 }
+    go = again
+  }
+  io.mkdir(go.profile); io.mkdir(go.downloads)
+  if (go.state !== 'marked') io.mark(go.profile)
+  try { await io.spawn(go.argv) } catch (err) { io.error(`error: could not start ${go.argv[0]}: ${err instanceof Error ? err.message : String(err)}`); return 1 }
   io.log(`opened: ${shown}`)
-  io.log(`profile folder: ${plan.profile} (downloads: ${plan.downloads})`)
+  io.log(`profile folder: ${go.profile} (downloads: ${go.downloads})`)
   io.log(`note: ${UNTRUSTED_NOTE}`)
   io.log(`log in to what ${id} should have, then close the browser window; hydra did not read the profile`)
   return 0
@@ -100,10 +110,18 @@ export async function browserMain(args: string[], stateDirOpt: string | undefine
     // The session check is an environment check, a courtesy guard: a session's shell cannot reach the daemon anyway, and unsetting HYDRA_SESSION_ID would get past it.
     probes: { present: lstatPresent, isSession: !!process.env.HYDRA_SESSION_ID, realpath: nearestReal, profileState: realProfileState },
     mkdir: realMkdir, mark: realMark,
+    setup: realSetup,
     spawn: argv => new Promise<void>((resolve, reject) => { const c = spawn(argv[0], argv.slice(1), { detached: true, stdio: 'ignore' }); c.once('error', reject); c.once('spawn', () => { c.unref(); resolve() }) }),
     log: l => console.log(l), error: l => console.error(l),
   })
 }
+
+/** The setup command in the foreground, its output on the operator's terminal (an install shows progress); a non-zero exit or a failure to start rejects. */
+export const realSetup = (argv: string[]): Promise<void> => new Promise<void>((resolve, reject) => {
+  const c = spawn(argv[0], argv.slice(1), { stdio: 'inherit' })
+  c.once('error', reject)
+  c.once('exit', (code, signal) => code === 0 ? resolve() : reject(new Error(signal ? `killed by ${signal}` : `exit ${code}`)))
+})
 
 export const lstatPresent = (p: string): boolean => { try { lstatSync(p); return true } catch { return false } }
 export const nearestReal = nearestRealpath   // the nearest existing ancestor resolved, the rest appended (a folder not yet made still resolves through its parents)

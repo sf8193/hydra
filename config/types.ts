@@ -189,6 +189,8 @@ export type McpServer = {
   tools: string[]
   /** For a `can_only_write_to` specialist: arguments added to the server's command, with {profile_dir} and {download_dir} for its own browser folders. */
   profileArgs?: string[]
+  /** `hydra specialist browser`: a command (argv, no placeholders) it runs first, to install what the server needs on this machine (a pinned browser build, say). Safe to repeat. Per-operator: hydra names no installer. */
+  setupCommand?: string[]
   /** `hydra specialist browser`: the command (argv, `{profile_dir}`/`{download_dir}` placeholders) that opens this server's browser, headed, on the specialist's profile folder, for the operator to log it in. Per-operator: no browser is named in hydra's code. */
   loginCommand?: string[]
   /** `hydra specialist browser`: file names a running browser leaves in a profile folder in use (Chromium's `SingletonLock`, Firefox's `.parentlock`): if one is there, the profile is in use and the command refuses. */

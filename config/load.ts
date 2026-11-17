@@ -368,7 +368,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (!ID_RE.test(name)) { error(path, `"${name}" is not a valid server name: lowercase letters, digits and dashes`); continue }
     const t = table(raw, path)
     if (!t) continue
-    unknownKeys(t, ['command', 'token_env', 'tools', 'profile_args', 'profile_env', 'login_command', 'profile_locks', 'deny_tools'], path)
+    unknownKeys(t, ['command', 'token_env', 'tools', 'profile_args', 'profile_env', 'login_command', 'setup_command', 'profile_locks', 'deny_tools'], path)
     const command = str(t, 'command', path)
     if (t.command === undefined) error(`${path}.command`, 'is required: the server\'s executable, pinned (a path or a versioned binary, not `npx -y` latest)')
     else if (command !== undefined && !env.isCommand(expand(command))) error(`${path}.command`, `${expand(command)} is not an executable file or a command on PATH`)
@@ -410,6 +410,16 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
         else loginCommand = [expand(loginRaw[0]), ...loginRaw.slice(1)]
       }
     }
+    // `hydra specialist browser` runs this first: whatever the server needs installed on this machine. No placeholder: it is not about one profile.
+    const setupRaw = strList(t, 'setup_command', path)
+    let setupCommand: string[] | undefined
+    if (setupRaw !== undefined) {
+      if (setupRaw.length === 0) error(`${path}.setup_command`, 'is empty: it is the command that installs what the server needs, its first element the executable')
+      else if (setupRaw.some(hasPlaceholder)) error(`${path}.setup_command`, 'takes no placeholder: it installs for the machine, not for one specialist\'s profile')
+      else if (!env.isCommand(expand(setupRaw[0]))) error(`${path}.setup_command[0]`, `${expand(setupRaw[0])} is not an executable file or a command on PATH`)
+      else if (loginRaw === undefined) error(path, 'setup_command runs only as part of `hydra specialist browser`, which needs login_command: declare how to open the browser too')
+      else setupCommand = [expand(setupRaw[0]), ...setupRaw.slice(1)]
+    }
     const locksRaw = strList(t, 'profile_locks', path)
     const profileLocks: string[] = []
     for (const [i, f] of (locksRaw ?? []).entries()) {
@@ -422,7 +432,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(n) || n.startsWith('mcp__')) error(`${path}.deny_tools[${i}]`, `"${n}" must be the name of one of the server's tools, like browser_run_code_unsafe`)
       else if (!denyTools.includes(n)) denyTools.push(n)
     }
-    if (command !== undefined) mcpServers[name] = { name, command: expand(command), tokenEnv, tools, ...(denyTools.length && { denyTools }), ...(loginCommand && { loginCommand }), ...(profileLocks.length && { profileLocks }), ...(profileArgs && { profileArgs }), ...(Object.keys(profileEnv).length && { profileEnv }) }
+    if (command !== undefined) mcpServers[name] = { name, command: expand(command), tokenEnv, tools, ...(denyTools.length && { denyTools }), ...(loginCommand && { loginCommand }), ...(setupCommand && { setupCommand }), ...(profileLocks.length && { profileLocks }), ...(profileArgs && { profileArgs }), ...(Object.keys(profileEnv).length && { profileEnv }) }
   }
 
   // --- people --------------------------------------------------------------------------------------------------------
