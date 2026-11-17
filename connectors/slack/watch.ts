@@ -914,8 +914,10 @@ export class SlackWatcher {
    */
   handle(ev: SlackMessageEvent): HandleOutcome {
     const cfg = this.deps.config(ev.app)
-    if (!cfg) return 'ignored'
-    if (!TS_RE.test(ev.ts) || (ev.threadTs !== undefined && !TS_RE.test(ev.threadTs))) return 'ignored'
+    // Said for a DM only (see `classify`'s `skip`): no view means the app has no connection to route with yet.
+    const lost = (why: () => string): HandleOutcome => { if (isDm(ev.channel)) this.deps.log(`daemon: slack connector: dropped ${ev.channel} ${ev.ts} from ${ev.user ?? ev.botId ?? 'unknown'} (${this.appName(ev.app)}): ${why()}\n`); return 'ignored' }
+    if (!cfg) return lost(() => 'the app has no live view of hydra.toml (not connected, or no longer declared)')
+    if (!TS_RE.test(ev.ts) || (ev.threadTs !== undefined && !TS_RE.test(ev.threadTs))) return lost(() => `its timestamp ${ev.ts} is not one Slack writes`)
     const outcome = this.classify(ev, cfg)
     // A cursor is kept only where catch-up scans: the channels hydra.toml names, and DM conversations once someone
     // admitted has written in them. A stranger's refused DM must not cost a history read on every pass.
@@ -1026,7 +1028,9 @@ export class SlackWatcher {
   }
 
   private classify(ev: SlackMessageEvent, cfg: SlackWatchConfig): HandleOutcome {
-    if (!PLAIN_SUBTYPES.has(ev.subtype)) return 'ignored'
+    // A message dropped before anything is counted or logged is said for a DM, where silence reads as a lost message (channels carry far too many to name).
+    const skip = (why: () => string): HandleOutcome => { if (isDm(ev.channel) || cfg.directory.isGroupDm?.(ev.channel)) this.deps.log(`daemon: slack connector: dropped ${ev.channel} ${ev.ts} from ${ev.user ?? ev.botId ?? 'unknown'} (${this.appName(ev.app)}): ${why()}\n`); return 'ignored' }
+    if (!PLAIN_SUBTYPES.has(ev.subtype)) return skip(() => `the message has subtype ${ev.subtype}, which is not heard`)
 
     const app = appOfEntry(cfg)
     const botId = cfg.botId ?? this.botIds.get(app)
@@ -1035,9 +1039,9 @@ export class SlackWatcher {
     // A sibling hydra app is never heard, `bots = true` or not: two of ours answering each other would loop.
     const others = Object.entries(cfg.identities ?? {}).filter(([a]) => a !== app).map(([, i]) => i)
     const sibling = !own && others.some(i => i.botUserId === ev.user || (!!ev.botId && i.botId === ev.botId))
-    if (sibling) return 'ignored'
+    if (sibling) return skip(() => `it is from another hydra app's bot`)
     const otherBot = !own && !!ev.botId
-    if (otherBot && !placeOptions(cfg, ev.channel)?.bots) return 'ignored'
+    if (otherBot && !placeOptions(cfg, ev.channel)?.bots) return skip(() => `it is from another bot and the place does not hear bots`)
     // A DM is one conversation per channel, whoever is in it; a group DM is treated alike, though its id looks like a channel's.
     const dm = isDm(ev.channel) || !!cfg.directory.isGroupDm?.(ev.channel)
     const isReply = !!ev.threadTs && ev.threadTs !== ev.ts
@@ -1067,24 +1071,24 @@ export class SlackWatcher {
     // A DM's top-level messages are one conversation. Anywhere else, a top-level message is its thread's first: the
     // conversation is that thread, bound when this message arrives. A thread inside a DM is a thread like any other.
     const threadTs = dm && !isReply ? TOP_LEVEL : ev.threadTs ?? ev.ts
-    if (this.inflight.get(watchKey(app, ev.channel, threadTs))?.has(ev.ts)) return 'ignored'
+    if (this.inflight.get(watchKey(app, ev.channel, threadTs))?.has(ev.ts)) return skip(() => `it is in flight already`)
     if (own) this.noteOwn(cfg, ev, threadTs, app)
-    if (dm && own) return 'ignored'
+    if (dm && own) return skip(() => `it is the bot's own message in a DM`)
     const existing = this.get(ev.channel, threadTs, app)
     const boundApp = through[0]
     // With the operator's token the app hears every channel, DM and group DM the operator is in. Hearing is not delivering: a place no
     // rule, `[places]` entry or open conversation names is nobody's, passed over before it opens, counts, reacts to or owes
     // anything. The bot's own DM is the one place that needs no name (the operator's goes to `main`). A tag in a channel still gets its
     // answer, as it would without the token; a DM with a person or a group DM never does, since nothing there asked the bot.
-    if (!existing && !at.some(isDmPlace) && !namedPlace(cfg, at, app) && (inNoBotDm || (!tagged && cfg.hydra.slackApps[app]?.operatorTokenEnv))) return 'ignored'
+    if (!existing && !at.some(isDmPlace) && !namedPlace(cfg, at, app) && (inNoBotDm || (!tagged && cfg.hydra.slackApps[app]?.operatorTokenEnv))) return skip(() => `no rule, [places] entry or open conversation names this place, and it is not a DM with the bot`)
 
     if (own) {
       // The bot's own top-level post opens a conversation, bound to whoever hears there. Its replies are not echoed back.
-      if (isReply) return 'ignored'
+      if (isReply) return skip(() => `it is a reply by the bot itself`)
       // Already recorded: a deep pass rereads the thread and Slack always returns its parent. Seen before, so not missed.
-      if (existing?.delivered?.includes(ev.ts)) return 'ignored'
+      if (existing?.delivered?.includes(ev.ts)) return skip(() => `it was already delivered`)
       const to = listenerOf(cfg, ev.channel)
-      if (!to) return 'ignored'
+      if (!to) return skip(() => `no one listens where the bot posted`)
       const entry = this.watch(ev.channel, threadTs, to, undefined, app)
       if (!entry) {
         this.drop('table-full', { app, channel: ev.channel, threadTs, specialist: to }, [ev.ts], `the conversation table is full (${cfg.maxWatches}), so the bot's own post opens no conversation and replies to it will not be delivered`)
@@ -1097,7 +1101,7 @@ export class SlackWatcher {
 
     // A DM is addressed to the bot by being one, and so is every message in a conversation whose binding still holds (route decides that).
     const addressed = dm || tagged || (!!existing && !existing.specialist)
-    if (existing?.delivered?.includes(ev.ts)) return 'ignored'
+    if (existing?.delivered?.includes(ev.ts)) return skip(() => `it was already delivered`)
     // A tag in a thread a session only listens to is for whoever answers a fresh one here: they take the thread, and the session is told.
     if (tagged && existing?.specialist && isSessionThread(existing.specialist)) {
       const fresh = route(cfg.hydra, { from: addressOf(ev.user), at, addressed: true, app })
@@ -1115,12 +1119,12 @@ export class SlackWatcher {
     const owner = dm ? app : cfg.decideOwner ? cfg.decideOwner(ev.channel, ev.ts, decide) : decide()
     // Standing down for a tagged app that was only guessed to hear it: if its bot is not in the channel, nobody answers. Said once per app and channel.
     if (owner !== app && guessed.includes(owner) && this.firstTime(this.noted.guessed, `${scoped(owner, ev.channel)}`)) this.deps.log(`daemon: slack connector: a tag of ${this.appName(owner)} in ${ev.channel} is left to it, but whether its bot is in the channel could not be read; if it is not, nobody answers. Add channels:read and groups:read to that app and reinstall it\n`)
-    if (owner !== app) return 'ignored'
+    if (owner !== app) return skip(() => `another app owns it`)
     const d = route(cfg.hydra, { from: addressOf(ev.user), at, addressed, app, ...(existing?.specialist && { bound: existing.specialist }) })
     if (d.fate === 'ignored') {
       // A tag of an app that can't hear it, with nothing here to answer it instead: counted, logged and reacted to, never silent.
       if (unheard.length) this.refuse({ ...ev, app }, threadTs, `it tags ${unheard.map(a => this.appName(a)).join(', ')}, whose bot is not in this channel and which has no operator token, so no app can take it: invite that bot to the channel`, 'unrouted', true)
-      return 'ignored'
+      return skip(() => `routing ignored it: ${d.trace.filter(t => !t.matched).map(t => t.why).join('; ') || 'no reason given'}`)
     }
     // Refused or unrouted before anything is counted, watched or owed: a sender `reachable_by` does not admit costs nothing.
     // Only a mention or a DM gets the 🚫: chatter in a bound thread by someone not allowed is passed over quietly.
@@ -1265,7 +1269,10 @@ export class SlackWatcher {
 
   /** `react`: a mention (refused or unrouted) or a refused DM, whose sender sees a 🚫; an unrouted DM is logged and counted, and gets no reply. A replay is neither logged, counted nor reacted to twice. */
   private refuse(ev: Pick<SlackMessageEvent, 'app' | 'channel' | 'ts' | 'user' | 'botId'>, threadTs: string, why: string, fate: 'refused' | 'unrouted', react: boolean): void {
-    if (!this.firstTime(this.noted.refused, `${scoped(ev.app, ev.channel)}:${ev.ts}`)) return
+    if (!this.firstTime(this.noted.refused, `${scoped(ev.app, ev.channel)}:${ev.ts}`)) {
+      if (isDm(ev.channel)) this.deps.log(`daemon: slack connector: dropped ${ev.channel} ${ev.ts} from ${ev.user ?? ev.botId ?? 'unknown'} (${this.appName(ev.app)}): ${fate} again, already said\n`)
+      return
+    }
     const who = ev.user ?? 'unknown sender'
     if (fate === 'unrouted') this.stats_.unrouted++
     else { this.stats_.refused++; this.stats_.refusedBy[who] = (this.stats_.refusedBy[who] ?? 0) + 1 }

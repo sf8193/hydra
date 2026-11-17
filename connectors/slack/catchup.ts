@@ -133,7 +133,7 @@ export async function catchUp(watcher: CatchUpWatch, api: SlackApi, cfg: SlackWa
   const feed = (channel: string, msgs: RawMessage[]) => {
     for (const m of [...msgs].sort((a, b) => cmpTs(a.ts ?? '0.0', b.ts ?? '0.0'))) {
       const ev = toEvent(channel, m)
-      if (!ev) continue
+      if (!ev) { opts.log(`daemon: slack connector: catch-up: dropped a message in ${channel} from ${m.user ?? m.bot_id ?? 'unknown'}: it has no timestamp\n`); continue }
       const outcome = watcher.handle(ev)
       if (outcome !== 'ignored' && outcome !== 'refused') accepted++
       handled++

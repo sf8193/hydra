@@ -98,6 +98,8 @@ export function postPayload(channel: string, threadTs: string | undefined, text:
 
 export type SlackAppLike = {
   onMessage(handler: (event: RawEvent) => void): void
+  /** Every message event the socket delivers, before Bolt's own filters (`ignoreSelf` among them) see it. Absent: not offered. */
+  onWire?(handler: (event: RawEvent, via: WireVia) => void): void
   start(): Promise<void>
   stop(): Promise<void>
   emitter(): SocketEmitter | null
@@ -189,7 +191,10 @@ class Directory implements SlackDirectory {
 }
 
 /** A Slack `message` event as Bolt hands it over. */
-export type RawEvent = RawMessage & { channel?: string; channel_type?: string }
+export type RawEvent = RawMessage & { channel?: string; channel_type?: string; type?: string }
+
+/** Which token an event came for: Slack's `authorizations` says whether the install it reached the app through is a bot's. */
+export type WireVia = 'bot' | 'user' | 'unknown'
 
 export type ListenerState = 'off' | 'connecting' | 'up' | 'down' | 'exhausted'
 export type ListenerHealth = {
@@ -489,6 +494,11 @@ export class SlackListener {
     await stale()
     const app = this.d.createApp({ app: t.app, bot: t.bot, ...(t.user && { user: t.user }) })
     app.onMessage(raw => { if (gen === this.generation) this.onMessage(raw) })
+    // The socket's own view, ahead of every Bolt filter: told apart from `heard` below, it says whether a lost DM never arrived or was dropped after.
+    app.onWire?.((raw, via) => {
+      if (gen !== this.generation || !raw.channel || !(isDm(raw.channel) || raw.channel_type === 'im' || raw.channel_type === 'mpim')) return
+      this.d.log(`daemon: slack connector: ${this.id} socket received message in ${raw.channel} (${raw.ts ?? '-'}) from ${raw.user ?? '-'} subtype=${raw.subtype ?? '-'} bot_id=${raw.bot_id ?? '-'} via ${via} token\n`)
+    })
     app.onReaction?.(r => { if (gen === this.generation) { this.sup?.touch(); this.w.handleReaction(r) } })
     app.onRename((id, name) => { this.directory.rename(id, name); this.d.log(`daemon: slack connector: channel ${id} is now #${name}\n`) })
     app.onMembership?.(channel => { this.apps.changed(channel, this.id); this.w.reactionsMayWork(channel) })
@@ -546,7 +556,9 @@ export class SlackListener {
     try {
       this.sup?.touch()
       const channel = raw.channel
-      if (!channel) return
+      if (!channel) { this.d.log(`daemon: slack connector: dropped: event with no channel (type=${raw.type ?? '-'} subtype=${raw.subtype ?? '-'} ts=${raw.ts ?? '-'})\n`); return }
+      // A DM's arrival is said, so a message that is later passed over (`dropped …`) or never arrives is told apart.
+      if (isDm(channel)) this.d.log(`daemon: slack connector: ${this.id} heard a message in ${channel} (${raw.ts}) from ${raw.user ?? raw.bot_id ?? 'unknown'}\n`)
       const tagged = this.taggedElsewhere(raw.text)
       const arrivedAt = this.now()
       // A DM or a group DM is this app's alone: no other app's membership decides it. With the operator's token, a DM
@@ -555,7 +567,7 @@ export class SlackListener {
       if (!this.queues.has(channel) && !this.unknownDm(channel) && (chat || this.apps.settled(channel, this.id, tagged))) { this.ingest(raw); return }
       const behind = this.queues.get(channel) ?? Promise.resolve()
       const next: Promise<void> = behind.then(async () => {
-        if (this.unknownDm(channel)) await this.learnDm(channel, arrivedAt)
+        if (this.unknownDm(channel)) await this.learnDm(channel, raw.ts, arrivedAt)
         await this.knowMembers(chat ? [] : [channel], tagged)
         this.ingestOrHold(raw, channel)
       }).catch(err => {
@@ -575,6 +587,7 @@ export class SlackListener {
   /** Handle a message, or, when an app that was started has not yet joined, leave it unanswered: held (the cursor stays) and read again by a catch-up pass once it has. */
   private ingestOrHold(raw: RawEvent, channel: string): void {
     if (this.apps.isJoining() && routedChannels(this.view()).includes(channel)) {
+      this.d.log(`daemon: slack connector: held ${channel} ${raw.ts}: an app is still joining, so who answers is not known; a catch-up pass reads it once every app has joined\n`)
       this.w.beginCatchUp([channel])
       void this.apps.allJoined().then(() => this.runCatchUp(false, 'apps joined'))
       return
@@ -597,10 +610,13 @@ export class SlackListener {
    * scope loses only the second: the bot's DM still works, and a DM with a person goes by no name. Each list is read one read at a time
    * (see `DmList`); a DM on neither, after a read that began after its message arrived, goes by no name for good.
    */
-  private async learnDm(channel: string, arrivedAt: number): Promise<void> {
-    if (await this.botDmList.settle(channel, arrivedAt, () => this.botDms.has(channel)) === 'known') return
+  private async learnDm(channel: string, ts: string | undefined, arrivedAt: number): Promise<void> {
+    this.d.log(`daemon: slack connector: holding ${channel} ${ts ?? '-'} to learn whose DM it is\n`)
+    const released = (how: string) => this.d.log(`daemon: slack connector: released ${channel} ${ts ?? '-'}: ${how}\n`)
+    if (await this.botDmList.settle(channel, arrivedAt, () => this.botDms.has(channel)) === 'known') return released('the bot\'s own DM')
     const found = await this.userDmList.settle(channel, arrivedAt, () => this.botDms.has(channel) || this.otherParties.has(channel))
     if (found === 'absent') this.absentDms.add(channel)
+    released(found === 'known' ? (this.botDms.has(channel) ? 'the bot\'s own DM' : 'a DM with someone else') : found === 'absent' ? 'on neither list, so it goes by no name' : 'a list read failed or is backing off, so it goes by no name for now')
   }
 
   /** The directory this app routes with: channel names, and (with the operator's token) whose each DM is and which channels are group DMs. */
@@ -625,7 +641,7 @@ export class SlackListener {
     try {
       if (!raw.channel) return
       const ev = toEvent(raw.channel, raw)
-      if (!ev) return
+      if (!ev) { if (isDm(raw.channel)) this.d.log(`daemon: slack connector: dropped ${raw.channel}: the event has no timestamp\n`); return }
       // The bot posting in a DM proves it is the bot's; the event says when a channel is a group DM.
       if (isDm(raw.channel) && this.identity && (raw.user === this.identity.botUserId || (!!raw.bot_id && raw.bot_id === this.identity.botId))) this.botDms.add(raw.channel)
       if (raw.channel_type === 'mpim') this.groupDms.add(raw.channel)
@@ -788,6 +804,16 @@ export function boltApp(tokens: { app: string; bot: string; user?: string }): Sl
   const { app } = buildSocketApp({ appToken: tokens.app, botToken: tokens.bot })
   let handler: (event: RawEvent) => void = () => {}
   app.message(async ({ message }) => { handler(message as RawEvent) })
+  // Bolt 4.7.3 registers its `ignoreSelf` in the App constructor, so it runs before any `app.use` we could add (and drops an event whose
+  // `user` is the bot). The receiver is ahead of it: the Socket Mode client says every event it gets, so it is listened to there.
+  let wire: (event: RawEvent, via: WireVia) => void = () => {}
+  const socket = (app as unknown as { receiver?: { client?: { on(event: string, fn: (args: { body?: { type?: string; event?: RawEvent; authorizations?: { is_bot?: boolean }[] } }) => void): unknown } } }).receiver?.client
+  socket?.on('slack_event', ({ body }) => {
+    const event = body?.event
+    if (body?.type !== 'event_callback' || event?.type !== 'message') return
+    const bot = body.authorizations?.[0]?.is_bot
+    wire(event, bot === undefined ? 'unknown' : bot ? 'bot' : 'user')
+  })
   // Posting never retries behind the caller's back, and gives up at a hard deadline: a retry landing after the caller
   // was told "unknown" would post twice. Reading keeps the SDK's patient retries.
   const poster = new WebClient(tokens.bot, { retryConfig: { retries: 0 }, timeout: POST_TIMEOUT_MS, logLevel: LogLevel.ERROR })
@@ -807,6 +833,7 @@ export function boltApp(tokens: { app: string; bot: string; user?: string }): Sl
   })
   return {
     onMessage: h => { handler = h },
+    onWire: h => { wire = h },
     onReaction: h => { reacted = h },
     onRename: h => { renamed = h },
     onMembership: h => { membership = h },
