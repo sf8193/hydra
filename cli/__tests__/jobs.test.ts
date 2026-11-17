@@ -1047,6 +1047,15 @@ describe('jobs list lines', () => {
     expect(l).not.toContain('failing')
   })
 
+  test('a paused job says paused, and shows no owed slot or retry; the rest of its record still shows', () => {
+    const l = line({ ...dur, paused: true }, { covered: { slot: '2026-11-04 10:00', at: '2026-11-04T18:00:30Z' }, failures: 2, failingSince: '2026-11-04T18:05:10Z', last: { at: '2026-11-04T18:06:00Z', result: 'failed', note: 'ssh timeout' } })
+    expect(l).toContain('paused')
+    expect(l).not.toContain('next ')
+    expect(l).not.toContain('owed')
+    expect(l).not.toContain('retry after')
+    expect(l).toContain('failed (ssh timeout)')
+  })
+
   test('not owed, served, and not now (only when newer than the last result)', () => {
     const l = line(dur, { covered: { slot: '2026-11-04 10:05', at: '2026-11-04T18:05:30Z' }, last: { at: '2026-11-04T18:05:30Z', result: 'done', servedBy: 'pull-7' }, notNow: { since: '2026-11-04T18:07:00Z', reason: 'offline' } })
     expect(l).toContain('not owed')

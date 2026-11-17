@@ -291,6 +291,10 @@ export async function jobsLaunchdRun(platform: string, name: string, stateDir: s
     runIO.print(`${name}: not a launchd-runner job in ${file}; \`hydra schedules sync ${platform}\` removes this entry`)
     return 0
   }
+  if (job.paused) {
+    runIO.print(`${name}: paused in ${file}; not running (\`hydra schedules sync ${platform}\` removes this entry)`)
+    return 0
+  }
   const now = jobsIO.now()
   const slot = latestSlot(job.schedule, now)
   if (!slot) return 0
@@ -463,12 +467,12 @@ export function launchdNotes(platform: string, stateDir: string, j: Job): string
   if (resolve(stateDir) !== resolve(platformStateDir(platform))) return out
   const registered = runnerJobs(launchdIO.agentsDir, platform).includes(j.name)
   const legacy = legacyTitles(launchdIO.agentsDir, platform).some(t => parseLegacyTitle(t)?.name === j.name)
-  if (j.runner === 'launchd' && !registered) {
+  if (j.runner === 'launchd' && !j.paused && !registered) {
     out.push(legacy
       ? `warning: still on the old runner's launchd entry (a versioned bun that a brew upgrade breaks); run hydra jobs sync ${platform}`
       : `warning: not registered with launchd, so nothing triggers it; run hydra jobs sync ${platform}`)
   }
-  if (j.runner === 'daemon' && (registered || legacy)) out.push(`warning: still has a launchd entry; run hydra jobs sync ${platform} to remove it`)
+  if ((j.runner === 'daemon' || j.paused) && (registered || legacy)) out.push(`warning: still has a launchd entry; run hydra jobs sync ${platform} to remove it`)
   return out
 }
 
@@ -581,7 +585,7 @@ export async function syncLaunchd(platform: string, stateDir: string, jobs: Job[
   const lines: string[] = []
   let ok = true
   const domain = `gui/${io.uid()}`
-  const want = jobs.filter(j => j.runner === 'launchd')
+  const want = jobs.filter(j => j.runner === 'launchd' && !j.paused)   // a paused job's entry is unregistered below, like a removed one's
   const plistOf = (name: string) => join(io.agentsDir, `${jobAgentLabel(platform, name)}.plist`)
   let bun = ''
   try { bun = want.length ? io.bun() : '' } catch (err) { return { lines: [`launchd: ${err instanceof Error ? err.message : err}`], ok: false } }
@@ -650,13 +654,13 @@ function readSpecialistNames(stateDir: string): Set<string> {
 /** One `jobs list` line: next slot; owed or not and since when; the last result and its note; not-now; the failure run. */
 export function describeJob(j: Job, r: ReturnType<typeof readJobState>, now: Date): string {
   const next = nextSlot(j.schedule, now)
-  const parts = [`next ${next ? next.at.toLocaleString() : '-'}`]
+  const parts = [j.paused ? 'paused' : `next ${next ? next.at.toLocaleString() : '-'}`]
   if (r.kind === 'missing') parts.push('last never')
   else if (r.kind === 'unreadable') parts.push(`state unreadable: ${r.error}`)
   else {
     const s = r.state
-    const owed = owedSlot(j.schedule, s, now)
-    if (j.runner === 'daemon') parts.push(owed ? `owed since ${owed.at.toLocaleString()} (${owed.label})` : 'not owed')
+    const owed = j.paused ? null : owedSlot(j.schedule, s, now)
+    if (j.runner === 'daemon' && !j.paused) parts.push(owed ? `owed since ${owed.at.toLocaleString()} (${owed.label})` : 'not owed')
     const last = s.last
     parts.push(last ? `last ${local(last.at)} ${last.result}${last.servedBy ? ` (served by ${last.servedBy})` : ''}${last.note ? ` (${last.note})` : ''}` : 'last never')
     if (s.notNow && (!last || s.notNow.since > last.at)) parts.push(`not now since ${local(s.notNow.since)}: ${s.notNow.reason}`)

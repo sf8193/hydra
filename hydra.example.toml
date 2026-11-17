@@ -185,6 +185,13 @@ runner = "daemon"                     # what runs the check: "launchd" (default)
 needs = ["internet"]                  # a bare precondition name (only `internet` is known); daemon runner only: not now while offline
 alert_after = "2d"                    # daemon runner only: how long a failure run lasts before it is alerted (default 1d)
 
+# Paused: still loaded and validated, shown as `paused` in `hydra schedules list`, and never fired (either runner). Remove the key to resume.
+[schedules.weekly-digest]
+cron = "0 9 * * MON"
+target = "main"
+message = "Weekly digest."
+paused = true
+
 # --- rules: who hears what. Each names a place, an app, or both, and the target that answers; first match in file order wins. This is the one home of where a specialist is heard. ---
 # An absent `place` matches every place and an absent `app` every app. `person` only narrows: a rule needs place or app.
 # A place is slack:#name, slack:C0ID, slack:dm (the bot's DMs only), slack:dm:<person>, slack:group-dm, discord:#name, discord:<id>, discord:dm, github:owner/repo or cli.

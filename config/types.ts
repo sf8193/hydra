@@ -208,6 +208,8 @@ export type Schedule = {
   workdir?: string
   envFile?: string
   runner: Runner
+  /** Defined and validated, but never fires on either runner: its launchd entry is unregistered, the daemon clock skips it. */
+  paused?: true
   /** Daemon runner only: preconditions checked before a run; unmet is "not now", and the slot stays owed. */
   needs?: Need[]
   /** Daemon runner only: how long a failure run lasts before the operator is alerted, once. Default 1 day. */
