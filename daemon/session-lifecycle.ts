@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto'
 import { spawn } from 'child_process'
+import { oneLine } from '../shared/untrusted-text.js'
 import { mkdirSync, writeFileSync, readFileSync, existsSync, openSync, readSync, closeSync, accessSync, realpathSync, constants as fsConstants } from 'fs'
 import { basename, dirname, join, resolve as resolvePath } from 'path'
 import { homedir, tmpdir } from 'os'
@@ -724,8 +725,30 @@ async function refuseStart(threadId: string | undefined, why: string): Promise<n
 const verifyRefused = new Map<string, { at: number; why: string }>()
 /** The back-off is per thread (one refused conversation does not block the specialist's others). */
 const verifyKey = (specialist: string, threadId: string | undefined, sessionName: string): string => `${specialist}\n${threadId ?? sessionName}`
+/** A verified start clears the specialist's refusals in every thread: health reports a refusal per specialist. */
+function clearRefusals(specialist: string): void { for (const k of [...verifyRefused.keys()]) if (k.startsWith(`${specialist}\n`)) verifyRefused.delete(k) }
+/** How long a refused launch stays on record for `hydra health`. Older ones go when the next is kept, so the map holds at most a day's refusals. */
+const REFUSAL_KEEP_MS = 24 * 3_600_000
+function keepRefusal(key: string, at: number, why: string): void {
+  for (const [k, r] of verifyRefused) if (at - r.at > REFUSAL_KEEP_MS) verifyRefused.delete(k)
+  verifyRefused.set(key, { at, why })
+}
+
+/** For `hydra health`: each restricted specialist whose last launch verification refused, the newest refusal of each, newest first. Never throws. */
+export function refusedLaunches(now = verifyBackoff.now()): { specialist: string; why: string; ageMin: number }[] {
+  const last = new Map<string, { at: number; why: string }>()
+  for (const [k, r] of verifyRefused) {
+    const specialist = k.split('\n')[0]
+    if (now - r.at > REFUSAL_KEEP_MS) continue
+    if (!last.has(specialist) || last.get(specialist)!.at < r.at) last.set(specialist, r)
+  }
+  return [...last].map(([specialist, r]) => ({ specialist, why: oneLine(r.why, 200), ageMin: Math.max(0, Math.round((now - r.at) / 60_000)) })).sort((a, b) => a.ageMin - b.ageMin)
+}
+
 /** Test seam: forget the verification refusals. */
 export function _resetVerifyBackoff(): void { verifyRefused.clear() }
+/** Test seam: how many refusals are kept. */
+export const _refusalsKept = (): number => verifyRefused.size
 
 /** Test seam: forget which refusals a thread was told. */
 export function _resetRefusalNotices(): void { threadNotices.clear() }
@@ -1184,7 +1207,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       verdict = { ok: false, why: 'the check itself failed to run, so what it loaded is unknown' }
     } finally { endVerifying(sessionId) }
     if (!verdict.ok) {
-      verifyRefused.set(verifyKey(confinedPolicy.specialist, threadId, sessionName), { at: verifyBackoff.now(), why: verdict.why })
+      keepRefusal(verifyKey(confinedPolicy.specialist, threadId, sessionName), verifyBackoff.now(), verdict.why)
       process.stderr.write(`daemon: spawn ${tmuxName}: launch verification refused: ${verdict.why}\n`)
       const created = registry.get(sessionId)
       if (created && created.sessionId === sessionId) await killSession(created, 'stopped: it did not load what its launch policy allows', { keepWatches: true }).catch((err: unknown) => process.stderr.write(`daemon: spawn ${tmuxName}: could not stop the unverified session ${sessionId}: ${err}\n`))
@@ -1193,6 +1216,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     // The marker the delivery gate reads: persisted, so a restart keeps a verified session reachable and leaves an unfinished one not.
     const created = registry.get(sessionId)
     if (created && created.sessionId === sessionId) { created.verified = true; registry.persist() }
+    clearRefusals(confinedPolicy.specialist)   // it starts now: health no longer reports a refusal for it
     process.stderr.write(`daemon: spawn ${tmuxName}: launch verified against its policy from ${launched.debugLogPath}\n`)
   }
   if (phaseBudgetMs) startPhaseBudget(sessionId)

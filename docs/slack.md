@@ -311,7 +311,9 @@ In `hydra health --json`, `slack.apps.<id>` holds each declared app's:
 - `missingScopes`: what the bot token lacks of what hydra.toml has the app do (empty when complete; `null` until Slack has said what the token holds, which the line prints as `scopes unchecked`);
 - `tokens`: `{ ok: true }`, or `{ ok: false, why }` naming the key to fix;
 - `connection`: `pending` (starting), `up`, `down` (lost, or never possible without tokens), or `gaveUp` (the first connection failed and was let go, or reconnecting is exhausted);
-- with several apps, `probeError`: why its last read of whether it is in a channel failed.
+- `probeError`: why its reads of whether it is in a channel fail (each distinct reason once), with the kind of channel when Slack names the scope. With one app it is shown on the `default` line as `membership unreadable (…) · fix: …`.
+
+Besides the apps, `slack` holds `owedLate`: each conversation whose oldest owed message is older than `owedLateAfterMin` (20: two catch-up passes, at 10 minutes each, have not delivered it), with `to`, `count`, `oldestAgeMin` and `cause`. The cause is the first that holds, in this order, and says what to do (a failure is one line of at most 200 characters): its app has no live connection, its specialist is waiting for a session (`max_sessions`), the guard keeps saying not now, its specialist is no longer declared, the last delivery failure with Slack's or the session's own words, or none recorded (the next catch-up pass replays it). The line reads `owed 2 to specialist:ops in slack:C0ABC:1793732224.093059, oldest 31 min (past 20 min): …`.
 
 An app removed from hydra.toml while its connection is still shutting down shows `declared: false` in the daemon's record and is gone from the next pass. `slack.listener` is the same fact as `slack.apps.default` (else the first connected app), kept for what already reads it.
 
@@ -352,6 +354,7 @@ Start with `hydra health`; `hydra health --json` has every field above.
 | `scopes unchecked` | The app has connected but Slack did not say what its token holds, or it has not connected yet. Check again after the next reconnect. |
 | `catch-up failing (…)` | Read the reason. A budget or a rate limit: the next pass resumes from the held cursor. A permanent error: the alert says what to do. |
 | `up`, and `catchUp.accepted > 0` in `hydra health --json` pass after pass | A second connection holds this app (Slack splits events). Stop the other process. |
+| `owed … oldest N min (past 20 min): <cause>` | A message has been owed longer than two catch-up passes. The cause names what holds it and what to change; with none recorded, wait for the next pass, and look for the app's own line above it. |
 | `membership unreadable` | The app could not read whether its bot is in a channel. The line gives Slack's reason, and the kind of channel (public or private) when Slack names the scope it needed (`channels:read` or `groups:read`). Where several apps share a channel, a top-level tag of that app is left to it when no other tagged app is known to hear it, and nobody answers if its bot is not in the channel (the log says so once). Untagged messages may be answered by more than one app. Add the scope and reinstall. |
 | A join was not noticed | An app lacks `member_joined_channel` and `member_left_channel`: add them to its Event Subscriptions and reinstall (the *Add the membership events* step of [Adding an app](#adding-an-app)). |
 | Slack is not connected, and a `slack-watch.json` is in the state dir | hydra.toml declares no app and the old file is no longer read: run `hydra migrate`. |
@@ -501,6 +504,8 @@ A session keeps the policy it was born under. Each new start (fresh, resume, res
 A difference, or a file that cannot be read or does not finish loading in 45 seconds, stops the session this start created (only that one) before its thread is handed to it, and tells the thread. The same specialist is not started again for a minute, so each message does not launch and check another:
 
 > specialist ops: the session that just started (ops) loaded something its policy does not give it, so hydra stopped it before routing the thread to it (its launch prompt had already reached it): it started MCP servers the policy does not list: `claude.ai Slack`. Send another message to start a fresh one. If this repeats, the cause is in Claude Code's setup or its debug file, not in hydra.toml.
+
+`hydra health` keeps the refusal in view after the thread has scrolled: one line for each restricted specialist whose last start was refused, with how long ago and why (`restricted specialist ops: launch REFUSED 4 min ago (…) · fix: …`; `hydra health --json`: `refusedLaunches`, each `specialist`, `why`, `ageMin`). The reason is cut to one line of at most 200 characters. It is kept in memory for a day, per daemon run, and goes when any start of that specialist passes, in whatever thread. The fix does not name an engine: for Claude Code the launch record is its debug file; an engine that cannot check what it loaded is refused too.
 
 The built-in tool list is not in that file; it is checked by the live test (`HYDRA_LIVE_CLAUDE=1 bun run test --isolate daemon/__tests__/restricted-claude.live.test.ts`), which runs a real launch and reads Claude Code's init event.
 

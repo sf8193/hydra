@@ -1,4 +1,4 @@
-import { SlackWatcher, namedChannels, cantRead, cmpTs, slackWatchesPath, unresolvedPlaces, conversationId, placeName, isDm, appOfEntry, TOP_LEVEL, NO_DIRECTORY, SLACK_LIMITS, type SlackWatchConfig, type SlackWatchEntry, type SlackWatchStats } from './watch.js'
+import { SlackWatcher, namedChannels, cantRead, cmpTs, slackWatchesPath, unresolvedPlaces, conversationId, placeName, isDm, appOfEntry, TOP_LEVEL, NO_DIRECTORY, SLACK_LIMITS, type SlackWatchConfig, type SlackWatchEntry, type SlackWatchStats, type LateOwed } from './watch.js'
 import { parseConversation } from './conversation.js'
 import { ConnectedApps, type AppIdentity } from './apps.js'
 import { getSpecialist, conversationSpecialistOf, specialistOf, boundAs } from '../../specialists/specialists.js'
@@ -7,7 +7,7 @@ import type { SessionInfo } from '../../daemon/sessions.js'
 import { pushToolSurface } from '../../daemon/tool-surface.js'
 import { deliverToTarget, conversationSessionName, conversationSessionRunning, placesFree, type Target } from '../../specialists/targets.js'
 import { on } from '../../daemon/event-bus.js'
-import { SlackListener, boltApp, POST_TIMEOUT_MS, type ToldScopes } from './listener.js'
+import { SlackListener, boltApp, POST_TIMEOUT_MS, OWED_LATE_AFTER_MS, type ToldScopes } from './listener.js'
 import { SlackConnections, type AppHealth } from './connections.js'
 import { STATE_DIR } from '../../daemon/config.js'
 import { ENV_NAME_RE, capturedSpawnVars, scrubbedSpawnVars, tokenVarRefusal } from '../../shared/spawn-env.js'
@@ -596,7 +596,7 @@ export function formatConversationsFor(caller: Partial<Pick<SessionInfo, 'thread
  * `apps` is every declared app's health by id (its listener's, `off` when it has none, with its tokens and connection);
  * `listener` is the same fact for the app `default` (else the first connected), kept as an alias.
  */
-export function slackWatchHealth(now = Date.now()): ({ places: { place: string; to: string; note?: string }[]; conversations: number; readAsOperator: number; owed: number; oldestOwedAgeMin: number | null; listener?: AppHealth; apps: Record<string, AppHealth> } & SlackWatchStats) | null {
+export function slackWatchHealth(now = Date.now()): ({ places: { place: string; to: string; note?: string }[]; conversations: number; readAsOperator: number; owed: number; oldestOwedAgeMin: number | null; owedLate: LateOwed[]; owedLateAfterMin: number; listener?: AppHealth; apps: Record<string, AppHealth> } & SlackWatchStats) | null {
   const h = hydraConfig()
   if (!slackConfigured(h)) return null
   const entries = getSlackWatcher().list()
@@ -622,6 +622,8 @@ export function slackWatchHealth(now = Date.now()): ({ places: { place: string; 
     readAsOperator: entries.filter(e => e.via === 'user').length,
     owed: owed.length,
     oldestOwedAgeMin: oldest ? Math.max(0, Math.round((now / 1000 - parseFloat(oldest)) / 60)) : null,
+    owedLate: getSlackWatcher().lateOwed(OWED_LATE_AFTER_MS, now),
+    owedLateAfterMin: OWED_LATE_AFTER_MS / 60_000,
     ...getSlackWatcher().stats(),
     ...(alias && { listener: apps[alias] }),
     apps,

@@ -10,7 +10,8 @@ import { gateway, STATE_DIR } from '../config.js'
 import { setSpecialistThread, _reloadSpecialists } from '../../specialists/specialists.js'
 import { toThread } from '../../specialists/targets.js'
 import { _resetBackoff, activeBackoff } from '../recovery-backoff.js'
-import { _resetRefusalNotices, _resetVerifyBackoff, doSpawnSession, handoffSpawnOpts, killSession, tryRespawn, tryResume } from '../session-lifecycle.js'
+import { handleCLIRequest } from '../cli-handler.js'
+import { _resetRefusalNotices, _resetVerifyBackoff, _refusalsKept, refusedLaunches, doSpawnSession, handoffSpawnOpts, killSession, tryRespawn, tryResume } from '../session-lifecycle.js'
 import { restrictedDir, writeRestrictedFiles } from '../restricted-files.js'
 import { markDead, registry, threadRegistry, type SessionInfo } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
@@ -891,5 +892,57 @@ describe('what the check leaves behind (hydra#620)', () => {
     expect(launches).toHaveLength(1)
     registry.deleteThread('sl-thread-other')
     for (const x of [...registry.values()]) if (x.threadId === 'sl-thread-other') registry.delete(x.sessionId)
+  })
+  test('hydra health names a refused launch: the specialist, why, and how long ago; a later start that verifies clears it (#669)', async () => {
+    seedDead()
+    expect(refusedLaunches()).toEqual([])
+    verifyDeps.read = () => debugLogFor(launches.at(-1)!.policy as any, ['[DEBUG] MCP server "x": Starting connection with timeout of 30000ms'])
+    await expect(start()).rejects.toThrow(PolicyRefusal)
+    const [r] = refusedLaunches()
+    const served = (await handleCLIRequest({ type: 'cli', command: 'health', id: 'h1', params: {} })).data as { refusedLaunches?: unknown }
+    expect(served.refusedLaunches).toEqual(refusedLaunches())   // what the daemon serves to `hydra health`
+    expect(r.specialist).toBe('ops')
+    expect(r.why).toContain('x')
+    expect(r.ageMin).toBe(0)
+    expect(refusedLaunches(Date.now() + 5 * 60_000)[0].ageMin).toBe(5)
+    verifyBackoff.now = () => Date.now() + 120_000   // past the back-off
+    launches.length = 0; seedDead()
+    verifyDeps.read = () => debugLogFor(launches.at(-1)!.policy as any)
+    await start()
+    expect(refusedLaunches(Date.now() + 120_000)).toEqual([])
+  })
+  test('one specialist, one line: a verified start in any thread clears the refusals of its other threads; the reason is one capped line (#669)', async () => {
+    seedDead()
+    verifyDeps.read = () => debugLogFor(launches.at(-1)!.policy as any, ['[DEBUG] MCP server "x": Starting connection with timeout of 30000ms'])
+    await expect(start('sl-thread-a')).rejects.toThrow(PolicyRefusal)
+    expect(refusedLaunches()).toHaveLength(1)
+    launches.length = 0
+    verifyDeps.read = () => debugLogFor(launches.at(-1)!.policy as any)
+    await start('sl-thread-b')
+    expect(refusedLaunches()).toEqual([])
+    registry.deleteThread('sl-thread-b')
+    for (const x of [...registry.values()]) if (x.threadId === 'sl-thread-b') registry.delete(x.sessionId)
+  })
+  test('a refusal reason with newlines and a long path is shown as one capped line', async () => {
+    seedDead()
+    const was = (fakeClaude as any).verifyLaunch
+    ;(fakeClaude as any).verifyLaunch = async () => ({ ok: false, why: `bad\n${'/p'.repeat(400)}` })
+    try { await expect(start()).rejects.toThrow(PolicyRefusal) } finally { (fakeClaude as any).verifyLaunch = was }
+    const [r] = refusedLaunches()
+    expect(r.why).not.toContain('\n')
+    expect(r.why.length).toBeLessThanOrEqual(200)
+  })
+  test('a refusal older than a day is forgotten when the next is kept: the record stays bounded', async () => {
+    seedDead()
+    verifyDeps.read = () => debugLogFor(launches.at(-1)!.policy as any, ['[DEBUG] MCP server "x": Starting connection with timeout of 30000ms'])
+    verifyBackoff.now = () => 1_000_000
+    await expect(start('sl-old')).rejects.toThrow(PolicyRefusal)
+    expect(refusedLaunches(1_000_000)).toHaveLength(1)
+    verifyBackoff.now = () => 1_000_000 + 25 * 3_600_000
+    launches.length = 0; seedDead()
+    await expect(start('sl-new')).rejects.toThrow(PolicyRefusal)
+    expect(_refusalsKept()).toBe(1)   // the day-old one is gone from the map, not only hidden
+    expect(refusedLaunches(1_000_000 + 25 * 3_600_000)).toHaveLength(1)
+    expect(refusedLaunches(1_000_000 + 25 * 3_600_000)[0].ageMin).toBe(0)
   })
 })

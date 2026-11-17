@@ -226,6 +226,16 @@ test('hydra health prints no raindrop line when the daemon reports none', () => 
   expect(capturedHealth(HEALTH)).not.toContain('raindrop')
 })
 
+test('hydra health names a refused restricted launch, with what to do; none reported, no line (#669)', () => {
+  const out = capturedHealth({ ...HEALTH, refusedLaunches: [{ specialist: 'ops', why: 'it loaded an unlisted server', ageMin: 4 }] })
+  expect(out).toContain('restricted specialist ops: launch REFUSED 4 min ago (it loaded an unlisted server) · fix: send it another message')
+  expect(capturedHealth(HEALTH)).not.toContain('REFUSED')
+  // an engine that cannot check what it loaded is refused too: the fix does not blame Claude Code's setup
+  const other = capturedHealth({ ...HEALTH, refusedLaunches: [{ specialist: 'ops', why: 'the codex engine cannot check what it loaded', ageMin: 1 }] })
+  expect(other).toContain("the engine's launch record (Claude Code: its debug file)")
+  expect(other).not.toContain("check Claude Code's setup")
+})
+
 test('sourceStateDirEnv loads the .env but keeps no RAINDROP_ value in this process', () => {
   writeEnv(`${SCRUBBED_SPAWN_VARS.map(v => `${v}=seeded`).join('\n')}\nSPAWN_CWD=/tmp/x\n`)
   sourceStateDirEnv(stateDir)

@@ -178,6 +178,8 @@ export type HandleOutcome = 'mention' | 'follow-up' | 'dm' | 'subscribed' | 'ref
 /** `refused` / `unrouted`: accepted and owed, then `reachable_by` or the config changed so it can no longer go anywhere. `unbound`: owed when its conversation was let go. */
 export type DropKind = 'expired' | 'owed-full' | 'too-large' | 'tag-cap' | 'table-full' | 'guard' | 'catch-up-gap' | 'refused' | 'unrouted' | 'unbound'
 
+/** An owed message that has waited past the health threshold: the conversation, who it is for, how many, how long, and why (with what to do). */
+export type LateOwed = { conversation: string; to?: string; count: number; oldestAgeMin: number; cause: string }
 export type SlackWatchStats = { refused: number; refusedBy: Record<string, number>; unrouted: number; dropped: Partial<Record<DropKind, number>> }
 
 /** The reaction on a refused or unrouted mention or DM. Hydra's notices are reactions, never prose. */
@@ -494,6 +496,8 @@ export class SlackWatcher {
   private readonly cannotReact = new Map<string, number>()
   private readonly stats_: SlackWatchStats = { refused: 0, refusedBy: {}, unrouted: 0, dropped: {} }
   private readonly episodeStart = new Map<string, number>()
+  // Why each conversation's last delivery failed, until one lands or nothing is owed: what `lateOwed` says. Pruned in `sweep`.
+  private readonly failing = new Map<string, string>()
 
   // What each app's connection offered: its display names, and its reactions and downloads. Keyed by app id.
   private readonly resolvers = new Map<string, NonNullable<SlackWatchDeps['resolveName']>>()
@@ -540,6 +544,30 @@ export class SlackWatcher {
   list(): SlackWatchEntry[] { return [...this.entries.values()] }
   /** Refusals and drops since the daemon started: what `hydra conversations` and `hydra health` count. */
   stats(): SlackWatchStats { return structuredClone(this.stats_) }
+  /**
+   * For `hydra health`: each conversation whose oldest owed message is older than `olderThanMs`, with the cause and what to do.
+   * Never throws: health must work when the watcher does not.
+   */
+  lateOwed(olderThanMs: number, now = this.deps.now()): LateOwed[] {
+    const out: LateOwed[] = []
+    try {
+      for (const [key, e] of this.entries) {
+        const oldest = e.owed?.length ? [...e.owed].sort(cmpTs)[0] : undefined
+        if (!oldest) continue
+        const ageMs = now - parseFloat(oldest) * 1000
+        if (ageMs < olderThanMs) continue
+        const h = this.deps.config(e.app)?.hydra
+        const cause = !h ? `its app (${appOfEntry(e)}) has no live connection, so nothing goes through it: see its line`
+          : e.waitingSince !== undefined ? `waiting for a session: its specialist is at max_sessions; end one, or raise max_sessions`
+          : e.heldSince && Object.keys(e.heldSince).length ? 'the guard keeps saying not now (exit 75): check the guard'
+          : e.specialist && !isLive(h, e.specialist) ? `its specialist ${e.specialist} is not declared in hydra.toml: declare it, or bind the conversation elsewhere`
+          : this.failing.has(key) ? `delivery failing: ${this.failing.get(key)}`
+          : 'not delivered yet and no failure recorded: the next catch-up pass replays it';
+        out.push({ conversation: conversationId(e), ...(e.specialist && { to: spelledBare(e.specialist) }), count: e.owed!.length, oldestAgeMin: Math.round(ageMs / 60_000), cause })
+      }
+    } catch (err) { this.deps.log(`daemon: slack connector: listing late owed messages failed: ${err}\n`) }
+    return out.sort((a, b) => b.oldestAgeMin - a.oldestAgeMin)
+  }
   get(channel: string, threadTs: string, app?: string): SlackWatchEntry | undefined { return this.entries.get(watchKey(app, channel, threadTs)) }
 
   setBotId(id: string | undefined, app?: string): void { if (id) this.botIds.set(appOfEntry({ app }), id); else this.botIds.delete(appOfEntry({ app })) }
@@ -669,6 +697,7 @@ export class SlackWatcher {
         }
       }
     }
+    for (const k of [...this.failing.keys()]) if (!this.entries.get(k)?.owed?.length) this.failing.delete(k)
     if (n) this.persist()
     this.pruneDmCursors(now, idleExpiryMs)
     this.sweepFiles(now)
@@ -1329,6 +1358,7 @@ export class SlackWatcher {
       if (!result.ok && !result.permanent) {
         // Still owed: it stays in `owed`, so the catch-up pass fetches it again. Unless the owed list was full and cut it.
         this.deps.log(`daemon: slack connector: delivery to ${spelledBare(target.to)} failed for ${key} (${first}..${last}): ${result.error}\n`)
+        this.failing.set(key, oneLine(result.error, 200))
         if (result.exit === 8 && fallback) {
           this.deps.log(`daemon: slack connector: the guard redirected ${key} (${first}..${last}) to ${target.to}, which has no session record; delivering to ${fallback}\n`)
           this.alertOnce(`guard-redirect:${target.to}`, fallback, `⚠️ The guard redirected a Slack message in ${placeName(cfg, entry.channel)} to "${target.to}", which has no session record (${result.error}), so it went to ${fallback} instead.`, appOfEntry(entry))
@@ -1341,7 +1371,12 @@ export class SlackWatcher {
         continue
       }
       if (!result.ok) this.drop('too-large', entry, batch.map(i => i.ts), `it can never be delivered: ${result.error}`)
-      else this.ack(entry, batch, cfg)
+      else {
+        this.failing.delete(key)
+        // Every landed delivery names its target, whoever it is (main, a specialist, a thread).
+        this.deps.log(`daemon: slack connector: delivered ${key} (${first}..${last}) to ${spelledBare(target.to)}${result.duplicate ? ' (already delivered)' : ''}\n`)
+        this.ack(entry, batch, cfg)
+      }
       this.settle(key, entry, batch.map(i => i.ts))
     }
   }

@@ -1875,3 +1875,80 @@ describe('a bot that was not in a channel is tried again once it joins', () => {
     expect((s.w as unknown as { cannotReact: Map<string, number> }).cannotReact.size).toBeLessThanOrEqual(500)
   })
 })
+
+describe('what hydra health says about owed messages and deliveries (#669)', () => {
+  const MIN = 60_000
+  const tsAgo = (s: { now: () => number }, min: number, n = 1) => `${Math.floor(s.now() / 1000) - min * 60}.00000${n}`
+
+  test('an owed message older than the threshold is listed with its cause; a younger one is not', async () => {
+    const s = setup({}, () => ({ ok: false, error: 'specialist down' }))
+    s.w.handle(ev({ ts: tsAgo(s, 30), text: mention }))
+    await s.w.flush()
+    const [late] = s.w.lateOwed(20 * MIN)
+    expect(late).toMatchObject({ to: 'specialist:helper', count: 1, oldestAgeMin: 30, cause: 'delivery failing: specialist down' })
+    expect(late.conversation).toContain(CH)
+    expect(s.w.lateOwed(40 * MIN)).toEqual([])
+  })
+
+  test('the cause is the one that holds: waiting for a place, the guard saying not now, an undeclared specialist, an app not connected', async () => {
+    const wait = setup({}, to => ({ ok: false, error: `${to} at max`, wait: true }))
+    wait.w.handle(ev({ ts: tsAgo(wait, 30), text: mention }))
+    await wait.w.flush()
+    expect(wait.w.lateOwed(20 * MIN)[0].cause).toContain('max_sessions')
+
+    const held = setup({ toml: oneListener(CH, 'helper', '["anyone"]', '[guard]\ncommand = "guard"') }, undefined, undefined, async () => ({ fate: 'later' }))
+    held.w.handle(ev({ ts: tsAgo(held, 30), text: mention }))
+    await held.w.flush()
+    expect(held.w.lateOwed(20 * MIN)[0].cause).toContain('exit 75')
+
+    const gone = setup({}, () => ({ ok: false, error: 'x' }))
+    gone.w.handle(ev({ ts: tsAgo(gone, 30), text: mention }))
+    await gone.w.flush()
+    gone.setConfig(cfg({ toml: oneListener(CH, 'other') }))
+    expect(gone.w.lateOwed(20 * MIN)[0].cause).toContain('is not declared in hydra.toml')
+
+    const off = setup({}, () => ({ ok: false, error: 'x' }))
+    off.w.handle(ev({ ts: tsAgo(off, 30), text: mention }))
+    await off.w.flush()
+    const down = new SlackWatcher({ now: off.now, file: off.file, log: () => {}, config: () => null, alert: () => {}, deliver: async () => ({ ok: true }) })
+    expect(down.lateOwed(20 * MIN)[0].cause).toContain('has no live connection')
+  })
+
+  test('when two causes hold, the first in the list wins; a failure is one capped line', async () => {
+    const s = setup({}, () => ({ ok: false, error: `first line\n${'x'.repeat(500)}` }))
+    s.w.handle(ev({ ts: tsAgo(s, 30), text: mention }))
+    await s.w.flush()
+    const cause = s.w.lateOwed(20 * MIN)[0].cause
+    expect(cause).toMatch(/^delivery failing: first line x+$/)
+    expect(cause.length).toBeLessThan(260)
+    s.w.get(CH, tsAgo(s, 30))!.waitingSince = s.now()      // a failure is recorded and it is also waiting for a place: waiting is named
+    expect(s.w.lateOwed(20 * MIN)[0].cause).toContain('max_sessions')
+  })
+
+  test('a late owed list never throws, and a landed delivery clears its failure', async () => {
+    let ok = false
+    const s = setup({}, () => ok ? { ok: true } : { ok: false, error: 'specialist down' })
+    s.w.handle(ev({ ts: tsAgo(s, 30), text: mention }))
+    await s.w.flush()
+    expect(s.w.lateOwed(20 * MIN)).toHaveLength(1)
+    ok = true
+    s.w.handle(ev({ ts: tsAgo(s, 30), text: mention }))
+    await s.w.flush()
+    expect(s.w.lateOwed(20 * MIN)).toEqual([])
+    expect((s.w as unknown as { failing: Map<string, string> }).failing.size).toBe(0)
+    const broken = new SlackWatcher({ now: s.now, file: s.file, log: () => {}, config: () => { throw new Error('boom') }, alert: () => {}, deliver: async () => ({ ok: true }) })
+    expect(() => broken.lateOwed(20 * MIN)).not.toThrow()
+  })
+
+  test('every landed delivery logs its target, main included', async () => {
+    const s = setup({ toml: BASE })   // the operator's DM reaches main
+    s.w.handle(ev({ channel: 'D0OP', ts: '1000.000001', user: 'UOP', text: 'hi' }))
+    await s.w.flush()
+    expect(s.sent.map(x => x.specialist)).toEqual(['main'])
+    expect(s.logs.filter(l => l.includes('delivered')).join('')).toMatch(/delivered .*\(1000\.000001\.\.1000\.000001\) to main\n/)
+    const t = setup()
+    t.w.handle(ev({ ts: '1000.000001', text: mention }))
+    await t.w.flush()
+    expect(t.logs.join('')).toMatch(/ to specialist:helper\n/)
+  })
+})

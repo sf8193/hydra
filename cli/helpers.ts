@@ -506,6 +506,7 @@ export function printResponse(response: Record<string, unknown>, json: boolean):
         console.log(`event loop: worst lag ${data.loopLagMaxMs}ms since start${s ? `; last stall ${s.ms}ms${s.callback ? ` (${s.callback} held it ${s.callbackMs}ms)` : ''} at ${s.at}` : ''}`)
       }
       if (data.raindrop) console.log(`raindrop: ${data.raindrop}`)
+      for (const r of data.refusedLaunches ?? []) console.log(`restricted specialist ${r.specialist}: launch REFUSED ${r.ageMin} min ago (${r.why}) · fix: send it another message to start a fresh session; if it repeats, the cause is in the engine's launch record (Claude Code: its debug file), not hydra.toml`)
       if (data.slack) for (const line of slackHealthLines(data.slack)) console.log(line)
       return
     case 'status':
@@ -620,7 +621,7 @@ export function pinnedBun(hydraDir: string, io: BunIO = bunIO()): { path: string
 }
 
 type AppHealthView = { state: string; downMin: number | null; lastActivityAgeMin: number | null; catchUp: { ok: boolean; ageMin: number; reason?: string } | null; missingScopes?: { option: string; any: string[] }[] | null; tokens?: { ok: boolean; why?: string }; probeError?: string }
-type SlackHealthView = { listener?: AppHealthView; apps?: Record<string, AppHealthView>; conversations: number; readAsOperator: number; owed: number; oldestOwedAgeMin: number | null }
+type SlackHealthView = { listener?: AppHealthView; apps?: Record<string, AppHealthView>; conversations: number; readAsOperator: number; owed: number; oldestOwedAgeMin: number | null; owedLate?: { conversation: string; to?: string; count: number; oldestAgeMin: number; cause: string }[]; owedLateAfterMin?: number }
 
 /**
  * `hydra health`'s Slack lines: one for the whole, as it always was, when the only app is `default`; with several (or one that
@@ -632,11 +633,14 @@ export function slackHealthLines(s: SlackHealthView): string[] {
   const asOperator = s.readAsOperator ? ` (${s.readAsOperator} read as the operator)` : ''
   const owed = s.owed ? `${s.owed} owed, oldest ${s.oldestOwedAgeMin} min` : '0 owed'
   const conversations = `${s.conversations} conversation${s.conversations === 1 ? '' : 's'}${asOperator} · ${owed}`
+  // What to do, said with the fact: Slack's reason names the scope; the fix is the manifest and a reinstall.
+  const unreadable = (a: AppHealthView, id: string) => a.probeError ? [`membership unreadable (${a.probeError}) · fix: add the scope Slack names (hydra slack manifest ${id}), reinstall`] : []
+  const late = (s.owedLate ?? []).map(o => `  owed ${o.count} to ${o.to ?? 'no target'} in ${o.conversation}, oldest ${o.oldestAgeMin} min (past ${s.owedLateAfterMin ?? '?'} min): ${o.cause}`)
   const ids = Object.keys(s.apps ?? {})
   if (ids.length <= 1 && (ids.length === 0 || ids[0] === 'default')) {
     const l = s.listener
     const lacks = l?.missingScopes?.length ? ` · missing ${l.missingScopes.map(m => `${m.any.join(' or ')} (${m.option})`).join('; ')}` : ''
-    return [`slack connector: ${stateOf(l)}${catchUpOf(l)} · ${conversations}${lacks}`]
+    return [`slack connector: ${stateOf(l)}${catchUpOf(l)} · ${conversations}${lacks}`, ...(l ? unreadable(l, 'default').map(x => `  default: ${x}`) : []), ...late]
   }
   const lines = [`slack connector: ${ids.length} app${ids.length === 1 ? '' : 's'} · ${conversations}`]
   for (const id of ids) {
@@ -646,11 +650,11 @@ export function slackHealthLines(s: SlackHealthView): string[] {
       ...(a.lastActivityAgeMin !== null ? [`last event ${a.lastActivityAgeMin} min ago`] : []),
       catchUpOf(a).replace(/^ · /, '') || 'catch-up not yet run',
       a.missingScopes === null || a.missingScopes === undefined ? 'scopes unchecked' : a.missingScopes.length ? `missing ${a.missingScopes.map(m => `${m.any.join(' or ')} (${m.option})`).join('; ')}` : 'scopes ok',
-      ...(a.probeError ? [`membership unreadable (${a.probeError})`] : []),
+      ...unreadable(a, id),
     ]
     lines.push(`  ${id}: ${parts.join(' · ')}`)
   }
-  return lines
+  return [...lines, ...late]
 }
 
 /** The chat platform a state dir belongs to: the one named, else the one the dir is called, else what the caller resolved (`cfg.platform`), else CHAT_PLATFORM. */

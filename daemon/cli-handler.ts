@@ -1,6 +1,6 @@
 import { registry } from './sessions.js'
 import { transport } from './bridge-transport.js'
-import { doSpawnSession, killSession } from './session-lifecycle.js'
+import { doSpawnSession, killSession, refusedLaunches } from './session-lifecycle.js'
 import { callerRefusal, destroyDeclinedText, killThenDestroy } from './destroy.js'
 import { fallbackDescription, formatDuration } from './util.js'
 import { tmuxServerState, tmuxSessionState } from './tmux.js'
@@ -237,13 +237,16 @@ function handleHealth(req: CLIRequest): CLIResponse {
   const disconnected = sessions.length - connected
 
   const raindropLine = raindropStatusLine('cli')
+  const refused = refusedLaunches()
+  const slack = slackWatchHealth()
   return respond(req, true, {
     sessions: { total: sessions.length, connected, disconnected },
     tmux: tmuxServerState(),
     idempotency: { active: listIdempotencyEntries().length },
     ...loopHealth(),
     ...(raindropLine ? { raindrop: raindropLine } : {}),
-    ...(slackWatchHealth() ? { slack: slackWatchHealth() } : {}),
+    ...(refused.length ? { refusedLaunches: refused } : {}),
+    ...(slack ? { slack } : {}),
     ...(jobsClock() ? { jobs: jobsClock()!.health() } : {}),
   })
 }
