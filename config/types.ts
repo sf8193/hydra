@@ -247,9 +247,14 @@ export type Vitals = {
   memoryCooldownMs: number
 }
 
+/** `[main]`. `model` as written (an alias, or a full ID); whatever starts main resolves it as a specialist's `model` is. */
+export type MainOptions = { model: string }
+
 export type HydraConfig = {
   /** The one person whose DMs reach `main` and who may reach every specialist. Required once anything else is declared. */
   operator?: string
+  /** `[main]`: how main (the operator's harness) runs. Absent when it sets nothing. */
+  main?: MainOptions
   connectors: Connectors
   gateways: Gateways
   /** Every Slack app, by id (no prototype: look one up with Object.hasOwn). The old `[connectors.slack]` loads as the app `default`. */

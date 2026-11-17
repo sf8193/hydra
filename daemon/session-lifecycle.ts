@@ -23,7 +23,7 @@ import { canAskPredecessor, pushToolSurface } from './tool-surface.js'
 import { parseSpawnTopic, resolveSpawnLabel } from './util.js'
 import { startPhaseBudget, clearPhaseBudget } from './phase-budget.js'
 import { clearIdleLimit, resumeIdleLimit } from './idle-limit.js'
-import { resolveModelAlias, spawnModel, withContextSuffix } from '../shared/constants.js'
+import { resolveLaunchModel, spawnModel, withContextSuffix } from '../shared/constants.js'
 import type { SessionType, SessionLabel } from '../shared/constants.js'
 import { resolveEngine } from './engines/instances.js'
 import type { EngineAdapter, ProviderId } from './engines/engine-adapter.js'
@@ -1088,7 +1088,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   // Central model resolution: alias → full ID → validate. All callers can pass
   // raw aliases (e.g. "sonnet") or full IDs (e.g. "claude-sonnet-5[1m]").
   const rawModel = opts?.model
-  const model = rawModel ? (resolveModelAlias(rawModel) ?? withContextSuffix(rawModel)) : withContextSuffix(spawnModel())
+  const model = rawModel ? resolveLaunchModel(rawModel) : withContextSuffix(spawnModel())
 
 
   // --- Launch via engine adapter ---

@@ -3,11 +3,11 @@ import { join, dirname } from 'path'
 import { homedir, tmpdir } from 'os'
 import { execSync, execFileSync } from 'child_process'
 
-import type { HydraConfig } from './helpers.js'
+import type { ByteModel, HydraConfig } from './helpers.js'
 import {
   resolveConfig, tmuxExists, tmuxKill, tmuxSpawn, tmuxSessionAge,
   compileCheck, killOrphanBytes, hasOrphanBytes, appendLog, shq,
-  waitForSocket, buildDaemonEnvs, pinnedBun, pinnedBunVersion, requireSpawnCwd, pluginVersionDir, probeDaemonHealth,
+  waitForSocket, buildDaemonEnvs, pinnedBun, pinnedBunVersion, requireSpawnCwd, pluginVersionDir, probeDaemonHealth, byteModel,
 } from './helpers.js'
 import { isKnownModel, SPIN_CPU_PERCENT } from '../shared/constants.js'
 import { modsExport, syncMods } from '../shared/mods.js'
@@ -91,12 +91,33 @@ export async function startByte(cfg: HydraConfig): Promise<void> {
     }
   }
 
-  if (!isKnownModel(cfg.byteModel)) {
-    console.warn(`\u26a0\ufe0f  Unrecognized model "${cfg.byteModel}" \u2014 may be a new release or typo. Starting anyway.`)
-  }
   // The watchdog can restart byte under a daemon that predates the mods sync, so sync here too.
   syncMods(cfg.hydraDir, cfg.stateDir)
-  const inner = [
+  const { model: { model, from, problem }, command: inner } = byteLaunch(cfg, prompt, authExport)
+  if (problem) {
+    console.warn(`\u26a0\ufe0f  ${problem}`)
+    appendLog(cfg.byteLog, problem)
+  }
+  if (!isKnownModel(model)) {
+    console.warn(`\u26a0\ufe0f  Unrecognized model "${model}" \u2014 may be a new release or typo. Starting anyway.`)
+  }
+
+  // The daemon reads main's context on its launch model's window from this; without it, from the pane footer.
+  // A failed write must not keep the byte from starting, nor leave an earlier launch's model in place.
+  try { writeMainRecord(cfg.stateDir, { model }) } catch (err) {
+    clearMainRecord(cfg.stateDir)
+    appendLog(cfg.byteLog, `main record not written (context % falls back to the pane footer): ${err}`)
+  }
+  tmuxSpawn(cfg.byteTmux, inner)
+
+  appendLog(cfg.byteLog, `${cfg.platform} byte started (daemon+bridge) on ${model}, from ${from}`)
+  console.log(`${cfg.platform} byte started. Attach with: tmux attach -t ${cfg.byteTmux}`)
+}
+
+/** What main is started with: its model (byteModel: `[main] model`, else the spawn default) and the shell command its tmux session runs. */
+export function byteLaunch(cfg: HydraConfig, prompt: string, authExport: string): { model: ByteModel; command: string } {
+  const model = byteModel(cfg)
+  const command = [
     `cd ${shq(cfg.byteCwd)}`,
     `export DAEMON_SOCK=${shq(cfg.sockPath)}`,
     `export CLAUDE_CONFIG_DIR=${shq(cfg.configDir)}`,
@@ -104,19 +125,9 @@ export async function startByte(cfg: HydraConfig): Promise<void> {
     `export HYDRA_ROLE=main`,
     modsExport(cfg.stateDir),
     authExport || null,
-    `caffeinate -i claude --model ${shq(cfg.byteModel)} --channels plugin:discord@claude-plugins-official --dangerously-skip-permissions ${shq(prompt)}`,
+    `caffeinate -i claude --model ${shq(model.model)} --channels plugin:discord@claude-plugins-official --dangerously-skip-permissions ${shq(prompt)}`,
   ].filter(Boolean).join(' && ')
-
-  // The daemon reads main's context on its launch model's window from this; without it, from the pane footer.
-  // A failed write must not keep the byte from starting, nor leave an earlier launch's model in place.
-  try { writeMainRecord(cfg.stateDir, { model: cfg.byteModel }) } catch (err) {
-    clearMainRecord(cfg.stateDir)
-    appendLog(cfg.byteLog, `main record not written (context % falls back to the pane footer): ${err}`)
-  }
-  tmuxSpawn(cfg.byteTmux, inner)
-
-  appendLog(cfg.byteLog, `${cfg.platform} byte started (daemon+bridge)`)
-  console.log(`${cfg.platform} byte started. Attach with: tmux attach -t ${cfg.byteTmux}`)
+  return { model, command }
 }
 
 // ---------------------------------------------------------------------------
@@ -254,10 +265,6 @@ export async function lifecycleRestart(platform: string, opts?: { validate?: boo
   requireSpawnCwd(cfg)
   // Before anything is stopped: a daemon that would refuse to start must not replace one that runs.
   refuseIfBootWouldBeRefused(cfg, true)
-
-  if (!isKnownModel(cfg.byteModel)) {
-    console.warn(`\u26a0\ufe0f  Unrecognized model "${cfg.byteModel}" \u2014 may be a new release or typo. Restarting anyway.`)
-  }
 
   appendLog(cfg.daemonLog, `Restart requested${validate ? ' (+v)' : ''}`)
 

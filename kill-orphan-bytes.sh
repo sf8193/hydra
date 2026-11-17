@@ -1,6 +1,6 @@
 #!/bin/bash
 # macOS-specific: ps eww shows process environment
-# Shared orphan-byte reaper — sourced by start-byte.sh and stop-byte.sh.
+# Orphan-byte reaper — sourced by stop-byte.sh (the CLI's killOrphanBytes is its twin).
 # Kills claude processes connected to this daemon that are not spawned sessions.
 # Catches: old byte processes (HYDRA_ROLE=main) and unconfigured bridges.
 # Does NOT catch: terminal sessions that resolved the socket via fallback (no

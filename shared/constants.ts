@@ -144,6 +144,11 @@ function lookup<T>(table: Readonly<Record<string, T>>, key: string): T | undefin
   return Object.hasOwn(table, key) ? table[key] : undefined
 }
 
+/** A model as a launch takes it, whoever names it (a spawn, a specialist's `model`, `[main] model`): an alias is its full ID, a bare known ID gets its 1M window. */
+export function resolveLaunchModel(raw: string): string {
+  return resolveModelAlias(raw) ?? withContextSuffix(raw)
+}
+
 export function resolveModelAlias(alias: string): string | undefined {
   const key = alias.toLowerCase()
   return lookup(MODEL_ALIASES, key)
