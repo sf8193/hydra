@@ -1,5 +1,5 @@
 import { gateway } from './config.js'
-import { markDead, registry, sessionEmoji, addCapability, removeCapability, setToolDescription, removeToolDescriptions, setToolInputSchema, removeToolInputSchemas, type SessionInfo } from './sessions.js'
+import { markDead, registry, addCapability, removeCapability, setToolDescription, removeToolDescriptions, setToolInputSchema, removeToolInputSchemas, type SessionInfo } from './sessions.js'
 import { doSpawnSession as _doSpawnSession, killSession as _killSession, killsInProgress, waitForBridge as _waitForBridge } from './session-lifecycle.js'
 import { transport } from './bridge-transport.js'
 import { decideResume } from './auto-resume.js'
@@ -9,7 +9,7 @@ import { isSessionWorking, isSessionWorkingAsync } from './session-activity.js'
 import { formatContextPercent, type ProviderId } from './engines/engine-adapter.js'
 import { recordSessionDeath } from './observability.js'
 import { registerProtocol, type ProtocolChildSpawnMetadata } from './protocol-registry.js'
-import { refreshSessionVisual, registerProtocolBadge, formatRoundBadge, formatStateLine } from './anchor-state.js'
+import { refreshSessionVisual, registerProtocolBadge, formatRoundBadge, formatStateLine, emojiOfName } from './anchor-state.js'
 import { dumpTranscript } from './transcript-dump.js'
 import { defaultToolDescription } from './bridge-tools.js'
 import { pushToolSurface } from './tool-surface.js'
@@ -1297,7 +1297,7 @@ async function postStatusLine(run: ProtocolRun): Promise<void> {
   const roleLabel = actor ? run.protocol.roles[actor] : 'unknown'
 
   const action = name
-    ? `${sessionEmoji(name)} ${name} (${roleLabel}) is working...`
+    ? `${emojiOfName(name)} ${name} (${roleLabel}) is working...`
     : `${roleLabel} is working...`
 
   const text = formatStateLine(run.protocol.emoji, run.protocol.name, formatRoundBadge('', half, run.currentRound, run.rounds), action)

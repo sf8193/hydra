@@ -374,6 +374,10 @@
     ],
     [
       "daemon",
+      "daemon_anchor-state"
+    ],
+    [
+      "daemon",
       "daemon_bridge-transport"
     ],
     [
@@ -786,6 +790,10 @@
     ],
     [
       "daemon_recovery",
+      "daemon_anchor-state"
+    ],
+    [
+      "daemon_recovery",
       "daemon_session-lifecycle"
     ],
     [
@@ -931,6 +939,10 @@
     [
       "daemon_dashboard",
       "daemon_sessions"
+    ],
+    [
+      "daemon_dashboard",
+      "daemon_anchor-state"
     ],
     [
       "daemon_dashboard",
@@ -1142,6 +1154,10 @@
     ],
     [
       "daemon_commands_global",
+      "daemon_anchor-state"
+    ],
+    [
+      "daemon_commands_global",
       "daemon_bridge-transport"
     ],
     [
@@ -1171,6 +1187,10 @@
     [
       "daemon_commands_status",
       "daemon_sessions"
+    ],
+    [
+      "daemon_commands_status",
+      "daemon_anchor-state"
     ],
     [
       "daemon_commands_status",

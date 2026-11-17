@@ -3,7 +3,8 @@
  */
 
 import { gateway, PLATFORM } from './config.js'
-import { registry, threadRegistry, sessionEmoji, type SessionInfo } from './sessions.js'
+import { registry, threadRegistry, type SessionInfo } from './sessions.js'
+import { emojiOf } from './anchor-state.js'
 import { transport } from './bridge-transport.js'
 import { formatDuration } from './util.js'
 import { loadAccess, operatorIds } from './access.js'
@@ -91,7 +92,7 @@ async function getActiveSessions(): Promise<SessionRow[]> {
     rows.push({
       name: s.tmuxName,
       sessionId: s.sessionId,
-      emoji: sessionEmoji(s.tmuxName),
+      emoji: emojiOf(s),
       desc,
       age: formatDuration(now - s.createdAt),
       status: statuses[i]?.status ?? null,

@@ -7,7 +7,8 @@
 // work-key dedup, and the single-flight guard here.
 import { existsSync } from 'fs'
 import { gateway } from './config.js'
-import { markDead, registry, repointChildren, sessionEmoji, threadRegistry } from './sessions.js'
+import { markDead, registry, repointChildren, threadRegistry } from './sessions.js'
+import { emojiOfName } from './anchor-state.js'
 import type { ThreadMetadata, ThreadSessionEntry, SessionInfo, SpawnOpts, SpawnResult } from './sessions.js'
 import { carryOver, doSpawnSession, killSession, tryResume, tryRespawn, RECOVERY_REVERIFY_GUARD } from './session-lifecycle.js'
 import { baseNameFromBranch, safeSend } from './util.js'
@@ -497,7 +498,7 @@ export async function handleRecoverIntercept(msg: InboundMessage, targetName?: s
         try {
           const r = await recoverLocked(info, toRecoverInput(info))
           if (r.method !== 'failed') {
-            const e = sessionEmoji(r.newName)
+            const e = emojiOfName(r.newName)
             void gateway.send(info.threadId, `${e} \`${r.newName}\` recovered (${r.method})`).catch(() => {})
           }
           return r

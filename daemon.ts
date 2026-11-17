@@ -54,7 +54,8 @@ try {
 import { gateway, TOKEN, PLATFORM, STATE_DIR, CLAUDE_CONFIG, SOCK_PATH, heartbeatPath, DEFAULT_SESSION_CHANNEL } from './daemon/config.js'
 import { syncMods } from './shared/mods.js'
 import { PLUGIN_MANIFEST, MCP_CONFIG, ensureBridgeReady } from './daemon/plugin-manifest.js'
-import { registry, threadRegistry, sessionEmoji, reattachAdapters } from './daemon/sessions.js'
+import { registry, threadRegistry, reattachAdapters } from './daemon/sessions.js'
+import { emojiOfName } from './daemon/anchor-state.js'
 import { engines, resolveEngine } from './daemon/engines/instances.js'
 import { engineRecords } from './daemon/engines/boot.js'
 import { transport } from './daemon/bridge-transport.js'
@@ -227,7 +228,7 @@ if ('homeSpawnHandler' in gateway) {
         const modelSuffix = modelOverride ? ` [${modelOverride}]` : ''
         transport.sendToBridge(mainBridge, {
           type: 'notification',
-          content: `[system] Spawned ${sessionEmoji(result.name)} \`${result.name}\`${labelSuffix}${modelSuffix} for: ${cleanTopic}${result.url ? ` — ${result.url}` : ''}`,
+          content: `[system] Spawned ${emojiOfName(result.name)} \`${result.name}\`${labelSuffix}${modelSuffix} for: ${cleanTopic}${result.url ? ` — ${result.url}` : ''}`,
           meta: { chat_id: 'home', message_id: '', user: 'system', user_id: userId, ts: new Date().toISOString() },
         })
       }

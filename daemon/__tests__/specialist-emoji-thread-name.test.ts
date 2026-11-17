@@ -1,9 +1,9 @@
-// A specialist's `emoji` is the glyph its sessions wear in their thread names. Every name goes through `threadEmoji` (the first name at spawn
+// A specialist's `emoji` is the glyph its sessions wear in their thread names. Every name goes through `emojiOf` (the first name at spawn
 // and every refresh after it), so these drive `refreshSessionVisual` and read the name the Discord and Slack gateways would set.
 import { describe, test, expect, afterEach } from 'bun:test'
 import { gateway } from '../config.js'
 import { registry, sessionEmoji } from '../sessions.js'
-import { refreshSessionVisual, threadEmoji } from '../anchor-state.js'
+import { refreshSessionVisual, emojiOf } from '../anchor-state.js'
 import { _setHydraConfigForTesting } from '../hydra-config.js'
 import { formatThreadName } from '../../gateways/discord.js'
 import { slackSessionTitles } from '../../gateways/slack.js'
@@ -96,16 +96,16 @@ describe('with an emoji, it takes the default glyph, in the one position', () =>
 
   test('the first name, made at spawn before the session has a record, goes through the same function', () => {
     configure(decl('ops', { emoji: '🔐' }))
-    expect(threadEmoji({ tmuxName: 'glyph' }, 'ops')).toBe('🔐')
-    expect(threadEmoji({ tmuxName: 'glyph' }, undefined)).toBe('🔣')
+    expect(emojiOf({ tmuxName: 'glyph' }, 'ops')).toBe('🔐')
+    expect(emojiOf({ tmuxName: 'glyph' }, undefined)).toBe('🔣')
   })
 })
 
 describe('no thread name is built from the default emoji alone', () => {
-  // The first name is a template in doSpawnSession (it runs before a record exists, so a test cannot drive it); pin that it takes its glyph from threadEmoji.
-  test('the spawn-time thread name uses threadEmoji', async () => {
+  // The first name is a template in doSpawnSession (it runs before a record exists, so a test cannot drive it); pin that it takes its glyph from emojiOf.
+  test('the spawn-time thread name uses emojiOf', async () => {
     const src = await Bun.file(new URL('../session-lifecycle.ts', import.meta.url)).text()
-    expect(src).toMatch(/const threadName = `\$\{threadEmoji\(/)
+    expect(src).toMatch(/const threadName = `\$\{emojiOf\(/)
     expect(src).not.toMatch(/threadName = `\$\{sessionEmoji\(/)
   })
 })

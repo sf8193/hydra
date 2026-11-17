@@ -83,6 +83,7 @@ graph TD
 
   daemon --> daemon_config
   daemon --> daemon_sessions
+  daemon --> daemon_anchor-state
   daemon --> daemon_bridge-transport
   daemon --> daemon_access
   daemon --> daemon_permission
@@ -186,6 +187,7 @@ graph TD
   daemon_session-lifecycle --> daemon_worktree-manager
   daemon_recovery --> daemon_config
   daemon_recovery --> daemon_sessions
+  daemon_recovery --> daemon_anchor-state
   daemon_recovery --> daemon_session-lifecycle
   daemon_recovery --> daemon_util
   daemon_recovery --> daemon_tmux
@@ -223,6 +225,7 @@ graph TD
   connectors_github_pr-watch --> shared_constants
   daemon_dashboard --> daemon_config
   daemon_dashboard --> daemon_sessions
+  daemon_dashboard --> daemon_anchor-state
   daemon_dashboard --> daemon_bridge-transport
   daemon_dashboard --> daemon_util
   daemon_dashboard --> daemon_access
@@ -275,6 +278,7 @@ graph TD
   daemon_usage-alerts --> daemon_util
   daemon_commands_global --> daemon_config
   daemon_commands_global --> daemon_sessions
+  daemon_commands_global --> daemon_anchor-state
   daemon_commands_global --> daemon_bridge-transport
   daemon_commands_global --> daemon_session-lifecycle
   daemon_commands_global --> daemon_util
@@ -283,6 +287,7 @@ graph TD
   daemon_commands_global --> daemon_access
   daemon_commands_status --> daemon_config
   daemon_commands_status --> daemon_sessions
+  daemon_commands_status --> daemon_anchor-state
   daemon_commands_status --> daemon_bridge-transport
   daemon_commands_status --> daemon_util
   daemon_commands_status --> connectors_github_pr-watch
