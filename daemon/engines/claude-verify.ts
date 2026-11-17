@@ -40,6 +40,8 @@ export type Loaded = {
   connectorActivity: boolean
   /** Plugins Claude Code registered as its own (`name@builtin`): the only ones allowed besides the hydra mod and the bridge. */
   builtinPlugins: string[]
+  /** Plugins it has registered, of any source. A plugin is named on a `Checking plugin` line first and registered ~100 ms later: until then its source is unknown. */
+  registeredPlugins: string[]
 }
 
 const BRIDGE_PLUGIN_NAME = BRIDGE_PLUGIN_ID.split('@')[0]
@@ -47,7 +49,7 @@ const flatten = (rules: unknown): string[] => (Array.isArray(rules) ? rules.filt
 
 /** Reads a debug file's text into what it says loaded. Lines it does not recognize are ignored: the judgement rests on what it does recognize. */
 export function readLoaded(log: string): Loaded {
-  const servers = new Set<string>(), connected = new Set<string>(), plugins = new Set<string>(), builtin = new Set<string>()
+  const servers = new Set<string>(), connected = new Set<string>(), plugins = new Set<string>(), builtin = new Set<string>(), registered = new Set<string>()
   let allow: Set<string> | undefined
   const otherAllow: Record<string, Set<string>> = {}
   let connectorsOff = false
@@ -71,7 +73,10 @@ export function readLoaded(log: string): Loaded {
     else if ((m = line.match(/^MCP server "([^"]+)": Successfully connected/))) { servers.add(m[1]); connected.add(m[1]) }
     else if ((m = line.match(/^Checking plugin (\S+?): skillsPath=/))) plugins.add(m[1])
     else if ((m = line.match(/^Loaded inline plugin from path: (\S+)/))) plugins.add(m[1])
-    else if ((m = line.match(/^plugin\.register: (\S+) \((?:builtin|prepend), (\S+)@builtin\)/)) && m[1] === m[2]) builtin.add(m[1])
+    else if ((m = line.match(/^plugin\.register: (\S+) \(([^,()]+), (\S+)@(\S+)\)/)) && m[1] === m[3]) {
+      registered.add(m[1])
+      if ((m[2] === 'builtin' || m[2] === 'prepend') && m[4] === 'builtin') builtin.add(m[1])
+    }
     else if ((m = line.match(/^(?:Applying permission update: )?(Adding|Replacing all) (?:\d+ )?allow rule(?:\(s\)|s) (?:to|for) destination '([^']+)'(?: with \d+ rule\(s\))?: (\[.*\])\s*$/))) {
       try { rules(m[2], flatten(JSON.parse(m[3])), m[1] !== 'Adding') } catch { /* an unreadable list is not a rule we can name */ }
     }
@@ -83,7 +88,7 @@ export function readLoaded(log: string): Loaded {
   return {
     servers: [...servers], connected: [...connected], plugins: [...plugins], allow: allow ? [...allow] : undefined,
     otherAllow: Object.fromEntries(Object.entries(otherAllow).filter(([, v]) => v.size).map(([k, v]) => [k, [...v]])),
-    connectorsOff, connectorActivity, builtinPlugins: [...builtin],
+    connectorsOff, connectorActivity, builtinPlugins: [...builtin], registeredPlugins: [...registered],
   }
 }
 
@@ -102,15 +107,20 @@ export function expectedLoad(p: Pick<ConfinedPolicy, 'servers'>): { servers: str
 const safe = (x: string): string => x.replace(/[^\w.:@*()/ -]/g, '?').slice(0, 60)
 const list = (xs: string[]): string => `${xs.slice(0, 5).map(x => `\`${safe(x)}\``).join(', ')}${xs.length > 5 ? ` and ${xs.length - 5} more` : ''}`
 
-/** The ways what loaded is more than the policy allows: each one is enough to refuse, even before the rest has loaded. */
-export function surplus(p: Pick<ConfinedPolicy, 'servers'>, got: Loaded): string[] {
+/**
+ * The ways what loaded is more than the policy allows: each one is enough to refuse, even before the rest has loaded.
+ * A plugin is judged by what Claude Code registered it as. While the file is still being written, a plugin that is named but not yet
+ * registered is not yet a surplus (Claude Code's own built-ins are named ~100 ms before they register as built in). `final` is the
+ * judgement that ends the wait: a plugin that never registered is refused then, because its source is unknown.
+ */
+export function surplus(p: Pick<ConfinedPolicy, 'servers'>, got: Loaded, final = false): string[] {
   const want = expectedLoad(p)
   const out: string[] = []
   const extraServers = [...new Set([...got.servers, ...got.connected])].filter(s => !want.servers.includes(s))
   if (extraServers.length) out.push(`it started MCP servers the policy does not list: ${list(extraServers)}`)
   // The hydra mod and the bridge, and what Claude Code registers as its own (`name@builtin`): a plugin merely named like one is not.
-  const extraPlugins = got.plugins.filter(n => n !== HYDRA_MOD && n !== BRIDGE_PLUGIN_NAME && !got.builtinPlugins.includes(n))
-  if (extraPlugins.length) out.push(`it loaded plugins the policy does not allow: ${list(extraPlugins)}`)
+  const extraPlugins = got.plugins.filter(n => n !== HYDRA_MOD && n !== BRIDGE_PLUGIN_NAME && !got.builtinPlugins.includes(n) && (final || got.registeredPlugins.includes(n)))
+  if (extraPlugins.length) out.push(`it loaded plugins the policy does not allow: ${list(extraPlugins)} (a restricted session loads only the hydra mod, the bridge and Claude Code's built-in plugins: take these out of the launch)`)
   const extraRules = (got.allow ?? []).filter(r => !want.allow.includes(r))
   if (extraRules.length) out.push(`it applied permission rules the policy does not give: ${list(extraRules)}`)
   for (const [dest, rules] of Object.entries(got.otherAllow)) out.push(`it applied permission rules from ${safe(dest)}, which a confined session reads none of: ${list(rules)}`)
@@ -134,7 +144,7 @@ export function shortfall(p: Pick<ConfinedPolicy, 'servers'>, got: Loaded): stri
 }
 
 /** All the ways a launch's loaded set differs from its policy; empty when it is exactly what the policy says. */
-export const mismatches = (p: Pick<ConfinedPolicy, 'servers'>, got: Loaded): string[] => [...surplus(p, got), ...shortfall(p, got)]
+export const mismatches = (p: Pick<ConfinedPolicy, 'servers'>, got: Loaded): string[] => [...surplus(p, got, true), ...shortfall(p, got)]
 
 /** Test seams: the file read, the clock and the deadline. */
 export const verifyDeps = {
@@ -152,7 +162,7 @@ export type Verdict = { ok: true } | { ok: false; why: string }
 
 /**
  * Whether the launch whose debug file is `path` loaded what `policy` says. Polls the file: a surplus (a server, plugin or rule the
- * policy does not give) refuses as soon as it is read; otherwise it waits until every expected server has connected, then judges
+ * policy does not give) refuses as soon as it is read (a plugin only once it has registered: see `surplus`); otherwise it waits until every expected server has connected, then judges
  * the whole. A file that cannot be read, or a launch that has not finished loading by the deadline, refuses: never "no news, good news".
  */
 export async function verifyLaunch(policy: Pick<ConfinedPolicy, 'servers'>, path: string | undefined, deps: typeof verifyDeps = verifyDeps): Promise<Verdict> {
