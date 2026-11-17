@@ -35,9 +35,9 @@ describe('hydra migrate', () => {
     expect(loaded.config.operator).toBe('operator')
     expect(loaded.config.people.operator.addresses).toEqual(['discord:100000000000000001'])
     expect(loaded.config.people['person-2'].addresses).toEqual(['discord:100000000000000002'])
-    expect(loaded.config.specialists.ops).toMatchObject({ workdir: '/home/op/work', kickoffFile: '/home/op/ops.md', model: 'm1', idleMs: 4 * 3_600_000, home: '555' })
+    expect(loaded.config.specialists.ops).toMatchObject({ workdir: '/home/op/work', kickoffFile: '/home/op/ops.md', model: 'm1', idleMs: 4 * 3_600_000, homePlace: '555' })
     expect(loaded.config.specialists.ops.kickoff).toBeUndefined()
-    expect(loaded.config.specialists.desk).toMatchObject({ kickoff: 'be the desk', home: '556' })
+    expect(loaded.config.specialists.desk).toMatchObject({ kickoff: 'be the desk', homePlace: '556' })
     expect(Object.keys(loaded.config.specialists)).toEqual(['ops', 'desk'])
     expect(plan.notes.join('\n')).toContain('discord:100000000000000002 (now people.person-2) was in allowFrom but isn\'t the operator')
     expect(plan.notes.join('\n')).toContain('specialist "123" left out')
@@ -74,7 +74,7 @@ describe('hydra migrate', () => {
     const input = state({ 'access.json': { allowFrom: ['U0OP'] }, 'specialists.json': { ops: { channel: 'C0OPS', kickoff: 'k' } } })
     const plan = planMigrate({ ...input, platform: 'slack' })
     if (!plan.ok) throw new Error(plan.errors.join('\n'))
-    expect(plan.text).toContain('home = "slack:C0OPS"')
+    expect(plan.text).toContain('home_place = "slack:C0OPS"')
     expect(plan.text).toContain('addresses = ["slack:U0OP"]')
     expect(accessStep.pending(dir)).toBe(true)
     expect(specialistsStep.pending(dir)).toBe(true)
@@ -154,7 +154,7 @@ describe('hydra migrate: found in review', () => {
     const input = state({ 'access.json': { allowFrom: ['U0OP'] }, 'specialists.json': { ops: { kickoffFile: 'prompts/k.md', channel: 'D0123ABC' } } })
     const plan = okPlan({ ...input, platform: 'slack', daemonCwd: '/opt/hydra' })
     expect(plan.text).toContain('kickoff_file = "/opt/hydra/prompts/k.md"')
-    expect(plan.text).not.toContain('home =')
+    expect(plan.text).not.toContain('home_place =')
     expect(plan.notes.join('\n')).toContain('was relative to the daemon\'s folder')
     expect(plan.notes.join('\n')).toContain('channel D0123ABC isn\'t a channel hydra.toml can name')
   })
@@ -312,7 +312,7 @@ describe('incremental migrate: what\'s pending is appended to an existing hydra.
     if (!plan.ok) {
       expect(plan.errors[0]).toContain('Make these edits by hand, then run hydra migrate again:')
       expect(plan.errors[0]).toContain('- under [specialists.ops]: add kickoff = "be ops"')
-      expect(plan.errors[0]).toContain('- under [specialists.ops]: add home = "555"')
+      expect(plan.errors[0]).toContain('- under [specialists.ops]: add home_place = "555"')
     }
   })
 

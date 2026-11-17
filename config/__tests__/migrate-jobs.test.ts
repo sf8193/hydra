@@ -60,7 +60,7 @@ describe('migrate jobs.toml → [schedules]', () => {
       health: { cron: '*/5 * * * *', check: '~/health/check.sh', message: 'Health check found something.', runner: 'launchd', target: 'main' },
     })
     // The fresh session's first words are today's message: the prompt, with the check output after it.
-    expect(m.specialists).toEqual({ review: { workdir: '/home/u/work', home: '1551794455227404370', sessions: 'per-conversation', idle: '4d', kickoff: 'Weekly review.' } })
+    expect(m.specialists).toEqual({ review: { workdir: '/home/u/work', home_place: '1551794455227404370', sessions: 'per-conversation', idle: '4d', kickoff: 'Weekly review.' } })
     expect(m.notes).toEqual([
       'review: a per-conversation specialist; each run is a fresh session in a new thread, as before',
       'review: workdir /home/u/work is where its spawned sessions ran (SPAWN_CWD); set workdir to run them elsewhere',
@@ -81,7 +81,7 @@ describe('migrate jobs.toml → [schedules]', () => {
       if (!loaded.ok) throw new Error('migrated text must load')
       expect(loaded.config.schedules.pull).toMatchObject({ runner: 'daemon', needs: ['internet'], alertAfterMs: 2 * 86_400_000 })
       expect(loaded.config.schedules.keepalive.target).toBeUndefined()
-      expect(loaded.config.specialists.review).toMatchObject({ sessions: 'per-conversation', home: '1551794455227404370', idleMs: 4 * 86_400_000 })
+      expect(loaded.config.specialists.review).toMatchObject({ sessions: 'per-conversation', homePlace: '1551794455227404370', idleMs: 4 * 86_400_000 })
       expect(plan.consumed).toEqual(['jobs.toml'])
       expect(loaded.config.operator).toBe('operator')
       applyMigrate(dir, plan)
@@ -173,7 +173,7 @@ describe('migrate jobs.toml → [schedules]', () => {
 
   test("a spawn table carries its kickoff and model; the session stays in SPAWN_CWD, the check in its cwd; no idle is today's 30m", () => {
     const m = migrateJobs(`[s]\nschedule="0 6 * * *"\ncwd="/srv/s"\ncheck="c.sh"\nprompt="Triage."\nspawn={ channel="c1", kickoff_file="/k.md", model="haiku" }\n`, opts)
-    expect(m.specialists.s).toEqual({ workdir: '/home/u/work', home: 'c1', sessions: 'per-conversation', idle: '30m', kickoff_file: '/k.md', model: 'haiku' })
+    expect(m.specialists.s).toEqual({ workdir: '/home/u/work', home_place: 'c1', sessions: 'per-conversation', idle: '30m', kickoff_file: '/k.md', model: 'haiku' })
     expect(m.schedules.s).toMatchObject({ target: 'specialist:s', workdir: '/srv/s', message: 'Triage.' })
     expect(m.notes).toEqual([
       's: a per-conversation specialist; each run is a fresh session in a new thread, as before',

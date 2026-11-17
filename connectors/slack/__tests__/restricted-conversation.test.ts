@@ -1,4 +1,4 @@
-// A restricted session's kept tools work in a Slack conversation bound to its specialist, and nowhere else in Slack: its home
+// A restricted session's kept tools work in a Slack conversation bound to its specialist, and nowhere else in Slack: its home_place
 // channel is not its conversation.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { rmSync } from 'fs'
@@ -20,14 +20,14 @@ const TOML = `${TWO_APPS}
 [specialists.${CRM}]
 workdir = "/w/crm"
 reachable_by = ["role:anyone"]
-home = "slack:C9"
+home_place = "slack:C9"
 [[rules]]
 place = "slack:C1"
 target = "specialist:${CRM}"
 [specialists.${OPS}]
 workdir = "/w/ops"
 reachable_by = ["role:anyone"]
-home = "slack:C8"
+home_place = "slack:C8"
 [[rules]]
 place = "slack:C2"
 target = "specialist:${OPS}"
@@ -68,8 +68,8 @@ describe('a Slack conversation bound to the specialist', () => {
   })
 })
 
-describe("the specialist's home is not its conversation", () => {
-  // Every spelling reply accepts for a home: the configured value, the channel, and the channel's top level.
+describe("the specialist's home_place is not its conversation", () => {
+  // Every spelling reply accepts for a home_place: the configured value, the channel, and the channel's top level.
   const HOME = ['slack:C9', 'slack:C9:' + TOP_LEVEL, 'C9']
   test.each(HOME)('conversationBelongsTo(%s) is false', home => {
     expect(conversationBelongsTo('crm-session', home)).toBe(false)
@@ -79,7 +79,7 @@ describe("the specialist's home is not its conversation", () => {
       expect(restrictedRefusal('crm-session', tool, { [key]: home, text: 'x' })).toBe(`${tool}: ${key} ${home} is not this session's own conversation; a restricted session acts only in its own thread or in a Slack conversation bound to its specialist`)
     })
   }
-  test('even with the home open as a conversation bound to the specialist (a post to it opens one)', () => {
+  test('even with the home_place open as a conversation bound to the specialist (a post to it opens one)', () => {
     getSlackWatcher().bind('C9', '8.000001', CRM, 'home')
     // That thread IS bound to the specialist, so it is its conversation: the refusal is for the channel itself.
     expect(conversationBelongsTo('crm-session', 'slack:C9:8.000001')).toBe(true)

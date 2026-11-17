@@ -23,7 +23,7 @@ afterEach(() => { _setHydraConfigForTesting(undefined); rmSync(threads, { force:
 
 describe('specialists declared in hydra.toml', () => {
   test('the recipe comes from hydra.toml, mapped to the daemon\'s shape', () => {
-    _setHydraConfigForTesting(config(declared('ops', { kickoff: '/orient ops', model: 'm1', idleMs: 4 * 3_600_000, home: '123456789' })))
+    _setHydraConfigForTesting(config(declared('ops', { kickoff: '/orient ops', model: 'm1', idleMs: 4 * 3_600_000, homePlace: '123456789' })))
     expect(getSpecialist('ops')).toEqual({ channel: '123456789', kickoff: '/orient ops', model: 'm1', idle: '240m', workdir: '/srv/ops', updatedAt: 0 })
     expect(getSpecialist('crm')).toBeUndefined()
     expect(getSpecialist('constructor')).toBeUndefined()
@@ -99,8 +99,8 @@ describe('specialists declared in hydra.toml', () => {
     expect(readFileSync(threads, 'utf8')).toBe('{ not json')
   })
 
-  test('a home that isn\'t a channel id here falls back to the default channel', () => {
-    _setHydraConfigForTesting(config(declared('ops', { home: 'discord:#feed' }), declared('crm', { home: 'slack:C0TEST' }), declared('desk', { home: 'discord:200000000000000000' })))
+  test('a home_place that isn\'t a channel id here falls back to the default channel', () => {
+    _setHydraConfigForTesting(config(declared('ops', { homePlace: 'discord:#feed' }), declared('crm', { homePlace: 'slack:C0TEST' }), declared('desk', { homePlace: 'discord:200000000000000000' })))
     expect(getSpecialist('ops')?.channel).toBe(DEFAULT_SESSION_CHANNEL || undefined)
     expect(getSpecialist('crm')?.channel).toBe(DEFAULT_SESSION_CHANNEL || undefined)
     expect(getSpecialist('desk')?.channel).toBe('200000000000000000')

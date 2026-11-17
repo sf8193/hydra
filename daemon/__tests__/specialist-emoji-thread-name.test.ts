@@ -11,7 +11,7 @@ import type { SessionVisualOpts } from '../../gateways/gateway.js'
 
 process.stderr.write = (() => true) as any
 
-const decl = (id: string, over: Record<string, unknown> = {}) => ({ id, workdir: '/srv/x', kickoff: 'k', home: '555', reachableBy: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false, ...over })
+const decl = (id: string, over: Record<string, unknown> = {}) => ({ id, workdir: '/srv/x', kickoff: 'k', homePlace: '555', reachableBy: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false, ...over })
 const configure = (...specialists: ReturnType<typeof decl>[]) => _setHydraConfigForTesting({
   operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
   people: { op: { id: 'op', addresses: ['discord:100000000000000001'], roles: [], name: 'op' } },
@@ -120,7 +120,7 @@ describe('hydra specialist show', () => {
   })
 })
 
-describe('a session sitting in its specialist\'s home thread, with no stored policy', () => {
+describe('a session sitting in its specialist\'s own thread, with no stored policy', () => {
   test('is found by the thread, and wears the emoji', async () => {
     const { setSpecialistThread } = await import('../../specialists/specialists.js')
     configure(decl('ops', { emoji: '🔐' }))

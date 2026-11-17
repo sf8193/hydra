@@ -58,3 +58,14 @@ describe('G: remaining names', () => {
     refuses('[defaults]\nprivate_roots = ["/home/op/notes"]\n', 'defaults.private_roots: unknown key "private_roots"')
   })
 })
+
+describe('I: home_place', () => {
+  // The value rules did not change with the key: a place, or a bare channel id.
+  test('home_place loads (a place, or a bare channel id); home is refused as an unknown key', () => {
+    for (const value of ['discord:#ops', '1234567890123456789']) {
+      const r = loadHydraConfig(`${HEAD}${SPECIALIST}home_place = "${value}"\n`, env)
+      expect(r.ok && r.config.specialists.ops?.homePlace).toBe(value)
+    }
+    refuses(`${SPECIALIST}home = "discord:#ops"\n`, 'specialists.ops.home: unknown key "home"')
+  })
+})

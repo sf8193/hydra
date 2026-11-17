@@ -455,7 +455,7 @@ function mayAnswerConversation(h: HydraConfig, caller: SessionInfo | undefined, 
 /**
  * Whether `conversation` is an open conversation the caller answers: bound to its specialist (a conversation's own session:
  * its own). Never throws: an id that parses to nothing, or is not open, is not theirs. Unlike `reply`, this does not count
- * the specialist's home channel: a restricted session's tools are held to this.
+ * the specialist's `home_place`: a restricted session's tools are held to this.
  */
 export function conversationBelongsTo(callerSessionId: string | undefined, conversation: unknown): boolean {
   try {
@@ -481,26 +481,26 @@ export async function replyInConversation(callerSessionId: string | undefined, c
   if (!text.trim()) throw new Error('nothing to post: the text is empty')
   const h = hydraConfig()
   const me = callerSessionId === 'main' ? MAIN : boundAs(callerSessionId ? registry.get(callerSessionId) : undefined, h)
-  // Its own `home` (a schedule's reply has no conversation): a new thread there, bound to it, so answers come back to it.
+  // Its own `home_place` (a schedule's reply has no conversation): a new thread there, bound to it, so answers come back to it.
   // The app it posts as with no message to answer: hydra.toml's loader has checked it is declared and can reach the specialist.
   const spec = me ? h.specialists[me] : undefined
   const speaks = spec ? speaksAsOf(spec, Object.keys(h.slackApps)) : undefined
-  const home = me ? homeChannel(h, me, speaks) : undefined
-  if (home && (conversation === h.specialists[me!]?.home || conversation === `slack:${home}` || conversation === conversationId({ app: speaks, channel: home, threadTs: TOP_LEVEL }))) {
+  const homePlaceId = me ? homePlaceChannel(h, me, speaks) : undefined
+  if (homePlaceId && (conversation === h.specialists[me!]?.homePlace || conversation === `slack:${homePlaceId}` || conversation === conversationId({ app: speaks, channel: homePlaceId, threadTs: TOP_LEVEL }))) {
     if (!speaks) throw new Error(`${me} has no Slack app to post as: set \`speaks_as\` in [specialists.${me}]`)
     declaredApp(h, speaks)
-    const where = `${me}'s home (${h.specialists[me!]!.home})`
+    const where = `${me}'s home_place (${h.specialists[me!]!.homePlace})`
     // Its thread is a conversation bound to it as soon as the first part lands (whatever becomes of the rest), counted
     // with the ones it binds by hand, so a loop can't fill the table. Past that, the post goes unbound, and is alerted.
     let unbound: string | undefined
     const bindThread = (ts: string) => {
       const w = getSlackWatcher()
       const held = w.list().filter(e => (e.mentionedBy === 'tool' || e.mentionedBy === 'home') && e.specialist && currentId(h, e.specialist) === me).length
-      if (held < TOOL_BIND_MAX && w.bind(home, ts, me!, 'home', speaks)) return
+      if (held < TOOL_BIND_MAX && w.bind(homePlaceId, ts, me!, 'home', speaks)) return
       unbound = held >= TOOL_BIND_MAX ? `${me} already holds ${TOOL_BIND_MAX} conversations it opened itself` : 'the conversation table is full'
-      alert(`⚠️ ${me}'s post to its home opened no conversation (${unbound}): replies under it go to whoever hears there, not back to ${me}.`, me)
+      alert(`⚠️ ${me}'s post to its home_place opened no conversation (${unbound}): replies under it go to whoever hears there, not back to ${me}.`, me)
     }
-    await postParts(speaks!, home, undefined, text, where, true, () => homeChannel(hydraConfig(), me!, speaks) === home, bindThread)
+    await postParts(speaks!, homePlaceId, undefined, text, where, true, () => homePlaceChannel(hydraConfig(), me!, speaks) === homePlaceId, bindThread)
     return unbound ? `posted to ${where}, but its thread is not bound to ${me}: ${unbound}` : `posted to ${where}; replies in its thread come back to ${me}`
   }
   const c = parseConversation(conversation)
@@ -512,7 +512,7 @@ export async function replyInConversation(callerSessionId: string | undefined, c
   // A thread a session bound to itself is listen-only: only a specialist (or main) speaks in Slack.
   if (bound && isSessionThread(bound)) throw new Error(`${id} is bound to a session to listen to: hydra posts to Slack only for a specialist (or main), so reply to the operator instead`)
   const caller = callerSessionId ? registry.get(callerSessionId) : undefined
-  if (!mayAnswerConversation(h, caller, me, bound, id)) throw new Error(`${id} is bound to ${bound ?? 'no one yet'}${me ? `, not ${me}` : ''}: a reply goes only to a conversation bound to your specialist (or its home)${isConversationSession(caller) ? ', and from a conversation\'s own session only to that conversation' : ''}`)
+  if (!mayAnswerConversation(h, caller, me, bound, id)) throw new Error(`${id} is bound to ${bound ?? 'no one yet'}${me ? `, not ${me}` : ''}: a reply goes only to a conversation bound to your specialist (or its home_place)${isConversationSession(caller) ? ', and from a conversation\'s own session only to that conversation' : ''}`)
   // Checked again before every part: a conversation moved away mid-reply gets no more of it.
   const stillMine = () => { const now = getSlackWatcher().get(c.channel, c.threadTs, app)?.specialist; return !!now && currentId(hydraConfig(), now) === bound }
   // Through the app that heard the conversation, and no other.
@@ -530,11 +530,11 @@ export function slackConversationLink(conversation: string): string | undefined 
   } catch { return undefined }
 }
 
-/** A specialist's `home`, when it names a Slack place: that channel's id (a `#name` resolved once names are read, through the app it speaks as). */
-function homeChannel(h: HydraConfig, id: string, app?: string): string | undefined {
-  const home = h.specialists[id]?.home
-  if (!home?.startsWith('slack:') || !namesAChannel(home)) return undefined
-  const rest = home.slice('slack:'.length)
+/** A specialist's `home_place`, when it names a Slack place: that channel's id (a `#name` resolved once names are read, through the app it speaks as). */
+function homePlaceChannel(h: HydraConfig, id: string, app?: string): string | undefined {
+  const homePlace = h.specialists[id]?.homePlace
+  if (!homePlace?.startsWith('slack:') || !namesAChannel(homePlace)) return undefined
+  const rest = homePlace.slice('slack:'.length)
   return rest.startsWith('#') ? offlineView(app).directory.idOf(rest.slice(1)) : rest
 }
 

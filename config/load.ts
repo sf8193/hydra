@@ -66,7 +66,7 @@ const TOP_KEYS = ['operator', 'main', 'gateways', 'connectors', 'slack', 'people
 const OPERATOR_FREE_KEYS = ['operator', 'main']
 /** `[main]`: the operator's harness, as `[specialists.<id>]` is a specialist. */
 const MAIN_KEYS = ['model']
-const SPECIALIST_KEYS = ['workdir', 'kickoff', 'kickoff_file', 'pinned_to', 'speaks_as', 'reachable_by', 'sessions', 'max_sessions', 'idle', 'home', 'model', 'emoji', 'engine', 'env_file', 'renamed_from', 'restricted', 'tools', 'mcp_servers', 'sends_to']
+const SPECIALIST_KEYS = ['workdir', 'kickoff', 'kickoff_file', 'pinned_to', 'speaks_as', 'reachable_by', 'sessions', 'max_sessions', 'idle', 'home_place', 'model', 'emoji', 'engine', 'env_file', 'renamed_from', 'restricted', 'tools', 'mcp_servers', 'sends_to']
 /** A Slack app's keys, as `[slack.apps.<id>]` spells them. */
 const SLACK_APP_KEYS = ['bot_token_env', 'socket_token_env', 'operator_token_env', 'display_name', 'description']
 /** Keys only a hand edit of one specialist's own table sets: a default would reach every specialist, a fragment's table is someone else's. */
@@ -490,7 +490,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
 
   function readSpecialistKeyTypes(t: Table, path: string) {
     str(t, 'workdir', path); str(t, 'kickoff', path); str(t, 'kickoff_file', path); strList(t, 'pinned_to', path); str(t, 'speaks_as', path); strList(t, 'reachable_by', path)
-    oneOf(t, 'sessions', path, SESSIONS); positiveInt(t, 'max_sessions', path); str(t, 'idle', path); str(t, 'home', path); str(t, 'model', path)
+    oneOf(t, 'sessions', path, SESSIONS); positiveInt(t, 'max_sessions', path); str(t, 'idle', path); str(t, 'home_place', path); str(t, 'model', path)
     oneOf(t, 'engine', path, ENGINES); str(t, 'env_file', path); strList(t, 'renamed_from', path)
     bool(t, 'restricted', path); strList(t, 'tools', path); strList(t, 'mcp_servers', path); strList(t, 'sends_to', path)
   }
@@ -546,7 +546,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       if (pinnedRaw.length) pinnedTo = [...new Set(apps)]
     }
 
-    // `speaks_as`: the app it posts as when no message came in (its `home`, a new thread). It names a declared app, one it is pinned to if it is pinned.
+    // `speaks_as`: the app it posts as when no message came in (its `home_place`, a new thread). It names a declared app, one it is pinned to if it is pinned.
     const speaksAsRaw = str(t, 'speaks_as', path)
     const speaksAs = speaksAsRaw === undefined ? undefined : appValue(speaksAsRaw, at('speaks_as'))
     if (speaksAs !== undefined) {
@@ -571,9 +571,9 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     }
 
     const envFile = str(t, 'env_file', path)
-    const home = str(t, 'home', path)
-    // A place, or a channel by its platform id: where its threads open.
-    if (home !== undefined && !normalizePlace(home) && !/^\d+$/.test(home)) error(at('home'), `"${home}" must be a place (slack:#channel, discord:#channel, …) or a channel id`)
+    const homePlace = str(t, 'home_place', path)
+    // A place, or a channel by its platform id: where it posts when nobody wrote to it first (a new thread).
+    if (homePlace !== undefined && !normalizePlace(homePlace) && !/^\d+$/.test(homePlace)) error(at('home_place'), `"${homePlace}" must be a place (slack:#channel, discord:#channel, …) or a channel id`)
     const model = str(t, 'model', path)
     // One emoji character, for its threads' names (shared/emoji.ts). Read raw, so an empty or spaced value gets what to write, not the generic string message.
     const emojiWhy = t.emoji === undefined ? undefined : emojiProblem(t.emoji)
@@ -621,7 +621,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       ...(kickoff !== undefined && { kickoff }),
       ...(kickoffFile !== undefined && { kickoffFile }),
       ...(idleMs !== undefined && { idleMs }),
-      ...(home !== undefined && { home: normalizePlace(home) ?? home }),
+      ...(homePlace !== undefined && { homePlace: normalizePlace(homePlace) ?? homePlace }),
       ...(model !== undefined && { model }),
       ...(t.emoji !== undefined && !emojiWhy && { emoji: t.emoji as string }),
       ...(engine !== undefined && { engine }),
@@ -872,15 +872,15 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     }
   }
 
-  // A post that answers no message (a specialist's `home`, a new thread) goes out through its `speaks_as` app (see speaksAsOf), and
-  // the thread it opens must be one that app can deliver back to the specialist: checked for every specialist with a Slack home.
+  // A post that answers no message (a specialist's `home_place`, a new thread) goes out through its `speaks_as` app (see speaksAsOf), and
+  // the thread it opens must be one that app can deliver back to the specialist: checked for every specialist with a Slack home_place.
   const declaredApps = Object.keys(slackApps)
   for (const s of Object.values(specialists)) {
-    const slackHome = !!s.home?.startsWith('slack:') && namesAChannel(s.home)
-    if (!slackHome && !s.speaksAs) continue
+    const slackHomePlace = !!s.homePlace?.startsWith('slack:') && namesAChannel(s.homePlace)
+    if (!slackHomePlace && !s.speaksAs) continue
     const app = speaksAsOf(s, declaredApps)
     const path = `specialists.${s.id}.speaks_as`
-    if (!app) { if (declaredApps.length) error(path, `${s.id} has a Slack home, and ${declaredApps.length} Slack apps are declared and none is \`default\`: set \`speaks_as\` to the app it posts as`); continue }
+    if (!app) { if (declaredApps.length) error(path, `${s.id} has a Slack home_place, and ${declaredApps.length} Slack apps are declared and none is \`default\`: set \`speaks_as\` to the app it posts as`); continue }
     // A pinned specialist's own `speaks_as` was checked against its `pinned_to` above.
     const apart = s.pinnedTo && s.speaksAs ? undefined : whyNotServed(specialists, s, app, 'it would post through')
     if (apart) error(path, `${apart}: set \`speaks_as\` to an app ${s.id} can be reached through, or pin ${s.id} to ${spelledApp(app)}`)

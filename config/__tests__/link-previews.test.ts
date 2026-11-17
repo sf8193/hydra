@@ -118,7 +118,7 @@ describe('a Discord channel given by name', () => {
 workdir = "~/agents/ops"
 reachable_by = ["role:anyone"]
 restricted = true
-home = "slack:#esc"
+home_place = "slack:#esc"
 [[rules]]
 place = "discord:#ops"
 target = "specialist:ops"

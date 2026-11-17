@@ -171,7 +171,7 @@ export type SlackWatchDeps = {
   filesDir?: string
   /** Runs the guard. Defaults to the real subprocess; tests pass a fake. */
   guard?: (g: Guard, input: GuardInput) => Promise<GuardVerdict>
-  /** A plain message to a person (not a session turn): how a drop is surfaced. `to`: the specialist it concerns, whose home should hear it. */
+  /** A plain message to a person (not a session turn): how a drop is surfaced. `to`: the specialist it concerns, whose `home_place` should hear it. */
   alert?: (text: string, to?: string, app?: string) => void
 }
 
