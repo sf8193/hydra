@@ -28,6 +28,7 @@ import { SOCK_PATH, STATE_DIR } from '../config.js'
 import { codexTurnOutcome, defaultTurnSources, isCodexWorking } from './codex-observation.js'
 import { codexPiggyback, type CodexPiggyback } from './codex-piggyback.js'
 import { isCodexReconnecting, reconnectCodexSessions } from './codex-runtime.js'
+import { replyContextLine } from '../reply-context.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
@@ -246,6 +247,8 @@ export class CodexEngineAdapter implements EngineAdapter {
     // Enrich before transferring ownership to the queue, including while the
     // app-server connection is absent.
     let deliveryText = text
+    const reply = meta ? replyContextLine(meta) : ''
+    if (reply) deliveryText += `\n\n[${reply}]`
     const downloadedFiles = meta?.downloaded_files
     if (downloadedFiles) deliveryText += `\n\n[attachments: ${downloadedFiles}]`
 

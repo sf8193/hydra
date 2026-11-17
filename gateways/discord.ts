@@ -15,6 +15,7 @@ import {
   ButtonStyle,
   ActionRowBuilder,
   MessageFlags,
+  MessageReferenceType,
   type Message,
   type MessageMentionOptions,
 } from 'discord.js'
@@ -37,6 +38,7 @@ import type {
   ReactionEvent,
   SessionVisualOpts,
   Outbound,
+  ReplyContext,
 } from './gateway.js'
 import { shapeDiscordOutbound } from './discord-format.js'
 import { ThrottledQueue } from '../throttled-queue.js'
@@ -721,6 +723,20 @@ export class DiscordGateway implements ChatGateway {
       }
     } catch {
       return null
+    }
+  }
+
+  /** The message a Discord Reply points at: its author and text. A forward is not a reply; a deleted original keeps its id. */
+  async getReplyContext(msg: InboundMessage): Promise<ReplyContext | null> {
+    if (!msg.referenceMessageId) return null
+    const ch = await this.fetchTextChannel(msg.channelId)
+    const discordMsg = await ch.messages.fetch(msg.id)
+    if (discordMsg.reference?.type === MessageReferenceType.Forward) return null
+    try {
+      const ref = await discordMsg.fetchReference()
+      return { id: ref.id, author: ref.author.username, content: ref.content || null, byUs: ref.author.id === this.client.user?.id }
+    } catch {
+      return { id: msg.referenceMessageId, author: null, content: null, byUs: this.wasSentByUs(msg.referenceMessageId) }
     }
   }
 

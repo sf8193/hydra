@@ -20,6 +20,7 @@ import { registry } from './sessions.js'
 import { on } from './event-bus.js'
 import type { SessionInfo } from './sessions.js'
 import { sessionDrift, unverified } from './restricted.js'
+import { replyContextLine } from './reply-context.js'
 
 // ---------------------------------------------------------------------------
 // The rule: one place that knows when each path applies
@@ -62,7 +63,8 @@ const clean = (s: string): string => s.replace(/[\s\]]+/g, ' ').trim()
  */
 export function typedDeliveryText(content: string, meta: Record<string, string>, platform: string = PLATFORM): string {
   const label = platform === 'slack' ? 'Slack' : 'Discord'
-  const tag = `[${label} · ${clean(meta.user ?? '')} · msg ${clean(meta.message_id ?? '')} · thread ${clean(meta.chat_id ?? '')}] `
+  const reply = replyContextLine(meta)
+  const tag = `[${label} · ${clean(meta.user ?? '')} · msg ${clean(meta.message_id ?? '')} · thread ${clean(meta.chat_id ?? '')}${reply ? ` · ${reply}` : ''}] `
   const files = meta.downloaded_files ? `\n[attachments: ${meta.downloaded_files}]` : ''
   return tag + content + files
 }
