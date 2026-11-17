@@ -15,6 +15,7 @@ import { join } from 'path'
 import { existsSync, readFileSync } from 'fs'
 import { safeSend, atomicWriteFileSync } from '../../daemon/util.js'
 import { mainChannel } from '../../daemon/main-session.js'
+import { gateway } from '../../daemon/config.js'
 import { currentHydraConfig, onHydraConfigLoad } from '../../daemon/hydra-config.js'
 import { MAIN, currentId, isSessionThread, slackSpecialistsOf } from '../../routing/route.js'
 import { chunk } from '../../daemon/util.js'
@@ -36,14 +37,12 @@ const log = (line: string) => { process.stderr.write(line) }
 export const slackRuntimeDeps = {
   view: (app: string = DEFAULT_SLACK_APP): SlackWatchConfig | null => connections.listener(app)?.view() ?? null,
   /** A place freed under max: catch-up refetches what waits, the oldest waiter first, through the apps that have waiters. */
-  wake: (apps?: string[]): void => { for (const [id, l] of connections.listeners()) if (!apps || apps.includes(id)) void l.runCatchUp(false, 'a place freed') },
+  wake: (apps?: string[], why = 'a place freed'): void => { for (const [id, l] of connections.listeners()) if (!apps || apps.includes(id)) void l.runCatchUp(false, why) },
   post: (channel: string, threadTs: string | undefined, text: string, app: string = DEFAULT_SLACK_APP): Promise<string> => {
     const l = connections.listener(app)
     if (!l) return Promise.reject(new Error(notConnected(app, Object.keys(hydraConfig().slackApps).length)))
     return l.post(channel, threadTs, text)
   },
-  /** How long a listening session's thread may stand empty (a handoff, a respawn) before its threads are let go. */
-  releaseGraceMs: 60_000,
   /**
    * Who can read a thread now, through one app: its bot, the operator's user token, or (null) nobody can be asked because
    * that app isn't connected. Throws Slack's refusal when neither token can read it.
@@ -255,7 +254,8 @@ export function startSlackWatch(): void {
   if (sweepTimer) return
   const w = getSlackWatcher()
   w.sweep()
-  sweepTimer = setInterval(() => timed('slack-watch-sweep', () => { w.sweep() }), SWEEP_INTERVAL_MS)
+  void unbindDeletedThreads()
+  sweepTimer = setInterval(() => timed('slack-watch-sweep', () => { w.sweep(); void unbindDeletedThreads() }), SWEEP_INTERVAL_MS)
   ;(sweepTimer as { unref?: () => void }).unref?.()
   refreshSlackSpecialistSurface()
   const offConfig = onHydraConfigLoad(() => queueMicrotask(refreshSlackSpecialistSurface))
@@ -266,33 +266,50 @@ export function startSlackWatch(): void {
     const waiting = to ? getSlackWatcher().waiters(id => currentId(h, id) === to) : []
     if (waiting.length) slackRuntimeDeps.wake([...new Set(waiting.map(appOfEntry))])
   }
-  // A session that listened ends (killed, reaped, or found dead) and nobody is home in its thread within the grace (a
-  // handoff successor or a respawn would be): its threads are let go, said once there, not owed to a thread nobody answers.
-  const offRelease = on('session:death', ({ threadId }) => releaseIfVacant(threadId), 'slack connector: let go of the threads a session listened to')
-  const offReleaseDead = on('session:marked-dead', ({ sessionId }) => releaseIfVacant(registry.get(sessionId)?.threadId), 'slack connector: let go of the threads a session listened to (found dead)')
-  // A timer pending at the last shutdown is gone: every listened thread is checked once at boot.
-  for (const t of new Set(getSlackWatcher().list().map(e => e.specialist).filter((id): id is string => !!id && isSessionThread(id)))) releaseIfVacant(t)
+  // A session thread keeps its bound conversations while no session is in it (a kill, a handoff, a respawn): what arrives stays
+  // owed, and is delivered when a session's bridge registers there. They end on unbind, when the thread is deleted, when Slack
+  // can no longer read the conversation, or when idle a week: the ends of any conversation.
+  const offRegistered = on('session:bridge-registered', ({ threadId }) => deliverOwedIn(threadId), 'slack connector: deliver what a session thread is owed when a session registers in it')
+  // A deleted thread is found by asking the platform (the gateway's `threadExists`): when its session ends, at start, and at each sweep.
+  // What the operator ends ends: a killed session takes its thread's subscriptions with it, said once in the thread. A crash, a handoff or a respawn does not.
+  const offDeleted = on('session:death', ({ threadId, deliberate }) => { if (deliberate) unbindOnKill(threadId); else void unbindIfThreadDeleted(threadId) }, 'slack connector: unbind a killed session thread\'s conversations, or those of a deleted one')
   const offDeath = on('session:death', freed, 'slack connector: wake conversations waiting at max')
   const offDead = on('session:marked-dead', freed, 'slack connector: wake conversations waiting at max (found dead)')
   // After a sleep the socket is likely dead and Slack replays nothing: replace it and catch up now, not when a timer notices.
   const offResumed = on('clock:resumed', () => { for (const l of connections.listeners().values()) l.onResume() }, 'slack connector: replace the socket and catch up after a resume')
-  unsubscribe = () => { offConfig(); offRelease(); offReleaseDead(); offDeath(); offDead(); offResumed() }
+  unsubscribe = () => { offConfig(); offRegistered(); offDeleted(); offDeath(); offDead(); offResumed() }
 }
 
-/** Whether a live session is home in this thread. A reaped session's kept record (deadAt) is nobody. */
-const homeIn = (threadId: string): boolean => [...registry.values()].some(s => s.threadId === threadId && s.deadAt === undefined)
+/** A session registered in this thread: the conversations bound to it that owe messages are refetched and delivered now, not at the next periodic catch-up. */
+function deliverOwedIn(threadId: string): void {
+  const owing = getSlackWatcher().list().filter(e => e.specialist === threadId && e.owed?.length)
+  if (owing.length) slackRuntimeDeps.wake([...new Set(owing.map(appOfEntry))], 'a session registered in the thread')
+}
 
-/** After the grace, let go of a vacant session thread's conversations, said once in that thread. */
-function releaseIfVacant(threadId: string | undefined): void {
+/** The session was killed: its thread's conversations are unbound at once (what they owed is dropped and counted), and the thread is told once how to resume. */
+function unbindOnKill(threadId: string | undefined): void {
+  if (!threadId || !isSessionThread(threadId)) return
+  const bound = getSlackWatcher().list().filter(e => e.specialist === threadId)
+  if (!bound.length) return
+  const owed = bound.reduce((n, e) => n + (e.owed?.length ?? 0), 0)
+  for (const e of bound) getSlackWatcher().unwatch(e.channel, e.threadTs, e.app, true)
+  alert(`ℹ️ This session was killed, so it stopped listening to ${bound.map(conversationId).join(', ')}${owed ? ` (${owed} owed dropped)` : ''}. Bind again with \`bind_conversation\` to resume.`, threadId)
+}
+
+/** The session threads that conversations are bound to. */
+const boundThreads = (): string[] => [...new Set(getSlackWatcher().list().map(e => e.specialist).filter((id): id is string => !!id && isSessionThread(id)))]
+
+/** If the platform says the session thread is deleted, its conversations are unbound, each logged (what they owed is dropped and counted). Any other answer keeps them. */
+async function unbindIfThreadDeleted(threadId: string | undefined): Promise<void> {
   if (!threadId || !isSessionThread(threadId) || !getSlackWatcher().list().some(e => e.specialist === threadId)) return
-  const t = setTimeout(() => {
-    if (homeIn(threadId)) return
-    const gone = getSlackWatcher().list().filter(e => e.specialist === threadId)
-    for (const e of gone) getSlackWatcher().unwatch(e.channel, e.threadTs, e.app)
-    if (gone.length) alert(`ℹ️ The session here ended, so it stopped listening to ${gone.map(conversationId).join(', ')}.`, threadId)
-  }, slackRuntimeDeps.releaseGraceMs)
-  ;(t as { unref?: () => void }).unref?.()
+  if (await gateway.threadExists(threadId).catch(() => true)) return
+  for (const e of getSlackWatcher().list().filter(e => e.specialist === threadId)) {
+    log(`daemon: slack connector: unbound ${conversationId(e)}: its session thread ${threadId} was deleted\n`)
+    getSlackWatcher().unwatch(e.channel, e.threadTs, e.app)
+  }
 }
+
+const unbindDeletedThreads = async (): Promise<void> => { for (const t of boundThreads()) await unbindIfThreadDeleted(t) }
 
 /**
  * Shutdown: stop the clock and write the store. Nothing is delivered on the way out

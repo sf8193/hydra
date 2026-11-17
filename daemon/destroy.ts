@@ -81,7 +81,7 @@ export async function destroyThread(threadId: string, by: string, onProceed?: ()
     registry.deleteThread(threadId)
     registry.persist()
     unwatchBySession(info)
-    emitSessionDeath(info)
+    emitSessionDeath(info, true)
   }
   threadRegistry.delete(threadId)
 

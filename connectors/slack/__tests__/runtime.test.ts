@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
+import { describe, test, expect, beforeEach, afterEach, jest } from 'bun:test'
 import { rmSync } from 'fs'
 import { join } from 'path'
 import { STATE_DIR, gateway } from '../../../daemon/config.js'
@@ -156,22 +156,115 @@ describe('any session listens to a Slack thread: bound to its own thread', () =>
     expect(formatConversations().find(l => l.startsWith('slack:C9:8.000001'))).toContain(`→ sw-named (listening, thread ${MINE})`)
   })
 
-  test('a session found dead (not killed) lets go too, and a restart checks every listened thread once', async () => {
-    const grace = slackRuntimeDeps.releaseGraceMs
-    slackRuntimeDeps.releaseGraceMs = 1
-    stopSlackWatch(); startSlackWatch()
-    try {
-      session('sw-crashed', MINE)
-      await bindConversation({ threadId: MINE }, 'slack:C9:9.000001')
-      ;(registry.get('sw-crashed') as any).deadAt = 1
-      emit('session:marked-dead', { sessionId: 'sw-crashed', tmuxName: 'sw-crashed' })
-      await new Promise(r => setTimeout(r, 30))
-      expect(getSlackWatcher().get('C9', '9.000001')).toBeUndefined()
-      getSlackWatcher().bind('C9', '10.000001', OTHER, 'tool')               // left from before a restart; nobody in OTHER now
-      stopSlackWatch(); startSlackWatch()
-      await new Promise(r => setTimeout(r, 30))
+  describe('a session thread keeps its bound conversations while no session is in it', () => {
+    const woken: { apps?: string[]; why?: string }[] = []
+    const realWake = slackRuntimeDeps.wake
+    beforeEach(() => { woken.length = 0; slackRuntimeDeps.wake = (apps, why) => { woken.push({ apps, why }) }; stopSlackWatch(); startSlackWatch() })
+    afterEach(() => { slackRuntimeDeps.wake = realWake; jest.useRealTimers(); stopSlackWatch() })
+    const told = (): [string, string][] => { const out: [string, string][] = []; (gateway as any).send = async (c: string, text: string) => { out.push([c, text]); return 'id' }; return out }
+
+    test('a session that ends without being killed (a crash), then resumed after what used to be the grace: still bound, nothing said, and the owed messages are delivered at once', async () => {
+      const realSend = gateway.send
+      try {
+        const out = told()
+        jest.useFakeTimers()
+        session('sw-first', MINE)
+        await bindConversation({ threadId: MINE }, 'slack:C9:6.000001')
+        getSlackWatcher().handle({ channel: 'C9', ts: '6.000002', threadTs: '6.000001', user: 'UANYONE', text: 'while you were gone' } as any)
+        ;(registry.get('sw-first') as any).deadAt = 1
+        emit('session:death', { sessionId: 'sw-first', threadId: MINE, wasOwner: true, tmuxName: 'sw-first' })
+        jest.advanceTimersByTime(61_000)                                     // past the 60 s an empty thread used to be given
+        jest.advanceTimersByTime(7 * 86_400_000 - 62_000)                    // and the whole idle week but one minute
+        expect(getSlackWatcher().get('C9', '6.000001')?.specialist).toBe(MINE)
+        expect(out.filter(([, t]) => t.includes('stopped listening'))).toEqual([])
+        expect(woken).toEqual([])                                            // no session in the thread: nothing to deliver yet
+        session('sw-resumed', MINE)
+        emit('session:bridge-registered', { sessionId: 'sw-resumed', threadId: MINE })
+        expect(woken).toEqual([{ apps: ['default'], why: 'a session registered in the thread' }])
+      } finally { (gateway as any).send = realSend }
+    })
+
+    test("a kill unbinds its thread's conversations at once, says so once in the thread, and keeps nothing owed; another thread's are untouched", async () => {
+      const realSend = gateway.send
+      try {
+        const out = told()
+        await bindConversation({ threadId: MINE }, 'slack:C9:12.000001')
+        await bindConversation({ threadId: MINE }, 'slack:C9:13.000001')
+        await bindConversation({ threadId: OTHER }, 'slack:C9:14.000001')
+        getSlackWatcher().handle({ channel: 'C9', ts: '12.000002', threadTs: '12.000001', user: 'UANYONE', text: 'owed' } as any)
+        await getSlackWatcher().flush()
+        expect(getSlackWatcher().get('C9', '12.000001')?.owed).toHaveLength(1)
+        emit('session:death', { sessionId: 'killed', threadId: MINE, wasOwner: true, tmuxName: 'killed', deliberate: true })
+        await new Promise(r => setTimeout(r, 20))
+        expect(getSlackWatcher().get('C9', '12.000001')).toBeUndefined()
+        expect(getSlackWatcher().get('C9', '13.000001')).toBeUndefined()
+        expect(getSlackWatcher().get('C9', '14.000001')?.specialist).toBe(OTHER)
+        const said = out.filter(([c]) => c === MINE).map(([, t]) => t)
+        expect(said).toHaveLength(1)                                           // one notice, not one per conversation, and not a second for the owed drop
+        expect(said[0]).toContain('This session was killed')
+        expect(said[0]).toContain('Bind again with `bind_conversation` to resume')
+        expect(said[0]).toContain('(1 owed dropped)')
+        expect(woken).toEqual([])
+        session('sw-resumed', MINE)
+        emit('session:bridge-registered', { sessionId: 'sw-resumed', threadId: MINE })
+        expect(woken).toEqual([])                                              // nothing was kept to deliver
+      } finally { (gateway as any).send = realSend }
+    })
+
+    test('a handoff successor, a respawn and a reconnect all register a bridge in the thread, and each delivers only what is owed there', async () => {
+      await bindConversation({ threadId: MINE }, 'slack:C9:7.000001')        // owes nothing
+      emit('session:bridge-registered', { sessionId: 'sw-successor', threadId: MINE })
+      expect(woken).toEqual([])                                              // no owed message, no pass
+      getSlackWatcher().handle({ channel: 'C9', ts: '7.000002', threadTs: '7.000001', user: 'UANYONE', text: 'held' } as any)
+      await getSlackWatcher().flush()                                        // no session is in the thread: the delivery fails and stays owed
+      expect(getSlackWatcher().get('C9', '7.000001')?.owed).toEqual(['7.000002'])
+      expect(transport.messageQueues.get('main') ?? []).toEqual([])          // owed to the thread's owner, never sent to main
+      emit('session:bridge-registered', { sessionId: 'sw-successor', threadId: OTHER })   // another thread's session
+      expect(woken).toEqual([])
+      emit('session:bridge-registered', { sessionId: 'sw-successor', threadId: MINE })
+      expect(woken).toEqual([{ apps: ['default'], why: 'a session registered in the thread' }])
+    })
+
+    test('a session thread the platform says is deleted lets its conversations go, at its session\'s death; one it cannot confirm, or another thread, keeps its own', async () => {
+      const real = gateway.threadExists
+      const logged: string[] = []
+      const realWrite = process.stderr.write
+      process.stderr.write = ((c: any) => { logged.push(String(c)); return true }) as any
+      try {
+        await bindConversation({ threadId: MINE }, 'slack:C9:8.000001')
+        await bindConversation({ threadId: OTHER }, 'slack:C9:9.000001')
+        ;(gateway as any).threadExists = async (t: string) => t !== MINE
+        emit('session:death', { sessionId: 'gone-a', threadId: OTHER, wasOwner: true, tmuxName: 'gone-a' })
+        await new Promise(r => setTimeout(r, 10))
+        expect(getSlackWatcher().get('C9', '9.000001')?.specialist).toBe(OTHER)      // exists: kept
+        emit('session:death', { sessionId: 'gone-b', threadId: MINE, wasOwner: true, tmuxName: 'gone-b' })
+        await new Promise(r => setTimeout(r, 10))
+        expect(getSlackWatcher().get('C9', '8.000001')).toBeUndefined()
+        expect(logged.join('')).toContain(`unbound slack:C9:8.000001: its session thread ${MINE} was deleted`)   // said, though nothing was owed
+        ;(gateway as any).threadExists = async () => { throw new Error('platform unreachable') }
+        emit('session:death', { sessionId: 'gone-c', threadId: OTHER, wasOwner: true, tmuxName: 'gone-c' })
+        await new Promise(r => setTimeout(r, 10))
+        expect(getSlackWatcher().get('C9', '9.000001')?.specialist).toBe(OTHER)      // unconfirmed: kept
+      } finally { (gateway as any).threadExists = real; process.stderr.write = realWrite }
+    })
+
+    test('a thread deleted while the daemon was down is found at start, not an hour later', async () => {
+      const real = gateway.threadExists
+      try {
+        getSlackWatcher().bind('C9', '11.000001', MINE, 'tool')
+        ;(gateway as any).threadExists = async () => false
+        stopSlackWatch(); startSlackWatch()
+        await new Promise(r => setTimeout(r, 10))
+        expect(getSlackWatcher().get('C9', '11.000001')).toBeUndefined()
+      } finally { (gateway as any).threadExists = real }
+    })
+
+    test('unbind ends it while no session is in the thread', async () => {
+      session('sw-binder', MINE)
+      await bindConversation({ threadId: MINE }, 'slack:C9:10.000001')
+      expect(unbindConversation({ threadId: MINE }, 'slack:C9:10.000001')).toContain('is unbound')
       expect(getSlackWatcher().get('C9', '10.000001')).toBeUndefined()
-    } finally { slackRuntimeDeps.releaseGraceMs = grace; stopSlackWatch() }
+    })
   })
 
   test('connecting or disconnecting Slack re-pushes every session its tools', () => {
@@ -189,29 +282,6 @@ describe('any session listens to a Slack thread: bound to its own thread', () =>
       refreshSlackSpecialistSurface()
       expect(pushed.find(p => p.id === 'sw-pushed')?.tools).toContain('bind_conversation')
     } finally { (transport as any).sendOrQueue = real }
-  })
-
-  test('a listening session that ends with nobody in its thread lets its threads go; a successor in the thread keeps them', async () => {
-    const grace = slackRuntimeDeps.releaseGraceMs
-    const realSend = gateway.send
-    slackRuntimeDeps.releaseGraceMs = 1
-    stopSlackWatch(); startSlackWatch()
-    try {
-      const told: [string, string][] = []
-      ;(gateway as any).send = async (c: string, text: string) => { told.push([c, text]); return 'id' }
-      await bindConversation({ threadId: MINE }, 'slack:C9:6.000001')
-      await bindConversation({ threadId: OTHER }, 'slack:C9:7.000001')
-      sessionIds.push('reaped')                                              // the idle reaper keeps a dead record: nobody home
-      registry.set('reaped', { sessionId: 'reaped', tmuxName: 'reaped', threadId: MINE, sessionType: 'thread_owner', engine: 'claude', createdAt: 0, deadAt: 1 } as any)
-      emit('session:death', { sessionId: 'gone-1', threadId: MINE, wasOwner: true, tmuxName: 'gone-1' })
-      emit('session:death', { sessionId: 'gone-2', threadId: OTHER, wasOwner: true, tmuxName: 'gone-2' })
-      session('sw-successor', OTHER)                                         // a handoff successor arrives within the grace
-      await new Promise(r => setTimeout(r, 30))
-      expect(getSlackWatcher().get('C9', '6.000001')).toBeUndefined()
-      expect(getSlackWatcher().get('C9', '7.000001')?.specialist).toBe(OTHER)
-      expect(told.filter(([c, t]) => c === MINE && t.includes('stopped listening to slack:C9:6.000001'))).toHaveLength(1)
-      expect(told.some(([c]) => c === OTHER)).toBe(false)
-    } finally { slackRuntimeDeps.releaseGraceMs = grace; (gateway as any).send = realSend; stopSlackWatch() }
   })
 
   test('a session with no thread has nothing to bind to; a specialist still binds to the specialist', async () => {

@@ -17,7 +17,8 @@ export interface EventMap {
   'reply': { sessionId: string; text: string; chatId: string; sentIds: string[] }
   // A session found dead, by any path (a kill, a crash the health poll sees, a lost bridge): fires once, when its deadAt is set.
   'session:marked-dead': { sessionId: string; tmuxName: string }
-  'session:death': { sessionId: string; threadId: string; wasOwner: boolean; tmuxName: string; deadAt?: number; claudeSessionId?: string; engine?: ProviderId; codexThreadId?: string; codexHomeName?: string }
+  // `deliberate`: ended on purpose (a kill), not by a crash, a handoff, a respawn or a resumable idle end.
+  'session:death': { deliberate?: boolean; sessionId: string; threadId: string; wasOwner: boolean; tmuxName: string; deadAt?: number; claudeSessionId?: string; engine?: ProviderId; codexThreadId?: string; codexHomeName?: string }
   // Fires on every successful bridge registration, including reconnects —
   // subscribers must be idempotent.
   'session:bridge-registered': { sessionId: string; threadId: string }
