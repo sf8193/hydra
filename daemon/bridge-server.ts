@@ -5,7 +5,7 @@ import { gateway, SOCK_PATH, STATE_DIR, PLATFORM } from './config.js'
 import { markDead, registry, threadRegistry, type SessionInfo } from './sessions.js'
 import { transport, type BridgeConn } from './bridge-transport.js'
 import { executeTool } from './bridge-dispatch.js'
-import { BRIDGE_SHUTDOWN_GRACE_MS, spawnModel } from '../shared/constants.js'
+import { BRIDGE_SHUTDOWN_GRACE_MS } from '../shared/constants.js'
 import { pendingPermissions } from './permission.js'
 import { discoverClaudeSessionId, killSession } from './session-lifecycle.js'
 import { loadAccess, operatorIds } from './access.js'
@@ -23,6 +23,7 @@ import { buildAutopsy, logCorrelation, tailSpawnLog, buildCrashNotice, getVitals
 import { clearInterceptsForSession } from './pane-probe.js'
 import { safeSend } from './util.js'
 import { tmuxSessionState, tmuxSync, TMUX_HOLD_MS } from './tmux.js'
+import { mainLaunchModel } from './main-session.js'
 import { clearIdleLimit, resumeIdleLimit } from './idle-limit.js'
 import { createMainBridgeCycle, formatReconnectLine, mainCloseRecordsReason } from './main-bridge-cycle.js'
 import { emit } from './event-bus.js'
@@ -202,7 +203,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
         transport.sendToBridge(conn, {
           type: 'registered', sessionId, tools, platform: PLATFORM,
           sessionMetadata: info?.sessionMetadata ?? {
-            role: 'worker', tools: tools.map(t => t.name), model: spawnModel(),
+            role: 'worker', tools: tools.map(t => t.name), model: 'unknown',
             cwd: process.env.SPAWN_CWD || '(unknown)', platform: PLATFORM,
           },
         })
@@ -276,7 +277,9 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
         sessionMetadata: info?.sessionMetadata ?? {
           role: sessionId === 'main' ? 'main' : 'worker',
           tools: tools.map(t => t.name),
-          model: spawnModel(),
+          // A registered session's record holds the model its launch resolved. Main has none: it is launched by `hydra up`, which recorded it.
+          // Anyone else without a record says so; the spawn default is only what a spawn takes when it names none.
+          model: (sessionId === 'main' ? mainLaunchModel() : undefined) ?? 'unknown',
           cwd: process.env.SPAWN_CWD || '(unknown)',
           platform: PLATFORM,
         },
