@@ -165,8 +165,8 @@ tools = ["search_logs", "get_monitor"]   # the tools of it a specialist may call
 # `profile_args` are the arguments added to the command (`profile_env` would be set for it). {profile_dir} and {download_dir} are the only placeholders.
 # Nothing else in hydra knows what the server is: this declaration is the whole contract. The browser it drives still runs outside Claude Code's sandbox.
 # This one is Microsoft's Playwright MCP server (`@playwright/mcp`, pinned) driving the installed Google Chrome. Playwright has no downloads flag:
-# `--output-dir` is where downloads go, and also its auto-named snapshots (one per navigation), screenshots and traces. Do not name the server `playwright`:
-# an operator's own ~/.claude.json very likely declares that name, and hydra refuses the clash (Claude Code's allowlist matches by name).
+# `--output-dir` is where downloads go, and also its auto-named snapshots (one per navigation), screenshots and traces. The server's name is yours to pick (`browser` here; `playwright` is fine too):
+# hydra's allowlist admits it by its exact command, so an operator server of the same name with another command does not start.
 # The first start downloads the package into ~/.npm/_npx, and Claude Code waits 30 seconds for a server: run `npx -y @playwright/mcp@0.0.85 --version` once first.
 [mcp_servers.browser]
 command = "npx"
