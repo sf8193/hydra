@@ -15,7 +15,7 @@ Checked against code at 42721c5. Bold names are README's core abstractions or th
 | timeout: 5 s by default, at most 30 s | `config/load.ts:57`, `:917`; `routing/guard.ts:74` | `?? 5_000`; `GUARD_TIMEOUT_MAX_MS = 30_000`; past it, `open` |
 | output: at most 4096 characters | `routing/guard.ts:42`, `:82-85` | `GUARD_STDOUT_MAX = 4096` against a utf8 string's `length`; more → `open` |
 | the operator, no guard, or exit 0 → send | `routing/guard.ts:104`, `:112`; `connectors/slack/watch.ts:1133` | empty stdout or no `target` → `deliver`; `to = home` |
-| another exit, a timeout, unusable output: sent anyway | `routing/guard.ts:74`, `:78-81`, `:85`, `:102`, `:106-110`, `:116`; `connectors/slack/watch.ts:1128`, `:1213-1215` | every `open` fate is logged "delivering anyway" and sent to `home` |
+| another exit, a timeout, unusable output: sent anyway | `routing/guard.ts:74`, `:78-81`, `:85`, `:102`, `:106-110`, `:116`; `connectors/slack/watch.ts:1128`, `:1213-1215` | every `open` verdict is logged "delivering anyway" and sent to `home` |
 | exit 0 with a target → 4 | `routing/guard.ts:117`; `connectors/slack/watch.ts:1133` | `deliver` with `target`; `to = currentId(target)` |
 | exit 10 → dropped: guard, not alerted | `routing/guard.ts:40`, `:100`; `connectors/slack/watch.ts:1109-1112` | `GUARD_DROP = 10`; `drop('guard', …, false)`, `settle` |
 | exit 75 → stays owed until owed_max | `routing/guard.ts:41`, `:101`; `connectors/slack/watch.ts:1114-1126` | `GUARD_LATER = 75`; drawn in flow-slack-owed |

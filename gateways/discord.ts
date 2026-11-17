@@ -666,7 +666,7 @@ export class DiscordGateway implements ChatGateway {
     if (opts.anchorChannelId && opts.anchorMessageId) {
       const dead = opts.state === 'killed' || opts.state === 'crashed'
       const emoji = dead ? (opts.state === 'killed' ? '☠️' : '💥') : opts.emoji
-      const countEmoji = opts.state === 'zombie' && opts.respawnCount && opts.respawnCount > 0
+      const countEmoji = opts.state === 'respawned_session' && opts.respawnCount && opts.respawnCount > 0
         ? DiscordGateway.COUNT_EMOJI[Math.min(opts.respawnCount - 1, DiscordGateway.COUNT_EMOJI.length - 1)]
         : undefined
       this.reactionQueue.enqueue(opts.anchorMessageId, {

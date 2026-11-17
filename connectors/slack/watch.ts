@@ -1006,7 +1006,7 @@ export class SlackWatcher {
     if (!to || !isLive(cfg.hydra, to)) return this.undo(entry, mark)
     const { named, verdicts } = await this.admit(entry, cfg, [item], () => to)
     // Refused now (a role taken away), or the guard says drop or not now: nothing is sent, and the same reaction may come again. A redirect is not followed: it goes to the binding.
-    if (!named.length || verdicts[0].fate === 'drop' || verdicts[0].fate === 'later') return this.undo(entry, mark)
+    if (!named.length || verdicts[0].verdict === 'drop' || verdicts[0].verdict === 'later') return this.undo(entry, mark)
     const send = this.chain.then(async () => {
       const result = await this.post(entry, { to }, named, cfg)
       if (result.ok) this.deps.log(`daemon: slack connector: delivered a reaction in ${key} (to ${item.ts}) to ${spelledBare(to)}${result.duplicate ? ' (already delivered)' : ''}\n`)
@@ -1436,13 +1436,13 @@ export class SlackWatcher {
     named.forEach((item, n) => {
       const v = verdicts[n]
       const home = homes.get(item.ts)!
-      if (v.fate !== 'later' && entry.heldSince?.[item.ts] !== undefined) { delete entry.heldSince[item.ts]; this.persist() }
-      if (v.fate === 'drop') {
+      if (v.verdict !== 'later' && entry.heldSince?.[item.ts] !== undefined) { delete entry.heldSince[item.ts]; this.persist() }
+      if (v.verdict === 'drop') {
         this.drop('guard', entry, [item.ts], 'the guard dropped it (exit 10)', false)
         this.settle(key, entry, [item.ts])
         return
       }
-      if (v.fate === 'later') {
+      if (v.verdict === 'later') {
         // Kept owed for the next pass, for at most owed_max from the first "not now": then it fails, visibly.
         // Unless the owed list was full and already cut it.
         if (!entry.owed?.includes(item.ts)) { this.drop('owed-full', entry, [item.ts], OWED_FULL_WHY); return }
@@ -1456,8 +1456,8 @@ export class SlackWatcher {
         this.deps.log(`daemon: slack connector: the guard said not now (exit 75) for ${key} ts ${item.ts}; it stays owed and the next catch-up pass offers it again\n`)
         return
       }
-      if (v.fate === 'open') this.deps.log(`daemon: slack connector: the guard ${v.why} for ${key} ts ${item.ts}; delivering anyway\n`)
-      let to = v.fate === 'deliver' && v.target ? currentId(h, v.target) : home
+      if (v.verdict === 'open') this.deps.log(`daemon: slack connector: the guard ${v.why} for ${key} ts ${item.ts}; delivering anyway\n`)
+      let to = v.verdict === 'deliver' && v.target ? currentId(h, v.target) : home
       if (to !== home && isSessionThread(to)) {
         // A session's thread is held only by that session's own bind: a guard can't send a conversation's message there.
         this.deps.log(`daemon: slack connector: the guard redirected ${key} ts ${item.ts} to the session thread ${to}, which only that session's bind may hold; delivering to ${home}\n`)
@@ -1560,7 +1560,7 @@ export class SlackWatcher {
     // The guard judges each item from anyone but the operator, and may send it somewhere else. Groups keep the burst's order.
     const g = h.guard
     const place = placeName(cfg, entry.channel)
-    const verdicts = await mapLimit(named, GUARD_CONCURRENCY, i => g && !i.operator ? this.judge(g, entry, place, homeOf(i), i) : Promise.resolve<GuardVerdict>({ fate: 'deliver' }))
+    const verdicts = await mapLimit(named, GUARD_CONCURRENCY, i => g && !i.operator ? this.judge(g, entry, place, homeOf(i), i) : Promise.resolve<GuardVerdict>({ verdict: 'deliver' }))
     return { named, verdicts, senders, refused }
   }
 
@@ -1580,7 +1580,7 @@ export class SlackWatcher {
       ...(g.includeText && { text: i.text }),
     }
     try { return await (this.deps.guard ?? runGuard)(g, input) } catch (err) {
-      return { fate: 'open', why: `threw: ${err instanceof Error ? err.message : err}` }
+      return { verdict: 'open', why: `threw: ${err instanceof Error ? err.message : err}` }
     }
   }
 

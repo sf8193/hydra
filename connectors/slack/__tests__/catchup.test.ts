@@ -538,14 +538,14 @@ test('a message the guard put off (exit 75) is refetched by catch-up and judged 
   const T = '1792999990.000001' // within owed_max of now: a "not now" holds it rather than failing it
   const dir = mkdtempSync(join(tmpdir(), 'slack-catchup-'))
   dirs.push(dir)
-  let fate: 'later' | 'deliver' = 'later'
+  let verdict: 'later' | 'deliver' = 'later'
   const sent: string[] = []
   const w = new SlackWatcher({ now: () => 1_793_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => guarded,
-    guard: async () => ({ fate }), deliver: async (_t, msg) => { sent.push(msg); return { ok: true } } })
+    guard: async () => ({ verdict }), deliver: async (_t, msg) => { sent.push(msg); return { ok: true } } })
   w.handle({ channel: CH, ts: T, user: 'UA', text: mention })
   await w.flush()
   expect(sent).toHaveLength(0)
-  fate = 'deliver'
+  verdict = 'deliver'
   const thread = { [`${CH}:${T}`]: [{ ts: T, user: 'UA', text: mention }] }
   const r = await catchUp(w, fakeApi({ [CH]: [] }, thread).api, guarded, opts())
   await w.flush()

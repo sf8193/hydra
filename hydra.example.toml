@@ -12,7 +12,7 @@
 # Kind prefixes. A value naming a place, address, target, person, role or app says which, or it is an error: `slack:#help`,
 # `discord:<id>`, `github:owner/repo`, `cli`; `main` or `specialist:<id>`; `person:<id>`; `role:<name>`; `app:<id>`.
 # These take a bare name: `operator` (a [people] id), `sends_to` and `renamed_from` (specialist ids), `mcp_servers` (server names),
-# a person's `roles` (written `role:<name>` wherever used), `needs` (a precondition) and `ack` (an emoji name).
+# a person's `roles` (written `role:<name>` wherever used), `needs` (a precondition) and `ack` (a reaction name such as `eyes`, where a specialist's `emoji` is the character).
 
 # The one person whose DMs reach main and who passes every admin check and every specialist's `reachable_by`.
 # Required once anything else is declared. A bare [people] id, not an address or a name.
@@ -148,7 +148,7 @@ tools = ["search_logs", "get_monitor"]   # the tools of it a specialist may call
 
 [places."slack:#help"]
 messages = "all"                      # "addressed" (default): only a DM or a tag opens a conversation; "all": any top-level message
-ack = "eyes"                          # a reaction added once a message is delivered
+ack = "eyes"                          # the reaction (by name, not "👀" or ":eyes:"; a skin tone is "+1::skin-tone-3") added once a message is delivered
 files = true                          # download attachments (default false)
 bots = false                          # hear other bots (default false; hydra's own bot is never heard)
 reactions = "bot-messages"            # a Slack place: a person's emoji reaction is delivered to the session that owns the conversation it is in. "bot-messages": only on a message the bot posted; "all": on any message of a conversation hydra holds; "off" (default). Who may be heard is the place's rules, as for a message

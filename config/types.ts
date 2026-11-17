@@ -151,7 +151,7 @@ export type Gateways = {
 
 /** Optional platform options for one place. */
 export type PlaceOptions = {
-  /** An emoji added when a message is picked up. */
+  /** The Slack reaction name added when a message is picked up, like `eyes`: the name, never the character or `:eyes:`. Only the Slack connector reads it. Only the Slack connector reads it. */
   ack?: string
   /** Download attachments. Default false. */
   files: boolean

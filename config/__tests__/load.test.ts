@@ -337,6 +337,18 @@ addresses = ["github:alice"]
     expect(ok(`${BASE}\n[places."slack:group-dm"]\nack = "eyes"\nfiles = true\n`).config.places['slack:group-dm']).toMatchObject({ ack: 'eyes', files: true })
   })
 
+  test('ack is a Slack reaction name: eyes and a skin tone load; a character, a :name: and anything else is refused with what to write', () => {
+    const at = (v: string) => `${BASE}\n[places."slack:#help"]\nack = ${v}\n`
+    const refusal = (v: string) => errorsOf(at(JSON.stringify(v)))
+    expect(ok(at('"eyes"')).config.places['slack:#help'].ack).toBe('eyes')
+    for (const name of ['+1', 'white_check_mark', 'woman-gesturing-no', "a'b", '+1::skin-tone-3', 'wave::skin-tone-2', 'wave::skin-tone-6']) expect(ok(at(JSON.stringify(name))).config.places['slack:#help'].ack).toBe(name)
+    expect(refusal('👀')).toEqual(['places."slack:#help".ack: "👀" is an emoji character, so write its Slack name, like ack = "eyes" (only Slack places read ack).'])
+    expect(refusal(':eyes:')).toEqual(['places."slack:#help".ack: ":eyes:" has a colon where only a skin tone like "+1::skin-tone-3" may, so write the name alone, like ack = "eyes" (only Slack places read ack).'])
+    for (const bad of ['eyes::skin-tone-1', 'eyes::skin-tone-7', 'eyes::foo', '::skin-tone-3', 'eyes::skin-tone-3::skin-tone-3']) expect(refusal(bad)).toEqual([expect.stringContaining('has a colon where only a skin tone')])
+    expect(refusal('Eyes')).toEqual([`places."slack:#help".ack: "Eyes" is not a Slack reaction name (lowercase letters, digits, _ - + '), so write one like ack = "eyes" (only Slack places read ack).`])
+    expect(errorsOf(at('"two words"'))).toHaveLength(1)
+  })
+
   test('a person id is lowercase, so slack:dm:Alice is not a place', () => {
     expect(errorsOf(`${BASE}\n[people.alice]\naddresses = ["slack:U0A"]\n[specialists.ops]\nworkdir = "~/agents/ops"\n[[rules]]\nplace = "slack:dm:Alice"\ntarget = "specialist:ops"\n`)[0]).toContain('"slack:dm:Alice" is not a place')
   })
