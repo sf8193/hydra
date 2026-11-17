@@ -77,9 +77,11 @@ export function buildHandoffPrompt(p: PromptParams & { originFrom: string; artif
   ].join('\n')
 }
 
-export function buildResurrectPrompt(p: PromptParams): string {
+/** `topicIsKickoff`: a specialist starts a new conversation in its thread, so the topic is its kickoff, which the thread's history does not carry. */
+export function buildResurrectPrompt(p: PromptParams & { topicIsKickoff?: boolean }): string {
   return [
     `You are ${p.tmuxName}, a resurrected session resuming work in an existing thread.`,
+    ...(p.topicIsKickoff ? [`Topic: ${topicOf(p)}`] : []),
     ``,
     `Your chat thread chat_id is ${p.threadId}. Your session_id is ${p.sessionId}.`,
     `Read your memory files for context.`,

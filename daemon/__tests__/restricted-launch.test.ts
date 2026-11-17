@@ -7,7 +7,9 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync 
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { gateway, STATE_DIR } from '../config.js'
-import { setSpecialistThread, _reloadSpecialists } from '../../specialists/specialists.js'
+import { setSpecialistThread, _reloadSpecialists, kickoffHash } from '../../specialists/specialists.js'
+import { specialistDeps } from '../../specialists/specialist-deliver.js'
+import { specialistThreadDeps } from '../specialist-thread.js'
 import { toThread } from '../../specialists/targets.js'
 import { _resetBackoff, activeBackoff } from '../recovery-backoff.js'
 import { handleCLIRequest } from '../cli-handler.js'
@@ -118,7 +120,7 @@ function seedDead(extra: Partial<SessionInfo> = {}): SessionInfo {
   } as any as SessionInfo
   registry.set(info.sessionId, info)
   registry.setThread(THREAD, info.sessionId)
-  threadRegistry.recordSpawn(THREAD, { topic: 'topic', respawnCount: 0, sessionId: info.sessionId, tmuxName: info.tmuxName, originType: 'spawn', model: 'm', claudeSessionId: info.claudeSessionId, label: undefined, policy: info.policy })
+  threadRegistry.recordSpawn(THREAD, { topic: 'topic', respawnCount: 0, sessionId: info.sessionId, tmuxName: info.tmuxName, originType: 'spawn', model: 'm', claudeSessionId: info.claudeSessionId, label: undefined, policy: info.policy, kickoffHash: info.kickoffHash })
   return info
 }
 const live = () => registry.get(registry.getByThread(THREAD)!)!
@@ -309,6 +311,128 @@ describe('a policy change starts fresh', () => {
     const r = await revive()
     expect(r).toMatchObject({ ok: false, reason: expect.stringContaining('no longer declares it') })
     expect(launches).toHaveLength(0)
+  })
+})
+
+describe('a kickoff change starts fresh', () => {
+  const OLD = 'You answer questions about the ledger.'
+  const NEW = 'You answer questions about the ledger, and never about payroll.'
+  const told: string[] = []
+  const ran = (over: Partial<SessionInfo> = {}) => seedDead({ policy: opsPolicy(), kickoffHash: kickoffHash(OLD), ...over })
+  beforeEach(() => {
+    told.length = 0
+    use({ ...OPS, kickoff: NEW }, DESK, CRM)
+    ;(gateway as any).send = async (c: string, text: string) => { told.push(text); return { id: 'm', channelId: c } }
+  })
+  afterEach(() => { ;(gateway as any).send = async (c: string) => ({ id: 'm', channelId: c }) })
+  const resumedNothing = () => expect(launches.every(l => l.resumeFrom === undefined && l.forkFrom === undefined)).toBe(true)
+
+  test('the same kickoff resumes the conversation (the control)', async () => {
+    ran({ kickoffHash: kickoffHash(NEW) })
+    expect(await reviveThread({ thread: threadRegistry.get(THREAD)!, specialist: 'ops' })).toMatchObject({ ok: true, method: 'resumed' })
+    expect(launches[0].resumeFrom).toMatch(/^C-/)
+    expect(live().kickoffHash).toBe(kickoffHash(NEW))   // a resume keeps the kickoff its conversation was born under
+    expect(told.filter(t => t.includes('restarted fresh'))).toEqual([])
+  })
+  test('a conversation with no stored kickoff resumes: one born before it was kept is not reset on deploy', async () => {
+    ran({ kickoffHash: undefined })
+    expect(await reviveThread({ thread: threadRegistry.get(THREAD)!, specialist: 'ops' })).toMatchObject({ ok: true, method: 'resumed' })
+    expect(live().kickoffHash).toBeUndefined()
+    expect(told.filter(t => t.includes('restarted fresh'))).toEqual([])
+  })
+  test('an edit that changes no word (trailing whitespace, CRLF) resumes; a real edit starts fresh', async () => {
+    ran({ kickoffHash: kickoffHash(NEW) })
+    use({ ...OPS, kickoff: NEW + '  \r\n' }, DESK, CRM)
+    expect(await reviveThread({ thread: threadRegistry.get(THREAD)!, specialist: 'ops' })).toMatchObject({ ok: true, method: 'resumed' })
+    registry.delete(live().sessionId)
+    expect(kickoffHash('a\r\nb\r\n')).toBe(kickoffHash('a\nb'))
+    expect(kickoffHash('a  b')).not.toBe(kickoffHash('a b'))   // inner whitespace counts
+    use({ ...OPS, kickoff: NEW + ' Be brief.' }, DESK, CRM)
+    expect(await reviveThread({ thread: threadRegistry.get(THREAD)!, specialist: 'ops' })).toMatchObject({ ok: true, method: 'respawned' })
+  })
+  test('a handoff successor keeps its predecessor\'s kickoff hash, so a later edit resets it at its next fresh start', async () => {
+    const dead = ran()
+    const r = await doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, handedOffFrom: dead.tmuxName, specialist: 'ops', carryOver: { policy: opsPolicy(), kickoffHash: kickoffHash(OLD) } })
+    expect(r.threadId).toBe(THREAD)
+    expect(live().kickoffHash).toBe(kickoffHash(OLD))
+    registry.delete(live().sessionId)
+    expect(await reviveThread({ thread: threadRegistry.get(THREAD)!, specialist: 'ops' })).toMatchObject({ ok: true, method: 'respawned' })
+  })
+  test('a changed kickoff starts a fresh conversation in the same thread, on the new kickoff, and says so once', async () => {
+    const dead = ran()
+    const r = await reviveThread({ thread: threadRegistry.get(THREAD)!, specialist: 'ops', respawnTopic: () => NEW })
+    expect(r).toMatchObject({ ok: true, method: 'respawned' })
+    resumedNothing()
+    expect(launches).toHaveLength(1)
+    expect(launches[0].prompt).toContain(NEW)
+    expect(launches[0].prompt).not.toContain(OLD)
+    expect(live().threadId).toBe(THREAD)
+    expect(live().kickoffHash).toBe(kickoffHash(NEW))
+    // The old conversation stays in the thread's history, with the kickoff it was born under, for crash recovery and reading.
+    const history = threadRegistry.get(THREAD)!.sessionHistory
+    expect(history[0]).toMatchObject({ sessionId: dead.sessionId, claudeSessionId: dead.claudeSessionId, kickoffHash: kickoffHash(OLD) })
+    expect(history.at(-1)).toMatchObject({ kickoffHash: kickoffHash(NEW) })
+    expect(told.filter(t => t.includes('restarted fresh'))).toHaveLength(1)
+    expect(told.join('\n')).toContain('Specialist ops restarted fresh: its kickoff changed')
+    expect(told.join('\n')).toContain('hydra kill ops')
+  })
+  test('after a kill (the record is gone, the history entry remains) the next start is fresh too: the case that was resuming', async () => {
+    const dead = ran()
+    registry.delete(dead.sessionId)
+    expect(await reviveThread({ thread: threadRegistry.get(THREAD)!, specialist: 'ops' })).toMatchObject({ ok: true, method: 'respawned' })
+    resumedNothing()
+    expect(launches[0].prompt).toContain(NEW)
+  })
+  test('found by the thread when nobody names the specialist and the record carries no policy (boot recovery, a resume typed in the thread)', async () => {
+    ran({ policy: undefined })
+    setSpecialistThread('ops', THREAD)
+    try {
+      expect(await reviveThread({ thread: threadRegistry.get(THREAD)!, reuseName: true })).toMatchObject({ ok: true, method: 'respawned' })
+      resumedNothing()
+      expect(launches[0].prompt).toContain(NEW)
+    } finally { rmSync(join(STATE_DIR, 'specialist-threads.json'), { force: true }); _reloadSpecialists() }
+  })
+  test('the respawn command, with no words of its own, starts on the new kickoff, not the thread\'s stored topic', async () => {
+    ran()
+    threadRegistry.get(THREAD)!.topic = OLD
+    expect(await reviveThread({ thread: threadRegistry.get(THREAD)!, respawnOnly: true, specialist: 'ops' })).toMatchObject({ ok: true, method: 'respawned' })
+    expect(launches[0].prompt).toContain(NEW)
+    expect(launches[0].prompt).not.toContain(OLD)
+    expect(live().kickoffHash).toBe(kickoffHash(NEW))
+    expect(told.filter(t => t.includes('restarted fresh'))).toEqual([])   // a respawn asked for by hand needs no telling
+  })
+  test('a respawn with words of its own is not a kickoff: it stores none', async () => {
+    ran()
+    expect(await reviveThread({ thread: threadRegistry.get(THREAD)!, respawnOnly: true, specialist: 'ops', respawnTopic: 'look at the ledger' })).toMatchObject({ ok: true, method: 'respawned' })
+    expect(launches[0].prompt).not.toContain(NEW)
+    expect(live().kickoffHash).toBeUndefined()   // it was not born under the kickoff, so it claims none
+  })
+  test('a restricted specialist is re-verified on the fresh start, under hydra.toml as it is now', async () => {
+    ran()
+    use({ ...OPS, kickoff: NEW, tools: ['Read'] })   // the same edit window changed a tool too
+    expect(await reviveThread({ thread: threadRegistry.get(THREAD)!, specialist: 'ops' })).toMatchObject({ ok: true, method: 'respawned' })
+    expect(launches[0].policy).toMatchObject({ access: 'workdir', tools: ['Read'] })
+    expect(live().verified).toBe(true)
+    expect(launches[0].cwd).toBe(workdir)
+  })
+  test('the fill that a vacant specialist\'s held message starts, and a delivery\'s refill, take the new kickoff', async () => {
+    const dead = ran()
+    registry.delete(dead.sessionId)
+    setSpecialistThread('ops', THREAD)
+    const real = specialistDeps.threadExists
+    specialistDeps.threadExists = async () => true
+    try {
+      await specialistThreadDeps.ensure('ops', 'held-message')   // what holdForSpecialist runs to start the specialist
+      resumedNothing()
+      expect(launches).toHaveLength(1)
+      expect(launches[0].prompt).toContain(NEW)
+      expect(live().kickoffHash).toBe(kickoffHash(NEW))
+    } finally { specialistDeps.threadExists = real; rmSync(join(STATE_DIR, 'specialist-threads.json'), { force: true }); _reloadSpecialists() }
+  })
+  test('an unreadable kickoff does not stop a resume', async () => {
+    ran()
+    use({ ...OPS, kickoff: undefined, kickoffFile: '/nonexistent/kickoff.md' })
+    expect(await reviveThread({ thread: threadRegistry.get(THREAD)!, specialist: 'ops' })).toMatchObject({ ok: true, method: 'resumed' })
   })
 })
 
