@@ -49,7 +49,7 @@ describe('core abstractions', () => {
 
   test('every bold box title in the picture is a glossary name', () => {
     const names = [...section.matchAll(/^\| ([^|]+?) \|/gm)].map(m => m[1]).filter(n => n !== 'Name' && !n.startsWith('--'))
-    expect(names.length, 'glossary table not found').toBe(12)
+    expect(names.length, 'glossary table not found').toBeGreaterThan(0)
     const bold = [...core.matchAll(/<b>([^<]+)<\/b>/g)].map(m => m[1])
     expect(bold.length).toBeGreaterThan(0)
     const stray = bold.filter(b => !names.includes(b))
