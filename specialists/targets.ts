@@ -3,7 +3,7 @@
  *
  * A target names an address (a specialist, `main`, a thread, or one conversation's own session of a specialist) or
  * a recipe (a fresh session each time). Each resolves to a session, and every delivery lands through `deliverToSession`: occupancy decides
- * dead (3), orphaned (4) and booting (5), a session stuck on a dialog is a failure (5, `stuck:`), and the engine's adapter
+ * dead (3), orphaned (4) and booting (5), a session stuck on a dialog is a failure (5, `stuck:`), and the engine's adapter (a rejection it marks retryable is 5, deferred)
  * carries the message. Healing a dead session is the specialist's rule (specialist-deliver.ts) or, for a thread
  * id, an explicit `revive`.
  */
@@ -125,7 +125,7 @@ export async function deliverToSession(info: SessionInfo, text: string, opts: { 
     result = { status: 'unknown', reason: String(err) }
   }
   const outcome = landingOf(result, !!opts.queue)
-  if (!outcome.ok) return { ok: false, exit: outcome.exitCode === 6 ? 6 : 3, reason: outcome.error }
+  if (!outcome.ok) return { ok: false, exit: outcome.exitCode ?? 3, reason: outcome.error }
   // Queued behind a session that died after it was chosen: nobody will drain that queue.
   if (outcome.status === 'queued' && occupancy(info) === 'dead') return { ok: false, exit: 6, reason: `${info.tmuxName} died during delivery` }
   return { ok: true, status: outcome.status, proof: outcome.proof }

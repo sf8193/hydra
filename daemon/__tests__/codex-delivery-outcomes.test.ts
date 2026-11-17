@@ -70,6 +70,20 @@ describe('acknowledged Codex steering', () => {
     expect(await result).toMatchObject({ status: 'rejected', reason: 'expected turn mismatch (code -32600)' })
     expect(sent).toHaveLength(1)
   })
+  test('a steer refused because the turn moved on is retryable; any other server refusal is not (#782)', async () => {
+    for (const [code, message, retryable] of [
+      [-32600, 'expected turn mismatch', true],
+      [-32600, 'no active turn to steer', true],
+      [-32600, 'no', false],
+      [-32602, 'invalid params: input', false],
+      [-32601, 'Method not found: turn/steer', false],
+    ] as const) {
+      const { engine, sent, reply } = setup()
+      const result = engine.steer('s', 'A')
+      reply({ id: sent[0].id, error: { code, message } })
+      expect(await result).toMatchObject({ status: 'rejected', retryable })
+    }
+  })
   test('disconnect after write is unknown and never retried', async () => {
     const { engine, sent, ws } = setup()
     const result = engine.steer('s', 'A')
