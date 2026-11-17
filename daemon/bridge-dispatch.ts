@@ -253,9 +253,9 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const text = args.text as string
         const reply_to = args.reply_to as string | undefined
         const files = (args.files as string[] | undefined) ?? []
-        // A conversation id from a Slack delivery: the answer goes back into that conversation, and only there.
+        // A conversation id from a Slack delivery: the answer goes back into that conversation, and only there. `reply_to` is handed on as given: the conversation says what it can mean.
         if (typeof chat_id === 'string' && chat_id.startsWith('slack:')) {
-          return { content: [{ type: 'text', text: await replyInConversation(callerSessionId, chat_id, text ?? '', files) }] }
+          return { content: [{ type: 'text', text: await replyInConversation(callerSessionId, chat_id, text ?? '', files, reply_to) }] }
         }
 
         const ch = await gateway.fetchChannel(chat_id)

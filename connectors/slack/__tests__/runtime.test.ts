@@ -938,3 +938,124 @@ describe('bind_conversation asks Slack who can read the thread before it says "l
     expect(await bindConversation({ threadId: MINE }, 'slack:C9:1.000001')).toContain("not checked: Slack isn't connected; if the thread can't be read")
   })
 })
+
+describe('reply_to answers in the thread of one message', () => {
+  const MSG = '1793000001.000100'
+  const DM = 'slack:D0OP'
+
+  test('main answering a DM message with reply_to posts in that message\'s thread and binds it to main', async () => {
+    fakePost()
+    getConversationTable().bind('D0OP', '0.000000', 'main')
+    const out = await replyInConversation('main', DM, 'in thread', [], MSG)
+    expect(posts).toEqual([`D0OP|${MSG}|in thread`])
+    expect(out).toBe(`posted 1 message to ${DM}, in the thread of message ${MSG}; replies in it come back to main`)
+    expect(getConversationTable().get('D0OP', MSG)).toMatchObject({ specialist: 'main' })
+  })
+
+  test('the same through the bridge reply tool, with the ts in reply_to and the conversation in chat_id', async () => {
+    fakePost()
+    getConversationTable().bind('D0OP', '0.000000', 'main')
+    const out = await executeTool('reply', { chat_id: DM, text: 'hi', reply_to: MSG }, 'main')
+    expect(posts).toEqual([`D0OP|${MSG}|hi`])
+    expect((out.content[0] as { text: string }).text).toContain(`in the thread of message ${MSG}`)
+  })
+
+  test("a message's ts as chat_id is still not a conversation (the tool text says to use reply_to)", async () => {
+    fakePost()
+    await expect(replyInConversation('main', `slack:D0OP:${MSG}`, 'x')).rejects.toThrow('is not an open conversation')
+    expect(posts).toEqual([])
+  })
+
+  test('a specialist answering a DM bound to it opens a thread bound to it', async () => {
+    fakePost()
+    session('r-food', FOOD_THREAD)
+    getConversationTable().bind('D0OP', '0.000000', FOOD)
+    expect(await replyInConversation('r-food', DM, 'there', [], MSG)).toContain(`replies in it come back to ${FOOD}`)
+    expect(posts).toEqual([`D0OP|${MSG}|there`])
+    expect(getConversationTable().get('D0OP', MSG)).toMatchObject({ specialist: FOOD })
+  })
+
+  test('a thread the rules bound to another specialist while the first part posted is not taken from it', async () => {
+    session('r-food', FOOD_THREAD)
+    getConversationTable().bind('D0OP', '0.000000', FOOD)
+    posts.length = 0
+    slackRuntimeDeps.post = async (c, t, text) => { posts.push(`${c}|${t}|${text}`); getConversationTable().bind('D0OP', MSG, OPS); return '1.000001' }
+    expect(await replyInConversation('r-food', DM, 'x', [], MSG)).toContain(`not bound to ${FOOD}: it is already bound to ${OPS}`)
+    expect(getConversationTable().get('D0OP', MSG)).toMatchObject({ specialist: OPS })
+  })
+
+  test('a long answer keeps every part in that thread', async () => {
+    fakePost()
+    getConversationTable().bind('D0OP', '0.000000', 'main')
+    await replyInConversation('main', DM, 'para\n\n'.repeat(1200), [], MSG)
+    expect(posts.length).toBeGreaterThan(1)
+    expect(posts.every(p => p.startsWith(`D0OP|${MSG}|`))).toBe(true)
+  })
+
+  test('a reply_to that is not a message ts posts nothing and says so', async () => {
+    fakePost()
+    getConversationTable().bind('D0OP', '0.000000', 'main')
+    await expect(replyInConversation('main', DM, 'x', [], 'not-a-ts')).rejects.toThrow('reply_to not-a-ts is not a Slack message ts')
+    expect(posts).toEqual([])
+    expect(getConversationTable().get('D0OP', MSG)).toBeUndefined()
+  })
+
+  test("in a thread conversation the post goes to the thread; reply_to naming another message is reported, its own root is not", async () => {
+    fakePost()
+    session('r-food', FOOD_THREAD)
+    getConversationTable().bind('C1', '5.000001', FOOD)
+    expect(await replyInConversation('r-food', 'slack:C1:5.000001', 'a', [], '5.000001')).toBe('posted 1 message to slack:C1:5.000001')
+    const out = await replyInConversation('r-food', 'slack:C1:5.000001', 'b', [], MSG)
+    expect(out).toContain(`reply_to ${MSG} is not this thread's first message`)
+    expect(out).toContain('posted to the thread as a whole')
+    expect(posts).toEqual(['C1|5.000001|a', 'C1|5.000001|b'])
+  })
+
+  test("never under a message whose thread is another specialist's, or a session's to listen to", async () => {
+    fakePost()
+    session('r-food', FOOD_THREAD)
+    getConversationTable().bind('C1', '0.000000', FOOD)
+    getConversationTable().bind('C1', MSG, OPS)
+    await expect(replyInConversation('r-food', 'slack:C1', 'x', [], MSG)).rejects.toThrow(`is bound to ${OPS}, not ${FOOD}`)
+    getConversationTable().unwatch('C1', MSG)
+    session('sw-listener', '1552619225032425525')
+    getConversationTable().bind('C1', MSG, '1552619225032425525')
+    await expect(replyInConversation('r-food', 'slack:C1', 'x', [], MSG)).rejects.toThrow('listen to')
+    expect(posts).toEqual([])
+  })
+
+  test("a thread of the replier's own that already exists is answered, not rebound", async () => {
+    fakePost()
+    getConversationTable().bind('D0OP', '0.000000', 'main')
+    getConversationTable().bind('D0OP', MSG, 'main')
+    expect(await replyInConversation('main', DM, 'again', [], MSG)).toBe(`posted 1 message to ${DM}, in the thread of message ${MSG}`)
+    expect(posts).toEqual([`D0OP|${MSG}|again`])
+  })
+
+  test("a home_place post opens its own thread: reply_to there is refused, nothing posted", async () => {
+    fakePost()
+    session('r-food', FOOD_THREAD)
+    configure(TOML.replace(`workdir = "/w/food"`, `workdir = "/w/food"\nhome_place = "slack:C7"`))
+    await expect(replyInConversation('r-food', 'slack:C7', 'x', [], MSG)).rejects.toThrow('reply_to cannot be used on a post to')
+    expect(posts).toEqual([])
+  })
+
+  test("a conversation's own session cannot open a thread (it would be a new conversation with another session)", async () => {
+    fakePost()
+    configure(TOML.replace(`reachable_by = ["role:anyone"]\n`, `reachable_by = ["role:anyone"]\nsessions = "per-conversation"\n`))
+    session(`${FOOD}_c1`, FOOD_THREAD)
+    getConversationTable().bind('C1', '0.000000', FOOD)
+    await expect(replyInConversation(`${FOOD}_c1`, 'slack:C1', 'x', [], MSG)).rejects.toThrow("from a conversation's own session")
+    expect(posts).toEqual([])
+  })
+
+  test('when the table cannot bind the thread, the post still lands and the result says follow-ups will not come back', async () => {
+    fakePost()
+    getConversationTable().bind('D0OP', '0.000000', 'main')
+    getConversationTable().bind('C1', '1.000001', FOOD)
+    getConversationTable().bind('C1', '2.000001', FOOD) // the table holds 3
+    const out = await replyInConversation('main', DM, 'x', [], MSG)
+    expect(posts).toEqual([`D0OP|${MSG}|x`])
+    expect(out).toContain('its thread is not bound to main: the conversation table is full')
+  })
+})

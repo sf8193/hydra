@@ -53,7 +53,7 @@ function setup(appName: string, userToken: boolean, extra = '', lists: { dms: { 
   const before = view(toml(appName, userToken, extra), { app: appName })
   const watcher = new ConversationTable({
     now: () => now, file: join(dir, 'w.json'), filesDir: join(dir, 'files'), log: l => logs.push(l), config: () => listener?.view() ?? before,
-    deliver: async (s, msg) => { await gate.wait; sent.push({ to: String((s as { specialist?: string })?.specialist ?? s), msg }); return { ok: true } },
+    deliver: async (s, msg) => { await gate.wait; sent.push({ to: String((s as { specialist?: string; to?: string })?.specialist ?? (s as { to?: string })?.to ?? s), msg }); return { ok: true } },
   })
   const client = new FakeClient()
   const api: SlackApi = {
@@ -121,6 +121,28 @@ for (const appName of ['default', 'krust']) {
         t.live({ channel: 'D0BOT0001', channel_type: 'im', text: 'in thread', ts: '1793000003.000001', thread_ts: '1793000001.000001' } as Partial<RawEvent>)
         await settle(t)
         for (const w of ['first', 'second', 'in thread']) expect(t.sent.filter(s => s.msg.includes(w))).toHaveLength(1)
+      })
+
+      test("a thread opened under a DM message by a reply: bound to the replier, its follow-up reaches it; unbound, the rules name main", async () => {
+        const t = T()
+        await t.listener.start()
+        const to = (w: string) => t.sent.find(s => s.msg.includes(w))?.to
+        // The operator moved this DM to `desk`; a thread under one of its messages is a conversation of its own (slack:D…:<ts>).
+        t.watcher.bind('D0BOT0001', '0.000000', 'desk', undefined, appName)
+        t.live({ channel: 'D0BOT0001', channel_type: 'im', text: 'top', ts: '1793000001.000001' })
+        await settle(t)
+        expect(to('top')).toBe('desk')
+        // Unbound: the thread reply goes where the rules send a DM, not to desk. This is what `reply_to` must not leave behind.
+        t.live({ channel: 'D0BOT0001', channel_type: 'im', text: 'loose follow-up', ts: '1793000002.000001', thread_ts: '1793000001.000001' } as Partial<RawEvent>)
+        await settle(t)
+        expect(to('loose follow-up')).toBe('main')
+        // What replyInConversation does as the first part lands (bindOpenedThread, tagged 'tool'): bind the thread to the replier.
+        t.watcher.bind('D0BOT0001', '1793000003.000001', 'desk', 'tool', appName)
+        t.live({ channel: 'D0BOT0001', channel_type: 'im', text: 'bound follow-up', ts: '1793000004.000001', thread_ts: '1793000003.000001' } as Partial<RawEvent>)
+        await settle(t)
+        expect(to('bound follow-up')).toBe('desk')
+        expect(t.sent.find(s => s.msg.includes('bound follow-up'))!.msg).toContain(`conversation="slack:${appName === 'default' ? '' : `${appName}:`}D0BOT0001:1793000003.000001"`)
+        expect(t.sent.filter(s => s.msg.includes('bound follow-up'))).toHaveLength(1)
       })
 
       test("a DM opened by the boot catch-up, then a live message in it, reaches main", async () => {
