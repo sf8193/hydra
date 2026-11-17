@@ -52,7 +52,7 @@ describe('fileSendDecision', () => {
   test('a path that does not exist is refused', () => {
     expect(refused(join(WORK, 'nope'))).toBeDefined()
   })
-  test('a hardlink in the folder to a file outside passes (named limit: the path is in the folder; the sandbox is what stops the link being made)', () => {
+  test('a hardlink in the folder to a file outside passes this path decision (a path cannot tell it apart; the daemon refuses it on its link count, daemon/write-confinement.ts)', () => {
     linkSync(join(SECRET, 'x'), join(WORK, 'hard'))
     expect(ok(join(WORK, 'hard'))).toBe(join(WORK, 'hard'))
   })

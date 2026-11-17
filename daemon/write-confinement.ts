@@ -166,7 +166,8 @@ export type ConfinedFiles = { files: string[]; cleanup: () => void } | { refusal
  * the path swapped, no longer leads to the file that was opened. The open file's bytes are copied into a folder of the daemon's own (the inbox, which the
  * session cannot read), and the copy is what the gateway opens: it never re-opens the session's path. `cleanup` removes the copies once the send has settled.
  * A file over the attachment limit (access.ts MAX_ATTACHMENT_BYTES) is refused on its size before any byte is read, and the copy is bounded by the same limit for a file that grows.
- * Not covered: a hardlink in the workdir to a file outside it (the sandbox's refusal to read the source stops that, not proven live); a shell that swaps a folder of the path outward before the open, back before the second decision, and outward again before the comparison (three swaps, microseconds apart; a race-free check needs the open file's own path, F_GETPATH, which Node and Bun do not expose without a native call).
+ * A file with more than one name (st_nlink > 1) is refused: a hardlink in the workdir to a file outside it cannot be told from the file by its path. The sandboxed shell cannot make one to a place it may not read (`ln` is denied, shown live in write-confinement-escape.live.test.ts), but a browser, an MCP server or an earlier write could.
+ * Not covered: a shell that swaps a folder of the path outward before the open, back before the second decision, and outward again before the comparison (three swaps, microseconds apart; a race-free check needs the open file's own path, F_GETPATH, which Node and Bun do not expose without a native call).
  */
 export function snapshotConfinedFiles(w: NonNullable<LaunchPolicy['canOnlyWriteTo']>, files: readonly unknown[]): ConfinedFiles {
   const env = { workdir: w.workdir, tmpDir: confinedTemp.dir(), deny: w.cannotRead, realpath: realpathSync }
@@ -184,7 +185,8 @@ export function snapshotConfinedFiles(w: NonNullable<LaunchPolicy['canOnlyWriteT
       fd = openSync(d.path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
       const open = fstatSync(fd)
       const again = fileSendDecision(f, env)
-      if (!open.isFile() || again.path !== d.path) return refuse(f)
+      // More than one name: another name (a hardlink made where the session cannot, by a browser or MCP server, or earlier) may lead to a place it may not read, and a path check cannot see that.
+      if (!open.isFile() || open.nlink > 1 || again.path !== d.path) return refuse(f)
       const there = statSync(d.path)
       if (there.ino !== open.ino || there.dev !== open.dev) return refuse(f)
       if (!dir) { const root = join(STATE_DIR, 'inbox'); mkdirSync(root, { recursive: true, mode: 0o700 }); dir = mkdtempSync(join(root, 'confined-send-')) }

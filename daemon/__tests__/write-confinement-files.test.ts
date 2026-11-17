@@ -2,7 +2,7 @@
 // result, any `files` path it could not read itself, opens what it decided on once, and posts a copy it owns, never the session's path.
 // Other sessions are unchanged.
 import { afterAll, afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'fs'
+import { appendFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { executeTool } from '../bridge-dispatch.js'
@@ -168,6 +168,22 @@ describe('a write-confined session known only by its bridge', () => {
     const r = await executeTool('reply', { chat_id: 'wc-stray-thread', text: 'hi', files: [join(WORK, 'a.txt')] }, 'wc-stray')
     expect(r.isError).toBe(true)
     expect(sends).toEqual([])
+  })
+})
+
+describe('a file with more than one name', () => {
+  test('a hardlink in its folder to a file outside it is refused (nlink > 1): its path alone cannot tell it from the file', async () => {
+    const link = join(WORK, 'hard.txt')
+    linkSync(join(SECRET, 'x'), link)
+    const r = await reply([link])
+    rmSync(link)
+    expect(r.isError).toBe(true)
+    expect(r.content[0].text).toBe(`reply: ${fileRefusal(link)}`)
+    expect(JSON.stringify(sends)).not.toContain('secret-bytes')
+    expect(inboxCopies()).toEqual([])
+  })
+  test('the same file with one name goes', async () => {
+    expect((await reply([join(WORK, 'a.txt')])).isError).toBeFalsy()
   })
 })
 
