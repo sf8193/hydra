@@ -132,6 +132,7 @@ export function getSlackWatcher(): SlackWatcher {
     config: app => config(app),
     apps: () => hydraConfig().slackApps,
     alert,
+    hosted: threadId => !!registry.getByThread(threadId),
     deliver: async (target, message, idempotencyKey) => {
       const t = targetFor(target.to, target.conversation)
       // First come, first served, when places are short: a newer conversation without a session takes a place only if
@@ -146,7 +147,7 @@ export function getSlackWatcher(): SlackWatcher {
       const r = await deliverToTarget(t, message, { initiator: 'slack-watch', idempotencyKey, source: 'slack-watch' })
       if (!r.ok && r.atMax) return { ok: false, error: r.reason, wait: true }
       if (r.ok) return { ok: true, ...(r.duplicate && { duplicate: true }) }
-      return { ok: false, error: r.reason, exit: r.exit, ...(r.permanent && { permanent: true }) }
+      return { ok: false, error: r.reason, exit: r.exit, ...(r.permanent && { permanent: true }), ...(r.malformed && { malformed: true }) }
     },
   })
 }
@@ -390,6 +391,7 @@ export async function bindConversation(caller: Partial<Pick<SessionInfo, 'thread
   if (!me) throw new Error('this session has no thread to bind a conversation to')
   // A DM, or a place's top level, is routing's to hand out: a tool never takes one, least of all the operator's DM from main.
   if (isDm(c.channel) || c.threadTs === TOP_LEVEL) throw new Error(`${conversationId(c)} is not a thread in a channel: only a thread can be bound by hand`)
+  if (registry.getByThread(`${c.channel}:${c.threadTs}`)) throw new Error(`${conversationId(c)} is a hydra session's own thread: its messages already reach that session`)
   // A specialist pinned to other apps can't be reached through this one: its answers would never be heard.
   const apart = notServedBy(v.hydra, me, app, 'this conversation is through')
   if (apart) throw new Error(`not bound: ${conversationId(c)}: ${apart}`)
@@ -587,6 +589,7 @@ export function operatorBind(conversation: string, target: string): string {
   if (apart) throw new Error(`${conversationId(c)} can't be bound to ${to}: ${apart}`)
   // A channel has no top-level conversation: every one is a thread (a DM's top level is one, and may be moved).
   if (!isDm(c.channel) && c.threadTs === TOP_LEVEL) throw new Error(`${conversationId(c)} names a channel, not a conversation: add the thread's ts`)
+  if (ref.ref.kind === 'thread' && registry.getByThread(`${c.channel}:${c.threadTs}`)) throw new Error(`${conversationId(c)} is a hydra session's own thread: another session can't listen to it`)
   if (!getSlackWatcher().bind(c.channel, c.threadTs, to, 'cli', app)) throw new Error('the conversation table is full')
   return `${conversationId(c)} → ${to}`
 }

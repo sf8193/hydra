@@ -131,6 +131,51 @@ describe('any session listens to a Slack thread: bound to its own thread', () =>
     expect(unbindConversation({ threadId: MINE }, 'slack:C9:1793732224.093059')).toBe('slack:C9:1793732224.093059 is unbound')
   })
 
+  test('a session hosted in a Slack thread binds a thread to itself as a thread, not a specialist', async () => {
+    const SLACK = 'D0BE3RB4Y00:1792616731.235729'
+    session('sw-slack', SLACK)
+    expect(isToolAllowed('sw-slack', 'bind_conversation')).toBe(true)
+    expect(await bindConversation({ threadId: SLACK }, 'slack:C9:1793732224.093060')).toContain('is bound to this session')
+    expect(getSlackWatcher().get('C9', '1793732224.093060')).toMatchObject({ specialist: SLACK, mentionedBy: 'tool' })
+    expect(unbindConversation({ threadId: SLACK }, 'slack:C9:1793732224.093060')).toBe('slack:C9:1793732224.093060 is unbound')
+  })
+
+  test("a session never binds another hydra session's own thread, however the conversation is spelled", async () => {
+    const SLACK = 'D0BE3RB4Y00:1792616731.235729'
+    session('sw-slack', SLACK)
+    session('sw-host', 'C9:1793732224.093060')
+    registry.setThread('C9:1793732224.093060', 'sw-host')
+    try {
+      for (const c of ['slack:C9:1793732224.093060', 'slack:C9:1793732224.09306', 'slack:default:C9:1793732224.093060'])
+        await expect(bindConversation({ threadId: SLACK }, c)).rejects.toThrow("is a hydra session's own thread")
+      expect(() => operatorBind('slack:C9:1793732224.093060', `thread:${SLACK}`)).toThrow("is a hydra session's own thread")
+      expect(operatorBind('slack:C9:1793732224.093060', 'main')).toBe('slack:C9:1793732224.093060 → main')
+    } finally { registry.deleteThread('C9:1793732224.093060') }
+  })
+
+  test("a thread a hydra session now lives in is let go by a session listening to it, at its next message; a specialist's binding is kept", async () => {
+    const told: [string, string][] = []
+    const realSend = gateway.send
+    ;(gateway as any).send = async (c: string, text: string) => { told.push([c, text]); return 'id' }
+    stopSlackWatch(); startSlackWatch()
+    try {
+      session('sw-listener', MINE)
+      await bindConversation({ threadId: MINE }, 'slack:C9:1793732224.093062')
+      await bindConversation(food, 'slack:C1:5.000003')
+      for (const t of ['C9:1793732224.093062', 'C1:5.000003']) registry.setThread(t, 'sw-host')
+      getSlackWatcher().handle({ channel: 'C9', ts: '1793732224.093063', threadTs: '1793732224.093062', user: 'UANYONE', text: 'for the host' } as any)
+      getSlackWatcher().handle({ channel: 'C1', ts: '5.000004', threadTs: '5.000003', user: 'UANYONE', text: 'for food' } as any)
+      await getSlackWatcher().flush()
+      expect(getSlackWatcher().get('C9', '1793732224.093062')).toBeUndefined()
+      expect(getSlackWatcher().get('C1', '5.000003')?.specialist).toBe(FOOD)
+      await Bun.sleep(5)
+      expect(told.filter(([c, t]) => c === MINE && t.includes("is now a hydra session's own thread") && t.includes('(1 owed dropped)'))).toHaveLength(1)
+    } finally {
+      (gateway as any).send = realSend; stopSlackWatch()
+      for (const t of ['C9:1793732224.093062', 'C1:5.000003']) registry.deleteThread(t)
+    }
+  })
+
   test("a session never binds a DM or a channel's top level", async () => {
     await expect(bindConversation({ threadId: MINE }, 'slack:D0OP')).rejects.toThrow('only a thread can be bound by hand')
     await expect(bindConversation({ threadId: MINE }, 'slack:C9')).rejects.toThrow('only a thread can be bound by hand')

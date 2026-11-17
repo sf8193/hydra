@@ -9,7 +9,7 @@ import { specialistForThread } from '../../specialists/specialists.js'
 import { DELIVER_MAX_MESSAGE_BYTES } from '../../shared/constants.js'
 import type { DeliverOpts, DeliverOutcome } from '../../specialists/targets.js'
 import { timed } from '../../shared/loop-watch.js'
-import { spelledBare } from '../../shared/target-kind.js'
+import { spelledBare, spelledTo } from '../../shared/target-kind.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -127,6 +127,7 @@ export function formatGreenNotice(entry: WatchEntry, check: { headSha: string; t
 // ---------------------------------------------------------------------------
 
 const watches = new Map<string, WatchEntry>()
+const toldUnreadable = new WeakSet<WatchEntry>()
 const PERSIST_FILE = join(STATE_DIR, 'pr-watches.json')
 const POLL_INTERVAL_MS = 3 * 60 * 1000
 let pollTimer: ReturnType<typeof setInterval> | undefined
@@ -576,13 +577,17 @@ async function pollPr(entry: WatchEntry): Promise<void> {
   })
   if (!r.ok) {
     Object.assign(entry, held)
-    if (r.exit === 8) {
+    if (r.exit === 8 && !r.malformed) {
       process.stderr.write(`daemon: pr-watch: ${entry.prUrl} → ${spelledBare(entry.to)}: ${r.reason} — unwatching\n`)
       dropWatch(entry)
       void safeSend(entry.threadId, `⚠️ Stopped watching [#${entry.prNumber}](${entry.prUrl}): ${r.reason}`, { unfurl: false })
       return
     }
-    process.stderr.write(`daemon: pr-watch: ${entry.prUrl} → ${spelledBare(entry.to)} not delivered (exit ${r.exit}: ${r.reason}) — owed, retried next poll\n`)
+    if (r.malformed && !toldUnreadable.has(entry)) {
+      toldUnreadable.add(entry)
+      void safeSend(entry.threadId, `⚠️ Can't deliver updates for [#${entry.prNumber}](${entry.prUrl}): ${r.reason}. Still watching; they stay owed until hydra can read the target.`, { unfurl: false })
+    }
+    process.stderr.write(`daemon: pr-watch: ${entry.prUrl} → ${spelledTo(entry.to)} not delivered (exit ${r.exit}: ${r.reason}) — owed, retried next poll\n`)
     return
   }
   if (watches.get(entry.prUrl) === entry) persist()
@@ -804,6 +809,7 @@ export function retargetWatches(from: Watcher, to: Watcher): number {
     unpinWatch(entry)
     delete entry.revive
     Object.assign(entry, targetOf(to.sessionId, to.threadId), { threadId: to.threadId, pinMessageId: undefined })
+    toldUnreadable.delete(entry)
     void pinWatch(entry)
     moved++
   }

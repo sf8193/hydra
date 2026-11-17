@@ -485,4 +485,16 @@ describe('a target says its kind: main, specialist:<name>, thread:<id>', () => {
     expect(await bad(`thread:${name}`)).toMatchObject({ exit: 8 })
     expect(spawns).toHaveLength(0)
   })
+
+  test('a Slack thread id is a thread, bare as stored or spelled', async () => {
+    const slack = 'D0BE3RB4Y00:1792616731.235729'
+    const live = occupy(slack)
+    expect(await deliverToTarget({ to: slack }, 'm', opts)).toMatchObject({ ok: true, sessionId: live.sessionId, threadId: slack })
+    expect(await deliverToTarget({ to: `thread:${slack}` }, 'm', opts)).toMatchObject({ ok: true, sessionId: live.sessionId, threadId: slack })
+  })
+
+  test('exit 8 says whether the target could be read: only an unreadable one is malformed', async () => {
+    expect(await deliverToTarget({ to: 'D0BE3RB4Y00:x' }, 'm', opts)).toMatchObject({ ok: false, exit: 8, malformed: true })
+    expect(await deliverToTarget({ to: 'specialist:ghost' }, 'm', opts)).toEqual({ ok: false, exit: 8, reason: 'no such specialist: ghost' })
+  })
 })

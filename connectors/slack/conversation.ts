@@ -46,5 +46,5 @@ export function parseConversation(raw: unknown): { app?: string; channel: string
   if (!m) throw new Error(`conversation must look like ${CONVERSATION_FORMAT}, as hydra conversations prints it`)
   const [, app, channel, ts] = m
   if (ts && !THREAD_TS.test(ts)) throw new Error('thread ts must look like 1793732224.093059')
-  return { ...(app && app !== DEFAULT_SLACK_APP && { app }), channel, threadTs: ts ?? TOP_LEVEL }
+  return { ...(app && app !== DEFAULT_SLACK_APP && { app }), channel, threadTs: ts ? ts.replace(/\.(\d+)$/, (_, f: string) => `.${f.padEnd(6, '0')}`) : TOP_LEVEL }
 }
