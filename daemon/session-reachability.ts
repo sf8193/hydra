@@ -1,10 +1,10 @@
 /**
  * Who is home in a session record, derived on every read and never stored.
  *
- * A live process is not the same thing as a reachable session. The pane can
+ * A live process is not the same thing as a connected session. The pane can
  * outlive the channel back to the daemon, and when it does the session keeps
  * running with nobody able to talk to it. The remedies are opposites: a
- * reachable session must be left alone, and an orphaned one must be torn down
+ * connected session must be left alone, and an orphaned one must be torn down
  * before it can be resumed — never revived over, or two sessions race.
  *
  * `deadAt` is history (when it was given up on), not a veto: a record stamped
@@ -40,7 +40,7 @@ export type Occupancy =
   /** Running, no bridge yet, inside the grace window. Booting: leave it be. */
   | 'starting'
   /** Bridge connected. Messages get through, and a bridge is a child of the session, so it is running. */
-  | 'reachable'
+  | 'connected'
   /** Running, no bridge past the grace window (or after it was given up on). Recoverable only after teardown. */
   | 'orphaned'
   /** Not running, or replaced: a successor holds its name (see nameHeldByAnother). Nothing of its own to tear down. */
@@ -60,7 +60,7 @@ export function classifyOccupancy(input: {
   waitMs: number
   givenUp?: boolean
 }): Exclude<Occupancy, 'none'> {
-  if (input.connected) return 'reachable'
+  if (input.connected) return 'connected'
   if (!input.running) return 'dead'
   return input.givenUp || input.waitMs > ORPHAN_GRACE_MS ? 'orphaned' : 'starting'
 }
@@ -73,7 +73,7 @@ export function occupancy(
   records: Iterable<OccupancySubject> = registry.values(),
 ): Occupancy {
   if (!info) return 'none'
-  if (transport.has(info.sessionId)) return 'reachable'
+  if (transport.has(info.sessionId)) return 'connected'
   if (nameHeldByAnother(info, records)) return 'dead'
   return classifyOccupancy({
     running: info.adapter ? info.adapter.isAlive(info) : tmuxHasSession(info.tmuxName),
@@ -91,9 +91,9 @@ export function nameHeldByAnother(info: OccupancySubject, records: Iterable<Occu
   return false
 }
 
-/** Someone is home (booting, reachable or orphaned): a new session here would race it. */
-export function occupied(o: Occupancy): o is 'starting' | 'reachable' | 'orphaned' {
-  return o === 'starting' || o === 'reachable' || o === 'orphaned'
+/** Someone is home (booting, connected or orphaned): a new session here would race it. */
+export function occupied(o: Occupancy): o is 'starting' | 'connected' | 'orphaned' {
+  return o === 'starting' || o === 'connected' || o === 'orphaned'
 }
 
 export function daemonPastOrphanGrace(uptimeMs = awakeSince(daemonStartedAt())): boolean {
@@ -102,5 +102,5 @@ export function daemonPastOrphanGrace(uptimeMs = awakeSince(daemonStartedAt())):
 
 /** A recovery command refuses a session that is fine, or still booting (tearing it down would race its own startup). */
 export function blocksRecovery(o: Occupancy): boolean {
-  return o === 'reachable' || o === 'starting'
+  return o === 'connected' || o === 'starting'
 }

@@ -1,6 +1,6 @@
 %%{init: {"theme":"base","themeVariables":{"background":"#ffffff","primaryColor":"#ffffff","primaryBorderColor":"#6b7280","primaryTextColor":"#1f2937","lineColor":"#374151","clusterBkg":"#ffffff","clusterBorder":"#d1d5db"},"flowchart":{"wrappingWidth":420,"useMaxWidth":false}}}%%
 %% When the Slack connector drops a message or a connection goes wrong, who is told, where, and how often?
-%% Drops: SlackWatcher.drop, connectors/slack/watch.ts:979; alertOnce, :995. Health: SlackListener.checkAlerts, connectors/slack/listener.ts:747.
+%% Drops: ConversationTable.drop, connectors/slack/watch.ts:979; alertOnce, :995. Health: SlackListener.checkAlerts, connectors/slack/listener.ts:747.
 %% Where it posts: alert, connectors/slack/runtime.ts:85. Every box's source: diagrams/flow-slack-alert.sources.md.
 flowchart TD
   drop(["a <b>Drop</b>"])

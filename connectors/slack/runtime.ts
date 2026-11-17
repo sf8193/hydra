@@ -1,4 +1,4 @@
-import { SlackWatcher, namedChannels, cantRead, cmpTs, slackWatchesPath, unresolvedPlaces, conversationId, placeName, isDm, appOfEntry, TOP_LEVEL, NO_DIRECTORY, SLACK_LIMITS, type SlackWatchConfig, type SlackWatchEntry, type SlackWatchStats, type LateOwed } from './watch.js'
+import { ConversationTable, namedChannels, cantRead, cmpTs, slackWatchesPath, unresolvedPlaces, conversationId, placeName, isDm, appOfEntry, TOP_LEVEL, NO_DIRECTORY, SLACK_LIMITS, type ConversationConfig, type ConversationEntry, type ConversationStats, type LateOwed } from './watch.js'
 import { parseConversation } from './conversation.js'
 import { ConnectedApps, type AppIdentity } from './apps.js'
 import { getSpecialist, conversationSpecialistOf, specialistOf, boundAs } from '../../specialists/specialists.js'
@@ -35,7 +35,7 @@ const log = (line: string) => { process.stderr.write(line) }
  * one app. An absent `app` is `default`.
  */
 export const slackRuntimeDeps = {
-  view: (app: string = DEFAULT_SLACK_APP): SlackWatchConfig | null => connections.listener(app)?.view() ?? null,
+  view: (app: string = DEFAULT_SLACK_APP): ConversationConfig | null => connections.listener(app)?.view() ?? null,
   /** A place freed under max: catch-up refetches what waits, the oldest waiter first, through the apps that have waiters. */
   wake: (apps?: string[], why = 'a place freed'): void => { for (const [id, l] of connections.listeners()) if (!apps || apps.includes(id)) void l.runCatchUp(false, why) },
   post: (channel: string, threadTs: string | undefined, text: string, app: string = DEFAULT_SLACK_APP): Promise<string> => {
@@ -64,12 +64,12 @@ const hydraConfig = () => currentHydraConfig()
 const READ_THREAD_TIMEOUT_MS = 10_000
 
 /** What the watcher routes with for one app: hydra.toml plus what that app's connection learned. Null until it has connected. */
-function config(app?: string): SlackWatchConfig | null {
+function config(app?: string): ConversationConfig | null {
   return slackRuntimeDeps.view(app)
 }
 
 /** Without a connection, the tools still name channels by id; `#name` places resolve once the app is up. */
-function offlineView(app?: string): Pick<SlackWatchConfig, 'hydra' | 'directory' | 'app'> {
+function offlineView(app?: string): Pick<ConversationConfig, 'hydra' | 'directory' | 'app'> {
   return config(app) ?? { hydra: hydraConfig(), directory: NO_DIRECTORY, ...(app && { app }) }
 }
 
@@ -115,7 +115,7 @@ function alertChannel(to: string): string | undefined {
   return to === MAIN ? mainChannel() || undefined : isSessionThread(to) ? to : getSpecialist(to)?.threadId
 }
 
-let watcher: SlackWatcher | undefined
+let watcher: ConversationTable | undefined
 let sweepTimer: ReturnType<typeof setInterval> | undefined
 
 /**
@@ -123,8 +123,8 @@ let sweepTimer: ReturnType<typeof setInterval> | undefined
  * Built on first use, not at import. A "duplicate" answer from the specialist means
  * the daemon already delivered this key: that counts as delivered.
  */
-export function getSlackWatcher(): SlackWatcher {
-  return watcher ??= new SlackWatcher({
+export function getConversationTable(): ConversationTable {
+  return watcher ??= new ConversationTable({
     now: Date.now,
     file: slackWatchesPath(),
     filesDir: join(STATE_DIR, 'slack-files'),
@@ -139,7 +139,7 @@ export function getSlackWatcher(): SlackWatcher {
       // one is left over after every older waiter has had theirs.
       if ('perConversation' in t && !conversationSessionRunning(t.perConversation, t.conversation)) {
         const h = hydraConfig()
-        const waiters = getSlackWatcher().waiters(id => currentId(h, id) === t.perConversation)
+        const waiters = getConversationTable().waiters(id => currentId(h, id) === t.perConversation)
         const ahead = waiters.findIndex(e => conversationId(e) === t.conversation)
         const before = ahead === -1 ? waiters.length : ahead
         if (before > 0 && placesFree(t.perConversation) <= before) return { ok: false, error: `${t.perConversation} is at max with ${before} conversation${before === 1 ? '' : 's'} waiting ahead of ${t.conversation}`, wait: true }
@@ -194,7 +194,7 @@ const connections = new SlackConnections({
   makeListener: (app, shared) => new SlackListener({
     app: app.id,
     apps: shared,
-    watcher: getSlackWatcher(),
+    watcher: getConversationTable(),
     hydra: hydraConfig,
     told: scopesTold,
     tokens: slackTokens,
@@ -266,9 +266,9 @@ let unsubscribe: (() => void) | undefined
  * Starts the watch's own clock: the idle sweep. Called at boot next to `startPrWatcher()`,
  * which owns the same kind of timer for PR watches.
  */
-export function startSlackWatch(): void {
+export function startConversationTable(): void {
   if (sweepTimer) return
-  const w = getSlackWatcher()
+  const w = getConversationTable()
   reconcileVacancy()
   w.sweep(false)   // not yet releasing vacant threads: recovery is about to revive sessions, whose registering stops the clock
   void unbindDeletedThreads()
@@ -280,13 +280,13 @@ export function startSlackWatch(): void {
   const freed = ({ tmuxName }: { tmuxName: string }) => {
     const to = conversationSpecialistOf(tmuxName)
     const h = hydraConfig()
-    const waiting = to ? getSlackWatcher().waiters(id => currentId(h, id) === to) : []
+    const waiting = to ? getConversationTable().waiters(id => currentId(h, id) === to) : []
     if (waiting.length) slackRuntimeDeps.wake([...new Set(waiting.map(appOfEntry))])
   }
   // A session thread keeps its bound conversations while no session is in it (a kill, a handoff, a respawn): what arrives stays
   // owed, and is delivered when a session's bridge registers there. They end on unbind, when the thread is deleted, when Slack
   // can no longer read the conversation, when idle a week, or when no session has been in the thread for VACANT_RELEASE_MS (a day).
-  const offRegistered = on('session:bridge-registered', ({ threadId }) => { getSlackWatcher().occupy(threadId); deliverOwedIn(threadId) }, 'slack connector: a session is in the thread again: stop its vacancy clock, and deliver what it is owed')
+  const offRegistered = on('session:bridge-registered', ({ threadId }) => { getConversationTable().occupy(threadId); deliverOwedIn(threadId) }, 'slack connector: a session is in the thread again: stop its vacancy clock, and deliver what it is owed')
   // A deleted thread is found by asking the platform (the gateway's `threadExists`): when its session ends, at start, and at each sweep.
   // What the operator ends ends: a killed session takes its thread's subscriptions with it, said once in the thread. A crash, a handoff or a respawn does not.
   const offDeleted = on('session:death', ({ threadId, deliberate, sessionId }) => { if (deliberate) unbindOnKill(threadId); else { void unbindIfThreadDeleted(threadId); reconcileVacancy(threadId, sessionId) } }, 'slack connector: unbind a killed session thread\'s conversations, or those of a deleted one')
@@ -299,17 +299,17 @@ export function startSlackWatch(): void {
 
 /** A session registered in this thread: the conversations bound to it that owe messages are refetched and delivered now, not at the next periodic catch-up. */
 function deliverOwedIn(threadId: string): void {
-  const owing = getSlackWatcher().list().filter(e => e.specialist === threadId && e.owed?.length)
+  const owing = getConversationTable().list().filter(e => e.specialist === threadId && e.owed?.length)
   if (owing.length) slackRuntimeDeps.wake([...new Set(owing.map(appOfEntry))], 'a session registered in the thread')
 }
 
 /** The session was killed: its thread's conversations are unbound at once (what they owed is dropped and counted), and the thread is told once how to resume. */
 function unbindOnKill(threadId: string | undefined): void {
   if (!threadId || !isSessionThread(threadId)) return
-  const bound = getSlackWatcher().list().filter(e => e.specialist === threadId)
+  const bound = getConversationTable().list().filter(e => e.specialist === threadId)
   if (!bound.length) return
   const owed = bound.reduce((n, e) => n + (e.owed?.length ?? 0), 0)
-  for (const e of bound) getSlackWatcher().unwatch(e.channel, e.threadTs, e.app, true)
+  for (const e of bound) getConversationTable().unwatch(e.channel, e.threadTs, e.app, true)
   alert(`ℹ️ This session was killed, so it stopped listening to ${bound.map(conversationId).join(', ')}${owed ? ` (${owed} owed dropped)` : ''}. Bind again with \`bind_conversation\` to resume.`, threadId)
 }
 
@@ -318,7 +318,7 @@ function unbindOnKill(threadId: string | undefined): void {
  * `leaving`: a session that is dying, not counted as in the thread. The clock keeps its first start, so a restart neither resets nor doubles it.
  */
 function reconcileVacancy(only?: string, leaving?: string): void {
-  const w = getSlackWatcher()
+  const w = getConversationTable()
   for (const t of only ? [only] : boundThreads()) {
     const home = [...registry.values()].some(s => s.threadId === t && s.sessionType !== 'thread_guest' && s.deadAt === undefined && s.sessionId !== leaving)
     if (home) w.occupy(t); else w.vacate(t)
@@ -326,15 +326,15 @@ function reconcileVacancy(only?: string, leaving?: string): void {
 }
 
 /** The session threads that conversations are bound to. */
-const boundThreads = (): string[] => [...new Set(getSlackWatcher().list().map(e => e.specialist).filter((id): id is string => !!id && isSessionThread(id)))]
+const boundThreads = (): string[] => [...new Set(getConversationTable().list().map(e => e.specialist).filter((id): id is string => !!id && isSessionThread(id)))]
 
 /** If the platform says the session thread is deleted, its conversations are unbound, each logged (what they owed is dropped and counted). Any other answer keeps them. */
 async function unbindIfThreadDeleted(threadId: string | undefined): Promise<void> {
-  if (!threadId || !isSessionThread(threadId) || !getSlackWatcher().list().some(e => e.specialist === threadId)) return
+  if (!threadId || !isSessionThread(threadId) || !getConversationTable().list().some(e => e.specialist === threadId)) return
   if (await gateway.threadExists(threadId).catch(() => true)) return
-  for (const e of getSlackWatcher().list().filter(e => e.specialist === threadId)) {
+  for (const e of getConversationTable().list().filter(e => e.specialist === threadId)) {
     log(`daemon: slack connector: unbound ${conversationId(e)}: its session thread ${threadId} was deleted\n`)
-    getSlackWatcher().unwatch(e.channel, e.threadTs, e.app)
+    getConversationTable().unwatch(e.channel, e.threadTs, e.app)
   }
 }
 
@@ -345,7 +345,7 @@ const unbindDeletedThreads = async (): Promise<void> => { for (const t of boundT
  * (that could spawn a session mid-teardown): what is waiting was already persisted as
  * owed, and the catch-up pass delivers it after the restart.
  */
-export function stopSlackWatch(): void {
+export function stopConversationTable(): void {
   if (sweepTimer) { clearInterval(sweepTimer); sweepTimer = undefined }
   unsubscribe?.()
   unsubscribe = undefined
@@ -366,7 +366,7 @@ function declaredApp(h: HydraConfig, app: string): void {
 const isConversationSession = (caller: Partial<Pick<SessionInfo, 'tmuxName'>> | undefined): boolean => !!conversationSpecialistOf(caller?.tmuxName)
 
 /** Whether `to` answers every message in this channel (`placesAnsweredBy`): a rule there with a `person` doesn't count, it takes chosen people's messages, not the place. */
-function answersIn(v: Pick<SlackWatchConfig, 'hydra' | 'directory'>, to: string, channel: string): boolean {
+function answersIn(v: Pick<ConversationConfig, 'hydra' | 'directory'>, to: string, channel: string): boolean {
   const s = v.hydra.specialists[to]
   const name = v.directory.nameOf(channel)
   const at = [placeOf('slack', 'channel', channel), ...(name ? [placeOf('slack', 'channel', `#${name}`)] : [])]
@@ -404,7 +404,7 @@ export async function bindConversation(caller: Partial<Pick<SessionInfo, 'thread
   // A specialist answers in its threads: one only the operator can read is one it could never post in.
   if (via === 'user' && !isSessionThread(me)) throw new Error(`not bound: ${conversationId(c)}: the bot isn't in ${placeName(v, c.channel)}, so ${me} could not answer there. Ask the operator to invite it, then bind again`)
   // From here to the bind nothing waits: the table checks and the bind can't interleave with another call.
-  const w = getSlackWatcher()
+  const w = getConversationTable()
   const bound = w.get(c.channel, c.threadTs, app)?.specialist
   // A specialist answers where it answers: a session only listening to the thread gives it way, and is told.
   const takeover = !!bound && isSessionThread(bound) && !isSessionThread(me)
@@ -412,7 +412,7 @@ export async function bindConversation(caller: Partial<Pick<SessionInfo, 'thread
   if (!bound && w.list().filter(e => (e.mentionedBy === 'tool' || e.mentionedBy === 'home') && e.specialist && currentId(v.hydra, e.specialist) === me).length >= TOOL_BIND_MAX) {
     throw new Error(`${me} already holds ${TOOL_BIND_MAX} conversations it opened itself; unbind one first`)
   }
-  if (!w.bind(c.channel, c.threadTs, me, 'tool', app)) throw new Error(`the conversation table is full (${SLACK_LIMITS.maxWatches}); unbind one first`)
+  if (!w.bind(c.channel, c.threadTs, me, 'tool', app)) throw new Error(`the conversation table is full (${SLACK_LIMITS.maxConversations}); unbind one first`)
   if (via) w.setVia(c.channel, c.threadTs, via, app)
   if (takeover) alert(`ℹ️ ${conversationId(c)} was bound to this session to listen; ${me} took it, since it answers there. This session no longer hears it.`, bound!)
   const place = placeName(v, c.channel)
@@ -429,13 +429,13 @@ export function unbindConversation(caller: Partial<Pick<SessionInfo, 'threadId' 
   const me = boundAs(caller)
   if (!me) throw new Error('this session has no thread, so it holds no conversations')
   const c = parseConversation(conversation)
-  const e = getSlackWatcher().get(c.channel, c.threadTs, appOfEntry(c))
+  const e = getConversationTable().get(c.channel, c.threadTs, appOfEntry(c))
   if (!e) return `${conversationId(c)} was not bound`
   if (!e.specialist || currentId(hydraConfig(), e.specialist) !== me) throw new Error(`${conversationId(c)} is bound to ${e.specialist ?? 'no one yet'}, not ${me}`)
   const owed = e.owed?.length ?? 0
   // A session that unbinds learns of its drop from this result; a specialist's drop is alerted in its thread.
   const own = isSessionThread(me)
-  getSlackWatcher().unwatch(c.channel, c.threadTs, appOfEntry(c), own)
+  getConversationTable().unwatch(c.channel, c.threadTs, appOfEntry(c), own)
   return `${conversationId(c)} is unbound${owed ? `; ${owed} message${owed === 1 ? '' : 's'} it still owed were dropped${own ? '' : ' (and alerted)'}` : ''}`
 }
 
@@ -466,7 +466,7 @@ export function conversationBelongsTo(callerSessionId: string | undefined, conve
     const caller = callerSessionId ? registry.get(callerSessionId) : undefined
     const me = boundAs(caller, h)
     const c = parseConversation(conversation)
-    const e = getSlackWatcher().get(c.channel, c.threadTs, appOfEntry(c))
+    const e = getConversationTable().get(c.channel, c.threadTs, appOfEntry(c))
     if (!e) return false
     const bound = e.specialist ? currentId(h, e.specialist) : undefined
     if (bound && isSessionThread(bound)) return false
@@ -497,7 +497,7 @@ export async function replyInConversation(callerSessionId: string | undefined, c
     // with the ones it binds by hand, so a loop can't fill the table. Past that, the post goes unbound, and is alerted.
     let unbound: string | undefined
     const bindThread = (ts: string) => {
-      const w = getSlackWatcher()
+      const w = getConversationTable()
       const held = w.list().filter(e => (e.mentionedBy === 'tool' || e.mentionedBy === 'home') && e.specialist && currentId(h, e.specialist) === me).length
       if (held < TOOL_BIND_MAX && w.bind(homePlaceId, ts, me!, 'home', speaks)) return
       unbound = held >= TOOL_BIND_MAX ? `${me} already holds ${TOOL_BIND_MAX} conversations it opened itself` : 'the conversation table is full'
@@ -509,7 +509,7 @@ export async function replyInConversation(callerSessionId: string | undefined, c
   const c = parseConversation(conversation)
   const app = appOfEntry(c)
   const id = conversationId(c)
-  const e = getSlackWatcher().get(c.channel, c.threadTs, app)
+  const e = getConversationTable().get(c.channel, c.threadTs, app)
   if (!e) throw new Error(`${id} is not an open conversation, so there is nothing there to answer`)
   const bound = e.specialist ? currentId(h, e.specialist) : undefined
   // A thread a session bound to itself is listen-only: only a specialist (or main) speaks in Slack.
@@ -517,7 +517,7 @@ export async function replyInConversation(callerSessionId: string | undefined, c
   const caller = callerSessionId ? registry.get(callerSessionId) : undefined
   if (!mayAnswerConversation(h, caller, me, bound, id)) throw new Error(`${id} is bound to ${bound ?? 'no one yet'}${me ? `, not ${me}` : ''}: a reply goes only to a conversation bound to your specialist (or its home_place)${isConversationSession(caller) ? ', and from a conversation\'s own session only to that conversation' : ''}`)
   // Checked again before every part: a conversation moved away mid-reply gets no more of it.
-  const stillMine = () => { const now = getSlackWatcher().get(c.channel, c.threadTs, app)?.specialist; return !!now && currentId(hydraConfig(), now) === bound }
+  const stillMine = () => { const now = getConversationTable().get(c.channel, c.threadTs, app)?.specialist; return !!now && currentId(hydraConfig(), now) === bound }
   // Through the app that heard the conversation, and no other.
   const { posted } = await postParts(app, c.channel, c.threadTs === TOP_LEVEL ? undefined : c.threadTs, text, id, false, stillMine)
   return `posted ${posted} message${posted === 1 ? '' : 's'} to ${id}`
@@ -590,21 +590,21 @@ export function operatorBind(conversation: string, target: string): string {
   // A channel has no top-level conversation: every one is a thread (a DM's top level is one, and may be moved).
   if (!isDm(c.channel) && c.threadTs === TOP_LEVEL) throw new Error(`${conversationId(c)} names a channel, not a conversation: add the thread's ts`)
   if (ref.ref.kind === 'thread' && registry.getByThread(`${c.channel}:${c.threadTs}`)) throw new Error(`${conversationId(c)} is a hydra session's own thread: another session can't listen to it`)
-  if (!getSlackWatcher().bind(c.channel, c.threadTs, to, 'cli', app)) throw new Error('the conversation table is full')
+  if (!getConversationTable().bind(c.channel, c.threadTs, to, 'cli', app)) throw new Error('the conversation table is full')
   return `${conversationId(c)} → ${to}`
 }
 
 export function operatorUnbind(conversation: string): string {
   const c = parseConversation(conversation)
-  const owed = getSlackWatcher().get(c.channel, c.threadTs, appOfEntry(c))?.owed?.length ?? 0
-  if (!getSlackWatcher().unwatch(c.channel, c.threadTs, appOfEntry(c))) return `${conversationId(c)} was not bound`
+  const owed = getConversationTable().get(c.channel, c.threadTs, appOfEntry(c))?.owed?.length ?? 0
+  if (!getConversationTable().unwatch(c.channel, c.threadTs, appOfEntry(c))) return `${conversationId(c)} was not bound`
   return `${conversationId(c)} is unbound${owed ? `; ${owed} message${owed === 1 ? '' : 's'} it still owed were dropped (and alerted)` : ''}`
 }
 
 /** The live session in a thread, by name. */
 const sessionNameIn = (threadId: string): string | undefined => [...registry.values()].find(s => s.threadId === threadId && s.deadAt === undefined)?.tmuxName
 
-const line = (v: Pick<SlackWatchConfig, 'hydra' | 'directory'>, e: SlackWatchEntry, now: number): string => {
+const line = (v: Pick<ConversationConfig, 'hydra' | 'directory'>, e: ConversationEntry, now: number): string => {
   const idle = Math.max(0, Math.round((now - e.lastEventAt) / 3_600_000))
   const owed = e.owed?.length ? ` · ${e.owed.length} owed` : ''
   const via = e.via === 'user' ? ' · read as the operator' : ''
@@ -613,8 +613,8 @@ const line = (v: Pick<SlackWatchConfig, 'hydra' | 'directory'>, e: SlackWatchEnt
 }
 
 /** The operator's view: every conversation. */
-export function formatConversations(now = Date.now(), only?: (e: SlackWatchEntry) => boolean): string[] {
-  return getSlackWatcher().list().filter(e => !only || only(e)).map(e => line(offlineView(appOfEntry(e)), e, now))
+export function formatConversations(now = Date.now(), only?: (e: ConversationEntry) => boolean): string[] {
+  return getConversationTable().list().filter(e => !only || only(e)).map(e => line(offlineView(appOfEntry(e)), e, now))
 }
 
 /** The conversations a session may see: those bound to it (boundAs). One session never reads another's. */
@@ -629,10 +629,10 @@ export function formatConversationsFor(caller: Partial<Pick<SessionInfo, 'thread
  * `apps` is every declared app's health by id (its listener's, `off` when it has none, with its tokens and connection);
  * `listener` is the same fact for the app `default` (else the first connected), kept as an alias.
  */
-export function slackWatchHealth(now = Date.now()): ({ places: { place: string; to: string; note?: string }[]; conversations: number; readAsOperator: number; owed: number; oldestOwedAgeMin: number | null; owedLate: LateOwed[]; owedLateAfterMin: number; listener?: AppHealth; apps: Record<string, AppHealth> } & SlackWatchStats) | null {
+export function slackConversationHealth(now = Date.now()): ({ places: { place: string; to: string; note?: string }[]; conversations: number; readAsOperator: number; owed: number; oldestOwedAgeMin: number | null; owedLate: LateOwed[]; owedLateAfterMin: number; listener?: AppHealth; apps: Record<string, AppHealth> } & ConversationStats) | null {
   const h = hydraConfig()
   if (!slackConfigured(h)) return null
-  const entries = getSlackWatcher().list()
+  const entries = getConversationTable().list()
   const owed = entries.flatMap(e => e.owed ?? [])
   const oldest = owed.sort(cmpTs)[0]
   // A name no connected app that reaches the place can resolve: each app reads its own workspace's channel names.
@@ -655,9 +655,9 @@ export function slackWatchHealth(now = Date.now()): ({ places: { place: string; 
     readAsOperator: entries.filter(e => e.via === 'user').length,
     owed: owed.length,
     oldestOwedAgeMin: oldest ? Math.max(0, Math.round((now / 1000 - parseFloat(oldest)) / 60)) : null,
-    owedLate: getSlackWatcher().lateOwed(OWED_LATE_AFTER_MS, now),
+    owedLate: getConversationTable().lateOwed(OWED_LATE_AFTER_MS, now),
     owedLateAfterMin: OWED_LATE_AFTER_MS / 60_000,
-    ...getSlackWatcher().stats(),
+    ...getConversationTable().stats(),
     ...(alias && { listener: apps[alias] }),
     apps,
   }

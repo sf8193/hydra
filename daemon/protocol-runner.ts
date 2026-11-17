@@ -1029,7 +1029,7 @@ async function runHealthCheck(run: ProtocolRun): Promise<void> {
 
     const occ = occupancy(info)
     const alive = occupied(occ)
-    const connected = occ === 'reachable'
+    const connected = occ === 'connected'
 
     // Hard cap check first — unconditional, never skipped for a working session
     const phaseElapsed = Date.now() - run._phaseStartedAt

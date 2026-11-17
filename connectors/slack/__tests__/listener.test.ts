@@ -2,7 +2,7 @@ import { describe, test, expect, afterEach } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'fs'
 import { tmpdir } from 'os'
 import { join, dirname } from 'path'
-import { SlackWatcher, placesOf, type SlackReactionEvent } from '../watch.js'
+import { ConversationTable, placesOf, type SlackReactionEvent } from '../watch.js'
 import { alsoHeard, hydra as load, hydra, oneListener, view, BASE } from './slack-config.js'
 import { EMPTY_CONFIG } from '../../../config/load.js'
 import { mustParsePlace, type HydraConfig } from '../../../config/types.js'
@@ -46,7 +46,7 @@ function setup(over: { tokens?: { app?: string; bot?: string }; toml?: string | 
   // Before it has connected, the watcher sees the same file through a stand-in view, so setup can lay down a cursor.
   let listener: SlackListener | undefined
   const before = toml === null ? null : view(toml, { names: Object.fromEntries((over.channels ?? []).map(c => [c.id, c.name])) })
-  const watcher = new SlackWatcher({
+  const watcher = new ConversationTable({
     now: () => now, file: join(dir, 'w.json'), filesDir: join(dir, 'files'), log: l => logs.push(l), config: () => listener?.view() ?? before,
     deliver: async (_s, msg) => { sent.push(msg); return { ok: true } },
   })

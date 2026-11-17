@@ -4,20 +4,20 @@ import { mkdtempSync, rmSync, writeFileSync, utimesSync, readFileSync, mkdirSync
 import { tmpdir } from 'os'
 import { join, dirname } from 'path'
 import {
-  SlackWatcher, formatDelivery, renderItem, packItems, cmpTs, placesOf, routedChannels, hearsDms, unresolvedPlaces,
+  ConversationTable, formatDelivery, renderItem, packItems, cmpTs, placesOf, routedChannels, hearsDms, unresolvedPlaces,
   ITEM_TEXT_MAX_CHARS, BATCH_MAX_BYTES, REFUSED_REACTION,
-  type SlackWatchConfig, type SlackMessageEvent, type DeliverResult, type Item, type SlackWatchDeps, type SlackActions, type SlackFile,
+  type ConversationConfig, type SlackMessageEvent, type DeliverResult, type Item, type ConversationDeps, type SlackActions, type SlackFile,
 } from '../watch.js'
 import type { GuardInput, GuardVerdict } from '../../../routing/guard.js'
 import { BASE, BOT, firstRules, oneListener, view, directory, TWO_APPS, type ViewOver } from './slack-config.js'
 
 const CH = 'C0FOOD'
-const cfg = (over: ViewOver = {}): SlackWatchConfig => view(oneListener(CH), over)
+const cfg = (over: ViewOver = {}): ConversationConfig => view(oneListener(CH), over)
 
 const dirs: string[] = []
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
 
-function setup(over: ViewOver = {}, deliver?: (specialist: string, msg: string, key: string) => DeliverResult, resolveName?: (id: string) => Promise<string | undefined>, guard?: SlackWatchDeps['guard']) {
+function setup(over: ViewOver = {}, deliver?: (specialist: string, msg: string, key: string) => DeliverResult, resolveName?: (id: string) => Promise<string | undefined>, guard?: ConversationDeps['guard']) {
   const alerts: string[] = []
   const alertTo: (string | undefined)[] = []
   const dir = mkdtempSync(join(tmpdir(), 'slack-watch-'))
@@ -27,11 +27,11 @@ function setup(over: ViewOver = {}, deliver?: (specialist: string, msg: string, 
   const sent: { specialist: string; msg: string; key: string }[] = []
   const logs: string[] = []
   let config = cfg(over)
-  const make = () => new SlackWatcher({
+  const make = () => new ConversationTable({
     now: () => now, file, log: l => logs.push(l), config: () => config, resolveName, guard, alert: (t, to) => { alerts.push(t); alertTo.push(to) },
     deliver: async ({ to: specialist }, msg, key) => { sent.push({ specialist, msg, key }); return deliver ? deliver(specialist, msg, key) : { ok: true } },
   })
-  return { w: make(), make, sent, logs, alerts, alertTo, file, tick: (ms: number) => { now += ms }, setConfig: (c: SlackWatchConfig) => { config = c }, now: () => now }
+  return { w: make(), make, sent, logs, alerts, alertTo, file, tick: (ms: number) => { now += ms }, setConfig: (c: ConversationConfig) => { config = c }, now: () => now }
 }
 const ev = (over: Partial<SlackMessageEvent>): SlackMessageEvent => ({ channel: CH, ts: '1000.000001', user: 'UALICE', text: 'hi', ...over })
 const mention = `<@${BOT}> can you spin up a cart?`
@@ -331,7 +331,7 @@ describe('what opens and continues a conversation', () => {
   })
 
   test('chatter still owed (or answered) takes at most half the table; once delivered and unanswered it holds no slot; all of it goes after a day', async () => {
-    const { w, logs, tick } = setup({ toml: oneListener(CH, 'helper', '["role:anyone"]', `[places."slack:${CH}"]\nmessages = "all"\n`), maxWatches: 4, coalesceMs: 60_000 })
+    const { w, logs, tick } = setup({ toml: oneListener(CH, 'helper', '["role:anyone"]', `[places."slack:${CH}"]\nmessages = "all"\n`), maxConversations: 4, coalesceMs: 60_000 })
     for (let i = 1; i <= 4; i++) w.handle(ev({ ts: `${i}.000001`, text: 'chatter' }))
     expect(w.list().filter(e => e.ambient)).toHaveLength(2) // two owed: half the table
     expect(logs.join()).toContain('conversations opened by untagged chatter already hold half the conversation table (2 of 4)')
@@ -399,7 +399,7 @@ describe('what opens and continues a conversation', () => {
   })
 
   test('no config (Slack not connected) means nothing is heard', () => {
-    const w = new SlackWatcher({ now: () => 0, file: join(tmpdir(), `sw-${Date.now()}.json`), log: () => {}, config: () => null, deliver: async () => ({ ok: true }) })
+    const w = new ConversationTable({ now: () => 0, file: join(tmpdir(), `sw-${Date.now()}.json`), log: () => {}, config: () => null, deliver: async () => ({ ok: true }) })
     expect(w.handle(ev({ text: mention }))).toBe('ignored')
   })
 })
@@ -502,7 +502,7 @@ describe('🚫: a refused or unrouted mention or DM', () => {
 
 describe('limits', () => {
   test('the conversation table is capped; open conversations keep working', async () => {
-    const { w, sent, logs } = setup({ maxWatches: 2 })
+    const { w, sent, logs } = setup({ maxConversations: 2 })
     w.handle(ev({ ts: '1.000001', text: mention }))
     w.handle(ev({ ts: '2.000001', text: mention }))
     expect(w.handle(ev({ ts: '3.000001', text: mention }))).toBe('ignored')
@@ -786,7 +786,7 @@ describe('expiry, cursors and persistence', () => {
   test('the sweep runs without a connection too: idle conversations and old owed messages still expire', async () => {
     let connected = true
     const s = setup({ idleExpiryMs: 1000 }, () => ({ ok: false, error: 'down' }))
-    const w = new SlackWatcher({ now: () => s.now(), file: s.file, log: () => {}, config: () => connected ? cfg() : null, deliver: async () => ({ ok: false, error: 'down' }) })
+    const w = new ConversationTable({ now: () => s.now(), file: s.file, log: () => {}, config: () => connected ? cfg() : null, deliver: async () => ({ ok: false, error: 'down' }) })
     w.handle(ev({ ts: '1000.000001', text: mention }))
     await w.flush()
     connected = false
@@ -867,7 +867,7 @@ roles = ["guest"]
     let config = cfg({ toml: allowing('["role:anyone"]') })
     const dir = mkdtempSync(join(tmpdir(), 'slack-watch-'))
     dirs.push(dir)
-    const w = new SlackWatcher({ now: () => 1_000_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => config, deliver: async () => ({ ok: false, error: 'down' }) })
+    const w = new ConversationTable({ now: () => 1_000_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => config, deliver: async () => ({ ok: false, error: 'down' }) })
     w.handle(ev({ ts: '1.000001', user: 'USTRANGER', text: mention }))
     await w.flush()
     expect(w.owedHints()).toHaveLength(1)
@@ -922,7 +922,7 @@ roles = ["guest"]
   })
 
   test('a flood of refusals does not evict drops: a replayed drop is not counted twice', () => {
-    const { w } = setup({ toml: allowing('["role:owner"]'), maxWatches: 1 })
+    const { w } = setup({ toml: allowing('["role:owner"]'), maxConversations: 1 })
     w.handle(ev({ ts: '1.000001', user: 'UOWNER', text: mention }))
     w.handle(ev({ ts: '2.000001', user: 'UOWNER', text: mention })) // table-full
     for (let i = 0; i < 10_001; i++) w.handle(ev({ ts: `${100 + i}.000001`, user: 'USTRANGER', text: mention }))
@@ -953,7 +953,7 @@ describe('no silent drops', () => {
   })
 
   test('a tag turned away by a full table or the tag cap is alerted', () => {
-    const full = setup({ maxWatches: 1 })
+    const full = setup({ maxConversations: 1 })
     full.w.handle(ev({ ts: '1.000001', text: mention }))
     full.w.handle(ev({ ts: '2.000001', text: mention }))
     expect(full.alerts.join()).toContain('table-full')
@@ -1001,14 +1001,14 @@ describe('no silent drops', () => {
   })
 
   test("the bot's own post turned away by a full table is a drop, not silence", () => {
-    const { w, alerts } = setup({ maxWatches: 1 })
+    const { w, alerts } = setup({ maxConversations: 1 })
     w.handle(ev({ ts: '1.000001', text: mention }))
     expect(w.handle(ev({ ts: '2.000001', user: BOT, text: 'posted' }))).toBe('ignored')
     expect(alerts.join()).toContain("the bot's own post opens no conversation")
   })
 
   test('an episode is named by when it began: a steady trickle of drops is still alerted once an hour', () => {
-    const { w, alerts, tick } = setup({ maxWatches: 1 })
+    const { w, alerts, tick } = setup({ maxConversations: 1 })
     w.handle(ev({ ts: '1.000001', text: mention }))
     for (let i = 0; i < 7; i++) { w.handle(ev({ ts: `${10 + i}.000001`, text: mention })); tick(20 * 60_000) } // a drop every 20 minutes for 2h20m
     expect(alerts).toHaveLength(3) // at 0, 60 and 120 minutes
@@ -1029,7 +1029,7 @@ reachable_by = ["role:anyone"]
 place = "slack:C0OPS"
 target = "specialist:ops"
 `
-    const s = setup({ toml, maxWatches: 1 })
+    const s = setup({ toml, maxConversations: 1 })
     s.w.handle(ev({ ts: '1.000001', text: mention }))
     s.w.handle(ev({ ts: '2.000001', text: mention }))
     s.w.handle(ev({ channel: 'C0OPS', ts: '3.000001', text: mention }))
@@ -1037,7 +1037,7 @@ target = "specialist:ops"
   })
 
   test('alerted once per episode: a second drop within the hour is logged only, one after a quiet hour alerts again', () => {
-    const { w, alerts, logs, tick } = setup({ maxWatches: 1 })
+    const { w, alerts, logs, tick } = setup({ maxConversations: 1 })
     w.handle(ev({ ts: '1.000001', text: mention }))
     w.handle(ev({ ts: '2.000001', text: mention }))
     tick(30 * 60_000)
@@ -1331,7 +1331,7 @@ roles = ["finance"]
 `
   const byText = (verdicts: Record<string, GuardVerdict>) => {
     const inputs: GuardInput[] = []
-    const fn: SlackWatchDeps['guard'] = async (_g, input) => { inputs.push(input); return verdicts[input.text ?? ''] ?? verdicts[input.person ?? ''] ?? { verdict: 'deliver' } }
+    const fn: ConversationDeps['guard'] = async (_g, input) => { inputs.push(input); return verdicts[input.text ?? ''] ?? verdicts[input.person ?? ''] ?? { verdict: 'deliver' } }
     return { fn, inputs }
   }
 
@@ -1600,7 +1600,7 @@ roles = ["finance"]
     let command = script('drop.sh', 'cat > /dev/null; exit 10')
     const config = () => cfg({ toml: oneListener(CH, 'ops', '["role:anyone"]', `[guard]\ncommand = "${command}"\n`), coalesceMs: 1 })
     const sent: string[] = []
-    const w = new SlackWatcher({ now: () => 1e12, file: join(dir, 'w.json'), log: () => {}, config, deliver: async t => { sent.push(t.to); return { ok: true } } })
+    const w = new ConversationTable({ now: () => 1e12, file: join(dir, 'w.json'), log: () => {}, config, deliver: async t => { sent.push(t.to); return { ok: true } } })
     w.handle(ev({ ts: '1.000001', text: mention }))
     await w.flush()
     expect(sent).toEqual([])
@@ -1634,10 +1634,10 @@ target = "specialist:assistant"
 [places."slack:${CH}"]
 ${place}
 `
-  const withFiles = (s: ReturnType<typeof setup>, a: SlackActions, config: SlackWatchConfig) => {
+  const withFiles = (s: ReturnType<typeof setup>, a: SlackActions, config: ConversationConfig) => {
     const dir = mkdtempSync(join(tmpdir(), 'slack-files-'))
     dirs.push(dir)
-    const w = new SlackWatcher({ now: () => 1e12, file: join(dir, 'w.json'), filesDir: join(dir, 'files'), log: l => s.logs.push(l), config: () => config, alert: t => s.alerts.push(t),
+    const w = new ConversationTable({ now: () => 1e12, file: join(dir, 'w.json'), filesDir: join(dir, 'files'), log: l => s.logs.push(l), config: () => config, alert: t => s.alerts.push(t),
       deliver: async ({ to }, msg, key) => { s.sent.push({ specialist: to, msg, key }); return { ok: true } } })
     w.setSlackActions(a)
     return { w, dir }
@@ -1738,7 +1738,7 @@ ${place}
     const dir = mkdtempSync(join(tmpdir(), 'slack-files-'))
     dirs.push(dir)
     const config = cfg({ toml: PLACES('files = true', '[guard]\ncommand = "g"\n') })
-    const w = new SlackWatcher({ now: () => 1e12, file: join(dir, 'w.json'), filesDir: join(dir, 'files'), log: () => {}, config: () => config,
+    const w = new ConversationTable({ now: () => 1e12, file: join(dir, 'w.json'), filesDir: join(dir, 'files'), log: () => {}, config: () => config,
       guard: async () => ({ verdict: 'drop' }), deliver: async () => ({ ok: true }) })
     w.setSlackActions(a)
     w.handle(ev({ ts: '1.000001', text: mention, files: [file()] }))
@@ -1828,7 +1828,7 @@ ${place}
     utimesSync(join(filesDir, CH, 'Fold-a.pdf'), old, old)
     const now = 1e12
     const config = cfg({ toml: PLACES('files = true') })
-    const w = new SlackWatcher({ now: () => now, file: join(dir, 'w.json'), filesDir, log: () => {}, config: () => config, deliver: async () => ({ ok: true }) })
+    const w = new ConversationTable({ now: () => now, file: join(dir, 'w.json'), filesDir, log: () => {}, config: () => config, deliver: async () => ({ ok: true }) })
     utimesSync(join(filesDir, CH, 'Fnew-b.pdf'), new Date(now - 86_400_000), new Date(now - 86_400_000))
     w.sweep()
     expect(existsSync(join(filesDir, CH, 'Fold-a.pdf'))).toBe(false)
@@ -1870,7 +1870,7 @@ describe('alert episodes are per app', () => {
   test('a catch-up gap through one app does not silence the same gap through the other, and each is said once; the app rides with the alert', () => {
     const s = setup({ toml })
     const apps: (string | undefined)[] = []
-    const w = new SlackWatcher({ now: s.now, file: join(dirs[dirs.length - 1], 'two.json'), log: () => {}, config: app => view(toml, { app }), alert: (t, to, app) => { s.alerts.push(t); apps.push(app) }, deliver: async () => ({ ok: true }) })
+    const w = new ConversationTable({ now: s.now, file: join(dirs[dirs.length - 1], 'two.json'), log: () => {}, config: app => view(toml, { app }), alert: (t, to, app) => { s.alerts.push(t); apps.push(app) }, deliver: async () => ({ ok: true }) })
     w.catchUpGap(CH, '1000.000001', '1900.000001', 200, 'default')
     w.catchUpGap(CH, '1000.000002', '1900.000001', 200, 'default')
     w.catchUpGap(CH, '1000.000001', '1900.000001', 200, 'sales')
@@ -1885,7 +1885,7 @@ describe('alert episodes are per app', () => {
   test('a refused operator token is said once an hour per app', () => {
     const s = setup({ toml })
     const apps: (string | undefined)[] = []
-    const w = new SlackWatcher({ now: s.now, file: join(dirs[dirs.length - 1], 'two.json'), log: () => {}, config: app => view(toml, { app }), alert: (_t, _to, app) => { apps.push(app) }, deliver: async () => ({ ok: true }) })
+    const w = new ConversationTable({ now: s.now, file: join(dirs[dirs.length - 1], 'two.json'), log: () => {}, config: app => view(toml, { app }), alert: (_t, _to, app) => { apps.push(app) }, deliver: async () => ({ ok: true }) })
     w.operatorTokenRefused('the operator\'s Slack token was refused', 'default')
     w.operatorTokenRefused('the operator\'s Slack token was refused', 'sales')
     w.operatorTokenRefused('the operator\'s Slack token was refused', 'sales')
@@ -2125,9 +2125,9 @@ describe('what hydra health says about owed messages and deliveries (#669)', () 
     const off = setup({}, () => ({ ok: false, error: 'x' }))
     off.w.handle(ev({ ts: tsAgo(off, 30), text: mention }))
     await off.w.flush()
-    const down = new SlackWatcher({ now: off.now, file: off.file, log: () => {}, config: () => null, alert: () => {}, deliver: async () => ({ ok: true }) })
+    const down = new ConversationTable({ now: off.now, file: off.file, log: () => {}, config: () => null, alert: () => {}, deliver: async () => ({ ok: true }) })
     expect(down.lateOwed(20 * MIN)[0].cause).toContain('has no live connection')
-    const named = new SlackWatcher({ now: off.now, file: off.file, log: () => {}, config: () => null, apps: () => ({ default: { displayName: 'Acme helper' } }), alert: () => {}, deliver: async () => ({ ok: true }) })
+    const named = new ConversationTable({ now: off.now, file: off.file, log: () => {}, config: () => null, apps: () => ({ default: { displayName: 'Acme helper' } }), alert: () => {}, deliver: async () => ({ ok: true }) })
     expect(named.lateOwed(20 * MIN)[0].cause).toBe('its app (Acme helper) has no live connection, so nothing goes through it: see its line')
   })
 
@@ -2153,7 +2153,7 @@ describe('what hydra health says about owed messages and deliveries (#669)', () 
     await s.w.flush()
     expect(s.w.lateOwed(20 * MIN)).toEqual([])
     expect((s.w as unknown as { failing: Map<string, string> }).failing.size).toBe(0)
-    const broken = new SlackWatcher({ now: s.now, file: s.file, log: () => {}, config: () => { throw new Error('boom') }, alert: () => {}, deliver: async () => ({ ok: true }) })
+    const broken = new ConversationTable({ now: s.now, file: s.file, log: () => {}, config: () => { throw new Error('boom') }, alert: () => {}, deliver: async () => ({ ok: true }) })
     expect(() => broken.lateOwed(20 * MIN)).not.toThrow()
   })
 

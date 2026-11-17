@@ -51,7 +51,7 @@ beforeEach(() => {
   _setIO(io)
   _setDeliveryDeps({
     isWorking: async () => working, now: () => clock, getSession: () => sess,
-    occupancy: s => s.deadAt ? 'dead' : 'reachable', // a stand-in record stamped dead is dead
+    occupancy: s => s.deadAt ? 'dead' : 'connected', // a stand-in record stamped dead is dead
     onOutcome: (_s, _m, o) => { outcomes.push(o) },
   })
 })

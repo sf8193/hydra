@@ -151,15 +151,15 @@ describe('apps that are still joining', () => {
   })
 })
 
-describe('the owner of a message', () => {
+describe('the owning app of a message', () => {
   test('the first decision stands for every later copy, until it is forgotten', () => {
     let now = 0
     const apps = new ConnectedApps({ now: () => now })
-    expect(apps.decideOwner('C1', '1.000001', () => 'a')).toBe('a')
-    expect(apps.decideOwner('C1', '1.000001', () => 'b')).toBe('a')
-    expect(apps.decideOwner('C1', '2.000001', () => 'b')).toBe('b')
+    expect(apps.decideOwningApp('C1', '1.000001', () => 'a')).toBe('a')
+    expect(apps.decideOwningApp('C1', '1.000001', () => 'b')).toBe('a')
+    expect(apps.decideOwningApp('C1', '2.000001', () => 'b')).toBe('b')
     now += 3 * 60_000
-    expect(apps.decideOwner('C1', '1.000001', () => 'b')).toBe('b')
+    expect(apps.decideOwningApp('C1', '1.000001', () => 'b')).toBe('b')
   })
 })
 

@@ -1,7 +1,7 @@
 %%{init: {"theme":"base","themeVariables":{"background":"#ffffff","primaryColor":"#ffffff","primaryBorderColor":"#6b7280","primaryTextColor":"#1f2937","lineColor":"#374151","clusterBkg":"#ffffff","clusterBorder":"#d1d5db"},"flowchart":{"wrappingWidth":420,"useMaxWidth":false}}}%%
 %% Which Slack messages does an app take up and hand to routing?
-%% SlackWatcher.handle and classify, connectors/slack/watch.ts:734 and :756.
-%% Before: flow-slack-hear, flow-slack-catchup. Next: flow-route-owner, flow-route, flow-slack-fate. Every box's source: diagrams/flow-slack-accept.sources.md.
+%% ConversationTable.handle and classify, connectors/slack/watch.ts:734 and :756.
+%% Before: flow-slack-hear, flow-slack-catchup. Next: flow-route-owning-app, flow-route, flow-slack-fate. Every box's source: diagrams/flow-slack-accept.sources.md.
 flowchart TD
   in(["a Slack message, live or caught up,<br/>through the <b>App</b> that heard it"])
   g1{"1. the app connected,<br/>and the ts valid?"}
@@ -16,7 +16,7 @@ flowchart TD
   own(["opens a <b>Conversation</b> for whoever<br/>a rule sends this place to; nothing owed"])
   g5{"5. delivered before?"}
   take["just before: a tag in a thread a session listens in<br/>hands it to whoever a rule sends it to,<br/>and the session is told"]
-  g6{"6. this app the <b>Owner</b>?<br/>flow-route-owner"}
+  g6{"6. this app the <b>Owning app</b>?<br/>flow-route-owning-app"}
   routed(["routed: flow-route,<br/>then flow-slack-fate"])
   ign1(["ignored"])
   ign2(["ignored"])

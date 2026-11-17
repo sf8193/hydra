@@ -6,12 +6,12 @@ import { registry } from '../../../daemon/sessions.js'
 import { setSpecialistThread, _reloadSpecialists } from '../../../specialists/specialists.js'
 import { _setHydraConfigForTesting } from '../../../daemon/hydra-config.js'
 import {
-  getSlackWatcher, slackWatchHealth, bindConversation, formatConversations, operatorBind, operatorUnbind, slackRuntimeDeps, replyInConversation, startSlackListener, stopSlackListener,
+  getConversationTable, slackConversationHealth, bindConversation, formatConversations, operatorBind, operatorUnbind, slackRuntimeDeps, replyInConversation, startSlackListener, stopSlackListener,
 } from '../runtime.js'
 import { slackSpecialistsOf } from '../../../routing/route.js'
 import { sessionCapabilities } from '../../../daemon/tool-surface.js'
 import { BASE, TWO_APPS, hydra, view, SALES_BOT } from './slack-config.js'
-import { SlackWatcher } from '../watch.js'
+import { ConversationTable } from '../watch.js'
 
 process.stderr.write = (() => true) as any
 
@@ -49,7 +49,7 @@ const session = (id: string, threadId: string) => {
 /** One connected view per app: what each app's listener would hand the runtime. */
 function configure(toml = TOML, via: Record<string, 'bot' | 'user' | null> = {}) {
   _setHydraConfigForTesting(hydra(toml))
-  const views = { default: view(toml, { maxWatches: 5 }), sales: view(toml, { maxWatches: 5, app: 'sales', botUserId: SALES_BOT }) }
+  const views = { default: view(toml, { maxConversations: 5 }), sales: view(toml, { maxConversations: 5, app: 'sales', botUserId: SALES_BOT }) }
   slackRuntimeDeps.view = (app = 'default') => (views as Record<string, ReturnType<typeof view>>)[app] ?? null
   slackRuntimeDeps.readThread = async (_c, _t, app = 'default') => via[app] === undefined ? 'bot' : via[app]
 }
@@ -65,7 +65,7 @@ beforeEach(() => {
   session('deals-session', DEALS_THREAD)
 })
 afterEach(() => {
-  for (const e of getSlackWatcher().list()) getSlackWatcher().unwatch(e.channel, e.threadTs, e.app)
+  for (const e of getConversationTable().list()) getConversationTable().unwatch(e.channel, e.threadTs, e.app)
   for (const s of sessionIds.splice(0)) registry.delete(s)
   _setHydraConfigForTesting(undefined)
   rmSync(join(STATE_DIR, 'specialist-threads.json'), { force: true })
@@ -79,8 +79,8 @@ afterEach(() => {
 
 describe('replies leave through the app that heard the conversation', () => {
   test('a conversation of app sales posts with sales’s client, and one of `default` with `default`’s', async () => {
-    getSlackWatcher().bind('C1', '5.000001', DEALS, 'tool', 'sales')
-    getSlackWatcher().bind('C1', '6.000001', CRM, 'tool')
+    getConversationTable().bind('C1', '5.000001', DEALS, 'tool', 'sales')
+    getConversationTable().bind('C1', '6.000001', CRM, 'tool')
     expect(await replyInConversation('deals-session', 'slack:sales:C1:5.000001', 'a quote')).toBe('posted 1 message to slack:sales:C1:5.000001')
     expect(await replyInConversation('crm-session', 'slack:C1:6.000001', 'a call')).toBe('posted 1 message to slack:C1:6.000001')
     expect(posts).toEqual([
@@ -90,20 +90,20 @@ describe('replies leave through the app that heard the conversation', () => {
   })
 
   test('a conversation is one app’s: the same thread named for another app is not open', async () => {
-    getSlackWatcher().bind('C1', '5.000001', DEALS, 'tool', 'sales')
+    getConversationTable().bind('C1', '5.000001', DEALS, 'tool', 'sales')
     await expect(replyInConversation('deals-session', 'slack:C1:5.000001', 'x')).rejects.toThrow('slack:C1:5.000001 is not an open conversation')
     expect(posts).toEqual([])
   })
 
   test('a specialist answers only conversations bound to it, whichever app they came through', async () => {
-    getSlackWatcher().bind('C1', '5.000001', DEALS, 'tool', 'sales')
+    getConversationTable().bind('C1', '5.000001', DEALS, 'tool', 'sales')
     await expect(replyInConversation('crm-session', 'slack:sales:C1:5.000001', 'x')).rejects.toThrow(`slack:sales:C1:5.000001 is bound to ${DEALS}, not ${CRM}`)
     expect(posts).toEqual([])
   })
 
   test('an app that is not connected is said by name, and posts nothing through another', async () => {
     slackRuntimeDeps.post = realPost
-    getSlackWatcher().bind('C1', '5.000001', DEALS, 'tool', 'sales')
+    getConversationTable().bind('C1', '5.000001', DEALS, 'tool', 'sales')
     await expect(replyInConversation('deals-session', 'slack:sales:C1:5.000001', 'x')).rejects.toThrow('Slack is not connected for sales')
   })
 })
@@ -115,9 +115,9 @@ describe('a post with no incoming message speaks as the specialist’s app', () 
     expect(await replyInConversation('crm-session', 'slack:C9', 'hello')).toContain('posted to crm-t\'s home_place')
     expect(posts.map(p => [p.channel, p.app])).toEqual([['C8', 'sales'], ['C9', 'default']])
     // Its thread is a conversation of the app it spoke through.
-    expect(getSlackWatcher().get('C8', '77.000001', 'sales')).toMatchObject({ specialist: DEALS, mentionedBy: 'home', app: 'sales' })
-    expect(getSlackWatcher().get('C9', '77.000001')).toMatchObject({ specialist: CRM, mentionedBy: 'home' })
-    expect(getSlackWatcher().get('C9', '77.000001')).not.toHaveProperty('app')
+    expect(getConversationTable().get('C8', '77.000001', 'sales')).toMatchObject({ specialist: DEALS, mentionedBy: 'home', app: 'sales' })
+    expect(getConversationTable().get('C9', '77.000001')).toMatchObject({ specialist: CRM, mentionedBy: 'home' })
+    expect(getConversationTable().get('C9', '77.000001')).not.toHaveProperty('app')
   })
 
   test('speaks_as overrides it, and the sales home_place can be named in the app’s own form', async () => {
@@ -136,7 +136,7 @@ describe('a pinned specialist cannot be reached through another app', () => {
     await expect(bindConversation(deals, 'slack:C1:5.000001')).rejects.toThrow('deals-t is pinned to app:sales, and this conversation is through app:default')
     await expect(bindConversation(crm, 'slack:sales:C1:5.000001')).rejects.toThrow('app:sales serves only specialists pinned to it (deals-t), and crm-t is not pinned')
     expect(await bindConversation(deals, 'slack:sales:C1:5.000001')).toStartWith(`slack:sales:C1:5.000001 is bound to ${DEALS}`)
-    expect(getSlackWatcher().get('C1', '5.000001', 'sales')?.specialist).toBe(DEALS)
+    expect(getConversationTable().get('C1', '5.000001', 'sales')?.specialist).toBe(DEALS)
     expect(await bindConversation(crm, 'slack:C1:6.000001')).toStartWith(`slack:C1:6.000001 is bound to ${CRM}`)
   })
 
@@ -150,12 +150,12 @@ describe('a pinned specialist cannot be reached through another app', () => {
     expect(() => operatorBind('slack:ghost:C1:5.000001', `specialist:${DEALS}`)).toThrow('no app "ghost"')
     expect(operatorBind('slack:sales:C1:5.000001', `specialist:${DEALS}`)).toBe(`slack:sales:C1:5.000001 → ${DEALS}`)
     expect(operatorBind('slack:C1:5.000001', `specialist:${CRM}`)).toBe(`slack:C1:5.000001 → ${CRM}`)
-    expect(getSlackWatcher().list().map(e => [e.app, e.specialist])).toEqual([['sales', DEALS], [undefined, CRM]])
+    expect(getConversationTable().list().map(e => [e.app, e.specialist])).toEqual([['sales', DEALS], [undefined, CRM]])
     // main is exempt from pinning.
     expect(operatorBind('slack:sales:C1:7.000001', 'main')).toBe('slack:sales:C1:7.000001 → main')
     expect(operatorUnbind('slack:sales:C1:5.000001')).toBe('slack:sales:C1:5.000001 is unbound')
-    expect(getSlackWatcher().get('C1', '5.000001', 'sales')).toBeUndefined()
-    expect(getSlackWatcher().get('C1', '5.000001')?.specialist).toBe(CRM)
+    expect(getConversationTable().get('C1', '5.000001', 'sales')).toBeUndefined()
+    expect(getConversationTable().get('C1', '5.000001')?.specialist).toBe(CRM)
   })
 
   test('the list prints every conversation in its own id, the app first where it is not `default`', () => {
@@ -206,7 +206,7 @@ describe('connecting one listener per app', () => {
 
 describe('the store keeps an app’s conversations apart', () => {
   test('the same channel and thread through two apps are two entries, each unwatched on its own', () => {
-    const w: SlackWatcher = getSlackWatcher()
+    const w: ConversationTable = getConversationTable()
     w.bind('C1', '5.000001', DEALS, 'tool', 'sales')
     w.bind('C1', '5.000001', CRM, 'tool')
     expect(w.list()).toHaveLength(2)
@@ -234,7 +234,7 @@ describe('an alert about one app goes to the specialists that app can reach', ()
 
   test('health lists every declared app, off when it has no connection, with its tokens and connection', () => {
     configure()
-    const h = slackWatchHealth()!
+    const h = slackConversationHealth()!
     expect(Object.keys(h.apps)).toEqual(['default', 'sales'])
     expect(h.apps.sales).toMatchObject({ state: 'off', connection: 'down' })
     expect(h.apps.sales.tokens).toMatchObject({ ok: false })
@@ -243,7 +243,7 @@ describe('an alert about one app goes to the specialists that app can reach', ()
 })
 
 describe('where a watcher alert lands, by app', () => {
-  const sendTo = async (app: string, text: string, say: () => void = () => getSlackWatcher().operatorTokenRefused(text, app)): Promise<{ channels: string[]; logged: string }> => {
+  const sendTo = async (app: string, text: string, say: () => void = () => getConversationTable().operatorTokenRefused(text, app)): Promise<{ channels: string[]; logged: string }> => {
     const told: string[] = []
     const realSend = gateway.send
     const realWrite = process.stderr.write
@@ -271,7 +271,7 @@ describe('where a watcher alert lands, by app', () => {
   test('when the specialists an app serves have no thread yet, main hears it, or it is logged: never dropped', async () => {
     rmSync(join(STATE_DIR, 'specialist-threads.json'), { force: true })
     _reloadSpecialists()
-    const r = await sendTo('sales', 'a gap', () => getSlackWatcher().catchUpGap('C0NOWHERE', '1000.000001', '1900.000001', 200, 'sales'))
+    const r = await sendTo('sales', 'a gap', () => getConversationTable().catchUpGap('C0NOWHERE', '1000.000001', '1900.000001', 200, 'sales'))
     expect(r.channels).not.toContain(CRM_THREAD)
     expect(r.channels.length > 0 || r.logged.includes('slack connector alert, logged only')).toBe(true)
   })

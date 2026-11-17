@@ -21,7 +21,7 @@ export function routeFlags(args: string[]): { ok: true; params: RouteParams } {
  * `hydra route --person <person:id|address|stranger> --place <place> [--app <app:id>]`: what routing would do with a new message there, every
  * candidate and why the winner won. `--app` is the app this check runs for, the one that heard the message (default: the app named
  * `default`); `--heard-by` adds the other apps in the channel, and `--mentioned` lists the apps the text tags, first tag first, so
- * ownership shows too. It reads the config and binds nothing.
+ * the owning app shows too. It reads the config and binds nothing.
  */
 export function routeFor(h: HydraConfig, p: RouteParams, aliases: (place: Place, app?: string) => Place[]): { ok: true; fate: string; to?: string; report: string } | { ok: false; error: string } {
   if (!p.person || !p.place) return { ok: false, error: ROUTE_USAGE }

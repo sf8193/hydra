@@ -6,7 +6,7 @@ flowchart TD
   subgraph A["(a) occupancy(info): session-reachability.ts"]
     A0{"record?"} -- no --> AN[none]
     A0 -- yes --> A1{"transport.has?<br/>(Codex: = isAlive)"}
-    A1 -- yes --> AR[reachable]
+    A1 -- yes --> AR[connected]
     A1 -- no --> A2{"adapter.isAlive?<br/>Claude/omp: tmux · Codex: socket or reconnecting"}
     A2 -- no --> AD[dead]
     A2 -- yes --> A3{"deadAt set, or waitMs > 90s<br/>waitMs = now − max(createdAt, daemonStart)"}
@@ -19,7 +19,7 @@ flowchart TD
     HELD -- yes --> BUSYMSG["'already in progress'"]
     HELD -- no --> TL["withThreadLock(targetKeyForThread)"]
     TL --> CO{"occupancy"}
-    CO -- "reachable / starting" --> REF["refuse: running / still starting"]
+    CO -- "connected / starting" --> REF["refuse: running / still starting"]
     CO -- orphaned --> RTO["reviveThread(orphan)"]
     CO -- "dead / none" --> MD["resume: markDead"]
     RTO --> RT
@@ -75,7 +75,7 @@ flowchart TD
     DS -- yes --> SPD["deliver to the specialist (b): its name, kickoff, back-off"]
     DS -- no --> DL["withThreadLock(T)"] --> DO{"occupancy of T's record"}
     DO -- orphaned --> D4[exit 4]
-    DO -- "starting / reachable" --> DQ["revived: false"]
+    DO -- "starting / connected" --> DQ["revived: false"]
     DO -- "dead / none" --> DB{"back-off on T?"}
     DB -- yes --> D6b["exit 6: not retrying until …<br/>(the platform is not asked)"]
     DB -- no --> DE{"threadExists"}
@@ -97,7 +97,7 @@ flowchart TD
     TR -- "anything else" --> T8["exit 8: no such specialist"]
     TK -- "spawn" --> TF["a fresh session from the recipe (idle → reaped when quiet)"]
     TK -- "perThread + key" --> TP["ensureSpecialist(perThreadName(key), recipe), never stored"]
-    TS & TT & TF & TP --> LS["deliverToSession: dead 3 · orphaned 4 · booting 5 (unless queued)<br/>reachable but stuck on a dialog → 5 'stuck: kind'<br/>→ adapter.deliver"]
+    TS & TT & TF & TP --> LS["deliverToSession: dead 3 · orphaned 4 · booting 5 (unless queued)<br/>connected but stuck on a dialog → 5 'stuck: kind'<br/>→ adapter.deliver"]
     LS --> TO["landed: key kept · else key released"]
     ST["send_to_thread(target = a specialist)"] --> TS
     SET["specialist set / rm"] --> SL["withTargetLock(name)"] --> SG{"set --thread elsewhere while the old thread is occupied?"}

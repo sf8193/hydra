@@ -248,7 +248,7 @@ if ('homeSpawnHandler' in gateway) {
 import { fetchSlackThreadSummary } from './daemon/router.js'
 import { restoreHeld } from './daemon/specialist-thread.js'
 import { startPrWatcher, backfillTitles, fetchPrTitle, parsePrUrl } from './connectors/github/pr-watch.js'
-import { startSlackWatch, stopSlackWatch, startSlackListener } from './connectors/slack/runtime.js'
+import { startConversationTable, stopConversationTable, startSlackListener } from './connectors/slack/runtime.js'
 import { startHydraConfig, stopHydraConfig, retryHydraConfigAlert, currentHydraConfig, onHydraConfigLoad, reloadHydraConfig, hydraConfigLoadedOk } from './daemon/hydra-config.js'
 import { jobsFromSchedules, schedulesAreSource } from './shared/schedules.js'
 import { readDaemonState } from './shared/jobs.js'
@@ -452,7 +452,7 @@ async function backfillArtifacts(): Promise<void> {
 
 startHydraConfig({ alert: notifyOperator })
 startPrWatcher()
-startSlackWatch()
+startConversationTable()
 
 // Reply guard: polls session activity every 20s (see below).
 
@@ -569,7 +569,7 @@ function shutdown(): void {
   shuttingDown = true
   process.stderr.write('daemon: shutting down\n')
 
-  stopSlackWatch()
+  stopConversationTable()
   stopJobsClock()
   stopHydraConfig()
   registry.persist()

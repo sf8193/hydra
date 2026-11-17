@@ -289,7 +289,7 @@ export async function jobsLaunchdRun(platform: string, name: string, stateDir: s
     runIO.error(`${name}: ${file} is unreadable (${err instanceof Error ? err.message : err}); running the last good copy`)
   }
   if (job?.runner !== 'launchd') {
-    runIO.print(`${name}: not a launchd-runner job in ${file}; \`hydra schedules sync ${platform}\` removes this entry`)
+    runIO.print(`${name}: not a launchd-runner schedule in ${file}; \`hydra schedules sync ${platform}\` removes this entry`)
     return 0
   }
   if (job.paused) {
@@ -381,7 +381,7 @@ export async function jobsRun(platform: string, name: string, stateDirOverride?:
   const giveUpAt = runIO.now() + runWaitMs()
   for (;;) {
     if (runIO.now() > giveUpAt) {
-      runIO.error(`error: no result applied for dispatch ${reply.id}; see hydra jobs list ${platform}`)
+      runIO.error(`error: no result applied for dispatch ${reply.id}; see hydra schedules list ${platform}`)
       return 1
     }
     const r = readJobState(stateDir, name)
@@ -442,7 +442,7 @@ export function jobsList(platform: string, stateDirOverride?: string): void {
     return
   }
   const file = jobsToml(stateDir)
-  if (!existsSync(file)) { console.log(`no jobs file at ${file}`); return }
+  if (!existsSync(file)) { console.log(`no schedules file at ${file}`); return }
   printJobs(platform, stateDir, parseJobsConfig(readFileSync(file, 'utf8')).jobs, now)
 }
 
@@ -470,10 +470,10 @@ export function launchdNotes(platform: string, stateDir: string, j: Job): string
   const legacy = legacyTitles(launchdIO.agentsDir, platform).some(t => parseLegacyTitle(t)?.name === j.name)
   if (j.runner === 'launchd' && !j.paused && !registered) {
     out.push(legacy
-      ? `warning: still on the old runner's launchd entry (a versioned bun that a brew upgrade breaks); run hydra jobs sync ${platform}`
-      : `warning: not registered with launchd, so nothing triggers it; run hydra jobs sync ${platform}`)
+      ? `warning: still on the old runner's launchd entry (a versioned bun that a brew upgrade breaks); run hydra schedules sync ${platform}`
+      : `warning: not registered with launchd, so nothing triggers it; run hydra schedules sync ${platform}`)
   }
-  if ((j.runner === 'daemon' || j.paused) && (registered || legacy)) out.push(`warning: still has a launchd entry; run hydra jobs sync ${platform} to remove it`)
+  if ((j.runner === 'daemon' || j.paused) && (registered || legacy)) out.push(`warning: still has a launchd entry; run hydra schedules sync ${platform} to remove it`)
   return out
 }
 
@@ -509,7 +509,7 @@ export async function jobsSync(platform: string, stateDirOverride?: string): Pro
   const file = jobsToml(stateDir)
   // [schedules]: the daemon validates hydra.toml (a bad load is alerted, the last good config stays); its answer is the list.
   const fromSchedules = schedulesAreSource(stateDir, readDaemonState(stateDir).state)
-  if (!fromSchedules && !existsSync(file)) { runIO.error(`error: no jobs file at ${file}`); return 1 }
+  if (!fromSchedules && !existsSync(file)) { runIO.error(`error: no schedules file at ${file}`); return 1 }
   let jobs: Job[] = []
   if (!fromSchedules) try { jobs = parseJobsConfig(readFileSync(file, 'utf8')).jobs } catch (err) {
     runIO.error(`error: ${err instanceof Error ? err.message : err}`)
@@ -606,7 +606,7 @@ export async function syncLaunchd(platform: string, stateDir: string, jobs: Job[
     if (r.code) {
       io.remove(plistOf(j.name))   // the next sync sees no entry and tries again
       ok = false
-      lines.push(`launchd: ${j.name}: registering failed: ${r.err || `exit ${r.code}`}; run jobs sync again`)
+      lines.push(`launchd: ${j.name}: registering failed: ${r.err || `exit ${r.code}`}; run schedules sync again`)
     } else lines.push(`launchd: registered ${j.name} (runs ${entry})`)
   }
   for (const name of runnerJobs(io.agentsDir, platform)) {

@@ -2,7 +2,7 @@ import { afterEach, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { SlackWatcher, type SlackMessageEvent } from '../watch.js'
+import { ConversationTable, type SlackMessageEvent } from '../watch.js'
 import { oneListener, view } from './slack-config.js'
 
 const CH = 'C0FOOD'
@@ -15,7 +15,7 @@ function setup(hosted: () => boolean) {
   dirs.push(dir)
   const alerts: string[] = []
   const sent: string[] = []
-  const w = new SlackWatcher({
+  const w = new ConversationTable({
     now: () => 1_000_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => view(oneListener(CH)), alert: t => { alerts.push(t) }, hosted,
     deliver: async ({ to }) => { sent.push(to); return { ok: true } },
   })

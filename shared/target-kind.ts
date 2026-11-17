@@ -6,10 +6,10 @@
 // A value without a kind (`ops`, `1234`, `C0ABC:1793732224.093059`) is an error here. Stored state holds the bare form (`refOfBare`).
 import { isSessionThread, SPECIALIST_NAME_RE, THREAD_ID_FORMS } from './specialist-name.js'
 
-export type TargetRef = { kind: 'main' } | { kind: 'specialist'; name: string } | { kind: 'thread'; threadId: string }
+export type TargetValue = { kind: 'main' } | { kind: 'specialist'; name: string } | { kind: 'thread'; threadId: string }
 
 export type TargetRead =
-  | { ok: true; ref: TargetRef }
+  | { ok: true; ref: TargetValue }
   /** `undeclared`: well-formed, but no such specialist (each caller words that its own way). Else `error` says what is wrong. */
   | { ok: false; undeclared: string; error?: undefined }
   | { ok: false; error: string; undeclared?: undefined }
@@ -37,14 +37,14 @@ export function readTarget(raw: string, declared: (name: string) => boolean): Ta
 }
 
 /** The value as the toml and the CLI write it, and as every log and report prints it: `main`, `specialist:ops`, `thread:123`. */
-export const spelled = (ref: TargetRef): string => ref.kind === 'main' ? 'main' : ref.kind === 'specialist' ? `specialist:${ref.name}` : `thread:${ref.threadId}`
+export const spelled = (ref: TargetValue): string => ref.kind === 'main' ? 'main' : ref.kind === 'specialist' ? `specialist:${ref.name}` : `thread:${ref.threadId}`
 
 /** The value as stored state holds it: `main`, a specialist's name, a thread id. */
-export const bareOf = (ref: TargetRef): string => ref.kind === 'main' ? 'main' : ref.kind === 'specialist' ? ref.name : ref.threadId
+export const bareOf = (ref: TargetValue): string => ref.kind === 'main' ? 'main' : ref.kind === 'specialist' ? ref.name : ref.threadId
 
 
 /** A value as stored state holds it (`main`, a specialist's name, a thread id: never prefixed), read as a target. */
-export const refOfBare = (bare: string): TargetRef => bare === 'main' ? { kind: 'main' } : isSessionThread(bare) ? { kind: 'thread', threadId: bare } : { kind: 'specialist', name: bare }
+export const refOfBare = (bare: string): TargetValue => bare === 'main' ? { kind: 'main' } : isSessionThread(bare) ? { kind: 'thread', threadId: bare } : { kind: 'specialist', name: bare }
 
 /** A stored (bare) value as the toml and the CLI write it, for printing: `main`, `specialist:ops`, `thread:1234`. */
 export const spelledBare = (bare: string): string => spelled(refOfBare(bare))

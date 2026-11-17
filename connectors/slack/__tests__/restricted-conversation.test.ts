@@ -8,7 +8,7 @@ import { registry } from '../../../daemon/sessions.js'
 import { setSpecialistThread, _reloadSpecialists } from '../../../specialists/specialists.js'
 import { _setHydraConfigForTesting } from '../../../daemon/hydra-config.js'
 import { restrictedRefusal } from '../../../daemon/bridge-dispatch.js'
-import { conversationBelongsTo, getSlackWatcher, slackRuntimeDeps, stopSlackListener } from '../runtime.js'
+import { conversationBelongsTo, getConversationTable, slackRuntimeDeps, stopSlackListener } from '../runtime.js'
 import { TOP_LEVEL } from '../conversation.js'
 import { TWO_APPS, hydra, view } from './slack-config.js'
 
@@ -38,13 +38,13 @@ const session = (id: string, threadId: string) => { ids.push(id); registry.set(i
 
 beforeEach(() => {
   _setHydraConfigForTesting(hydra(TOML))
-  const v = view(TOML, { maxWatches: 5 })
+  const v = view(TOML, { maxConversations: 5 })
   slackRuntimeDeps.view = () => v
   setSpecialistThread(CRM, 'crm-thread'); setSpecialistThread(OPS, 'ops-thread')
   session('crm-session', 'crm-thread'); session('ops-session', 'ops-thread')
 })
 afterEach(() => {
-  for (const e of getSlackWatcher().list()) getSlackWatcher().unwatch(e.channel, e.threadTs, e.app)
+  for (const e of getConversationTable().list()) getConversationTable().unwatch(e.channel, e.threadTs, e.app)
   for (const s of ids.splice(0)) registry.delete(s)
   _setHydraConfigForTesting(undefined)
   rmSync(join(STATE_DIR, 'specialist-threads.json'), { force: true }); _reloadSpecialists()
@@ -55,12 +55,12 @@ afterEach(() => {
 
 describe('a Slack conversation bound to the specialist', () => {
   test.each(KEPT)('%s passes the scope check there', (tool, key) => {
-    getSlackWatcher().bind('C1', '5.000001', CRM, 'tool')
+    getConversationTable().bind('C1', '5.000001', CRM, 'tool')
     expect(conversationBelongsTo('crm-session', 'slack:C1:5.000001')).toBe(true)
     expect(restrictedRefusal('crm-session', tool, { [key]: 'slack:C1:5.000001', text: 'x' })).toBeUndefined()
   })
   test.each(KEPT)('%s is refused in a conversation bound to another specialist, and in one bound to no one', (tool, key) => {
-    getSlackWatcher().bind('C2', '6.000001', OPS, 'tool')
+    getConversationTable().bind('C2', '6.000001', OPS, 'tool')
     for (const other of ['slack:C2:6.000001', 'slack:C1:7.000001']) {
       expect(conversationBelongsTo('crm-session', other)).toBe(false)
       expect(restrictedRefusal('crm-session', tool, { [key]: other, text: 'x' })).toBe(`${tool}: ${key} ${other} is not this session's own conversation; a restricted session acts only in its own thread or in a Slack conversation bound to its specialist`)
@@ -80,7 +80,7 @@ describe("the specialist's home_place is not its conversation", () => {
     })
   }
   test('even with the home_place open as a conversation bound to the specialist (a post to it opens one)', () => {
-    getSlackWatcher().bind('C9', '8.000001', CRM, 'home')
+    getConversationTable().bind('C9', '8.000001', CRM, 'home')
     // That thread IS bound to the specialist, so it is its conversation: the refusal is for the channel itself.
     expect(conversationBelongsTo('crm-session', 'slack:C9:8.000001')).toBe(true)
     expect(conversationBelongsTo('crm-session', 'slack:C9')).toBe(false)

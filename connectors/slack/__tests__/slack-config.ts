@@ -1,7 +1,7 @@
 // Test helper: a Slack view of a hydra.toml, as the listener would build it once connected.
 import { loadHydraConfig } from '../../../config/load.js'
 import type { HydraConfig, LoadEnv } from '../../../config/types.js'
-import { SLACK_LIMITS, type SlackDirectory, type SlackWatchConfig } from '../watch.js'
+import { SLACK_LIMITS, type SlackDirectory, type ConversationConfig } from '../watch.js'
 import { testLoadEnv } from '../../../config/__tests__/load-env.js'
 
 export const BOT = 'UBOT'
@@ -77,7 +77,7 @@ export function directory(names: Record<string, string> = {}, dms?: Record<strin
   }
 }
 
-export type ViewOver = Partial<Omit<SlackWatchConfig, 'hydra' | 'directory'>> & { toml?: string; names?: Record<string, string>; dms?: Record<string, string>; groupDms?: string[] }
-export function view(defaultToml: string, { toml, names, dms, groupDms, ...over }: ViewOver = {}): SlackWatchConfig {
+export type ViewOver = Partial<Omit<ConversationConfig, 'hydra' | 'directory'>> & { toml?: string; names?: Record<string, string>; dms?: Record<string, string>; groupDms?: string[] }
+export function view(defaultToml: string, { toml, names, dms, groupDms, ...over }: ViewOver = {}): ConversationConfig {
   return { hydra: hydra(toml ?? defaultToml), botUserId: BOT, workspaceUrl: 'https://x.slack.com', directory: directory(names, dms, groupDms), ...SLACK_LIMITS, coalesceMs: 5, ...over }
 }

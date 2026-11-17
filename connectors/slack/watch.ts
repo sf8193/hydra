@@ -71,7 +71,7 @@ export const NO_DIRECTORY: SlackDirectory = { nameOf: () => undefined, idOf: () 
  * What the watcher reads for one app: `hydra.toml`, plus what that app's Slack connection learned (its own ids, the
  * workspace, channel names). Read per event, so an edit applies without a restart.
  */
-export type SlackWatchConfig = {
+export type ConversationConfig = {
   hydra: HydraConfig
   /** The app this connection is. Absent: the app named `default`. */
   app?: string
@@ -83,8 +83,8 @@ export type SlackWatchConfig = {
   unread?: (channel: string, apps: string[]) => string[]
   /** The apps with a live connection. A tagged app with none will catch the message up itself, so no other answers it. Absent: all. */
   connected?: () => string[]
-  /** Which app owns a message, fixed by whichever connection asks first, so the other connections' copies agree. Absent (one app): decided on the spot. */
-  decideOwner?: (channel: string, ts: string, decide: () => string) => string
+  /** The owning app of a message, fixed by whichever connection asks first, so the other connections' copies agree. Absent (one app): decided on the spot. */
+  decideOwningApp?: (channel: string, ts: string, decide: () => string) => string
   /** The bot's Slack user id: `<@id>` in a message text is a tag. From auth.test. */
   botUserId: string
   /** Its bot id (`B…`), for message events that carry no `user`. From auth.test. */
@@ -96,7 +96,7 @@ export type SlackWatchConfig = {
   /** Replies arriving within this window of each other are delivered as one message. */
   coalesceMs: number
   /** Upper bound on conversations: a tag from anyone creates one. */
-  maxWatches: number
+  maxConversations: number
   /** Tags one person may land in ten minutes before the rest are dropped. */
   maxMentionsPer10Min: number
   /** Reactions one person may land in ten minutes before the rest are dropped. */
@@ -104,13 +104,13 @@ export type SlackWatchConfig = {
 }
 
 /** The limits hydra.toml has no key for. */
-export const SLACK_LIMITS = { idleExpiryMs: 7 * 86_400_000, coalesceMs: 4000, maxWatches: 50, maxMentionsPer10Min: 10, maxReactionsPer10Min: 30 } as const
+export const SLACK_LIMITS = { idleExpiryMs: 7 * 86_400_000, coalesceMs: 4000, maxConversations: 50, maxMentionsPer10Min: 10, maxReactionsPer10Min: 30 } as const
 
 /**
  * A conversation: a Slack thread (or a DM's top level) and the specialist it is bound to. The binding is fixed when
  * its first message arrives; a config change re-routes only new conversations, and `bind_conversation` moves one.
  */
-export type SlackWatchEntry = {
+export type ConversationEntry = {
   /** The app that heard it, so every reply, reaction and reread goes through that app. Absent: the app named `default` (every entry stored before apps existed). */
   app?: string
   channel: string
@@ -185,11 +185,11 @@ export type DeliverResult =
   // `wait`: its specialist runs `max_sessions` conversation sessions already. Kept owed, and never expires while it waits.
   | { ok: false; error: string; permanent?: boolean; exit?: number; wait?: true; malformed?: true }
 
-export type SlackWatchDeps = {
+export type ConversationDeps = {
   now: () => number
   deliver: (target: RouteTarget, message: string, idempotencyKey: string) => Promise<DeliverResult>
   /** One app's view, read per event so edits apply without a restart. Null: that app isn't connected, nothing is heard through it. Absent `app`: `default`. */
-  config: (app?: string) => SlackWatchConfig | null
+  config: (app?: string) => ConversationConfig | null
   /** Every app hydra.toml declares now, to name one in a message. Absent: each is named by its id. */
   apps?: () => Apps
   file: string
@@ -214,7 +214,7 @@ export type DropKind = 'reaction-cap' | 'expired' | 'owed-full' | 'too-large' | 
 
 /** An owed message that has waited past the health threshold: the conversation, who it is for, how many, how long, and why (with what to do). */
 export type LateOwed = { conversation: string; to?: string; count: number; oldestAgeMin: number; cause: string }
-export type SlackWatchStats = { refused: number; refusedBy: Record<string, number>; unrouted: number; dropped: Partial<Record<DropKind, number>> }
+export type ConversationStats = { refused: number; refusedBy: Record<string, number>; unrouted: number; dropped: Partial<Record<DropKind, number>> }
 
 /** The reaction on a refused or unrouted mention or DM. Hydra's notices are reactions, never prose. */
 export const REFUSED_REACTION = 'no_entry_sign'
@@ -237,7 +237,7 @@ export const isDm = (channel: string): boolean => /^D[A-Z0-9]+$/.test(channel)
  * A rule or `[places]` entry written with `*` (`slack:app-dm:*`, `slack:group-dm:*`) names every place of its kind, so it matches these (`placeCovers`).
  * A DM with someone not in `[people]`, or one whose other party is not known yet, goes by no name: nothing can name it, so it is dropped.
  */
-export function placesOf(cfg: Pick<SlackWatchConfig, 'hydra' | 'directory' | 'app'>, channel: string): Place[] {
+export function placesOf(cfg: Pick<ConversationConfig, 'hydra' | 'directory' | 'app'>, channel: string): Place[] {
   const d = cfg.directory
   if (isDm(channel)) {
     const other: DmOtherParty | undefined = d.otherPartyOf ? d.otherPartyOf(channel) : 'bot'
@@ -250,7 +250,7 @@ export function placesOf(cfg: Pick<SlackWatchConfig, 'hydra' | 'directory' | 'ap
 }
 
 /** How a place reads to a person (the string hydra.toml writes it as): by name when known. */
-export const placeName = (cfg: Pick<SlackWatchConfig, 'hydra' | 'directory' | 'app'>, channel: string): string => placeKey(placesOf(cfg, channel).at(-1) ?? placeOf('slack', 'channel', channel))
+export const placeName = (cfg: Pick<ConversationConfig, 'hydra' | 'directory' | 'app'>, channel: string): string => placeKey(placesOf(cfg, channel).at(-1) ?? placeOf('slack', 'channel', channel))
 
 /**
  * The Slack channels hydra.toml names in `[[rules]]` (those with a `place`), as written: channels only, to be read by id
@@ -262,22 +262,22 @@ export function namedChannels(h: HydraConfig, app?: string): Place[] {
   return [...new Map(r.rules.flatMap(x => x.place && x.place.platform === 'slack' && x.place.kind === 'channel' ? [[placeKey(x.place), x.place] as const] : [])).values()]
 }
 
-const channelIdOf = (cfg: Pick<SlackWatchConfig, 'directory'>, place: Place): string | undefined =>
+const channelIdOf = (cfg: Pick<ConversationConfig, 'directory'>, place: Place): string | undefined =>
   isChannelName(place) ? cfg.directory.idOf(place.ref.slice(1)) : place.ref
 
 /** The channels hydra.toml names that this config's app can reach, by id: what catch-up scans and the listener holds. A `#name` not yet resolved is left out. */
-export function routedChannels(cfg: Pick<SlackWatchConfig, 'hydra' | 'directory' | 'app'> | null | undefined): string[] {
+export function routedChannels(cfg: Pick<ConversationConfig, 'hydra' | 'directory' | 'app'> | null | undefined): string[] {
   if (!cfg) return []
   return [...new Set(namedChannels(cfg.hydra, cfg.app).flatMap(p => channelIdOf(cfg, p) ?? []))]
 }
 
 /** `#name` places no channel answers to: the bot isn't in it, it was renamed, or names can't be read (no channels:read). */
-export function unresolvedPlaces(cfg: Pick<SlackWatchConfig, 'hydra' | 'directory' | 'app'>): Place[] {
+export function unresolvedPlaces(cfg: Pick<ConversationConfig, 'hydra' | 'directory' | 'app'>): Place[] {
   return namedChannels(cfg.hydra, cfg.app).filter(p => !channelIdOf(cfg, p))
 }
 
 /** Whether a rule that app (none: the app named `default`) serves names a DM with its bot (`slack:app-dm:<app>` or `slack:app-dm:*`): DMs someone declared they want, as opposed to the operator's own. */
-export function dmsDeclared(cfg: Pick<SlackWatchConfig, 'hydra' | 'app'>): boolean {
+export function dmsDeclared(cfg: Pick<ConversationConfig, 'hydra' | 'app'>): boolean {
   const r = reachableBy(cfg.hydra, cfg.app)
   const mine = placeOf('slack', 'app-dm', cfg.app ?? DEFAULT_SLACK_APP)
   return r.rules.some(x => x.place !== undefined && placeCovers(x.place, mine))
@@ -287,7 +287,7 @@ export function dmsDeclared(cfg: Pick<SlackWatchConfig, 'hydra' | 'app'>): boole
  * Whether one event's places (`placesOf`) are named: by a rule this app delivers to, or by a `[places]` entry
  * (an option set for the place is a name too, wider than `namedChannels`). The early gate asks it of every kind of place.
  */
-export function namedPlace(cfg: Pick<SlackWatchConfig, 'hydra' | 'app'>, at: Place[], app?: string): boolean {
+export function namedPlace(cfg: Pick<ConversationConfig, 'hydra' | 'app'>, at: Place[], app?: string): boolean {
   const r = reachableBy(cfg.hydra, app ?? cfg.app)
   return at.some(p => optionsOf(cfg.hydra.places, p) !== undefined || r.rules.some(x => x.place !== undefined && placeCovers(x.place, p)))
 }
@@ -296,7 +296,7 @@ export function namedPlace(cfg: Pick<SlackWatchConfig, 'hydra' | 'app'>, at: Pla
  * Whether DMs are heard: some specialist or rule names a DM with the bot (`dmsDeclared`), or the operator has a Slack address (their DMs
  * reach `main` through any app: pins don't bind `main`).
  */
-export function hearsDms(cfg: Pick<SlackWatchConfig, 'hydra' | 'app'> | null | undefined): boolean {
+export function hearsDms(cfg: Pick<ConversationConfig, 'hydra' | 'app'> | null | undefined): boolean {
   if (!cfg) return false
   const h = cfg.hydra
   return dmsDeclared({ hydra: h, app: cfg.app }) || (!!h.operator && !!h.people[h.operator]?.addresses.some(a => a.startsWith('slack:')))
@@ -306,7 +306,7 @@ export function hearsDms(cfg: Pick<SlackWatchConfig, 'hydra' | 'app'> | null | u
 export const addressOf = (user: string | undefined): Address | undefined => user ? `slack:${user}` : undefined
 
 /** The `[places]` options that apply to a channel: a specific entry before one with `*`, then the most specific name that has any. */
-export function placeOptions(cfg: Pick<SlackWatchConfig, 'hydra' | 'directory' | 'app'>, channel: string): PlaceOptions | undefined {
+export function placeOptions(cfg: Pick<ConversationConfig, 'hydra' | 'directory' | 'app'>, channel: string): PlaceOptions | undefined {
   return optionsAt(cfg.hydra.places, placesOf(cfg, channel))
 }
 
@@ -335,7 +335,7 @@ export const OPERATOR_TOKEN_REFUSED = "the operator's Slack token was refused"
 const CHANNEL_GONE = /not_in_channel|channel_not_found|is_archived/
 
 /** The specialist that would answer a new conversation here, whoever asks: where an alert about this channel goes. */
-export function listenerOf(cfg: SlackWatchConfig | null | undefined, channel: string): string | undefined {
+export function listenerOf(cfg: ConversationConfig | null | undefined, channel: string): string | undefined {
   if (!cfg) return undefined
   const d = route(cfg.hydra, { at: placesOf(cfg, channel), addressed: true, app: appOfEntry(cfg), ...(cfg.hydra.operator && { from: cfg.hydra.people[cfg.hydra.operator]?.addresses[0] }) })
   return d.fate === 'deliver' || d.fate === 'refused' ? d.to : undefined
@@ -373,7 +373,7 @@ const WAIT_MAX_MS = 3 * 86_400_000
  * Chatter answered by no one: a conversation opened by an untagged message, delivered, nothing owed, no reply under it.
  * It holds no slot in the table (it stays a day only so a late reply follows its binding and a replay is not delivered twice).
  */
-const oneOff = (e: SlackWatchEntry): boolean => !!e.ambient && !e.owed?.length && (e.delivered?.length ?? 0) <= 1
+const oneOff = (e: ConversationEntry): boolean => !!e.ambient && !e.owed?.length && (e.delivered?.length ?? 0) <= 1
 const OWED_KEEP = 200
 const OWED_MAX_AGE_S = 24 * 3600
 /**
@@ -416,11 +416,11 @@ const OWED_FULL_WHY = `more than ${OWED_KEEP} messages were owed in one thread, 
 
 /** A conversation's key in memory, and a channel's in a cursor, a hold or a noted fact: as they always were for `default`, the app first for any other. */
 const watchKey = (app: string | undefined, channel: string, threadTs: string) => scopeKey(app, channel, threadTs)
-const keyOf = (e: Pick<SlackWatchEntry, 'app' | 'channel' | 'threadTs'>) => watchKey(e.app, e.channel, e.threadTs)
+const keyOf = (e: Pick<ConversationEntry, 'app' | 'channel' | 'threadTs'>) => watchKey(e.app, e.channel, e.threadTs)
 
 /** A store written under an older name of `deferredSince` (`heldSince`, then `notNowSince`) loads under the new name, so a message held by the guard keeps its `owed_max` clock. The next write carries only the new name.
  *  More than one name can be present when a build that predates a rename wrote the store after one that did not: each ts then takes the latest of them. */
-function readOldNames(e: SlackWatchEntry): void {
+function readOldNames(e: ConversationEntry): void {
   const merged = { ...e.deferredSince }
   for (const old of [e.heldSince, e.notNowSince]) for (const [ts, at] of Object.entries(old ?? {})) merged[ts] = Math.max(at, merged[ts] ?? at)
   if (Object.keys(merged).length) e.deferredSince = merged
@@ -507,7 +507,7 @@ const formatBytes = (n: number): string => n < 1024 ? `${n} B` : n < 1024 * 1024
  * envelope: markers carrying a one-off nonce the text cannot forge. Where it was said rides on the opening marker.
  */
 export function formatDelivery(
-  entry: Pick<SlackWatchEntry, 'channel' | 'threadTs'>,
+  entry: Pick<ConversationEntry, 'channel' | 'threadTs'>,
   items: Item[],
   where: { place: string; workspaceUrl?: string },
   nonce: string = randomBytes(6).toString('hex'),
@@ -539,10 +539,10 @@ export function packItems(items: Item[], maxBytes: number = BATCH_MAX_BYTES): It
 // ---------------------------------------------------------------------------
 
 /** `taggedIn`: the scoped keys (as `channelCursors`) of channels where an app was tagged, each with the ts of the last tag. An older store wrote the keys alone, as an array: their time is unknown. */
-type Store = { entries: SlackWatchEntry[]; channelCursors: Record<string, string>; taggedIn?: Record<string, string> | string[] }
+type Store = { entries: ConversationEntry[]; channelCursors: Record<string, string>; taggedIn?: Record<string, string> | string[] }
 
-export class SlackWatcher {
-  private readonly entries = new Map<string, SlackWatchEntry>()
+export class ConversationTable {
+  private readonly entries = new Map<string, ConversationEntry>()
   private channelCursors: Record<string, string> = {}
   /** Scoped channel key to the ts of the last tag of the app there. Not the channel cursor, which means "last read": a quiet channel read in full moves it to now. */
   private taggedIn = new Map<string, string>()
@@ -569,17 +569,17 @@ export class SlackWatcher {
   private readonly noted = { refused: new Set<string>(), dropped: new Set<string>(), guessed: new Set<string>() }
   // Channels where an app's bot answered a reaction with "not in channel", by app and channel: no reaction is tried there again until the time here has passed.
   private readonly cannotReact = new Map<string, number>()
-  private readonly stats_: SlackWatchStats = { refused: 0, refusedBy: {}, unrouted: 0, dropped: {} }
+  private readonly stats_: ConversationStats = { refused: 0, refusedBy: {}, unrouted: 0, dropped: {} }
   private readonly episodeStart = new Map<string, number>()
   // Why each conversation's last delivery failed, until one lands or nothing is owed: what `lateOwed` says. Pruned in `sweep`.
   private readonly failing = new Map<string, string>()
 
   // What each app's connection offered: its display names, and its reactions and downloads. Keyed by app id.
-  private readonly resolvers = new Map<string, NonNullable<SlackWatchDeps['resolveName']>>()
+  private readonly resolvers = new Map<string, NonNullable<ConversationDeps['resolveName']>>()
   private readonly actions = new Map<string, SlackActions>()
   private readonly downloads = new Map<string, Promise<void>>()
 
-  constructor(private readonly deps: SlackWatchDeps) { if (deps.resolveName) this.resolvers.set(DEFAULT_SLACK_APP, deps.resolveName); this.load() }
+  constructor(private readonly deps: ConversationDeps) { if (deps.resolveName) this.resolvers.set(DEFAULT_SLACK_APP, deps.resolveName); this.load() }
 
   // -- store ---------------------------------------------------------------
 
@@ -620,9 +620,9 @@ export class SlackWatcher {
     }
   }
 
-  list(): SlackWatchEntry[] { return [...this.entries.values()] }
+  list(): ConversationEntry[] { return [...this.entries.values()] }
   /** Refusals and drops since the daemon started: what `hydra conversations` and `hydra health` count. */
-  stats(): SlackWatchStats { return structuredClone(this.stats_) }
+  stats(): ConversationStats { return structuredClone(this.stats_) }
   /**
    * For `hydra health`: each conversation whose oldest owed message is older than `olderThanMs`, with the cause and what to do.
    * Never throws: health must work when the watcher does not.
@@ -647,24 +647,24 @@ export class SlackWatcher {
     } catch (err) { this.deps.log(`daemon: slack connector: listing late owed messages failed: ${err}\n`) }
     return out.sort((a, b) => b.oldestAgeMin - a.oldestAgeMin)
   }
-  get(channel: string, threadTs: string, app?: string): SlackWatchEntry | undefined { return this.entries.get(watchKey(app, channel, threadTs)) }
+  get(channel: string, threadTs: string, app?: string): ConversationEntry | undefined { return this.entries.get(watchKey(app, channel, threadTs)) }
 
   /** What a message calls an app. */
   private appName(app: string | undefined): string { return appName(this.deps.apps?.() ?? {}, appOfEntry({ app })) }
 
   setBotId(id: string | undefined, app?: string): void { if (id) this.botIds.set(appOfEntry({ app }), id); else this.botIds.delete(appOfEntry({ app })) }
   /** Supplied once an app's listener has a Slack client: display names for the senders in its deliveries. */
-  setNameResolver(fn: SlackWatchDeps['resolveName'], app?: string): void { if (fn) this.resolvers.set(appOfEntry({ app }), fn); else this.resolvers.delete(appOfEntry({ app })) }
+  setNameResolver(fn: ConversationDeps['resolveName'], app?: string): void { if (fn) this.resolvers.set(appOfEntry({ app }), fn); else this.resolvers.delete(appOfEntry({ app })) }
   /** Supplied once an app's listener is connected: file downloads and the ack reaction, through that app. */
   setSlackActions(actions: SlackActions | undefined, app?: string): void { if (actions) this.actions.set(appOfEntry({ app }), actions); else this.actions.delete(appOfEntry({ app })) }
   /** One app's side of the watcher: the same calls with the app filled in, which is what its listener and its catch-up pass use. */
-  forApp(app: string): AppWatch { return new AppWatch(this, app) }
+  forApp(app: string): AppConversations { return new AppConversations(this, app) }
 
   /**
    * Open a conversation bound to `specialist`, or touch the one that exists. Its binding is never changed here: only
    * `bind` moves a conversation. Undefined when the table is full.
    */
-  watch(channel: string, threadTs: string, specialist: string, mentionedBy?: string, app?: string): SlackWatchEntry | undefined {
+  watch(channel: string, threadTs: string, specialist: string, mentionedBy?: string, app?: string): ConversationEntry | undefined {
     const now = this.deps.now()
     const existing = this.get(channel, threadTs, app)
     if (existing) {
@@ -673,9 +673,9 @@ export class SlackWatcher {
       this.persist()
       return existing
     }
-    const cap = this.deps.config(app)?.maxWatches ?? SLACK_LIMITS.maxWatches
+    const cap = this.deps.config(app)?.maxConversations ?? SLACK_LIMITS.maxConversations
     if (this.list().filter(e => !oneOff(e)).length >= cap) return undefined
-    const entry: SlackWatchEntry = { ...(appOfEntry({ app }) !== DEFAULT_SLACK_APP && { app }), channel, threadTs, specialist, ...(mentionedBy && { mentionedBy }), createdAt: now, lastEventAt: now }
+    const entry: ConversationEntry = { ...(appOfEntry({ app }) !== DEFAULT_SLACK_APP && { app }), channel, threadTs, specialist, ...(mentionedBy && { mentionedBy }), createdAt: now, lastEventAt: now }
     this.entries.set(keyOf(entry), entry)
     this.persist()
     this.tellSessionsTaken(entry)
@@ -686,7 +686,7 @@ export class SlackWatcher {
    * The one place a conversation's binding changes to a specialist (it opens bound, is first bound, or is moved): a session listening to
    * the same thread through another app is told then.
    */
-  private setBinding(entry: SlackWatchEntry, to: string): void {
+  private setBinding(entry: ConversationEntry, to: string): void {
     entry.specialist = to
     delete entry.vacantSince   // a vacancy belongs to the thread the conversation was bound to; the next reconcile starts the new one's
     this.tellSessionsTaken(entry)
@@ -696,7 +696,7 @@ export class SlackWatcher {
    * The conversation id names the app, so a session listening to the same thread through another app holds a different conversation,
    * now quiet. Told when a specialist takes the thread, once per takeover.
    */
-  private tellSessionsTaken(taken: SlackWatchEntry): void {
+  private tellSessionsTaken(taken: ConversationEntry): void {
     if (!taken.specialist || isSessionThread(taken.specialist)) return
     for (const held of this.list()) {
       if (held.channel !== taken.channel || held.threadTs !== taken.threadTs) continue
@@ -712,7 +712,7 @@ export class SlackWatcher {
    * the parent as seen: Slack returns it with every thread read, and it would be delivered as a follow-up. The operator's CLI
    * has not necessarily seen it, so it stays undelivered: a request the live stream missed is still delivered.
    */
-  bind(channel: string, threadTs: string, specialist: string, by?: string, app?: string): SlackWatchEntry | undefined {
+  bind(channel: string, threadTs: string, specialist: string, by?: string, app?: string): ConversationEntry | undefined {
     const seenParent = !this.get(channel, threadTs, app) && (by === 'tool' || by === 'home')
     const entry = this.watch(channel, threadTs, specialist, by, app)
     if (!entry) return undefined
@@ -750,7 +750,7 @@ export class SlackWatcher {
     let n = 0
     // A session thread that let conversations go says so once (per app, per reason), after the loop.
     const letGo = new Map<string, { thread: string; app: string; why: 'vacant' | 'idle'; idleMs: number; names: string[]; owed: number }>()
-    const note = (e: SlackWatchEntry, why: 'vacant' | 'idle', idleMs: number, owed: number): void => {
+    const note = (e: ConversationEntry, why: 'vacant' | 'idle', idleMs: number, owed: number): void => {
       if (!e.specialist || !isSessionThread(e.specialist)) return
       const k = `${e.specialist}|${appOfEntry(e)}|${why}`
       const g = letGo.get(k) ?? { thread: e.specialist, app: appOfEntry(e), why, idleMs, names: [], owed: 0 }
@@ -838,12 +838,12 @@ export class SlackWatcher {
 
   /** Where each thread with owed messages needs refetching from. Waiters first, the oldest first: it takes the next freed place. Of one app's, when given. */
   owedHints(app?: string): { channel: string; threadTs: string; fromTs: string }[] {
-    const order = (e: SlackWatchEntry) => e.waitingSince ?? Infinity
+    const order = (e: ConversationEntry) => e.waitingSince ?? Infinity
     return this.list().filter(e => e.owed?.length && (app === undefined || appOfEntry(e) === app)).sort((a, b) => order(a) - order(b)).map(e => ({ channel: e.channel, threadTs: e.threadTs, fromTs: e.owed![0] }))
   }
 
   /** The conversations waiting for a session of `to` (current id, after renames), the oldest first. */
-  waiters(isTo: (specialist: string) => boolean): SlackWatchEntry[] {
+  waiters(isTo: (specialist: string) => boolean): ConversationEntry[] {
     return this.list().filter(e => e.waitingSince !== undefined && e.owed?.length && e.specialist && isTo(e.specialist)).sort((a, b) => a.waitingSince! - b.waitingSince!)
   }
 
@@ -995,7 +995,7 @@ export class SlackWatcher {
   }
 
   /** The bot's own message in a conversation, noted where its place hears reactions, so a reaction on it finds the conversation. */
-  private noteOwn(cfg: SlackWatchConfig, ev: SlackMessageEvent, threadTs: string, app: string): void {
+  private noteOwn(cfg: ConversationConfig, ev: SlackMessageEvent, threadTs: string, app: string): void {
     if ((placeOptions(cfg, ev.channel)?.reactions ?? 'off') === 'off') return
     const entry = this.get(ev.channel, threadTs, app)
     if (!entry || entry.ours?.includes(ev.ts)) return
@@ -1004,14 +1004,14 @@ export class SlackWatcher {
   }
 
   /** A reaction that did not land is forgotten, so Slack sending it again (or the person adding it again) delivers it. */
-  private undo(entry: SlackWatchEntry, mark: string): void {
+  private undo(entry: ConversationEntry, mark: string): void {
     if (this.entries.get(keyOf(entry)) !== entry || !entry.reacted?.includes(mark)) return
     entry.reacted = entry.reacted.filter(m => m !== mark)
     if (!entry.reacted.length) delete entry.reacted
     this.persist()
   }
 
-  private releasedByHost(key: string, entry: SlackWatchEntry): boolean {
+  private releasedByHost(key: string, entry: ConversationEntry): boolean {
     const host = `${entry.channel}:${entry.threadTs}`
     if (!entry.specialist || !isSessionThread(entry.specialist) || !this.deps.hosted?.(host)) return false
     if (this.entries.get(key) !== entry) return true
@@ -1025,7 +1025,7 @@ export class SlackWatcher {
    * One reaction, sent as a message would be: to the conversation's binding, if it still admits the person, after the guard, named as the
    * roster names them. It is never owed: Slack does not replay it, and a message's retry (catch-up reading the thread again) would not find it.
    */
-  private async deliverReaction(key: string, entry: SlackWatchEntry, item: Item, mark: string, enqueuedCfg: SlackWatchConfig): Promise<void> {
+  private async deliverReaction(key: string, entry: ConversationEntry, item: Item, mark: string, enqueuedCfg: ConversationConfig): Promise<void> {
     if (this.releasedByHost(key, entry)) return
     const cfg = this.deps.config(entry.app) ?? enqueuedCfg
     const to = entry.specialist ? currentId(cfg.hydra, entry.specialist) : undefined
@@ -1047,12 +1047,12 @@ export class SlackWatcher {
    * conversation in it, so each is in the channel whatever the membership cache says, and the first is `boundApp`, which keeps the
    * thread's untagged follow-ups.
    */
-  private boundThrough(cfg: SlackWatchConfig, channel: string, threadTs: string): string[] {
+  private boundThrough(cfg: ConversationConfig, channel: string, threadTs: string): string[] {
     const order = Object.keys(cfg.hydra.slackApps)
     return order.filter(a => this.get(channel, threadTs, a)).sort((a, b) => this.get(channel, threadTs, b)!.lastEventAt - this.get(channel, threadTs, a)!.lastEventAt || order.indexOf(a) - order.indexOf(b))
   }
 
-  private classify(ev: SlackMessageEvent, cfg: SlackWatchConfig): HandleOutcome {
+  private classify(ev: SlackMessageEvent, cfg: ConversationConfig): HandleOutcome {
     // A message dropped before anything is counted or logged is said for a DM, where silence reads as a lost message (channels carry far too many to name).
     const skip = (why: () => string): HandleOutcome => { if (isDm(ev.channel) || cfg.directory.isGroupDm?.(ev.channel)) this.deps.log(`daemon: slack connector: dropped ${ev.channel} ${ev.ts} from ${ev.user ?? ev.botId ?? 'unknown'} (${this.appName(ev.app)}): ${why()}\n`); return 'ignored' }
     if (!PLAIN_SUBTYPES.has(ev.subtype)) return skip(() => `the message has subtype ${ev.subtype}, which is not heard`)
@@ -1075,14 +1075,14 @@ export class SlackWatcher {
     const mentioned = own ? [] : mentionedApps({ [app]: { botUserId: cfg.botUserId }, ...cfg.identities }, ev.text)
     // A DM is this app's alone. In a channel, the apps whose bot is in it (a cache the connections share).
     // An app this thread is already bound through is in the channel too: it keeps its untagged follow-ups (`boundApp`), even while its connection is down.
-    // A tagged app with no connection is taken to hear its tag: it owns the message and catches it up, so no other app answers in its place.
+    // A tagged app with no connection is taken to hear its tag: it is the owning app and catches it up, so no other app answers in its place.
     const through = dm ? [] : this.boundThrough(cfg, ev.channel, ev.threadTs ?? ev.ts)
     const connected = cfg.connected?.()
     const unreachable = connected ? mentioned.filter(m => m !== app && !connected.includes(m)) : []
     // A tagged app with the operator's token hears every channel the operator is in, its bot a member or not: its tag reaches it.
     const viaOperator = dm ? [] : mentioned.filter(m => m !== app && !!cfg.hydra.slackApps[m]?.operatorTokenEnv)
     const heardBy = dm ? [app] : [...new Set([app, ...(cfg.heardBy?.(ev.channel) ?? []), ...through, ...unreachable, ...viaOperator])]
-    // A tagged app whose membership was never read may or may not receive the message. It owns the tag only when no tagged app is known to
+    // A tagged app whose membership was never read may or may not receive the message. It is the owning app only when no tagged app is known to
     // hear it: a tag then reaches it rather than vanishing (rule 1: a tag goes to the tagged app, in a bound thread too), and a known hearer
     // is never outranked by a guess. Only a tag makes a guess, so an untagged follow-up still goes to the app the thread is bound through.
     const unread = dm || own ? [] : (cfg.unread?.(ev.channel, mentioned.filter(m => m !== app)) ?? [])
@@ -1116,7 +1116,7 @@ export class SlackWatcher {
       if (!to) return skip(() => `no one listens where the bot posted`)
       const entry = this.watch(ev.channel, threadTs, to, undefined, app)
       if (!entry) {
-        this.drop('table-full', { app, channel: ev.channel, threadTs, specialist: to }, [ev.ts], `the conversation table is full (${cfg.maxWatches}), so the bot's own post opens no conversation and replies to it will not be delivered`)
+        this.drop('table-full', { app, channel: ev.channel, threadTs, specialist: to }, [ev.ts], `the conversation table is full (${cfg.maxConversations}), so the bot's own post opens no conversation and replies to it will not be delivered`)
         return 'ignored'
       }
       entry.delivered = insertTs(entry.delivered, ev.ts, DELIVERED_KEEP) // its own words are never owed to the specialist
@@ -1138,13 +1138,13 @@ export class SlackWatcher {
         this.deps.alert?.(`ℹ️ Someone tagged the bot in ${conversationId(existing)}, so ${fresh.to} took it, since it answers there. This session no longer hears it.`, from)
       }
     }
-    // Several apps heard it: one owns it, fixed by whichever connection decides first, so every copy of the message agrees.
+    // Several apps heard it: one is the owning app, fixed by whichever connection decides first, so every copy of the message agrees.
     // Past that the message is this app's alone, and routes as if no other app had heard it.
     const decide = () => owningApp(cfg.hydra, { app, heardBy, mentioned, ...(boundApp && { boundApp }), at })?.app ?? app
-    const owner = dm ? app : cfg.decideOwner ? cfg.decideOwner(ev.channel, ev.ts, decide) : decide()
+    const owning = dm ? app : cfg.decideOwningApp ? cfg.decideOwningApp(ev.channel, ev.ts, decide) : decide()
     // Standing down for a tagged app that was only guessed to hear it: if its bot is not in the channel, nobody answers. Said once per app and channel.
-    if (owner !== app && guessed.includes(owner) && this.firstTime(this.noted.guessed, `${scoped(owner, ev.channel)}`)) this.deps.log(`daemon: slack connector: a tag of ${this.appName(owner)} in ${ev.channel} is left to it, but whether its bot is in the channel could not be read; if it is not, nobody answers. Add channels:read and groups:read to that app and reinstall it\n`)
-    if (owner !== app) return skip(() => `another app owns it`)
+    if (owning !== app && guessed.includes(owning) && this.firstTime(this.noted.guessed, `${scoped(owning, ev.channel)}`)) this.deps.log(`daemon: slack connector: a tag of ${this.appName(owning)} in ${ev.channel} is left to it, but whether its bot is in the channel could not be read; if it is not, nobody answers. Add channels:read and groups:read to that app and reinstall it\n`)
+    if (owning !== app) return skip(() => `another app is the owning app`)
     const d = route(cfg.hydra, { from: addressOf(ev.user), at, addressed, app, ...(existing?.specialist && { bound: existing.specialist }) })
     if (d.fate === 'ignored') {
       // A tag of an app that can't hear it, with nothing here to answer it instead: counted, logged and reacted to, never silent.
@@ -1170,13 +1170,13 @@ export class SlackWatcher {
     if (!existing && tagged && !this.allowMention({ ...ev, app }, threadTs, d.to, cfg)) return 'ignored'
     // A conversation opened by untagged chatter may take only half the table: the rest stays free for mentions and DMs.
     const ambient = !existing && !tagged && !dm
-    if (ambient && this.list().filter(e => e.ambient && !oneOff(e)).length >= Math.floor(cfg.maxWatches / 2)) {
-      this.drop('table-full', { app, channel: ev.channel, threadTs, specialist: d.to }, [ev.ts], `conversations opened by untagged chatter already hold half the conversation table (${Math.floor(cfg.maxWatches / 2)} of ${cfg.maxWatches}); a tag still opens one`)
+    if (ambient && this.list().filter(e => e.ambient && !oneOff(e)).length >= Math.floor(cfg.maxConversations / 2)) {
+      this.drop('table-full', { app, channel: ev.channel, threadTs, specialist: d.to }, [ev.ts], `conversations opened by untagged chatter already hold half the conversation table (${Math.floor(cfg.maxConversations / 2)} of ${cfg.maxConversations}); a tag still opens one`)
       return 'ignored'
     }
     const entry = existing ?? this.watch(ev.channel, threadTs, d.to, ev.user, app)
     if (!entry) {
-      this.drop('table-full', { app, channel: ev.channel, threadTs, specialist: d.to }, [ev.ts], `the conversation table is full (${cfg.maxWatches}); unbind a conversation`)
+      this.drop('table-full', { app, channel: ev.channel, threadTs, specialist: d.to }, [ev.ts], `the conversation table is full (${cfg.maxConversations}); unbind a conversation`)
       return 'ignored'
     }
     if (ambient) { entry.ambient = true; this.persist() }
@@ -1247,7 +1247,7 @@ export class SlackWatcher {
   }
 
   /** One person tagging in a loop must not be able to keep opening watches and filling the specialist. */
-  private allowMention(ev: SlackMessageEvent, threadTs: string, to: string, cfg: SlackWatchConfig): boolean {
+  private allowMention(ev: SlackMessageEvent, threadTs: string, to: string, cfg: ConversationConfig): boolean {
     const user = ev.user
     if (!user) return true
     const now = this.deps.now()
@@ -1262,7 +1262,7 @@ export class SlackWatcher {
     return true
   }
 
-  private enqueue(entry: SlackWatchEntry, item: Item, cfg: SlackWatchConfig): void {
+  private enqueue(entry: ConversationEntry, item: Item, cfg: ConversationConfig): void {
     // Owed before anything is sent: a crash inside the window leaves this for catch-up to find.
     const before = entry.owed ?? []
     entry.owed = insertTs([...before], item.ts, OWED_KEEP)
@@ -1344,7 +1344,7 @@ export class SlackWatcher {
   }
 
   /** A message that will never be delivered: logged every time, counted, and alerted once per episode of its kind. */
-  private drop(kind: DropKind, where: Pick<SlackWatchEntry, 'app' | 'channel' | 'threadTs' | 'specialist'>, ts: string[], why: string, alert = true): void {
+  private drop(kind: DropKind, where: Pick<ConversationEntry, 'app' | 'channel' | 'threadTs' | 'specialist'>, ts: string[], why: string, alert = true): void {
     const fresh = ts.filter(t => this.firstTime(this.noted.dropped, `${scoped(where.app, where.channel)}:${t}`))
     if (!fresh.length) return
     this.stats_.dropped[kind] = (this.stats_.dropped[kind] ?? 0) + fresh.length
@@ -1402,7 +1402,7 @@ export class SlackWatcher {
 
   // -- delivery ------------------------------------------------------------
 
-  private flushKey(key: string, cfg: SlackWatchConfig): void {
+  private flushKey(key: string, cfg: ConversationConfig): void {
     const batch = this.pending.get(key)
     if (!batch) return
     clearTimeout(batch.timer)
@@ -1420,7 +1420,7 @@ export class SlackWatcher {
     void run.finally(() => { if (this.threadRuns.get(key) === run) this.threadRuns.delete(key) })
   }
 
-  private async deliverItems(key: string, entry: SlackWatchEntry, items: Item[], cfg: SlackWatchConfig): Promise<void> {
+  private async deliverItems(key: string, entry: ConversationEntry, items: Item[], cfg: ConversationConfig): Promise<void> {
     try {
       await this.deliverBatches(key, entry, items, cfg)
     } finally {
@@ -1430,7 +1430,7 @@ export class SlackWatcher {
     }
   }
 
-  private async deliverBatches(key: string, entry: SlackWatchEntry, items: Item[], enqueuedCfg: SlackWatchConfig): Promise<void> {
+  private async deliverBatches(key: string, entry: ConversationEntry, items: Item[], enqueuedCfg: ConversationConfig): Promise<void> {
     if (this.releasedByHost(key, entry)) return
     // Where each message goes was fixed when its conversation opened: its binding. Who may reach it is read now, from the current config, so a role taken away refuses at once. Read once for
     // the whole burst, so a split burst lands in one place.
@@ -1529,7 +1529,7 @@ export class SlackWatcher {
    * A message's attachments, as the session will read them: downloaded at mode 0600 under the state dir when the
    * place says `files`, otherwise listed by name. Too large, failed or not connected: listed, with why. Never a reason to hold the message.
    */
-  private async saveFiles(entry: SlackWatchEntry, i: Item, enabled: boolean): Promise<Item> {
+  private async saveFiles(entry: ConversationEntry, i: Item, enabled: boolean): Promise<Item> {
     const saved: FileRef[] = []
     for (const f of i.files ?? []) {
       const ref: FileRef = { name: f.name, ...(f.size !== undefined && { size: f.size }) }
@@ -1568,7 +1568,7 @@ export class SlackWatcher {
    * read now (a role taken away stops it: `refused`, left for the caller to settle), the sender's name (the roster's `name` wins; else Slack's
    * display name, cleaned; else the person's id), and the guard, which judges everyone but the operator. `named` and `verdicts` run together.
    */
-  private async admit(entry: SlackWatchEntry, cfg: SlackWatchConfig, items: Item[], homeOf: (i: Item) => string): Promise<{ named: Item[]; verdicts: GuardVerdict[]; senders: Map<string, ReturnType<typeof identify>>; refused: { item: Item; why: string }[] }> {
+  private async admit(entry: ConversationEntry, cfg: ConversationConfig, items: Item[], homeOf: (i: Item) => string): Promise<{ named: Item[]; verdicts: GuardVerdict[]; senders: Map<string, ReturnType<typeof identify>>; refused: { item: Item; why: string }[] }> {
     const h = cfg.hydra
     const app = appOfEntry(entry)
     const senders = new Map(items.map(i => [i.ts, identify(h, addressOf(i.user))] as const))
@@ -1597,7 +1597,7 @@ export class SlackWatcher {
   }
 
   /** One send: the items as the session reads them, to `target`. The target is part of the key: the same items re-routed elsewhere are a different send. */
-  private async post(entry: SlackWatchEntry, target: RouteTarget, batch: Item[], cfg: SlackWatchConfig): Promise<DeliverResult> {
+  private async post(entry: ConversationEntry, target: RouteTarget, batch: Item[], cfg: ConversationConfig): Promise<DeliverResult> {
     const message = formatDelivery(entry, batch, { place: placeName(cfg, entry.channel), ...(cfg.workspaceUrl && { workspaceUrl: cfg.workspaceUrl }) })
     const idempotencyKey = `slack-watch-${appPrefix(entry.app, '-')}${entry.channel}-${entry.threadTs}-${batch[0].ts}-${batch[batch.length - 1].ts}-${target.to}`
     try { return await this.deps.deliver({ ...target, conversation: conversationId(entry) }, message, idempotencyKey) } catch (err) {
@@ -1606,7 +1606,7 @@ export class SlackWatcher {
   }
 
   /** One message's verdict from the guard. A guard that throws fails open, like one that crashes. */
-  private async judge(g: Guard, entry: SlackWatchEntry, place: string, to: string, i: Item): Promise<GuardVerdict> {
+  private async judge(g: Guard, entry: ConversationEntry, place: string, to: string, i: Item): Promise<GuardVerdict> {
     const input: GuardInput = {
       person: i.person ?? null, roles: i.roles ?? ['anyone'], place, conversation: conversationId(entry), target: spelledBare(to),
       ...(g.includeText && { text: i.text }),
@@ -1617,7 +1617,7 @@ export class SlackWatcher {
   }
 
   /** These ts are done with: delivered, or dropped for good. Replays of them deliver nothing. */
-  private settle(key: string, entry: SlackWatchEntry, ts: string[]): void {
+  private settle(key: string, entry: ConversationEntry, ts: string[]): void {
     if (this.entries.get(key) !== entry) return
     for (const t of ts) entry.delivered = insertTs(entry.delivered, t, Infinity)
     entry.delivered = keepDelivered(entry.delivered!, entry.owed?.filter(t => !ts.includes(t)), entry.threadTs)
@@ -1629,7 +1629,7 @@ export class SlackWatcher {
   }
 
   /** `fallback`: the binding, for a guard redirect whose specialist has no session record. A broken guard never holds a message back. */
-  private async deliverGroup(key: string, entry: SlackWatchEntry, target: RouteTarget, items: Item[], cfg: SlackWatchConfig, fallback?: string): Promise<void> {
+  private async deliverGroup(key: string, entry: ConversationEntry, target: RouteTarget, items: Item[], cfg: ConversationConfig, fallback?: string): Promise<void> {
     for (const batch of packItems(items)) {
       const first = batch[0].ts
       const last = batch[batch.length - 1].ts
@@ -1669,7 +1669,7 @@ export class SlackWatcher {
   }
 
   /** The sender sees the message was picked up: the place's `ack` reaction on each delivered message. Best effort, never retried. */
-  private ack(entry: SlackWatchEntry, batch: Item[], cfg: SlackWatchConfig): void {
+  private ack(entry: ConversationEntry, batch: Item[], cfg: ConversationConfig): void {
     const name = placeOptions(cfg, entry.channel)?.ack
     const slack = this.actions.get(appOfEntry(entry))   // the reaction goes through the app that heard the message
     if (!name || !slack) return
@@ -1698,11 +1698,11 @@ export class SlackWatcher {
  * One app's side of the watcher: the calls its listener and its catch-up pass make, with the app filled in. What it lists,
  * holds, reads from and hands events to is that app's alone; the table, the guard and the alerts stay the watcher's.
  */
-export class AppWatch {
-  constructor(private readonly w: SlackWatcher, readonly app: string) {}
+export class AppConversations {
+  constructor(private readonly w: ConversationTable, readonly app: string) {}
   handle(ev: SlackMessageEvent): HandleOutcome { return this.w.handle({ ...ev, app: this.app }) }
   handleReaction(ev: SlackReactionEvent): ReactionOutcome { return this.w.handleReaction({ ...ev, app: this.app }) }
-  list(): SlackWatchEntry[] { return this.w.list().filter(e => appOfEntry(e) === this.app) }
+  list(): ConversationEntry[] { return this.w.list().filter(e => appOfEntry(e) === this.app) }
   channelCursor(channel: string): string | undefined { return this.w.channelCursor(channel, this.app) }
   owedHints(): { channel: string; threadTs: string; fromTs: string }[] { return this.w.owedHints(this.app) }
   dmChannels(): string[] { return this.w.dmChannels(this.app) }
@@ -1715,10 +1715,10 @@ export class AppWatch {
   threadGone(channel: string, threadTs: string, why: string): void { this.w.threadGone(channel, threadTs, why, this.app) }
   operatorTokenRefused(why: string): void { this.w.operatorTokenRefused(why, this.app) }
   setBotId(id: string | undefined): void { this.w.setBotId(id, this.app) }
-  setNameResolver(fn: SlackWatchDeps['resolveName']): void { this.w.setNameResolver(fn, this.app) }
+  setNameResolver(fn: ConversationDeps['resolveName']): void { this.w.setNameResolver(fn, this.app) }
   setSlackActions(actions: SlackActions | undefined): void { this.w.setSlackActions(actions, this.app) }
   reactionsMayWork(channel: string): void { this.w.reactionsMayWork(channel) }
 }
 
 /** What a catch-up pass needs of the watcher: the whole watcher (the app `default`), or one app's side of it. */
-export type CatchUpWatch = Pick<SlackWatcher, 'handle' | 'list' | 'channelCursor' | 'owedHints' | 'dmChannels' | 'taggedChannels' | 'beginCatchUp' | 'endCatchUp' | 'markRead' | 'catchUpGap' | 'setVia' | 'threadGone' | 'operatorTokenRefused'>
+export type CatchUpConversations = Pick<ConversationTable, 'handle' | 'list' | 'channelCursor' | 'owedHints' | 'dmChannels' | 'taggedChannels' | 'beginCatchUp' | 'endCatchUp' | 'markRead' | 'catchUpGap' | 'setVia' | 'threadGone' | 'operatorTokenRefused'>

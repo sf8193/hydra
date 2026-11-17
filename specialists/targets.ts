@@ -20,7 +20,7 @@ import { currentHydraConfig } from '../daemon/hydra-config.js'
 import { ensureSpecialist, SpecialistError } from './specialist-deliver.js'
 import { currentRecoveryDeps, reviveThreadForDelivery } from '../daemon/recovery.js'
 import type { DeliveryResult } from '../daemon/engines/engine-adapter.js'
-import { readTarget, spelledTo, TARGET_FORMS, type TargetRef } from '../shared/target-kind.js'
+import { readTarget, spelledTo, TARGET_FORMS, type TargetValue } from '../shared/target-kind.js'
 import { STUCK_PREFIX } from '../shared/exit-codes.js'
 
 export type Recipe = { channel: string; kickoff?: string; kickoffFile?: string; model?: string; idle?: string }
@@ -53,7 +53,7 @@ export const targetDeps = { stuckState: confirmedStuckState }
  * `thread:<id>`. A caller inside hydra holds the stored form (`refOfBare`: a specialist's name, a thread id), which this also takes.
  * Anything else is unknown, with the reason (exit 8).
  */
-export function resolveTo(to: string): TargetRef | { kind: 'unknown'; reason: string; malformed: boolean } {
+export function resolveTo(to: string): TargetValue | { kind: 'unknown'; reason: string; malformed: boolean } {
   const r = readTarget(spelledTo(to), name => !!getSpecialist(name))
   return r.ok ? r.ref : { kind: 'unknown', reason: r.error ?? `no such specialist: ${r.undeclared}`, malformed: r.error !== undefined }
 }
@@ -108,7 +108,7 @@ export async function deliverToSession(info: SessionInfo, text: string, opts: { 
   if (occ === 'dead' || occ === 'none') return { ok: false, exit: 3, reason: `${info.tmuxName} is gone — revive it (deliver --revive, or resume in its thread)` }
   if (occ === 'orphaned' && !opts.queue) return { ok: false, exit: 4, reason: `${info.tmuxName} is orphaned (running, bridge not connected) — resume it in its thread, or kill it to restart` }
   if (occ === 'starting' && !opts.queue) return { ok: false, exit: 5, reason: `${info.tmuxName} is still booting — retry in ~${Math.max(1, Math.ceil((ORPHAN_GRACE_MS - bridgeWaitMs(info.createdAt)) / 1000))}s` }
-  if (occ === 'reachable') {
+  if (occ === 'connected') {
     const stuck = targetDeps.stuckState(info.tmuxName)
     if (stuck) return { ok: false, exit: 5, reason: `${STUCK_PREFIX} ${stuck.kind}` }
   }
