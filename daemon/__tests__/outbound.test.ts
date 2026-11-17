@@ -23,7 +23,7 @@ const sends: { channel: string; text: string; files?: string[] }[] = []
 const shapes: { text: string; room: number }[] = []
 const events: string[] = []
 let spies: { mockRestore(): void }[] = []
-const saved = { shape: (gateway as any).shapeOutbound, edit: gateway.edit, sendOrQueue: transport.sendOrQueue, stderr: process.stderr.write }
+const saved = { shape: (gateway as any).shapeOutbound, edit: gateway.edit, deliver: transport.deliver, stderr: process.stderr.write }
 
 function session(id: string, type: string) {
   registry.set(id, {
@@ -43,7 +43,7 @@ beforeEach(() => {
     events.push('files removed')
     return r
   }
-  ;(transport as any).sendOrQueue = () => {}
+  ;(transport as any).deliver = async () => ({ status: 'accepted' })
   spies = [
     spyOn(gateway, 'send').mockImplementation((async (channel: string, text: string, opts?: { files?: string[] }) => {
       sends.push({ channel, text, ...(opts?.files ? { files: opts.files } : {}) }); events.push('sent'); return { id: 'm1', channelId: channel }
@@ -59,7 +59,7 @@ beforeEach(() => {
 afterEach(() => {
   ;(gateway as any).shapeOutbound = saved.shape
   ;(gateway as any).edit = saved.edit
-  ;(transport as any).sendOrQueue = saved.sendOrQueue
+  ;(transport as any).deliver = saved.deliver
   process.stderr.write = saved.stderr
   for (const s of spies) s.mockRestore()
   for (const id of ['ob-owner', 'ob-restricted', 'ob-target']) registry.delete(id)

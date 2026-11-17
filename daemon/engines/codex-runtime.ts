@@ -20,7 +20,6 @@ import { safeSend } from '../util.js'
 import { noteCodexMessage, noteCodexTurnState } from './codex-observation.js'
 import { codexPiggyback } from './codex-piggyback.js'
 import { refreshSessionVisual } from '../anchor-state.js'
-import { on } from '../event-bus.js'
 import type { EngineAdapter } from './engine-adapter.js'
 import { markYourTurn } from '../home-status.js'
 
@@ -120,14 +119,6 @@ codexEngine.on('turnDeliveryUnknown', (sessionId: string, _text: string, err: un
   if (!info) return
   void safeSend(info.threadId, `⚠️ Codex input delivery is uncertain; retaining it while checking thread history. ${String(err)}`)
 })
-
-on('delivery:failed', ({ sessionId, status, reason, messageId }) => {
-  const info = registry.get(sessionId)
-  if (!info) return
-  const source = messageId ? ` (message ${messageId})` : ''
-  const outcome = status === 'unknown' ? 'delivery is uncertain; no automatic replay' : 'delivery was rejected'
-  void safeSend(info.threadId, `⚠️ Codex ${outcome}${source}: ${reason}`)
-}, 'codex-bootstrap:delivery-failed')
 
 codexEngine.on('usageWarning', (sessionId: string, usedPercent: number) => {
   const info = registry.get(sessionId)

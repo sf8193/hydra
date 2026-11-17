@@ -794,13 +794,15 @@ describe('spawn_session fork_from and read_only', () => {
     const delivered: string[] = []
     let savedSend: typeof gateway.send
     let savedSendOrQueue: typeof transport.sendOrQueue
+    let savedDeliver: typeof transport.deliver
     beforeEach(() => {
       sent.length = 0; delivered.length = 0
-      savedSend = gateway.send; savedSendOrQueue = transport.sendOrQueue
+      savedSend = gateway.send; savedSendOrQueue = transport.sendOrQueue; savedDeliver = transport.deliver
       ;(gateway as any).send = async (channel: string, text: string) => { sent.push({ channel, text }); return { id: 'm', channelId: channel } }
       ;(transport as any).sendOrQueue = (sessionId: string) => { delivered.push(sessionId) }
+      ;(transport as any).deliver = async (sessionId: string) => { delivered.push(sessionId); return { status: 'accepted' } }
     })
-    afterEach(() => { (gateway as any).send = savedSend; (transport as any).sendOrQueue = savedSendOrQueue })
+    afterEach(() => { (gateway as any).send = savedSend; (transport as any).sendOrQueue = savedSendOrQueue; (transport as any).deliver = savedDeliver })
 
     const deathNotices = () => sent.filter(m => / (died|killed)[ ,]/.test(m.text)).map(m => m.channel)
     const errText = (r: { content: { text: string }[] }) => r.content[0].text

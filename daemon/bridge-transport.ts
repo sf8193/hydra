@@ -5,6 +5,7 @@ import { STATE_DIR } from './config.js'
 import { registry, type SessionInfo } from './sessions.js'
 import { atomicWriteFileSync } from './util.js'
 import { emit } from './event-bus.js'
+import './delivery-notice.js'
 import { withoutIntents, type DeliveryResult, type Notification } from './engines/engine-adapter.js'
 
 // ---------------------------------------------------------------------------
@@ -128,36 +129,45 @@ export class BridgeTransport {
   }
 
   sendOrQueue(sessionId: string, msg: Record<string, unknown>): void {
+    void this.deliver(sessionId, msg)
+  }
+
+  /**
+   * sendOrQueue for a caller that must tell someone what became of the message: the adapter's outcome, not just the event.
+   * A refusal or an uncertain delivery is still reported to the session's chat (delivery:failed), as for every sender.
+   * Nothing awaits before the write, so it has happened by the time this returns a promise.
+   */
+  deliver(sessionId: string, msg: Record<string, unknown>): Promise<DeliveryResult> {
+    const accepted = (via: string): Promise<DeliveryResult> => Promise.resolve({ status: 'accepted', via })
     // Codex's MCP sidecar owns tool discovery. Capability changes must reach it
     // even though ordinary user messages route through the app-server.
     if (msg.type === 'tools_update') {
       const controls = this.controlBridges.get(sessionId)
       if (controls?.size) {
         for (const control of controls) this.sendToBridge(control, msg)
-        return
+        return accepted('bridge-socket')
       }
       const bridge = this.bridges.get(sessionId)
-      if (bridge) this.sendToBridge(bridge, msg)
-      else this.enqueue(sessionId, msg)
-      return
+      if (bridge) { this.sendToBridge(bridge, msg); return accepted('bridge-socket') }
+      this.enqueue(sessionId, msg)
+      return accepted('queued')
     }
     // Every registered session delivers through its adapter, which owns the
     // mechanics (Claude: writeOrQueue on its own transport; Codex: steer or
     // queue a turn). 'main' and unregistered ids have no adapter.
     const info = registry.get(sessionId)
-    if (!info?.adapter) { this.writeOrQueue(sessionId, withoutIntents(msg)); return }
+    if (!info?.adapter) { return accepted(this.writeOrQueue(sessionId, withoutIntents(msg)) === 'written' ? 'bridge-socket' : 'queued') }
     const text = typeof msg.content === 'string' && msg.content ? msg.content : undefined
     const meta = msg.meta as Record<string, string> | undefined
-    const complete = (result: DeliveryResult) => {
+    const complete = (result: DeliveryResult): DeliveryResult => {
       // Non-text content is no user input; its refusal stays silent (PINNED E1b).
       if (result.status !== 'accepted' && text) reportDeliveryFailure(sessionId, result, meta?.message_id)
+      return result
     }
     try {
-      void info.adapter.deliver(info, msg as Notification).then(complete, err => {
-        complete({ status: 'unknown', reason: String(err) })
-      })
+      return info.adapter.deliver(info, msg as Notification).then(complete, err => complete({ status: 'unknown', reason: String(err) }))
     } catch (err) {
-      complete({ status: 'unknown', reason: String(err) })
+      return Promise.resolve(complete({ status: 'unknown', reason: String(err) }))
     }
   }
 

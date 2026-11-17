@@ -48,7 +48,7 @@ beforeEach(() => {
   sess('rh-helper', { initiator: 'rh-critic' })
   sess('rh-stranger')
   sends = []; gwSends = []
-  spyOn(transport, 'sendOrQueue').mockImplementation(((sid: string, msg: any) => { sends.push({ sid, msg }) }) as any)
+  spyOn(transport, 'deliver').mockImplementation((async (sid: string, msg: any) => { sends.push({ sid, msg }); return { status: 'accepted' } }) as any)
   spyOn(gateway, 'send').mockImplementation((async (...a: any[]) => { gwSends.push(a); return { id: 'm1' } }) as any)
 })
 
@@ -58,7 +58,7 @@ afterEach(() => {
   runs.clear(); threadToRun.clear(); sessionToRun.clear()
   __test!.resetLifecycle()
   __test!.privateProtocolChildren.clear()
-  ;(transport.sendOrQueue as any).mockRestore?.()
+  ;(transport.deliver as any).mockRestore?.()
   ;(gateway.send as any).mockRestore?.()
 })
 

@@ -11,7 +11,7 @@ import { nameHeldByAnother, occupancy, occupied } from './session-reachability.j
 import { withThreadLock } from '../specialists/specialists.js'
 import { unreadableWorkdir } from '../config/write-confinement.js'
 import { confinementRefusal, endVerifying, startVerifying, verifyBackoff, verifyRefusal, confined, describePolicy, macosRefusal, missingTokenRefusal, PolicyRefusal, remedy, resolvePolicy, type LaunchPolicy } from './restricted.js'
-import { threadNotices } from './notice-limit.js'
+import { refusalNoticeKey, threadNotices } from './notice-limit.js'
 import { hydraLoadEnv, currentHydraConfig } from './hydra-config.js'
 import { workdirRestrictionIssues } from '../config/restricted-workdir.js'
 import { removeLaunchFiles } from './launch-files.js'
@@ -719,7 +719,7 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
 
 /** Tells a thread why a start was refused, at most once a minute per cause (threadNotices): a revive tries three tiers, each refused for the same cause. */
 async function tellThread(threadId: string, why: string): Promise<void> {
-  if (!threadNotices.allow(`${threadId}\n${why}`)) return
+  if (!threadNotices.allow(refusalNoticeKey(threadId, why))) return
   await safeSend(threadId, `⚠️ ${why}`).catch(() => {})
 }
 

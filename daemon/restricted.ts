@@ -21,7 +21,7 @@ import { readDenyRoots } from '../config/write-confinement.js'
 import { macosGateIssue, unprovenMacos } from '../config/server-sandbox.js'
 import { hydraLoadEnv, onHydraConfigLoad } from './hydra-config.js'
 import type { SessionInfo } from './sessions.js'
-import { threadNotices } from './notice-limit.js'
+import { refusalNoticeKey, threadNotices } from './notice-limit.js'
 import { setFlushGate } from './bridge-transport.js'
 import { safeSend } from './util.js'
 
@@ -350,7 +350,7 @@ export function deliveryRefusal(info: SessionInfo): string | undefined {
       ? `specialist ${info.policy?.specialist ?? '?'}: its session ${name} is still being checked against its policy and takes no message until that passes; send it again in a moment.`
       : `specialist ${info.policy?.specialist ?? '?'}: its running session ${name} has not been checked against its policy (hydra restarted while it was being checked, or it started before hydra checked each start), so nothing is delivered to it. ${remedy(name)}`
     process.stderr.write(`daemon: delivery to ${name} refused: its start is not verified\n`)
-    if (threadNotices.allow(`${info.threadId}\n${reason}`)) void safeSend(info.threadId, `⚠️ ${reason.replace(/^specialist [^:]+: /, '')}`).catch(() => {})
+    if (threadNotices.allow(refusalNoticeKey(info.threadId, reason))) void safeSend(info.threadId, `⚠️ ${reason.replace(/^specialist [^:]+: /, '')}`).catch(() => {})
     return reason
   }
   let found: ReturnType<typeof sessionDrift>
@@ -361,7 +361,7 @@ export function deliveryRefusal(info: SessionInfo): string | undefined {
   const changed = found.drift.join('; ')
   const reason = `specialist ${found.specialist}: its running session ${info.tmuxName} was born with ${was}, and hydra.toml now says ${now} (changed: ${changed}); nothing was delivered. ${remedy(info.tmuxName)}`
   process.stderr.write(`daemon: delivery to ${info.tmuxName} refused: specialist ${found.specialist} was born with ${was}; hydra.toml now says ${now} (changed: ${changed})\n`)
-  if (threadNotices.allow(`${info.threadId}\n${reason}`)) void safeSend(info.threadId, `⚠️ ${reason.replace(/^specialist [^:]+: /, '')}`).catch(() => {})
+  if (threadNotices.allow(refusalNoticeKey(info.threadId, reason))) void safeSend(info.threadId, `⚠️ ${reason.replace(/^specialist [^:]+: /, '')}`).catch(() => {})
   return reason
 }
 

@@ -227,7 +227,7 @@ describe('T0.7 engine events', () => {
     const code = [
       "const { gateway } = await import('./daemon/config.ts')",
       "const { registry } = await import('./daemon/sessions.ts')",
-      "await import('./daemon/engines/codex-runtime.ts')",
+      "await import('./daemon/delivery-notice.ts')",
       "const { emit } = await import('./daemon/event-bus.ts')",
       "const sent = []; gateway.send = async (c, text) => { sent.push([c, text]); return { id: 'x', channelId: c } }",
       "registry.set('t07-fail', { sessionId: 't07-fail', threadId: 'th-t07-fail', tmuxName: 't07-fail', engine: 'codex' })",

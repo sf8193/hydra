@@ -6,7 +6,7 @@ export const NOTICE_REPEAT_MS = 60_000
 const MAX_CAUSES = 500
 
 export class NoticeLimiter {
-  private readonly told = new Map<string, number>()
+  private readonly said = new Map<string, number>()
   private readonly windowMs: number
   private readonly max: number
   private readonly now: () => number
@@ -17,28 +17,37 @@ export class NoticeLimiter {
     this.now = opts.now ?? Date.now
   }
 
-  get size(): number { return this.told.size }
+  get size(): number { return this.said.size }
+
+  /** Whether this cause was said inside the window, without saying it now. */
+  told(cause: string): boolean {
+    const last = this.said.get(cause)
+    return last !== undefined && this.now() - last < this.windowMs
+  }
 
   /** Whether this cause may be said now. Saying it is recorded: the next `allow` of the same cause inside the window is false. */
   allow(cause: string): boolean {
     const now = this.now()
-    const last = this.told.get(cause)
+    const last = this.said.get(cause)
     if (last !== undefined && now - last < this.windowMs) return false
-    this.told.delete(cause)   // re-inserted last: insertion order is age order
-    this.told.set(cause, now)
+    this.said.delete(cause)   // re-inserted last: insertion order is age order
+    this.said.set(cause, now)
     this.trim(now)
     return true
   }
 
   private trim(now: number): void {
-    if (this.told.size <= this.max) return
-    for (const [k, at] of this.told) if (now - at >= this.windowMs) this.told.delete(k)
+    if (this.said.size <= this.max) return
+    for (const [k, at] of this.said) if (now - at >= this.windowMs) this.said.delete(k)
     // Still over: the oldest go first (a Map iterates in insertion order).
-    for (const k of this.told.keys()) { if (this.told.size <= this.max) break; this.told.delete(k) }
+    for (const k of this.said.keys()) { if (this.said.size <= this.max) break; this.said.delete(k) }
   }
 
-  clear(): void { this.told.clear() }
+  clear(): void { this.said.clear() }
 }
 
 /** The thread notices of daemon/session-lifecycle.ts and specialists/specialist-deliver.ts share this one. */
 export const threadNotices = new NoticeLimiter()
+
+/** The cause a refusal notice is limited by: one thread, one reason. Every place that tells a thread about a refused delivery builds it here. */
+export const refusalNoticeKey = (threadId: string, reason: string): string => `${threadId}\n${reason}`
