@@ -9,9 +9,7 @@ import { join } from 'path'
 import { launchdCalendar } from './jobs-launchd.js'
 import { jobsToml, readDaemonState, type DaemonState, type Job } from './jobs.js'
 import { formatIssues, loadHydraConfig, systemEnv } from '../config/load.js'
-import type { ChatPlatform, HydraConfig } from '../config/types.js'
-
-const DEFAULT_ALERT_AFTER_MS = 24 * 60 * 60_000
+import { DEFAULT_ALERT_AFTER_MS, type ChatPlatform, type HydraConfig } from '../config/types.js'
 
 /** Where `hydra migrate` leaves jobs.toml once its jobs are [schedules]. */
 export const migratedJobsToml = (stateDir: string) => `${jobsToml(stateDir)}.migrated`

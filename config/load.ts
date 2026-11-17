@@ -21,7 +21,7 @@ import { readValue, spelledApp, spelledPerson, spelledRole, whoSpelled } from '.
 import {
   BUILTIN_ROLES, DEFAULT_SLACK_APP, SLACK_APP_ID_RE, homePlaceOf, isChannelName, isDmPlace, isEvery, namesDmWithOthers, optionsOf, parsePlace, placeKey, placeShadows, placesAnsweredBy, samePlace, type Address, type ConfigIssue, type Connectors, type Gateways, type Guard, type HydraConfig, type LoadEnv, type LoadResult, type MainOptions,
   type McpServer, type WorkdirScan, type Person, type Place, type PlaceOptions, type Platform, type Rule, type Schedule, type SlackApp, type Specialist, type Vitals,
-  NEEDS, RUNNERS, SESSIONS_MODES, WORKDIR_TOOLS, type Need,
+  MAX_ALERT_AFTER_MS, NEEDS, RUNNERS, SESSIONS_MODES, WORKDIR_TOOLS, type Need,
 } from './types.js'
 
 export const VITALS_DEFAULTS: Vitals = Object.freeze({
@@ -52,7 +52,6 @@ const TOOL_WARNINGS: Readonly<Record<string, string>> = {
 const MCP_TOOL_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/
 const MAX_DAY_MS = 86_400_000
 const GUARD_TIMEOUT_MAX_MS = 30_000 // deliveries for a conversation wait on the guard
-const MAX_ALERT_AFTER_MS = 30 * MAX_DAY_MS
 const BUILTIN: readonly string[] = BUILTIN_ROLES
 const MAIN_TARGET = 'main'
 

@@ -9,7 +9,7 @@ import { isAbsolute, join, normalize } from 'path'
 import { latestSlot, nextSlot, parseCron, type Slot } from './cron-local.js'
 import { parseDuration, parseIdleTtl } from './constants.js'
 import { launchdCalendar } from './jobs-launchd.js'
-import { NEEDS, RUNNERS, type Need, type Runner } from '../config/types.js'
+import { DEFAULT_ALERT_AFTER_MS, MAX_ALERT_AFTER_MS, NEEDS, RUNNERS, type Need, type Runner } from '../config/types.js'
 import type { LoopClock } from './loop-watch.js'
 
 // ---------------------------------------------------------------------------
@@ -58,9 +58,6 @@ export function jobFromWire(o: Job & { mode?: string; model?: string; idleTtl?: 
 
 export const isSpawn = (t: JobTarget | undefined): t is { spawn: Recipe } => !!t && 'spawn' in t
 export const targetLabel = (t: JobTarget | undefined) => !t ? 'none' : 'spawn' in t ? 'spawn' : `to ${t.to}`
-
-const DEFAULT_ALERT_AFTER_MS = 24 * 60 * 60_000
-const MAX_ALERT_AFTER_MS = 30 * 24 * 60 * 60_000
 
 /** alert_after: a duration up to 30d. */
 export const parseAlertAfter = (s: string): number | null => parseDuration(s, MAX_ALERT_AFTER_MS)
