@@ -4,10 +4,16 @@
 export const SPECIALIST_NAME_RE = /^[a-z0-9][a-z0-9-]*$/
 
 /**
- * A session's own thread, as an address: an all-digit thread id. A specialist's name needs a letter (below), so the two
- * never collide. targets.ts delivers to whoever lives in that thread, so a handoff successor keeps what was bound to it.
+ * A thread id is whatever the running gateway names a thread with: digits on Discord, `<channel>:<ts>` on the Slack gateway
+ * (`D0BE3RB4Y00:1792616731.235729`; the channel starts with C, D or G). The one definition of that shape: every check that asks
+ * "is this a thread id?" calls it. A specialist's name is lowercase, so neither form is ever a name. targets.ts delivers to whoever
+ * lives in that thread, so a handoff successor keeps what was bound to it.
  */
-export const isSessionThread = (id: string): boolean => /^\d+$/.test(id)
+const THREAD_ID_RE = /^(\d+|[CDG][A-Z0-9]+:\d{1,12}\.\d{1,6})$/
+export const isSessionThread = (id: string): boolean => THREAD_ID_RE.test(id)
+
+/** What a thread id looks like, for error texts. */
+export const THREAD_ID_FORMS = 'digits (Discord) or <channel>:<ts> (Slack gateway)'
 
 /** Why a name can't be a specialist's, or undefined. It needs a letter: an all-digit `to` is a thread id. */
 export function invalidSpecialistName(name: string, sessionNames: readonly string[]): string | undefined {

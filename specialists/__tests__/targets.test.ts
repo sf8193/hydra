@@ -93,7 +93,7 @@ describe('parseTarget', () => {
   })
 })
 
-describe('deliverToTarget: `to` resolves main, then a specialist, then an all-digit thread id, else exit 8', () => {
+describe('deliverToTarget: `to` resolves main, then a specialist, then a thread id, else exit 8', () => {
   test('I: a name that is none of them is exit 8, never a specialist made from a typo', async () => {
     expect(await deliverToTarget({ to: 'bookkeper' }, 'm', opts)).toEqual({ ok: false, exit: 8, reason: 'no such specialist: bookkeper' })
     expect(getSpecialist('bookkeper')).toBeUndefined()
@@ -118,6 +118,26 @@ describe('deliverToTarget: `to` resolves main, then a specialist, then an all-di
   test('main is reached by its bridge and is never revived', async () => {
     expect(await deliverToTarget({ to: 'main', revive: true }, 'm', opts)).toMatchObject({ ok: false, exit: 4 })
     expect(spawns).toHaveLength(0)
+  })
+})
+
+
+describe('a Slack gateway thread id (`<channel>:<ts>`) is a thread, as a Discord id is', () => {
+  const slackId = 'D0BE3RB4Y00:1792616731.235729'
+
+  test('a bare Slack thread id delivers to the session living there, never exit 8', async () => {
+    const live = occupy(slackId)
+    expect(await deliverToTarget({ to: slackId }, 'm', opts)).toMatchObject({ ok: true, sessionId: live.sessionId, revived: false })
+    expect(await deliverToTarget({ to: `thread:${slackId}` }, 'm', opts)).toMatchObject({ ok: true, sessionId: live.sessionId })
+    expect(await deliverToTarget({ to: `specialist:${slackId}` }, 'm', opts)).toMatchObject({ ok: false, exit: 8 })
+  })
+
+  test('a PR watch\'s target for a session in that thread delivers (the watch is not dropped as "not a kind of target")', async () => {
+    const { targetOf } = await import('../../connectors/github/pr-watch.js')
+    const live = occupy(slackId)
+    const t = targetOf(live.sessionId, slackId)
+    expect(t).toEqual({ to: slackId, revive: true })
+    expect(await deliverToTarget(t, 'review', opts)).toMatchObject({ ok: true, sessionId: live.sessionId })
   })
 })
 
@@ -458,8 +478,8 @@ describe('a target says its kind: main, specialist:<name>, thread:<id>', () => {
     const bad = async (to: string) => (await deliverToTarget({ to }, 'm', opts)) as { ok: false; exit: number; reason: string }
     expect(await bad('specialist:main')).toMatchObject({ exit: 8, reason: expect.stringContaining('main is the operator\'s own session; write "main"') })
     expect(await bad('specialist:123')).toMatchObject({ exit: 8, reason: expect.stringContaining('write "thread:123" for the thread') })
-    expect(await bad('thread:abc')).toMatchObject({ exit: 8, reason: expect.stringContaining('a thread id is all digits') })
-    expect(await bad('thread:')).toMatchObject({ exit: 8, reason: expect.stringContaining('a thread id is all digits') })
+    expect(await bad('thread:abc')).toMatchObject({ exit: 8, reason: expect.stringContaining('a thread id is digits (Discord)') })
+    expect(await bad('thread:')).toMatchObject({ exit: 8, reason: expect.stringContaining('a thread id is digits (Discord)') })
     expect(await bad('session:x')).toMatchObject({ exit: 8, reason: expect.stringContaining('a target is main, specialist:<name> or thread:<id>') })
     expect(await bad('specialist:ghost')).toEqual({ ok: false, exit: 8, reason: 'no such specialist: ghost' })
     expect(await bad(`thread:${name}`)).toMatchObject({ exit: 8 })
