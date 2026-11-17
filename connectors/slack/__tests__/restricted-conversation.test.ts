@@ -34,7 +34,7 @@ target = "specialist:${OPS}"
 `
 const KEPT: [string, string][] = [['reply', 'chat_id'], ['react', 'chat_id'], ['edit_message', 'chat_id'], ['delete_message', 'chat_id'], ['download_attachment', 'chat_id'], ['fetch_messages', 'channel']]
 const ids: string[] = []
-const session = (id: string, threadId: string) => { ids.push(id); registry.set(id, { sessionId: id, tmuxName: id, threadId, sessionType: 'scoped', engine: 'claude', createdAt: Date.now() } as any) }
+const session = (id: string, threadId: string) => { ids.push(id); registry.set(id, { sessionId: id, tmuxName: id, threadId, sessionType: 'thread_owner', engine: 'claude', createdAt: Date.now() } as any) }
 
 beforeEach(() => {
   _setHydraConfigForTesting(hydra(TOML))

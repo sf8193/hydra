@@ -1,5 +1,5 @@
 // Golden: which tools every non-restricted session may call, over every tool the daemon defines. Written against the
-// code before the `scoped` session type and kept green through it: adding a type must not move any other type.
+// code before the restricted tool set and kept green through it: adding a type must not move any other type.
 import { expect, test } from 'bun:test'
 import { registry } from '../sessions.js'
 import { getToolsForSession, isToolAllowed } from '../tool-surface.js'

@@ -22,7 +22,7 @@ const configure = (over: Partial<Specialist> = {}): void => _setHydraConfigForTe
   people: { op: { id: 'op', addresses: ['discord:100000000000000001'], roles: [], name: 'op' } },
   specialists: { ops: spec(over) },
 } as HydraConfig)
-const operatorPolicy: LaunchPolicy = { specialist: 'ops', access: 'operator', id: 'operator' }
+const operatorPolicy: LaunchPolicy = { specialist: 'ops', restricted: false, id: 'operator' }
 const flip = () => configure({ restricted: true, tools: ['Read'], mcpServerNames: [] })
 
 const ids: string[] = []

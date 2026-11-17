@@ -19,10 +19,10 @@ process.stderr.write = (() => true) as any
 
 const servers = [{ name: 'datadog', command: '/usr/local/bin/datadog-mcp', tokenEnv: ['DD_API_KEY'], tools: ['search_logs', 'get_monitor'] }]
 const policy: ConfinedPolicy = {
-  specialist: 'ops', access: 'workdir', workdir: '/work/ops', tools: ['Read', 'Grep', 'Glob'], servers,
+  specialist: 'ops', restricted: true, workdir: '/work/ops', tools: ['Read', 'Grep', 'Glob'], servers,
   id: policyIdFor('/work/ops', ['Read', 'Grep', 'Glob'], servers),
 }
-const base = { sessionId: '11111111-1111-4111-8111-111111111111', tmuxName: 'sc-t', cwd: '/work/ops', originalCwd: '/work/ops', model: 'claude-opus-4-1', prompt: "it's a prompt", sessionType: 'scoped' as const, policy }
+const base = { sessionId: '11111111-1111-4111-8111-111111111111', tmuxName: 'sc-t', cwd: '/work/ops', originalCwd: '/work/ops', model: 'claude-opus-4-1', prompt: "it's a prompt", sessionType: 'thread_owner' as const, policy }
 
 let fake: FakeTmux
 const saved: Record<string, string | undefined> = {}
@@ -95,7 +95,8 @@ describe('argv', () => {
     expect(cmd).toContain(`export ENABLE_CLAUDEAI_MCP_SERVERS='false'`.replace("'false'", 'false'))
     expect(cmd).toContain("export CLAUDE_CODE_PLUGIN_DIRS='<state>/mods/hydra' ")
     expect(cmd).not.toContain('personal')
-    expect(cmd).toContain("export HYDRA_SESSION_TYPE='scoped'")
+    expect(cmd).toContain("export HYDRA_SESSION_TYPE='scoped'")   // historical, beside the boolean
+    expect(cmd).toContain('export HYDRA_RESTRICTED=1')
     expect([...RESTRICTED_MODS]).toEqual(['hydra'])
   })
 
@@ -122,11 +123,11 @@ describe("in launch(), the folder, the flags and the env come from the launch po
   })
   test('with no policy, the caller\'s cwd rules, as it always has', async () => {
     expect(claudeCd(await launch({ policy: undefined, sessionType: 'thread_owner', cwd: '/elsewhere', originalCwd: '/elsewhere' }))).toBe('/elsewhere')
-    expect(claudeCd(await launch({ policy: { specialist: 'desk', access: 'operator', id: 'operator' }, sessionType: 'thread_owner', cwd: '/elsewhere', originalCwd: '/elsewhere' }))).toBe('/elsewhere')
+    expect(claudeCd(await launch({ policy: { specialist: 'desk', restricted: false, id: 'operator' }, sessionType: 'thread_owner', cwd: '/elsewhere', originalCwd: '/elsewhere' }))).toBe('/elsewhere')
   })
   test('an operator policy launches byte for byte as no policy does', async () => {
     const plain = await launch({ policy: undefined, sessionType: 'thread_owner' })
-    expect(await launch({ policy: { specialist: 'desk', access: 'operator', id: 'operator' }, sessionType: 'thread_owner' })).toBe(plain)
+    expect(await launch({ policy: { specialist: 'desk', restricted: false, id: 'operator' }, sessionType: 'thread_owner' })).toBe(plain)
   })
   test.each([
     ['no workdir', { workdir: undefined }], ['a relative workdir', { workdir: 'work/ops' }], ['no tool list', { tools: undefined }],
@@ -139,8 +140,8 @@ describe("in launch(), the folder, the flags and the env come from the launch po
 })
 
 describe('generated settings and mcp-config', () => {
-  const files = () => readdirSync(join(STATE_DIR, 'scoped')).sort()
-  const read = (name: string) => JSON.parse(readFileSync(join(STATE_DIR, 'scoped', name), 'utf8'))
+  const files = () => readdirSync(join(STATE_DIR, 'restricted')).sort()
+  const read = (name: string) => JSON.parse(readFileSync(join(STATE_DIR, 'restricted', name), 'utf8'))
 
   test('the settings enable the bridge plugin and allow exactly the bridge and the listed server tools', async () => {
     await launch()
@@ -189,7 +190,7 @@ describe('generated settings and mcp-config', () => {
   })
 
   test('the temp path (from $TMPDIR) with a control character is a refusal too, not a plain Error', () => {
-    const input = configInput({ policy, held: { DD_API_KEY: 'k' }, tmp: () => '/var/folders/a\nb/hydra-scoped/x' })
+    const input = configInput({ policy, held: { DD_API_KEY: 'k' }, tmp: () => '/var/folders/a\nb/hydra-restricted/x' })
     expect(() => restrictedConfig(input)).toThrow(PolicyRefusal)
     expect(() => restrictedConfig(input)).toThrow(/control character.*after you fix it/s)
   })
@@ -220,11 +221,11 @@ describe('generated settings and mcp-config', () => {
     } finally { _setHydraConfigForTesting(undefined) }
   })
 
-  test('a shared temp dir whose hydra-scoped parent is a symlink refuses the launch (a PolicyRefusal), and nothing starts', async () => {
+  test('a shared temp dir whose hydra-restricted parent is a symlink refuses the launch (a PolicyRefusal), and nothing starts', async () => {
     const saved = process.env.TMPDIR
     const tmpBase = mkdtempSync(join(tmpdir(), 'svlink-'))
     mkdirSync(join(tmpBase, 'elsewhere'))
-    symlinkSync(join(tmpBase, 'elsewhere'), join(tmpBase, 'hydra-scoped'))
+    symlinkSync(join(tmpBase, 'elsewhere'), join(tmpBase, 'hydra-restricted'))
     process.env.TMPDIR = tmpBase
     try {
       await expect(launch()).rejects.toThrow(PolicyRefusal)
@@ -245,8 +246,8 @@ describe('generated settings and mcp-config', () => {
   test('both files are 0600 in a 0700 folder, whatever the umask', async () => {
     const before = process.umask(0o000)
     try { await launch() } finally { process.umask(before) }
-    for (const f of files()) expect(statSync(join(STATE_DIR, 'scoped', f)).mode & 0o777).toBe(0o600)
-    expect(statSync(join(STATE_DIR, 'scoped')).mode & 0o777).toBe(0o700)
+    for (const f of files()) expect(statSync(join(STATE_DIR, 'restricted', f)).mode & 0o777).toBe(0o600)
+    expect(statSync(join(STATE_DIR, 'restricted')).mode & 0o777).toBe(0o700)
   })
 
   test("each launch writes its own and removes this session name's earlier ones", async () => {

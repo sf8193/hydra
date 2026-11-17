@@ -20,6 +20,7 @@ import { tmuxCreateSession, tmuxWindowActivity } from '../tmux.js'
 import { ompContextTokens, ompSessionDir, ompTurn, ompUsageTotals, type OmpUsageCursor } from './omp-session.js'
 import { contextWindowOf, ompProvider } from '../../shared/constants.js'
 import { withRaisedFdLimit } from '../../shared/spawn-env.js'
+import { isRestrictedPolicy } from '../policy-record.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 const EXTENSION = join(import.meta.dir, '..', '..', 'omp', 'hydra-bridge.ts')
@@ -36,7 +37,7 @@ export class OmpEngine implements EngineAdapter {
 
   async launch(input: LaunchInput): Promise<LaunchResult> {
     // This engine cannot confine a session (confinesAccess); it would run one as the operator.
-    if (input.policy?.access === 'workdir') throw new Error(`specialist ${input.policy.specialist} has restricted = true, which this engine cannot give: set engine = "claude", or set restricted = false`)
+    if (isRestrictedPolicy(input.policy)) throw new Error(`specialist ${input.policy.specialist} has restricted = true, which this engine cannot give: set engine = "claude", or set restricted = false`)
     if (input.policy?.canOnlyWriteTo) throw new Error(`specialist ${input.policy.specialist} has can_only_write_to = "workdir", which this engine cannot give: set engine = "claude", or remove can_only_write_to`)
     const { sessionId, tmuxName, model } = input
     if (!model) throw new Error('omp engine: launched without a model')   // doSpawnSession always gives omp one

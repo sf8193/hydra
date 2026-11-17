@@ -264,7 +264,7 @@ describe('a confined session is not typed into until its start is verified', () 
       people: { op: { id: 'op', addresses: ['discord:1'], roles: [], name: 'op' } },
       specialists: { ops: { id: 'ops', workdir: '/srv/ops', reachableBy: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: true, tools: ['Read'], mcpServers: [] } },
     } as any)
-    return session({ sessionType: 'scoped', policy: bornPolicy('ops'), threadId: 'th', ...over })
+    return session({ sessionType: 'thread_owner', policy: bornPolicy('ops'), threadId: 'th', ...over })
   }
   afterEach(() => _setHydraConfigForTesting(undefined))
   test('unverified: the message takes the channel path (the gate refuses it), and nothing is pasted', async () => {

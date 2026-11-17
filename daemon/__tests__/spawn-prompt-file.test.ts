@@ -97,9 +97,9 @@ describe('Claude: the prompt is absent from every command line, and arrives unch
 
   test('a restricted kickoff (preamble + prompt) arrives whole, and the command line holds none of it', async () => {
     const servers: ConfinedPolicy['servers'] = []
-    const policy: ConfinedPolicy = { specialist: 'ops', access: 'workdir', workdir: dir, tools: ['Read'], servers, id: policyIdFor(dir, ['Read'], servers) }
+    const policy: ConfinedPolicy = { specialist: 'ops', restricted: true, workdir: dir, tools: ['Read'], servers, id: policyIdFor(dir, ['Read'], servers) }
     _setLoadEnvForTesting(macLike())
-    await launchClaude({ prompt: `ops ${MARKER}`, policy, sessionType: 'scoped' })
+    await launchClaude({ prompt: `ops ${MARKER}`, policy, sessionType: 'thread_owner' })
     expect(tmuxCalls()).not.toContain(MARKER)
     const word = claudeArgv().find(a => a.includes(MARKER))!
     expect(word.endsWith(`ops ${MARKER}`)).toBe(true)
@@ -187,7 +187,7 @@ describe('the file: private, replaced by the next launch of the name, removed wi
   })
 
   test('a restricted launch the policy refuses leaves no file', async () => {
-    const policy: ConfinedPolicy = { specialist: 'ops', access: 'workdir', workdir: undefined as any, tools: ['Read'], servers: [], id: 'x' }
+    const policy: ConfinedPolicy = { specialist: 'ops', restricted: true, workdir: undefined as any, tools: ['Read'], servers: [], id: 'x' }
     await expect(launchClaude({ prompt: 'a', policy })).rejects.toThrow(PolicyRefusal)
     expect(files()).toEqual([])
   })

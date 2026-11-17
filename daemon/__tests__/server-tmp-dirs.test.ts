@@ -23,7 +23,7 @@ afterEach(() => {
 describe('the folders for a session\'s servers', () => {
   test('are made under the temp dir, one per server, each 0700, under a 0700 parent', () => {
     makeServerTmpDirs('ops', SID, ['datadog', 'other'])
-    expect(serverTmpRoot()).toBe(join(base, 'hydra-scoped'))
+    expect(serverTmpRoot()).toBe(join(base, 'hydra-restricted'))
     for (const server of ['datadog', 'other']) expect(statSync(serverTmpDir('ops', SID, server)).mode & 0o777).toBe(0o700)
     expect(statSync(serverTmpRoot()).mode & 0o777).toBe(0o700)
   })

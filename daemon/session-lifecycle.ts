@@ -26,7 +26,8 @@ import { parseSpawnTopic, resolveSpawnLabel } from './util.js'
 import { startPhaseBudget, clearPhaseBudget } from './phase-budget.js'
 import { clearIdleLimit, resumeIdleLimit } from './idle-limit.js'
 import { resolveLaunchSelection, spawnModel, withContextSuffix } from '../shared/constants.js'
-import type { SessionType, SessionLabel } from '../shared/constants.js'
+import type { SessionType, ToolBase, SessionLabel } from '../shared/constants.js'
+import { isRestricted, isRestrictedPolicy } from './policy-record.js'
 import { resolveEngine } from './engines/instances.js'
 import type { EngineAdapter, ProviderId } from './engines/engine-adapter.js'
 import { resumeHomeOwner } from './engines/codex-engine-adapter.js'
@@ -163,7 +164,7 @@ export function buildWorktreePromptAppend(isFork: boolean, worktreePath: string 
 
 /** Tool names recorded in a spawn's sessionMetadata. Codex sessions discover
  *  tools via their own MCP sidecar, not the daemon bridge. */
-export function spawnToolNames(adapter: EngineAdapter, spawnType: SessionType): string[] {
+export function spawnToolNames(adapter: EngineAdapter, spawnType: ToolBase): string[] {
   return adapter.channel === 'bridge' ? computeToolsForSession(spawnType, new Set()).map(t => t.name) : []
 }
 
@@ -425,6 +426,7 @@ function hookEnv(info: HookSubject): Record<string, string> {
     HYDRA_CLAUDE_SESSION_ID: info.claudeSessionId ?? '',
     HYDRA_CODEX_HOME_NAME: info.codexHomeName ?? '',
     HYDRA_SESSION_TYPE: info.sessionType ?? '',
+    HYDRA_RESTRICTED: isRestricted(info) ? '1' : '',
   }
 }
 
@@ -454,7 +456,7 @@ export type PreHandoffVerdict = { ok: true } | { ok: false; output: string }
 
 /** What the hooks read about a session. Main has no SessionInfo, so hooks take only this (it has no thread and no worktree). */
 export type HookSubject = Pick<SessionInfo, 'tmuxName' | 'sessionId'>
-  & Partial<Pick<SessionInfo, 'threadId' | 'engine' | 'claudeSessionId' | 'codexHomeName' | 'sessionType' | 'worktreePath'>>
+  & Partial<Pick<SessionInfo, 'threadId' | 'engine' | 'claudeSessionId' | 'codexHomeName' | 'sessionType' | 'policy' | 'worktreePath'>>
   & { sessionMetadata?: Pick<SessionMetadata, 'cwd'> }
 
 /** Where the session works: its Hydra worktree, else the cwd it was launched in. */
@@ -1014,7 +1016,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     }
     policy = continuing ? (r.stored ?? r.current) : r.current
     // The engine comes from the thread's history, and `handoff <model>` can change it: only an engine that confines can run a confined session.
-    if (policy?.access === 'workdir' && !resolveEngine(engine).confinesAccess) {
+    if (isRestrictedPolicy(policy) && !resolveEngine(engine).confinesAccess) {
       throw new PolicyRefusal(`specialist ${policy.specialist} has restricted = true, which the ${engine} engine cannot give: set engine = "claude", or set restricted = false. ${remedy(sessionName)}`)
     }
     // The sandbox its servers run under is proven only on some macOS versions: refused here, where every start passes, never run on a guess.
@@ -1180,7 +1182,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     }
   }
   const adapter = resolveEngine(engine)
-  const spawnType: SessionType = confinedPolicy ? 'scoped' : opts?.sessionType ?? (isJoin ? 'thread_guest' : 'thread_owner')
+  const spawnType: SessionType = confinedPolicy ? 'thread_owner' : opts?.sessionType ?? (isJoin ? 'thread_guest' : 'thread_owner')
   const launched = await adapter.launch({
     sessionId, tmuxName, cwd: effectiveCwd, originalCwd: spawnCwd, model, prompt,
     worktreePath, forkFromOriginalCwd: !!worktreeTarget,
@@ -1196,7 +1198,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   const now = Date.now()
   const sessionMetadata = {
     role: 'worker' as const,
-    tools: spawnToolNames(adapter, spawnType),
+    tools: spawnToolNames(adapter, confinedPolicy ? 'restricted' : spawnType),
     model: launched.model,
     cwd: effectiveCwd,
     platform: PLATFORM,

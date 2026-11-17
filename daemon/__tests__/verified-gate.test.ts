@@ -22,15 +22,15 @@ const configure = (): void => _setHydraConfigForTesting({
   people: { op: { id: 'op', addresses: ['discord:100000000000000001'], roles: [], name: 'op' } },
   specialists: { ops: spec() },
 } as HydraConfig)
-const confinedPolicy = (): LaunchPolicy => ({ specialist: 'ops', access: 'workdir', workdir: '/srv/ops', tools: ['Read'], servers: [], id: policyIdFor('/srv/ops', ['Read'], []) })
-const operatorPolicy: LaunchPolicy = { specialist: 'ops', access: 'operator', id: 'operator' }
+const confinedPolicy = (): LaunchPolicy => ({ specialist: 'ops', restricted: true, workdir: '/srv/ops', tools: ['Read'], servers: [], id: policyIdFor('/srv/ops', ['Read'], []) })
+const operatorPolicy: LaunchPolicy = { specialist: 'ops', restricted: false, id: 'operator' }
 
 const ids: string[] = []
 function session(id: string, over: Record<string, unknown> = {}) {
   ids.push(id)
   registry.set(id, {
     sessionId: id, tmuxName: `${id}-tmux`, topic: 't', threadId: `th-${id}`, createdAt: Date.now(), lastActive: Date.now(), listening: false,
-    engine: 'claude', policy: confinedPolicy(), sessionType: 'scoped', adapter: Object.assign(Object.create(engines.claude), { isAlive: () => true }), ...over,
+    engine: 'claude', policy: confinedPolicy(), sessionType: 'thread_owner', adapter: Object.assign(Object.create(engines.claude), { isAlive: () => true }), ...over,
   } as any)
   return registry.get(id)!
 }

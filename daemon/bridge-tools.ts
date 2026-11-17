@@ -3,7 +3,7 @@
 // Tool access is determined by session type (base set) + capabilities (dynamic addons).
 // Definitions live in shared/tool-definitions.ts. Name sets live in shared/constants.ts.
 import { BASE_TOOLS, ALL_CAPABILITY_TOOLS } from '../shared/constants.js'
-import type { SessionType, Capability, DerivedCapability, ToolName } from '../shared/constants.js'
+import type { ToolBase, Capability, DerivedCapability, ToolName } from '../shared/constants.js'
 import { RESTRICTED_SEND_TYPES, UNIVERSAL_TOOLS } from '../shared/tool-definitions.js'
 
 export { UNIVERSAL_TOOLS }
@@ -50,15 +50,15 @@ function restrictedSend(tool: SessionTool): SessionTool {
   }
 }
 
-export function computeToolsForSession(type: SessionType, capabilities: Set<Capability | DerivedCapability>, overrides?: ToolOverrides): SessionTool[] {
+export function computeToolsForSession(type: ToolBase, capabilities: Set<Capability | DerivedCapability>, overrides?: ToolOverrides): SessionTool[] {
   const allowed = new Set(BASE_TOOLS[type])
   // A restricted session's surface is its base set and nothing more: no capability grants it a tool.
-  for (const cap of type === 'scoped' ? [] : capabilities) {
+  for (const cap of type === 'restricted' ? [] : capabilities) {
     const extra = ALL_CAPABILITY_TOOLS[cap]
     if (extra) for (const t of extra) allowed.add(t)
   }
   const base: SessionTool[] = UNIVERSAL_TOOLS.filter(t => allowed.has(t.name))
-  const tools = type === 'scoped' ? base.map(t => t.name === 'reply' ? withoutFiles(t) : t.name === 'send_to_thread' ? restrictedSend(t) : t) : base
+  const tools = type === 'restricted' ? base.map(t => t.name === 'reply' ? withoutFiles(t) : t.name === 'send_to_thread' ? restrictedSend(t) : t) : base
   if (!overrides?.descriptions && !overrides?.inputSchemas) return tools
   return tools.map(t => {
     const desc = overrides.descriptions?.[t.name]
