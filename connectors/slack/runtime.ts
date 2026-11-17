@@ -26,6 +26,7 @@ import { NO_SLACK_APP, appKey, notConnected } from './app.js'
 import { timed } from '../../shared/loop-watch.js'
 import { registerSlackChannelNames } from '../../shared/link-previews.js'
 import { bareOf, readTarget } from '../../shared/target-kind.js'
+import { placeInInbox } from '../../shared/confined-inbox.js'
 
 const log = (line: string) => { process.stderr.write(line) }
 
@@ -118,6 +119,10 @@ function alertChannel(to: string): string | undefined {
 let watcher: ConversationTable | undefined
 let sweepTimer: ReturnType<typeof setInterval> | undefined
 
+/** A downloaded file's path for a recipient: a copy in its own inbox when it is write-confined (it cannot read the state folder the download is in), else undefined (the download's path stands). */
+export const placeFileFor = (specialist: { canOnlyWriteTo?: unknown; workdir: string } | undefined, src: string, name: string): string | undefined =>
+  specialist?.canOnlyWriteTo ? placeInInbox(specialist.workdir, src, name) : undefined
+
 /**
  * The daemon's one watcher, wired to the state dir and to specialist delivery.
  * Built on first use, not at import. A "duplicate" answer from the specialist means
@@ -128,6 +133,8 @@ export function getConversationTable(): ConversationTable {
     now: Date.now,
     file: slackWatchesPath(),
     filesDir: join(STATE_DIR, 'slack-files'),
+    // A write-confined specialist cannot read the state folder: its files are copied into its own inbox (<workdir>/.inbox). Any other specialist reads the download where it is.
+    placeFile: (to, src, name) => placeFileFor(hydraConfig().specialists[to], src, name),
     log,
     config: app => config(app),
     apps: () => hydraConfig().slackApps,

@@ -1,6 +1,6 @@
 import { existsSync, statSync } from 'fs'
 import { isAbsolute, join, resolve as resolvePath } from 'path'
-import { gateway, INBOX_DIR, STATE_DIR } from './config.js'
+import { gateway, STATE_DIR } from './config.js'
 import { isParentOf, parentSessionOf, registry, resolveSendTarget, threadRegistry, type Predecessor, type SessionInfo, type ThreadSessionEntry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { callerRefusal, destroyDeclinedText, killThenDestroy } from './destroy.js'
@@ -19,6 +19,7 @@ import { resolveEngine } from './engines/instances.js'
 import { dispatchAdvance, finishPrivateProtocolChildLaunch, isProtocolParticipant, markPrivateProtocolChildLaunching, protocolChildRequiresPrivate, protocolSpawnRequiresPrivate, registerProtocolChild, registerProtocolChildResult } from './protocol-registry.js'
 import { watchPr, unwatchPr, listWatches, getWatchesBySession, formatWatchEntry, detectPrUrl, WATCH_ERRORS } from '../connectors/github/pr-watch.js'
 import { fileArgTools, snapshotConfinedFiles } from './write-confinement.js'
+import { attachmentTarget } from './attachment-target.js'
 import { fileRefusal } from '../config/write-confinement.js'
 import { bindConversation, unbindConversation, formatConversationsFor, replyInConversation, conversationBelongsTo } from '../connectors/slack/runtime.js'
 import { refreshSessionVisual, emojiOf, emojiOfName } from './anchor-state.js'
@@ -406,10 +407,13 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       }
 
       case 'download_attachment': {
+        // The one answer for where this session's files go (daemon/attachment-target.ts); a confined session with no record gets a refusal.
+        const { dir, limits } = attachmentTarget(callerSessionId)
         const results = await gateway.downloadAttachments(
           args.chat_id as string,
           args.message_id as string,
-          INBOX_DIR,
+          dir,
+          limits,
         )
         if (results.length === 0) {
           return { content: [{ type: 'text', text: `message ${args.message_id} has no downloadable attachments` }] }

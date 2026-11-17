@@ -1,4 +1,5 @@
-import { gateway, PERMISSION_REPLY_RE, INBOX_DIR } from './config.js'
+import { gateway, PERMISSION_REPLY_RE } from './config.js'
+import { attachmentTarget, tellsSaveFailure } from './attachment-target.js'
 import { reserveUserIngress } from './user-ingress.js'
 import { cacheSlackChannel, cacheSlackThread } from './artifacts.js'
 import { refreshDashboard } from './dashboard.js'
@@ -164,15 +165,21 @@ function resolveProtocolModel(alias: string | undefined, channelId: string, repl
 export async function buildNotificationPayload(
   msg: InboundMessage,
   chatId: string,
+  targetSessionId?: string,
 ): Promise<{ content: string; meta: Record<string, string> }> {
   // Started first: the lookup overlaps the downloads and transcription instead of adding to them.
   const replyLookup = resolveReplyContext(gateway, msg)
   let downloadedFiles: DownloadedFile[] = []
+  let notSaved = ''
   if (msg.attachments.length > 0) {
     try {
-      downloadedFiles = await gateway.downloadAttachments(registry.resolveThreadId(msg), msg.id, INBOX_DIR)
+      // A write-confined session reads only its own folder: its files go to its own inbox there, and the path is told to it.
+      const { dir, limits } = attachmentTarget(targetSessionId)
+      downloadedFiles = await gateway.downloadAttachments(registry.resolveThreadId(msg), msg.id, dir, limits)
     } catch (err) {
       process.stderr.write(`daemon: auto-download failed for ${msg.id}: ${err}\n`)
+      // A confined session is told why (a full or replaced inbox is its own folder's to fix); the shared inbox's failures stay in the log, as before.
+      if (tellsSaveFailure(targetSessionId)) notSaved = ` — not saved: ${err instanceof Error ? err.message : err}`
     }
   }
 
@@ -180,7 +187,7 @@ export async function buildNotificationPayload(
     ? downloadedFiles.map(f => `${f.name} (${f.contentType}, ${f.sizeKB}KB) -> ${f.path}`)
     : msg.attachments.map(att => {
         const kb = (att.size / 1024).toFixed(0)
-        return `${att.name} (${att.contentType ?? 'unknown'}, ${kb}KB)`
+        return `${att.name} (${att.contentType ?? 'unknown'}, ${kb}KB)${notSaved}`
       })
 
   // Voice dictation: transcribe any audio attachments so Claude reads the
@@ -335,7 +342,7 @@ setHeldDelivery(async (msg, info) => {
  */
 function enqueueUserMessage(msg: InboundMessage, targetSessionId: string, chatId: string, before?: Promise<unknown>): Promise<void> {
   return reserveUserIngress(targetSessionId, async () => {
-    const { content, meta } = await buildNotificationPayload(msg, chatId)
+    const { content, meta } = await buildNotificationPayload(msg, chatId, targetSessionId)
     // Trusted senders may be pasted or held (typed-delivery.ts) to avoid the harness's mid-turn "not from your user" warning.
     // A pasted or held message does not reach the bridge now, so the reply guard is armed here for every outcome.
     await deliverUserMessage(targetSessionId, content, meta, () => transport.sendOrQueue(targetSessionId, {

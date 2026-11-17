@@ -19,8 +19,10 @@ import {
   type Message,
   type MessageMentionOptions,
 } from 'discord.js'
-import { readFileSync, writeFileSync, mkdirSync, statSync } from 'fs'
-import { sanitizeFilename, COUNT_EMOJI, SUPERSCRIPT } from './gateway.js'
+import { statSync } from 'fs'
+import { COUNT_EMOJI, SUPERSCRIPT } from './gateway.js'
+import { discardInboxFiles, writeInboxFile } from '../shared/confined-inbox.js'
+import type { InboxLimits } from '../config/write-confinement.js'
 import { GatewayHealth } from '../daemon/gateway-health.js'
 import { planReactionReconciliation } from '../shared/reaction-reconcile.js'
 import { linkPreviewsOff } from '../shared/link-previews.js'
@@ -498,29 +500,31 @@ export class DiscordGateway implements ChatGateway {
     return { id: thread.id, url }
   }
 
-  async downloadAttachments(channelId: string, messageId: string, inboxDir: string): Promise<DownloadedFile[]> {
+  async downloadAttachments(channelId: string, messageId: string, inboxDir: string, limits?: InboxLimits): Promise<DownloadedFile[]> {
     const ch = await this.fetchTextChannel(channelId)
     const msg = await ch.messages.fetch(messageId)
     if (msg.attachments.size === 0) return []
 
     const results: DownloadedFile[] = []
-    for (const att of msg.attachments.values()) {
-      if (att.size > MAX_ATTACHMENT_BYTES) {
-        throw new Error(`attachment too large: ${(att.size / 1024 / 1024).toFixed(1)}MB, max 25MB`)
+    try {
+      for (const att of msg.attachments.values()) {
+        if (att.size > MAX_ATTACHMENT_BYTES) {
+          throw new Error(`attachment too large: ${(att.size / 1024 / 1024).toFixed(1)}MB, max 25MB`)
+        }
+        const res = await fetch(att.url)
+        const buf = Buffer.from(await res.arrayBuffer())
+        const path = writeInboxFile(inboxDir, att.name || `${att.id}`, buf, limits)
+        results.push({
+          path,
+          name: (att.name ?? att.id).replace(/[\[\]\r\n;]/g, '_'),
+          contentType: att.contentType ?? 'unknown',
+          sizeKB: (att.size / 1024).toFixed(0),
+        })
       }
-      const res = await fetch(att.url)
-      const buf = Buffer.from(await res.arrayBuffer())
-      const name = att.name || `${att.id}`
-      const sanitizedName = sanitizeFilename(name, `${att.id}`)
-      const path = `${inboxDir}/${Date.now()}-${sanitizedName}`
-      mkdirSync(inboxDir, { recursive: true })
-      writeFileSync(path, buf)
-      results.push({
-        path,
-        name: (att.name ?? att.id).replace(/[\[\]\r\n;]/g, '_'),
-        contentType: att.contentType ?? 'unknown',
-        sizeKB: (att.size / 1024).toFixed(0),
-      })
+    } catch (err) {
+      // A confined session's inbox is its own folder: files this call already saved are not left behind for a message that says none were.
+      if (limits) discardInboxFiles(results.map(r => r.path))
+      throw err
     }
     return results
   }

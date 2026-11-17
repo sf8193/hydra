@@ -18,7 +18,8 @@
  * token-required side effects and can be unit-tested in isolation.
  */
 
-import { stat, readFile } from 'fs/promises'
+import { constants } from 'fs'
+import { open } from 'fs/promises'
 import { basename } from 'path'
 
 import type { DownloadedFile } from '../gateways/gateway.js'
@@ -27,7 +28,7 @@ export type Transcript = { name: string; text: string }
 
 // Extensions Discord/Slack use for voice notes and audio uploads. Discord voice
 // messages arrive as audio/ogg; Slack audio clips as m4a/mp3/wav.
-const AUDIO_EXTENSIONS = new Set([
+export const AUDIO_EXTENSIONS = new Set([
   'ogg', 'oga', 'opus', 'mp3', 'm4a', 'wav', 'webm', 'flac', 'aac', 'mp4', 'mpeg', 'mpga', 'amr', 'wma',
 ])
 
@@ -113,16 +114,22 @@ export function mergeTranscripts(originalContent: string, transcripts: Transcrip
 export async function transcribeFile(path: string, contentType?: string | null): Promise<string | null> {
   // Size check BEFORE reading: the cap must protect daemon memory too, and
   // gateway-reported attachment sizes aren't always present or truthful.
+  // Opened without following a link and required to be a plain file with one name: the file may sit in a folder a write-confined specialist can also write
+  // (its own inbox), and a link put there must not make the daemon read, and send to the sidecar, a file the specialist may not read.
   let bytes: Buffer<ArrayBuffer>
   try {
-    const size = (await stat(path)).size
-    if (size > transcribeMaxBytes()) {
-      process.stderr.write(
-        `transcription: skipping ${basename(path)} — ${(size / 1024 / 1024).toFixed(1)}MB exceeds HYDRA_TRANSCRIBE_MAX_BYTES\n`,
-      )
-      return null
-    }
-    bytes = await readFile(path)
+    const f = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+    try {
+      const st = await f.stat()
+      if (!st.isFile() || st.nlink > 1) throw new Error('not a plain file with one name')
+      if (st.size > transcribeMaxBytes()) {
+        process.stderr.write(
+          `transcription: skipping ${basename(path)} — ${(st.size / 1024 / 1024).toFixed(1)}MB exceeds HYDRA_TRANSCRIBE_MAX_BYTES\n`,
+        )
+        return null
+      }
+      bytes = await f.readFile()
+    } finally { await f.close() }
   } catch (err) {
     process.stderr.write(`transcription: cannot read ${path}: ${err}\n`)
     return null

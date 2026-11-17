@@ -5,6 +5,8 @@
  * Each gateway handles its own connection lifecycle, message normalization,
  * and platform-specific API calls.
  */
+import type { InboxLimits } from '../config/write-confinement.js'
+
 export type AttachmentInfo = {
   id: string
   name: string
@@ -136,24 +138,6 @@ export type SessionVisualOpts = {
   anchorMessageId?: string
 }
 
-export function sanitizeFilename(raw: string, fallbackId: string, maxLen = 200): string {
-  const cleaned = raw.replace(/^\.+/, '').replace(/[^a-zA-Z0-9._-]/g, '_')
-  let result: string
-  if (cleaned.length > maxLen) {
-    const dotIdx = cleaned.lastIndexOf('.')
-    if (dotIdx > 0) {
-      const ext = cleaned.slice(dotIdx)
-      const stem = cleaned.slice(0, maxLen - ext.length)
-      result = stem + ext
-    } else {
-      result = cleaned.slice(0, maxLen)
-    }
-  } else {
-    result = cleaned
-  }
-  return result || fallbackId
-}
-
 /** Text on its way out, as a gateway's shapeOutbound left it, with the files that made (attached to the first chunk). */
 export type Outbound = { text: string; files: string[] }
 
@@ -226,7 +210,8 @@ export interface ChatGateway {
   getThreadStarterInfo(channelId: string): Promise<ThreadStarterInfo | null>
 
   // Attachments
-  downloadAttachments(channelId: string, messageId: string, inboxDir: string): Promise<DownloadedFile[]>
+  /** Saves a message's attachments in `inboxDir`. `limits` is given for a write-confined specialist's own inbox (its caps and the checks of shared/confined-inbox.ts); absent for the shared inbox. */
+  downloadAttachments(channelId: string, messageId: string, inboxDir: string, limits?: InboxLimits): Promise<DownloadedFile[]>
 
   // Users
   sendDM(userId: string, text: string, buttons?: ButtonDef[]): Promise<void>

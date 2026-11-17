@@ -13,6 +13,18 @@ export const browserProfileDir = (workdir: string, named?: string): string => na
 /** Its download folder: `<workdir>/.browser/downloads` by default; beside a named profile, `<profile>-downloads` (never inside it: a profile is the browser's to rewrite). */
 export const browserDownloadDir = (workdir: string, named?: string): string => named ? `${named.replace(/\/+$/, '')}-downloads` : `${workdir.replace(/\/+$/, '')}/${BROWSER_DIR}/downloads`
 
+/**
+ * The folder, inside a write-confined specialist's workdir, where the files people send it are saved (the shared inbox under the state folder is denied to it).
+ * The daemon makes it (0700) and writes to it; the specialist can write there too, so nothing found in it is trusted (shared/confined-inbox.ts).
+ */
+export const INBOX_DIR_NAME = '.inbox'
+/**
+ * What one specialist's inbox may hold. The file size is the attachment limit (daemon/access.ts MAX_ATTACHMENT_BYTES, pinned equal by a test); a full folder
+ * refuses the next file and says so. The daemon never deletes inside it by age: it is the specialist's own folder, and a folder swapped for a link would turn a sweep into a delete.
+ */
+export const INBOX_LIMITS = { maxFileBytes: 25 * 1024 * 1024, maxFiles: 200, maxTotalBytes: 500 * 1024 * 1024 } as const
+export type InboxLimits = { maxFileBytes: number; maxFiles: number; maxTotalBytes: number }
+
 /** What `[mcp_servers.<name>] profile_args` and `profile_env` may name. */
 export const PROFILE_PLACEHOLDERS = ['{profile_dir}', '{download_dir}'] as const
 
@@ -107,7 +119,7 @@ export const readDenyRule = (root: string): string => `Read(/${root}/**)`
  * write-confined specialist someone else can reach.
  */
 export const confinementWarning = (workdir: string): string =>
-  `can reach the operator's account: Bash and Edit/Write writes are confined to ${workdir}, and Claude Code's tools and shell cannot read the credential folders (~/.ssh, ~/.aws and the like), hydra's state folder or other specialists' workdirs; ~/Library/Keychains is one of those folders, so \`security\` and git's keychain helper fail in its shell (shown with a throwaway keychain; login keychain: not proven live; the git helper cannot be told apart on the real one without writing an item; a store the keychain service holds without a file is not separately blocked); the browser and MCP servers can read them; the daemon attaches, for it, only a file in its folder or temp folder that is in none of those places, and it holds no tool that reaches another session (spawn, list, peek, kill, send_to_thread, handoff, watch, bind) and uses its reading and reply tools only in its own conversation; and other reads, network, MCP servers' own writes and credentials are not confined; it sees only the MCP servers it lists (hydra's bridge aside), and a listed server that declares a profile folder uses its own profile in the folder browser_profile names, else ${workdir}/.browser/profile, while one that declares none keeps its default; attachments sent to it are unreadable (the shared inbox is denied). Credential separation (run_as) is planned, not built.`
+  `can reach the operator's account: Bash and Edit/Write writes are confined to ${workdir}, and Claude Code's tools and shell cannot read the credential folders (~/.ssh, ~/.aws and the like), hydra's state folder or other specialists' workdirs; ~/Library/Keychains is one of those folders, so \`security\` and git's keychain helper fail in its shell (shown with a throwaway keychain; login keychain: not proven live; the git helper cannot be told apart on the real one without writing an item; a store the keychain service holds without a file is not separately blocked); the browser and MCP servers can read them; the daemon attaches, for it, only a file in its folder or temp folder that is in none of those places, and it holds no tool that reaches another session (spawn, list, peek, kill, send_to_thread, handoff, watch, bind) and uses its reading and reply tools only in its own conversation; and other reads, network, MCP servers' own writes and credentials are not confined; it sees only the MCP servers it lists (hydra's bridge aside), and a listed server that declares a profile folder uses its own profile in the folder browser_profile names, else ${workdir}/.browser/profile, while one that declares none keeps its default; files people send it are saved in ${workdir}/.inbox, a folder the daemon makes (0700) in its own folder, and the message names the path (the shared inbox is denied to it). Credential separation (run_as) is planned, not built.`
 
 /** What a bridge tool's `files` check needs: the session's folder and temp folder, the places its tools are denied, and how a path resolves. */
 export type FileSendEnv = { workdir: string; tmpDir: string; deny: readonly string[]; realpath: (p: string) => string }

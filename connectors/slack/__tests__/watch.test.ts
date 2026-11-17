@@ -1634,10 +1634,10 @@ target = "specialist:assistant"
 [places."slack:${CH}"]
 ${place}
 `
-  const withFiles = (s: ReturnType<typeof setup>, a: SlackActions, config: ConversationConfig) => {
+  const withFiles = (s: ReturnType<typeof setup>, a: SlackActions, config: ConversationConfig, placeFile?: (to: string, src: string, name: string) => string | undefined) => {
     const dir = mkdtempSync(join(tmpdir(), 'slack-files-'))
     dirs.push(dir)
-    const w = new ConversationTable({ now: () => 1e12, file: join(dir, 'w.json'), filesDir: join(dir, 'files'), log: l => s.logs.push(l), config: () => config, alert: t => s.alerts.push(t),
+    const w = new ConversationTable({ now: () => 1e12, file: join(dir, 'w.json'), filesDir: join(dir, 'files'), log: l => s.logs.push(l), config: () => config, alert: t => s.alerts.push(t), ...(placeFile && { placeFile }),
       deliver: async ({ to }, msg, key) => { s.sent.push({ specialist: to, msg, key }); return { ok: true } } })
     w.setSlackActions(a)
     return { w, dir }
@@ -1759,6 +1759,36 @@ ${place}
     w.handle(ev({ ts: '2.000001', threadTs: '1.000001', text: 'same file again', files: [file({ id: 'F01' })] }))
     await w.flush()
     expect(downloads).toHaveLength(1)
+  })
+
+  test('files for a write-confined specialist: the downloaded file is copied into its own inbox, and the delivery carries that path (the state folder is denied to it)', async () => {
+    const s = setup()
+    const { a } = actions()
+    const placed: string[] = []
+    const { w, dir } = withFiles(s, a, cfg({ toml: PLACES('files = true') }), (to, src, name) => { placed.push(`${to} ${src} ${name}`); return `/work/.inbox/9-abcd-${name}` })
+    w.handle(ev({ ts: '1.000001', text: mention, files: [file()] }))
+    await w.flush()
+    expect(placed).toEqual([`food ${join(dir, 'files', CH, 'F01-invoice.pdf')} invoice.pdf`])
+    expect(s.sent[0].msg).toContain('  file: invoice.pdf (2 KB) → /work/.inbox/9-abcd-invoice.pdf')
+    expect(s.sent[0].msg).not.toContain(join(dir, 'files'))
+  })
+
+  test('files for any other specialist: the path is the download, as before (the hook answers nothing)', async () => {
+    const s = setup()
+    const { w, dir } = withFiles(s, actions().a, cfg({ toml: PLACES('files = true') }), () => undefined)
+    w.handle(ev({ ts: '1.000001', text: mention, files: [file()] }))
+    await w.flush()
+    expect(s.sent[0].msg).toContain(`  file: invoice.pdf (2 KB) → ${join(dir, 'files', CH, 'F01-invoice.pdf')}`)
+  })
+
+  test('a write-confined specialist whose inbox refuses the file (a link in its place, full): listed with why, no path, and the message still goes', async () => {
+    const s = setup()
+    const { w } = withFiles(s, actions().a, cfg({ toml: PLACES('files = true') }), () => { throw new Error('/work/.inbox is not a plain folder (a link or a file is there)') })
+    w.handle(ev({ ts: '1.000001', text: mention, files: [file()] }))
+    await w.flush()
+    expect(s.sent[0].msg).toContain('  file: invoice.pdf (2 KB): not saved in its inbox (/work/.inbox is not a plain folder (a link or a file is there))')
+    expect(s.sent[0].msg).not.toContain('→')
+    expect(s.logs.join()).toContain('not a plain folder')
   })
 
   test("files in a thread read as the operator are listed, not fetched: the operator's token reads text only", async () => {
