@@ -8,6 +8,8 @@ import { clearBackoff } from '../daemon/recovery-backoff.js'
 import { SPECIALIST_NAME_RE, invalidSpecialistName as invalidName, isSessionThread } from '../shared/specialist-name.js'
 import { currentHydraConfig, hydraConfigInUse, onHydraConfigLoad } from '../daemon/hydra-config.js'
 import type { HydraConfig, Specialist as DeclaredSpecialist } from '../config/types.js'
+import type { EngineName } from '../shared/engine-capabilities.js'
+import { engineOfModel } from '../shared/constants.js'
 
 /**
  * A specialist is a named pointer to a thread (or the channel to open one in) plus the recipe for filling it.
@@ -31,12 +33,17 @@ export type Specialist = {
   kickoff?: string
   kickoffFile?: string
   model?: string
+  /** The engine a fresh start runs on; absent: the one `model`'s alias names, else claude. A conversation with history keeps the engine its history records. */
+  engine?: EngineName
   /** A quiet session ends after this long (`30m`, `4h`, `1d`): nudged, then reaped. Absent: it stays. */
   idle?: string
   /** The folder it runs in, from hydra.toml. Absent for a specialists.json recipe. */
   workdir?: string
   updatedAt: number
 }
+
+/** The engine a specialist's fresh start runs on: its `engine`, else the one its model alias names; undefined means claude. */
+export const declaredEngineOf = (s: Pick<Specialist, 'engine' | 'model'>): EngineName | undefined => s.engine ?? (s.model ? engineOfModel(s.model) : undefined)
 
 export { SPECIALIST_NAME_RE }
 
@@ -106,6 +113,7 @@ function fromToml(s: DeclaredSpecialist): Specialist {
     ...(s.kickoff !== undefined && { kickoff: s.kickoff }),
     ...(s.kickoffFile !== undefined && { kickoffFile: s.kickoffFile }),
     ...(s.model !== undefined && { model: s.model }),
+    ...(s.engine !== undefined && { engine: s.engine }),
     // hydra.toml durations are whole minutes (m, h or d), so this round-trips through parseIdleTtl.
     ...(s.idleMs !== undefined && { idle: `${s.idleMs / 60_000}m` }),
     workdir: s.workdir,

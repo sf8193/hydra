@@ -13,11 +13,13 @@ export function isForeignPlaceholder(entry: Pick<ThreadSessionEntry, 'model' | '
 }
 
 // Which engine ran the dead session: the live record's engine, else the engine the
-// history entry recorded, else (older entries) a codexThreadId means Codex, else Claude.
+// history entry recorded, else (older entries) a codexThreadId means Codex, else Claude. A thread with no history yet is a fresh
+// start: it takes `declaredEngine` (a specialist's), else Claude. History is never overridden by `declaredEngine`.
 // (Uses the id as a discriminator — PR-IDENT.)
 export function recoveryEngine(
   entry: Pick<ThreadSessionEntry, 'codexThreadId' | 'engine'> | undefined,
   info: { engine?: ProviderId } | undefined,
+  declaredEngine?: ProviderId,
 ): ProviderId {
-  return info?.engine ?? entry?.engine ?? (entry?.codexThreadId ? 'codex' : 'claude')
+  return info?.engine ?? entry?.engine ?? (entry?.codexThreadId ? 'codex' : entry ? 'claude' : declaredEngine ?? 'claude')
 }

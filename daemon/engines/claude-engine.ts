@@ -320,6 +320,7 @@ export class ClaudeEngine implements EngineAdapter {
 
   private async launchSession(input: LaunchInput): Promise<LaunchResult> {
     const { sessionId, tmuxName, model } = input
+    if (!model) throw new Error('claude engine: launched without a model')   // doSpawnSession always gives Claude one
     // The folder, flags, env and files of a launch come from the launch policy here, whatever cwd the caller passed. A policy that
     // cannot be read refuses (never the operator's account).
     const restricted = confined(input.policy, tmuxName)

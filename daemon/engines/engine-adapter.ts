@@ -117,7 +117,8 @@ export type LaunchInput = {
   readonly tmuxName: string
   readonly cwd: string
   readonly originalCwd: string
-  readonly model: string
+  /** Absent: the engine picks its own default (Codex asks its app-server). Claude and omp are always given one. */
+  readonly model?: string
   readonly prompt: string
   readonly worktreePath?: string
   readonly forkFromOriginalCwd?: boolean

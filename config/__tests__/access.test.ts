@@ -275,8 +275,13 @@ describe('[mcp_servers.*]', () => {
 })
 
 describe('engine', () => {
-  test.each(['codex', 'omp'])('%s is refused with restricted = true', engine => {
-    expect(errorsOf(spec(`restricted = true\nengine = "${engine}"`))[0]).toContain(`specialists.ops.engine: ${engine} can't run a restricted specialist: that engine cannot confine its tools; set engine = "claude", or set restricted = false`)
+  test('codex is refused with restricted = true', () => {
+    expect(errorsOf(spec('restricted = true\nengine = "codex"'))).toEqual([`specialists.ops.engine: codex can't run a restricted specialist: that engine cannot confine its tools; use claude (engine = "claude", or a Claude model), or set restricted = false`])
+  })
+  test('omp is refused for a specialist, restricted or not, with its own one message', () => {
+    for (const body of ['restricted = true\nengine = "omp"', 'engine = "omp"']) {
+      expect(errorsOf(spec(body))).toEqual([`specialists.ops.engine: omp cannot confine a session's tools, so a specialist cannot use it; use claude or codex`])
+    }
   })
   test('claude, or no engine, loads', () => {
     expect(ok(spec('restricted = true\nengine = "claude"')).config.specialists.ops.engine).toBe('claude')

@@ -149,6 +149,33 @@ export function resolveLaunchModel(raw: string): string {
   return resolveModelAlias(raw) ?? withContextSuffix(raw)
 }
 
+/**
+ * The engine a model belongs to: an alias (an `omp-` alias is omp, Codex's four are codex, the Claude table is claude) or a full id of a
+ * known family (a Claude id the Claude table knows, with or without `[1m]`; a Codex table id or any `gpt-*`). Undefined for a name it
+ * cannot place: that passes through unchanged and no check holds it against an engine.
+ */
+export function engineOfModel(raw: string): EngineName | undefined {
+  if (resolveCodexModelAlias(raw)) return 'codex'
+  if (resolveOmpModelAlias(raw)) return 'omp'
+  if (resolveModelAlias(raw)) return 'claude'
+  const id = raw.replace(/\[1m\]$/, '')
+  if (isKnownModel(id)) return 'claude'
+  if (id.startsWith('gpt-') || Object.values(CODEX_MODEL_ALIASES).includes(id)) return 'codex'
+  return undefined
+}
+
+/**
+ * A raw model, as any launch path names it, resolved to the model to run and the engine that runs it. With no `engine`, an alias picks
+ * it (the Codex and omp tables are checked before the Claude one, and any other string is Claude's). With one (the thread's history,
+ * a handoff), the alias is read in that engine's table and a full id passes through.
+ */
+export function resolveLaunchSelection(raw: string, engine?: EngineName): { model: string; engine: EngineName } {
+  const run = engine ?? engineOfModel(raw) ?? 'claude'
+  if (run === 'codex') return { model: resolveCodexModelAlias(raw) ?? raw, engine: run }
+  if (run === 'omp') return { model: resolveOmpModelAlias(raw) ?? raw, engine: run }
+  return { model: resolveLaunchModel(raw), engine: run }
+}
+
 export function resolveModelAlias(alias: string): string | undefined {
   const key = alias.toLowerCase()
   return lookup(MODEL_ALIASES, key)
@@ -206,6 +233,7 @@ export function buildModel(): string {
 import { homedir } from 'os'
 import { join } from 'path'
 import type { ToolName } from './tool-definitions.js'
+import type { EngineName } from './engine-capabilities.js'
 
 /** The state dir a platform's daemon uses unless HYDRA_STATE_DIR points elsewhere: ~/.claude/channels/<platform>. */
 export const platformStateDir = (platform: string) => join(homedir(), '.claude', 'channels', platform)

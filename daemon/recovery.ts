@@ -19,6 +19,7 @@ import { checkUnpushedCommits, reattachWorktree } from './worktree-manager.js'
 import { notifyOperator } from './access.js'
 import { deadSessionLabel, recoveryEntry, recoveryModel } from './recovery-selection.js'
 import { recoveryEngine } from './engines/history.js'
+import { engineOfModel } from '../shared/constants.js'
 import { resolveEngine } from './engines/instances.js'
 import type { ProviderId } from './engines/engine-adapter.js'
 import { activeBackoff, clearBackoff, recordFailure, type Backoff } from './recovery-backoff.js'
@@ -58,7 +59,10 @@ export type ReviveRequest = {
   /** A specialist's name, claimed on every tier. */
   name?: string
   model?: string
+  /** Forces the engine (`handoff <model>`), over the thread's history. */
   engine?: ProviderId
+  /** The engine a conversation with no history starts on (a specialist's): the history's engine wins when there is one. */
+  declaredEngine?: ProviderId
   /** Layered onto the respawn tier only (a template's tools and session type). */
   respawnOpts?: Partial<SpawnOpts>
   /** Where a fresh session starts (a specialist's workdir): the respawn tier and a new thread. Resume and fork start
@@ -111,8 +115,13 @@ export async function reviveThread(req: ReviveRequest): Promise<ReviveOutcome> {
     markDead(req.orphan.info)
   }
 
-  const engine = req.engine ?? recoveryEngine(entry, dead)
-  const model = req.model ?? recoveryModel(entry?.model ?? dead?.sessionMetadata?.model)
+  const engine = req.engine ?? recoveryEngine(entry, dead, req.declaredEngine)
+  // A model another engine runs (a specialist's alias, while its history is on a different engine) is not sent to this one: the history's own is.
+  const modelEngine = req.model && !req.engine ? engineOfModel(req.model) : undefined
+  const foreignModel = modelEngine !== undefined && modelEngine !== engine
+  if (foreignModel) process.stderr.write(`daemon: revive ${lastTmuxName}: model ${req.model} belongs to the ${modelEngine} engine and this conversation runs on ${engine}, so it was not sent\n`)
+  const askedModel = foreignModel ? undefined : req.model
+  const model = askedModel ?? recoveryModel(entry?.model ?? dead?.sessionMetadata?.model)
   const label = deadSessionLabel(entry, dead)
   const claudeSessionId = entry?.claudeSessionId ?? dead?.claudeSessionId
   // The `respawn` command is a fresh start: it carries no restrictions, parent or launch dir from the dead session.

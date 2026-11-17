@@ -38,6 +38,7 @@ export class OmpEngine implements EngineAdapter {
     // This engine cannot confine a session (confinesAccess); it would run one as the operator.
     if (input.policy?.access === 'workdir') throw new Error(`specialist ${input.policy.specialist} has restricted = true, which this engine cannot give: set engine = "claude", or set restricted = false`)
     const { sessionId, tmuxName, model } = input
+    if (!model) throw new Error('omp engine: launched without a model')   // doSpawnSession always gives omp one
     // CLAUDE_CONFIG_DIR unset and the claude providers disabled (OMP_CONFIG): omp must not load Claude's plugins or a cwd .mcp.json.
     const stderrLog = join(SPAWN_LOGS_DIR, `stderr-${tmuxName}-${sessionId}.log`)
     const omp = process.env.HYDRA_OMP_BIN || 'omp'
