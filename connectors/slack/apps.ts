@@ -1,9 +1,9 @@
-// What the Slack connections share, in one daemon: who each app's bot is, which apps' bots are in which channel, and who owns
-// each message. A leaf over Slack's calls (injected), so it is tested without Slack.
+// What the Slack connections share, in one daemon: who each app's bot is, which apps' bots are in which channel, and which app
+// is each message's owning app. A leaf over Slack's calls (injected), so it is tested without Slack.
 //
 // Several apps in one channel all hear every message in it, and exactly one answers (routing/route.ts `owningApp`). Each
-// connection decides for itself, from the same facts, and the first connection to decide a message fixes its owner for the
-// others (`decideOwner`), so "exactly one" holds by construction, not by the facts staying still between two copies.
+// connection decides for itself, from the same facts, and the first connection to decide a message fixes its owning app for the
+// others (`decideOwningApp`), so "exactly one" holds by construction, not by the facts staying still between two copies.
 
 import { appKey, appName, type Apps } from './app.js'
 
@@ -19,8 +19,8 @@ export const PROBE_RETRY_MS = 30_000
 export const TAG_REPROBE_MS = 5_000
 /** Membership reads (conversations.info) in flight at once, across every app. */
 export const PROBE_CONCURRENCY = 5
-/** How long a message's owner is remembered for the other connections' copies of it. */
-export const OWNER_TTL_MS = 2 * 60_000
+/** How long a message's owning app is remembered for the other connections' copies of it. */
+export const OWNING_APP_TTL_MS = 2 * 60_000
 /** How long an app that was started may take to join before it counts as not joining (see `failedToJoin`). */
 export const JOIN_GRACE_MS = 30_000
 
@@ -59,7 +59,7 @@ export class ConnectedApps {
   private readonly said = new Set<string>()
   /** Why an app's last membership read of a channel failed, until a read of that channel works: what health shows as its `probeError`. */
   private readonly probeErrors = new Map<string, string>()   // `<app>\0<channel>`
-  private readonly owners = new Map<string, { app: string; at: number }>()   // `<channel>\0<ts>`
+  private readonly owningApps = new Map<string, { app: string; at: number }>()   // `<channel>\0<ts>`
   /** Apps that have reported a channel join or leave: they are subscribed to those events. */
   private readonly reporting = new Set<string>()
   /** Apps started and not yet joined: until each has joined (or failed to), who is in a channel is not settled. */
@@ -234,23 +234,23 @@ export class ConnectedApps {
     for (const k of [...this.facts.keys()]) if (k.endsWith(`\0${channel}`)) this.facts.delete(k)
   }
 
-  // -- who owns a message --------------------------------------------------------------------------------------------
+  // -- a message's owning app --------------------------------------------------------------------------------------------
 
   /**
-   * The app that owns a message, fixed by the first connection to ask: every other connection's copy of it (and a catch-up
+   * The owning app of a message, fixed by the first connection to ask: every other connection's copy of it (and a catch-up
    * pass's) gets the same answer, whatever the facts have become. Remembered briefly.
    */
-  decideOwner(channel: string, ts: string, decide: () => string): string {
+  decideOwningApp(channel: string, ts: string, decide: () => string): string {
     const key = `${channel}\0${ts}`
     const now = this.now()
-    const known = this.owners.get(key)
-    if (known && now - known.at < OWNER_TTL_MS) return known.app
+    const known = this.owningApps.get(key)
+    if (known && now - known.at < OWNING_APP_TTL_MS) return known.app
     const app = decide()
-    this.owners.set(key, { app, at: now })
-    if (this.owners.size > 5000) {
-      for (const [k, v] of this.owners) if (now - v.at >= OWNER_TTL_MS) this.owners.delete(k)
+    this.owningApps.set(key, { app, at: now })
+    if (this.owningApps.size > 5000) {
+      for (const [k, v] of this.owningApps) if (now - v.at >= OWNING_APP_TTL_MS) this.owningApps.delete(k)
       // Map order is insertion order: past the cap, the oldest go.
-      for (const k of this.owners.keys()) { if (this.owners.size <= 4000) break; this.owners.delete(k) }
+      for (const k of this.owningApps.keys()) { if (this.owningApps.size <= 4000) break; this.owningApps.delete(k) }
     }
     return app
   }

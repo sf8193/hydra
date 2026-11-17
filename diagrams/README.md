@@ -68,7 +68,7 @@ One question per picture, read in this order. Each has a `<name>.sources.md` bes
 
 | Diagram | The question it answers |
 |---------|--------------|
-| `flow-route-owner` | Which app answers a message that several Slack apps heard? |
+| `flow-route-owning-app` | Which app answers a message that several Slack apps heard? |
 | `flow-route` | Which target hears a message, and may its sender reach it? (`routing/route.ts`: binding, `messages = "all"`, `[[rules]]`, the operator's DM to main, then `reachable_by`) |
 | `flow-slack-hear` | How does each Slack app connect, and how does a live message reach the connector? |
 | `flow-slack-catchup` | What does a catch-up pass read, and when does it hold or give up? |
@@ -82,7 +82,7 @@ A bold name in these pictures is one of README's [core abstractions](../README.m
 
 | Name | Question | Sentence |
 |---|---|---|
-| Owner | Which app answers, when several heard it? | The one app that answers a message several apps heard; the others ignore it. |
+| Owning app | Which app answers, when several heard it? | The one app that answers a message several apps heard; the others ignore it. |
 | Serves | Can this app deliver to that target? | An app serves a specialist pinned to it, or an unpinned one when no specialist is pinned to that app; it always serves main and a session's own thread. |
 | Binding | Which target does this conversation already have? | The target a conversation was bound to when it opened; it holds while hydra.toml declares that target and this app serves it. |
 | Operator | Whose hydra is it? | The person `operator` names: always reaches every target, and is the only one who reaches main. |

@@ -5,7 +5,7 @@ import { catchUp, toEvent, type CatchUpResult, type Page, type RawMessage, type 
 import { mkdirSync, openSync, writeSync, closeSync, renameSync, rmSync } from 'fs'
 import { dirname } from 'path'
 import { linkPreviewsOff } from '../../shared/link-previews.js'
-import { routedChannels, hearsDms, dmsDeclared, namedChannels, unresolvedPlaces, isDm, type SlackReactionEvent, mentionedApps, NOT_A_MEMBER, OPERATOR_TOKEN_REFUSED, NO_DIRECTORY, SLACK_LIMITS, type AppWatch, type DmOtherParty, type SlackDirectory, type SlackWatchConfig, type SlackWatcher } from './watch.js'
+import { routedChannels, hearsDms, dmsDeclared, namedChannels, unresolvedPlaces, isDm, type SlackReactionEvent, mentionedApps, NOT_A_MEMBER, OPERATOR_TOKEN_REFUSED, NO_DIRECTORY, SLACK_LIMITS, type AppConversations, type DmOtherParty, type SlackDirectory, type ConversationConfig, type ConversationTable } from './watch.js'
 import { DEFAULT_SLACK_APP, mustParsePlace, placeCovers, placeKey, isChannelName, placeOf, placesAnsweredBy, samePlace, type HydraConfig, type SlackApp } from '../../config/types.js'
 import { reachableBy } from '../../routing/route.js'
 import { SLACK_APP_NEEDS, NO_SLACK_APP, appKey, appSuffix, type Apps, type ScopeNeed } from './app.js'
@@ -209,7 +209,7 @@ export type ListenerHealth = {
 }
 
 export type ListenerDeps = {
-  watcher: SlackWatcher
+  watcher: ConversationTable
   /** The app this listener is, by its id in hydra.toml. Absent: `default`. It connects only while hydra.toml declares it. */
   app?: string
   /** What the connections share: each app's bot ids, and which apps are in which channel. Absent: this listener's own. */
@@ -312,7 +312,7 @@ export class SlackListener {
   private namesWarned = false
   readonly id: string
   private readonly apps: ConnectedApps
-  private readonly w: AppWatch
+  private readonly w: AppConversations
   /** Per channel, the events waiting for who is in it to be read, in the order they came: none is handled ahead of one before it. A channel with nothing waiting never queues. */
   private readonly queues = new Map<string, Promise<void>>()
   /** With the operator's user token: the bot's own DM channels (from the bot's list, or the bot posting in one), and who is on the other end of the rest (a DM's two ends never change, so an answer is final). */
@@ -354,7 +354,7 @@ export class SlackListener {
   private manifestCommand(): string { return this.id === DEFAULT_SLACK_APP && Object.keys(this.d.hydra().slackApps).length <= 1 ? 'hydra slack manifest' : `hydra slack manifest ${this.id}` }
 
   /** What the watcher routes with: hydra.toml joined with what this connection learned. Null until connected once. */
-  view(): SlackWatchConfig | null {
+  view(): ConversationConfig | null {
     const hydra = this.d.hydra()
     if (!this.declared() || !this.identity) return null
     return {
@@ -364,7 +364,7 @@ export class SlackListener {
       unread: (channel, apps) => this.apps.unread(channel, apps),
       connected: () => this.apps.connectedApps(),
       // With one app connected there is nothing to tell apart, and nothing to remember.
-      ...(this.apps.several() && { decideOwner: (channel: string, ts: string, decide: () => string) => this.apps.decideOwner(channel, ts, decide) }),
+      ...(this.apps.several() && { decideOwningApp: (channel: string, ts: string, decide: () => string) => this.apps.decideOwningApp(channel, ts, decide) }),
       directory: this.directoryView(), ...SLACK_LIMITS,
     }
   }

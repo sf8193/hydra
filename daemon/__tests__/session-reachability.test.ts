@@ -23,8 +23,8 @@ function classify(over: Partial<Parameters<typeof classifyOccupancy>[0]>) {
 }
 
 describe('classifyOccupancy', () => {
-  it('calls a running session with a connected bridge reachable', () => {
-    expect(classify({})).toBe('reachable')
+  it('calls a running session with a connected bridge connected', () => {
+    expect(classify({})).toBe('connected')
   })
 
   it('calls a long-running session with no bridge orphaned', () => {
@@ -35,8 +35,8 @@ describe('classifyOccupancy', () => {
     expect(classify({ connected: false, waitMs: fresh })).toBe('starting')
   })
 
-  it('treats a connected bridge as reachable however new the session is', () => {
-    expect(classify({ waitMs: 0 })).toBe('reachable')
+  it('treats a connected bridge as connected however new the session is', () => {
+    expect(classify({ waitMs: 0 })).toBe('connected')
   })
 
   it('calls a session that is not running and has no bridge dead', () => {
@@ -44,7 +44,7 @@ describe('classifyOccupancy', () => {
   })
 
   it('a connected bridge is proof enough of a running session', () => {
-    expect(classify({ running: false, connected: true })).toBe('reachable')
+    expect(classify({ running: false, connected: true })).toBe('connected')
   })
 
   it('needs the wait to pass the grace window, not merely reach it', () => {
@@ -102,13 +102,13 @@ describe('occupancy of a record', () => {
     } finally { tmux.restore() }
   })
 
-  it('a connected bridge is reachable even on a record stamped dead', () => {
+  it('a connected bridge is connected even on a record stamped dead', () => {
     const tmux = withFakeTmux()
     try {
       const info = rec({ deadAt: Date.now() })
       tmux.alive(info.tmuxName)
       transport.bridges.set(info.sessionId, {} as any)
-      expect(occupancy(info)).toBe('reachable')
+      expect(occupancy(info)).toBe('connected')
     } finally { tmux.restore() }
   })
 
@@ -117,7 +117,7 @@ describe('occupancy of a record', () => {
     try {
       const info = rec()
       transport.bridges.set(info.sessionId, {} as any)
-      expect(occupancy(info)).toBe('reachable')
+      expect(occupancy(info)).toBe('connected')
       expect(tmux.calls().filter(c => c.startsWith('has-session'))).toEqual([])
     } finally { tmux.restore() }
   })
@@ -148,7 +148,7 @@ describe('markDead', () => {
 
 describe('blocksRecovery', () => {
   it('refuses recovery for sessions that are fine or still booting', () => {
-    expect(blocksRecovery('reachable')).toBe(true)
+    expect(blocksRecovery('connected')).toBe(true)
     expect(blocksRecovery('starting')).toBe(true)
   })
 

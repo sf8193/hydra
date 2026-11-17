@@ -18,7 +18,7 @@ Checked against code at 42721c5. Bold names are README's core abstractions or th
 | deliver → 4 | `connectors/slack/watch.ts:852` | the deliver path |
 | 4. a tag opening a conversation: its sender under 10 in 10 min? / over → dropped: tag-cap | `connectors/slack/watch.ts:852`, `:908-920` | `!existing && tagged` → `allowMention`; `recent.length >= 10` → `drop('tag-cap')`; no user passes |
 | 5. room in the conversation table? | `connectors/slack/watch.ts:854-863` | ambient cap, then `watch`'s cap |
-| at most 50, shared by every app | `connectors/slack/watch.ts:103`, `:532`, `:558-559` | `maxWatches: 50` over `list()`, every app's entries |
+| at most 50, shared by every app | `connectors/slack/watch.ts:103`, `:532`, `:558-559` | `maxConversations: 50` over `list()`, every app's entries |
 | at most 25 opened by untagged chatter | `connectors/slack/watch.ts:854-855` | `!existing && !tagged && !dm`: `floor(50 / 2)` |
 | an open one, or one-off chatter: no slot needed | `connectors/slack/watch.ts:552-556`, `:330`, `:559` | an existing entry skips the cap; `oneOff` is not counted |
 | no → dropped: table-full | `connectors/slack/watch.ts:856`, `:861` | `drop('table-full', …)` |

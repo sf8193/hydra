@@ -1,6 +1,6 @@
 import { route } from '../../routing/route.js'
 import { DEFAULT_SLACK_APP, placeOf } from '../../config/types.js'
-import { cmpTs, routedChannels, hearsDms, addressOf, TOP_LEVEL, OPERATOR_TOKEN_REFUSED, NOT_A_MEMBER, type SlackFile, type SlackMessageEvent, type SlackWatchConfig, type CatchUpWatch } from './watch.js'
+import { cmpTs, routedChannels, hearsDms, addressOf, TOP_LEVEL, OPERATOR_TOKEN_REFUSED, NOT_A_MEMBER, type SlackFile, type SlackMessageEvent, type ConversationConfig, type CatchUpConversations } from './watch.js'
 
 /** Slack's clock and ours differ a little: a thread is read from this long before its bind, so a reply just after it is not passed over. */
 const BIND_SKEW_S = 10
@@ -118,7 +118,7 @@ export const MAX_CALLS_CAP = 400
 
 class OutOfBudget extends Error {}
 
-export async function catchUp(watcher: CatchUpWatch, api: SlackApi, cfg: SlackWatchConfig, opts: CatchUpOpts): Promise<CatchUpResult> {
+export async function catchUp(watcher: CatchUpConversations, api: SlackApi, cfg: ConversationConfig, opts: CatchUpOpts): Promise<CatchUpResult> {
   // One call per watched thread on a deep pass, plus the channel scan: the budget grows with the table so a big one can still finish.
   let maxCalls = opts.maxCalls ?? Math.min(MAX_CALLS_CAP, Math.max(MIN_CALLS, 2 * watcher.list().length + watcher.dmChannels().length + 20))
   const maxPages = opts.maxPages ?? 5

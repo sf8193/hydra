@@ -191,7 +191,7 @@ async function main(): Promise<void> {
 
   const schedulesCmd = command === 'schedules' || command === 'jobs'   // `jobs`: the old name, kept for one release
   if (schedulesCmd && daemonName) {
-    console.error(`error: ${command} commands take --state-dir <dir>, not --daemon (a schedule's state lives in the daemon's state dir)`)
+    console.error(`error: schedules commands take --state-dir <dir>, not --daemon (a schedule's state lives in the daemon's state dir)`)
     process.exit(1)
   }
 

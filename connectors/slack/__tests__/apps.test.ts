@@ -2,7 +2,7 @@ import { describe, test, expect, afterEach } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { SlackWatcher, appOfEntry, conversationId } from '../watch.js'
+import { ConversationTable, appOfEntry, conversationId } from '../watch.js'
 import { SlackListener, scopesNeeded, DOWN_ALERT_AFTER_MS, CATCH_UP_STALE_AFTER_MS, type SlackAppLike, type RawEvent } from '../listener.js'
 import { ConnectedApps, MEMBER_TTL_MS } from '../apps.js'
 import { parseConversation } from '../conversation.js'
@@ -48,7 +48,7 @@ function setup(toml: string, over: { members?: Record<string, string[]>; probeEr
   const file = join(dir, 'w.json')
   // Cursors laid down before the daemon starts: what each pass reads from.
   if (over.cursors || over.entries) writeFileSync(file, JSON.stringify({ entries: over.entries ?? [], channelCursors: over.cursors ?? {} }))
-  const watcher = new SlackWatcher({
+  const watcher = new ConversationTable({
     now: () => now, file, filesDir: join(dir, 'files'), log: l => logs.push(l), config: app => byId[app ?? 'default']?.view() ?? null, apps: () => h.slackApps,
     alert: (t, to) => { alerts.push(t); alertTo.push(to) },
     ...(over.guard && { guard: async (_g, input) => over.guard!(input.target) }),
@@ -233,7 +233,7 @@ describe('two apps in one channel: exactly one answers', () => {
     expect(t.sent).toHaveLength(2)
   })
 
-  test('a tag reaches the tagged app even when its membership cannot be read: the tagged app owns it, whichever copy is decided first', async () => {
+  test('a tag reaches the tagged app even when its membership cannot be read: the tagged app is the owning app, whichever copy is decided first', async () => {
     const t = setup(sharedChannel(CH), { members: BOTH, probeError: { [SALES]: 'missing_scope: the token needs groups:read' } })
     await t.start()
     t.say({ ts: '1200.000001', text: `<@${SALES_BOT}> a quote` }, ['default'])   // the other app's copy decides first
@@ -243,7 +243,7 @@ describe('two apps in one channel: exactly one answers', () => {
     expect(t.sent.map(s => [s.to, s.conversation])).toEqual([['deals', `slack:${SALES}:${CH}:1200.000001`]])
   })
 
-  test('a tagged app whose bot is not in the channel but that hears it through the operator token owns the tag, though another app decides first', async () => {
+  test('a tagged app whose bot is not in the channel but that hears it through the operator token is the owning app for the tag, though another app decides first', async () => {
     const withOperator = sharedChannel(CH).replace('socket_token_env = "SALES_SLACK_APP_TOKEN"', 'socket_token_env = "SALES_SLACK_APP_TOKEN"\noperator_token_env = "SALES_SLACK_USER_TOKEN"')
     const t = setup(withOperator, { members: { default: [CH], [SALES]: [] } })
     await t.start()
@@ -616,7 +616,7 @@ describe('what is stored', () => {
     const file = join(dir, 'w.json')
     const old = { entries: [{ channel: CH, threadTs: '5.000001', specialist: 'crm', createdAt: 1, lastEventAt: 1 }], channelCursors: { [CH]: '9.000001' } }
     writeFileSync(file, JSON.stringify(old))
-    const w = new SlackWatcher({ now: () => 5, file, log: () => {}, config: () => null, deliver: async () => ({ ok: true }) })
+    const w = new ConversationTable({ now: () => 5, file, log: () => {}, config: () => null, deliver: async () => ({ ok: true }) })
     expect(w.get(CH, '5.000001')?.specialist).toBe('crm')
     expect(w.get(CH, '5.000001', 'default')?.specialist).toBe('crm')
     expect(w.get(CH, '5.000001', SALES)).toBeUndefined()
@@ -630,7 +630,7 @@ describe('what is stored', () => {
     expect(stored.entries.find((e: { specialist: string }) => e.specialist === 'crm' && true)).not.toHaveProperty('app')
     expect(stored.entries.filter((e: { app?: string }) => e.app === SALES)).toHaveLength(1)
     // And it loads back as it was.
-    const again = new SlackWatcher({ now: () => 5, file, log: () => {}, config: () => null, deliver: async () => ({ ok: true }) })
+    const again = new ConversationTable({ now: () => 5, file, log: () => {}, config: () => null, deliver: async () => ({ ok: true }) })
     expect(again.get(CH, '6.000001', SALES)?.specialist).toBe('deals')
     expect(again.get(CH, '6.000001')?.specialist).toBe('crm')
   })
@@ -653,7 +653,7 @@ describe('what is stored', () => {
 describe('an app that is not connected', () => {
   const tagSales = (ts: string, extra: Partial<RawEvent> = {}) => ({ ts, text: `<@${SALES_BOT}> a quote`, ...extra })
 
-  test('a restart still recognises a tag of an app that has not joined: the tagged app owns it, and the other does not answer', async () => {
+  test('a restart still recognises a tag of an app that has not joined: the tagged app is the owning app, and the other does not answer', async () => {
     const t = setup(sharedChannel(CH, LISTEN_ALL), { members: BOTH, seed: { [SALES]: { botUserId: SALES_BOT } } })
     await t.listeners.default.start()   // `sales` never connects
     t.fakes.default.handler({ channel: CH, user: 'UB', ...tagSales('1100.000001') })
@@ -753,15 +753,15 @@ describe('a thread bound through two apps', () => {
   })
 })
 
-describe('the owner is fixed by the first copy', () => {
+describe('the owning app is fixed by the first copy', () => {
   test('if who is in the channel changes between two apps’ copies of one message, still exactly one answers', async () => {
     const t = setup(sharedChannel(CH, `[places."slack:${CH}"]\nmessages = "all"\ndefault_app = "app:sales"\n`), { members: { default: [CH], [SALES]: [] } })
     await t.start()
-    // `default` decides first: `sales` is not known to be in the channel, so it owns the message.
+    // `default` decides first: `sales` is not known to be in the channel, so it is the owning app.
     t.fakes.default.handler({ channel: CH, user: 'UB', ts: '1100.000001', text: 'hello' })
     await t.settle()
     expect(t.sent.map(s => s.to)).toEqual(['crm'])
-    // Then `sales` turns out to be in it, and its copy arrives: without the memory it would own it (default_app).
+    // Then `sales` turns out to be in it, and its copy arrives: without the memory it would be the owning app (default_app).
     t.fakes[SALES].members.add(CH)
     t.fakes.default.members.add(CH)
     t.shared.changed(CH)

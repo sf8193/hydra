@@ -1,12 +1,12 @@
 %%{init: {"theme":"base","themeVariables":{"background":"#ffffff","primaryColor":"#ffffff","primaryBorderColor":"#6b7280","primaryTextColor":"#1f2937","lineColor":"#374151","clusterBkg":"#ffffff","clusterBorder":"#d1d5db"},"flowchart":{"wrappingWidth":420,"useMaxWidth":false}}}%%
 %% Which app answers a message that several Slack apps heard? owningApp(), routing/route.ts:178; route() asks it first (route.ts:211).
-%% Then flow-route: which target hears it. Every box's source: diagrams/flow-route-owner.sources.md.
+%% Then flow-route: which target hears it. Every box's source: diagrams/flow-route-owning-app.sources.md.
 flowchart TD
   in(["a message, and every <b>App</b> that heard it"])
   heard["heard by: the apps in the channel,<br/>the app its conversation is bound through,<br/>an app it tags, even one offline<br/>a DM is heard by one app"]
   g1{"1. heard by more<br/>than one app?"}
-  only["that app owns it"]
-  subgraph ladder["The <b>Owner</b>: the first of these that heard it"]
+  only["that app is the owning app"]
+  subgraph ladder["The <b>Owning app</b>: the first of these that heard it"]
     direction TB
     o1["a. the app tagged first"]
     o2["b. the app that opened the <b>Conversation</b>"]
@@ -16,8 +16,8 @@ flowchart TD
     pool["d and e: among the apps that deliver<br/>to someone here, if any do"]
     o1 --> o2 --> o3 --> o4 --> o5 ~~~ pool
   end
-  g2{"2. is this app<br/>the owner?"}
-  ign(["ignored: only the owner answers"])
+  g2{"2. is this app<br/>the owning app?"}
+  ign(["ignored: only the owning app answers"])
   next(["this app routes it:<br/>flow-route"])
   in --> g1
   in -.- heard

@@ -1,10 +1,10 @@
 // The operator's DMs on the LIVE socket path, end to end through the real listener and watcher, for each app shape.
-// Uses only the repo's public harness (SlackListener, SlackWatcher, slack-config), so it runs unchanged across commits.
+// Uses only the repo's public harness (SlackListener, ConversationTable, slack-config), so it runs unchanged across commits.
 import { describe, test, expect, afterEach } from 'bun:test'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { SlackWatcher } from '../watch.js'
+import { ConversationTable } from '../watch.js'
 import { hydra as load, view } from './slack-config.js'
 import { ConnectedApps } from '../apps.js'
 import { SlackListener, type SlackAppLike, type RawEvent } from '../listener.js'
@@ -51,7 +51,7 @@ function setup(appName: string, userToken: boolean, extra = '', lists: { dms: { 
   const gate = { wait: Promise.resolve() as Promise<unknown> }
   let listener: SlackListener | undefined
   const before = view(toml(appName, userToken, extra), { app: appName })
-  const watcher = new SlackWatcher({
+  const watcher = new ConversationTable({
     now: () => now, file: join(dir, 'w.json'), filesDir: join(dir, 'files'), log: l => logs.push(l), config: () => listener?.view() ?? before,
     deliver: async (s, msg) => { await gate.wait; sent.push({ to: String((s as { specialist?: string })?.specialist ?? s), msg }); return { ok: true } },
   })
@@ -79,7 +79,7 @@ function setup(appName: string, userToken: boolean, extra = '', lists: { dms: { 
   listeners.push(listener)
   return { listener, watcher, sent, logs, shared, gate, wire: (e: Partial<RawEvent>, via: 'bot' | 'user' | 'unknown' = 'user') => wire({ ts: '1793000001.000001', user: 'UOP', ...e } as RawEvent, via), raw: (e: Partial<RawEvent>) => handler(e as RawEvent), live: (e: Partial<RawEvent>) => handler({ ts: '1793000001.000001', user: 'UOP', text: 'hi', ...e } as RawEvent) }
 }
-const settle = async (t: { watcher: SlackWatcher }) => { await Bun.sleep(5); await t.watcher.flush() }
+const settle = async (t: { watcher: ConversationTable }) => { await Bun.sleep(5); await t.watcher.flush() }
 
 for (const appName of ['default', 'krust']) {
   for (const sibling of [false, true]) for (const userToken of [false, true]) {
@@ -209,10 +209,10 @@ describe('a DM that is passed over says why', () => {
   })
   test('an app with no live view, and a timestamp Slack does not write', () => {
     const logs: string[] = []
-    const w = new SlackWatcher({ now: () => 1_793_000_000_000, file: join(tmpdir(), `live-dm-${Math.random()}.json`), log: l => logs.push(l), config: () => null, deliver: async () => ({ ok: true }) })
+    const w = new ConversationTable({ now: () => 1_793_000_000_000, file: join(tmpdir(), `live-dm-${Math.random()}.json`), log: l => logs.push(l), config: () => null, deliver: async () => ({ ok: true }) })
     expect(w.handle({ channel: 'D0BOT0001', ts: TS, user: 'UOP' })).toBe('ignored')
     expect(logs.join('')).toMatch(dropped('D0BOT0001', TS, /no live view of hydra\.toml/))
-    const w2 = new SlackWatcher({ now: () => 1_793_000_000_000, file: join(tmpdir(), `live-dm-${Math.random()}.json`), log: l => logs.push(l), config: () => view(toml('krust', true), { app: 'krust' }), deliver: async () => ({ ok: true }) })
+    const w2 = new ConversationTable({ now: () => 1_793_000_000_000, file: join(tmpdir(), `live-dm-${Math.random()}.json`), log: l => logs.push(l), config: () => view(toml('krust', true), { app: 'krust' }), deliver: async () => ({ ok: true }) })
     expect(w2.handle({ channel: 'D0BOT0001', ts: 'not-a-ts', user: 'UOP', app: 'krust' })).toBe('ignored')
     expect(logs.join('')).toMatch(dropped('D0BOT0001', 'not-a-ts', /is not one Slack writes/))
   })

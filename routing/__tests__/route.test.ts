@@ -149,7 +149,7 @@ test('explain prints every candidate and why the winner won', () => {
 })
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Apps: rules by app, specialists pinned to apps, and one owner when several apps are in a channel.
+// Apps: rules by app, specialists pinned to apps, and one owning app when several apps are in a channel.
 // ---------------------------------------------------------------------------------------------------------------------
 
 const APPS = `
@@ -210,10 +210,10 @@ describe('old configs route as before', () => {
       expect(withoutApp(named)).toEqual(withoutApp(route(CFG, m)))
     }
   })
-  test('no app is reported or owner set when only one app is in the channel', () => {
+  test('no app is reported or owning app set when only one app is in the channel', () => {
     const d = route(CFG, MSGS[0])
     expect(d.app).toBe('default')
-    expect(d.owner).toBeUndefined()
+    expect(d.owningApp).toBeUndefined()
   })
 })
 
@@ -329,74 +329,74 @@ target = "specialist:deals"
   })
 })
 
-describe('two apps in one channel: exactly one owns it', () => {
+describe('two apps in one channel: exactly one app is the owning app', () => {
   const both = (extra: Partial<Inbound> = {}) => ({ heardBy: ['default', 'sales'], ...extra })
   /** Route the same message as each hearing app sees it. */
   const asEach = (cfg: HydraConfig, extra: Partial<Inbound>) => Object.fromEntries((extra.heardBy ?? []).map(a => [a, route(cfg, inApp(a, extra))]))
-  const owners = (r: Record<string, ReturnType<typeof route>>) => Object.entries(r).filter(([, d]) => d.fate !== 'ignored' || d.trace.every(s => s.via !== 'owner')).map(([a]) => a)
+  const owningApps = (r: Record<string, ReturnType<typeof route>>) => Object.entries(r).filter(([, d]) => d.fate !== 'ignored' || d.trace.every(s => s.via !== 'owning-app')).map(([a]) => a)
   const placeDefault = (cfg: HydraConfig, defaultApp: string) => { cfg.places['slack:#help'] = { files: false, messages: 'addressed', bots: false, reactions: 'off', linkPreviews: true, defaultApp } }
 
-  test('no tag, no default_app: the app named `default` owns it, and the other stands down', () => {
+  test('no tag, no default_app: the app named `default` is the owning app, and the other stands down', () => {
     const r = asEach(TWO, both())
-    expect(owners(r)).toEqual(['default'])
+    expect(owningApps(r)).toEqual(['default'])
     expect(r.sales.fate).toBe('ignored')
-    expect(r.sales.trace[0]).toMatchObject({ via: 'owner', to: 'default', matched: false })
-    expect(r.sales.trace[0].why).toBe('app:sales heard it, but app:default owns it (no tag, and no `default_app` for this place; the app named `app:default` is in the channel), so only app:default answers')
-    expect(r.default).toMatchObject({ fate: 'deliver', to: 'crm', owner: 'default' })
+    expect(r.sales.trace[0]).toMatchObject({ via: 'owning-app', to: 'default', matched: false })
+    expect(r.sales.trace[0].why).toBe('app:sales heard it, but app:default is the owning app (no tag, and no `default_app` for this place; the app named `app:default` is in the channel), so only app:default answers')
+    expect(r.default).toMatchObject({ fate: 'deliver', to: 'crm', owningApp: 'default' })
   })
-  test('no tag, no default_app, `default` not among them: the first declared app owns it', () => {
+  test('no tag, no default_app, `default` not among them: the first declared app is the owning app', () => {
     const cfg = structuredClone(TWO)
     cfg.rules.push({ place: P('slack:#help'), target: 'desk' })   // support now delivers to someone here too
     const r = asEach(cfg, { heardBy: ['support', 'sales'], app: undefined })
     // the same message, seen by each app; `default` did not hear it
     const each = Object.fromEntries(['support', 'sales'].map(a => [a, route(cfg, { ...inApp(a), heardBy: ['support', 'sales'] })]))
-    expect(owners(each)).toEqual(['sales'])   // sales is declared before support
-    expect(each.support.trace[0].why).toBe('app:support heard it, but app:sales owns it (no tag, no `default_app` for this place, and the app named `app:default` is not in the channel; app:sales is the first declared app that delivers to someone here), so only app:sales answers')
+    expect(owningApps(each)).toEqual(['sales'])   // sales is declared before support
+    expect(each.support.trace[0].why).toBe('app:support heard it, but app:sales is the owning app (no tag, no `default_app` for this place, and the app named `app:default` is not in the channel; app:sales is the first declared app that delivers to someone here), so only app:sales answers')
     expect(r).toBeDefined()
   })
-  test('the place\'s default_app owns it, ahead of `default` and declaration order', () => {
+  test('the place\'s default_app is the owning app, ahead of `default` and declaration order', () => {
     const cfg = structuredClone(TWO)
     placeDefault(cfg, 'sales')
     const r = asEach(cfg, both())
-    expect(owners(r)).toEqual(['sales'])
-    expect(r.default.trace[0].why).toBe("app:default heard it, but app:sales owns it (app:sales is this place's `default_app`), so only app:sales answers")
+    expect(owningApps(r)).toEqual(['sales'])
+    expect(r.default.trace[0].why).toBe("app:default heard it, but app:sales is the owning app (app:sales is this place's `default_app`), so only app:sales answers")
     expect(r.sales).toMatchObject({ fate: 'deliver', to: 'deals' })
     // a default_app that did not hear it is skipped: back to `default`
     placeDefault(cfg, 'support')
-    expect(owners(asEach(cfg, both()))).toEqual(['default'])
+    expect(owningApps(asEach(cfg, both()))).toEqual(['default'])
   })
   test('a default_app on the channel\'s id applies as on its name', () => {
     const cfg = structuredClone(TWO)
     cfg.places['slack:C0HELP'] = { files: false, messages: 'addressed', bots: false, reactions: 'off', linkPreviews: true, defaultApp: 'sales' }
-    expect(owners(asEach(cfg, both()))).toEqual(['sales'])
+    expect(owningApps(asEach(cfg, both()))).toEqual(['sales'])
   })
   test('a tag always wins: over default_app, `default`, and the app that opened the conversation', () => {
     const cfg = structuredClone(TWO)
     placeDefault(cfg, 'default')
     const r = asEach(cfg, both({ mentioned: ['sales'] }))
-    expect(owners(r)).toEqual(['sales'])
+    expect(owningApps(r)).toEqual(['sales'])
     expect(r.default.trace[0].why).toContain('sales is tagged')
     // a bound thread where the other app is tagged belongs to the tagged app: it opens that app's own conversation
     const bound = asEach(TWO, both({ bound: 'crm', boundApp: 'default', mentioned: ['sales'] }))
-    expect(owners(bound)).toEqual(['sales'])
+    expect(owningApps(bound)).toEqual(['sales'])
     expect(bound.default.trace[0].why).toContain('sales is tagged')
   })
-  test('two tags: the first in the text owns it', () => {
-    expect(owners(asEach(TWO, { heardBy: ['default', 'sales'], mentioned: ['sales', 'default'] }))).toEqual(['sales'])
+  test('two tags: the first in the text is the owning app', () => {
+    expect(owningApps(asEach(TWO, { heardBy: ['default', 'sales'], mentioned: ['sales', 'default'] }))).toEqual(['sales'])
     const r = asEach(TWO, { heardBy: ['default', 'sales'], mentioned: ['default', 'sales'] })
-    expect(owners(r)).toEqual(['default'])
+    expect(owningApps(r)).toEqual(['default'])
     expect(r.sales.trace[0].why).toContain('default is tagged first')
   })
   test('an untagged follow-up stays with the app that opened the conversation, against default_app and `default`', () => {
     const cfg = structuredClone(TWO)
     placeDefault(cfg, 'sales')
     const r = asEach(cfg, both({ bound: 'crm', boundApp: 'default' }))
-    expect(owners(r)).toEqual(['default'])
-    expect(r.sales.trace[0].why).toBe('app:sales heard it, but app:default owns it (app:default opened this conversation, and no app is tagged), so only app:default answers')
-    // the opener is gone from the channel: ownership is decided anew
-    expect(owners(asEach(TWO, { heardBy: ['sales', 'support'], boundApp: 'default' }))).toEqual(['sales'])
+    expect(owningApps(r)).toEqual(['default'])
+    expect(r.sales.trace[0].why).toBe('app:sales heard it, but app:default is the owning app (app:default opened this conversation, and no app is tagged), so only app:default answers')
+    // the opener is gone from the channel: the owning app is decided anew
+    expect(owningApps(asEach(TWO, { heardBy: ['sales', 'support'], boundApp: 'default' }))).toEqual(['sales'])
   })
-  test('a non-owner is ignored even when addressed, messages = "all", or bound: never a second answer', () => {
+  test('an app that is not the owning app is ignored even when addressed, messages = "all", or bound: never a second answer', () => {
     const cfg = structuredClone(TWO)
     cfg.places['slack:#help'] = { files: false, messages: 'all', bots: false, reactions: 'off', linkPreviews: true }
     for (const extra of [{}, { addressed: false }, { bound: 'crm', boundApp: 'default' }]) {
@@ -408,8 +408,8 @@ describe('two apps in one channel: exactly one owns it', () => {
     const cfg = structuredClone(TWO)
     cfg.rules = cfg.rules.filter(r => r.target !== 'crm')   // only deals (pinned to sales) is sent #help
     const r = asEach(cfg, both())
-    expect(owners(r)).toEqual(['sales'])
-    expect(r.sales).toMatchObject({ fate: 'deliver', to: 'deals', owner: 'sales' })
+    expect(owningApps(r)).toEqual(['sales'])
+    expect(r.sales).toMatchObject({ fate: 'deliver', to: 'deals', owningApp: 'sales' })
     expect(r.default.trace[0].why).toContain('the app named `app:default` delivers to no one here; app:sales is the first declared app that delivers to someone here')
   })
   test('an explicit default_app is honored even if it reaches no one: the message is unrouted, never handed on', () => {
@@ -417,19 +417,19 @@ describe('two apps in one channel: exactly one owns it', () => {
     cfg.rules = cfg.rules.filter(r => r.target !== 'crm')
     placeDefault(cfg, 'default')
     const r = asEach(cfg, both())
-    expect(r.default).toMatchObject({ fate: 'unrouted', owner: 'default' })
+    expect(r.default).toMatchObject({ fate: 'unrouted', owningApp: 'default' })
     expect(r.sales.fate).toBe('ignored')
   })
   test('when no heard app delivers to anyone, the plain pick applies: `default`, else first declared', () => {
     const cfg = structuredClone(TWO)
     cfg.rules = []
-    expect(owners(asEach(cfg, both()))).toEqual(['default'])
-    expect(owners(Object.fromEntries(['support', 'sales'].map(a => [a, route(cfg, { ...inApp(a), heardBy: ['support', 'sales'] })])))).toEqual(['sales'])
+    expect(owningApps(asEach(cfg, both()))).toEqual(['default'])
+    expect(owningApps(Object.fromEntries(['support', 'sales'].map(a => [a, route(cfg, { ...inApp(a), heardBy: ['support', 'sales'] })])))).toEqual(['sales'])
   })
   test('heard is one set: heardBy without `app` on a Slack place counts the app named `default` too, and exactly one app is not ignored', () => {
     const m = msg('slack:U0ALICE', HELP, { heardBy: ['sales'] })
     const d = route(TWO, m)   // no app: the app named `default`
-    expect(d).toMatchObject({ app: 'default', owner: 'default' })
+    expect(d).toMatchObject({ app: 'default', owningApp: 'default' })
     expect(d.fate).not.toBe('ignored')
     expect(owningApp(TWO, m)).toMatchObject({ app: 'default', contested: true })
     expect(route(TWO, { ...m, app: 'sales', heardBy: ['default'] }).fate).toBe('ignored')
@@ -456,7 +456,7 @@ describe('a binding that is skipped counts as no binding', () => {
     // a binding that holds still carries it; addressed again, it is routed anew
     expect(chatter({ bound: 'crm' })).toMatchObject({ fate: 'deliver', to: 'crm', via: 'binding' })
     expect(chatter({ bound: 'deals', addressed: true })).toMatchObject({ fate: 'deliver', to: 'crm', via: 'rule', bind: true })
-    // a specialist gone from hydra.toml is different: the conversation goes on, and its new owner takes it
+    // a specialist gone from hydra.toml is different: the conversation goes on, and its new specialist takes it
     expect(chatter({ bound: 'vanished' })).toMatchObject({ fate: 'deliver', to: 'crm', via: 'rule' })
   })
 })
@@ -473,13 +473,13 @@ describe('refusal knows the app', () => {
   })
 })
 
-test('explain shows the app, who owns the message, and a non-owner standing down', () => {
+test('explain shows the app, the owning app, and an app that is not the owning app standing down', () => {
   const own = explain(route(TWO, inApp('default', { heardBy: ['default', 'sales'] })))
-  expect(own).toContain('through: app:default (owns this message)')
-  expect(own).toContain('→ owner app:default: app:default owns it:')
+  expect(own).toContain('through: app:default (owning app)')
+  expect(own).toContain('→ owning-app app:default: app:default is the owning app:')
   const other = explain(route(TWO, inApp('sales', { heardBy: ['default', 'sales'] })))
-  expect(other).toContain('through: app:sales (does not own it: app:default does)')
-  expect(other.split('\n').at(-1)).toBe('ignored: app:default owns this message, so app:sales does not answer')
+  expect(other).toContain('through: app:sales (not the owning app: app:default is)')
+  expect(other.split('\n').at(-1)).toBe('ignored: app:default is the owning app, so app:sales does not answer')
 })
 
 describe('DM places: one name, one meaning', () => {

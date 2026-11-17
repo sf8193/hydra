@@ -123,7 +123,7 @@ describe('jobs sync registers launchd-runner jobs', () => {
 
   test('a failed bootstrap fails the sync and leaves no plist, so the next sync registers it', async () => {
     launchdIO.launchctl = (a: string[]) => a[0] === 'bootstrap' ? { code: 5, err: 'Input/output error' } : { code: 0, err: '' }
-    expect(await sync(jobs(LD))).toEqual({ ok: false, lines: ['launchd: scan: registering failed: Input/output error; run jobs sync again'] })
+    expect(await sync(jobs(LD))).toEqual({ ok: false, lines: ['launchd: scan: registering failed: Input/output error; run schedules sync again'] })
     expect(existsSync(plist('scan'))).toBe(false)
     launchdIO.launchctl = (a: string[]) => { calls.push(a); return { code: 0, err: '' } }
     expect(await sync(jobs(LD))).toEqual({ ok: true, lines: [`launchd: registered scan (runs ${ENTRY})`] })

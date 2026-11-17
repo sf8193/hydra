@@ -4,7 +4,7 @@ Checked against code at 42721c5. Bold names are README's core abstractions or th
 
 | Box or edge | Source | What the line shows |
 |---|---|---|
-| a message this app owns | `routing/route.ts:211-218` | `route()` asks `owningApp` first; drawn in flow-route-owner |
+| a message this app is the owning app of | `routing/route.ts:211-218` | `route()` asks `owningApp` first; drawn in flow-route-owning-app |
 | Person, roles | `routing/route.ts:71-79` `identify` | roles = theirs + `people` + `anyone`; a stranger holds only `anyone` |
 | 1. Binding? | `routing/route.ts:224-232` | `msg.bound`, after `renamed_from` renames (`currentId`, `:107`) |
 | bound, and it holds → 5 | `routing/route.ts:228-230` | live: declared and served → `decide(to, 'binding', false)` (no new bind) |

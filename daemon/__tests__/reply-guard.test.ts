@@ -27,7 +27,7 @@ import { codexTurnOutcome, type TurnSources } from '../engines/codex-observation
 import type { Occupancy } from '../session-reachability.js'
 // Liveness is occupancy()'s answer, set per record; a stand-in's stamp (`deadAt`) is not consulted: a stamped record may still run.
 const occupancies = new Map<string, Occupancy>()
-const occupancyOf = (s: { sessionId: string }): Occupancy => occupancies.get(s.sessionId) ?? 'reachable'
+const occupancyOf = (s: { sessionId: string }): Occupancy => occupancies.get(s.sessionId) ?? 'connected'
 
 
 // deps.turnOutcome over fake sources; the engine switch mirrors resolveEngine.

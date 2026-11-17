@@ -82,7 +82,7 @@ describe('boot sweep grace', () => {
     expect(isAlive(b)).toBe(true)
     // Long past the grace window and even with a stale stamp, a Codex mid-reconnect is reachable (a queued turn waits
     // out the reconnect), never dead or orphaned: a revive over it would run a second app-server.
-    expect(occupancy({ ...b, createdAt: 0, deadAt: 1 })).toBe('reachable')
+    expect(occupancy({ ...b, createdAt: 0, deadAt: 1 })).toBe('connected')
     expect(occupied(occupancy({ ...b, createdAt: 0, deadAt: 1 }))).toBe(true)
     release()
     await sweep

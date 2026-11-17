@@ -47,13 +47,13 @@ describe('hydra route --app', () => {
     expect(routeFor(CFG, { person: 'person:op', place: 'slack:#help' }, aliases)).toMatchObject({ ok: true })
     expect(run({ app: 'role:sales' })).toEqual({ ok: false, error: '`--app`: "role:sales" starts with "role:", which is not a kind this key takes: write app:<id>' })
   })
-  test('--heard-by and --mentioned show which app owns the message, and who stands down', () => {
+  test('--heard-by and --mentioned show which app is the owning app, and who stands down', () => {
     const both = { heardBy: 'app:default,app:sales' }
-    expect((run({ ...both }) as { report: string }).report).toContain('through: app:default (owns this message)')
+    expect((run({ ...both }) as { report: string }).report).toContain('through: app:default (owning app)')
     const loser = run({ ...both, app: 'app:sales' }) as { fate: string; report: string }
     expect(loser.fate).toBe('ignored')
-    expect(loser.report).toContain('through: app:sales (does not own it: app:default does)')
-    expect(loser.report).toContain('ignored: app:default owns this message, so app:sales does not answer')
+    expect(loser.report).toContain('through: app:sales (not the owning app: app:default is)')
+    expect(loser.report).toContain('ignored: app:default is the owning app, so app:sales does not answer')
     expect(run({ ...both, app: 'app:sales', mentioned: 'app:sales' })).toMatchObject({ fate: 'deliver', to: 'deals' })
     expect(run({ ...both, boundApp: 'app:default', bound: 'crm', app: 'app:sales' })).toMatchObject({ fate: 'ignored' })
     // a tag wins over the app that opened the conversation

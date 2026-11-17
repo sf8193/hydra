@@ -4,7 +4,7 @@ import { test, expect, afterEach } from 'bun:test'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { SlackWatcher, type SlackWatchConfig } from '../watch.js'
+import { ConversationTable, type ConversationConfig } from '../watch.js'
 import { BOT, SALES_BOT, oneListener, alsoHeard, sharedChannel, view } from './slack-config.js'
 
 const CH = 'C0FOOD'
@@ -38,10 +38,10 @@ function holder(c: Case) {
     : c.shape === 'two' ? sharedChannel(CH, extra).replaceAll('["role:anyone"]', c.reach)
     : oneListener(CH, 'helper', c.reach, extra)
   const identities = { default: { botUserId: BOT }, sales: { botUserId: SALES_BOT } }
-  const byApp: Record<string, SlackWatchConfig> = { default: view(toml, { identities }), sales: view(toml, { app: 'sales', botUserId: SALES_BOT, identities }) }
+  const byApp: Record<string, ConversationConfig> = { default: view(toml, { identities }), sales: view(toml, { app: 'sales', botUserId: SALES_BOT, identities }) }
   let now = 1_000_000_000_000
   let sent = 0
-  const w = new SlackWatcher({
+  const w = new ConversationTable({
     now: () => now, file: join(dir, 'w.json'), log: () => {}, config: app => byApp[app ?? 'default'],
     deliver: async () => { sent++; return { ok: true } },
     guard: async (_g, input) => input.person === null ? { verdict: 'drop' } : { verdict: 'deliver' },

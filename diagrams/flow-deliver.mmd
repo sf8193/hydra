@@ -38,7 +38,7 @@ sequenceDiagram
         handler->>recovery: reviveThreadForDelivery(id)<br/>under the thread's target lock
         alt occupancy orphaned
             handler-->>cli: {exitCode: 4, "running but not connected"}
-        else someone home (reachable / starting)
+        else someone home (connected / starting)
             Note over recovery: nothing spawned
         else backing off
             handler-->>cli: {exitCode: 6, "not retrying until …"} (the platform is not asked)
@@ -82,7 +82,7 @@ sequenceDiagram
         end
     end
 
-    Note over handler: reachable (or --queue with orphan)
+    Note over handler: connected (or --queue with orphan)
 
     alt codex session (adapter routing)
         handler->>cc: adapter.deliver(info, message, meta)

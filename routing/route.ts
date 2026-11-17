@@ -1,7 +1,7 @@
 // Which specialist hears a message, and whether its sender may reach it. Pure: config and message in, a decision out.
 // It reads who sent a message, where, and which apps it tags, never the rest of what it says.
 //
-//   0. When several Slack apps are in the channel, one app owns the message (`owningApp`); the others ignore it, so exactly one answers.
+//   0. When several Slack apps are in the channel, one app is the owning app of the message (`owningApp`); the others ignore it, so exactly one answers.
 //   1. A bound conversation follows its binding, unless hydra.toml no longer declares that specialist, or this app cannot be served by it
 //      (it is pinned elsewhere, or this app serves only specialists pinned to it): then the message is routed anew, and counts as unbound for "is it addressed" (a gone specialist's thread stays addressed).
 //   2. Otherwise the first matching [[rules]] entry: its place, app and sender all match (an absent `place` or `app` matches every one). An old `listens` was read as rules at load, after the explicit ones.
@@ -39,7 +39,7 @@ export type Inbound = {
    * Absent elsewhere (Discord, GitHub, the CLI): no app, so no app rule matches and no pinned specialist takes it.
    */
   app?: string
-  /** Every app in the channel that heard it; `app` is always counted. More than one means ownership decides who answers. */
+  /** Every app in the channel that heard it; `app` is always counted. More than one means the owning app answers. */
   heardBy?: string[]
   /** The apps the text tags, first tag first. */
   mentioned?: string[]
@@ -49,11 +49,11 @@ export type Inbound = {
 
 /** One candidate considered, in order, and what became of it. What `hydra route` prints. */
 export type Step = { via: Via; to: string; matched: boolean; why: string }
-/** `owner` is the one step whose `to` is an app id, not a specialist: the app that owns the message. `trigger` is the step where nothing makes the message count: not addressed, and no place here lets everything in. */
-export type Via = 'owner' | 'binding' | 'trigger' | 'rule' | 'operator-dm'
+/** `owning-app` is the one step whose `to` is an app id, not a specialist: the app that answers the message. `trigger` is the step where nothing makes the message count: not addressed, and no place here lets everything in. */
+export type Via = 'owning-app' | 'binding' | 'trigger' | 'rule' | 'operator-dm'
 
-/** On every decision: the app that heard the message, and (when it was not alone in the channel) the app that owns it. */
-type Heard = { app?: string; owner?: string }
+/** On every decision: the app that heard the message, and (when it was not alone in the channel) the owning app. */
+type Heard = { app?: string; owningApp?: string }
 
 export type Decision = Heard & (
   /** Delivered to `to`; `bind` is set when this message opens the conversation. */
@@ -62,7 +62,7 @@ export type Decision = Heard & (
   | { fate: 'refused'; to: string; via: Via; sender: Sender; trace: Step[]; why: string }
   /** Addressed, but no specialist hears this place. */
   | { fate: 'unrouted'; sender: Sender; trace: Step[] }
-  /** Not addressed, and not in a bound conversation, or another app owns it: not for this app. */
+  /** Not addressed, and not in a bound conversation, or another app is the owning app: not for this app. */
   | { fate: 'ignored'; sender: Sender; trace: Step[] }
 )
 
@@ -168,7 +168,7 @@ export function reachesAnyone(cfg: HydraConfig, app: string, at: Place[]): boole
 }
 
 /**
- * Which app owns a message, so exactly one answers. `contested` is whether more than one app heard it. The first of these that applies:
+ * Which app is the owning app of a message, so exactly one answers. `contested` is whether more than one app heard it. The first of these that applies:
  *   1. the first app the text tags that heard it: a tag always wins (it opens that app's own conversation);
  *   2. the app that opened the conversation (`boundApp`), if it heard it;
  *   3. the place's `default_app`, if it heard it: honored as written, even if it reaches no one;
@@ -209,18 +209,18 @@ export function route(cfg: HydraConfig, msg: Inbound): Decision {
     return why ? { ...heard, fate: 'refused', to, via, sender, trace, why } : { ...heard, fate: 'deliver', to, via, bind, sender, trace }
   }
 
-  // Several apps in one channel: one owns the message, the rest stand down, whatever else would match.
+  // Several apps in one channel: one is the owning app, the rest stand down, whatever else would match.
   const own = owningApp(cfg, msg)
   if (own?.contested) {
-    heard.owner = own.app
+    heard.owningApp = own.app
     const mine = own.app === app
-    trace.push({ via: 'owner', to: own.app, matched: mine, why: mine ? `${spelledApp(app!)} owns it: ${own.why}` : `${app ? spelledApp(app) : 'no Slack app'} heard it, but ${spelledApp(own.app)} owns it (${own.why}), so only ${spelledApp(own.app)} answers` })
+    trace.push({ via: 'owning-app', to: own.app, matched: mine, why: mine ? `${spelledApp(app!)} is the owning app: ${own.why}` : `${app ? spelledApp(app) : 'no Slack app'} heard it, but ${spelledApp(own.app)} is the owning app (${own.why}), so only ${spelledApp(own.app)} answers` })
     if (!mine) return { ...heard, fate: 'ignored', sender, trace }
   }
 
   // A binding that is skipped is routed anew. If it is skipped because this app cannot be served by its specialist, the message
   // counts as unbound: chatter in that thread is not addressed. If its specialist is gone from hydra.toml, the conversation goes on,
-  // so it stays addressed and its new owner takes it.
+  // so it stays addressed and its new specialist takes it.
   let addressed = msg.addressed
   if (msg.bound) {
     const to = currentId(cfg, msg.bound)
@@ -275,13 +275,13 @@ export function explain(d: Decision, guardCommand?: string): string {
   const who = d.sender.person ? `${spelledPerson(d.sender.person.id)}${d.sender.operator ? ' (operator)' : ''}, roles ${roles}` : `a stranger, roles ${roles}`
   const lines = [`sender: ${who}`]
   // Only when it says something: not for the one app a single-app hydra has.
-  if (d.app && (d.owner || d.app !== DEFAULT_SLACK_APP)) lines.push(`through: ${spelledApp(d.app)}${d.owner ? (d.owner === d.app ? ' (owns this message)' : ` (does not own it: ${spelledApp(d.owner)} does)`) : ''}`)
-  for (const s of d.trace) lines.push(`  ${s.matched ? '→' : ' '} ${s.via}${s.to ? ` ${s.via === 'owner' ? spelledApp(s.to) : spelledBare(s.to)}` : ''}: ${s.why}`)
+  if (d.app && (d.owningApp || d.app !== DEFAULT_SLACK_APP)) lines.push(`through: ${spelledApp(d.app)}${d.owningApp ? (d.owningApp === d.app ? ' (owning app)' : ` (not the owning app: ${spelledApp(d.owningApp)} is)`) : ''}`)
+  for (const s of d.trace) lines.push(`  ${s.matched ? '→' : ' '} ${s.via}${s.to ? ` ${s.via === 'owning-app' ? spelledApp(s.to) : spelledBare(s.to)}` : ''}: ${s.why}`)
   if (d.fate === 'deliver') {
     lines.push(`delivers to ${spelledBare(d.to)} (by ${d.via})${d.bind ? ', and binds the conversation to it' : ''}`)
     if (guardCommand && !d.sender.operator) lines.push(`then the guard judges it: ${guardCommand}`)
   } else if (d.fate === 'refused') lines.push(`refused (🚫): ${d.why}`)
   else if (d.fate === 'unrouted') lines.push('unrouted: no rule sends this place to anyone (a mention gets a 🚫; a DM gets no reply)')
-  else lines.push(d.owner && d.owner !== d.app ? `ignored: ${spelledApp(d.owner)} owns this message, so ${d.app ? spelledApp(d.app) : 'no Slack app'} does not answer` : 'ignored: not addressed to hydra')
+  else lines.push(d.owningApp && d.owningApp !== d.app ? `ignored: ${spelledApp(d.owningApp)} is the owning app, so ${d.app ? spelledApp(d.app) : 'no Slack app'} does not answer` : 'ignored: not addressed to hydra')
   return lines.join('\n')
 }

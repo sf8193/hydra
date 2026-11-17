@@ -7,7 +7,7 @@ import { registry } from '../../../daemon/sessions.js'
 import { setSpecialistThread, _reloadSpecialists } from '../../../specialists/specialists.js'
 import { _setHydraConfigForTesting } from '../../../daemon/hydra-config.js'
 import {
-  getSlackWatcher, bindConversation, unbindConversation, formatConversations, formatConversationsFor, operatorBind, refreshSlackSpecialistSurface, slackWatchHealth, slackTokens, slackRuntimeDeps, parseConversation, replyInConversation, targetFor, startSlackWatch, stopSlackWatch,
+  getConversationTable, bindConversation, unbindConversation, formatConversations, formatConversationsFor, operatorBind, refreshSlackSpecialistSurface, slackConversationHealth, slackTokens, slackRuntimeDeps, parseConversation, replyInConversation, targetFor, startConversationTable, stopConversationTable,
 } from '../runtime.js'
 import { sessionCapabilities, isSpecialistOccupant, isToolAllowed } from '../../../daemon/tool-surface.js'
 import { emit } from '../../../daemon/event-bus.js'
@@ -47,7 +47,7 @@ let current = TOML
 function configure(toml = TOML, over: Parameters<typeof view>[1] = {}) {
   current = toml
   _setHydraConfigForTesting(hydra(toml))
-  const v = view(toml, { maxWatches: 3, ...over })
+  const v = view(toml, { maxConversations: 3, ...over })
   slackRuntimeDeps.view = () => v
 }
 const food = { threadId: FOOD_THREAD }
@@ -70,7 +70,7 @@ beforeEach(() => {
   setSpecialistThread(OPS, OPS_THREAD)
 })
 afterEach(() => {
-  for (const e of getSlackWatcher().list()) getSlackWatcher().unwatch(e.channel, e.threadTs)
+  for (const e of getConversationTable().list()) getConversationTable().unwatch(e.channel, e.threadTs)
   for (const s of sessionIds.splice(0)) registry.delete(s)
   _setHydraConfigForTesting(undefined)
   rmSync(join(STATE_DIR, 'specialist-threads.json'), { force: true })
@@ -123,7 +123,7 @@ describe('any session listens to a Slack thread: bound to its own thread', () =>
 
   test('it binds a thread anywhere to itself, sees it in list_watches, lets go of it; another session can neither unbind nor take it', async () => {
     expect(await bindConversation({ threadId: MINE }, 'slack:C9:1793732224.093059')).toContain('is bound to this session')
-    expect(getSlackWatcher().get('C9', '1793732224.093059')).toMatchObject({ specialist: MINE, mentionedBy: 'tool' })
+    expect(getConversationTable().get('C9', '1793732224.093059')).toMatchObject({ specialist: MINE, mentionedBy: 'tool' })
     expect(formatConversationsFor({ threadId: MINE }).join()).toContain('slack:C9:1793732224.093059')
     expect(formatConversationsFor({ threadId: OTHER })).toEqual([])
     expect(() => unbindConversation({ threadId: OTHER }, 'slack:C9:1793732224.093059')).toThrow(`is bound to ${MINE}, not ${OTHER}`)
@@ -136,7 +136,7 @@ describe('any session listens to a Slack thread: bound to its own thread', () =>
     session('sw-slack', SLACK)
     expect(isToolAllowed('sw-slack', 'bind_conversation')).toBe(true)
     expect(await bindConversation({ threadId: SLACK }, 'slack:C9:1793732224.093060')).toContain('is bound to this session')
-    expect(getSlackWatcher().get('C9', '1793732224.093060')).toMatchObject({ specialist: SLACK, mentionedBy: 'tool' })
+    expect(getConversationTable().get('C9', '1793732224.093060')).toMatchObject({ specialist: SLACK, mentionedBy: 'tool' })
     expect(unbindConversation({ threadId: SLACK }, 'slack:C9:1793732224.093060')).toBe('slack:C9:1793732224.093060 is unbound')
   })
 
@@ -157,21 +157,21 @@ describe('any session listens to a Slack thread: bound to its own thread', () =>
     const told: [string, string][] = []
     const realSend = gateway.send
     ;(gateway as any).send = async (c: string, text: string) => { told.push([c, text]); return 'id' }
-    stopSlackWatch(); startSlackWatch()
+    stopConversationTable(); startConversationTable()
     try {
       session('sw-listener', MINE)
       await bindConversation({ threadId: MINE }, 'slack:C9:1793732224.093062')
       await bindConversation(food, 'slack:C1:5.000003')
       for (const t of ['C9:1793732224.093062', 'C1:5.000003']) registry.setThread(t, 'sw-host')
-      getSlackWatcher().handle({ channel: 'C9', ts: '1793732224.093063', threadTs: '1793732224.093062', user: 'UANYONE', text: 'for the host' } as any)
-      getSlackWatcher().handle({ channel: 'C1', ts: '5.000004', threadTs: '5.000003', user: 'UANYONE', text: 'for food' } as any)
-      await getSlackWatcher().flush()
-      expect(getSlackWatcher().get('C9', '1793732224.093062')).toBeUndefined()
-      expect(getSlackWatcher().get('C1', '5.000003')?.specialist).toBe(FOOD)
+      getConversationTable().handle({ channel: 'C9', ts: '1793732224.093063', threadTs: '1793732224.093062', user: 'UANYONE', text: 'for the host' } as any)
+      getConversationTable().handle({ channel: 'C1', ts: '5.000004', threadTs: '5.000003', user: 'UANYONE', text: 'for food' } as any)
+      await getConversationTable().flush()
+      expect(getConversationTable().get('C9', '1793732224.093062')).toBeUndefined()
+      expect(getConversationTable().get('C1', '5.000003')?.specialist).toBe(FOOD)
       await Bun.sleep(5)
       expect(told.filter(([c, t]) => c === MINE && t.includes("is now a hydra session's own thread") && t.includes('(1 owed dropped)'))).toHaveLength(1)
     } finally {
-      (gateway as any).send = realSend; stopSlackWatch()
+      (gateway as any).send = realSend; stopConversationTable()
       for (const t of ['C9:1793732224.093062', 'C1:5.000003']) registry.deleteThread(t)
     }
   })
@@ -188,7 +188,7 @@ describe('any session listens to a Slack thread: bound to its own thread', () =>
     try {
       await bindConversation({ threadId: MINE }, 'slack:C1:5.000001')
       expect(await bindConversation(food, 'slack:C1:5.000001')).toStartWith(`slack:C1:5.000001 is bound to ${FOOD}`)
-      expect(getSlackWatcher().get('C1', '5.000001')?.specialist).toBe(FOOD)
+      expect(getConversationTable().get('C1', '5.000001')?.specialist).toBe(FOOD)
       await expect(bindConversation({ threadId: MINE }, 'slack:C1:5.000001')).rejects.toThrow(`is bound to ${FOOD}`)
       await Bun.sleep(5)
       expect(told.some(([c, t]) => c === MINE && t.includes(`${FOOD} took it`))).toBe(true)
@@ -204,8 +204,8 @@ describe('any session listens to a Slack thread: bound to its own thread', () =>
   describe('a session thread keeps its bound conversations while no session is in it', () => {
     const woken: { apps?: string[]; why?: string }[] = []
     const realWake = slackRuntimeDeps.wake
-    beforeEach(() => { woken.length = 0; slackRuntimeDeps.wake = (apps, why) => { woken.push({ apps, why }) }; stopSlackWatch(); startSlackWatch() })
-    afterEach(() => { slackRuntimeDeps.wake = realWake; jest.useRealTimers(); stopSlackWatch() })
+    beforeEach(() => { woken.length = 0; slackRuntimeDeps.wake = (apps, why) => { woken.push({ apps, why }) }; stopConversationTable(); startConversationTable() })
+    afterEach(() => { slackRuntimeDeps.wake = realWake; jest.useRealTimers(); stopConversationTable() })
     const told = (): [string, string][] => { const out: [string, string][] = []; (gateway as any).send = async (c: string, text: string) => { out.push([c, text]); return 'id' }; return out }
 
     test('a session that ends without being killed (a crash), then resumed after what used to be the grace: still bound, nothing said, and the owed messages are delivered at once', async () => {
@@ -215,12 +215,12 @@ describe('any session listens to a Slack thread: bound to its own thread', () =>
         jest.useFakeTimers()
         session('sw-first', MINE)
         await bindConversation({ threadId: MINE }, 'slack:C9:6.000001')
-        getSlackWatcher().handle({ channel: 'C9', ts: '6.000002', threadTs: '6.000001', user: 'UANYONE', text: 'while you were gone' } as any)
+        getConversationTable().handle({ channel: 'C9', ts: '6.000002', threadTs: '6.000001', user: 'UANYONE', text: 'while you were gone' } as any)
         ;(registry.get('sw-first') as any).deadAt = 1
         emit('session:death', { sessionId: 'sw-first', threadId: MINE, wasOwner: true, tmuxName: 'sw-first' })
         jest.advanceTimersByTime(61_000)                                     // past the 60 s an empty thread used to be given
         jest.advanceTimersByTime(7 * 86_400_000 - 62_000)                    // and the whole idle week but one minute
-        expect(getSlackWatcher().get('C9', '6.000001')?.specialist).toBe(MINE)
+        expect(getConversationTable().get('C9', '6.000001')?.specialist).toBe(MINE)
         expect(out.filter(([, t]) => t.includes('stopped listening'))).toEqual([])
         expect(woken).toEqual([])                                            // no session in the thread: nothing to deliver yet
         session('sw-resumed', MINE)
@@ -236,14 +236,14 @@ describe('any session listens to a Slack thread: bound to its own thread', () =>
         await bindConversation({ threadId: MINE }, 'slack:C9:12.000001')
         await bindConversation({ threadId: MINE }, 'slack:C9:13.000001')
         await bindConversation({ threadId: OTHER }, 'slack:C9:14.000001')
-        getSlackWatcher().handle({ channel: 'C9', ts: '12.000002', threadTs: '12.000001', user: 'UANYONE', text: 'owed' } as any)
-        await getSlackWatcher().flush()
-        expect(getSlackWatcher().get('C9', '12.000001')?.owed).toHaveLength(1)
+        getConversationTable().handle({ channel: 'C9', ts: '12.000002', threadTs: '12.000001', user: 'UANYONE', text: 'owed' } as any)
+        await getConversationTable().flush()
+        expect(getConversationTable().get('C9', '12.000001')?.owed).toHaveLength(1)
         emit('session:death', { sessionId: 'killed', threadId: MINE, wasOwner: true, tmuxName: 'killed', deliberate: true })
         await new Promise(r => setTimeout(r, 20))
-        expect(getSlackWatcher().get('C9', '12.000001')).toBeUndefined()
-        expect(getSlackWatcher().get('C9', '13.000001')).toBeUndefined()
-        expect(getSlackWatcher().get('C9', '14.000001')?.specialist).toBe(OTHER)
+        expect(getConversationTable().get('C9', '12.000001')).toBeUndefined()
+        expect(getConversationTable().get('C9', '13.000001')).toBeUndefined()
+        expect(getConversationTable().get('C9', '14.000001')?.specialist).toBe(OTHER)
         const said = out.filter(([c]) => c === MINE).map(([, t]) => t)
         expect(said).toHaveLength(1)                                           // one notice, not one per conversation, and not a second for the owed drop
         expect(said[0]).toContain('This session was killed')
@@ -260,9 +260,9 @@ describe('any session listens to a Slack thread: bound to its own thread', () =>
       await bindConversation({ threadId: MINE }, 'slack:C9:7.000001')        // owes nothing
       emit('session:bridge-registered', { sessionId: 'sw-successor', threadId: MINE })
       expect(woken).toEqual([])                                              // no owed message, no pass
-      getSlackWatcher().handle({ channel: 'C9', ts: '7.000002', threadTs: '7.000001', user: 'UANYONE', text: 'held' } as any)
-      await getSlackWatcher().flush()                                        // no session is in the thread: the delivery fails and stays owed
-      expect(getSlackWatcher().get('C9', '7.000001')?.owed).toEqual(['7.000002'])
+      getConversationTable().handle({ channel: 'C9', ts: '7.000002', threadTs: '7.000001', user: 'UANYONE', text: 'held' } as any)
+      await getConversationTable().flush()                                        // no session is in the thread: the delivery fails and stays owed
+      expect(getConversationTable().get('C9', '7.000001')?.owed).toEqual(['7.000002'])
       expect(transport.messageQueues.get('main') ?? []).toEqual([])          // owed to the thread's owner, never sent to main
       emit('session:bridge-registered', { sessionId: 'sw-successor', threadId: OTHER })   // another thread's session
       expect(woken).toEqual([])
@@ -281,26 +281,26 @@ describe('any session listens to a Slack thread: bound to its own thread', () =>
         ;(gateway as any).threadExists = async (t: string) => t !== MINE
         emit('session:death', { sessionId: 'gone-a', threadId: OTHER, wasOwner: true, tmuxName: 'gone-a' })
         await new Promise(r => setTimeout(r, 10))
-        expect(getSlackWatcher().get('C9', '9.000001')?.specialist).toBe(OTHER)      // exists: kept
+        expect(getConversationTable().get('C9', '9.000001')?.specialist).toBe(OTHER)      // exists: kept
         emit('session:death', { sessionId: 'gone-b', threadId: MINE, wasOwner: true, tmuxName: 'gone-b' })
         await new Promise(r => setTimeout(r, 10))
-        expect(getSlackWatcher().get('C9', '8.000001')).toBeUndefined()
+        expect(getConversationTable().get('C9', '8.000001')).toBeUndefined()
         expect(logged.join('')).toContain(`unbound slack:C9:8.000001: its session thread ${MINE} was deleted`)   // said, though nothing was owed
         ;(gateway as any).threadExists = async () => { throw new Error('platform unreachable') }
         emit('session:death', { sessionId: 'gone-c', threadId: OTHER, wasOwner: true, tmuxName: 'gone-c' })
         await new Promise(r => setTimeout(r, 10))
-        expect(getSlackWatcher().get('C9', '9.000001')?.specialist).toBe(OTHER)      // unconfirmed: kept
+        expect(getConversationTable().get('C9', '9.000001')?.specialist).toBe(OTHER)      // unconfirmed: kept
       } finally { (gateway as any).threadExists = real; process.stderr.write = realWrite }
     })
 
     test('a thread deleted while the daemon was down is found at start, not an hour later', async () => {
       const real = gateway.threadExists
       try {
-        getSlackWatcher().bind('C9', '11.000001', MINE, 'tool')
+        getConversationTable().bind('C9', '11.000001', MINE, 'tool')
         ;(gateway as any).threadExists = async () => false
-        stopSlackWatch(); startSlackWatch()
+        stopConversationTable(); startConversationTable()
         await new Promise(r => setTimeout(r, 10))
-        expect(getSlackWatcher().get('C9', '11.000001')).toBeUndefined()
+        expect(getConversationTable().get('C9', '11.000001')).toBeUndefined()
       } finally { (gateway as any).threadExists = real }
     })
 
@@ -308,7 +308,7 @@ describe('any session listens to a Slack thread: bound to its own thread', () =>
       session('sw-binder', MINE)
       await bindConversation({ threadId: MINE }, 'slack:C9:10.000001')
       expect(unbindConversation({ threadId: MINE }, 'slack:C9:10.000001')).toContain('is unbound')
-      expect(getSlackWatcher().get('C9', '10.000001')).toBeUndefined()
+      expect(getConversationTable().get('C9', '10.000001')).toBeUndefined()
     })
   })
 
@@ -349,7 +349,7 @@ describe('any session listens to a Slack thread: bound to its own thread', () =>
 describe('bind_conversation / unbind_conversation', () => {
   test('a specialist binds a conversation where it listens, and lets go of it', async () => {
     expect(await bindConversation(food, 'slack:C1:1793732224.093059')).toStartWith(`slack:C1:1793732224.093059 is bound to ${FOOD}`)
-    expect(getSlackWatcher().get('C1', '1793732224.093059')).toMatchObject({ specialist: FOOD, mentionedBy: 'tool' })
+    expect(getConversationTable().get('C1', '1793732224.093059')).toMatchObject({ specialist: FOOD, mentionedBy: 'tool' })
     expect(formatConversations()[0]).toContain(`slack:C1:1793732224.093059 (slack:C1) → ${FOOD}`)
     expect(unbindConversation(food, 'slack:C1:1793732224.093059')).toBe('slack:C1:1793732224.093059 is unbound')
     expect(unbindConversation(food, 'slack:C1:1793732224.093059')).toContain('was not bound')
@@ -360,7 +360,7 @@ describe('bind_conversation / unbind_conversation', () => {
     await expect(bindConversation(undefined, 'slack:C1:1.000001')).rejects.toThrow('no thread to bind')
     await expect(bindConversation(food, 'slack:C2:1.000001')).rejects.toThrow(`${FOOD} doesn't answer slack:C2`)
     await expect(bindConversation(food, 'C1:yesterday')).rejects.toThrow('conversation must look like')
-    getSlackWatcher().bind('C1', '9.000001', OPS)
+    getConversationTable().bind('C1', '9.000001', OPS)
     await expect(bindConversation(food, 'slack:C1:9.000001')).rejects.toThrow(`is bound to ${OPS}; only the operator moves it`)
     for (const ts of ['1.000001', '2.000001']) await bindConversation(food, `slack:C1:${ts}`)
     await expect(bindConversation(food, 'slack:C1:4.000001')).rejects.toThrow('conversation table is full')
@@ -374,26 +374,26 @@ describe('bind_conversation / unbind_conversation', () => {
 
   test("a DM or a place's top level is never bound by hand: the operator's DM stays main's", async () => {
     configure(alsoHeard(TOML, FOOD, 'slack:app-dm:*'))
-    getSlackWatcher().bind('D0OP', '0.000000', 'main')
+    getConversationTable().bind('D0OP', '0.000000', 'main')
     await expect(bindConversation(food, 'slack:D0OP')).rejects.toThrow('only a thread can be bound by hand')
     await expect(bindConversation(food, 'slack:C1')).rejects.toThrow('only a thread can be bound by hand')
-    expect(getSlackWatcher().get('D0OP', '0.000000')!.specialist).toBe('main')
+    expect(getConversationTable().get('D0OP', '0.000000')!.specialist).toBe('main')
   })
 
   test('a specialist holds at most TOOL_BIND_MAX conversations it bound itself', async () => {
-    configure(TOML, { maxWatches: 50 })
+    configure(TOML, { maxConversations: 50 })
     for (let i = 1; i <= 10; i++) await bindConversation(food, `slack:C1:${i}.000001`)
     await expect(bindConversation(food, 'slack:C1:11.000001')).rejects.toThrow(`${FOOD} already holds 10 conversations it opened itself`)
     expect(await bindConversation(food, 'slack:C1:3.000001')).toContain('is bound to') // one it holds already is fine
   })
 
   test('a rename through `renamed_from` keeps a specialist\'s hold on its conversations', async () => {
-    getSlackWatcher().bind('C1', '7.000001', 'old-food')
+    getConversationTable().bind('C1', '7.000001', 'old-food')
     configure(TOML.replace(`[specialists.${FOOD}]`, `[specialists.${FOOD}]\nrenamed_from = ["old-food"]`))
     expect(await bindConversation(food, 'slack:C1:7.000001')).toContain(`is bound to ${FOOD}`)
     sessionIds.push('sw-rn')
     registry.set('sw-rn', { sessionId: 'sw-rn', tmuxName: 'sw-rn', threadId: FOOD_THREAD, sessionType: 'thread_owner', engine: 'claude', createdAt: Date.now() } as any)
-    getSlackWatcher().bind('C1', '8.000001', 'old-food')
+    getConversationTable().bind('C1', '8.000001', 'old-food')
     expect(((await executeTool('list_watches', {}, 'sw-rn')).content[0] as { text: string }).text).toContain('slack:C1:8.000001')
     expect(unbindConversation(food, 'slack:C1:8.000001')).toContain('is unbound')
   })
@@ -409,8 +409,8 @@ describe('bind_conversation / unbind_conversation', () => {
       sessionIds.push(id)
       registry.set(id, { sessionId: id, tmuxName: id, threadId, sessionType: 'thread_owner', engine: 'claude', createdAt: Date.now() } as any)
     }
-    getSlackWatcher().watch('C1', '11.000001', FOOD)
-    getSlackWatcher().watch('C2', '22.000001', OPS)
+    getConversationTable().watch('C1', '11.000001', FOOD)
+    getConversationTable().watch('C2', '22.000001', OPS)
     const seen = async (id: string) => ((await executeTool('list_watches', {}, id)).content[0] as { text: string }).text
     expect(await seen('sw-food')).toContain('slack:C1:11.000001')
     expect(await seen('sw-food')).not.toContain('C2:')
@@ -431,14 +431,14 @@ describe('replies: posted only into the conversation they answer', () => {
   test("a specialist's reply goes into its own conversation's thread, as written", async () => {
     fakePost()
     session('r-food', FOOD_THREAD)
-    getSlackWatcher().bind('C1', '5.000001', FOOD)
+    getConversationTable().bind('C1', '5.000001', FOOD)
     expect(await replyInConversation('r-food', 'slack:C1:5.000001', 'Void it from *Invoices* → ⋯')).toBe('posted 1 message to slack:C1:5.000001')
     expect(posts).toEqual(['C1|5.000001|Void it from *Invoices* → ⋯'])
   })
 
   test('a top-level conversation (a DM) is answered at its top level; main answers the operator\'s DM', async () => {
     fakePost()
-    getSlackWatcher().bind('D0OP', '0.000000', 'main')
+    getConversationTable().bind('D0OP', '0.000000', 'main')
     expect(await replyInConversation('main', 'slack:D0OP', 'hi')).toContain('posted 1')
     expect(posts).toEqual(['D0OP|-|hi'])
   })
@@ -447,7 +447,7 @@ describe('replies: posted only into the conversation they answer', () => {
     fakePost()
     session('r-food', FOOD_THREAD)
     session('r-none', 'some-other-thread')
-    getSlackWatcher().bind('C2', '6.000001', OPS)
+    getConversationTable().bind('C2', '6.000001', OPS)
     await expect(replyInConversation('r-food', 'slack:C2:6.000001', 'x')).rejects.toThrow(`is bound to ${OPS}, not ${FOOD}: a reply goes only to a conversation bound to your specialist`)
     await expect(replyInConversation('r-food', 'slack:C1:7.000001', 'x')).rejects.toThrow('is not an open conversation')
     await expect(replyInConversation('r-none', 'slack:C2:6.000001', 'x')).rejects.toThrow(`is bound to ${OPS}: a reply goes only`)
@@ -462,7 +462,7 @@ describe('replies: posted only into the conversation they answer', () => {
     configure(TOML.replace(`workdir = "/w/food"`, `workdir = "/w/food"\nhome_place = "slack:#food-home"`), { names: { C7: 'food-home' } })
     expect(await replyInConversation('r-food', 'slack:#food-home', 'nightly summary')).toBe(`posted to ${FOOD}'s home_place (slack:#food-home); replies in its thread come back to ${FOOD}`)
     expect(posts).toEqual(['C7|-|nightly summary'])
-    expect(getSlackWatcher().get('C7', '1.000001')).toMatchObject({ specialist: FOOD })
+    expect(getConversationTable().get('C7', '1.000001')).toMatchObject({ specialist: FOOD })
     expect(await replyInConversation('r-food', 'slack:C7', 'by id too')).toContain('home_place')
     await expect(replyInConversation('r-ops', 'slack:#food-home', 'not mine')).rejects.toThrow('conversation must look like')
     await expect(replyInConversation('r-ops', 'slack:C7', 'not mine')).rejects.toThrow('is not an open conversation')
@@ -478,14 +478,14 @@ describe('replies: posted only into the conversation they answer', () => {
 
   test("a part with no answer from Slack is reported as unknown (it may have posted), not as failed", async () => {
     session('r-food', FOOD_THREAD)
-    getSlackWatcher().bind('C1', '11.000001', FOOD)
+    getConversationTable().bind('C1', '11.000001', FOOD)
     slackRuntimeDeps.post = async () => { throw new Error('A request error occurred: timeout of 30000ms exceeded') }
     await expect(replyInConversation('r-food', 'slack:C1:11.000001', 'hi')).rejects.toThrow("0 of 1 message(s) posted to slack:C1:11.000001; part 1's outcome is unknown (no answer from Slack: it may have posted)")
   })
 
   test('only a clean refusal counts as "did not post"; fatal_error, a 5xx or a dropped socket may have half succeeded: unknown', async () => {
     session('r-food', FOOD_THREAD)
-    getSlackWatcher().bind('C1', '13.000001', FOOD)
+    getConversationTable().bind('C1', '13.000001', FOOD)
     const fate = async (msg: string) => {
       slackRuntimeDeps.post = async () => { throw new Error(msg) }
       return replyInConversation('r-food', 'slack:C1:13.000001', 'hi').then(() => 'posted', (e: Error) => e.message.includes('outcome is unknown') ? 'unknown' : e.message.includes('did not post') ? 'did not post' : e.message)
@@ -504,21 +504,21 @@ describe('replies: posted only into the conversation they answer', () => {
     let n = 0
     slackRuntimeDeps.post = async () => { if (++n === 2) throw new Error('An API error occurred: ratelimited'); return '300.000001' }
     await expect(replyInConversation('r-food', 'slack:C7', 'para one\n\n'.repeat(800))).rejects.toThrow('reply failed after 1 of 3')
-    expect(getSlackWatcher().get('C7', '300.000001')).toMatchObject({ specialist: FOOD, mentionedBy: 'home' })
+    expect(getConversationTable().get('C7', '300.000001')).toMatchObject({ specialist: FOOD, mentionedBy: 'home' })
   })
 
   test('a conversation moved away mid-reply gets no more of it', async () => {
     session('r-food', FOOD_THREAD)
-    getSlackWatcher().bind('C1', '12.000001', FOOD)
+    getConversationTable().bind('C1', '12.000001', FOOD)
     posts.length = 0
-    slackRuntimeDeps.post = async (c, t, text) => { posts.push(text.slice(0, 8)); getSlackWatcher().bind('C1', '12.000001', OPS); return '1.000001' }
+    slackRuntimeDeps.post = async (c, t, text) => { posts.push(text.slice(0, 8)); getConversationTable().bind('C1', '12.000001', OPS); return '1.000001' }
     await expect(replyInConversation('r-food', 'slack:C1:12.000001', 'para one\n\n'.repeat(800))).rejects.toThrow('stopped after 1 of 3 message(s) to slack:C1:12.000001: it is no longer yours to answer')
     expect(posts).toHaveLength(1)
   })
 
   test('home_place threads count against what a specialist may open itself; past that the post goes, unbound, and the operator hears why', async () => {
     session('r-food', FOOD_THREAD)
-    configure(TOML.replace(`workdir = "/w/food"`, `workdir = "/w/food"\nhome_place = "slack:C7"`), { maxWatches: 50 })
+    configure(TOML.replace(`workdir = "/w/food"`, `workdir = "/w/food"\nhome_place = "slack:C7"`), { maxConversations: 50 })
     let n = 0
     slackRuntimeDeps.post = async () => `${100 + ++n}.000001`
     const posted: string[] = []
@@ -536,14 +536,14 @@ describe('replies: posted only into the conversation they answer', () => {
   test('a rename through `renamed_from` keeps the right to answer', async () => {
     fakePost()
     session('r-food', FOOD_THREAD)
-    getSlackWatcher().bind('C1', '8.000001', 'old-food')
+    getConversationTable().bind('C1', '8.000001', 'old-food')
     configure(TOML.replace(`[specialists.${FOOD}]`, `[specialists.${FOOD}]\nrenamed_from = ["old-food"]`))
     expect(await replyInConversation('r-food', 'slack:C1:8.000001', 'still mine')).toContain('posted 1')
   })
 
   test('long text is split under Slack\'s limit; a failure says how far it got; attachments and empty text are refused', async () => {
     session('r-food', FOOD_THREAD)
-    getSlackWatcher().bind('C1', '9.000001', FOOD)
+    getConversationTable().bind('C1', '9.000001', FOOD)
     fakePost()
     expect(await replyInConversation('r-food', 'slack:C1:9.000001', 'para one\n\n'.repeat(800))).toBe('posted 3 messages to slack:C1:9.000001')
     expect(posts.every(p => p.length < 4000)).toBe(true)
@@ -556,7 +556,7 @@ describe('replies: posted only into the conversation they answer', () => {
   test('the reply tool routes a slack: chat_id here, without Discord\'s allowlist', async () => {
     fakePost()
     session('r-tool', FOOD_THREAD)
-    getSlackWatcher().bind('C1', '10.000001', FOOD)
+    getConversationTable().bind('C1', '10.000001', FOOD)
     const out = await executeTool('reply', { chat_id: 'slack:C1:10.000001', text: 'done' }, 'r-tool')
     expect((out.content[0] as { text: string }).text).toBe('posted 1 message to slack:C1:10.000001')
     expect(posts).toEqual(['C1|10.000001|done'])
@@ -566,7 +566,7 @@ describe('replies: posted only into the conversation they answer', () => {
 describe('sessions = "per-conversation"', () => {
   test('first come, first served: a newer conversation waits behind older waiters, and a freed place wakes them', async () => {
     configure(TOML.replace(`reachable_by = ["role:anyone"]\n`, `reachable_by = ["role:anyone"]\nsessions = "per-conversation"\nmax_sessions = 1\n`))
-    const w = getSlackWatcher()
+    const w = getConversationTable()
     w.bind('C1', '1.000001', FOOD)
     const old = w.get('C1', '1.000001')!
     old.owed = ['1.000001']; old.waitingSince = Date.now() - 60_000
@@ -578,19 +578,19 @@ describe('sessions = "per-conversation"', () => {
     let woke = 0
     const realWake = slackRuntimeDeps.wake
     slackRuntimeDeps.wake = () => { woke++ }
-    startSlackWatch()
+    startConversationTable()
     try {
       emit('session:death', { sessionId: 'x', threadId: 't', wasOwner: true, tmuxName: `${FOOD}_c1-9-000001` })
       emit('session:death', { sessionId: 'y', threadId: 't', wasOwner: true, tmuxName: 'someone-else' })
       expect(woke).toBe(1)
       emit('session:marked-dead', { sessionId: 'z', tmuxName: `${FOOD}_c1-8-000001` }) // a crash the health poll found
       expect(woke).toBe(2)
-    } finally { stopSlackWatch(); slackRuntimeDeps.wake = realWake }
+    } finally { stopConversationTable(); slackRuntimeDeps.wake = realWake }
   })
 
   test("first come, first served only when places are short: with a place to spare, a newer conversation doesn't wait", async () => {
     configure(TOML.replace(`reachable_by = ["role:anyone"]\n`, `reachable_by = ["role:anyone"]\nsessions = "per-conversation"\nmax_sessions = 3\n`))
-    const w = getSlackWatcher()
+    const w = getConversationTable()
     w.bind('C1', '1.000001', FOOD)
     const old = w.get('C1', '1.000001')!
     old.owed = ['1.000001']; old.waitingSince = Date.now() - 60_000 // waiting for its refetch, though places are free
@@ -607,8 +607,8 @@ describe('sessions = "per-conversation"', () => {
     expect(isSpecialistOccupant(conv)).toBe(true)
     sessionIds.push('pc-own')
     registry.set('pc-own', { sessionId: 'pc-own', ...conv, sessionType: 'thread_owner', engine: 'claude', createdAt: Date.now() } as any)
-    getSlackWatcher().bind('C1', '4.000001', FOOD)
-    getSlackWatcher().bind('C1', '5.000001', FOOD)
+    getConversationTable().bind('C1', '4.000001', FOOD)
+    getConversationTable().bind('C1', '5.000001', FOOD)
     expect(await replyInConversation('pc-own', 'slack:C7', 'scheduled report')).toContain(`posted to ${FOOD}'s home_place`)
     expect(await replyInConversation('pc-own', 'slack:C1:4.000001', 'mine')).toContain('posted 1')
     await expect(replyInConversation('pc-own', 'slack:C1:5.000001', 'a sibling\'s')).rejects.toThrow("and from a conversation's own session only to that conversation")
@@ -632,8 +632,8 @@ describe('sessions = "per-conversation"', () => {
   test("a conversation's own session answers its conversation, and no other; a renamed one still does", async () => {
     configure(PER.replace(`[specialists.${FOOD}]`, `[specialists.${FOOD}]\nrenamed_from = ["old-food"]`))
     fakePost()
-    getSlackWatcher().bind('C1', '4.000001', FOOD)
-    getSlackWatcher().bind('C1', '5.000001', FOOD)
+    getConversationTable().bind('C1', '4.000001', FOOD)
+    getConversationTable().bind('C1', '5.000001', FOOD)
     live(`${FOOD}_c1-4-000001`)
     live('old-food_c1-5-000001')
     expect(await replyInConversation(`pc-${FOOD}_c1-4-000001`, 'slack:C1:4.000001', 'yours')).toContain('posted 1')
@@ -645,9 +645,9 @@ describe('sessions = "per-conversation"', () => {
 
 describe('the operator: hydra conversations and hydra route', () => {
   test('conversations bind, list, unbind; bind moves one from any specialist to any other', async () => {
-    getSlackWatcher().watch('C1', '9.000001', FOOD)
+    getConversationTable().watch('C1', '9.000001', FOOD)
     expect(await handleCLIRequest(req('conversations', { action: 'bind', conversation: 'slack:C1:9.000001', to: `specialist:${OPS}` }))).toMatchObject({ ok: true, data: { bound: `slack:C1:9.000001 → ${OPS}` } })
-    expect(getSlackWatcher().get('C1', '9.000001')!.specialist).toBe(OPS)
+    expect(getConversationTable().get('C1', '9.000001')!.specialist).toBe(OPS)
     const listed = await handleCLIRequest(req('conversations', { action: 'list' }))
     expect((listed.data as any).conversations).toEqual([expect.stringContaining(`slack:C1:9.000001 (slack:C1) → ${OPS} · idle 0h`)])
     expect((listed.data as any).health).toMatchObject({ places: [{ place: 'slack:C1', to: FOOD }, { place: 'slack:C2', to: OPS }], conversations: 1, owed: 0, oldestOwedAgeMin: null })
@@ -668,18 +668,18 @@ describe('the operator: hydra conversations and hydra route', () => {
     expect(await handleCLIRequest(req('route', { person: 'stranger', place: 'slack:C2' }))).toMatchObject({ ok: true, data: { fate: 'refused', to: OPS } })
     expect(await handleCLIRequest(req('route', { person: 'slack:UNEW', place: 'slack:C9' }))).toMatchObject({ ok: true, data: { fate: 'unrouted' } })
     expect(await handleCLIRequest(req('route', { person: 'nobody', place: 'slack:C2' }))).toMatchObject({ ok: false })
-    expect(getSlackWatcher().list()).toEqual([])
+    expect(getConversationTable().list()).toEqual([])
   })
 
   test('refusals by sender, unrouted mentions, and drops by kind are counted', async () => {
-    configure(TOML, { maxWatches: 1 })
-    const before = slackWatchHealth()!
-    const w = getSlackWatcher()
+    configure(TOML, { maxConversations: 1 })
+    const before = slackConversationHealth()!
+    const w = getConversationTable()
     expect(w.handle({ channel: 'C2', ts: '50.000001', user: 'USTRANGER', text: '<@UBOT> hi' })).toBe('refused')
     expect(w.handle({ channel: 'C9', ts: '50.000002', user: 'USTRANGER', text: '<@UBOT> hi' })).toBe('unrouted')
     w.handle({ channel: 'C1', ts: '51.000001', user: 'UOWNER', text: '<@UBOT> one' })
     w.handle({ channel: 'C1', ts: '52.000001', user: 'UOWNER', text: '<@UBOT> two' }) // the table holds one
-    const after = slackWatchHealth()!
+    const after = slackConversationHealth()!
     expect(after.refused - before.refused).toBe(1)
     expect(after.refusedBy.USTRANGER - (before.refusedBy.USTRANGER ?? 0)).toBe(1)
     expect(after.unrouted - before.unrouted).toBe(1)
@@ -689,7 +689,7 @@ describe('the operator: hydra conversations and hydra route', () => {
 
   test('health lists owed messages older than two catch-up passes, with the threshold it used (#669)', async () => {
     configure(TOML)
-    const w = getSlackWatcher()
+    const w = getConversationTable()
     w.handle({ channel: 'C1', ts: '51.000001', user: 'UOWNER', text: '<@UBOT> one' })   // accepted, never delivered: it is owed, and from 1970
     const h = ((await handleCLIRequest(req('health', {}))).data as any).slack
     expect(h.owedLateAfterMin).toBe(20)
@@ -700,9 +700,9 @@ describe('the operator: hydra conversations and hydra route', () => {
 
   test('health flags a #name place no channel answers to, and omits the line without an app named default', async () => {
     configure(TOML.replace('place = "slack:C2"', 'place = "slack:#ops-room"'))
-    expect(slackWatchHealth()!.places.find(p => p.to === OPS)!.note).toContain('no channel answers to this name')
+    expect(slackConversationHealth()!.places.find(p => p.to === OPS)!.note).toContain('no channel answers to this name')
     configure('')
-    expect(slackWatchHealth()).toBeNull()
+    expect(slackConversationHealth()).toBeNull()
     expect(((await handleCLIRequest(req('health', {}))).data as any).slack).toBeUndefined()
     void current
   })
@@ -710,7 +710,7 @@ describe('the operator: hydra conversations and hydra route', () => {
 
 describe('main and alerts', () => {
   test("the operator's DM reaches main only while main is connected; otherwise it stays owed", async () => {
-    const w = getSlackWatcher()
+    const w = getConversationTable()
     w.handle({ channel: 'D0OP', ts: '71.000001', user: 'UOP', text: 'hi' })
     await w.flush()
     expect(w.get('D0OP', '0.000000')?.owed).toEqual(['71.000001'])
@@ -722,8 +722,8 @@ describe('main and alerts', () => {
     const realSend = gateway.send
     ;(gateway as any).send = async (channel: string, text: string) => { posted.push({ channel, text }); return 'id' }
     try {
-      configure(TOML, { maxWatches: 1 })
-      const w = getSlackWatcher()
+      configure(TOML, { maxConversations: 1 })
+      const w = getConversationTable()
       // ops, not food: the watcher is the daemon's one, and an earlier test began food's table-full episode
       w.handle({ channel: 'C2', ts: '80.000001', user: 'UOWNER', text: '<@UBOT> one' })
       w.handle({ channel: 'C2', ts: '81.000001', user: 'UOWNER', text: '<@UBOT> two' }) // table-full
@@ -743,8 +743,8 @@ describe('a live session is told, as input, what the connector says about its ow
     heard.length = 0; posted.length = 0
     ;(gateway as any).send = async (c: string, text: string) => { posted.push([c, text]); return 'id' }
   })
-  beforeEach(() => { stopSlackWatch(); startSlackWatch() })
-  afterEach(() => { (gateway as any).send = realSend; stopSlackWatch(); for (const t of [MINE, OPS_THREAD]) registry.deleteThread(t) })
+  beforeEach(() => { stopConversationTable(); startConversationTable() })
+  afterEach(() => { (gateway as any).send = realSend; stopConversationTable(); for (const t of [MINE, OPS_THREAD]) registry.deleteThread(t) })
   /** A session in `threadId` whose input is recorded; `alive: false` is one that was killed. */
   const listening = (id: string, threadId: string, alive = true) => {
     sessionIds.push(id)
@@ -767,7 +767,7 @@ describe('a live session is told, as input, what the connector says about its ow
   test("a specialist taking it through another app: the session listening through its own app is told", async () => {
     listening('told-b', MINE)
     await bindConversation({ threadId: MINE }, 'slack:C9:6.000001')
-    getSlackWatcher().watch('C9', '6.000001', FOOD, undefined, 'other')
+    getConversationTable().watch('C9', '6.000001', FOOD, undefined, 'other')
     await settle()
     expect(heard).toHaveLength(1)
     expect(heard[0]).toStartWith('[system] ℹ️ ')
@@ -777,16 +777,16 @@ describe('a live session is told, as input, what the connector says about its ow
   test('a tag of the bot in a thread the session listens to: the session is told the specialist took it', async () => {
     listening('told-c', MINE)
     await bindConversation({ threadId: MINE }, 'slack:C1:7.000001')
-    getSlackWatcher().handle({ channel: 'C1', ts: '7.000002', threadTs: '7.000001', user: 'UOWNER', text: '<@UBOT> hello' } as any)
+    getConversationTable().handle({ channel: 'C1', ts: '7.000002', threadTs: '7.000001', user: 'UOWNER', text: '<@UBOT> hello' } as any)
     await settle()
-    expect(getSlackWatcher().get('C1', '7.000001')?.specialist).toBe(FOOD)
+    expect(getConversationTable().get('C1', '7.000001')?.specialist).toBe(FOOD)
     expect(heard).toEqual([expect.stringContaining(`Someone tagged the bot in slack:C1:7.000001, so ${FOOD} took it`)])
   })
 
   test("Slack can no longer read the conversation: the session that held it is told what was lost and what to do", async () => {
     listening('told-d', MINE)
     await bindConversation({ threadId: MINE }, 'slack:C9:8.000001')
-    getSlackWatcher().threadGone('C9', '8.000001', 'thread_not_found')
+    getConversationTable().threadGone('C9', '8.000001', 'thread_not_found')
     await settle()
     expect(heard).toHaveLength(1)
     expect(heard[0]).toStartWith('[system] ⚠️ Let go of slack:C9:8.000001')
@@ -796,8 +796,8 @@ describe('a live session is told, as input, what the connector says about its ow
   test('messages the session was owed and never got are dropped: the session that is in the thread is told, once', async () => {
     listening('told-g', MINE)
     await bindConversation({ threadId: MINE }, 'slack:C9:11.000001')
-    getSlackWatcher().get('C9', '11.000001')!.owed = ['11.000002']      // from 1970: past what is worth chasing
-    getSlackWatcher().sweep()
+    getConversationTable().get('C9', '11.000001')!.owed = ['11.000002']      // from 1970: past what is worth chasing
+    getConversationTable().sweep()
     await settle()
     expect(heard).toHaveLength(1)
     expect(heard[0]).toStartWith('[system] ⚠️ Dropped 1 Slack message in C9:11.000001 (expired')
@@ -806,7 +806,7 @@ describe('a live session is told, as input, what the connector says about its ow
   test('a session that unbinds a conversation owing messages is not also told: its tool result says it', async () => {
     listening('told-h', MINE)
     await bindConversation({ threadId: MINE }, 'slack:C9:12.000001')
-    getSlackWatcher().get('C9', '12.000001')!.owed = [`${Math.floor(Date.now() / 1000)}.000001`]
+    getConversationTable().get('C9', '12.000001')!.owed = [`${Math.floor(Date.now() / 1000)}.000001`]
     expect(unbindConversation({ threadId: MINE }, 'slack:C9:12.000001')).toBe('slack:C9:12.000001 is unbound; 1 message it still owed were dropped')
     await settle()
     expect(heard).toEqual([])
@@ -814,7 +814,7 @@ describe('a live session is told, as input, what the connector says about its ow
 
   test('a session killed (nothing can read it) gets the post only: no input, and the dead session is not revived', async () => {
     listening('told-e', MINE, false)
-    getSlackWatcher().bind('C9', '9.000001', MINE, 'tool')
+    getConversationTable().bind('C9', '9.000001', MINE, 'tool')
     emit('session:death', { sessionId: 'told-e', threadId: MINE, wasOwner: true, tmuxName: 'told-e', deliberate: true })
     await settle()
     expect(saidIn(MINE)).toEqual([expect.stringContaining('This session was killed')])
@@ -823,8 +823,8 @@ describe('a live session is told, as input, what the connector says about its ow
   })
 
   test('a thread with no session in it (vacant) is posted to, and nothing is delivered', async () => {
-    getSlackWatcher().bind('C9', '10.000001', MINE, 'tool')
-    getSlackWatcher().threadGone('C9', '10.000001', 'thread_not_found')
+    getConversationTable().bind('C9', '10.000001', MINE, 'tool')
+    getConversationTable().threadGone('C9', '10.000001', 'thread_not_found')
     await settle()
     expect(saidIn(MINE)).toHaveLength(1)
     expect(heard).toEqual([])
@@ -833,10 +833,10 @@ describe('a live session is told, as input, what the connector says about its ow
   test("a specialist's alert stays post-only: the connector's trouble is the operator's, not a binding the session holds", async () => {
     // a specialist no earlier test used: the watcher is the daemon's one, and an alert episode lasts an hour
     const LONE = 'lone-t', LONE_THREAD = 'lone-thread-1'
-    configure(`${TOML}[specialists.${LONE}]\nworkdir = "/w/lone"\nreachable_by = ["role:owner"]\n[[rules]]\nplace = "slack:C3"\ntarget = "specialist:${LONE}"\n`, { maxWatches: 1 })
+    configure(`${TOML}[specialists.${LONE}]\nworkdir = "/w/lone"\nreachable_by = ["role:owner"]\n[[rules]]\nplace = "slack:C3"\ntarget = "specialist:${LONE}"\n`, { maxConversations: 1 })
     setSpecialistThread(LONE, LONE_THREAD)
     listening('told-f', LONE_THREAD)
-    const w = getSlackWatcher()
+    const w = getConversationTable()
     w.handle({ channel: 'C3', ts: '90.000001', user: 'UOWNER', text: '<@UBOT> one' })
     w.handle({ channel: 'C3', ts: '91.000001', user: 'UOWNER', text: '<@UBOT> two' })
     await settle()
@@ -905,14 +905,14 @@ describe('bind_conversation asks Slack who can read the thread before it says "l
   test('the bot reads it: live', async () => {
     slackRuntimeDeps.readThread = async () => 'bot'
     expect(await bindConversation({ threadId: MINE }, 'slack:C9:1.000001')).toContain('live: the bot is in slack:C9')
-    expect(getSlackWatcher().get('C9', '1.000001')!.via).toBeUndefined()
+    expect(getConversationTable().get('C9', '1.000001')!.via).toBeUndefined()
   })
 
   test('only the operator reads it: bound, marked, and listed so', async () => {
     withUser()
     slackRuntimeDeps.readThread = async () => 'user'
     expect(await bindConversation({ threadId: MINE }, 'slack:C9:1.000001')).toContain("live, read as the operator: the bot isn't in slack:C9")
-    expect(getSlackWatcher().get('C9', '1.000001')!.via).toBe('user')
+    expect(getConversationTable().get('C9', '1.000001')!.via).toBe('user')
     expect(formatConversationsFor({ threadId: MINE }).join()).toContain('· read as the operator')
   })
 
@@ -923,14 +923,14 @@ describe('bind_conversation asks Slack who can read the thread before it says "l
     await expect(bindConversation({ threadId: MINE }, 'slack:C9:1.000001')).rejects.toThrow('nor the operator is in slack:C9')
     slackRuntimeDeps.readThread = async () => { throw new Error('An API error occurred: thread_not_found') }
     await expect(bindConversation({ threadId: MINE }, 'slack:C9:1.000001')).rejects.toThrow("not bound: slack:C9:1.000001: it can't be read (An API error occurred: thread_not_found)")
-    expect(getSlackWatcher().get('C9', '1.000001')).toBeUndefined()
+    expect(getConversationTable().get('C9', '1.000001')).toBeUndefined()
   })
 
   test("a specialist never binds a thread only the operator can read: it could not answer there", async () => {
     withUser()
     slackRuntimeDeps.readThread = async () => 'user'
     await expect(bindConversation(food, 'slack:C1:1.000001')).rejects.toThrow(`not bound: slack:C1:1.000001: the bot isn't in slack:C1, so ${FOOD} could not answer there`)
-    expect(getSlackWatcher().get('C1', '1.000001')).toBeUndefined()
+    expect(getConversationTable().get('C1', '1.000001')).toBeUndefined()
   })
 
   test('Slack not connected: bound, and said to be unchecked', async () => {

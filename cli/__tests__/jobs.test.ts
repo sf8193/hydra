@@ -896,7 +896,7 @@ describe('jobs run', () => {
     runIO.now = () => t
     onSleep = () => { t += 60_000 }                    // a minute per poll; nothing ever applies dispatch 3
     expect(await jobsRun('test', 'sweep', dir, 0)).toBe(1)
-    expect(out.at(-1)).toBe('error: no result applied for dispatch 3; see hydra jobs list test')
+    expect(out.at(-1)).toBe('error: no result applied for dispatch 3; see hydra schedules list test')
     expect(t).toBeGreaterThan(runWaitMs())
     expect(t).toBeLessThanOrEqual(runWaitMs() + 120_000)
   })
@@ -908,10 +908,11 @@ describe('jobs run', () => {
     expect(await jobsRun('test', 'sweep', dir, 0)).toBe(0)
   })
 
-  test('jobs commands refuse --daemon and point to --state-dir', async () => {
-    const p = Bun.spawn([process.execPath, join(repo, 'cli', 'hydra.ts'), '--daemon', 'discord', 'jobs', 'list', 'discord'], { stdout: 'pipe', stderr: 'pipe' })
+  // `schedules` is the name the CLI prints; `jobs` is the same command, kept because installed launchd entries run it.
+  test.each(['schedules', 'jobs'])('hydra %s refuses --daemon and points to --state-dir, in the word schedules', async word => {
+    const p = Bun.spawn([process.execPath, join(repo, 'cli', 'hydra.ts'), '--daemon', 'discord', word, 'list', 'discord'], { stdout: 'pipe', stderr: 'pipe' })
     expect(await p.exited).toBe(1)
-    expect(await new Response(p.stderr).text()).toContain('jobs commands take --state-dir <dir>, not --daemon')
+    expect(await new Response(p.stderr).text()).toContain('schedules commands take --state-dir <dir>, not --daemon')
   }, 15_000)
 
   test('deferred exits 75, the check contract\'s own code, so a script can tell "ran" from "deferred"', async () => {
@@ -1196,7 +1197,7 @@ describe('jobs sync (CLI)', () => {
       runIO.send = async (_s: string, req: Record<string, unknown>) => { t.sent.push(req); return { ok: true, data: {} } }
       try {
         expect(await jobsSync('test', t.dir)).toBe(1)
-        expect(t.out[0]).toMatch(/^error: (jobs.toml \[a\]: schedule "soon" is not a cron expression|no jobs file at)/)
+        expect(t.out[0]).toMatch(/^error: (jobs.toml \[a\]: schedule "soon" is not a cron expression|no schedules file at)/)
         expect(t.sent).toEqual([])
       } finally { t.done() }
     }

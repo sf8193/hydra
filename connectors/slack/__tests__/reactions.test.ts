@@ -3,19 +3,19 @@ import { describe, test, expect, afterEach } from 'bun:test'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { SlackWatcher, type SlackWatchConfig, type SlackWatchDeps, type DeliverResult, type SlackActions, type SlackReactionEvent } from '../watch.js'
+import { ConversationTable, type ConversationConfig, type ConversationDeps, type DeliverResult, type SlackActions, type SlackReactionEvent } from '../watch.js'
 import { BOT, oneListener, alsoHeard, view, sharedChannel, SALES_BOT, type ViewOver } from './slack-config.js'
 
 const CH = 'C0FOOD'
 const OWN = '3000.000001'      // the bot's own top-level post
 const THEIRS = '3100.000001'   // a person's message, delivered
 const places = (mode: string) => `[places."slack:${CH}"]\nreactions = "${mode}"\n`
-const cfg = (mode: string, over: ViewOver = {}): SlackWatchConfig => view(oneListener(CH, 'helper', '["role:anyone"]', mode ? places(mode) : ''), { workspaceUrl: 'https://acme.slack.com', ...over })
+const cfg = (mode: string, over: ViewOver = {}): ConversationConfig => view(oneListener(CH, 'helper', '["role:anyone"]', mode ? places(mode) : ''), { workspaceUrl: 'https://acme.slack.com', ...over })
 
 const dirs: string[] = []
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
 
-function setup(config: SlackWatchConfig, deliver?: (key: string) => DeliverResult, guard?: SlackWatchDeps['guard']) {
+function setup(config: ConversationConfig, deliver?: (key: string) => DeliverResult, guard?: ConversationDeps['guard']) {
   const dir = mkdtempSync(join(tmpdir(), 'slack-reactions-'))
   dirs.push(dir)
   const file = join(dir, 'slack-watches.json')
@@ -24,7 +24,7 @@ function setup(config: SlackWatchConfig, deliver?: (key: string) => DeliverResul
   const logs: string[] = []
   let cur = config
   const make = () => {
-    const w = new SlackWatcher({
+    const w = new ConversationTable({
       now: () => 1_000_000_000_000, file, log: l => logs.push(l), config: () => cur, guard,
       deliver: async ({ to }, msg, key) => { sent.push({ to, msg, key }); return deliver ? deliver(key) : { ok: true } },
     })
@@ -36,7 +36,7 @@ function setup(config: SlackWatchConfig, deliver?: (key: string) => DeliverResul
   // A bot post, and a person's message the bot answers: two things to react to.
   w.handle({ channel: CH, ts: OWN, user: BOT, text: 'daily post' })
   w.handle({ channel: CH, ts: THEIRS, user: 'UALICE', text: `<@${BOT}> hi` })
-  return { w, make, sent, reacted, logs, file, set: (c: SlackWatchConfig) => { cur = c } }
+  return { w, make, sent, reacted, logs, file, set: (c: ConversationConfig) => { cur = c } }
 }
 const react = (over: Partial<SlackReactionEvent> = {}): SlackReactionEvent => ({ channel: CH, itemTs: OWN, itemUser: BOT, reaction: 'white_check_mark', user: 'UALICE', eventTs: '4000.000001', ...over })
 
@@ -143,7 +143,7 @@ describe('inbound reactions', () => {
     dirs.push(dir)
     let now = 1_000_000_000_000
     const sent: string[] = []
-    const w = new SlackWatcher({ now: () => now, file: join(dir, 'w.json'), log: () => {}, config: app => app === 'sales' ? sales : dflt, deliver: async ({ to }) => { sent.push(to); return { ok: true } } })
+    const w = new ConversationTable({ now: () => now, file: join(dir, 'w.json'), log: () => {}, config: app => app === 'sales' ? sales : dflt, deliver: async ({ to }) => { sent.push(to); return { ok: true } } })
     w.handle({ channel: CH, ts: OWN, user: BOT, text: 'post' })
     now += 1000
     w.handle({ app: 'sales', channel: CH, ts: OWN, user: SALES_BOT, text: 'post' })

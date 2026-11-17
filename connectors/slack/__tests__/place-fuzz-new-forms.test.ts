@@ -122,7 +122,7 @@ function lowerFor(cfg: HydraConfig, inbound: Inbound): HydraConfig {
 }
 
 const brief = (d: any, mapWhy: (s: string) => string) => ({
-  fate: d.fate, to: d.to, via: d.via, bind: d.bind, app: d.app, owner: d.owner, why: d.why, sender: d.sender,
+  fate: d.fate, to: d.to, via: d.via, bind: d.bind, app: d.app, owningApp: d.owningApp, why: d.why, sender: d.sender,
   trace: d.trace.map((s: any) => ({ via: s.via, to: s.to, matched: s.matched, why: mapWhy(s.why) })),
 })
 const noPlaceText = (s: string) => s.replace(/is for place \S+/, 'is for place X')

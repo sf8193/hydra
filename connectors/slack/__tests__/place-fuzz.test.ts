@@ -103,7 +103,7 @@ function genInbound(r: R, apps: string[]): OldInbound {
 }
 
 const brief = (d: any) => ({
-  fate: d.fate, to: d.to, via: d.via, bind: d.bind, app: d.app, owner: d.owner, why: d.why, sender: d.sender,
+  fate: d.fate, to: d.to, via: d.via, bind: d.bind, app: d.app, owningApp: d.owningApp, why: d.why, sender: d.sender,
   trace: d.trace.map((s: any) => ({ via: s.via, to: s.to, matched: s.matched, why: s.why })),
 })
 

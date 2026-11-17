@@ -1,8 +1,8 @@
 # The old format. New setups declare [schedules.<id>] in <state dir>/hydra.toml (README, "Schedules"); an existing
 # jobs.toml runs exactly as before until `hydra migrate` moves its jobs there.
 #
-# Copy to <state dir>/jobs.toml, then `hydra jobs sync <platform>`. Each job runs at its local-time slots; a slot
-# missed while the machine slept runs once on wake. `hydra jobs list <platform>` validates the file and shows each
+# Copy to <state dir>/jobs.toml, then `hydra schedules sync <platform>`. Each job runs at its local-time slots; a slot
+# missed while the machine slept runs once on wake. `hydra schedules list <platform>` validates the file and shows each
 # job's state.
 #
 # runner: launchd tries once, no matter what. daemon keeps trying, as long as hydra runs (and adds needs and
@@ -19,18 +19,18 @@
 # A daemon-runner job can add:
 # alert_after = "2d"      how long a failure run lasts before it is alerted, 1m to 30d (default 1d)
 # needs = ["internet"]    deferred while offline (the captive-portal probe and the daemon's gateway both down)
-# `hydra jobs mark-done <platform> <name>` marks the latest slot done without running it (runner = "daemon" only).
+# `hydra schedules mark-done <platform> <name>` marks the latest slot done without running it (runner = "daemon" only).
 #
 # cwd = "~/build"         the check's working dir (absolute, or ~/), so check = "./scripts/x.sh" works
 # env_file = "~/build/.env"  KEY=VALUE lines added to the check's environment, read at each run; not expanded.
 #                         A failing check's output is shown with these values (4+ characters) blanked out.
 #                         The check reads both with the daemon's macOS access: a path under ~/Documents, ~/Desktop
 #                         or ~/Downloads works only if the daemon's tmux server has access there
-#                         (docs/macos-permissions.md). `jobs list` warns about such paths.
+#                         (docs/macos-permissions.md). `schedules list` warns about such paths.
 #
 # Each job has one target: where its message (prompt, then the check's output) goes.
 # to = "ops"          a specialist (hydra specialist list), "main", or a thread id. A specialist with no live
-#                     session gets one, started from its kickoff. `jobs list` flags a name that isn't declared.
+#                     session gets one, started from its kickoff. `schedules list` flags a name that isn't declared.
 # revive = true       (to a thread id) restart the thread's session if it is gone; a specialist heals anyway.
 # spawn = { channel = "…", kickoff = "…", model = "haiku", idle = "4d" }
 #                     a fresh session every time, closed when it finishes. channel falls back to the job's, then

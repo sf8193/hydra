@@ -471,7 +471,7 @@ export class JobsClock {
 
   /** `hydra jobs run`: a manual dispatch, answered after the spawn. It ignores owed state and runs now. */
   requestRun(name: string): { ok: true; reply: RunReply } | { ok: false; error: string } {
-    if (!this.tryLock()) return { ok: false, error: 'clock not owned: another daemon holds the jobs lock' }
+    if (!this.tryLock()) return { ok: false, error: 'clock not owned: another daemon holds the schedule clock lock' }
     const cfg = this.currentConfig()
     const job = cfg.jobs.find(j => j.name === name)
     if (!job) return { ok: false, error: noSuch(cfg, name) }
@@ -489,7 +489,7 @@ export class JobsClock {
    * once.
    */
   async requestSync(): Promise<{ ok: true; before: Job[]; after: Job[]; hydraEntry: string } | { ok: false; error: string }> {
-    if (!this.tryLock()) return { ok: false, error: 'clock not owned: another daemon holds the jobs lock' }
+    if (!this.tryLock()) return { ok: false, error: 'clock not owned: another daemon holds the schedule clock lock' }
     // Against the config the last sync made live: the tick reloads jobs.toml every minute, so the last good copy
     // would show "no changes" for any edit older than a minute.
     const state = readDaemonState(this.d.stateDir).state
@@ -502,7 +502,7 @@ export class JobsClock {
     }
     const before = this.parsedOrEmpty(state.syncedConfig ?? state.lastGoodConfig)
     let text: string
-    try { text = readFileSync(jobsToml(this.d.stateDir), 'utf8') } catch { return { ok: false, error: `no jobs file at ${jobsToml(this.d.stateDir)}` } }
+    try { text = readFileSync(jobsToml(this.d.stateDir), 'utf8') } catch { return { ok: false, error: `no schedules file at ${jobsToml(this.d.stateDir)}` } }
     let after: Job[]
     try { after = parseJobsConfig(text).jobs } catch (err) { return { ok: false, error: err instanceof Error ? err.message : String(err) } }
     this.updateDaemon(s => { s.lastGoodConfig = text; s.syncedConfig = text })
@@ -512,7 +512,7 @@ export class JobsClock {
 
   /** `hydra jobs mark-done`: record the latest slot as done without running anything (a cutover, a slot you handled). */
   requestMarkDone(name: string): { ok: true; slot: string | null } | { ok: false; error: string } {
-    if (!this.tryLock()) return { ok: false, error: 'clock not owned: another daemon holds the jobs lock' }
+    if (!this.tryLock()) return { ok: false, error: 'clock not owned: another daemon holds the schedule clock lock' }
     const cfg = this.currentConfig()
     const job = cfg.jobs.find(j => j.name === name)
     if (!job) return { ok: false, error: noSuch(cfg, name) }

@@ -12,7 +12,7 @@ import { existsSync } from 'fs'
 import { checkIdempotency, registerIdempotency, updateIdempotency, getBySessionId, clearIdempotency, listIdempotencyEntries } from './idempotency.js'
 import { spawnSpecialist, specialistStatus, SpecialistError } from '../specialists/specialist-deliver.js'
 import { declaredInToml, getSpecialist, listSpecialists, removeSpecialist, setSpecialist, setSpecialistThread, withTargetLock, type Specialist } from '../specialists/specialists.js'
-import { slackWatchHealth, refreshSlackSpecialistSurface, formatConversations, operatorBind, operatorUnbind, placeAliases } from '../connectors/slack/runtime.js'
+import { slackConversationHealth, refreshSlackSpecialistSurface, formatConversations, operatorBind, operatorUnbind, placeAliases } from '../connectors/slack/runtime.js'
 import { currentHydraConfig } from './hydra-config.js'
 import { routeFor, type RouteParams } from '../routing/route-request.js'
 import { deliverToTarget, deliverVia, sessionByName, toSession, toThread, type DeliverOutcome } from '../specialists/targets.js'
@@ -248,7 +248,7 @@ function handleHealth(req: CLIRequest): CLIResponse {
   const raindropLine = raindropStatusLine('cli')
   const refused = refusedLaunches()
   const macosGate = macosGateHealth()
-  const slack = slackWatchHealth()
+  const slack = slackConversationHealth()
   return respond(req, true, {
     sessions: { total: sessions.length, connected, disconnected },
     tmux: tmuxServerState(),
@@ -267,7 +267,7 @@ function handleJobsMarkDone(req: CLIRequest): CLIResponse {
   const { name } = req.params as { name?: string }
   if (!name) return respond(req, false, 'name is required')
   const clock = jobsClock()
-  if (!clock) return respond(req, false, 'jobs clock not running in this daemon')
+  if (!clock) return respond(req, false, 'the schedule clock is not running in this daemon')
   const r = clock.requestMarkDone(name)
   return r.ok ? respond(req, true, { slot: r.slot }) : respond(req, false, r.error)
 }
@@ -275,7 +275,7 @@ function handleJobsMarkDone(req: CLIRequest): CLIResponse {
 // `hydra jobs sync`: the clock loads jobs.toml now; answered with the jobs before and after, after a tick.
 async function handleJobsSync(req: CLIRequest): Promise<CLIResponse> {
   const clock = jobsClock()
-  if (!clock) return respond(req, false, 'jobs clock not running in this daemon')
+  if (!clock) return respond(req, false, 'the schedule clock is not running in this daemon')
   const r = await clock.requestSync()
   return r.ok ? respond(req, true, { before: r.before, after: r.after, hydraEntry: r.hydraEntry }) : respond(req, false, r.error)
 }
@@ -285,7 +285,7 @@ function handleJobsRun(req: CLIRequest): CLIResponse {
   const { name } = req.params as { name?: string }
   if (!name) return respond(req, false, 'name is required')
   const clock = jobsClock()
-  if (!clock) return respond(req, false, 'jobs clock not running in this daemon')
+  if (!clock) return respond(req, false, 'the schedule clock is not running in this daemon')
   const r = clock.requestRun(name)
   return r.ok ? respond(req, true, r.reply) : respond(req, false, r.error)
 }
@@ -475,7 +475,7 @@ function handleConversations(req: CLIRequest): CLIResponse {
   const p = req.params as { action?: string; conversation?: string; to?: string }
   try {
     switch (p.action ?? 'list') {
-      case 'list': return respond(req, true, { conversations: formatConversations(), health: slackWatchHealth() })
+      case 'list': return respond(req, true, { conversations: formatConversations(), health: slackConversationHealth() })
       case 'bind':
         if (!p.conversation || !p.to) return respond(req, false, 'a conversation and a specialist are required')
         return respond(req, true, { bound: operatorBind(p.conversation, p.to) })
