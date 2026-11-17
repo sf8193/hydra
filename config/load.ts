@@ -368,7 +368,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (!ID_RE.test(name)) { error(path, `"${name}" is not a valid server name: lowercase letters, digits and dashes`); continue }
     const t = table(raw, path)
     if (!t) continue
-    unknownKeys(t, ['command', 'token_env', 'tools', 'profile_args', 'profile_env', 'login_command', 'profile_locks'], path)
+    unknownKeys(t, ['command', 'token_env', 'tools', 'profile_args', 'profile_env', 'login_command', 'profile_locks', 'deny_tools'], path)
     const command = str(t, 'command', path)
     if (t.command === undefined) error(`${path}.command`, 'is required: the server\'s executable, pinned (a path or a versioned binary, not `npx -y` latest)')
     else if (command !== undefined && !env.isCommand(expand(command))) error(`${path}.command`, `${expand(command)} is not an executable file or a command on PATH`)
@@ -416,7 +416,13 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       if (f === '' || f.includes('/') || f === '.' || f === '..') error(`${path}.profile_locks[${i}]`, `"${f}" must be a plain file name inside the profile folder, like SingletonLock`)
       else if (!profileLocks.includes(f)) profileLocks.push(f)
     }
-    if (command !== undefined) mcpServers[name] = { name, command: expand(command), tokenEnv, tools, ...(loginCommand && { loginCommand }), ...(profileLocks.length && { profileLocks }), ...(profileArgs && { profileArgs }), ...(Object.keys(profileEnv).length && { profileEnv }) }
+    // Tools of this server a write-confined session may not call (a deny rule, `mcp__<server>__<tool>`): a plain tool name, not a rule or a pattern.
+    const denyTools: string[] = []
+    for (const [i, n] of (strList(t, 'deny_tools', path) ?? []).entries()) {
+      if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(n) || n.startsWith('mcp__')) error(`${path}.deny_tools[${i}]`, `"${n}" must be the name of one of the server's tools, like browser_run_code_unsafe`)
+      else if (!denyTools.includes(n)) denyTools.push(n)
+    }
+    if (command !== undefined) mcpServers[name] = { name, command: expand(command), tokenEnv, tools, ...(denyTools.length && { denyTools }), ...(loginCommand && { loginCommand }), ...(profileLocks.length && { profileLocks }), ...(profileArgs && { profileArgs }), ...(Object.keys(profileEnv).length && { profileEnv }) }
   }
 
   // --- people --------------------------------------------------------------------------------------------------------
@@ -735,8 +741,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
           for (const c of probe.clashes) error(`${path}.mcp_servers[${i}]`, `${c.file} already declares an MCP server named ${name}; Claude Code's allowlist matches by name, so that one would be admitted too and could take the place of [mcp_servers.${name}]: rename [mcp_servers.${name}]`)
           // A file that cannot be read is not "no clash": the check fails closed.
           for (const u of probe.unreadable) error(`${path}.mcp_servers[${i}]`, `${u.why}, so hydra cannot tell whether it declares an MCP server named ${name} (Claude Code's allowlist matches by name): fix or remove the file`)
-          // No tool of a listed server can be limited at this level (no mcp__ rule is written): its tools list changes nothing.
-          if (server.tools.length) warn(`${path}.mcp_servers[${i}]`, `[mcp_servers.${name}] lists tools, which limit nothing at this level: every tool of the server is callable here (only a restricted specialist is held to the list)`)
+          // `tools` limits nothing at this level; `deny_tools` is what denies a tool here (a `mcp__<server>__<tool>` rule in the launch settings).
+          if (server.tools.length) warn(`${path}.mcp_servers[${i}]`, `[mcp_servers.${name}] lists tools, which limit nothing at this level: every tool of the server is callable here except those in deny_tools (only a restricted specialist is held to the tools list)`)
           for (const v of server.tokenEnv) if (!env.envFileHas(v)) warn(`${path}.mcp_servers[${i}]`, `[mcp_servers.${name}] needs ${v}, and ${join(env.stateDir, '.env')} does not set it, so no session of this specialist can start until it does: add ${v}=<value> there and restart the daemon`)
           // A server that says nothing about its profile keeps its own default one, which is the operator's: only a declared profile is the specialist's.
           if (!server.profileArgs?.length && !Object.keys(server.profileEnv ?? {}).length) warn(`${path}.mcp_servers[${i}]`, `[mcp_servers.${name}] declares no profile_args or profile_env, so it keeps its own default browser profile (the operator's, if it is a browser): declare how it takes a profile folder, or accept that`)
@@ -755,6 +761,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       for (const [i, name] of (mcpServerNamesRaw ?? []).entries()) {
         if (!Object.hasOwn(mcpServers, name)) error(`${path}.mcp_servers[${i}]`, `no [mcp_servers.${name}]: declare the server in hydra.toml first`)
         else if (mcpServers[name].tools.length === 0) error(`${path}.mcp_servers[${i}]`, `[mcp_servers.${name}] lists no tools, so a specialist could call none of them: set its \`tools\``)
+        else if (mcpServers[name].denyTools?.some(n => mcpServers[name].tools.includes(n))) error(`${path}.mcp_servers[${i}]`, `[mcp_servers.${name}] deny_tools names ${mcpServers[name].denyTools!.filter(n => mcpServers[name].tools.includes(n)).join(', ')}, which its tools list allows a restricted specialist, and deny_tools is not applied to one (it may call only the tools listed): remove it from tools or from deny_tools (a server needed with the tool by one specialist and without it by another: declare it twice under two [mcp_servers.*] names)`)
         else for (const v of mcpServers[name].tokenEnv) if (!env.envFileHas(v)) warn(`${path}.mcp_servers[${i}]`, `[mcp_servers.${name}] needs ${v}, and ${join(env.stateDir, '.env')} does not set it, so no session of this specialist can start until it does: add ${v}=<value> there and restart the daemon`)
       }
       // A listed server runs under sandbox-exec; a machine without it cannot host the specialist (the launch checks again).

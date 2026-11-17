@@ -153,7 +153,7 @@ describe('the same-name hole and the tool warnings', () => {
   })
   test('a listed server that lists tools is warned: it limits nothing at this level', () => {
     const withTools = spec('can_only_write_to = "workdir"\nmcp_servers = ["browser"]').replace('profile_env =', 'tools = ["open"]\nprofile_env =')
-    expect(ok(withTools).warnings).toContain('specialists.ops.mcp_servers[0]: [mcp_servers.browser] lists tools, which limit nothing at this level: every tool of the server is callable here (only a restricted specialist is held to the list)')
+    expect(ok(withTools).warnings).toContain('specialists.ops.mcp_servers[0]: [mcp_servers.browser] lists tools, which limit nothing at this level: every tool of the server is callable here except those in deny_tools (only a restricted specialist is held to the tools list)')
   })
 })
 
@@ -436,5 +436,27 @@ describe('what the docs say a write-confined session may write', () => {
   }
   test('README and the guide say shared /tmp is not writable', () => {
     for (const f of ['README.md', 'docs/slack.md']) { expect(read(f)).toMatch(/shared `\/tmp`[^.]*not/); expect(read(f)).toContain("Claude Code's sandbox default") }
+  })
+})
+
+describe('[mcp_servers.<name>] deny_tools', () => {
+  const decl = (extra: string) => BASE.replace('profile_env = { BROWSER_HOME = "{profile_dir}" }', `profile_env = { BROWSER_HOME = "{profile_dir}" }\n${extra}`)
+  const load = (extra: string) => loadHydraConfig(spec('can_only_write_to = "workdir"\nmcp_servers = ["browser"]').replace(BASE, decl(extra)), env)
+  const errs = (extra: string) => { const r = load(extra); return r.ok ? [] : r.errors.map(i => `${i.path}: ${i.message}`) }
+  test('loads, as the server\'s denyTools (a tool name of the server, in the order and without repeats)', () => {
+    const r = load('deny_tools = ["browser_run_code_unsafe", "browser_evaluate", "browser_evaluate"]')
+    expect(r.ok).toBe(true)
+    expect((r as any).config.mcpServers.browser.denyTools).toEqual(['browser_run_code_unsafe', 'browser_evaluate'])
+  })
+  test('absent: the server has no denyTools key at all', () => {
+    expect((load('') as any).config.mcpServers.browser.denyTools).toBeUndefined()
+  })
+  test('an empty entry, a name that is not a plain tool name, and a non-string are errors naming the path', () => {
+    expect(errs('deny_tools = [""]')).toEqual(['mcp_servers.browser.deny_tools[0]: "" must be the name of one of the server\'s tools, like browser_run_code_unsafe'])
+    expect(errs('deny_tools = ["a b"]')[0]).toContain('mcp_servers.browser.deny_tools[0]')
+    expect(errs('deny_tools = ["mcp__browser__x"]')[0]).toContain('mcp_servers.browser.deny_tools[0]')
+    expect(errs('deny_tools = ["*"]')[0]).toContain('mcp_servers.browser.deny_tools[0]')
+    expect(errs('deny_tools = [1]')).toEqual(['mcp_servers.browser.deny_tools: must be a list of strings'])
+    expect(errs('deny_tools = "x"')).toEqual(['mcp_servers.browser.deny_tools: must be a list of strings'])
   })
 })

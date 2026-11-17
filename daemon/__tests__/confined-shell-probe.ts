@@ -1,13 +1,16 @@
 // A harness for what a write-confined specialist's tools can do, from hydra's own settings (`confinementSettings`) run by the real `claude -p`, not from a profile text.
 // `claude -p` talks to a stub API served here that asks for exactly one tool call per run (Bash or Read), so no model is involved and nothing is declined.
 // Everything it makes is in a throwaway HOME. Used by the *.live.test.ts files, which are off unless HYDRA_LIVE_CLAUDE=1.
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { confinementSettings } from '../write-confinement.js'
 import { readDenyRoots } from '../../config/write-confinement.js'
 
-export type ToolCall = { name: 'Bash' | 'Read'; input: Record<string, unknown> }
+export type ToolCall = { name: string; input: Record<string, unknown> }
+
+/** Beyond the one scripted call: servers the launch lists (their MCP config is written and passed, their tools loaded up front) and the settings' server rules. */
+export type RunExtra = { servers?: { name: string; command: string; args: string[]; denyTools?: string[] }[] }
 
 export type Probe = {
   fake: string; home: string; state: string; workdir: string; configDir: string
@@ -16,7 +19,9 @@ export type Probe = {
   /** The places hydra's own list denies this probe's specialist. */
   places(): string[]
   /** Runs one tool call as the one call of a real `claude -p` started with hydra's confinement settings; returns what the tool printed. */
-  run(call: ToolCall, cannotRead?: string[]): Promise<string>
+  run(call: ToolCall, cannotRead?: string[], extra?: RunExtra): Promise<string>
+  /** What the last run's Claude Code wrote to its --debug-file (what the start check reads). */
+  lastDebug(): string
   stop(): void
 }
 
@@ -30,6 +35,7 @@ export function makeProbe(prefix: string): Probe {
   for (const d of [state, workdir, configDir]) mkdirSync(d, { recursive: true, mode: 0o700 })
   const env = (): Record<string, string> => ({ PATH: process.env.PATH!, USER: process.env.USER ?? 'user', HOME: home })
   let next: ToolCall = { name: 'Bash', input: { command: 'true' } }
+  let offered = new Set<string>()   // the tool names the last request offered the model
   const api = Bun.serve({
     port: 0, hostname: '127.0.0.1',
     async fetch(req: Request): Promise<Response> {
@@ -37,7 +43,8 @@ export function makeProbe(prefix: string): Probe {
       const body: any = await req.json().catch(() => ({}))
       const last = body.messages?.[body.messages.length - 1]
       const afterTool = Array.isArray(last?.content) && last.content.some((c: any) => c.type === 'tool_result')
-      const useTool = (body.tools ?? []).some((t: any) => t.name === next.name) && !afterTool
+      offered = new Set((body.tools ?? []).map((t: any) => t.name))
+      const useTool = offered.has(next.name) && !afterTool
       const content: any[] = useTool ? [{ type: 'tool_use', id: 'toolu_1', name: next.name, input: { ...(next.name === 'Bash' ? { description: 'probe' } : {}), ...next.input } }] : [{ type: 'text', text: 'done' }]
       const m = message(content, useTool ? 'tool_use' : 'end_turn')
       if (!body.stream) return Response.json(m)
@@ -51,16 +58,22 @@ export function makeProbe(prefix: string): Probe {
       return new Response(sse(ev), { headers: { 'content-type': 'text/event-stream' } })
     },
   })
+  let lastDebugFile = ''
   const places = (): string[] => readDenyRoots({ home, stateDir: state, realpath }, workdir, [], [])
   return {
     fake, home, state, workdir, configDir, env, places,
-    async run(call, cannotRead = places()) {
+    lastDebug: () => { try { return readFileSync(lastDebugFile, 'utf8') } catch { return '' } },
+    async run(call, cannotRead = places(), extra = {}) {
       next = call
+      lastDebugFile = join(fake, `debug-${Math.random().toString(36).slice(2)}.log`)
       const settings = join(fake, `settings-${Math.random().toString(36).slice(2)}.json`)
-      writeFileSync(settings, JSON.stringify(confinementSettings({ denyCommands: [], cannotRead })))
-      const p = Bun.spawn(['claude', '-p', 'go', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions', '--settings', settings], {
+      const servers = (extra.servers ?? []).map(x => ({ name: x.name, command: x.command, tokenEnv: [], profileArgs: x.args, profileEnv: {}, ...(x.denyTools && { denyTools: x.denyTools }) }))
+      writeFileSync(settings, JSON.stringify(confinementSettings({ denyCommands: [], cannotRead, servers })))
+      const mcp = join(fake, `mcp-${Math.random().toString(36).slice(2)}.json`)
+      writeFileSync(mcp, JSON.stringify({ mcpServers: Object.fromEntries(servers.map(x => [x.name, { type: 'stdio', command: x.command, args: x.profileArgs, env: {} }])) }))
+      const p = Bun.spawn(['claude', '-p', 'go', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions', '--settings', settings, '--debug-file', lastDebugFile, ...(servers.length ? ['--mcp-config', mcp] : [])], {
         cwd: workdir, stdout: 'pipe', stderr: 'pipe', stdin: 'ignore',
-        env: { ...env(), ANTHROPIC_BASE_URL: `http://127.0.0.1:${api.port}`, ANTHROPIC_API_KEY: 'sk-ant-fake', CLAUDE_CONFIG_DIR: configDir },
+        env: { ...env(), ENABLE_CLAUDEAI_MCP_SERVERS: 'false', ENABLE_TOOL_SEARCH: 'false', ANTHROPIC_BASE_URL: `http://127.0.0.1:${api.port}`, ANTHROPIC_API_KEY: 'sk-ant-fake', CLAUDE_CONFIG_DIR: configDir },
       })
       const timer = setTimeout(() => p.kill(), 60_000)   // only the process this harness started, by its own handle
       const [out] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()])
@@ -73,6 +86,8 @@ export function makeProbe(prefix: string): Probe {
           if (Array.isArray(c)) for (const x of c) if (x.type === 'tool_result') return typeof x.content === 'string' ? x.content : JSON.stringify(x.content)
         } catch { /* ditto */ }
       }
+      // A tool the settings deny is not offered to the model at all: that is its refusal.
+      if (!offered.has(call.name)) return `TOOL NOT OFFERED: ${call.name}`
       throw new Error(`the ${call.name} tool printed nothing in the run: ${out.slice(0, 600)}`)
     },
     stop() { api.stop(true) },

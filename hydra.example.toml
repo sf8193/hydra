@@ -177,6 +177,15 @@ profile_args = ["-y", "@playwright/mcp@0.0.85", "--browser", "chrome", "--user-d
 # profile folder while it runs: profile_locks names it, and the command refuses while it is there. Per-operator: hydra names no browser.
 login_command = ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "--user-data-dir={profile_dir}", "--password-store=basic", "--use-mock-keychain", "--no-first-run"]
 profile_locks = ["SingletonLock"]
+# `deny_tools` are tools of this server a write-confined session may not call, each written as a deny rule `mcp__<server>__<tool>` in its launch settings, so
+# Claude Code does not offer them. Playwright's `browser_run_code_unsafe` runs arbitrary Playwright code in the server, outside Claude Code's sandbox, and with it a
+# session reads any local file through the browser (`page.goto("file:///...")`), which the server's own file: block on `browser_navigate` does not stop.
+# Names are matched exactly (case included) and a name that matches nothing is accepted: recheck deny_tools whenever you bump the pinned server version, since a renamed tool reopens it.
+deny_tools = ["browser_run_code_unsafe"]
+# To never start your real Chrome, use Playwright's own Chromium instead: run `npx playwright install chromium` once (about 100 MB), change `--browser chrome` to `--browser chromium`
+# in profile_args, and open the login window with Playwright too (its launcher adds --password-store=basic --use-mock-keychain to every Chromium launch itself; the version is the one
+# @playwright/mcp@0.0.85 depends on): login_command = ["npx", "-y", "playwright@1.66.0-alpha-2026-11-09", "open", "--browser", "chromium", "--user-data-dir={profile_dir}"]
+# (the server under a write-confined launch was shown with chromium; that headed login window was not run).
 
 
 # --- places: optional platform options for one place ---

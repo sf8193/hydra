@@ -28,7 +28,7 @@ import { safeSend } from './util.js'
 export type PolicyServer = { name: string; command: string; tokenEnv: string[]; tools: string[] }
 
 /** A server a write-confined session starts with its own browser folders: its command, the variables that reach it, and how it takes the folders (config/write-confinement.ts placeholders). */
-export type ConfinementServer = { name: string; command: string; tokenEnv: string[]; profileArgs: string[]; profileEnv: Record<string, string> }
+export type ConfinementServer = { name: string; command: string; tokenEnv: string[]; profileArgs: string[]; profileEnv: Record<string, string>; /** Tools of the server its session may not call (`mcp__<server>__<tool>` deny rules); absent: none. */ denyTools?: string[] }
 
 /**
  * `can_only_write_to = "workdir"`: the operator's account and tools, with Bash and Edit/Write writes confined to `workdir` (daemon/write-confinement.ts).
@@ -60,7 +60,7 @@ export type ConfinedPolicy = LaunchPolicy & { access: 'workdir'; workdir: string
 
 /** The id a write-confining policy's facts give: changes whenever the folder, a deny pattern or a server (command, token variables, profile declaration) does, and with nothing else. */
 export function confinementIdFor(w: Omit<ConfinementPolicy, 'specialist'>): string {
-  const identity = JSON.stringify({ workdir: w.workdir, deny: [...w.denyCommands].sort(), noRead: [...w.cannotRead].sort(), ...(w.tools && { tools: [...w.tools].sort() }), servers: w.servers.map(s => ({ name: s.name, command: s.command, tokenEnv: [...s.tokenEnv].sort(), args: s.profileArgs, env: Object.entries(s.profileEnv).sort(([a], [b]) => a.localeCompare(b)) })).sort((a, b) => a.name.localeCompare(b.name)), ...(w.browserProfile && { browserProfile: w.browserProfile }) })
+  const identity = JSON.stringify({ workdir: w.workdir, deny: [...w.denyCommands].sort(), noRead: [...w.cannotRead].sort(), ...(w.tools && { tools: [...w.tools].sort() }), servers: w.servers.map(s => ({ name: s.name, command: s.command, tokenEnv: [...s.tokenEnv].sort(), args: s.profileArgs, env: Object.entries(s.profileEnv).sort(([a], [b]) => a.localeCompare(b)), ...(s.denyTools?.length && { denyTools: [...s.denyTools].sort() }) })).sort((a, b) => a.name.localeCompare(b.name)), ...(w.browserProfile && { browserProfile: w.browserProfile }) })
   return `writes:${createHash('sha256').update(identity).digest('hex').slice(0, 12)}`
 }
 
@@ -118,7 +118,7 @@ export function policyProblem(p: unknown): string | undefined {
     if (w.tools !== undefined && (!Array.isArray(w.tools) || !w.tools.every(t => typeof t === 'string'))) return 'its can_only_write_to has no readable tool list'
     if (w.browserProfile !== undefined && (typeof w.browserProfile !== 'string' || !isAbsolute(w.browserProfile))) return 'its can_only_write_to has no readable browser profile folder'
     if (!Array.isArray(w.cannotRead) || !w.cannotRead.every(c => typeof c === 'string' && isAbsolute(c))) return 'its can_only_write_to has no readable list of places it may not read'
-    if (!Array.isArray(w.servers) || !w.servers.every(x => x && typeof x.name === 'string' && typeof x.command === 'string' && Array.isArray(x.tokenEnv) && Array.isArray(x.profileArgs) && typeof x.profileEnv === 'object' && x.profileEnv !== null)) return 'its can_only_write_to has no readable server list'
+    if (!Array.isArray(w.servers) || !w.servers.every(x => x && typeof x.name === 'string' && typeof x.command === 'string' && Array.isArray(x.tokenEnv) && Array.isArray(x.profileArgs) && typeof x.profileEnv === 'object' && x.profileEnv !== null && (x.denyTools === undefined || (Array.isArray(x.denyTools) && x.denyTools.every(n => typeof n === 'string'))))) return 'its can_only_write_to has no readable server list'
     return q.id === confinementIdFor(w as Omit<ConfinementPolicy, 'specialist'>) ? undefined : 'its id does not match its folder, deny lists and servers'
   }
   if (q.access === 'operator') return q.id === OPERATOR_POLICY_ID ? undefined : 'its id does not match its access (an operator policy has the operator id)'
@@ -153,7 +153,7 @@ export function bornPolicy(specialistId: string | undefined, h: HydraConfig = cu
     const servers = (declared.mcpServerNames ?? []).map((name): ConfinementServer => {
       const s = h.mcpServers?.[name]
       if (!s) throw new PolicyRefusal(`specialist ${declared.id} lists [mcp_servers.${name}], which hydra.toml does not declare: declare it, or remove it from the specialist's mcp_servers. ${remedy(sessionName)}`)
-      return { name: s.name, command: s.command, tokenEnv: [...s.tokenEnv], profileArgs: [...(s.profileArgs ?? [])], profileEnv: { ...(s.profileEnv ?? {}) } }
+      return { name: s.name, command: s.command, tokenEnv: [...s.tokenEnv], profileArgs: [...(s.profileArgs ?? [])], profileEnv: { ...(s.profileEnv ?? {}) }, ...(s.denyTools?.length && { denyTools: [...s.denyTools] }) }
     })
     const env = hydraLoadEnv()
     const others = Object.values(h.specialists).filter(x => x.id !== declared.id).map(x => x.workdir)
@@ -255,6 +255,7 @@ function confinementDrifted(stored: LaunchPolicy | undefined, current: LaunchPol
     if (!x && y) out.push(`mcp ${name}: not listed -> listed`)
     else if (x && !y) out.push(`mcp ${name}: listed -> not listed`)
     else if (x && y && JSON.stringify([x.command, [...x.tokenEnv].sort(), x.profileArgs, x.profileEnv]) !== JSON.stringify([y.command, [...y.tokenEnv].sort(), y.profileArgs, y.profileEnv])) out.push(`mcp ${name}: command, token_env or profile declaration changed`)
+    else if (x && y && JSON.stringify([...(x.denyTools ?? [])].sort()) !== JSON.stringify([...(y.denyTools ?? [])].sort())) out.push(`mcp ${name}: deny_tools changed`)
   }
   return out
 }
