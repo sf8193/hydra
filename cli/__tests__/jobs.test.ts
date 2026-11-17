@@ -1040,6 +1040,13 @@ describe('jobs list lines', () => {
     expect(l).toContain('retry after')
   })
 
+  test('a launchd job the daemon only started watching has no result yet: it lists as never run', () => {
+    const ld = parseJobs(`[scan]\nschedule="0 * * * *"\ncheck="s.sh"\nmode="none"\nrunner="launchd"`)[0]
+    const l = line(ld, { expectedThrough: '2026-11-04T18:00:00Z', expectedCron: '0 * * * *' })
+    expect(l).toContain('last never')
+    expect(l).not.toContain('failing')
+  })
+
   test('not owed, served, and not now (only when newer than the last result)', () => {
     const l = line(dur, { covered: { slot: '2026-11-04 10:05', at: '2026-11-04T18:05:30Z' }, last: { at: '2026-11-04T18:05:30Z', result: 'done', servedBy: 'pull-7' }, notNow: { since: '2026-11-04T18:07:00Z', reason: 'offline' } })
     expect(l).toContain('not owed')

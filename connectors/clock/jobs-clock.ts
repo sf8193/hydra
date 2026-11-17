@@ -9,14 +9,15 @@ import { dlopen, FFIType } from 'bun:ffi'
 import { randomBytes } from 'crypto'
 import { join } from 'path'
 import { closeSync, constants as fsc, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, unlinkSync } from 'fs'
-import { latestSlot, type Slot } from '../../shared/cron-local.js'
+import { latestSlot, nextSlot, type Slot } from '../../shared/cron-local.js'
 import {
-  ATTEMPT_DEADLINE_MS, KILL_GRACE_MS, STALE_TICK_MS, jobInitiator, attemptArgv, attemptEnv, listProcesses, lstartOf, type Proc, commandMatches, daemonFile, jobsDir, jobsToml, lockFile, logFile,
+  ATTEMPT_DEADLINE_MS, KILL_GRACE_MS, NO_REPORT_GRACE_MS, STALE_TICK_MS, jobInitiator, attemptArgv, attemptEnv, listProcesses, lstartOf, type Proc, commandMatches, daemonFile, jobsDir, jobsToml, lockFile, logFile,
   owedSlot, backoffUntil, parseJobsConfig, type Outcome, parseResultName, parseExternalName, externalFile, externalResults, type ExternalResult, readDaemonState, readJobState, resultFile, resultsDir, stateFile,
   writeAtomic, type AttemptResult, type DaemonState, type Dispatch, type Job, type JobsConfig, type JobState,
 } from '../../shared/jobs.js'
 import { migratedJobsToml, schedulesAreSource } from '../../shared/schedules.js'
 import { timed } from '../../shared/loop-watch.js'
+import { awakeSince, suspendedSince } from '../../shared/resume.js'
 
 const noSuch = (cfg: JobsConfig, name: string) => cfg.fromSchedules ? `no schedule named ${name} in hydra.toml` : `no job named ${name} in jobs.toml`
 
@@ -25,6 +26,9 @@ export const ADOPT_GRACE_MS = 30_000
 /** After the process is gone, how long to wait for its final rename before calling it lost. */
 export const FINAL_WRITE_GRACE_MS = 2_000
 const TICK_MS = 60_000
+/** A bound on one tick's catch-up over a long outage; the rest is judged on the next tick. */
+const MAX_SLOTS_PER_TICK = 500
+const MAX_UNREPORTED = 100
 
 export type ClockDeps = {
   stateDir: string
@@ -68,6 +72,10 @@ export type ClockDeps = {
   explicitTZ: boolean
   getTZ: () => string | undefined
   setTZ: (zone: string) => void
+  /** Wall time since `t` (ms), less the time the daemon was suspended (asleep or held) since: the resume detector's `awakeSince`. */
+  awakeSince: (t: number, now: number) => number
+  /** The time suspended since `t` up to `now`, or null for none (shared/resume.ts `suspendedSince`). */
+  suspendedSince: (t: number, now: number) => { ms: number } | null
   log: (msg: string) => void
 }
 
@@ -170,6 +178,7 @@ export class JobsClock {
     // Results first, so a dispatch that ended this minute frees its job for this tick's decision.
     await this.applyResults(cfg)
     if (this.stopped) return
+    this.expectReports(cfg)
     for (const job of cfg.jobs) { if (this.stopped) return; await this.decide(job, cfg, isOnline) }
     if (this.stopped) return
     await this.reportFailures(cfg)
@@ -197,6 +206,47 @@ export class JobsClock {
       if (!online) return this.recordOutcome(job, { at: now.toISOString(), result: 'not-now', note: 'offline' }, target)
     }
     this.dispatch(job, 'scheduled', slot)
+  }
+
+  /**
+   * A launchd job reports each slot; the daemon expects it. A slot whose grace (awake time) has passed with no result
+   * applied or waiting is a failure, cause `no report`, one per slot: it runs the same alert path as any failure. The
+   * watch is the daemon's own, so it holds only while unbroken: a job it first sees, a changed cron, or a gap of more
+   * than two ticks since it last watched (the Mac was off or asleep, the daemon was down, the job was out of the config)
+   * restarts it at the latest slot, and the slots it could not watch are not owed. A slot that fell in a suspension the
+   * resume detector recorded is skipped too. A late result is applied as usual; a success clears the run unless a later
+   * slot is still missed (answerMisses).
+   */
+  private expectReports(cfg: JobsConfig): void {
+    const now = this.d.now()
+    const watchedAt = now.toISOString()
+    for (const job of cfg.jobs) {
+      if (job.runner !== 'launchd') continue
+      const r = readJobState(this.d.stateDir, job.name, job.schedule)
+      const first = (latestSlot(job.schedule, now)?.at ?? now).toISOString()
+      // Never seen: record only where to start watching. No baseline outcome, which would claim a run that never was.
+      if (r.kind === 'missing') { this.write(job.name, { expectedThrough: first, expectedCron: job.schedule, watchedAt }); continue }
+      const st = r.kind === 'ok' ? r.state : this.ensureState(job, now)
+      if (!st) continue
+      // Until `schedules sync` re-registers a changed entry its new slots can run late; the grace covers that.
+      const unbroken = st.expectedThrough !== undefined && st.expectedCron === job.schedule && st.watchedAt !== undefined && now.getTime() - new Date(st.watchedAt).getTime() <= 2 * TICK_MS
+      if (!unbroken) { this.update(job.name, job.schedule, s => { s.expectedThrough = first; s.expectedCron = job.schedule; s.watchedAt = watchedAt }); continue }
+      let through = st.expectedThrough!
+      const missed: Slot[] = []
+      for (let slot = nextSlot(job.schedule, new Date(through)), n = 0; slot && slot.at <= now && n < MAX_SLOTS_PER_TICK; slot = nextSlot(job.schedule, slot.at), n++) {
+        if (this.d.awakeSince(slot.at.getTime(), now.getTime()) < NO_REPORT_GRACE_MS) break
+        through = slot.at.toISOString()
+        const reported = (st.appliedExternal !== undefined && through <= st.appliedExternal) || existsSync(externalFile(this.d.stateDir, job.name, through))
+        if (!reported && !this.d.suspendedSince(slot.at.getTime(), slot.at.getTime() + 1)) missed.push(slot)
+      }
+      this.update(job.name, job.schedule, s => {
+        for (const slot of missed) applyOutcome(s, { at: now.toISOString(), result: 'failed', note: `no report: no result from launchd for ${slot.label} within ${Math.round(NO_REPORT_GRACE_MS / 60_000)}m` }, null)
+        if (missed.length) s.unreported = [...(s.unreported ?? []), ...missed.map(m => m.at.toISOString())].slice(-MAX_UNREPORTED)
+        s.expectedThrough = through
+        s.watchedAt = watchedAt
+      })
+      for (const slot of missed) this.d.log(`jobs: ${job.name}: no report for ${slot.label}`)
+    }
   }
 
   /** Online if either witness says so: a VPN that blocks the probe can't hold every job, and a captive portal fails both. */
@@ -512,8 +562,10 @@ export class JobsClock {
       const note = res.result === 'done' ? res.output?.slice(0, 300) : res.note
       // The outcome and the applied mark in one write: a crash between them can't record the slot twice.
       this.update(job.name, job.schedule, s => {
+        const since = s.failingSince
         applyOutcome(s, { at: res.at, result: res.result, ...(note && { note }) }, { kind: 'scheduled', slot: res.slot, at: res.at })
         s.appliedExternal = slotAt
+        answerMisses(s, slotAt, since)
       })
       this.d.log(`jobs: ${job.name}: launchd result for ${res.slot}: ${res.result}${note ? ` (${note})` : ''}`)
       drop()
@@ -585,10 +637,11 @@ export class JobsClock {
   private apply(name: string, job: Job | undefined, d: Dispatch, res: AttemptResult): void {
     const applied = this.update(name, job?.schedule, s => {
       if (res.dispatch <= (s.appliedDispatch ?? 0)) return
+      const since = s.failingSince
       applyOutcome(s, { ...res, dispatch: d.id }, { kind: d.kind, slot: d.slot, at: coveredAt(d) })
       if (s.dispatch?.id === d.id) delete s.dispatch
       s.appliedDispatch = d.id
-      if (d.external && res.result !== 'not-now') s.appliedExternal = d.external
+      if (d.external && res.result !== 'not-now') { s.appliedExternal = d.external; answerMisses(s, d.external, since) }
     })
     if (!applied) return   // state went unreadable: keep the result for the tick after the reset
     if (d.kind === 'manual') this.manualEnded.add(name)
@@ -735,6 +788,18 @@ export function applyOutcome(s: JobState, o: Recorded, t: Target | null): void {
   if (t?.slot && success) s.covered = { slot: t.slot, at: t.at }
 }
 
+/**
+ * A result for a launchd slot answers the `no report` misses at or before it. A success clears the failure run only
+ * when no later miss is left: a late result for an older slot says nothing about the slots after it.
+ */
+function answerMisses(s: JobState, slotAt: string, since: string | undefined): void {
+  if (!s.unreported?.length) return
+  const rest = s.unreported.filter(m => m > slotAt)
+  if (!rest.length) { delete s.unreported; return }
+  s.unreported = rest
+  if (s.last?.result !== 'failed') { s.failures = rest.length; if (since) s.failingSince = since }
+}
+
 const msToNextMinute = (now: Date) => TICK_MS - (now.getTime() % TICK_MS) + 1_000
 
 // ---------------------------------------------------------------------------
@@ -814,6 +879,8 @@ export function realDeps(o: Pick<ClockDeps, 'stateDir' | 'platform' | 'hydraEntr
     kill: (pid, signal) => process.kill(pid, signal),
     captiveProbe,
     systemZone,
+    awakeSince: (t, now) => awakeSince(t, now),
+    suspendedSince: (t, now) => suspendedSince(t, now),
     explicitTZ: !!process.env.TZ,
     getTZ: () => process.env.TZ,
     setTZ: zone => { process.env.TZ = zone },

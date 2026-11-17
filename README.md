@@ -627,6 +627,8 @@ Take a weekly job, `weekly-review`, due Friday 11:00:
 
 A launchd job's entry is registered by `jobs sync` and runs a stable bun link, never a versioned Cellar path, which `brew upgrade` deletes. `needs` and `alert_after` need `runner = "daemon"`.
 
+The daemon also expects every launchd slot to report. A slot with no result 35 minutes after it (a check's 30-minute limit plus slack, counted in awake time, so a sleep extends it) is a failure, `no report for <slot>`, one per missed slot, and it is alerted like any launchd failure. That is how a broken checkout, an unloaded entry, a moved bun or a macOS permission denial shows up: as silence otherwise. The watch restarts at the latest slot whenever it was not continuous, so a slot nobody was watching is never counted: the machine was asleep or off, the daemon was down, the schedule was out of hydra.toml for a while, or its cron changed (launchd runs a slept-through slot on wake). A late result clears the failure unless a later slot is still missed.
+
 **Nothing changes unless you opt in.** An existing file runs under launchd as before. The old runner's entries keep working until `jobs sync` moves them onto the stable bun path, and `jobs list` flags any that remain. `jobs sync` registers and unregisters launchd entries only for the platform's live state dir, and removes one only when its job leaves the file or moves to `runner = "daemon"`.
 
 Known and accepted for daemon-runner jobs: in the hour the clocks fall back, a frequent job (`*/5`) pauses for about an hour, once a year. Flows: [`flow-jobs-dispatch.mmd`](diagrams/flow-jobs-dispatch.mmd) (a daemon-runner slot), [`flow-jobs-launchd.mmd`](diagrams/flow-jobs-launchd.mmd) (a launchd-runner slot), [`flow-jobs-sync.mmd`](diagrams/flow-jobs-sync.mmd).

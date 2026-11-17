@@ -258,6 +258,11 @@ export const isJobName = (n: string) => NAME.test(n)
 
 export const CHECK_TIMEOUT_MS = 30 * 60_000
 export const ACTION_TIMEOUT_MS = 2 * 60_000
+/**
+ * How long after a launchd slot the daemon waits for its result before calling it missed: the longest a check runs,
+ * and 5 minutes for launchd to start it and the file to land. Awake time: a sleep inside it extends it.
+ */
+export const NO_REPORT_GRACE_MS = CHECK_TIMEOUT_MS + 5 * 60_000
 /** The daemon kills a wedged attempt this long after its deadline. */
 export const KILL_GRACE_MS = 60_000
 /** How long `jobs run` waits for its dispatch to be applied: past the deadline, the kill grace and one tick, it is stuck. */
@@ -297,6 +302,10 @@ export type JobState = {
   dispatch?: Dispatch             // set = a live dispatch
   appliedDispatch?: number        // the last dispatch id whose result (or loss) was applied
   appliedExternal?: string        // the latest slot instant whose launchd result was applied: a replay of it is dropped
+  expectedThrough?: string        // a launchd job: the latest slot instant whose result the daemon has stopped waiting for
+  expectedCron?: string           // the cron expectedThrough was computed under: another cron restarts the watch
+  watchedAt?: string              // the last tick that watched this job: a gap of more than two ticks restarts the watch
+  unreported?: string[]           // slot instants counted as `no report` and not answered since, oldest first (a late result for an older slot must not clear a newer miss)
   failures?: number
   failingSince?: string
   last?: { at: string; dispatch?: number; result: Exclude<Result, 'not-now'>; note?: string; servedBy?: string }
