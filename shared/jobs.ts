@@ -62,6 +62,18 @@ export const targetLabel = (t: JobTarget | undefined) => !t ? 'none' : 'spawn' i
 /** alert_after: a duration up to 30d. */
 export const parseAlertAfter = (s: string): number | null => parseDuration(s, MAX_ALERT_AFTER_MS)
 
+/**
+ * Where a job runs, for jobs.toml and hydra.toml's [schedules] alike. A schedule launchd can't hold runs on the daemon,
+ * and says why. launchd has no retries: a failure is the run, so it is alerted at once.
+ */
+export function jobRunner(schedule: string, runner: Runner, runnerFrom: Job['runnerFrom'], alertAfterMs: number): Pick<Job, 'runner' | 'runnerFrom' | 'alertAfterMs'> & { notes: string[] } {
+  if (runner === 'daemon') return { runner, runnerFrom, alertAfterMs, notes: [] }
+  try { launchdCalendar(schedule) } catch (e) {
+    return { runner: 'daemon', runnerFrom: 'schedule', alertAfterMs, notes: [`${(e as Error).message}, so the daemon runs it; set runner = "daemon" to say so`] }
+  }
+  return { runner, runnerFrom, alertAfterMs: 0, notes: [] }
+}
+
 /** `fromSchedules`: hydra.toml's [schedules] are the source, not jobs.toml. */
 export type JobsConfig = { channel?: string; jobs: Job[]; fromSchedules?: true }
 
@@ -172,7 +184,6 @@ export function parseJobsConfig(text: string): JobsConfig {
     }
     // A daemon job's slot is owed until it is done. durable = true says that; false is ignored, for old files.
     if (t.durable !== undefined && typeof t.durable !== 'boolean') fail('durable must be true or false')
-    const notes: string[] = []
     let needs: Need[] = []
     if (t.needs !== undefined) {
       if (!Array.isArray(t.needs) || t.needs.some(n => typeof n !== 'string')) fail('needs must be a list of names')
@@ -185,15 +196,8 @@ export function parseJobsConfig(text: string): JobsConfig {
     if (alertAfterMs === null) fail(`alert_after "${alertAfter}" must be a duration like 90m, 12h or 2d, at most 30d`)
     const own = str('runner')
     if (own !== undefined && !RUNNERS.includes(own as Runner)) fail(`runner must be "${RUNNERS[0]}" (the default) or ${RUNNERS.slice(1).map(r => `"${r}"`).join(' or ')}`)
-    let runner = (own ?? fileRunner ?? 'launchd') as Runner
-    let runnerFrom: Job['runnerFrom'] = own ? 'job' : fileRunner ? 'file' : 'default'
-    if (runner === 'launchd') {
-      // A schedule launchd can't hold never fails the file (it parsed on main): the daemon runs that job, and says why.
-      try { launchdCalendar(schedule) } catch (e) {
-        runner = 'daemon'; runnerFrom = 'schedule'
-        notes.push(`${(e as Error).message}, so the daemon runs it; set runner = "daemon" to say so`)
-      }
-    }
+    // A schedule launchd can't hold never fails the file (it parsed on main).
+    const { runner, runnerFrom, alertAfterMs: after, notes } = jobRunner(schedule, (own ?? fileRunner ?? 'launchd') as Runner, own ? 'job' : fileRunner ? 'file' : 'default', alertAfterMs!)
     if (runner === 'launchd') {
       for (const k of ['durable', 'needs', 'alert_after']) if (t[k] !== undefined && t[k] !== false) fail(`${k} needs the daemon runner: add runner = "daemon"`)
     }
@@ -205,8 +209,7 @@ export function parseJobsConfig(text: string): JobsConfig {
     const channel = jobChannel ?? (isSpawn(target) ? target.spawn.channel : undefined) ?? defaultChannel
     jobs.push({
       name, schedule, runner, runnerFrom, ...(check && { check }), ...(cwd && { cwd }), ...(envFile && { envFile }), ...(target && { target }), ...(prompt && { prompt }), ...(channel && { channel }),
-      // launchd has no retries: a failure is the run, so it is alerted at once
-      alertAfterMs: runner === 'launchd' ? 0 : alertAfterMs!, ...(needs.length && { needs }), ...(notes.length && { notes }),
+      alertAfterMs: after, ...(needs.length && { needs }), ...(notes.length && { notes }),
     })
   }
   return { ...(defaultChannel && { channel: defaultChannel }), jobs }
