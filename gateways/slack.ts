@@ -7,8 +7,9 @@
  */
 
 import { App, webApi, type MessageEvent, type GenericMessageEvent, type BotMessageEvent } from '@slack/bolt'
-import { readFileSync, writeFileSync, mkdirSync } from 'fs'
-import { sanitizeFilename } from './gateway.js'
+import { readFileSync, writeFileSync } from 'fs'
+import { discardInboxFiles, writeInboxFile } from '../shared/confined-inbox.js'
+import type { InboxLimits } from '../config/write-confinement.js'
 import { SocketSupervisor } from '../shared/socket-supervisor.js'
 import { ThrottledQueue } from '../throttled-queue.js'
 import { HOME_STATUS_ACTION_PREFIX } from '../shared/constants.js'
@@ -696,7 +697,7 @@ export class SlackGateway implements ChatGateway {
     return { id: `${channel}:${threadTs}`, url }
   }
 
-  async downloadAttachments(channelId: string, messageId: string, inboxDir: string): Promise<DownloadedFile[]> {
+  async downloadAttachments(channelId: string, messageId: string, inboxDir: string, limits?: InboxLimits): Promise<DownloadedFile[]> {
     if (!this.app) throw new Error('not connected')
     const { channel, threadTs } = this.parseChannelId(channelId)
 
@@ -709,31 +710,33 @@ export class SlackGateway implements ChatGateway {
     if (!msg.files?.length) return []
 
     const results: DownloadedFile[] = []
-    for (const file of msg.files) {
-      if (!file.url_private_download && !file.url_private) continue
-      const url = file.url_private_download ?? file.url_private!
-      const size = file.size ?? 0
-      if (size > MAX_ATTACHMENT_BYTES) {
-        throw new Error(`attachment too large: ${(size / 1024 / 1024).toFixed(1)}MB, max 25MB`)
+    try {
+      for (const file of msg.files) {
+        if (!file.url_private_download && !file.url_private) continue
+        const url = file.url_private_download ?? file.url_private!
+        const size = file.size ?? 0
+        if (size > MAX_ATTACHMENT_BYTES) {
+          throw new Error(`attachment too large: ${(size / 1024 / 1024).toFixed(1)}MB, max 25MB`)
+        }
+
+        const res = await fetch(url, {
+          headers: { Authorization: `Bearer ${this.app.client.token}` },
+        })
+        const buf = Buffer.from(await res.arrayBuffer())
+
+        const path = writeInboxFile(inboxDir, file.name || `${file.id}`, buf, limits)
+
+        results.push({
+          path,
+          name: (file.name ?? file.id ?? 'unknown').replace(/[\[\]\r\n;]/g, '_'),
+          contentType: file.mimetype ?? 'unknown',
+          sizeKB: (size / 1024).toFixed(0),
+        })
       }
-
-      const res = await fetch(url, {
-        headers: { Authorization: `Bearer ${this.app.client.token}` },
-      })
-      const buf = Buffer.from(await res.arrayBuffer())
-
-      const name = file.name || `${file.id}`
-      const sanitizedName = sanitizeFilename(name, `${file.id}`)
-      const path = `${inboxDir}/${Date.now()}-${sanitizedName}`
-      mkdirSync(inboxDir, { recursive: true })
-      writeFileSync(path, buf)
-
-      results.push({
-        path,
-        name: (file.name ?? file.id ?? 'unknown').replace(/[\[\]\r\n;]/g, '_'),
-        contentType: file.mimetype ?? 'unknown',
-        sizeKB: (size / 1024).toFixed(0),
-      })
+    } catch (err) {
+      // A confined session's inbox is its own folder: files this call already saved are not left behind for a message that says none were.
+      if (limits) discardInboxFiles(results.map(r => r.path))
+      throw err
     }
     return results
   }

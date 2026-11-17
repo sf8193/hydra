@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { mkdtempSync, rmSync, readFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, readFileSync } from 'fs'
+import { INBOX_LIMITS } from '../../config/write-confinement.js'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { SlackGateway } from '../../gateways/slack.js'
@@ -145,5 +146,20 @@ describe('SlackGateway.downloadAttachments', () => {
     stubHistory(gw, { ok: true, messages: [{ ts: TOP_LEVEL_TS, thread_ts: TOP_LEVEL_TS }] })
 
     expect(await gw.downloadAttachments(CHANNEL, TOP_LEVEL_TS, inbox)).toEqual([])
+  })
+})
+
+describe('SlackGateway.downloadAttachments, a message with two files where the second is refused', () => {
+  const TWO = { ts: TOP_LEVEL_TS, thread_ts: TOP_LEVEL_TS, files: [file('F_OK', 1000), { ...file('F_BIG', 30 * 1024 * 1024), name: 'big.zip' }] }
+  const gw2 = () => { const { gw } = gatewayWithStub(); stubHistory(gw, { ok: true, messages: [TWO] }); return gw }
+
+  test("in a write-confined session's inbox the first file is not left behind for a message that says none were saved", async () => {
+    const dir = join(realpathSync(inbox), 'confined-inbox'); mkdirSync(dir, { mode: 0o700 })
+    await expect(gw2().downloadAttachments(CHANNEL, TOP_LEVEL_TS, dir, INBOX_LIMITS)).rejects.toThrow(/too large/)
+    expect(readdirSync(dir)).toEqual([])
+  })
+  test('in the shared inbox nothing changes: the first file stays, as before', async () => {
+    await expect(gw2().downloadAttachments(CHANNEL, TOP_LEVEL_TS, inbox)).rejects.toThrow(/too large/)
+    expect(readdirSync(inbox).length).toBe(1)
   })
 })

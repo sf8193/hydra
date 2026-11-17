@@ -7,7 +7,7 @@ import { registry } from '../../../daemon/sessions.js'
 import { setSpecialistThread, _reloadSpecialists } from '../../../specialists/specialists.js'
 import { _setHydraConfigForTesting } from '../../../daemon/hydra-config.js'
 import {
-  getConversationTable, bindConversation, unbindConversation, formatConversations, formatConversationsFor, operatorBind, refreshSlackSpecialistSurface, slackConversationHealth, slackTokens, slackRuntimeDeps, parseConversation, replyInConversation, targetFor, startConversationTable, stopConversationTable,
+  getConversationTable, bindConversation, unbindConversation, formatConversations, formatConversationsFor, operatorBind, refreshSlackSpecialistSurface, slackConversationHealth, slackTokens, slackRuntimeDeps, placeFileFor, parseConversation, replyInConversation, targetFor, startConversationTable, stopConversationTable,
 } from '../runtime.js'
 import { sessionCapabilities, isSpecialistOccupant, isToolAllowed } from '../../../daemon/tool-surface.js'
 import { emit } from '../../../daemon/event-bus.js'
@@ -1057,5 +1057,22 @@ describe('reply_to answers in the thread of one message', () => {
     const out = await replyInConversation('main', DM, 'x', [], MSG)
     expect(posts).toEqual([`D0OP|${MSG}|x`])
     expect(out).toContain('its thread is not bound to main: the conversation table is full')
+  })
+})
+
+describe('placeFileFor (a download for a specialist that reads only its own folder)', () => {
+  test('a write-confined specialist gets a copy in <workdir>/.inbox; any other recipient gets nothing, so the download stands', () => {
+    const { mkdtempSync, writeFileSync, readFileSync, realpathSync } = require('fs') as typeof import('fs')
+    const { tmpdir } = require('os') as typeof import('os')
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'place-file-')))
+    try {
+      const src = join(root, 'F1-a.pdf'); writeFileSync(src, 'bytes')
+      const work = join(root, 'work'); require('fs').mkdirSync(work)
+      const p = placeFileFor({ canOnlyWriteTo: 'workdir', workdir: work }, src, 'a.pdf')!
+      expect(p.startsWith(join(work, '.inbox') + '/')).toBe(true)
+      expect(readFileSync(p, 'utf8')).toBe('bytes')
+      expect(placeFileFor({ workdir: work }, src, 'a.pdf')).toBeUndefined()
+      expect(placeFileFor(undefined, src, 'a.pdf')).toBeUndefined()
+    } finally { rmSync(root, { recursive: true, force: true }) }
   })
 })

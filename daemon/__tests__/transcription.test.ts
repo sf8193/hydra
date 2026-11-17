@@ -1,8 +1,9 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { writeFileSync, mkdtempSync } from 'fs'
+import { writeFileSync, mkdtempSync, symlinkSync, linkSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { isAudioFile, mergeTranscripts, transcriptionEnabled, transcribeDownloads } from '../transcription.js'
+import { KEPT_EXTENSIONS } from '../../shared/confined-inbox.js'
+import { AUDIO_EXTENSIONS, isAudioFile, mergeTranscripts, transcriptionEnabled, transcribeDownloads } from '../transcription.js'
 
 describe('isAudioFile', () => {
   test('detects audio by MIME type', () => {
@@ -166,5 +167,39 @@ describe('transcribeDownloads', () => {
     globalThis.fetch = (async () => { calls++; throw new Error('should not be called') }) as any
     expect(await transcribeDownloads([voiceClip] as any)).toEqual([])
     expect(calls).toBe(0)
+  })
+})
+
+describe('transcribeDownloads on a file a specialist can also write', () => {
+  const realFetch = globalThis.fetch
+  afterEach(() => { globalThis.fetch = realFetch; delete process.env.HYDRA_TRANSCRIBE_ENABLED })
+
+  test('a link put where the daemon saved the audio is not followed: the sidecar is sent nothing', async () => {
+    process.env.HYDRA_TRANSCRIBE_ENABLED = '1'
+    const dir = mkdtempSync(join(tmpdir(), 'hydra-transcribe-link-'))
+    writeFileSync(join(dir, 'secret.txt'), 'not-yours')
+    symlinkSync(join(dir, 'secret.txt'), join(dir, 'voice.m4a'))
+    let posted = 0
+    globalThis.fetch = (async () => { posted++; return new Response(JSON.stringify({ text: 'x' })) }) as any
+    const out = await transcribeDownloads([{ path: join(dir, 'voice.m4a'), name: 'voice.m4a', contentType: 'audio/mp4', sizeKB: '1' }])
+    expect(posted).toBe(0)
+    expect(out).toEqual([])
+  })
+
+  test('a file with a second name (a hard link to a file it may not read) is not sent either', async () => {
+    process.env.HYDRA_TRANSCRIBE_ENABLED = '1'
+    const dir = mkdtempSync(join(tmpdir(), 'hydra-transcribe-hl-'))
+    writeFileSync(join(dir, 'secret.m4a'), 'not-yours')
+    linkSync(join(dir, 'secret.m4a'), join(dir, 'voice.m4a'))
+    let posted = 0
+    globalThis.fetch = (async () => { posted++; return new Response(JSON.stringify({ text: 'x' })) }) as any
+    expect(await transcribeDownloads([{ path: join(dir, 'voice.m4a'), name: 'voice.m4a', contentType: 'audio/mp4', sizeKB: '1' }])).toEqual([])
+    expect(posted).toBe(0)
+  })
+})
+
+describe('audio extensions in a write-confined specialist\'s inbox', () => {
+  test('every extension the sidecar takes is kept by the inbox\'s name rule (a voice note must not arrive as .dat)', () => {
+    for (const ext of AUDIO_EXTENSIONS) expect(KEPT_EXTENSIONS.has(ext)).toBe(true)
   })
 })

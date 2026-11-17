@@ -198,6 +198,12 @@ export type ConversationDeps = {
   resolveName?: (userId: string) => Promise<string | undefined>
   /** Where downloaded attachments go: `<dir>/<channel>/<file id>-<name>` for the app `default`, `<dir>/<app>/<channel>/<file id>-<name>` for any other. */
   filesDir?: string
+  /**
+   * For a file downloaded for the specialist `to`: when `to` reads only its own folder (a write-confined specialist: the state folder, where `filesDir` is, is denied to it),
+   * copies the downloaded `src` into its inbox and returns the new path, which the delivery then carries instead. Returns undefined for any other specialist (the download's path stands);
+   * throws when the inbox refuses the file (a link in its place, full), and the file is listed with why.
+   */
+  placeFile?: (to: string, src: string, name: string) => string | undefined
   /** Runs the guard. Defaults to the real subprocess; tests pass a fake. */
   guard?: (g: Guard, input: GuardInput) => Promise<GuardVerdict>
   /** A plain message to a person (not a session turn): how a drop is surfaced. `to`: the specialist it concerns, whose `home_place` should hear it. */
@@ -1516,7 +1522,7 @@ export class ConversationTable {
     })
     // Attachments are fetched only for what will be delivered, two messages at a time, before this thread's turn to send.
     const files = !!placeOptions(cfg, entry.channel)?.files
-    for (const [to, group] of groups) groups.set(to, await mapLimit(group, 2, i => i.files?.length ? this.saveFiles(entry, i, files) : Promise.resolve(i)))
+    for (const [to, group] of groups) groups.set(to, await mapLimit(group, 2, i => i.files?.length ? this.saveFiles(entry, i, files, to) : Promise.resolve(i)))
     // Only the sending is serialized across threads.
     const send = this.chain.then(async () => {
       for (const [to, group] of groups) await this.deliverGroup(key, entry, { to }, group, cfg, fallbackOf.get(to))
@@ -1527,9 +1533,9 @@ export class ConversationTable {
 
   /**
    * A message's attachments, as the session will read them: downloaded at mode 0600 under the state dir when the
-   * place says `files`, otherwise listed by name. Too large, failed or not connected: listed, with why. Never a reason to hold the message.
+   * place says `files` (then copied into the recipient's own inbox when it reads only its own folder: `placeFile`), otherwise listed by name. Too large, failed or not connected: listed, with why. Never a reason to hold the message.
    */
-  private async saveFiles(entry: ConversationEntry, i: Item, enabled: boolean): Promise<Item> {
+  private async saveFiles(entry: ConversationEntry, i: Item, enabled: boolean, to: string): Promise<Item> {
     const saved: FileRef[] = []
     for (const f of i.files ?? []) {
       const ref: FileRef = { name: f.name, ...(f.size !== undefined && { size: f.size }) }
@@ -1552,7 +1558,11 @@ export class ConversationTable {
             }
             await flight
           }
-          ref.path = dest
+          // A recipient that reads only its own folder is handed a copy there: the download stays where the state folder keeps it, for the next recipient and the sweep.
+          try { ref.path = this.deps.placeFile?.(to, dest, f.name) ?? dest } catch (err) {
+            ref.note = `not saved in its inbox (${err instanceof Error ? err.message : err})`
+            this.deps.log(`daemon: slack connector: saving ${f.id} for ${to} in its inbox failed: ${ref.note}\n`)
+          }
         } catch (err) {
           ref.note = `not downloaded (${err instanceof Error ? err.message : err})`
           this.deps.log(`daemon: slack connector: downloading ${f.id} from ${entry.channel} ts ${i.ts} failed: ${ref.note}\n`)

@@ -10,7 +10,7 @@ import { readDenyRoots } from '../../config/write-confinement.js'
 export type ToolCall = { name: string; input: Record<string, unknown> }
 
 /** Beyond the one scripted call: servers the launch lists (their MCP config is written and passed, their tools loaded up front) and the settings' server rules. */
-export type RunExtra = { servers?: { name: string; command: string; args: string[]; denyTools?: string[] }[] }
+export type RunExtra = { /** Changes the settings object before it is written (a test of one setting). */ tweak?: (settings: any) => void; servers?: { name: string; command: string; args: string[]; denyTools?: string[] }[] }
 
 export type Probe = {
   fake: string; home: string; state: string; workdir: string; configDir: string
@@ -68,7 +68,8 @@ export function makeProbe(prefix: string): Probe {
       lastDebugFile = join(fake, `debug-${Math.random().toString(36).slice(2)}.log`)
       const settings = join(fake, `settings-${Math.random().toString(36).slice(2)}.json`)
       const servers = (extra.servers ?? []).map(x => ({ name: x.name, command: x.command, tokenEnv: [], profileArgs: x.args, profileEnv: {}, ...(x.denyTools && { denyTools: x.denyTools }) }))
-      writeFileSync(settings, JSON.stringify(confinementSettings({ denyCommands: [], cannotRead, servers })))
+      const body = confinementSettings({ denyCommands: [], cannotRead, servers }); extra.tweak?.(body)
+      writeFileSync(settings, JSON.stringify(body))
       const mcp = join(fake, `mcp-${Math.random().toString(36).slice(2)}.json`)
       writeFileSync(mcp, JSON.stringify({ mcpServers: Object.fromEntries(servers.map(x => [x.name, { type: 'stdio', command: x.command, args: x.profileArgs, env: {} }])) }))
       const p = Bun.spawn(['claude', '-p', 'go', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions', '--settings', settings, '--debug-file', lastDebugFile, ...(servers.length ? ['--mcp-config', mcp] : [])], {
