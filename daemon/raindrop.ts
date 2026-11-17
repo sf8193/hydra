@@ -7,6 +7,7 @@ import { STATE_DIR, PLATFORM, RAINDROP_DRYRUN_FILE } from './config.js'
 import { capturedSpawnVars } from '../shared/spawn-env.js'
 import { loadAccess, operatorIds } from './access.js'
 import { registry } from './sessions.js'
+import { isRestricted } from './policy-record.js'
 import { on } from './event-bus.js'
 import { byteTmuxName, sentimentForReaction } from '../shared/constants.js'
 import { setSweepFailureHandler } from '../shared/spawn-env.js'
@@ -309,6 +310,7 @@ export function factsFromRegistry(sessionId: string): SessionFacts | undefined {
     engine: info.engine,
     model: info.sessionMetadata?.model,
     sessionType: info.sessionType,
+    restricted: String(isRestricted(info)),
     label: info.label,
     originType: info.originType,
     platform: PLATFORM,

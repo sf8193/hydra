@@ -11,7 +11,7 @@ import { discoverClaudeSessionId, killSession } from './session-lifecycle.js'
 import { loadAccess, operatorIds } from './access.js'
 import { dispatchReconnect, dispatchSessionReply, dispatchDisconnect } from './protocol-registry.js'
 import './restricted.js'   // registers the queue-flush gate on the transport
-import { getToolsForSession, isToolAllowed, noteDeclaredSessionType, refusalText } from './tool-surface.js'
+import { getToolsForSession, isToolAllowed, noteDeclaredRestrictions, refusalText } from './tool-surface.js'
 import { getProtocolContext } from './protocol-runner.js'
 import { maybeNudgeMissingAdvance } from './advance-nudge.js'
 import { clearPendingReply, settlePendingOnReact, notePendingFromQueue } from './reply-guard.js'
@@ -266,7 +266,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       }
 
       // Only a registration that was accepted may declare: a refused newcomer must not narrow the session it was refused for.
-      noteDeclaredSessionType(sessionId, msg.sessionType, msg.writeConfined)
+      noteDeclaredRestrictions(sessionId, msg)
       transport.set(sessionId, conn)
       const tools = getToolsForSession(sessionId)
       transport.sendToBridge(conn, {

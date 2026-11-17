@@ -25,6 +25,7 @@ import type { ProviderId } from './engines/engine-adapter.js'
 import { activeBackoff, clearBackoff, recordFailure, type Backoff } from './recovery-backoff.js'
 import { currentKickoff, kickoffHash, specialistForThread, targetKeyForThread, withThreadLock } from '../specialists/specialists.js'
 import { PolicyRefusal } from './restricted.js'
+import { isPlainWorker } from './policy-record.js'
 import type { InboundMessage } from '../gateways/gateway.js'
 
 // ---------------------------------------------------------------------------
@@ -721,7 +722,7 @@ export async function autoRecoverAfterBoot(gapMs?: number, only?: ReadonlySet<st
     // constructor — runs before this) stamps deadAt on EVERY tmux-gone non-guest session at boot,
     // so a session that was alive at crash time (never gracefully stamped) is already deadAt here.
     !!info.deadAt
-    && info.sessionType === 'thread_owner'  // only plain workers — excludes thread_guest and master_orchestrator
+    && isPlainWorker(info)  // only plain workers — excludes thread_guest and master_orchestrator
     && !info.suppressAutoRecover
     && !info.ephemeral
     && info.adapter.recoveryPlan(info).generic  // Codex: no — its runtime's start() reconnects it at boot; recoverOne would relaunch it as Claude

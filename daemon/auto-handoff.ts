@@ -1,4 +1,5 @@
 import { registry } from './sessions.js'
+import { isPlainWorker } from './policy-record.js'
 import { autoHandoffOn, envPercent } from './config.js'
 import type { SessionInfo } from './sessions.js'
 import { transport } from './bridge-transport.js'
@@ -48,7 +49,7 @@ function askHandoff(info: SessionInfo): void {
 
 /** A live worker nobody is waiting on: safe to interrupt with a handoff request. */
 function canAskHandoff(info: SessionInfo): boolean {
-  if (info.sessionType !== 'thread_owner' || !transport.has(info.sessionId)) return false
+  if (!isPlainWorker(info) || !transport.has(info.sessionId)) return false
   if (isSessionWorking(info) || getProtocolContext(info.sessionId)) return false
   return ![...pendingPermissions.values()].some(p => p.sessionId === info.sessionId)
 }
@@ -92,7 +93,7 @@ function convergeNudge(info: SessionInfo, pct: number, now: number): void {
   if (at === undefined || Number.isNaN(pct)) return
   if (pct < at) { convergeTold.delete(info.sessionId); askedThisClimb.delete(info.sessionId); return }
   if (askedThisClimb.has(info.sessionId) || convergeTold.has(info.sessionId)) return
-  if (info.sessionType !== 'thread_owner' || !transport.has(info.sessionId) || getProtocolContext(info.sessionId)) return
+  if (!isPlainWorker(info) || !transport.has(info.sessionId) || getProtocolContext(info.sessionId)) return
   const then = convergeThen(info, pct)
   process.stderr.write(`daemon: converge nudge: ${info.tmuxName} at ${pct}%\n`)
   transport.sendOrQueue(info.sessionId, {

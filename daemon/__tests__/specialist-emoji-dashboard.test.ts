@@ -51,7 +51,7 @@ describe('dashboard.ts rows', () => {
       const id = `eve-dash-${++n}`
       registry.set(id, {
         sessionId: id, tmuxName: k.name, threadId: `${id}-thread`, topic: 'fixing auth middleware', description: 'fixing auth middleware', createdAt: Date.now(), lastActive: Date.now(),
-        listening: false, engine: 'claude', sessionType: 'thread_owner', ...(k.specialist && { policy: { specialist: k.specialist, access: 'operator' } }),
+        listening: false, engine: 'claude', sessionType: 'thread_owner', ...(k.specialist && { policy: { specialist: k.specialist, restricted: false } }),
         adapter: fakeAdapter({ isAlive: () => true, usage: () => null }),
       } as any)
       try {

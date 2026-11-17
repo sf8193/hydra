@@ -55,6 +55,7 @@ import { gateway, TOKEN, PLATFORM, STATE_DIR, CLAUDE_CONFIG, SOCK_PATH, heartbea
 import { syncMods } from './shared/mods.js'
 import { PLUGIN_MANIFEST, MCP_CONFIG, ensureBridgeReady } from './daemon/plugin-manifest.js'
 import { registry, threadRegistry, reattachAdapters } from './daemon/sessions.js'
+import { isPlainWorker } from './daemon/policy-record.js'
 import { emojiOfName } from './daemon/anchor-state.js'
 import { engines, resolveEngine } from './daemon/engines/instances.js'
 import { engineRecords } from './daemon/engines/boot.js'
@@ -362,7 +363,7 @@ async function startGateway(attempt = 0): Promise<void> {
     // fires ~30s later) and the standalone report would mislead with "N disconnected"
     // right before auto-recovery fixes them.
     if (startupGapMs !== null) {
-      const hasDeadWorkers = [...registry.values()].some(s => !!s.deadAt && s.sessionType === 'thread_owner')
+      const hasDeadWorkers = [...registry.values()].some(s => !!s.deadAt && isPlainWorker(s))
       if (!hasDeadWorkers || (process.env.HYDRA_AUTO_RECOVER || '') !== '1') {
         sendRecoveryReport(startupGapMs)
       }

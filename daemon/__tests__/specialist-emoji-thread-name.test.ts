@@ -46,7 +46,7 @@ describe('without an emoji, a thread name is what it was', () => {
 
   test('a specialist that sets none, and a name outside the catalog', () => {
     configure(decl('ops'))
-    expect(names({ policy: { specialist: 'ops', access: 'operator' } }).discord).toBe('🔣 fixing auth middleware · glyph')
+    expect(names({ policy: { specialist: 'ops', restricted: false } }).discord).toBe('🔣 fixing auth middleware · glyph')
     expect(names({ tmuxName: 'not-in-the-catalog' }).discord).toBe('🔹 fixing auth middleware · not-in-the-catalog')
   })
 })
@@ -54,14 +54,14 @@ describe('without an emoji, a thread name is what it was', () => {
 describe('with an emoji, it takes the default glyph, in the one position', () => {
   test('the session born for the specialist (its stored policy), on both gateways', () => {
     configure(decl('ops', { emoji: '🔐' }))
-    const r = names({ policy: { specialist: 'ops', access: 'operator' } })
+    const r = names({ policy: { specialist: 'ops', restricted: false } })
     expect(r.discord).toBe('🔐 fixing auth middleware · glyph')
     expect(r.slack).toBe('🔐 glyph - fixing auth middleware')
   })
 
   test('the presence grammar is unchanged: dead and paused still replace it, a protocol badge follows it, lineage still trails', () => {
     configure(decl('ops', { emoji: '🔐' }))
-    const own = { policy: { specialist: 'ops', access: 'operator' } }
+    const own = { policy: { specialist: 'ops', restricted: false } }
     expect(names(own, { state: 'killed' }).discord).toBe('› ☠️ fixing auth middleware · glyph')
     expect(names({ ...own, paused: true }).discord).toBe('› ⏸ fixing auth middleware · glyph')
     expect(names(own, { badge: '⚔️²▲₃' }).discord).toBe('🔐 ⚔️²▲₃ fixing auth middleware · glyph')
@@ -75,11 +75,11 @@ describe('with an emoji, it takes the default glyph, in the one position', () =>
 
   test('a rename keeps it: a session born under the old id finds the specialist by renamed_from', () => {
     configure(decl('ledger', { emoji: '💰', renamedFrom: ['books'] }))
-    expect(names({ policy: { specialist: 'books', access: 'operator' } }).discord).toBe('💰 fixing auth middleware · glyph')
+    expect(names({ policy: { specialist: 'books', restricted: false } }).discord).toBe('💰 fixing auth middleware · glyph')
   })
 
   test('respawn, handoff and every later refresh read hydra.toml live: an edit shows at the next refresh, and removing it restores the default', () => {
-    const own = { policy: { specialist: 'ops', access: 'operator' } }
+    const own = { policy: { specialist: 'ops', restricted: false } }
     configure(decl('ops', { emoji: '🔐' }))
     expect(names(own).discord).toStartWith('🔐 ')
     configure(decl('ops', { emoji: '🛠️' }))
@@ -90,7 +90,7 @@ describe('with an emoji, it takes the default glyph, in the one position', () =>
 
   test('only that specialist\'s sessions: another specialist and an ordinary session keep the default', () => {
     configure(decl('ops', { emoji: '🔐' }), decl('crm'))
-    expect(names({ policy: { specialist: 'crm', access: 'operator' } }).discord).toStartWith('🔣 ')
+    expect(names({ policy: { specialist: 'crm', restricted: false } }).discord).toStartWith('🔣 ')
     expect(names().discord).toStartWith('🔣 ')
   })
 

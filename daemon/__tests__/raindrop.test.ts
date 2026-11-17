@@ -3151,7 +3151,7 @@ describe('raindrop: factsFromRegistry', () => {
     const mapped = factsFromRegistry('reg-1')!
     expect(mapped).toEqual({
       threadId: 'T-1', createdAt: 1700, tmuxName: 'atlas', engine: 'claude',
-      model: 'claude-opus-5[1m]', sessionType: 'thread_owner', originType: 'spawn',
+      model: 'claude-opus-5[1m]', sessionType: 'thread_owner', restricted: 'false', originType: 'spawn',
       platform: PLATFORM, project: 'hydra', label: undefined,
     })
     expect(JSON.stringify(mapped)).not.toContain('Acme')
@@ -3461,7 +3461,7 @@ describe('raindrop: codex usage from the rollout', () => {
     const fire = registerWithIntervals()
     fire(); await tick()
     expect(lastUsage()).toEqual({
-      tmuxName: 'atlas', engine: 'claude', sessionType: 'thread_owner', originType: 'spawn', platform: PLATFORM, repo: UNATTRIBUTED_REPO,
+      tmuxName: 'atlas', engine: 'claude', sessionType: 'thread_owner', restricted: 'false', originType: 'spawn', platform: PLATFORM, repo: UNATTRIBUTED_REPO,
       threadId: 'T-snap',
       cumulativeInputTokens: 1, cumulativeOutputTokens: 2, cumulativeCacheCreateTokens: 3, cumulativeCacheReadTokens: 4,
       deltaInputTokens: 0, deltaOutputTokens: 0, deltaCacheCreateTokens: 0, deltaCacheReadTokens: 0,

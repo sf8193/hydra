@@ -245,15 +245,20 @@ export function claudeConfigDir(): string {
 export type { ToolName }
 
 /**
- * `scoped`: a restricted specialist, one set to `restricted = true`. The stored value `scoped` is historical (from before
- * "restricted specialist"): it sits in session records and in HYDRA_SESSION_TYPE, so renaming it needs a read alias first.
- * It speaks only in its own conversation, so it has none of the tools
- * that reach another thread, watch or the operator's account (spawn, kill, peek, list, handoff, bind, watch, ask_predecessor),
+ * What a session is in its thread. Whether it is a restricted specialist is not a type: it is the boolean `restricted` on its launch
+ * policy (daemon/restricted.ts), so a restricted session is stored as the owner it is. Records written before this stored the type
+ * `scoped` (and `access: workdir` on the policy); daemon/sessions.ts reads both as `restricted: true`.
+ */
+export type SessionType = 'master_orchestrator' | 'thread_owner' | 'thread_guest'
+
+/**
+ * Where a session's base tools come from: its type, or `restricted`, a restricted specialist's. It speaks only in its own conversation, so it has none
+ * of the tools that reach another thread, watch or the operator's account (spawn, kill, peek, list, handoff, bind, watch, ask_predecessor),
  * and no capability grants it any. `send_to_thread` it keeps only toward the specialists its `sends_to` names (daemon/sends-to.ts).
  */
-export type SessionType = 'master_orchestrator' | 'thread_owner' | 'thread_guest' | 'scoped'
+export type ToolBase = SessionType | 'restricted'
 
-export const BASE_TOOLS: Readonly<Record<SessionType, ReadonlySet<ToolName>>> = {
+export const BASE_TOOLS: Readonly<Record<ToolBase, ReadonlySet<ToolName>>> = {
   master_orchestrator: new Set([
     'reply', 'react', 'edit_message', 'delete_message', 'fetch_messages',
     'download_attachment', 'send_to_thread', 'set_description',
@@ -275,7 +280,7 @@ export const BASE_TOOLS: Readonly<Record<SessionType, ReadonlySet<ToolName>>> = 
     'advance', 'extend_phase',
   ]),
   // Each is checked against the session's own conversation where it is called (bridge-dispatch `restrictedRefusal`), not only here.
-  scoped: new Set([
+  restricted: new Set([
     'reply', 'react', 'edit_message', 'delete_message', 'fetch_messages',
     'download_attachment', 'set_description',
     // Its one way to speak to another session: only the specialists in its sends_to, quoted, capped and labelled (daemon/sends-to.ts).
@@ -286,9 +291,9 @@ export const BASE_TOOLS: Readonly<Record<SessionType, ReadonlySet<ToolName>>> = 
 /**
  * What a write-confined session (`can_only_write_to`) holds: a restricted session's tools without `send_to_thread`, and no capability adds to them.
  * It runs on the operator's account and the daemon acts with that authority for every bridge call, so it holds nothing that starts, lists, reads,
- * messages or ends another session. Derived from `scoped`, so the two never drift into separate lists.
+ * messages or ends another session. Derived from `restricted`, so the two never drift into separate lists.
  */
-export const CONFINED_TOOLS: ReadonlySet<ToolName> = new Set([...BASE_TOOLS.scoped].filter(t => t !== 'send_to_thread'))
+export const CONFINED_TOOLS: ReadonlySet<ToolName> = new Set([...BASE_TOOLS.restricted].filter(t => t !== 'send_to_thread'))
 
 export type Capability = 'protocol_context' | 'protocol_spawn' | 'main_handoff'
 // Derived by tool-surface from session state, never stored: not a Capability, so addCapability, a protocol phase and the loader all refuse it.

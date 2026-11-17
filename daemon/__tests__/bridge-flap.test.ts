@@ -24,13 +24,13 @@ afterAll(() => { socketServer.close(); rmSync(dir, { recursive: true, force: tru
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
 // A bridge client: registers as `id`, resolves once the server answered 'registered' or closed on it.
-function bridge(id: string, claudeSessionId?: string, connectionRole?: string, sessionType?: string): Promise<{ socket: Socket; accepted: boolean }> {
+function bridge(id: string, claudeSessionId?: string, connectionRole?: string, declares: Record<string, unknown> = {}): Promise<{ socket: Socket; accepted: boolean }> {
   return new Promise(resolve => {
     const socket = connect(sock)
     let buf = ''
     let done = false
     const finish = (accepted: boolean) => { if (!done) { done = true; resolve({ socket, accepted }) } }
-    socket.on('connect', () => socket.write(JSON.stringify({ type: 'register', sessionId: id, claudeSessionId, connectionRole, sessionType }) + '\n'))
+    socket.on('connect', () => socket.write(JSON.stringify({ type: 'register', sessionId: id, claudeSessionId, connectionRole, ...declares }) + '\n'))
     socket.on('data', d => { buf += d.toString(); if (buf.includes('"registered"')) finish(true) })
     socket.on('close', () => finish(false))
     socket.on('error', () => finish(false))
@@ -77,7 +77,7 @@ describe('bridge flap circuit breaker', () => {
     const sockets: Socket[] = []
     const accepted: boolean[] = []
     for (let i = 0; i < 14; i++) {
-      const b = await bridge(id, i < 9 ? 'legit' : 'INTRUDER', undefined, i < 9 ? undefined : 'scoped')
+      const b = await bridge(id, i < 9 ? 'legit' : 'INTRUDER', undefined, i < 9 ? undefined : { restricted: true })
       sockets.push(b.socket); accepted.push(b.accepted)
       await sleep(15)
     }
@@ -90,10 +90,21 @@ describe('bridge flap circuit breaker', () => {
     }
   })
 
+  // Golden for a session already running when the boolean arrived: its bridge was launched with HYDRA_SESSION_TYPE=scoped and says so in its registration.
+  test('an accepted bridge that declares the old type `scoped` is narrowed the same', async () => {
+    const id = 'flap-restricted-old-form'
+    session(id)
+    const b = await bridge(id, undefined, undefined, { sessionType: 'scoped' })
+    try {
+      expect(b.accepted).toBe(true)
+      expect(isToolAllowed(id, 'spawn_session')).toBe(false)
+    } finally { b.socket.destroy(); registry.delete(id) }
+  })
+
   test('an accepted bridge that declares restricted is narrowed', async () => {
     const id = 'flap-restricted-accepted'
     session(id)
-    const b = await bridge(id, undefined, undefined, 'scoped')
+    const b = await bridge(id, undefined, undefined, { restricted: true })
     try {
       expect(b.accepted).toBe(true)
       expect(isToolAllowed(id, 'spawn_session')).toBe(false)

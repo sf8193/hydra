@@ -1,3 +1,4 @@
+import { readStoredPolicy, readStoredSession, storedPolicy, storedSession } from './policy-record.js'
 import { randomBytes } from 'crypto'
 import { readFileSync } from 'fs'
 import { occupancy, occupied } from './session-reachability.js'
@@ -280,7 +281,7 @@ export type SpawnOpts = {
   launchCwd?: string          // fork: launch from the source's launch dir, where --resume finds its transcript (no worktree)
   cwd?: string                // a fresh launch's working dir (a specialist's workdir) in place of SPAWN_CWD; a fork, resume or worktree wins
   tools?: string[]            // Claude --tools whitelist (must include MCP tools with prefix)
-  sessionType?: SessionType  // declared at spawn — determines base tool set (a specialist with restricted = true is always `scoped`)
+  sessionType?: SessionType  // declared at spawn — its role in its thread (a restricted specialist is a thread_owner whose policy says `restricted`)
   kickoffHash?: string        // a fresh start's prompt is the specialist's kickoff: the hash stored with the conversation it begins (a resume or fork keeps its own, through carryOver)
   specialist?: string        // the specialist a caller names as the one this session acts for (a fill, a conversation's own session); its launch policy is decided from hydra.toml at birth (restricted.ts)
   worktree?: string           // git repo subdirectory to create a worktree from (structural alternative to topic prefix)
@@ -394,7 +395,7 @@ export class SessionRegistry {
 
   persist(): void {
     try {
-      const data = [...this.sessions.values()].map(({ adapter, ...rest }) => rest)
+      const data = [...this.sessions.values()].map(({ adapter, ...rest }) => storedSession(rest))
       atomicWriteFileSync(this.sessionsFile, JSON.stringify(data, null, 2) + '\n')
     } catch (err) {
       process.stderr.write(`daemon: failed to persist sessions: ${err}\n`)
@@ -499,6 +500,9 @@ export class SessionRegistry {
           raw.toolDescriptions = raw.toolDescriptionOverrides
           delete raw.toolDescriptionOverrides
         }
+
+        // Written before the boolean `restricted`: the type `scoped` and the policy's `access` are read as it (policy-record.ts).
+        readStoredSession(raw)
 
         // Backfill explicit engine for pre-adapter sessions
         if (!raw.engine) raw.engine = 'claude'
@@ -686,7 +690,7 @@ export class ThreadRegistry {
 
   persist(): void {
     try {
-      const data = [...this.threads.values()]
+      const data = [...this.threads.values()].map(t => ({ ...t, sessionHistory: t.sessionHistory.map(e => e.policy === undefined ? e : { ...e, policy: storedPolicy(e.policy) }) }))
       atomicWriteFileSync(this.threadsFile, JSON.stringify(data, null, 2) + '\n')
     } catch (err) {
       process.stderr.write(`daemon: failed to persist threads: ${err}\n`)
@@ -698,6 +702,7 @@ export class ThreadRegistry {
       const raw = readFileSync(this.threadsFile, 'utf8')
       const data = JSON.parse(raw) as ThreadMetadata[]
       for (const info of data) {
+        for (const entry of info.sessionHistory ?? []) readStoredPolicy(entry.policy)
         this.threads.set(info.threadId, info)
       }
       if (data.length > 0) {

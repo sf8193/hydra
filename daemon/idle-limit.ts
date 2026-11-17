@@ -17,6 +17,7 @@
 // Like phase-budget, the reaper is injected at boot: this module must never import
 // session-lifecycle (which imports us).
 import { registry, parentSessionOf, type SessionInfo } from './sessions.js'
+import { isPlainWorker } from './policy-record.js'
 import { occupancy } from './session-reachability.js'
 import { transport } from './bridge-transport.js'
 import { safeSend, formatDuration } from './util.js'
@@ -46,7 +47,7 @@ type Kind = 'ephemeral' | 'idle-reap'
 function kindOf(info: SessionInfo | undefined): Kind | undefined {
   if (!info || occupancy(info) === 'dead') return undefined
   if (info.ephemeral) return 'ephemeral'
-  if (idleReapMs() === undefined || info.sessionType !== 'thread_owner') return undefined
+  if (idleReapMs() === undefined || !isPlainWorker(info)) return undefined
   if (listSpecialists().some(([, s]) => s.threadId === info.threadId)) return undefined
   if (isProtocolParticipant(info.sessionId)) return undefined
   return 'idle-reap'

@@ -39,6 +39,7 @@ import type { PrivateRoot } from '../../config/restricted-workdir.js'
 import type { LoadEnv } from '../../config/types.js'
 import { bridgeServerCommands, claudeSettingsProblems, claudeVersionRefusal, confinementRules, confinementServers, makeBrowserDirs, confinementLogLine, confinementMcp, confinementSettings } from '../write-confinement.js'
 import { clearNeedsAuthEntry, describeSetAt, NEEDS_AUTH_CLEARED_NOTE } from './claude-needs-auth.js'
+import { isRestricted } from '../policy-record.js'
 
 // What the pane-and-transcript methods read. The byte (main) has no SessionInfo, so these take only this.
 export type ClaudeSubject = Pick<SessionInfo, 'tmuxName'> & Partial<Pick<SessionInfo, 'claudeSessionId'>>
@@ -148,8 +149,11 @@ function buildSpawnEnv(input: LaunchInput): string[] {
     `export HYDRA_SESSION_ID=${shq(input.sessionId)}`,
     `export HYDRA_SESSION_NAME=${shq(input.tmuxName)}`,
     `export HYDRA_THREAD_ID=${shq(input.threadId ?? '')}`,
-    `export HYDRA_SESSION_TYPE=${shq(input.sessionType ?? '')}`,
-    // A write-confined launch says so to its bridge, which declares it at registration (tool-surface noteDeclaredSessionType): a record that is gone must not widen it.
+    // Historical, dropped in a follow-up: a restricted launch still says `scoped` here, which a build from before the boolean reads when a session's record is gone.
+    `export HYDRA_SESSION_TYPE=${shq(isRestricted(input) ? 'scoped' : input.sessionType ?? '')}`,
+    // A restricted launch says so to its bridge the same way (HYDRA_RESTRICTED); it still also says HYDRA_SESSION_TYPE=scoped above.
+    ...(isRestricted(input) ? ['export HYDRA_RESTRICTED=1'] : []),
+    // A write-confined launch says so to its bridge, which declares it at registration (tool-surface noteDeclaredRestrictions): a record that is gone must not widen it.
     ...(input.policy?.canOnlyWriteTo && !confined(input.policy, input.tmuxName) ? ['export HYDRA_WRITE_CONFINED=1'] : []),
     ...(forkedFromClaudeSessionId ? [`export HYDRA_FORKED_FROM_CLAUDE_SESSION_ID=${shq(forkedFromClaudeSessionId)}`] : []),
     `export DAEMON_SOCK=${shq(SOCK_PATH)}`,
@@ -344,7 +348,7 @@ export class ClaudeEngine implements EngineAdapter {
       // A confined launch writes a file holding token values before it starts anything; one that fails then has no session record
       // whose kill or death would remove it, so it is removed here.
       removeSpawnPrompt(input)
-      if (input.policy?.access === 'workdir' || input.policy?.canOnlyWriteTo) removeRestrictedFiles({ tmuxName: input.tmuxName, sessionId: input.sessionId })
+      if (isRestricted(input) || input.policy?.canOnlyWriteTo) removeRestrictedFiles({ tmuxName: input.tmuxName, sessionId: input.sessionId })
       throw err
     }
   }

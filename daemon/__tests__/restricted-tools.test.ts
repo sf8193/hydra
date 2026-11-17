@@ -1,10 +1,10 @@
-// The `scoped` session type: a specialist set to restricted = true. Each removed tool is refused where it is enforced
+// A restricted session (a specialist set to restricted = true). Each removed tool is refused where it is enforced
 // (isToolAllowed, and executeTool behind it), each kept tool is refused outside the session's own conversation, and no
 // shape of an unregistered or half-registered caller falls back to a wider surface.
 import { afterEach, describe, expect, test } from 'bun:test'
 import { executeTool, restrictedRefusal } from '../bridge-dispatch.js'
 import { registry } from '../sessions.js'
-import { getToolsForSession, isToolAllowed, noteDeclaredSessionType } from '../tool-surface.js'
+import { getToolsForSession, isToolAllowed, noteDeclaredRestrictions } from '../tool-surface.js'
 import { UNIVERSAL_TOOLS } from '../../shared/tool-definitions.js'
 import { computeToolsForSession } from '../bridge-tools.js'
 import { BASE_TOOLS } from '../../shared/constants.js'
@@ -20,7 +20,7 @@ const REMOVED = ['spawn_session', 'kill_session', 'peek_session', 'list_sessions
 
 const mk = (id: string, extra: Record<string, unknown> = {}) => registry.set(id, {
   sessionId: id, tmuxName: id, topic: 't', threadId: `th-${id}`, createdAt: Date.now(), lastActive: Date.now(),
-  listening: false, engine: 'claude', adapter: { stop: async () => {} }, sessionType: 'scoped', specialist: 'ops', ...extra,
+  listening: false, engine: 'claude', adapter: { stop: async () => {} }, sessionType: 'thread_owner', specialist: 'ops', policy: { specialist: 'ops', restricted: true, id: 'x' }, ...extra,
 } as any)
 const ids: string[] = []
 const restricted = (extra: Record<string, unknown> = {}) => { const id = `sc-${ids.length}-${Math.random().toString(36).slice(2, 7)}`; ids.push(id); mk(id, extra); return id }
@@ -31,7 +31,7 @@ describe('the surface of a restricted session', () => {
     const id = restricted()
     expect(ALL.filter(n => isToolAllowed(id, n)).sort()).toEqual([...KEPT].sort())
     expect(namesOf(id)).toEqual([...NO_SENDS].sort())
-    expect([...BASE_TOOLS.scoped].map(String).sort()).toEqual([...KEPT].sort())
+    expect([...BASE_TOOLS.restricted].map(String).sort()).toEqual([...KEPT].sort())
   })
   test.each(REMOVED)('%s is refused at isToolAllowed and at executeTool', async tool => {
     const id = restricted()
@@ -46,8 +46,8 @@ describe('the surface of a restricted session', () => {
     expect(namesOf(id)).not.toContain('ask_predecessor')
   })
   test('computeToolsForSession itself grants no capability to a restricted type (the guard is live, not decoration)', () => {
-    const plain = computeToolsForSession('scoped', new Set()).map(t => t.name).sort()
-    const loaded = computeToolsForSession('scoped', new Set(['protocol_spawn', 'protocol_context', 'main_handoff', 'predecessor', 'conversations'])).map(t => t.name).sort()
+    const plain = computeToolsForSession('restricted', new Set()).map(t => t.name).sort()
+    const loaded = computeToolsForSession('restricted', new Set(['protocol_spawn', 'protocol_context', 'main_handoff', 'predecessor', 'conversations'])).map(t => t.name).sort()
     expect(loaded).toEqual(plain)
     expect(computeToolsForSession('thread_owner', new Set(['protocol_spawn', 'conversations'])).map(t => t.name)).toContain('bind_conversation')
   })
@@ -59,7 +59,7 @@ describe('the surface of a restricted session', () => {
 
 describe('an unknown or unregistered caller is never handed thread_owner tools when it is restricted', () => {
   test('a bridge that declared restricted, with no registry record, gets the restricted surface', () => {
-    noteDeclaredSessionType('ghost-restricted', 'scoped')
+    noteDeclaredRestrictions('ghost-restricted', { restricted: true })
     expect(ALL.filter(n => isToolAllowed('ghost-restricted', n)).sort()).toEqual([...KEPT].sort())
     expect(namesOf('ghost-restricted')).toEqual([...NO_SENDS].sort())
     for (const tool of REMOVED) expect(isToolAllowed('ghost-restricted', tool)).toBe(false)
@@ -69,17 +69,17 @@ describe('an unknown or unregistered caller is never handed thread_owner tools w
     expect(isToolAllowed(id, 'spawn_session')).toBe(false)
   })
   test('a record of another type whose bridge declares restricted is narrowed, never widened', () => {
-    const id = restricted({ sessionType: 'thread_owner' })
+    const id = restricted({ policy: undefined })
     expect(isToolAllowed(id, 'spawn_session')).toBe(true)
-    noteDeclaredSessionType(id, 'scoped')
+    noteDeclaredRestrictions(id, { restricted: true })
     expect(isToolAllowed(id, 'spawn_session')).toBe(false)
   })
   test('declaring any other type changes nothing', () => {
-    noteDeclaredSessionType('ghost-owner', 'thread_owner')
+    noteDeclaredRestrictions('ghost-owner', { sessionType: 'thread_owner' })
     expect(isToolAllowed('ghost-owner', 'spawn_session')).toBe(true)   // today's behaviour for an unregistered id, unchanged
   })
   test('an unregistered declared-restricted caller reaches no conversation at all', async () => {
-    noteDeclaredSessionType('ghost-restricted-2', 'scoped')
+    noteDeclaredRestrictions('ghost-restricted-2', { restricted: true })
     const r = await executeTool('reply', { chat_id: 'slack:C1:1.0', text: 'x' }, 'ghost-restricted-2')
     expect(r.isError).toBe(true)
     expect(r.content[0].text).toContain("not this session's own conversation")

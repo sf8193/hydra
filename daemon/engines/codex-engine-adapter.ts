@@ -29,6 +29,7 @@ import { codexTurnOutcome, defaultTurnSources, isCodexWorking } from './codex-ob
 import { codexPiggyback, type CodexPiggyback } from './codex-piggyback.js'
 import { isCodexReconnecting, reconnectCodexSessions } from './codex-runtime.js'
 import { replyContextLine } from '../reply-context.js'
+import { isRestrictedPolicy } from '../policy-record.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
@@ -147,7 +148,7 @@ export class CodexEngineAdapter implements EngineAdapter {
 
   async launch(input: LaunchInput): Promise<LaunchResult> {
     // This engine cannot confine a session (confinesAccess); it would run one as the operator.
-    if (input.policy?.access === 'workdir') throw new Error(`specialist ${input.policy.specialist} has restricted = true, which this engine cannot give: set engine = "claude", or set restricted = false`)
+    if (isRestrictedPolicy(input.policy)) throw new Error(`specialist ${input.policy.specialist} has restricted = true, which this engine cannot give: set engine = "claude", or set restricted = false`)
     if (input.policy?.canOnlyWriteTo) throw new Error(`specialist ${input.policy.specialist} has can_only_write_to = "workdir", which this engine cannot give: set engine = "claude", or remove can_only_write_to`)
     const { sessionId, tmuxName, model, prompt, resumeCodex } = input
     // Resume reuses the ORIGINAL home: the rollout lives there, and a fresh home cannot see it.
