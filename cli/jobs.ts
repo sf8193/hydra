@@ -625,7 +625,7 @@ export async function syncLaunchd(platform: string, stateDir: string, jobs: Job[
 
 /**
  * What jobs.toml can't rule out on its own: things that may stop the job when it runs. A `to` is read as deliver
- * --to reads it: main, specialist:<name>, thread:<id>, or bare (a declared specialist, then an all-digit thread id); anything else is no such specialist.
+ * --to reads it: main, specialist:<name>, thread:<id>, or bare (a declared specialist, then a thread id); anything else is no such specialist.
  */
 export function jobWarnings(j: Job, specialists: ReadonlySet<string> = new Set()): string[] {
   const keys = [['cwd', j.cwd], ['env_file', j.envFile]] as const

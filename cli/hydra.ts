@@ -69,7 +69,7 @@ Session management:
 
 Deliver (whisper channel — message to session context, not thread):
   hydra deliver --to <main|specialist:name|thread:id> --message "..." [--revive]
-                                       the target says its kind: main, specialist:<name> (declared), thread:<all-digit id>.
+                                       the target says its kind: main, specialist:<name> (declared), thread:<id>.
                                        anything else is exit 8 (no such specialist). A specialist always revives.
   hydra deliver --session <name> --message "..."
   hydra deliver --thread <id> --message "..."

@@ -3,8 +3,8 @@
 // hydra.toml loader passes the specialists it has loaded, so config checks and delivery never disagree about what a value means.
 // Pure on purpose (shared/ can't import the daemon): `declared` says whether a specialist of that name exists.
 //
-// A value without a kind (`ops`, `1234`) is an error here. Stored state holds the bare form (`refOfBare`).
-import { isSessionThread, SPECIALIST_NAME_RE } from './specialist-name.js'
+// A value without a kind (`ops`, `1234`, `C0ABC:1793732224.093059`) is an error here. Stored state holds the bare form (`refOfBare`).
+import { isSessionThread, SPECIALIST_NAME_RE, THREAD_ID_FORMS } from './specialist-name.js'
 
 export type TargetRef = { kind: 'main' } | { kind: 'specialist'; name: string } | { kind: 'thread'; threadId: string }
 
@@ -25,12 +25,12 @@ export function readTarget(raw: string, declared: (name: string) => boolean): Ta
   const rest = value.slice(colon + 1)
   if (kind === 'specialist') {
     if (rest === 'main') return { ok: false, error: `"${value}" names main as a specialist, but main is the operator's own session; write "main"` }
-    if (isSessionThread(rest)) return { ok: false, error: `"${value}": a specialist's name needs a letter, and an all-digit value is a thread id; write "thread:${rest}" for the thread` }
+    if (isSessionThread(rest)) return { ok: false, error: `"${value}": a specialist's name needs a letter, and that value is a thread id; write "thread:${rest}" for the thread` }
     if (!SPECIALIST_NAME_RE.test(rest) || !declared(rest)) return { ok: false, undeclared: rest }
     return { ok: true, ref: { kind: 'specialist', name: rest } }
   }
   if (kind === 'thread') {
-    if (!isSessionThread(rest)) return { ok: false, error: `"${value}": a thread id is all digits, like "thread:1234567890"` }
+    if (!isSessionThread(rest)) return { ok: false, error: `"${value}": a thread id is ${THREAD_ID_FORMS}, like "thread:1234567890" or "thread:C0ABC:1793732224.093059"` }
     return { ok: true, ref: { kind: 'thread', threadId: rest } }
   }
   return { ok: false, error: `"${value}" starts with "${kind}:", which is not a kind of target: a target is ${TARGET_FORMS}` }
@@ -50,4 +50,4 @@ export const refOfBare = (bare: string): TargetRef => bare === 'main' ? { kind: 
 export const spelledBare = (bare: string): string => spelled(refOfBare(bare))
 
 /** A `to` that is either already spelled (`specialist:ops`) or in the stored form hydra's own callers hold (`ops`, `1234`), spelled. */
-export const spelledTo = (to: string): string => to === 'main' || to.includes(':') ? to : spelledBare(to)
+export const spelledTo = (to: string): string => to === 'main' || (to.includes(':') && !isSessionThread(to)) ? to : spelledBare(to)

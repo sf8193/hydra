@@ -93,7 +93,7 @@ flowchart TD
     TK -- "to" --> TR{"resolveTo"}
     TR -- main --> TM["main: bridge or --queue (exit 4); never revived"]
     TR -- "declared specialist" --> TS["ensureSpecialist(name) (b) → orphaned: exit 4"]
-    TR -- "all digits" --> TT["toThread (c)"]
+    TR -- "a thread id" --> TT["toThread (c)"]
     TR -- "anything else" --> T8["exit 8: no such specialist"]
     TK -- "spawn" --> TF["a fresh session from the recipe (idle → reaped when quiet)"]
     TK -- "perThread + key" --> TP["ensureSpecialist(perThreadName(key), recipe), never stored"]

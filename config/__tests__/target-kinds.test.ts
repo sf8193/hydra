@@ -54,8 +54,8 @@ describe('each kind', () => {
 })
 
 describe('a value must fit its kind', () => {
-  test('a thread id is all digits', () => {
-    expect(load(rule('thread:12a')).errors).toEqual(['rules[0].target: "thread:12a": a thread id is all digits, like "thread:1234567890"'])
+  test('a thread id is digits or <channel>:<ts>', () => {
+    expect(load(rule('thread:12a')).errors).toEqual(['rules[0].target: "thread:12a": a thread id is digits (Discord) or <channel>:<ts> (Slack gateway), like "thread:1234567890" or "thread:C0ABC:1793732224.093059"'])
   })
 
   test('an unknown prefix errors and lists the valid kinds', () => {
@@ -64,7 +64,7 @@ describe('a value must fit its kind', () => {
 
   test('specialist:main and specialist:<digits> say what is wrong', () => {
     expect(load(rule('specialist:main')).errors).toEqual(['rules[0].target: "specialist:main" names main as a specialist, but main is the operator\'s own session; write "main"'])
-    expect(load(sched('specialist:123')).errors).toEqual(['schedules.s.target: "specialist:123": a specialist\'s name needs a letter, and an all-digit value is a thread id; write "thread:123" for the thread'])
+    expect(load(sched('specialist:123')).errors).toEqual(['schedules.s.target: "specialist:123": a specialist\'s name needs a letter, and that value is a thread id; write "thread:123" for the thread'])
   })
 
   test('a specialist must be declared', () => {
@@ -87,5 +87,14 @@ describe('what writes hydra.toml says the kind', () => {
       expect(plan).toMatchObject({ ok: false })
       expect((plan as any).error).toContain('schedules.x.target: "books" does not say its kind')
     } finally { require('fs').rmSync(dir, { recursive: true, force: true }) }
+  })
+})
+
+describe('a Slack gateway thread id', () => {
+  const id = 'D0BE3RB4Y00:1792616731.235729'
+  test('reads as a thread, so a rule or schedule says what to do, not that it is not a kind', () => {
+    const v = `thread:${id}`
+    expect(load(rule(v)).errors).toEqual([`rules[0].target: "${v}" is a thread, and a rule's target is main or a declared specialist: declare a specialist for that thread, and write specialist:<name>`])
+    expect(load(sched(v)).errors).toEqual([`schedules.s.target: "${v}" is a thread, and a schedule's target is main or a declared specialist: declare a specialist for that thread, and write specialist:<name>`])
   })
 })
