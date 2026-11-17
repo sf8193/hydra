@@ -110,7 +110,7 @@ describe('several apps in one hydra', () => {
     // An app that serves no specialist and no rule reads no channel, so it is not asked who is in one.
     expect(scopesNeeded(hydra(TWO_APPS), 'sales')).not.toContain(SLACK_APP_NEEDS.membership.public)
     // A private channel is named: the groups scope is checked too, for the app that reaches it.
-    const withPrivate = hydra(`${TWO_APPS}\n[specialists.x]\nworkdir = "/w/x"\nreachable_by = ["anyone"]\n[[rules]]\nplace = "slack:G0PRIV"\ntarget = "specialist:x"\n`)
+    const withPrivate = hydra(`${TWO_APPS}\n[specialists.x]\nworkdir = "/w/x"\nreachable_by = ["role:anyone"]\n[[rules]]\nplace = "slack:G0PRIV"\ntarget = "specialist:x"\n`)
     expect(scopesNeeded(withPrivate).slice(-2)).toEqual([SLACK_APP_NEEDS.membership.public, SLACK_APP_NEEDS.membership.private])
     // Both are scopes the manifest already grants for channel names.
     const m = Bun.YAML.parse(slackManifest(hydra(TWO_APPS).slackApps.sales)) as Manifest

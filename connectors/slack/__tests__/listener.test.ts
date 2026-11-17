@@ -117,7 +117,7 @@ describe('diagnosing a refused token', () => {
   })
 
   test('a live DM with a file: downloaded, delivered to the slack:dm listener, and acked', async () => {
-    const t = setup({ toml: TOML + `[people.bea]\naddresses = ["slack:UB"]\nname = "Bea B"\nroles = ["owner"]\n[specialists.assistant]\nworkdir = "/w/a"\nreachable_by = ["owner"]\n[[rules]]\nplace = "slack:dm"\ntarget = "specialist:assistant"\n[places."slack:dm"]\nfiles = true\nack = "eyes"\n` })
+    const t = setup({ toml: TOML + `[people.bea]\naddresses = ["slack:UB"]\nname = "Bea B"\nroles = ["owner"]\n[specialists.assistant]\nworkdir = "/w/a"\nreachable_by = ["role:owner"]\n[[rules]]\nplace = "slack:dm"\ntarget = "specialist:assistant"\n[places."slack:dm"]\nfiles = true\nack = "eyes"\n` })
     await t.listener.start()
     t.apps[0].handler({ channel: 'D0BEA0001', ts: '1793000001.000001', user: 'UB', text: 'see attached', channel_type: 'im',
       files: [{ id: 'F1', name: 'a.pdf', size: 3, url_private_download: 'https://files.slack.com/F1' }] } as RawEvent)
@@ -672,7 +672,7 @@ describe('the scope check alerts for what was declared, once per episode', () =>
 
 describe("the operator's own app hears DMs and group DMs", () => {
   const USER = (toml: string) => toml.replace('socket_token_env = "SLOPBOT_SLACK_APP_TOKEN"', 'socket_token_env = "SLOPBOT_SLACK_APP_TOKEN"\noperator_token_env = "HYDRA_SLACK_USER_TOKEN"')
-  const CONF = (rules: string) => USER(oneListener(CH, 'helper', '["anyone"]', `[people.alice]\naddresses = ["slack:UALICE"]\n[specialists.desk]\nworkdir = "/w/desk"\nreachable_by = ["anyone"]\n${rules}`))
+  const CONF = (rules: string) => USER(oneListener(CH, 'helper', '["anyone"]', `[people.alice]\naddresses = ["slack:UALICE"]\n[specialists.desk]\nworkdir = "/w/desk"\nreachable_by = ["role:anyone"]\n${rules}`))
   const BOT_LIST = [{ channel: 'D0BOT0001', user: 'UOP' }]
   const USER_LIST = [{ channel: 'D0BOT0001', user: BOT }, { channel: 'D0ALICE01', user: 'UALICE' }, { channel: 'D0NOBODY1', user: 'UNOBODY' }]
   const reads = (t: ReturnType<typeof setup>, name: string) => t.apps[0].apiCalls.filter(c => c === name).length
@@ -794,7 +794,7 @@ describe("the operator's own app hears DMs and group DMs", () => {
   })
 
   test("an app with no operator token hears only the bot's DMs: every DM is the bot's, and it reads no list", async () => {
-    const t = setup({ toml: TOML + `[people.bea]\naddresses = ["slack:UB"]\nroles = ["owner"]\n[specialists.assistant]\nworkdir = "/w/a"\nreachable_by = ["owner"]\n[[rules]]\nplace = "slack:dm"\ntarget = "specialist:assistant"\n`, dms: [], otherParties: [] })
+    const t = setup({ toml: TOML + `[people.bea]\naddresses = ["slack:UB"]\nroles = ["owner"]\n[specialists.assistant]\nworkdir = "/w/a"\nreachable_by = ["role:owner"]\n[[rules]]\nplace = "slack:dm"\ntarget = "specialist:assistant"\n`, dms: [], otherParties: [] })
     await t.listener.start()
     const base = reads(t, 'dms')
     live(t, { channel: 'D0BEA0001', user: 'UB', channel_type: 'im', text: 'a DM to the bot' })

@@ -2,6 +2,7 @@
 // (which skips it): a specialist pinned to apps takes only messages that come through them, and an app that any specialist is
 // pinned to delivers only to specialists pinned to it. Pure, and over the specialists alone so it needs no loaded config.
 
+import { spelledApp } from '../shared/value-kind.js'
 import { DEFAULT_SLACK_APP, type Specialist } from './types.js'
 
 export type Pinnable = Pick<Specialist, 'id' | 'pinnedTo'>
@@ -25,14 +26,14 @@ export function serves(specialists: Specialists, s: Pinnable, app: string | unde
  */
 export function whyNotServed(specialists: Specialists, s: Pinnable, app: string | undefined, what = 'this message came through'): string | undefined {
   if (serves(specialists, s, app)) return undefined
-  const via = app === undefined ? 'no Slack app' : `app ${app}`
-  if (s.pinnedTo) return `${s.id} is pinned to app${s.pinnedTo.length > 1 ? 's' : ''} ${s.pinnedTo.join(', ')}, and ${what} ${via}`
-  return `app ${app} serves only specialists pinned to it (${pinnersOf(specialists, app!).join(', ')}), and ${s.id} is not pinned`
+  const via = app === undefined ? 'no Slack app' : spelledApp(app)
+  if (s.pinnedTo) return `${s.id} is pinned to ${s.pinnedTo.map(spelledApp).join(', ')}, and ${what} ${via}`
+  return `${spelledApp(app!)} serves only specialists pinned to it (${pinnersOf(specialists, app!).join(', ')}), and ${s.id} is not pinned`
 }
 
 /** The one wording for a name that is no declared Slack app. */
 export function noSuchApp(id: string, declared: string[]): string {
-  return `no app "${id}": declare [slack.apps.${id}]; hydra.toml declares ${declared.length ? declared.join(', ') : 'no apps'}`
+  return `no app "${id}": declare [slack.apps.${id}]; hydra.toml declares ${declared.length ? declared.map(spelledApp).join(', ') : 'no apps'}`
 }
 
 /**

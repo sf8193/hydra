@@ -19,14 +19,14 @@ const OPS = 'ops-t'
 const TOML = `${TWO_APPS}
 [specialists.${CRM}]
 workdir = "/w/crm"
-reachable_by = ["anyone"]
+reachable_by = ["role:anyone"]
 home = "slack:C9"
 [[rules]]
 place = "slack:C1"
 target = "specialist:${CRM}"
 [specialists.${OPS}]
 workdir = "/w/ops"
-reachable_by = ["anyone"]
+reachable_by = ["role:anyone"]
 home = "slack:C8"
 [[rules]]
 place = "slack:C2"

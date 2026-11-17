@@ -1,6 +1,7 @@
 // A specialist's `access`, `prompt`, `prompt_file`, `max`, `was` and `apps` are now `restricted`, `kickoff`, `kickoff_file`, `max_sessions`,
 // `renamed_from` and `pinned_to`. The old names still load, as the new ones, with a warning that names the new key (and, for `access`,
 // the value it became); both names is an error; an invalid value is reported at the key the file has.
+import { isValueWarning, unkinded } from './value-kinds.js'
 import { describe, test, expect } from 'bun:test'
 import { readFileSync } from 'fs'
 import { join } from 'path'
@@ -62,7 +63,7 @@ describe('a full specialist config in the old names', () => {
     expect(r.config).toEqual(listensAsRules(inNewNames(before.config)) as HydraConfig)
     // Every other warning is as before; only the one that quoted `access` now says `restricted`.
     const asBefore = before.warnings.map(line).map(w => w.replace('(access = "operator")', '(restricted = false)').replace('give ops access = "workdir" with the broader folder it needs', 'make ops restricted = true, with the broader folder it needs'))
-    expect(r.warnings.filter(w => !renameWarnings([w]).length && !isListensWarning(w))).toEqual(asBefore)
+    expect(r.warnings.filter(w => !renameWarnings([w]).length && !isValueWarning(w) && !isListensWarning(w)).map(unkinded)).toEqual(asBefore.map(unkinded))
     // crm, ops, deals and plain still say where they are heard with `listens`.
     expect(r.warnings.filter(isListensWarning).length).toBe(4)
     // 2 in [defaults.specialist] (prompt, max); crm: access, prompt_file, max, was, talks_to; ops: access; deals: apps, prompt.
@@ -193,7 +194,7 @@ describe('`was` is now `renamed_from`', () => {
 
 describe('`apps` is now `pinned_to`', () => {
   test('the new name works', () => {
-    expect(ok(spec('pinned_to = ["sales"]')).config.specialists.ops.pinnedTo).toEqual(['sales'])
+    expect(ok(spec('pinned_to = ["app:sales"]')).config.specialists.ops.pinnedTo).toEqual(['sales'])
   })
   test('the old name works, and the warning names the new one', () => {
     const r = ok(spec('apps = ["sales"]'))
@@ -201,22 +202,22 @@ describe('`apps` is now `pinned_to`', () => {
     expect(renameWarnings(r.warnings)).toEqual(['specialists.ops.apps: rename `apps` to `pinned_to`; `apps` still loads and will be removed'])
   })
   test('both names is an error', () => {
-    expect(load(spec('apps = ["sales"]\npinned_to = ["sales"]')).errors).toEqual(['specialists.ops.apps: is the old name of `pinned_to`, which is also set: keep `pinned_to` and delete `apps`'])
+    expect(load(spec('apps = ["sales"]\npinned_to = ["app:sales"]')).errors).toEqual(['specialists.ops.apps: is the old name of `pinned_to`, which is also set: keep `pinned_to` and delete `apps`'])
   })
   test('an invalid value is refused at the key the file has', () => {
-    expect(load(spec('apps = ["nope"]')).errors).toEqual(['specialists.ops.apps[0]: no app "nope": declare [slack.apps.nope]; hydra.toml declares default, sales'])
-    expect(load(spec('pinned_to = ["nope"]')).errors).toEqual(['specialists.ops.pinned_to[0]: no app "nope": declare [slack.apps.nope]; hydra.toml declares default, sales'])
+    expect(load(spec('apps = ["nope"]')).errors).toEqual(['specialists.ops.apps[0]: no app "nope": declare [slack.apps.nope]; hydra.toml declares app:default, app:sales'])
+    expect(load(spec('pinned_to = ["app:nope"]')).errors).toEqual(['specialists.ops.pinned_to[0]: no app "nope": declare [slack.apps.nope]; hydra.toml declares app:default, app:sales'])
     expect(load(spec('apps = "sales"')).errors).toEqual(['specialists.ops.apps: must be a list of strings'])
   })
   test('an inherited old name is reported at the key the defaults have', () => {
     expect(load(`${BASE}[defaults.specialist]\napps = ["nope"]\n[specialists.ops]\nworkdir = "/home/op/ops"\nlistens = ["slack:#help"]\n`).errors)
-      .toEqual(['specialists.ops.apps (from defaults.specialist)[0]: no app "nope": declare [slack.apps.nope]; hydra.toml declares default, sales'])
+      .toEqual(['specialists.ops.apps (from defaults.specialist)[0]: no app "nope": declare [slack.apps.nope]; hydra.toml declares app:default, app:sales'])
   })
   test('the old name is not read on a rule or a place: `app` is not renamed', () => {
     expect(load(`${spec('')}[[rules]]\napps = "sales"\ntarget = "specialist:ops"\n`).errors).toEqual(['rules[1].apps: unknown key "apps"', 'rules[1]: a rule needs `place`, `app` or both; `person` only narrows who it applies to'])
   })
   test('a rule pointing at a pinned specialist names pinned_to in its fix', () => {
-    expect(load(`${spec('pinned_to = ["sales"]')}[[rules]]\napp = "default"\ntarget = "specialist:ops"\n`).errors[0]).toContain("add default to ops's `pinned_to`")
+    expect(load(`${spec('pinned_to = ["app:sales"]')}[[rules]]\napp = "app:default"\ntarget = "specialist:ops"\n`).errors[0]).toContain("add app:default to ops's `pinned_to`")
   })
 })
 

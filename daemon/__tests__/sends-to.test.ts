@@ -36,7 +36,7 @@ addresses = ["slack:U0OP"]
 bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"
 [specialists.ops]
 workdir = "~/agents/ops"
-reachable_by = ["anyone"]
+reachable_by = ["role:anyone"]
 restricted = true
 sends_to = ["deep"]
 [[rules]]
@@ -49,14 +49,14 @@ restricted = true
 sends_to = ["ops"]
 [specialists.plain]
 workdir = "~/agents/plain"
-reachable_by = ["anyone"]
+reachable_by = ["role:anyone"]
 restricted = true
 [[rules]]
 place = "slack:C0PLAIN"
 target = "specialist:plain"
 [specialists.full]
 workdir = "~/agents/full"
-reachable_by = ["people"]
+reachable_by = ["role:people"]
 [[rules]]
 place = "slack:C0FULL"
 target = "specialist:full"

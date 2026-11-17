@@ -32,13 +32,13 @@ addresses = ["slack:UOWNER"]
 roles = ["owner"]
 [specialists.${FOOD}]
 workdir = "/w/food"
-reachable_by = ["anyone"]
+reachable_by = ["role:anyone"]
 [[rules]]
 place = "slack:C1"
 target = "specialist:${FOOD}"
 [specialists.${OPS}]
 workdir = "/w/ops"
-reachable_by = ["owner"]
+reachable_by = ["role:owner"]
 [[rules]]
 place = "slack:C2"
 target = "specialist:${OPS}"
@@ -323,7 +323,7 @@ describe('bind_conversation / unbind_conversation', () => {
   })
 
   test("a rule there doesn't count: it takes chosen people's messages, not the place", async () => {
-    configure(`${TOML}[[rules]]\nplace = "slack:C2"\nperson = "olive"\ntarget = "specialist:${FOOD}"\n`)
+    configure(`${TOML}[[rules]]\nplace = "slack:C2"\nperson = "person:olive"\ntarget = "specialist:${FOOD}"\n`)
     await expect(bindConversation(food, 'slack:C2:1.000001')).rejects.toThrow(`${FOOD} doesn't answer slack:C2`)
   })
 
@@ -520,7 +520,7 @@ describe('replies: posted only into the conversation they answer', () => {
 
 describe('sessions = "per-conversation"', () => {
   test('first come, first served: a newer conversation waits behind older waiters, and a freed place wakes them', async () => {
-    configure(TOML.replace(`reachable_by = ["anyone"]\n`, `reachable_by = ["anyone"]\nsessions = "per-conversation"\nmax_sessions = 1\n`))
+    configure(TOML.replace(`reachable_by = ["role:anyone"]\n`, `reachable_by = ["role:anyone"]\nsessions = "per-conversation"\nmax_sessions = 1\n`))
     const w = getSlackWatcher()
     w.bind('C1', '1.000001', FOOD)
     const old = w.get('C1', '1.000001')!
@@ -544,7 +544,7 @@ describe('sessions = "per-conversation"', () => {
   })
 
   test("first come, first served only when places are short: with a place to spare, a newer conversation doesn't wait", async () => {
-    configure(TOML.replace(`reachable_by = ["anyone"]\n`, `reachable_by = ["anyone"]\nsessions = "per-conversation"\nmax_sessions = 3\n`))
+    configure(TOML.replace(`reachable_by = ["role:anyone"]\n`, `reachable_by = ["role:anyone"]\nsessions = "per-conversation"\nmax_sessions = 3\n`))
     const w = getSlackWatcher()
     w.bind('C1', '1.000001', FOOD)
     const old = w.get('C1', '1.000001')!
@@ -556,7 +556,7 @@ describe('sessions = "per-conversation"', () => {
   })
 
   test('a conversation session acts for its specialist: the tools, its home, but replies only into its own conversation', async () => {
-    configure(TOML.replace(`reachable_by = ["anyone"]\n`, `reachable_by = ["anyone"]\nsessions = "per-conversation"\nhome = "slack:C7"\n`))
+    configure(TOML.replace(`reachable_by = ["role:anyone"]\n`, `reachable_by = ["role:anyone"]\nsessions = "per-conversation"\nhome = "slack:C7"\n`))
     fakePost()
     const conv = { threadId: 'conv-thread', tmuxName: `${FOOD}_c1-4-000001` }
     expect(isSpecialistOccupant(conv)).toBe(true)
@@ -569,7 +569,7 @@ describe('sessions = "per-conversation"', () => {
     await expect(replyInConversation('pc-own', 'slack:C1:5.000001', 'a sibling\'s')).rejects.toThrow("and from a conversation's own session only to that conversation")
   })
 
-  const PER = TOML.replace(`reachable_by = ["anyone"]\n`, `reachable_by = ["anyone"]\nsessions = "per-conversation"\nmax_sessions = 2\n`)
+  const PER = TOML.replace(`reachable_by = ["role:anyone"]\n`, `reachable_by = ["role:anyone"]\nsessions = "per-conversation"\nmax_sessions = 2\n`)
   const live = (name: string) => {
     const id = `pc-${name}`
     sessionIds.push(id)
@@ -615,7 +615,7 @@ describe('the operator: hydra conversations and hydra route', () => {
   })
 
   test('hydra route prints every candidate and why the winner won, and binds nothing', async () => {
-    configure(TOML.replace(`[specialists.${FOOD}]`, `[[rules]]\nplace = "slack:C2"\nperson = "owner"\ntarget = "specialist:${FOOD}"\n[specialists.${FOOD}]`))
+    configure(TOML.replace(`[specialists.${FOOD}]`, `[[rules]]\nplace = "slack:C2"\nperson = "role:owner"\ntarget = "specialist:${FOOD}"\n[specialists.${FOOD}]`))
     const r = await handleCLIRequest(req('route', { person: 'olive', place: 'slack:C2' }))
     expect(r).toMatchObject({ ok: true, data: { fate: 'deliver', to: FOOD } })
     expect((r.data as any).report).toContain(`→ rule specialist:${FOOD}: rules[0]: first rule that matches`)

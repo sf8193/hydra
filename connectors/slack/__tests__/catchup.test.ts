@@ -365,13 +365,13 @@ describe('catch-up across routes', () => {
     const routed: SlackWatchConfig = view(`${BASE}
 [specialists.food]
 workdir = "/w/food"
-reachable_by = ["anyone"]
+reachable_by = ["role:anyone"]
 [[rules]]
 place = "slack:${CH}"
 target = "specialist:food"
 [specialists.ops]
 workdir = "/w/ops"
-reachable_by = ["anyone"]
+reachable_by = ["role:anyone"]
 [[rules]]
 place = "slack:C0OPS"
 target = "specialist:ops"

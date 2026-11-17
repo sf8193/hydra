@@ -22,15 +22,15 @@ const DEALS_THREAD = 'deals-thread-1'
 const TOML = `${TWO_APPS}
 [specialists.${CRM}]
 workdir = "/w/crm"
-reachable_by = ["anyone"]
+reachable_by = ["role:anyone"]
 home = "slack:C9"
 [[rules]]
 place = "slack:C1"
 target = "specialist:${CRM}"
 [specialists.${DEALS}]
 workdir = "/w/deals"
-pinned_to = ["sales"]
-reachable_by = ["anyone"]
+pinned_to = ["app:sales"]
+reachable_by = ["role:anyone"]
 home = "slack:C8"
 [[rules]]
 place = "slack:C1"
@@ -121,7 +121,7 @@ describe('a post with no incoming message speaks as the specialist’s app', () 
   })
 
   test('speaks_as overrides it, and the sales home can be named in the app’s own form', async () => {
-    configure(TOML.replace(`workdir = "/w/crm"\nreachable_by`, `workdir = "/w/crm"\npinned_to = ["default"]\nreachable_by`).replace(`place = "slack:C1"\ntarget = "specialist:${CRM}"`, `place = "slack:C2"\ntarget = "specialist:${CRM}"`).replace(`pinned_to = ["sales"]`, `pinned_to = ["sales", "default"]\nspeaks_as = "default"`))
+    configure(TOML.replace(`workdir = "/w/crm"\nreachable_by`, `workdir = "/w/crm"\npinned_to = ["app:default"]\nreachable_by`).replace(`place = "slack:C1"\ntarget = "specialist:${CRM}"`, `place = "slack:C2"\ntarget = "specialist:${CRM}"`).replace(`pinned_to = ["app:sales"]`, `pinned_to = ["app:sales", "app:default"]\nspeaks_as = "app:default"`))
     await replyInConversation('deals-session', 'slack:C8', 'hello')
     expect(posts.map(p => p.app)).toEqual(['default'])
     posts.length = 0
@@ -133,20 +133,20 @@ describe('a post with no incoming message speaks as the specialist’s app', () 
 
 describe('a pinned specialist cannot be reached through another app', () => {
   test('a specialist session binds only through its own apps, and says why', async () => {
-    await expect(bindConversation(deals, 'slack:C1:5.000001')).rejects.toThrow('deals-t is pinned to app sales, and this conversation is through app default')
-    await expect(bindConversation(crm, 'slack:sales:C1:5.000001')).rejects.toThrow('app sales serves only specialists pinned to it (deals-t), and crm-t is not pinned')
+    await expect(bindConversation(deals, 'slack:C1:5.000001')).rejects.toThrow('deals-t is pinned to app:sales, and this conversation is through app:default')
+    await expect(bindConversation(crm, 'slack:sales:C1:5.000001')).rejects.toThrow('app:sales serves only specialists pinned to it (deals-t), and crm-t is not pinned')
     expect(await bindConversation(deals, 'slack:sales:C1:5.000001')).toStartWith(`slack:sales:C1:5.000001 is bound to ${DEALS}`)
     expect(getSlackWatcher().get('C1', '5.000001', 'sales')?.specialist).toBe(DEALS)
     expect(await bindConversation(crm, 'slack:C1:6.000001')).toStartWith(`slack:C1:6.000001 is bound to ${CRM}`)
   })
 
   test('a bind names an app hydra.toml declares', async () => {
-    await expect(bindConversation(deals, 'slack:ghost:C1:5.000001')).rejects.toThrow('no app "ghost": declare [slack.apps.ghost]; hydra.toml declares default, sales')
+    await expect(bindConversation(deals, 'slack:ghost:C1:5.000001')).rejects.toThrow('no app "ghost": declare [slack.apps.ghost]; hydra.toml declares app:default, app:sales')
   })
 
   test('the operator’s bind carries the app, and refuses a specialist pinned elsewhere, or an app that is not declared', () => {
-    expect(() => operatorBind('slack:C1:5.000001', DEALS)).toThrow('deals-t is pinned to app sales, and this conversation is through app default')
-    expect(() => operatorBind('slack:sales:C1:5.000001', CRM)).toThrow('app sales serves only specialists pinned to it')
+    expect(() => operatorBind('slack:C1:5.000001', DEALS)).toThrow('deals-t is pinned to app:sales, and this conversation is through app:default')
+    expect(() => operatorBind('slack:sales:C1:5.000001', CRM)).toThrow('app:sales serves only specialists pinned to it')
     expect(() => operatorBind('slack:ghost:C1:5.000001', DEALS)).toThrow('no app "ghost"')
     expect(operatorBind('slack:sales:C1:5.000001', DEALS)).toBe(`slack:sales:C1:5.000001 → ${DEALS}`)
     expect(operatorBind('slack:C1:5.000001', CRM)).toBe(`slack:C1:5.000001 → ${CRM}`)
@@ -177,7 +177,7 @@ socket_token_env = "SALES_SLACK_APP_TOKEN"
 addresses = ["slack:UOP"]
 [specialists.${CRM}]
 workdir = "/w/crm"
-reachable_by = ["anyone"]
+reachable_by = ["role:anyone"]
 [[rules]]
 place = "slack:C1"
 target = "specialist:${CRM}"
@@ -223,11 +223,11 @@ describe('an alert about one app goes to the specialists that app can reach', ()
     // A third app that every unpinned specialist is shut out of, and no one is pinned to: no specialist, so main hears it.
     const three = hydra(`${TOML}\n[slack.apps.ops]\nbot_token_env = "OPS_BOT"\nsocket_token_env = "OPS_APP"\n`)
     expect(slackSpecialistsOf(three, 'ops')).toEqual([CRM])
-    const lone = hydra(`${BASE}\n[specialists.${CRM}]\nworkdir = "/w"\nreachable_by = ["anyone"]\n[[rules]]\nplace = "slack:C1"\ntarget = "specialist:${CRM}"\n[specialists.${DEALS}]\nworkdir = "/w"\nreachable_by = ["anyone"]\n[[rules]]\nplace = "slack:C2"\ntarget = "specialist:${DEALS}"\n`)
+    const lone = hydra(`${BASE}\n[specialists.${CRM}]\nworkdir = "/w"\nreachable_by = ["role:anyone"]\n[[rules]]\nplace = "slack:C1"\ntarget = "specialist:${CRM}"\n[specialists.${DEALS}]\nworkdir = "/w"\nreachable_by = ["role:anyone"]\n[[rules]]\nplace = "slack:C2"\ntarget = "specialist:${DEALS}"\n`)
     // A lone `default` serves every specialist, as the alert always did.
     expect(slackSpecialistsOf(lone, 'default')).toEqual([CRM, DEALS])
     // A rule for one app pages that app’s target, not the other app’s.
-    const ruled = hydra(`${TWO_APPS}\n[specialists.${CRM}]\nworkdir = "/w"\nreachable_by = ["anyone"]\n[[rules]]\nplace = "slack:C1"\ntarget = "specialist:${CRM}"\n[specialists.${DEALS}]\nworkdir = "/w"\npinned_to = ["sales"]\nreachable_by = ["anyone"]\n[[rules]]\napp = "sales"\ntarget = "specialist:${DEALS}"\n`)
+    const ruled = hydra(`${TWO_APPS}\n[specialists.${CRM}]\nworkdir = "/w"\nreachable_by = ["role:anyone"]\n[[rules]]\nplace = "slack:C1"\ntarget = "specialist:${CRM}"\n[specialists.${DEALS}]\nworkdir = "/w"\npinned_to = ["app:sales"]\nreachable_by = ["role:anyone"]\n[[rules]]\napp = "app:sales"\ntarget = "specialist:${DEALS}"\n`)
     expect(slackSpecialistsOf(ruled, 'sales')).toEqual([DEALS])
     expect(slackSpecialistsOf(ruled, 'default')).toEqual([CRM])
   })

@@ -16,7 +16,7 @@ addresses = ["slack:U0OP"]
 [slack.apps.default]
 bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"
 `
-const ops = (body = 'sends_to = ["deep"]') => `[specialists.ops]\nworkdir = "~/agents/ops"\nreachable_by = ["staff"]\nrestricted = true\n${body}\n[[rules]]\nplace = "slack:C0OPS"\ntarget = "specialist:ops"\n`
+const ops = (body = 'sends_to = ["deep"]') => `[specialists.ops]\nworkdir = "~/agents/ops"\nreachable_by = ["role:staff"]\nrestricted = true\n${body}\n[[rules]]\nplace = "slack:C0OPS"\ntarget = "specialist:ops"\n`
 const deep = (body = '') => `[specialists.deep]\nworkdir = "~/agents/deep"\nreachable_by = []\nrestricted = true\n${body}\n`
 const people = `[people.alice]\naddresses = ["slack:U0A"]\nroles = ["staff"]\n`
 const text = (...parts: string[]) => [BASE, people, ...parts].join('\n')
@@ -43,7 +43,7 @@ describe('sends_to', () => {
     expect(ok(text(ops(), deep())).warnings).toEqual([])
   })
   test('on a restricted = false specialist it is refused: that session already has send_to_thread to any session', () => {
-    const t = text(`[specialists.ops]\nworkdir = "~/agents/ops"\nreachable_by = ["staff"]\nsends_to = ["deep"]\n[[rules]]\nplace = "slack:C0OPS"\ntarget = "specialist:ops"\n`, deep())
+    const t = text(`[specialists.ops]\nworkdir = "~/agents/ops"\nreachable_by = ["role:staff"]\nsends_to = ["deep"]\n[[rules]]\nplace = "slack:C0OPS"\ntarget = "specialist:ops"\n`, deep())
     expect(errorsOf(t)).toEqual(['specialists.ops.sends_to: has no effect while restricted = false: it already has every tool and server the operator does, and send_to_thread to any session; set restricted = true to choose them'])
   })
   test('it is refused in [defaults.specialist]: a default would reach every specialist', () => {
@@ -100,7 +100,7 @@ describe('a workdir inside a workstream loads, through the real loader on a real
   const disk = { ...systemEnv(['spark'], stateDir, 'discord', join(home, '.claude')), home }
   const t = (offLimits = '') => text(
     offLimits,
-    `[specialists.ops]\nworkdir = "~/specialists/ops"\nreachable_by = ["staff"]\nrestricted = true\nsends_to = ["ops-deep"]\n[[rules]]\nplace = "slack:C0OPS"\ntarget = "specialist:ops"\n`,
+    `[specialists.ops]\nworkdir = "~/specialists/ops"\nreachable_by = ["role:staff"]\nrestricted = true\nsends_to = ["ops-deep"]\n[[rules]]\nplace = "slack:C0OPS"\ntarget = "specialist:ops"\n`,
     `[specialists.ops-deep]\nworkdir = "~/Workstreams/ops/runbooks"\nreachable_by = []\nrestricted = true\n`,
   )
   mkdirSync(join(home, 'specialists', 'ops'), { recursive: true })

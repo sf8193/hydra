@@ -115,7 +115,7 @@ Specialists (named addresses that refill themselves):
   hydra specialist show <name> | list | rm <name>   (rm: without hydra.toml only)
 
 Routing (hydra.toml):
-  hydra route --person <person|address|stranger> --place <place> [--app <app>] [--heard-by <app,app>] [--mentioned <app,app>] [--bound <specialist> [--bound-app <app>]]
+  hydra route --person <person:id|address|stranger> --place <place> [--app <app:id>] [--heard-by <app:id,app:id>] [--mentioned <app:id,app:id>] [--bound <specialist> [--bound-app <app:id>]]
                                        What a new message there would do: every candidate, and why the winner won.
                                        --app is the app this check runs for, the one that heard the message (default: the app
                                        named "default"). --heard-by adds the other apps in the channel. --mentioned lists the

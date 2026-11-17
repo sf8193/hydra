@@ -85,7 +85,7 @@ describe('slack-watch.json → hydra.toml', () => {
       'maxWatches = 80 has no hydra.toml key; the default (50) applies',
     ])
     const split = migrateSlackWatch({ botUserId: 'U', people: { U0A: { role: 'a' } }, routes: [{ channels: ['C1'], to: 's', from: ['a'] }, { channels: ['C2'], to: 's', from: 'anyone', beforeDeliver: false }] })
-    expect(split.specialists.s.reachable_by).toEqual(['a', 'anyone'])
+    expect(split.specialists.s.reachable_by).toEqual(['role:a', 'role:anyone'])
     expect(split.notes).toContain('routes[1]: s is reached from several routes with different "from"; its reachable_by is now their union, since one specialist has one reachable_by')
     expect(split.notes).toContain('routes[1].beforeDeliver: a guard per route has no hydra.toml form; [guard] applies to every specialist')
   })

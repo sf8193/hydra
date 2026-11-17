@@ -1,5 +1,6 @@
 // Rule `at`/`from`/`to`, schedule `to` and place `listen` are now `place`/`person`/`target`, `target` and `messages` (value `mentions`
 // is now `addressed`). The old names still load, as the new ones, with a warning that names the new key; both names is an error.
+import { isValueWarning, unkinded } from './value-kinds.js'
 import { describe, test, expect } from 'bun:test'
 import { readFileSync } from 'fs'
 import { join } from 'path'
@@ -73,7 +74,7 @@ describe('a full config in the old names', () => {
     const r = ok(text('old-names.toml'))
     expect(r.config).toEqual(listensAsRules(inNewNames(before.config)) as HydraConfig)
     // Every warning the file gave before is still given, unchanged; the rest are the renames, and the bare targets (the fixture predates target kinds).
-    expect(r.warnings.filter(w => !renameWarnings([w]).length && !kindWarnings([w]).length && !isListensWarning(w))).toEqual(before.warnings.map(line).map(w => w.replace('set access = "workdir"', 'set restricted = true')))
+    expect(r.warnings.filter(w => !renameWarnings([w]).length && !kindWarnings([w]).length && !isValueWarning(w) && !isListensWarning(w)).map(unkinded)).toEqual(before.warnings.map(line).map(unkinded).map(w => w.replace('set access = "workdir"', 'set restricted = true')))
     // One per old key written: 2 places, 1 schedule, 1 `allow`, and 3 `at`, 3 `from`, 4 `to` across four rules.
     expect(renameWarnings(r.warnings).length).toBe(14)
     // Two specialists (crm, ops) still say where they are heard with `listens`.
@@ -115,7 +116,7 @@ describe('rule `at` is now `place`', () => {
 describe('rule `from` is now `person`', () => {
   const rule = (body: string) => `${BASE}[[rules]]\nplace = "slack:#help"\n${body}\ntarget = "specialist:ops"\n`
   test('the new name works', () => {
-    const r = ok(rule('person = "alice"'))
+    const r = ok(rule('person = "person:alice"'))
     expect(r.config.rules).toEqual([{ place: 'slack:#help', person: 'alice', target: 'ops' }])
     expect(r.warnings).toEqual([])
   })
@@ -125,10 +126,10 @@ describe('rule `from` is now `person`', () => {
     expect(renameWarnings(r.warnings)).toEqual(['rules[0].from: rename `from` to `person`; `from` still loads and will be removed'])
   })
   test('both names is an error', () => {
-    expect(load(rule('from = "alice"\nperson = "alice"')).errors).toEqual(['rules[0].from: is the old name of `person`, which is also set: keep `person` and delete `from`'])
+    expect(load(rule('from = "alice"\nperson = "person:alice"')).errors).toEqual(['rules[0].from: is the old name of `person`, which is also set: keep `person` and delete `from`'])
   })
   test('a person nobody holds is refused under the new name', () => {
-    expect(load(rule('person = "bob"')).errors).toEqual(['rules[0].person: "bob" is neither a person nor a role anyone holds'])
+    expect(load(rule('person = "bob"')).errors).toEqual(['rules[0].person: "bob" is neither a person nor a role anyone holds: write person:<id> or role:<name>'])
   })
 })
 

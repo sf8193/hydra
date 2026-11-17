@@ -138,7 +138,7 @@ describe('hydra config add', () => {
     expect(!r.ok && r.error).toContain('specialists.crm.listens[0]: never matches: rules[0] already takes every message at slack:#help')
     expect(file()).toBe(before)
     // a rule narrowed to a person does not take it
-    expect(addFragment(d, env, '[[rules]]\nplace = "slack:#help"\nperson = "operator"\ntarget = "main"\n', '/repo/h.toml')).toMatchObject({ ok: true })
+    expect(addFragment(d, env, '[[rules]]\nplace = "slack:#help"\nperson = "person:operator"\ntarget = "main"\n', '/repo/h.toml')).toMatchObject({ ok: true })
   })
 
   test('a fragment still written with a specialist\'s old keys is added under the new ones', () => {

@@ -17,7 +17,7 @@ addresses = ["slack:U0OP"]
 workdir = "/a/crm"
 [specialists.deals]
 workdir = "/a/deals"
-pinned_to = ["sales"]
+pinned_to = ["app:sales"]
 [[rules]]
 place = "slack:#help"
 target = "specialist:crm"
@@ -38,23 +38,30 @@ describe('hydra route --app', () => {
   test('--app routes as that app heard it, and shows the app when it is not default', () => {
     const d = run({ app: 'sales' })
     expect(d).toMatchObject({ ok: true, fate: 'deliver', to: 'deals' })
-    expect((d as { report: string }).report).toContain('app: sales')
+    expect((d as { report: string }).report).toContain('through: app:sales')
+  })
+  test('an app and a person may be written with their kind; a bare one still reads', () => {
+    const [bare, kinded] = [run({ app: 'sales' }), run({ app: 'app:sales', heardBy: 'app:default,app:sales', mentioned: 'app:sales' })]
+    expect(kinded).toMatchObject({ ok: true, fate: 'deliver', to: 'deals' })
+    expect((bare as { report: string }).report).toContain('through: app:sales')
+    expect(routeFor(CFG, { person: 'person:op', place: 'slack:#help' }, aliases)).toMatchObject({ ok: true })
+    expect(run({ app: 'role:sales' })).toEqual({ ok: false, error: '`--app`: "role:sales" starts with "role:", which is not a kind this key takes: write app:<id>' })
   })
   test('--heard-by and --mentioned show which app owns the message, and who stands down', () => {
     const both = { heardBy: 'default,sales' }
-    expect((run({ ...both }) as { report: string }).report).toContain('app: default (owns this message)')
+    expect((run({ ...both }) as { report: string }).report).toContain('through: app:default (owns this message)')
     const loser = run({ ...both, app: 'sales' }) as { fate: string; report: string }
     expect(loser.fate).toBe('ignored')
-    expect(loser.report).toContain('app: sales (does not own it: default does)')
-    expect(loser.report).toContain('ignored: default owns this message, so sales does not answer')
+    expect(loser.report).toContain('through: app:sales (does not own it: app:default does)')
+    expect(loser.report).toContain('ignored: app:default owns this message, so app:sales does not answer')
     expect(run({ ...both, app: 'sales', mentioned: 'sales' })).toMatchObject({ fate: 'deliver', to: 'deals' })
     expect(run({ ...both, boundApp: 'default', bound: 'crm', app: 'sales' })).toMatchObject({ fate: 'ignored' })
     // a tag wins over the app that opened the conversation
     expect(run({ ...both, boundApp: 'default', mentioned: 'sales', bound: 'crm', app: 'sales' })).toMatchObject({ fate: 'deliver', to: 'deals' })
   })
   test('an app hydra.toml does not declare is refused, naming the flag and what is declared', () => {
-    expect(run({ app: 'nope' })).toEqual({ ok: false, error: '`--app`: no app "nope": declare [slack.apps.nope]; hydra.toml declares default, sales' })
-    expect(run({ heardBy: 'default,nope' })).toEqual({ ok: false, error: '`--heard-by`: no app "nope": declare [slack.apps.nope]; hydra.toml declares default, sales' })
+    expect(run({ app: 'nope' })).toEqual({ ok: false, error: '`--app`: no app "nope": declare [slack.apps.nope]; hydra.toml declares app:default, app:sales' })
+    expect(run({ heardBy: 'default,nope' })).toEqual({ ok: false, error: '`--heard-by`: no app "nope": declare [slack.apps.nope]; hydra.toml declares app:default, app:sales' })
     expect(run({ mentioned: 'x' })).toMatchObject({ ok: false, error: expect.stringContaining('`--mentioned`: no app "x"') })
   })
   test('off Slack the message came through no app: --app is ignored, and the report says so', () => {
@@ -65,7 +72,7 @@ describe('hydra route --app', () => {
   })
   test('the implicit default app is named when hydra.toml does not declare it', () => {
     const noDefault = { ...CFG, slackApps: { sales: CFG.slackApps.sales } }
-    expect(routeFor(noDefault, { person: 'op', place: 'slack:#help' }, aliases)).toEqual({ ok: false, error: '`--app` (default `default`): no app "default": declare [slack.apps.default]; hydra.toml declares sales' })
+    expect(routeFor(noDefault, { person: 'op', place: 'slack:#help' }, aliases)).toEqual({ ok: false, error: '`--app` (default `app:default`): no app "default": declare [slack.apps.default]; hydra.toml declares app:sales' })
   })
   test('--bound-app goes with --bound', () => {
     expect(run({ boundApp: 'sales' })).toMatchObject({ ok: false, error: expect.stringContaining('--bound-app goes with --bound') })
@@ -82,7 +89,7 @@ describe('hydra route --app', () => {
   })
   test('without --person or --place: the usage, which lists --app', () => {
     expect(routeFor(CFG, {}, aliases)).toEqual({ ok: false, error: ROUTE_USAGE })
-    expect(ROUTE_USAGE).toContain('[--app <app>]')
+    expect(ROUTE_USAGE).toContain('[--app <app:id>]')
   })
 })
 
@@ -97,13 +104,13 @@ ids = ["slack:U0OP"]
 ids = ["slack:U0ALICE"]
 [specialists.assistant]
 workdir = "/a/asst"
-reachable_by = ["anyone"]
+reachable_by = ["role:anyone"]
 [[rules]]
 place = "slack:dm"
 target = "specialist:assistant"
 [specialists.alices]
 workdir = "/a/alices"
-reachable_by = ["anyone"]
+reachable_by = ["role:anyone"]
 [[rules]]
 place = "slack:dm:alice"
 target = "specialist:alices"

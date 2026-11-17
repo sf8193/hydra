@@ -1,0 +1,137 @@
+{
+  "config": {
+    "operator": "op",
+    "connectors": {},
+    "gateways": {},
+    "slackApps": {
+      "default": {
+        "id": "default",
+        "botTokenEnv": "CONNECTOR_SLACK_BOT_TOKEN",
+        "displayName": "hydra",
+        "description": "Answers the Slack threads it is tagged in, and its DMs, using Claude."
+      },
+      "sales": {
+        "id": "sales",
+        "botTokenEnv": "SALES_SLACK_BOT_TOKEN",
+        "displayName": "sales",
+        "description": "Answers the Slack threads it is tagged in, and its DMs, using Claude."
+      }
+    },
+    "people": {
+      "op": {
+        "id": "op",
+        "addresses": [
+          "slack:U0OP"
+        ],
+        "roles": []
+      },
+      "alice": {
+        "id": "alice",
+        "addresses": [
+          "slack:U0ALICE"
+        ],
+        "roles": [
+          "finance"
+        ]
+      },
+      "bob": {
+        "id": "bob",
+        "addresses": [
+          "slack:U0BOB"
+        ],
+        "roles": []
+      }
+    },
+    "specialists": {
+      "ops": {
+        "id": "ops",
+        "workdir": "/home/op/ops",
+        "reachableBy": [
+          "finance",
+          "anyone"
+        ],
+        "sessions": "shared",
+        "maxSessions": 20,
+        "renamedFrom": [],
+        "restricted": false
+      },
+      "deals": {
+        "id": "deals",
+        "workdir": "/home/op/deals",
+        "reachableBy": [
+          "finance"
+        ],
+        "pinnedTo": [
+          "sales"
+        ],
+        "speaksAs": "sales",
+        "sessions": "shared",
+        "maxSessions": 20,
+        "renamedFrom": [],
+        "restricted": false
+      },
+      "crm": {
+        "id": "crm",
+        "workdir": "/home/op/crm",
+        "reachableBy": [],
+        "sessions": "per-conversation",
+        "maxSessions": 20,
+        "renamedFrom": [],
+        "restricted": false
+      }
+    },
+    "places": {
+      "slack:#sales": {
+        "defaultApp": "sales",
+        "files": false,
+        "messages": "addressed",
+        "bots": false,
+        "linkPreviews": true
+      }
+    },
+    "schedules": {},
+    "rules": [
+      {
+        "target": "crm",
+        "place": "slack:#sales",
+        "person": "alice"
+      },
+      {
+        "target": "ops",
+        "place": "slack:#sales",
+        "person": "finance"
+      },
+      {
+        "target": "deals",
+        "app": "sales"
+      },
+      {
+        "target": "main",
+        "place": "slack:#oncall",
+        "person": "anyone"
+      }
+    ]
+  },
+  "warnings": [
+    {
+      "path": "connectors.slack",
+      "message": "rename the table [connectors.slack] to [slack.apps.default]; it still loads and will be removed"
+    },
+    {
+      "path": "rules[1]",
+      "message": "never matches: rules[0] already takes finance's messages at slack:#sales"
+    },
+    {
+      "path": "specialists.ops",
+      "message": "anyone can reach the operator's account through it; set restricted = true"
+    },
+    {
+      "path": "specialists.deals",
+      "message": "alice (role \"finance\") can reach the operator's account through it; set restricted = true"
+    },
+    {
+      "path": "specialists.crm",
+      "message": "conversations past max_sessions (20) will wait until a session is ended by hand; set idle"
+    }
+  ]
+}

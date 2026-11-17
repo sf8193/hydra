@@ -170,23 +170,23 @@ socket_token_env = "SALES_SLACK_APP_TOKEN"
 
 *Slack connector.* **One connection per app.** Hydra opens a Socket Mode connection for each app, each with its own bot, its own tokens, and its own reconnects and catch-up pass. An app added to hydra.toml connects as soon as hydra.toml loads (no restart); one taken out disconnects. Every message records the app that heard it, and everything that follows goes through that app: its reply, its reactions, the files it downloads, the threads it rereads. A message goes in through one app and leaves through the same one.
 
-An app is a way in: a message reaches hydra through the app whose connection delivered it. Routing knows which, and three things use it. `hydra route --person <person> --place <place> --app <app>` shows each.
+An app is a way in: a message reaches hydra through the app whose connection delivered it. Routing knows which, and three things use it. `hydra route --person <person:id> --place <place> --app <app:id>` shows each.
 
 **Rules match an app, a place, or both.** A `[[rules]]` entry names `place`, `app` (an app id), or both; an absent one matches every place or every app, so a rule in a hydra.toml with no `[slack.apps.*]` tables and no `app` keys behaves as it did. `person` only narrows who: a rule with `person` and neither `place` nor `app` is an error. The first rule in file order that matches wins. A `target` says its kind: `main`, or `specialist:<name>` for a declared specialist (a bare name still loads, with a warning that gives the prefixed form; `thread:<id>` is not a rule's target).
 
 ```toml
 [[rules]]
-app = "sales"                    # everything that comes through the sales app
+app = "app:sales"                # everything that comes through the sales app
 target = "specialist:deals"
 
 [[rules]]
 place = "slack:#help"
-app = "support"                  # #help, through the support app only
-person = "staff"
+app = "app:support"              # #help, through the support app only
+person = "role:staff"
 target = "specialist:desk"
 ```
 
-**A specialist can be pinned to apps.** `pinned_to = ["sales"]` in a specialist means two things:
+**A specialist can be pinned to apps.** `pinned_to = ["app:sales"]` in a specialist means two things:
 
 - It answers only messages that come through those apps. A message through another app never reaches it: not through a rule's `target` (including one for `slack:dm`), or a conversation bound to it.
 - Those apps deliver only to specialists pinned to them. Once any specialist is pinned to `sales`, a message through `sales` goes to a specialist pinned to `sales`, or to nobody.
@@ -199,7 +199,7 @@ Two rules may send the same place, to everyone, to two specialists only when no 
 
 1. The app the message tags. With two tags, the first in the text. A tag outranks everything below, the app the conversation is bound through included (a tag outranks the bound app): it opens that app's own conversation, even in a thread another app opened. A tagged app whose connection is down counts as having heard its tag, if its bot is in the channel: no other app answers in its place, and it catches the message up when it is back.
 2. The app the conversation is bound through, if it is already a bound conversation: an untagged follow-up stays with that app. When the thread is bound through two apps, the one most recently active in it.
-3. The channel's `default_app`: `default_app = "sales"` under `[places."slack:#help"]` (the place's id or its name; it must be a declared app, on a Slack channel). It is honored as written, even if that app delivers to no one there.
+3. The channel's `default_app`: `default_app = "app:sales"` under `[places."slack:#help"]` (the place's id or its name; it must be a declared app, on a Slack channel). It is honored as written, even if that app delivers to no one there.
 4. The app named `default`, if it delivers to someone at this place.
 5. The first app, in hydra.toml order, that delivers to someone at this place.
 
@@ -209,7 +209,7 @@ The other apps do nothing: `hydra route` shows them as `ignored`, with the app t
 
 ```toml
 [places."slack:#help"]
-default_app = "support"          # an untagged message in #help is answered by support; tag @sales and sales answers
+default_app = "app:support"      # an untagged message in #help is answered by support; tag @sales and sales answers
 ```
 
 **Several apps in one channel need a read of who is in it.** Each connection receives every message of a channel its bot is in, so with several apps connected each connection asks whether the other apps' bots are members (`conversations.info`, through that app's own token; an app never asks about itself, and at most 5 asks are in flight). A member is believed for ten minutes, a non-member for 30 seconds (an invite is the common change), and an answer that fails is never taken as a verdict: the last good answer stands and Slack is asked again in 30 seconds. A message that tags an app reads that app again first, so an invite followed at once by a tag is answered by the tagged app. The first connection to decide a message fixes its owner for every other connection's copy of it (and for a catch-up pass), so exactly one app answers even if who is in the channel changes between two copies. A DM belongs to the app it was sent to. With one app connected nothing is asked. A session listening to a thread through one app is told, once, when a specialist takes the same thread through another: the conversation id names the app, so the session's conversation is a different one and goes quiet.
@@ -220,7 +220,7 @@ Each app's bot ids are kept in `<state>/slack-apps.json`, so after a restart a t
 
 A message from another app's bot is another bot's message: it is passed over unless the place has `bots = true`. A bot that is one of hydra's own apps is never heard, `bots = true` or not, so two apps cannot answer each other.
 
-`hydra route` takes `--app <app>`: the app this check runs for, the one that heard the message (default: the app named `default`). `--heard-by <app,app>` adds the other apps in the channel. `--mentioned <app,app>` lists the apps the text tags, first tag first. `--bound-app <app>` (with `--bound`) is the app the bound conversation is bound through (if two, the one most recently active).
+`hydra route` takes `--app <app:id>`: the app this check runs for, the one that heard the message (default: the app named `default`). `--heard-by <app:id,app:id>` adds the other apps in the channel. `--mentioned <app:id,app:id>` lists the apps the text tags, first tag first. `--bound-app <app:id>` (with `--bound`) is the app the bound conversation is bound through (if two, the one most recently active).
 
 ## Which app listens
 
@@ -264,7 +264,7 @@ place = "slack:group-dm"   # every group DM the operator is in
 target = "specialist:deals"
 ```
 
-`hydra route --person alice --place slack:dm:alice` shows what a DM with Alice would do. Only `ack` and `files` apply to `[places."slack:dm:alice"]` and `[places."slack:group-dm"]`; `link_previews`, `messages` and `bots` there are errors when hydra.toml loads. A `[places]` entry alone counts as naming a place, so untagged chatter in a channel only `[places]` names is heard.
+`hydra route --person person:alice --place slack:dm:alice` shows what a DM with Alice would do. Only `ack` and `files` apply to `[places."slack:dm:alice"]` and `[places."slack:group-dm"]`; `link_previews`, `messages` and `bots` there are errors when hydra.toml loads. A `[places]` entry alone counts as naming a place, so untagged chatter in a channel only `[places]` names is heard.
 
 **How a DM gets its place.** Two lists answer two questions. The bot's own DMs (`users.conversations`, types `im`, with the bot token) say which DM is `slack:dm`. For any other DM, the operator's DMs (the same call with the user token, scope `im:read`) say who is on the other end: a person in `[people]` is `slack:dm:<person>`. Each list is read at connect and for a DM it has not seen, once at a time; the user list is capped at 25 pages of 200 DMs, so a DM beyond the first 5,000 is not named and is dropped; a DM on neither list goes by no name and is dropped, and a failed read is not tried again for a minute. A group DM's id looks like a channel's, so it is told by the event's `channel_type` (`mpim`). Read-only calls against a real install showed each DM from `users.conversations` carries its other party in `user`, on both tokens (one page, no cursor, for 138 DMs; the pagination stays). **Not yet proven:** the `message.im` and `message.mpim` user-event shapes, and a live drop of a real DM (the go-live check). DMs with people and group DMs are heard live only: catch-up does not rescan them, and the bot answers only where it is a member.
 
@@ -285,8 +285,8 @@ The id of `default` is exactly what it was in a hydra.toml with no `[slack.apps.
 
 ```toml
 [specialists.deals]
-pinned_to = ["sales"]
-speaks_as = "sales"            # the app it posts as when it answers no message; one of `pinned_to` if it is pinned
+pinned_to = ["app:sales"]
+speaks_as = "app:sales"        # the app it posts as when it answers no message; one of `pinned_to` if it is pinned
 home = "slack:#sales-ops"
 ```
 
@@ -368,7 +368,7 @@ Start with `hydra health`; `hydra health --json` has every field above.
 3. **Restart the daemon:** it reads the tokens from its environment when it starts. The app connects when hydra.toml loads, with no restart, if its token variables are already in the daemon's environment.
 4. **Invite the bot** to the channels it should hear. For a channel more than one app is in, `default_app` says which answers an untagged message; `pinned_to` on a specialist pins it to an app.
 5. **Add the membership events to every existing app.** A second app changes the first: add `member_joined_channel` and `member_left_channel` under Event Subscriptions of each app that already exists (`hydra slack manifest <app>` lists them) and reinstall each, so a join or a leave is noticed at once. Until you do, hydra alerts once, naming the app, when an invite goes unreported, and a join is noticed only when a tag asks or within ten minutes.
-6. **Check:** `hydra route --person <person> --place <place> --app <id>`, then `hydra health` (the new app's line, with its scope status; see the [runbook](#runbook-reading-hydra-health) if it is not `up`).
+6. **Check:** `hydra route --person <person:id> --place <place> --app <app:id>`, then `hydra health` (the new app's line, with its scope status; see the [runbook](#runbook-reading-hydra-health) if it is not `up`).
 
 ## A specialist other people talk to: `restricted = true`
 
@@ -402,7 +402,7 @@ tools = ["search_logs", "get_monitor"]    # the tools of it a specialist may cal
 
 [specialists.ops]
 workdir = "~/specialists/ops"             # runbooks and FAQs: all it may know. A folder of its own, not a git work tree, no symlinks out
-reachable_by = ["staff"]                # roles only; `anyone` is allowed too; see link_previews below
+reachable_by = ["role:staff"]           # roles only, `role:<name>`; `role:anyone` is allowed too; see link_previews below
 restricted = true
 tools = ["Read", "Grep", "Glob"]          # the default, and all a restricted specialist may list
 mcp_servers = ["datadog"]                # names from [mcp.*]

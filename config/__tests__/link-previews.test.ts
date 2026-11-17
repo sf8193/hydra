@@ -74,7 +74,7 @@ describe('the load warning', () => {
     const t = `
 [specialists.ops]
 workdir = "~/agents/ops"
-reachable_by = ["anyone"]
+reachable_by = ["role:anyone"]
 restricted = true
 [[rules]]
 place = "slack:#ops"
@@ -94,7 +94,7 @@ link_previews = false
     const t = `
 [specialists.ops]
 workdir = "~/agents/ops"
-reachable_by = ["anyone"]
+reachable_by = ["role:anyone"]
 restricted = true
 [[rules]]
 place = "cli"
@@ -116,7 +116,7 @@ describe('a Discord channel given by name', () => {
     const t = `
 [specialists.ops]
 workdir = "~/agents/ops"
-reachable_by = ["anyone"]
+reachable_by = ["role:anyone"]
 restricted = true
 home = "slack:#esc"
 [[rules]]
