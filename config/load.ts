@@ -11,7 +11,7 @@ import { ENV_NAME_RE, tokenVarRefusal } from '../shared/spawn-env.js'
 import { offLimitRoots, workdirRestrictionIssues } from './restricted-workdir.js'
 import { ALLOW_UNPROVEN_MACOS, macosGateIssue, sandboxIssues, unquotablePath } from './server-sandbox.js'
 import { engineConfinesAccess } from '../shared/engine-capabilities.js'
-import { CAN_ONLY_WRITE_TO_VALUES, confinementWarning, hasPlaceholder, readDenyRoots, unknownPlaceholders, unreadableWorkdir } from './write-confinement.js'
+import { CAN_ONLY_WRITE_TO_VALUES, KNOWN_BUILTIN_TOOLS, confinementWarning, hasPlaceholder, operatorMcpNameClashes, readDenyRoots, unknownPlaceholders, unreadableWorkdir } from './write-confinement.js'
 import { noSuchApp, pinnersOf, speaksAsOf, whyNotServed } from './pins.js'
 import { SLACK_APP_DEFAULTS } from '../connectors/slack/app.js'
 import { emojiProblem, reactionNameProblem } from '../shared/emoji.js'
@@ -97,6 +97,17 @@ export function systemEnv(sessionNames: readonly string[], stateDir: string, pla
     stateDir,
     claudeConfigDir,
     exists: path => { try { statSync(path); return true } catch { return false } },
+    mcpNamesIn: (path, projects = []) => {
+      let text: string
+      try { text = readFileSync(path, 'utf8') } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code
+        if (code === 'ENOENT' || code === 'ENOTDIR') return []   // no such file: nothing declared there
+        throw new Error(`${path} cannot be read (${err instanceof Error ? err.message : String(err)})`)
+      }
+      let j: { mcpServers?: object; projects?: Record<string, { mcpServers?: object }> }
+      try { j = JSON.parse(text) } catch (err) { throw new Error(`${path} is not valid JSON (${err instanceof Error ? err.message : String(err)})`) }
+      return [...new Set([...Object.keys(j?.mcpServers ?? {}), ...projects.flatMap(k => Object.keys(j?.projects?.[k]?.mcpServers ?? {}))])]
+    },
     envFileHas: name => {
       try {
         for (const line of readFileSync(join(stateDir, '.env'), 'utf8').split('\n')) { const kv = parseEnvLine(line); if (kv && kv[0] === name && kv[1].trim() !== '') return true }
@@ -672,15 +683,33 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (!restricted) {
       for (const k of ['tools', 'mcp_servers', 'sends_to'] as const) {
         if (t[k] === undefined) continue
-        // A write-confined specialist lists the servers that get its own browser profile; every tool of them stays callable, as for any unrestricted session.
-        if (k === 'mcp_servers' && confinesWrites) continue
+        // A write-confined specialist's `tools` (its built-in tools: absent means all, as for any unrestricted session) and `mcp_servers` (the only servers it sees, each started
+        // with its own browser profile if it declares one) are its allowlist.
+        if ((k === 'mcp_servers' || k === 'tools') && confinesWrites) continue
         error(`${path}.${k}`, `has no effect while restricted = false: it already has every tool and server the operator does${k === 'sends_to' ? ', and send_to_thread to any session' : ''}; set restricted = true to choose them`)
       }
       if (confinesWrites) {
+        // Built-in tools by name (Bash, Edit, Write, Read, ...): a name Claude Code does not have is not caught here, and the start check does not see tools; the live smoke test does.
+        if (toolsRaw !== undefined) {
+          tools = []
+          for (const [i, name] of toolsRaw.entries()) {
+            if (!/^[A-Z][A-Za-z]*$/.test(name)) error(`${path}.tools[${i}]`, `"${name}" must be the name of a built-in tool, like Bash, Edit or Read`)
+            else if (!tools.includes(name)) tools.push(name)
+            if (/^[A-Z][A-Za-z]*$/.test(name) && !(KNOWN_BUILTIN_TOOLS as readonly string[]).includes(name)) warn(`${path}.tools[${i}]`, `${name} is not a built-in tool hydra knows (${KNOWN_BUILTIN_TOOLS.join(', ')}): a typo leaves the session without the tool it meant`)
+          }
+          if (toolsRaw.length === 0) error(`${path}.tools`, 'is empty: a session with no built-in tool cannot do anything; list the tools it may use, or leave tools out for all of them')
+        }
         mcpServerNames = [...new Set(mcpServerNamesRaw ?? [])]
         for (const [i, name] of (mcpServerNamesRaw ?? []).entries()) {
           if (!Object.hasOwn(mcpServers, name)) { error(`${path}.mcp_servers[${i}]`, `no [mcp_servers.${name}]: declare the server in hydra.toml first`); continue }
           const server = mcpServers[name]
+          // Claude Code's allowlist matches by name: an operator's own server of this name (in a Claude config or the workdir's .mcp.json) would be admitted too, and could take this one's place.
+          const probe = operatorMcpNameClashes(env, workdir, [name])
+          for (const c of probe.clashes) error(`${path}.mcp_servers[${i}]`, `${c.file} already declares an MCP server named ${name}; Claude Code's allowlist matches by name, so that one would be admitted too and could take the place of [mcp_servers.${name}]: rename [mcp_servers.${name}]`)
+          // A file that cannot be read is not "no clash": the check fails closed.
+          for (const u of probe.unreadable) error(`${path}.mcp_servers[${i}]`, `${u.why}, so hydra cannot tell whether it declares an MCP server named ${name} (Claude Code's allowlist matches by name): fix or remove the file`)
+          // No tool of a listed server can be limited at this level (no mcp__ rule is written): its tools list changes nothing.
+          if (server.tools.length) warn(`${path}.mcp_servers[${i}]`, `[mcp_servers.${name}] lists tools, which limit nothing at this level: every tool of the server is callable here (only a restricted specialist is held to the list)`)
           for (const v of server.tokenEnv) if (!env.envFileHas(v)) warn(`${path}.mcp_servers[${i}]`, `[mcp_servers.${name}] needs ${v}, and ${join(env.stateDir, '.env')} does not set it, so no session of this specialist can start until it does: add ${v}=<value> there and restart the daemon`)
           // A server that says nothing about its profile keeps its own default one, which is the operator's: only a declared profile is the specialist's.
           if (!server.profileArgs?.length && !Object.keys(server.profileEnv ?? {}).length) warn(`${path}.mcp_servers[${i}]`, `[mcp_servers.${name}] declares no profile_args or profile_env, so it keeps its own default browser profile (the operator's, if it is a browser): declare how it takes a profile folder, or accept that`)

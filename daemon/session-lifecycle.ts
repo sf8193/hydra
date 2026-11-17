@@ -9,7 +9,7 @@ import { safeSend, formatSpawnLine, atomicWriteFileSync } from './util.js'
 import { tmuxHasSession, tmuxSync, tmuxTimedOut } from './tmux.js'
 import { nameHeldByAnother, occupancy, occupied } from './session-reachability.js'
 import { withThreadLock } from '../specialists/specialists.js'
-import { unreadableWorkdir } from '../config/write-confinement.js'
+import { operatorMcpNameClashes, unreadableWorkdir } from '../config/write-confinement.js'
 import { confinementRefusal, endVerifying, startVerifying, verifyBackoff, verifyRefusal, confined, describePolicy, macosRefusal, missingTokenRefusal, PolicyRefusal, remedy, resolvePolicy, type LaunchPolicy } from './restricted.js'
 import { refusalNoticeKey, threadNotices } from './notice-limit.js'
 import { hydraLoadEnv, currentHydraConfig } from './hydra-config.js'
@@ -1075,6 +1075,11 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     // The folder can change after hydra.toml loaded (a link added into a place the layer denies): the load's check runs again, on resolved paths.
     const inside = unreadableWorkdir(w.workdir, w.cannotRead, hydraLoadEnv().realpath)
     if (inside) await refuse(`specialist ${layerPolicy.specialist}: its workdir ${w.workdir} is, or now holds, ${inside}, which the layer denies reading, so it could not read its own folder and no session starts. ${remedy(sessionName)}`)
+    // Claude Code's server allowlist matches by name: a listed server whose name the operator's own config (or the workdir's .mcp.json) also declares would admit that one too, so none starts. Checked again here because the files change after the load.
+    const probe = operatorMcpNameClashes(hydraLoadEnv(), w.workdir, w.servers.map(x => x.name))
+    if (probe.clashes.length) await refuse(`specialist ${layerPolicy.specialist}: ${probe.clashes.map(c => `${c.file} already declares an MCP server named ${c.name}`).join('; ')}; Claude Code's allowlist matches by name, so that one would be admitted too and could take the place of the server hydra starts, and no session starts: rename it in hydra.toml. ${remedy(sessionName)}`)
+    // A file that cannot be read is not "no clash": the start fails closed.
+    if (probe.unreadable.length) await refuse(`specialist ${layerPolicy.specialist}: ${probe.unreadable.map(u => u.why).join('; ')}, so hydra cannot tell whether it declares an MCP server named like a listed one (Claude Code's allowlist matches by name), and no session starts: fix or remove the file. ${remedy(sessionName)}`)
     // A listed server's token variable must be set: checked here, with the other refusals, so the thread hears it.
     const noToken = missingTokenRefusal({ specialist: layerPolicy.specialist, servers: w.servers }, ENV_FILE, sessionName, process.env, capturedSpawnVars())
     if (noToken) await refuse(noToken)

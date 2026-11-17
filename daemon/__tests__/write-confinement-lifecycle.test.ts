@@ -11,7 +11,7 @@ import { engines } from '../engines/instances.js'
 import type { LaunchInput } from '../engines/engine-adapter.js'
 import { _setHydraConfigForTesting, _setLoadEnvForTesting } from '../hydra-config.js'
 import { PolicyRefusal, bornPolicy, deliveryRefusal, unverified, type LaunchPolicy } from '../restricted.js'
-import { confinementRules } from '../write-confinement.js'
+import { confinementRules, confinementServers } from '../write-confinement.js'
 import { verifyConfinement, verifyDeps } from '../engines/claude-verify.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import { macLike } from './sandbox-host.js'
@@ -50,7 +50,7 @@ const fakeClaude = {
     return { provider: 'claude', model: 'claude-x', identity: { claudeSessionId: `new-${launches.length}` }, debugLogPath: `/spawn-logs/debug-${input.tmuxName}-${input.sessionId}.log` }
   },
   // The real start check, on the fake engine's launch.
-  verifyConfinement: (policy: LaunchPolicy, launched: any) => verifyConfinement(confinementRules(policy.canOnlyWriteTo!), launched.debugLogPath),
+  verifyConfinement: (policy: LaunchPolicy, launched: any) => verifyConfinement({ ...confinementRules(policy.canOnlyWriteTo!), servers: confinementServers(policy.canOnlyWriteTo!) }, launched.debugLogPath),
   stop: async (info: SessionInfo) => { stops.push(info.sessionId); return { status: 'stopped' } }, isAlive: () => false, surface: () => null,
   recoveryPlan: (s: any, o: any) => orig.claude.recoveryPlan(s, o),
 }
@@ -58,7 +58,8 @@ const fakeClaude = {
 const applied = (p: LaunchPolicy): string => {
   const r = confinementRules(p.canOnlyWriteTo!)
   const T = '2026-11-13T04:34:18.000Z [DEBUG] '
-  return [`${T}Applying permission update: Adding ${r.allow.length} allow rule(s) to destination 'flagSettings': ${JSON.stringify(r.allow)}`, `${T}Applying permission update: Adding ${r.deny.length} deny rule(s) to destination 'flagSettings': ${JSON.stringify(r.deny)}`].join('\n') + '\n'
+  return [`${T}Applying permission update: Adding ${r.allow.length} allow rule(s) to destination 'flagSettings': ${JSON.stringify(r.allow)}`, `${T}Applying permission update: Adding ${r.deny.length} deny rule(s) to destination 'flagSettings': ${JSON.stringify(r.deny)}`,
+    ...confinementServers(p.canOnlyWriteTo!).map(n => `${T}MCP server "${n}": Successfully connected (transport: stdio) in 9ms`), `${T}[claudeai-mcp] Disabled via env var`].join('\n') + '\n'
 }
 
 const savedVerify = { read: verifyDeps.read, deadline: verifyDeps.deadlineMs, poll: verifyDeps.pollMs }
@@ -177,6 +178,26 @@ describe('a start of a write-confined specialist', () => {
     } finally { process.env.BR_TOKEN = saved }
   })
 
+  test('a listed server whose name the operator\'s own MCP config also declares refuses the start in the thread, naming the file; nothing starts', async () => {
+    _setLoadEnvForTesting(macLike({ mcpNamesIn: f => (f.endsWith('.mcp.json') ? ['browser'] : []) }))
+    seedDead()
+    await expect(start()).rejects.toThrow(PolicyRefusal)
+    expect(launches).toHaveLength(0)
+    expect(told.join('\n')).toMatch(/\.mcp\.json already declares an MCP server named browser; Claude Code's allowlist matches by name/)
+  })
+
+  test('a parent .mcp.json or a file that cannot be read refuses the start (the probe walks up and fails closed)', async () => {
+    _setLoadEnvForTesting(macLike({ mcpNamesIn: f => (f === `${join(workdir, '..')}/.mcp.json` ? ['browser'] : []) }))
+    seedDead()
+    await expect(start()).rejects.toThrow(PolicyRefusal)
+    expect(told.join('\n')).toMatch(/\.mcp\.json already declares an MCP server named browser/)
+    told.length = 0
+    _setLoadEnvForTesting(macLike({ mcpNamesIn: f => { if (f.endsWith('/.claude.json')) throw new Error(`${f} is not valid JSON (Unexpected end)`); return [] } }))
+    await expect(start()).rejects.toThrow(PolicyRefusal)
+    expect(launches).toHaveLength(0)
+    expect(told.join('\n')).toMatch(/is not valid JSON \(Unexpected end\), so hydra cannot tell whether it declares an MCP server named like a listed one/)
+  })
+
   test.each(['codex', 'omp'] as const)('%s: refused in the thread, naming the engine hydra actually chose (not "undefined")', async engine => {
     seedDead({ engine: engine as any })
     await expect(start({ engine })).rejects.toThrow(new RegExp(`which the ${engine} engine cannot give`))
@@ -201,6 +222,14 @@ describe('the start check', () => {
     expect(stops).toContain(launches[0].sessionId)   // this launch's own session is the one stopped
     expect(told.join('\n')).toMatch(/did not apply these deny rules: .*Read\(\/\//)
     expect(told.join('\n')).toMatch(/Send another message to start a fresh one/)
+  })
+
+  test('a session that started a server it was not given (an operator\'s, a plugin\'s, a connector) is stopped and the thread told which', async () => {
+    debugText = p => applied(p) + '2026-11-13T04:34:18.000Z [DEBUG] MCP server "plugin:slack:slack": Starting connection with timeout of 30000ms\n'
+    seedDead()
+    await expect(start()).rejects.toThrow(/did not show the write confinement/)
+    expect(stops).toContain(launches[0].sessionId)
+    expect(told.join('\n')).toMatch(/started MCP servers the policy does not give it: `plugin:slack:slack`/)
   })
 
   test('a file that never appears refuses: no news is not good news', async () => {

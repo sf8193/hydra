@@ -14,6 +14,7 @@ import { spawnSync } from 'child_process'
 import { mkdirSync } from 'fs'
 import { join } from 'path'
 import { browserDownloadDir, browserProfileDir, fillProfile, readDenyRule } from '../config/write-confinement.js'
+import { expectedServerNames } from './engines/claude-verify.js'
 import { PolicyRefusal, missingTokenRefusal, remedy, type ConfinementPolicy } from './restricted.js'
 
 /** The first Claude Code with `permissions.blockWritesOutsideWorkingDirectories`: an older one ignores the key, which would leave Edit/Write unconfined. */
@@ -23,8 +24,15 @@ export const MIN_CLAUDE_VERSION = [2, 1, 314] as const
 /** The rule that lets the sandbox's proxy reach any host: `sandbox.network.allowedDomains` refuses a bare `*` as too broad, but a `WebFetch(domain:*)` allow rule feeds the same allowlist (Claude Code 2.1.186+) and matches every host. */
 export const NETWORK_ALLOW_RULE = 'WebFetch(domain:*)'
 
-export function confinementSettings(policy: Pick<ConfinementPolicy, 'denyCommands' | 'cannotRead'>): object {
+/** The MCP servers the session may see: hydra's bridge (its one way to the thread) and the servers its policy lists. Nothing else: not the operator's own, a plugin's, a project's or a claude.ai connector. */
+export const confinementServers = (policy: Pick<ConfinementPolicy, 'servers'>): string[] => expectedServerNames(policy.servers)
+
+export function confinementSettings(policy: Pick<ConfinementPolicy, 'denyCommands' | 'cannotRead'> & Partial<Pick<ConfinementPolicy, 'servers'>>): object {
   return {
+    // Claude Code's own allowlist, which governs user/project/local config, --mcp-config, plugins and claude.ai connectors alike (not --strict-mcp-config: that drops plugin servers, and the bridge is one).
+    allowedMcpServers: confinementServers({ servers: policy.servers ?? [] }).map(serverName => ({ serverName })),
+    // Honored from any settings source; the environment variable at launch says the same, and the start check wants its debug line.
+    disableClaudeAiConnectors: true,
     sandbox: {
       enabled: true,
       // Without it a machine where the sandbox cannot start runs every command unsandboxed, silently.

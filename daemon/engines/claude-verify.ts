@@ -115,10 +115,21 @@ export function readLoaded(log: string): Loaded {
 /** `2026-11-13T04:34:18.480Z [DEBUG] `: how every line Claude Code writes about itself begins. */
 const DEBUG_LINE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z \[DEBUG\] /
 
+/** The MCP servers a launch started or connected that are not in `want`: one rule for a restricted launch and a write-confined one. */
+const extraServerNames = (want: readonly string[], got: Loaded): string[] => [...new Set([...got.servers, ...got.connected])].filter(s => !want.includes(s))
+/** The servers in `want` that have not connected. */
+const unconnectedServers = (want: readonly string[], got: Loaded): string[] => want.filter(s => !got.connected.includes(s))
+/** claude.ai connector activity (a surplus: judged as soon as it is read), and the missing "disabled" line (a shortfall: judged once the launch has loaded). */
+const connectorActivity = (got: Loaded): string | undefined => got.connectorActivity ? 'claude.ai connectors were not off (the log shows connector activity)' : undefined
+const connectorsNotOff = (got: Loaded): string | undefined => !got.connectorsOff && !got.connectorActivity ? 'nothing says claude.ai connectors were off (no `[claudeai-mcp] Disabled via env var` line)' : undefined
+
 /** What a policy expects of a launch: the servers (the bridge and the listed ones), the permission rules and the plugins. */
+/** The servers a launch may run: the bridge and the policy's listed ones (a restricted launch's and a write-confined one's alike). */
+export const expectedServerNames = (listed: ReadonlyArray<{ name: string }>): string[] => [BRIDGE_MCP_SERVER_KEY, ...listed.map(s => s.name)]
+
 export function expectedLoad(p: Pick<ConfinedPolicy, 'servers'>): { servers: string[]; allow: string[] } {
   return {
-    servers: [BRIDGE_MCP_SERVER_KEY, ...p.servers.map(s => s.name)],
+    servers: expectedServerNames(p.servers),
     allow: [BRIDGE_TOOLS_PERMISSION, ...p.servers.flatMap(s => s.tools.map(t => serverToolRule(s.name, t)))],
   }
 }
@@ -136,7 +147,7 @@ const list = (xs: string[]): string => `${xs.slice(0, 5).map(x => `\`${safe(x)}\
 export function surplus(p: Pick<ConfinedPolicy, 'servers'>, got: Loaded, final = false): string[] {
   const want = expectedLoad(p)
   const out: string[] = []
-  const extraServers = [...new Set([...got.servers, ...got.connected])].filter(s => !want.servers.includes(s))
+  const extraServers = extraServerNames(want.servers, got)
   if (extraServers.length) out.push(`it started MCP servers the policy does not list: ${list(extraServers)}`)
   // Two judgements. By registration: every `plugin.register` line is judged by its id, so a name that registers from another source
   // (as `discord` or `hydra` from a marketplace, or once as built in and once as a user's) is refused, and so is one never named on a
@@ -152,7 +163,8 @@ export function surplus(p: Pick<ConfinedPolicy, 'servers'>, got: Loaded, final =
   const extraRules = (got.allow ?? []).filter(r => !want.allow.includes(r))
   if (extraRules.length) out.push(`it applied permission rules the policy does not give: ${list(extraRules)}`)
   for (const [dest, rules] of Object.entries(got.otherAllow)) out.push(`it applied permission rules from ${safe(dest)}, which a restricted specialist reads none of: ${list(rules)}`)
-  if (got.connectorActivity) out.push('claude.ai connectors were not off (the log shows connector activity)')
+  const activity = connectorActivity(got)
+  if (activity) out.push(activity)
   return out
 }
 
@@ -160,13 +172,14 @@ export function surplus(p: Pick<ConfinedPolicy, 'servers'>, got: Loaded, final =
 export function shortfall(p: Pick<ConfinedPolicy, 'servers'>, got: Loaded): string[] {
   const want = expectedLoad(p)
   const out: string[] = []
-  const unconnected = want.servers.filter(s => !got.connected.includes(s))
+  const unconnected = unconnectedServers(want.servers, got)
   // A listed server runs under sandbox-exec (config/server-sandbox.ts), and a denied path or socket shows only as 'did not connect': say so.
   const sandboxed = unconnected.some(n => n !== BRIDGE_MCP_SERVER_KEY)
   if (unconnected.length) out.push(`these MCP servers did not connect: ${list(unconnected)}${sandboxed ? ' (a listed server runs under sandbox-exec, which denies unix sockets other than name lookup, writes outside its own temp folder, signals to other processes and the places hydra lists as off limits (credential folders and more): a server that needs one of those cannot start)' : ''}`)
   const missingRules = want.allow.filter(r => !(got.allow ?? []).includes(r))
   if (missingRules.length) out.push(`it did not apply these permission rules: ${list(missingRules)}`)
-  if (!got.connectorsOff && !got.connectorActivity) out.push('nothing says claude.ai connectors were off (no `[claudeai-mcp] Disabled via env var` line)')
+  const notOff = connectorsNotOff(got)
+  if (notOff) out.push(notOff)
   // Claude Code registers the bridge about 2-6 s before its MCP server connects (live launches), and this runs after that, so a missing line is a refusal, not a wait.
   for (const [name, id] of [[HYDRA_MOD, `${HYDRA_MOD}@inline`], [BRIDGE_PLUGIN_NAME, BRIDGE_PLUGIN_ID]]) {
     if (!got.registrations.some(r => r.name === name && r.id === id && registrationAllowed(r))) out.push(`the plugin ${list([name])} did not register as ${list([id])}, so it may not be the one hydra installed`)
@@ -232,34 +245,71 @@ export async function verifyLaunch(policy: Pick<ConfinedPolicy, 'servers'>, path
 }
 
 /**
- * What a write-confined launch's debug file can show: that Claude Code read the launch's `--settings` and applied the rules in it, the deny rules that
- * keep reads out of the credential places and the allow rule that opens the network. A restricted launch is judged by everything it loaded
+ * What a write-confined launch's debug file can show: that Claude Code read the launch's `--settings` and applied the rules in it (the deny rules that
+ * keep reads out of the credential places, the allow rule that opens the network), that the bridge and the listed servers connected and no other MCP server
+ * started, and that claude.ai connectors were off. A restricted launch is judged by everything it loaded
  * (`verifyLaunch`); this layer runs the operator's own account, so only its own rules are judged, and nothing else the session loads is.
  *
  * What it cannot show: the `sandbox.*` keys and `permissions.blockWritesOutsideWorkingDirectories`. Claude Code 2.1.326 logs no line for them that
  * hydra has seen, so a version that ignored or renamed one would pass here. The rules passing proves the settings file was read and applied
  * (a renamed *rule* key fails here), not that every other key in it was understood; the launch's version gate and the live smoke test cover the rest.
  */
-export function confinementShortfall(want: { allow: readonly string[]; deny: readonly string[] }, got: Loaded): string[] {
+/** Test seam: a write-confined launch whose bridge has not connected this long after its settings loaded (the rules and the connectors line are in the file) is refused; Claude Code's own limit for a server to connect is 30 s, and the deadline from the start is 45 s. */
+export const confinementDeps = { bridgeWaitMs: 20_000 }
+
+export type ConfinementWant = { allow: readonly string[]; deny: readonly string[]; servers: readonly string[] }
+
+/**
+ * What a write-confined start loaded that it should not have, judged as soon as it is read: an MCP server beyond the bridge and the listed ones (the operator's own, a
+ * plugin's, a project's or a claude.ai connector), or any claude.ai connector activity. Plugins other than MCP servers are not judged: the operator's own account loads its own.
+ * Servers are matched by name, as for a restricted launch (see the top of this file); hydra refuses a listed name an operator's own config also declares, so a name is one server.
+ */
+export function confinementSurplus(want: ConfinementWant, got: Loaded): string[] {
+  const out: string[] = []
+  const extra = extraServerNames(want.servers, got)
+  if (extra.length) out.push(`it started MCP servers the policy does not give it: ${list(extra)}`)
+  const activity = connectorActivity(got)
+  if (activity) out.push(activity)
+  return out
+}
+
+export function confinementShortfall(want: ConfinementWant, got: Loaded): string[] {
   const out: string[] = []
   const missingDeny = want.deny.filter(r => !(got.deny ?? []).includes(r))
   const missingAllow = want.allow.filter(r => !(got.allow ?? []).includes(r))
   if (missingDeny.length) out.push(`it did not apply these deny rules: ${list(missingDeny)}`)
   if (missingAllow.length) out.push(`it did not apply these allow rules: ${list(missingAllow)}`)
+  const unconnected = unconnectedServers(want.servers, got)
+  if (unconnected.length) out.push(`these MCP servers did not connect: ${list(unconnected)}${unconnected.includes(BRIDGE_MCP_SERVER_KEY) ? ' (the bridge is one: Claude Code\'s server allowlist may have refused it by name)' : ''}`)
+  const notOff = connectorsNotOff(got)
+  if (notOff) out.push(notOff)
   return out
 }
 
 /** Whether the launch whose debug file is `path` applied the write-confined layer's rules; polls the file until it has, or the deadline: never "no news, good news". */
-export async function verifyConfinement(want: { allow: readonly string[]; deny: readonly string[] }, path: string | undefined, deps: typeof verifyDeps = verifyDeps): Promise<Verdict> {
+export async function verifyConfinement(want: ConfinementWant, path: string | undefined, deps: typeof verifyDeps = verifyDeps): Promise<Verdict> {
   if (!path) return { ok: false, why: 'the launch wrote no debug file to check what it applied' }
   const start = deps.now()
   let readError: string | undefined
   let short: string[] = ['nothing yet']
+  let loadedAt: number | undefined
   for (;;) {
     try {
-      short = confinementShortfall(want, readLoaded(deps.read(path)))
+      const got = readLoaded(deps.read(path))
       readError = undefined
-      if (!short.length) return { ok: true }
+      const extra = confinementSurplus(want, got)
+      if (extra.length) return { ok: false, why: extra.join('; ') }
+      short = confinementShortfall(want, got)
+      if (!short.length) {
+        // Judged once, then once more after a moment: a server or a connector line that arrives after the last expected server connected is still caught.
+        await deps.sleep(deps.settleMs)
+        const again = readLoaded(deps.read(path))
+        const late = [...confinementSurplus(want, again), ...confinementShortfall(want, again)]
+        return late.length ? { ok: false, why: late.join('; ') } : { ok: true }
+      }
+      // The settings have loaded (the rules and the connectors line are there) and the bridge still has not connected after the time it needs: refuse now, not at the deadline.
+      if (!short.some(x => /^it did not apply|^nothing says/.test(x))) loadedAt ??= deps.now()
+      if (loadedAt !== undefined && !got.connected.includes(BRIDGE_MCP_SERVER_KEY) && deps.now() - loadedAt >= confinementDeps.bridgeWaitMs) return { ok: false, why: `${short.join('; ')} (its settings were loaded ${Math.round((deps.now() - loadedAt) / 1000)}s ago and the bridge still has not connected)` }
     } catch (err) { readError = err instanceof Error ? err.message : String(err) }
     if (deps.now() - start >= deps.deadlineMs) break
     await deps.sleep(deps.pollMs)

@@ -179,7 +179,7 @@ describe('workdir (restricted = true): what Claude Code could still reach', () =
 describe('LoadEnv: nothing is optional', () => {
   test('a test env names every probe, and the loader reads them all (a missing one is a type error, not a skipped check)', () => {
     const keys = Object.keys(testLoadEnv()).sort()
-    expect(keys).toEqual(['claudeConfigDir', 'envFileHas', 'exists', 'home', 'isCommand', 'isDir', 'isGitWorkTree', 'macosVersion', 'platform', 'realpath', 'scanWorkdir', 'sessionNames', 'stateDir'])
+    expect(keys).toEqual(['claudeConfigDir', 'envFileHas', 'exists', 'home', 'isCommand', 'isDir', 'isGitWorkTree', 'macosVersion', 'mcpNamesIn', 'platform', 'realpath', 'scanWorkdir', 'sessionNames', 'stateDir'])
   })
 })
 
