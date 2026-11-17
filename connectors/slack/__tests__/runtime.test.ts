@@ -689,6 +689,119 @@ describe('main and alerts', () => {
   })
 })
 
+describe('a live session is told, as input, what the connector says about its own bindings', () => {
+  const MINE = '1552619225032425525'
+  const heard: string[] = []
+  const posted: [string, string][] = []
+  const realSend = gateway.send
+  beforeEach(() => {
+    heard.length = 0; posted.length = 0
+    ;(gateway as any).send = async (c: string, text: string) => { posted.push([c, text]); return 'id' }
+  })
+  beforeEach(() => { stopSlackWatch(); startSlackWatch() })
+  afterEach(() => { (gateway as any).send = realSend; stopSlackWatch(); for (const t of [MINE, OPS_THREAD]) registry.deleteThread(t) })
+  /** A session in `threadId` whose input is recorded; `alive: false` is one that was killed. */
+  const listening = (id: string, threadId: string, alive = true) => {
+    sessionIds.push(id)
+    registry.set(id, { sessionId: id, tmuxName: id, threadId, sessionType: 'thread_owner', engine: 'claude', createdAt: Date.now() - 600_000, ...(alive ? {} : { deadAt: 1 }),
+      adapter: fakeAdapter({ isAlive: () => alive, usage: () => null, deliver: async (_i: unknown, msg: { content?: string }) => { heard.push(String(msg.content)); return { status: 'accepted' } } }) } as any)
+    registry.setThread(threadId, id)
+  }
+  const settle = () => new Promise(r => setTimeout(r, 20))
+  const saidIn = (thread: string) => posted.filter(([c]) => c === thread).map(([, t]) => t)
+
+  test('a specialist taking a thread the session listens to (bind_conversation): posted and delivered, once', async () => {
+    listening('told-a', MINE)
+    await bindConversation({ threadId: MINE }, 'slack:C1:5.000001')
+    await bindConversation(food, 'slack:C1:5.000001')
+    await settle()
+    expect(heard).toEqual([expect.stringMatching(new RegExp(`^\\[system\\] ℹ️ slack:C1:5.000001 was bound to this session to listen; ${FOOD} took it`))])
+    expect(saidIn(MINE)).toHaveLength(1)
+  })
+
+  test("a specialist taking it through another app: the session listening through its own app is told", async () => {
+    listening('told-b', MINE)
+    await bindConversation({ threadId: MINE }, 'slack:C9:6.000001')
+    getSlackWatcher().watch('C9', '6.000001', FOOD, undefined, 'other')
+    await settle()
+    expect(heard).toHaveLength(1)
+    expect(heard[0]).toStartWith('[system] ℹ️ ')
+    expect(heard[0]).toContain(`${FOOD} now answers this thread through the app named other`)
+  })
+
+  test('a tag of the bot in a thread the session listens to: the session is told the specialist took it', async () => {
+    listening('told-c', MINE)
+    await bindConversation({ threadId: MINE }, 'slack:C1:7.000001')
+    getSlackWatcher().handle({ channel: 'C1', ts: '7.000002', threadTs: '7.000001', user: 'UOWNER', text: '<@UBOT> hello' } as any)
+    await settle()
+    expect(getSlackWatcher().get('C1', '7.000001')?.specialist).toBe(FOOD)
+    expect(heard).toEqual([expect.stringContaining(`Someone tagged the bot in slack:C1:7.000001, so ${FOOD} took it`)])
+  })
+
+  test("Slack can no longer read the conversation: the session that held it is told what was lost and what to do", async () => {
+    listening('told-d', MINE)
+    await bindConversation({ threadId: MINE }, 'slack:C9:8.000001')
+    getSlackWatcher().threadGone('C9', '8.000001', 'thread_not_found')
+    await settle()
+    expect(heard).toHaveLength(1)
+    expect(heard[0]).toStartWith('[system] ⚠️ Let go of slack:C9:8.000001')
+    expect(saidIn(MINE)).toHaveLength(1)
+  })
+
+  test('messages the session was owed and never got are dropped: the session that is in the thread is told, once', async () => {
+    listening('told-g', MINE)
+    await bindConversation({ threadId: MINE }, 'slack:C9:11.000001')
+    getSlackWatcher().get('C9', '11.000001')!.owed = ['11.000002']      // from 1970: past what is worth chasing
+    getSlackWatcher().sweep()
+    await settle()
+    expect(heard).toHaveLength(1)
+    expect(heard[0]).toStartWith('[system] ⚠️ Dropped 1 Slack message in C9:11.000001 (expired')
+  })
+
+  test('a session that unbinds a conversation owing messages is not also told: its tool result says it', async () => {
+    listening('told-h', MINE)
+    await bindConversation({ threadId: MINE }, 'slack:C9:12.000001')
+    getSlackWatcher().get('C9', '12.000001')!.owed = [`${Math.floor(Date.now() / 1000)}.000001`]
+    expect(unbindConversation({ threadId: MINE }, 'slack:C9:12.000001')).toBe('slack:C9:12.000001 is unbound; 1 message it still owed were dropped')
+    await settle()
+    expect(heard).toEqual([])
+  })
+
+  test('a session killed (nothing can read it) gets the post only: no input, and the dead session is not revived', async () => {
+    listening('told-e', MINE, false)
+    getSlackWatcher().bind('C9', '9.000001', MINE, 'tool')
+    emit('session:death', { sessionId: 'told-e', threadId: MINE, wasOwner: true, tmuxName: 'told-e', deliberate: true })
+    await settle()
+    expect(saidIn(MINE)).toEqual([expect.stringContaining('This session was killed')])
+    expect(heard).toEqual([])
+    expect(registry.get('told-e')?.deadAt).toBe(1)
+  })
+
+  test('a thread with no session in it (vacant) is posted to, and nothing is delivered', async () => {
+    getSlackWatcher().bind('C9', '10.000001', MINE, 'tool')
+    getSlackWatcher().threadGone('C9', '10.000001', 'thread_not_found')
+    await settle()
+    expect(saidIn(MINE)).toHaveLength(1)
+    expect(heard).toEqual([])
+  })
+
+  test("a specialist's alert stays post-only: the connector's trouble is the operator's, not a binding the session holds", async () => {
+    // a specialist no earlier test used: the watcher is the daemon's one, and an alert episode lasts an hour
+    const LONE = 'lone-t', LONE_THREAD = 'lone-thread-1'
+    configure(`${TOML}[specialists.${LONE}]\nworkdir = "/w/lone"\nreachable_by = ["owner"]\n[[rules]]\nplace = "slack:C3"\ntarget = "specialist:${LONE}"\n`, { maxWatches: 1 })
+    setSpecialistThread(LONE, LONE_THREAD)
+    listening('told-f', LONE_THREAD)
+    const w = getSlackWatcher()
+    w.handle({ channel: 'C3', ts: '90.000001', user: 'UOWNER', text: '<@UBOT> one' })
+    w.handle({ channel: 'C3', ts: '91.000001', user: 'UOWNER', text: '<@UBOT> two' })
+    await settle()
+    expect(saidIn(LONE_THREAD).some(t => t.includes('table-full'))).toBe(true)
+    expect(heard).toEqual([])
+    registry.deleteThread(LONE_THREAD)
+    w.close()
+  })
+})
+
 const appOf = (toml: string) => defaultSlackApp(hydra(toml))!
 
 describe('tokens', () => {
