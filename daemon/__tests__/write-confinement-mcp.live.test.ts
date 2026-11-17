@@ -86,6 +86,20 @@ describe.skipIf(!LIVE)('the server allowlist of a write-confined session, agains
     expect(readLoaded(no.log).connected.join()).not.toContain('probebridge')
   }, 120_000)
 
+  // #772: once any serverCommand entry exists (the bridge's), a stdio server is matched by its full command and a serverName entry no longer admits it.
+  test('beside a serverCommand entry, a stdio server is admitted by its own command and not by its name', async () => {
+    const p = plugin('probebridge3')
+    const mcp = { alpha: { type: 'stdio', command: BUN, args: [serverJs] } }
+    const byName = await run([{ serverName: 'alpha' }, { serverCommand: p.command }], { plugin: p, mcp })
+    say('serverName alpha + the bridge by command', byName)
+    const byCommand = await run([{ serverCommand: [BUN, serverJs] }, { serverCommand: p.command }], { plugin: p, mcp })
+    say('serverCommand for alpha + the bridge by command', byCommand)
+    expect(readLoaded(byName.log).connected).not.toContain('alpha')
+    expect(readLoaded(byName.log).connected.join()).toContain('probebridge3')
+    expect(readLoaded(byCommand.log).connected).toContain('alpha')
+    expect(readLoaded(byCommand.log).connected.join()).toContain('probebridge3')
+  }, 120_000)
+
   test('the `${CLAUDE_PLUGIN_ROOT}` form of the entry (what the manifest literally holds)', async () => {
     const p = plugin('probebridge2')
     const literal = [BUN, serverJs.replace(fake, '${CLAUDE_PLUGIN_ROOT}/..')]
