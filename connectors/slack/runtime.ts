@@ -18,7 +18,7 @@ import { mainChannel } from '../../daemon/main-session.js'
 import { currentHydraConfig, onHydraConfigLoad } from '../../daemon/hydra-config.js'
 import { MAIN, currentId, isSessionThread, slackSpecialistsOf } from '../../routing/route.js'
 import { chunk } from '../../daemon/util.js'
-import { DEFAULT_SLACK_APP, namesAChannel, slackConfigured, type HydraConfig, type SlackApp } from '../../config/types.js'
+import { DEFAULT_SLACK_APP, namesAChannel, placesAnsweredBy, slackConfigured, type HydraConfig, type SlackApp } from '../../config/types.js'
 import { speaksAsOf, noSuchApp } from '../../config/pins.js'
 import { notServedBy } from '../../routing/route.js'
 import { NO_SLACK_APP, notConnected } from './app.js'
@@ -76,15 +76,6 @@ function offlineView(app?: string): Pick<SlackWatchConfig, 'hydra' | 'directory'
 
 const SWEEP_INTERVAL_MS = 60 * 60_000
 
-/** The specialists that hear Slack: they listen on a Slack place, or a rule at one sends to them. */
-function slackSpecialists(h: HydraConfig): string[] {
-  const slack = (p: string) => p.startsWith('slack:')
-  return [...new Set([
-    ...Object.values(h.specialists).filter(s => s.listens.some(slack)).map(s => s.id),
-    ...h.rules.filter(r => r.place === undefined || slack(r.place)).map(r => r.target),   // a rule with only an app is a Slack rule
-  ])]
-}
-
 /**
  * A plain message (not a session turn) to the thread of the specialist it concerns. With none named, it goes to the specialists
  * the app it concerns serves and that hear Slack (`slackSpecialistsOf`); for an app hydra.toml no longer declares, or one no
@@ -93,7 +84,7 @@ function slackSpecialists(h: HydraConfig): string[] {
  */
 function alert(text: string, to?: string, app?: string): void {
   const h = hydraConfig()
-  const audience = app === undefined ? slackSpecialists(h) : Object.hasOwn(h.slackApps, app) ? slackSpecialistsOf(h, app) : []
+  const audience = app === undefined ? slackSpecialistsOf(h) : Object.hasOwn(h.slackApps, app) ? slackSpecialistsOf(h, app) : []
   const targets = to && alertChannel(to) ? [to] : audience
   const post = (ts: string[]): boolean => {
     let sent = false
@@ -244,7 +235,7 @@ export function refreshSlackSpecialistSurface(): void {
   const connected = slackConfigured(hydraConfig())
   if (lastConnected !== undefined && connected !== lastConnected) for (const s of registry.values()) pushToolSurface(s.sessionId)
   lastConnected = connected
-  const now = slackSpecialists(hydraConfig())
+  const now = slackSpecialistsOf(hydraConfig())
   const all = [...new Set([...now, ...lastSpecialists])]
   lastSpecialists = now
   for (const to of all) {
@@ -328,11 +319,11 @@ function declaredApp(h: HydraConfig, app: string): void {
 /** Whether this session is one conversation's own session, rather than a specialist's shared one. */
 const isConversationSession = (caller: Partial<Pick<SessionInfo, 'tmuxName'>> | undefined): boolean => !!conversationSpecialistOf(caller?.tmuxName)
 
-/** Whether `to` listens on this channel. A rule there doesn't count: it takes chosen people's messages, not the place. */
-function listensOn(v: Pick<SlackWatchConfig, 'hydra' | 'directory'>, to: string, channel: string): boolean {
+/** Whether `to` answers every message in this channel (`placesAnsweredBy`): a rule there with a `person` doesn't count, it takes chosen people's messages, not the place. */
+function answersIn(v: Pick<SlackWatchConfig, 'hydra' | 'directory'>, to: string, channel: string): boolean {
   const s = v.hydra.specialists[to]
   const name = v.directory.nameOf(channel)
-  return !!s && [`slack:${channel}`, ...(name ? [`slack:#${name}`] : [])].some(p => s.listens.includes(p))
+  return !!s && [`slack:${channel}`, ...(name ? [`slack:#${name}`] : [])].some(p => placesAnsweredBy(v.hydra, to).includes(p))
 }
 
 /** Conversations one specialist may hold by its own hand at once: the tool must not be a way to fill the table. */
@@ -356,7 +347,7 @@ export async function bindConversation(caller: Partial<Pick<SessionInfo, 'thread
   // A specialist pinned to other apps can't be reached through this one: its answers would never be heard.
   const apart = notServedBy(v.hydra, me, app, 'this conversation is through')
   if (apart) throw new Error(`not bound: ${conversationId(c)}: ${apart}`)
-  if (!isSessionThread(me) && !listensOn(v, me, c.channel)) throw new Error(`${me} doesn't listen on ${placeName(v, c.channel)}: it binds only threads where it listens`)
+  if (!isSessionThread(me) && !answersIn(v, me, c.channel)) throw new Error(`${me} doesn't answer ${placeName(v, c.channel)}: it binds only threads in a place it answers (a \`[[rules]]\` entry with that place and no person)`)
   // Asked of Slack, not assumed: a bind nobody can read would say "listening" and deliver nothing.
   const via = await slackRuntimeDeps.readThread(c.channel, c.threadTs, app).catch((err: unknown) => {
     const why = err instanceof Error ? err.message : String(err)
@@ -367,7 +358,7 @@ export async function bindConversation(caller: Partial<Pick<SessionInfo, 'thread
   // From here to the bind nothing waits: the table checks and the bind can't interleave with another call.
   const w = getSlackWatcher()
   const bound = w.get(c.channel, c.threadTs, app)?.specialist
-  // A specialist answers where it listens: a session only listening there gives the thread way, and is told.
+  // A specialist answers where it answers: a session only listening to the thread gives it way, and is told.
   const takeover = !!bound && isSessionThread(bound) && !isSessionThread(me)
   if (bound && currentId(v.hydra, bound) !== me && !takeover) throw new Error(`${conversationId(c)} is bound to ${bound}; only the operator moves it (hydra conversations bind)`)
   if (!bound && w.list().filter(e => (e.mentionedBy === 'tool' || e.mentionedBy === 'home') && e.specialist && currentId(v.hydra, e.specialist) === me).length >= TOOL_BIND_MAX) {
@@ -460,7 +451,7 @@ export async function replyInConversation(callerSessionId: string | undefined, c
       const held = w.list().filter(e => (e.mentionedBy === 'tool' || e.mentionedBy === 'home') && e.specialist && currentId(h, e.specialist) === me).length
       if (held < TOOL_BIND_MAX && w.bind(home, ts, me!, 'home', speaks)) return
       unbound = held >= TOOL_BIND_MAX ? `${me} already holds ${TOOL_BIND_MAX} conversations it opened itself` : 'the conversation table is full'
-      alert(`⚠️ ${me}'s post to its home opened no conversation (${unbound}): replies under it go to whoever listens there, not back to ${me}.`, me)
+      alert(`⚠️ ${me}'s post to its home opened no conversation (${unbound}): replies under it go to whoever hears there, not back to ${me}.`, me)
     }
     await postParts(speaks!, home, undefined, text, where, true, () => homeChannel(hydraConfig(), me!, speaks) === home, bindThread)
     return unbound ? `posted to ${where}, but its thread is not bound to ${me}: ${unbound}` : `posted to ${where}; replies in its thread come back to ${me}`
@@ -601,7 +592,7 @@ export function slackWatchHealth(now = Date.now()): ({ places: { place: string; 
     const reaching = views.filter(v => namedChannels(v.hydra, v.app).includes(place))
     return reaching.length > 0 && reaching.every(v => unresolvedPlaces(v).includes(place))
   }
-  const places = Object.values(h.specialists).flatMap(s => s.listens.filter(p => p.startsWith('slack:')).map(place => ({
+  const places = Object.values(h.specialists).flatMap(s => placesAnsweredBy(h, s.id).filter(p => p.startsWith('slack:')).map(place => ({
     place, to: s.id,
     ...(unresolved(place) && { note: 'no channel answers to this name (not joined, renamed, or names unreadable without channels:read)' }),
   })))

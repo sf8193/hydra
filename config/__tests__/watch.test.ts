@@ -61,7 +61,7 @@ describe('watchHydraConfig', () => {
     let exists = false
     dir = mkdtempSync(join(tmpdir(), 'hydra-config-'))
     const path = join(dir, 'hydra.toml')
-    writeFileSync(path, `${GOOD}[specialists.ops]\nworkdir = "/srv/ops"\nlistens = ["cli"]\n`)
+    writeFileSync(path, `${GOOD}[specialists.ops]\nworkdir = "/srv/ops"\n[[rules]]\nplace = "cli"\ntarget = "specialist:ops"\n`)
     const alerts: string[] = []
     w = watchHydraConfig({ path, env: { ...env, isDir: () => exists }, onAlert: t => alerts.push(t) })
     expect(w.initial.ok).toBe(false)

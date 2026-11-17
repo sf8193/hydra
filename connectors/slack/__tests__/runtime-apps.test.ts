@@ -22,15 +22,19 @@ const DEALS_THREAD = 'deals-thread-1'
 const TOML = `${TWO_APPS}
 [specialists.${CRM}]
 workdir = "/w/crm"
-listens = ["slack:C1"]
 allow = ["anyone"]
 home = "slack:C9"
+[[rules]]
+place = "slack:C1"
+target = "specialist:${CRM}"
 [specialists.${DEALS}]
 workdir = "/w/deals"
 pinned_to = ["sales"]
-listens = ["slack:C1"]
 allow = ["anyone"]
 home = "slack:C8"
+[[rules]]
+place = "slack:C1"
+target = "specialist:${DEALS}"
 `
 const crm = { threadId: CRM_THREAD }
 const deals = { threadId: DEALS_THREAD }
@@ -117,7 +121,7 @@ describe('a post with no incoming message speaks as the specialist’s app', () 
   })
 
   test('speaks_as overrides it, and the sales home can be named in the app’s own form', async () => {
-    configure(TOML.replace(`[specialists.${CRM}]\nworkdir = "/w/crm"\nlistens = ["slack:C1"]`, `[specialists.${CRM}]\nworkdir = "/w/crm"\npinned_to = ["default"]\nlistens = ["slack:C2"]`).replace(`pinned_to = ["sales"]`, `pinned_to = ["sales", "default"]\nspeaks_as = "default"`))
+    configure(TOML.replace(`workdir = "/w/crm"\nallow`, `workdir = "/w/crm"\npinned_to = ["default"]\nallow`).replace(`place = "slack:C1"\ntarget = "specialist:${CRM}"`, `place = "slack:C2"\ntarget = "specialist:${CRM}"`).replace(`pinned_to = ["sales"]`, `pinned_to = ["sales", "default"]\nspeaks_as = "default"`))
     await replyInConversation('deals-session', 'slack:C8', 'hello')
     expect(posts.map(p => p.app)).toEqual(['default'])
     posts.length = 0
@@ -173,8 +177,10 @@ socket_token_env = "SALES_SLACK_APP_TOKEN"
 addresses = ["slack:UOP"]
 [specialists.${CRM}]
 workdir = "/w/crm"
-listens = ["slack:C1"]
 allow = ["anyone"]
+[[rules]]
+place = "slack:C1"
+target = "specialist:${CRM}"
 `
     _setHydraConfigForTesting(hydra(only))
     expect(sessionCapabilities({ threadId: CRM_THREAD, capabilities: [], engine: 'claude' } as any).has('conversations')).toBe(true)
@@ -217,11 +223,11 @@ describe('an alert about one app goes to the specialists that app can reach', ()
     // A third app that every unpinned specialist is shut out of, and no one is pinned to: no specialist, so main hears it.
     const three = hydra(`${TOML}\n[slack.apps.ops]\nbot_token_env = "OPS_BOT"\nsocket_token_env = "OPS_APP"\n`)
     expect(slackSpecialistsOf(three, 'ops')).toEqual([CRM])
-    const lone = hydra(`${BASE}\n[specialists.${CRM}]\nworkdir = "/w"\nlistens = ["slack:C1"]\nallow = ["anyone"]\n[specialists.${DEALS}]\nworkdir = "/w"\nlistens = ["slack:C2"]\nallow = ["anyone"]\n`)
+    const lone = hydra(`${BASE}\n[specialists.${CRM}]\nworkdir = "/w"\nallow = ["anyone"]\n[[rules]]\nplace = "slack:C1"\ntarget = "specialist:${CRM}"\n[specialists.${DEALS}]\nworkdir = "/w"\nallow = ["anyone"]\n[[rules]]\nplace = "slack:C2"\ntarget = "specialist:${DEALS}"\n`)
     // A lone `default` serves every specialist, as the alert always did.
     expect(slackSpecialistsOf(lone, 'default')).toEqual([CRM, DEALS])
     // A rule for one app pages that app’s target, not the other app’s.
-    const ruled = hydra(`${TWO_APPS}\n[specialists.${CRM}]\nworkdir = "/w"\nlistens = ["slack:C1"]\nallow = ["anyone"]\n[specialists.${DEALS}]\nworkdir = "/w"\npinned_to = ["sales"]\nallow = ["anyone"]\n[[rules]]\napp = "sales"\ntarget = "specialist:${DEALS}"\n`)
+    const ruled = hydra(`${TWO_APPS}\n[specialists.${CRM}]\nworkdir = "/w"\nallow = ["anyone"]\n[[rules]]\nplace = "slack:C1"\ntarget = "specialist:${CRM}"\n[specialists.${DEALS}]\nworkdir = "/w"\npinned_to = ["sales"]\nallow = ["anyone"]\n[[rules]]\napp = "sales"\ntarget = "specialist:${DEALS}"\n`)
     expect(slackSpecialistsOf(ruled, 'sales')).toEqual([DEALS])
     expect(slackSpecialistsOf(ruled, 'default')).toEqual([CRM])
   })

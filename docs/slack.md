@@ -8,7 +8,7 @@ Hydra bridges a Slack app to a Claude Code session: you DM the bot (or @mention 
 |---|---|---|
 | What it is | Slack as the operator's own chat surface (`gateways/slack.ts`, `CHAT_PLATFORM=slack`), as Discord is for a Discord daemon | Slack as a source of events, routed by hydra.toml (`connectors/slack/`, in every daemon, Discord's included) |
 | What it does | the operator talks to the byte, spawns sessions in threads, runs commands | delivers what its apps hear to specialists, to threads bound to sessions, and to restricted specialists; it runs no commands, and routing never reads what a message says |
-| Configured by | `.env` (`SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`) and `access.json` | `[slack.apps.<id>]`, `[[rules]]`, `listens`, `allow` in hydra.toml |
+| Configured by | `.env` (`SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`) and `access.json` | `[slack.apps.<id>]`, `[[rules]]`, `allow` in hydra.toml |
 | Connections | one, on the gateway's app | one per app declared, each with an optional read-only operator token |
 
 Steps 1–6 below set up the gateway. [Apps in hydra.toml](#apps-in-hydratoml) onward is the connector.
@@ -186,12 +186,12 @@ target = "specialist:desk"
 
 **A specialist can be pinned to apps.** `pinned_to = ["sales"]` in a specialist means two things:
 
-- It answers only messages that come through those apps. A message through another app never reaches it: not through `listens` (including `slack:dm`), a rule's `target`, or a conversation bound to it.
+- It answers only messages that come through those apps. A message through another app never reaches it: not through a rule's `target` (including one for `slack:dm`), or a conversation bound to it.
 - Those apps deliver only to specialists pinned to them. Once any specialist is pinned to `sales`, a message through `sales` goes to a specialist pinned to `sales`, or to nobody.
 
-A specialist with no `pinned_to` is unpinned: it answers messages through every app that no specialist is pinned to. `allow` is separate: it governs who may reach a specialist, and still applies. `main` is exempt from pinning: the operator's DM reaches `main` through any app, and `main` still hears only the operator. A rule that would send a message to a specialist its app cannot deliver to is skipped, a binding to one is skipped and the message routed anew, and a guard redirect to one goes to the conversation's own specialist with one alert; `hydra route` says why. hydra.toml refuses a rule whose `app` and `target` can never meet, and a pinned specialist that listens on a place that is not a Slack place. Pinning an app takes it from every unpinned specialist, so hydra.toml warns when an unpinned specialist listens where no pinned specialist backs it up.
+A specialist with no `pinned_to` is unpinned: it answers messages through every app that no specialist is pinned to. `allow` is separate: it governs who may reach a specialist, and still applies. `main` is exempt from pinning: the operator's DM reaches `main` through any app, and `main` still hears only the operator. A rule that would send a message to a specialist its app cannot deliver to is skipped, a binding to one is skipped and the message routed anew, and a guard redirect to one goes to the conversation's own specialist with one alert; `hydra route` says why. hydra.toml refuses a rule whose `app` and `target` can never meet, and a rule that sends a place that is not a Slack place to a pinned specialist. Pinning an app takes it from every unpinned specialist, so hydra.toml warns when a rule sends an unpinned specialist a place where no pinned specialist is also sent.
 
-Two specialists may `listens` on the same place only when no app reaches both: their `pinned_to` lists are disjoint, or one is pinned and the other is not. Two unpinned specialists, or two whose `pinned_to` lists overlap, may not.
+Two rules may send the same place, to everyone, to two specialists only when no app reaches both: their `pinned_to` lists are disjoint, or one is pinned and the other is not. Two unpinned specialists, or two whose `pinned_to` lists overlap, may not: hydra.toml refuses the later rule, naming both. To split a place between people, give the first rule a `person`.
 
 **One app owns a message.** When two apps are in one channel, both hear every message in it, and exactly one answers. The owner is the first of these that applies, among the apps that heard it:
 
@@ -201,7 +201,7 @@ Two specialists may `listens` on the same place only when no app reaches both: t
 4. The app named `default`, if it delivers to someone at this place.
 5. The first app, in hydra.toml order, that delivers to someone at this place.
 
-An app "delivers to someone at this place" when a specialist it serves listens there, or a rule that matches there sends to one (or to `main`), or it is a DM. If no app that heard the message does, 4 and 5 pick among all that heard it. So a channel whose only app is pinned to `sales` is answered by `sales` with no `default_app` set; set one only to choose between apps that all deliver.
+An app "delivers to someone at this place" when a rule that matches there sends to a specialist it serves (or to `main`), or it is a DM. If no app that heard the message does, 4 and 5 pick among all that heard it. So a channel whose only app is pinned to `sales` is answered by `sales` with no `default_app` set; set one only to choose between apps that all deliver.
 
 The other apps do nothing: `hydra route` shows them as `ignored`, with the app that owns it. Ownership is decided before any specialist, and never hands a message on: if the owner reaches no one (an explicit `default_app` that delivers to nobody there), the message is unrouted.
 
@@ -241,16 +241,16 @@ The operator's app may still route something the operator saw to a specialist, b
 
 *Slack connector.* With `operator_token_env`, the operator's app hears the operator's DMs and group DMs as well as its channels. The manifest (`hydra slack manifest`) adds user scopes `im:history`, `mpim:history` and `im:read` (these are the three this connector needs; the manifest names no `mpim:read`), and user events `message.im` and `message.mpim`; for group DMs that include the bot it also adds bot scope `mpim:history` and bot event `message.mpim`. The workspace admin approves these at install (and a reinstall adds them to an app that exists). Finding who is on the other end of a DM with a person needs the user scope `im:read`. An app installed without it still hears the DM with the bot (that comes from the bot's own DM list, which needs `im:read` on the bot), but a DM with a person names no place and is dropped, and the log says why, until the app is reinstalled with the new user scope. The manifest always lists `mpim:history` and `message.mpim`; the startup scope check asks for them only where `slack:group-dm` is named. The token can then read all of the operator's DMs: keep it in `.env`, and use it only in the operator's own app. A user token without `im:history` or `mpim:history` receives no DM events, and says nothing.
 
-**Hearing is not delivering.** A place no rule, `listens`, `[places]` entry or open conversation names is dropped first, before it opens a conversation or thread, reaches a session, or counts or reacts to anything. Every place name means one thing:
+**Hearing is not delivering.** A place no rule, `[places]` entry or open conversation names is dropped first, before it opens a conversation or thread, reaches a session, or counts or reacts to anything. Every place name means one thing:
 
 | Where it happened | Place | What delivers it |
 |---|---|---|
-| The operator's DM with the bot | `slack:dm` | a specialist that `listens` on it, or a rule; with neither, the operator's goes to `main` |
-| The operator's DM with one person | `slack:dm:<person>` | a specialist that `listens` on it, or a rule for it |
+| The operator's DM with the bot | `slack:dm` | a rule; with none, the operator's goes to `main` |
+| The operator's DM with one person | `slack:dm:<person>` | a rule for it |
 | One group DM | `slack:G0…` (its channel id) | the same |
 | Every group DM | `slack:group-dm` | the same |
 
-`<person>` is an id in `[people]` with a Slack address. Naming one that is missing, or has no Slack address, is an error when hydra.toml loads. A DM with someone not in `[people]` goes by no name, so it is dropped. A DM with a person does not reach the specialist that listens on `slack:dm`, and `main` takes only the operator's DM with the bot. A DM with the bot that nothing hears (a stranger's, with no rule or `listens` on `slack:dm`) is logged and counted and gets no reply. One that a rule or specialist routes but `allow` does not admit gets the 🚫, so a colleague told no still learns it. The 🚫 applies to a DM with the bot only (and to a tag in a channel): a DM with a person or a group DM that a place names, but that no rule routes or `allow` refuses, is logged (ids only, no text) and counted and gets no 🚫; one that no place names is dropped first, without a log.
+`<person>` is an id in `[people]` with a Slack address. Naming one that is missing, or has no Slack address, is an error when hydra.toml loads. A DM with someone not in `[people]` goes by no name, so it is dropped. A DM with a person does not reach the specialist a rule sends `slack:dm` to, and `main` takes only the operator's DM with the bot. A DM with the bot that nothing hears (a stranger's, with no rule for `slack:dm`) is logged and counted and gets no reply. One that a rule routes but `allow` does not admit gets the 🚫, so a colleague told no still learns it. The 🚫 applies to a DM with the bot only (and to a tag in a channel): a DM with a person or a group DM that a place names, but that no rule routes or `allow` refuses, is logged (ids only, no text) and counted and gets no 🚫; one that no place names is dropped first, without a log.
 
 ```toml
 [[rules]]
@@ -315,7 +315,7 @@ An app removed from hydra.toml while its connection is still shutting down shows
 
 **Scope check, per app.** At connect each app's bot token is checked against the scopes *that app* needs, from what hydra.toml has it do:
 
-- channel history, when it reads a named channel, serves a rule that has no place (it reaches every place), or serves a specialist with no `listens` (that one answers only threads bound to it);
+- channel history, when it reads a named channel, serves a rule that has no place (it reaches every place), or serves a specialist that no rule sends a place to (that one answers only threads bound to it);
 - the channel-name read, only for a `#name` among its places; files, only when a place it reaches has `files`;
 - DMs (`im:*`), when a specialist or rule it serves names `slack:dm`, or the operator has a Slack address (their DM reaches `main` through any app);
 - group DMs (`mpim:history`), when a specialist or rule it serves names `slack:group-dm`;
@@ -333,7 +333,7 @@ A missing scope is always logged and shown in `hydra health` (`missing <scope> (
 - channel names can't be read and a `#name` the app needs goes unresolved;
 - a token variable is empty (the app is skipped), or a declared scope is missing.
 
-**Who hears an alert.** An alert about one app goes to the specialists that app serves and that hear Slack (they listen on a Slack place, or a Slack rule for the app sends to them), and to `main`'s channel when none does or none has a thread yet. A pinned specialist is paged only by its own apps; an app no specialist uses pages no one but `main`; an app hydra.toml no longer declares pages `main` only. An alert about one specialist (a drop, a thread let go, a guard redirect) goes to that specialist. One about no app in particular (the old `slack-watch.json` left unmigrated: run `hydra migrate`) goes to every specialist that hears Slack. A lone `default` serves every specialist, so it reaches the same ones it always did.
+**Who hears an alert.** An alert about one app goes to the specialists that app serves and that hear Slack (a Slack rule for the app sends to them), and to `main`'s channel when none does or none has a thread yet. A pinned specialist is paged only by its own apps; an app no specialist uses pages no one but `main`; an app hydra.toml no longer declares pages `main` only. An alert about one specialist (a drop, a thread let go, a guard redirect) goes to that specialist. One about no app in particular (the old `slack-watch.json` left unmigrated: run `hydra migrate`) goes to every specialist that hears Slack. A lone `default` serves every specialist, so it reaches the same ones it always did.
 
 **Catch-up, per app.** Each app has its own cursors, last-complete time, gap time, retry timer and in-progress pass. A slow pass of one app does not delay another's; a pass that fails retries after 60 seconds for that app alone and alerts once for it, and does not mark another app's pass failed. A freed place wakes only the apps that have conversations waiting for it.
 
@@ -397,19 +397,23 @@ tools = ["search_logs", "get_monitor"]    # the tools of it a specialist may cal
 
 [specialists.ops]
 workdir = "~/specialists/ops"             # runbooks and FAQs: all it may know. A folder of its own, not a git work tree, no symlinks out
-listens = ["slack:#ops"]
 allow = ["staff"]                         # `anyone` is allowed too; see link_previews below
 restricted = true
 tools = ["Read", "Grep", "Glob"]          # the default, and all a restricted specialist may list
 mcp = ["datadog"]                         # names from [mcp.*]
 talks_to = ["ops-deep"]                  # the specialists it may send to with send_to_thread: shared-session specialists, never main
 
-# The specialist it hands off to: restricted too, with a folder of its own. No place listens to it; only ops reaches it (and the operator).
+# The specialist it hands off to: restricted too, with a folder of its own. No rule sends a place to it; only ops reaches it (and the operator).
 [specialists.ops-deep]
 workdir = "~/specialists/ops-deep"        # the wider runbooks
 allow = []
 restricted = true
 talks_to = ["ops"]                       # the way back: its answer is a send_to_thread(type = "result") to ops
+
+# Who hears #ops: the specialist above.
+[[rules]]
+place = "slack:#ops"
+target = "specialist:ops"
 
 [places."slack:#ops"]
 messages = "all"                          # hears every top-level post, not only tags; it answers in a thread on the post

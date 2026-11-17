@@ -1,7 +1,8 @@
 import { describe, test, expect } from 'bun:test'
 import { loadHydraConfig, VITALS_DEFAULTS } from '../load.js'
 import { SLACK_APP_DEFAULTS } from '../../connectors/slack/app.js'
-import { defaultSlackApp, type HydraConfig, type LoadEnv, type LoadResult } from '../types.js'
+import { defaultSlackApp, placesAnsweredBy, type HydraConfig, type LoadEnv, type LoadResult } from '../types.js'
+import { isListensWarning } from './legacy-listens.js'
 import { testLoadEnv } from './load-env.js'
 
 const env: LoadEnv = testLoadEnv({
@@ -15,7 +16,8 @@ const ok = (text: string): { config: HydraConfig; warnings: string[] } => {
   const r = loadHydraConfig(text, env)
   if (!r.ok) throw new Error(`expected a load, got:\n${r.errors.map(e => `${e.path}: ${e.message}`).join('\n')}`)
   // The reachability warning (specialists.<id>: ... reach the operator's account) has its own tests, in access.test.ts.
-  return { config: r.config, warnings: r.warnings.filter(w => !w.message.includes("the operator's account")).map(w => `${w.path}: ${w.message}`) }
+  // Most fixtures here say where a specialist is heard with the old `listens`: its notice (`listens is now [[rules]]`) is asserted once, in rules-home.test.ts.
+  return { config: r.config, warnings: r.warnings.filter(w => !w.message.includes("the operator's account") && !isListensWarning(w.message)).map(w => `${w.path}: ${w.message}`) }
 }
 const errorsOf = (text: string): string[] => {
   const r: LoadResult = loadHydraConfig(text, env)
@@ -94,7 +96,7 @@ timeout = "2s"
     expect(config.people.op).toEqual({ id: 'op', addresses: ['slack:U0OP', 'github:op-login'], roles: [], name: 'op' })
     expect(config.people.alice.name).toBe('Alice')
     expect(config.specialists.crm).toEqual({
-      id: 'crm', workdir: '/home/op/agents/crm', kickoff: '/orient crm', listens: ['slack:#help'], allow: ['staff'],
+      id: 'crm', workdir: '/home/op/agents/crm', kickoff: '/orient crm', allow: ['staff'],
       sessions: 'per-conversation', maxSessions: 5, idleMs: 4 * 3_600_000, renamedFrom: [], restricted: false,
     })
     // Its own kickoff_file replaces the default kickoff; a relative kickoff_file is under the workdir.
@@ -103,7 +105,9 @@ timeout = "2s"
     expect(config.specialists.review.allow).toEqual(['people'])
     expect(config.places['slack:#help']).toEqual({ ack: 'eyes', files: false, messages: 'all', bots: false, linkPreviews: true })
     expect(config.schedules.nightly).toEqual({ id: 'nightly', cron: '0 3 * * *', target: 'ops', message: 'Nightly run.', runner: 'launchd' })
-    expect(config.rules).toEqual([{ place: 'slack:#help', person: 'alice', target: 'ops' }])
+    expect(config.rules).toEqual([{ place: 'slack:#help', person: 'alice', target: 'ops' }, { place: 'slack:dm', target: 'ops' }, { place: 'github:acme/widget', target: 'review' }, { place: 'slack:#help', target: 'crm' }])
+    // `listens` is read as the rules after the explicit one: `crm` and `ops` hear where they said.
+    expect(placesAnsweredBy(config, 'crm')).toEqual(['slack:#help'])
     expect(config.guard).toEqual({ command: '~/bin/guard --strict', timeoutMs: 2000, includeText: false, owedMaxMs: 3_600_000 })
   })
 })
@@ -144,7 +148,7 @@ describe('the Discord gateway: [gateways.discord]', () => {
   })
   test('a specialist listening on discord with neither warns, naming the new key', () => {
     expect(ok(`${B}\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["discord:#feed"]\n`).warnings)
-      .toEqual(["specialists.ops: listens on discord:#feed, but [gateways.discord] isn't set, so it won't hear it"])
+      .toEqual(["specialists.ops: a rule sends discord:#feed to it, but [gateways.discord] isn't set, so it won't hear it"])
   })
   test('a specialist listening on discord through the old key hears it: no listens warning', () => {
     expect(ok(`${B}\n[connectors.discord]\nbot_token_env = "D"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["discord:#feed"]\n`).warnings)
@@ -166,7 +170,7 @@ sessions = "per-conversation"
 [places."slack:G0PRIV"]
 files = true
 `)
-    expect(config.specialists.ops.listens).toEqual(['slack:C0TEST', 'discord:100000000000000001'])
+    expect(placesAnsweredBy(config, 'ops')).toEqual(['slack:C0TEST', 'discord:100000000000000001'])
     expect(config.places['slack:G0PRIV'].files).toBe(true)
   })
 })
@@ -182,8 +186,10 @@ model = "default-model"
 [specialists.crm]
 model = "own-model"
 `)
-    expect(config.specialists.ops).toMatchObject({ workdir: '/home/op/agents/ops', listens: ['slack:#ops'], model: 'default-model' })
-    expect(config.specialists.crm).toMatchObject({ workdir: '/home/op/agents/crm', listens: ['slack:#crm'], model: 'own-model' })
+    expect(config.specialists.ops).toMatchObject({ workdir: '/home/op/agents/ops', model: 'default-model' })
+    expect(placesAnsweredBy(config, 'ops')).toEqual(['slack:#ops'])
+    expect(config.specialists.crm).toMatchObject({ workdir: '/home/op/agents/crm', model: 'own-model' })
+    expect(placesAnsweredBy(config, 'crm')).toEqual(['slack:#crm'])
   })
   test('a bad default is reported once, at the default', () => {
     expect(errorsOf(`${BASE}
@@ -227,7 +233,7 @@ target = "specialist:ghost"
 [specialists.crm]
 workdir = "~/agents/crm"
 listens = ["slack:#ops"]
-`)).toEqual(['specialists.crm.listens[0]: ops already listens on slack:#ops, and every app nobody is pinned to reaches both: two specialists may share a place only when no app reaches both: give one a `pinned_to` app the other lacks, or pin only one of them'])
+`)).toEqual(['specialists.crm.listens[0]: sends every message at slack:#ops through any app to specialist:crm, but specialists.ops.listens[0] already sends them to specialist:ops: give specialists.crm.listens[0] a `person`, or remove it'])
   })
 
   test('one address under two people (GitHub logins compare without case)', () => {
@@ -311,7 +317,7 @@ addresses = ["github:alice"]
   test('a DM with a person is slack:dm:<person>, a group DM slack:group-dm or its id; slack:dm stays the bot\'s', () => {
     const base = `${BASE}\n[people.alice]\naddresses = ["slack:U0A"]\n`
     const c = ok(`${base}[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:group-dm", "slack:dm:alice", "slack:G0GROUP1"]\nallow = []\n[places."slack:dm:alice"]\nack = "eyes"\n[[rules]]\nplace = "slack:dm:alice"\ntarget = "specialist:ops"\n`).config
-    expect(c.specialists.ops.listens).toEqual(['slack:group-dm', 'slack:dm:alice', 'slack:G0GROUP1'])
+    expect(placesAnsweredBy(c, 'ops')).toEqual(['slack:dm:alice', 'slack:G0GROUP1', 'slack:group-dm'])
     expect(c.places['slack:dm:alice'].ack).toBe('eyes')
     expect(c.rules[0].place).toBe('slack:dm:alice')
     expect(errorsOf(`${base}[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:group-dm:x", "discord:group-dm", "slack:dm:"]\n`).map(e => e.split(':')[0])).toEqual(['specialists.ops.listens[0]', 'specialists.ops.listens[1]', 'specialists.ops.listens[2]'])
@@ -379,7 +385,7 @@ describe('found in review', () => {
     expect(errorsOf(`${BASE}\n[people.anyone]\naddresses = ["slack:U0X"]\n`)).toEqual(['people.anyone: "anyone" is a built-in role; a person needs another id'])
   })
   test('a place listed twice by one specialist is one place, not a collision', () => {
-    expect(ok(`${BASE}\n[connectors.github]\nrepos = ["me/r"]\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["github:Me/R", "github:me/r"]\n`).config.specialists.ops.listens).toEqual(['github:me/r'])
+    expect(ok(`${BASE}\n[connectors.github]\nrepos = ["me/r"]\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["github:Me/R", "github:me/r"]\n`).config.rules).toEqual([{ place: 'github:me/r', target: 'ops' }])
   })
   test('operator is required beside any other table', () => {
     expect(errorsOf('[gateways.discord]\nbot_token_env = "T"\n')).toEqual(['operator: is required: name the person whose DMs reach main and who may reach every specialist'])
@@ -402,7 +408,7 @@ describe('found in review', () => {
 describe('found in the second review', () => {
   test('a rule from anyone takes the place from its listener too', () => {
     expect(ok(`${BASE}\n[slack.apps.default]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:#y"]\n[specialists.crm]\nworkdir = "~/agents/crm"\n[[rules]]\nplace = "slack:#y"\nperson = "anyone"\ntarget = "specialist:crm"\n`).warnings)
-      .toEqual(['rules[0]: takes every message at slack:#y, so ops, which listens there, never hears it'])
+      .toEqual(['specialists.ops.listens[0]: never matches: rules[0] already takes every message at slack:#y'])
   })
   test('relative paths resolve under the workdir, or the schedule\'s cwd, or are refused', () => {
     const { config } = ok(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\nenv_file = ".env"\n[schedules.a]\ncron = "@daily"\ntarget = "specialist:ops"\nworkdir = "~/jobs"\nenv_file = "a.env"\n`)
@@ -423,7 +429,7 @@ describe('found in the second review', () => {
 describe('load warnings', () => {
   test('a rule for everyone at a place takes it from its listener', () => {
     expect(ok(`${BASE}\n[slack.apps.default]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:#y"]\n[specialists.crm]\nworkdir = "~/agents/crm"\n[[rules]]\nplace = "slack:#y"\ntarget = "specialist:crm"\n`).warnings)
-      .toEqual(['rules[0]: takes every message at slack:#y, so ops, which listens there, never hears it'])
+      .toEqual(['specialists.ops.listens[0]: never matches: rules[0] already takes every message at slack:#y'])
   })
   test('a rule for a role whose holders all hold an earlier rule\'s role is shadowed', () => {
     const { warnings } = ok(`${BASE}
@@ -484,7 +490,7 @@ target = "specialist:desk"
 
   test('a specialist nobody can reach', () => {
     expect(ok(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\n`).warnings)
-      .toEqual(['specialists.ops: nobody can reach it: it listens nowhere, and no rule or schedule sends to it'])
+      .toEqual(['specialists.ops: nobody can reach it: no rule, schedule or `talks_to` names it'])
     // A schedule's `to` is a way in.
     expect(ok(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\n[schedules.daily]\ncron = "@daily"\ntarget = "specialist:ops"\n`).warnings).toEqual([])
   })
@@ -526,11 +532,11 @@ target = "specialist:desk"
 
   test('a place on a platform that isn\'t connected', () => {
     expect(ok(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["discord:#feed"]\n`).warnings)
-      .toEqual(["specialists.ops: listens on discord:#feed, but [gateways.discord] isn't set, so it won't hear it"])
+      .toEqual(["specialists.ops: a rule sends discord:#feed to it, but [gateways.discord] isn't set, so it won't hear it"])
   })
   test('a github place with no [connectors.github] names that table', () => {
     expect(ok(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["github:me/r"]\n`).warnings)
-      .toEqual(["specialists.ops: listens on github:me/r, but [connectors.github] isn't set, so it won't hear it"])
+      .toEqual(["specialists.ops: a rule sends github:me/r to it, but [connectors.github] isn't set, so it won't hear it"])
   })
 })
 
@@ -663,7 +669,7 @@ description = "Answers sales threads."
   })
   test('a slack-listening specialist with no Slack app declared is warned, naming what to add', () => {
     expect(ok(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:#y"]\n`).warnings)
-      .toEqual(['specialists.ops: listens on slack:#y, but hydra.toml declares no Slack app: add [slack.apps.<id>], or it won\'t hear it'])
+      .toEqual(['specialists.ops: a rule sends slack:#y to it, but hydra.toml declares no Slack app: add [slack.apps.<id>], or it won\'t hear it'])
   })
 })
 
@@ -742,8 +748,8 @@ bot_token_env = "SUPPORT_BOT"
     })
     test('a pinned specialist may not listen on a place that is not Slack', () => {
       expect(errorsOf(`${APPS}[connectors.github]\nrepos = ["acme/w"]\n${spec('deals', 'pinned_to = ["sales"]\nlistens = ["slack:#help", "github:acme/w", "discord:#feed"]')}`)).toEqual([
-        'specialists.deals.listens[1]: github:acme/w is not a Slack place, and `pinned_to` pins this specialist to Slack apps: remove `pinned_to`, or listen on a `slack:` place',
-        'specialists.deals.listens[2]: discord:#feed is not a Slack place, and `pinned_to` pins this specialist to Slack apps: remove `pinned_to`, or listen on a `slack:` place',
+        'specialists.deals.listens[1]: deals is pinned to Slack apps, so it can never take a message at github:acme/w: remove `pinned_to` from deals, or send it a `slack:` place instead',
+        'specialists.deals.listens[2]: deals is pinned to Slack apps, so it can never take a message at discord:#feed: remove `pinned_to` from deals, or send it a `slack:` place instead',
       ])
     })
   })
@@ -751,14 +757,14 @@ bot_token_env = "SUPPORT_BOT"
   describe('sharing a place', () => {
     test('two specialists with disjoint apps may listen on the same place; so may a pinned and an unpinned one', () => {
       const { config, warnings } = ok(`${APPS}${spec('deals', 'pinned_to = ["sales"]\nlistens = ["slack:#help"]')}${spec('desk', 'pinned_to = ["support"]\nlistens = ["slack:#help"]')}${spec('crm', 'listens = ["slack:#help"]')}`)
-      expect(['deals', 'desk', 'crm'].map(id => config.specialists[id].listens)).toEqual([['slack:#help'], ['slack:#help'], ['slack:#help']])
+      expect(['deals', 'desk', 'crm'].map(id => placesAnsweredBy(config, id))).toEqual([['slack:#help'], ['slack:#help'], ['slack:#help']])
       expect(warnings).toEqual([])
     })
     test('overlapping apps, or two unpinned, still clash', () => {
       expect(errorsOf(`${APPS}${spec('deals', 'pinned_to = ["sales", "support"]\nlistens = ["slack:#help"]')}${spec('desk', 'pinned_to = ["support"]\nlistens = ["slack:#help"]')}`))
-        .toEqual(['specialists.desk.listens[0]: deals already listens on slack:#help, and app support reaches both: two specialists may share a place only when no app reaches both: give one a `pinned_to` app the other lacks, or pin only one of them'])
+        .toEqual(['specialists.desk.listens[0]: sends every message at slack:#help through app support to specialist:desk, but specialists.deals.listens[0] already sends them to specialist:deals: give specialists.desk.listens[0] a `person`, or remove it'])
       expect(errorsOf(`${APPS}${spec('a', 'listens = ["slack:#help"]')}${spec('b', 'listens = ["slack:#help"]')}`))
-        .toEqual(['specialists.b.listens[0]: a already listens on slack:#help, and every app nobody is pinned to reaches both: two specialists may share a place only when no app reaches both: give one a `pinned_to` app the other lacks, or pin only one of them'])
+        .toEqual(['specialists.b.listens[0]: sends every message at slack:#help through any app to specialist:b, but specialists.a.listens[0] already sends them to specialist:a: give specialists.b.listens[0] a `person`, or remove it'])
     })
   })
 
@@ -778,7 +784,7 @@ bot_token_env = "SUPPORT_BOT"
     test('it can never send an app to a specialist that app cannot reach', () => {
       expect(errorsOf(rule('app = "support"\ntarget = "specialist:deals"'))).toEqual(['rules[0].target: deals is pinned to sales, so app support can never deliver to it: add support to deals\'s `pinned_to`, or change the rule\'s `app`'])
       expect(errorsOf(rule('app = "sales"\ntarget = "specialist:crm"'))).toEqual(['rules[0].target: app sales serves only specialists pinned to it (deals), and crm is not pinned to it: add sales to crm\'s `pinned_to`, or change the rule\'s `app`'])
-      expect(errorsOf(rule('place = "discord:#feed"\ntarget = "specialist:deals"'))).toEqual(['rules[0].target: deals is pinned to Slack apps, so it can never take a message at discord:#feed: remove `pinned_to` from deals, or change `place` to a `slack:` place'])
+      expect(errorsOf(rule('place = "discord:#feed"\ntarget = "specialist:deals"'))).toEqual(['rules[0].target: deals is pinned to Slack apps, so it can never take a message at discord:#feed: remove `pinned_to` from deals, or send it a `slack:` place instead'])
       // no app: fine, the rule reaches deals through sales only
       expect(ok(rule('place = "slack:#help"\ntarget = "specialist:deals"')).config.rules).toHaveLength(1)
     })
@@ -796,19 +802,19 @@ bot_token_env = "SUPPORT_BOT"
     })
     test('a rule for everyone takes the place from a listener that hears its app, and from no other', () => {
       const specs = spec('deals', 'pinned_to = ["sales"]\nlistens = ["slack:#help"]') + spec('crm', 'listens = ["slack:#help"]') + spec('triage')
-      const w = (body: string) => ok(rule(body, specs)).warnings.filter(x => x.startsWith('rules['))
+      const w = (body: string) => ok(rule(body, specs)).warnings.filter(x => /never matches|gets only some apps/.test(x))
       // no app, to an unpinned specialist: only apps nobody is pinned to take it, so crm loses #help; deals, pinned to sales, does not
-      expect(w('place = "slack:#help"\ntarget = "specialist:triage"')).toEqual(['rules[0]: takes every message at slack:#help, so crm, which listens there, never hears it'])
+      expect(w('place = "slack:#help"\ntarget = "specialist:triage"')).toEqual(['specialists.crm.listens[0]: never matches: rules[0] already takes every message at slack:#help'])
       // through `default` only crm hears #help: deals is pinned to sales, so it loses nothing
-      expect(w('place = "slack:#help"\napp = "default"\ntarget = "specialist:triage"')).toEqual(['rules[0]: takes every message at slack:#help through app default, so crm, which listens there, never hears it'])
+      expect(w('place = "slack:#help"\napp = "default"\ntarget = "specialist:triage"')).toEqual(['specialists.crm.listens[0]: gets only some apps: rules[0] already takes every message at slack:#help through app default, so crm does not answer it through app default'])
       // an app-only rule takes every place that app hears
       expect(w('app = "sales"\ntarget = "specialist:deals"')).toEqual([])
       // support is pinned by no one here, so crm (unpinned) hears it, and the rule takes it from crm
-      expect(w('app = "support"\ntarget = "specialist:triage"')).toEqual(['rules[0]: takes every message through app support, so crm, which listens on slack:#help, never hears it through that app'])
+      expect(w('app = "support"\ntarget = "specialist:triage"')).toEqual(['specialists.crm.listens[0]: gets only some apps: rules[0] already takes every message through app support, so crm does not answer it through app support'])
     })
     test('an app-only rule takes the app from a pinned listener elsewhere, as the warning says', () => {
-      const w = ok(rule('target = "specialist:deals"\napp = "sales"', spec('deals', 'pinned_to = ["sales"]') + spec('crm', 'listens = ["slack:#a"]') + spec('desk', 'pinned_to = ["sales", "support"]\nlistens = ["slack:#b"]'))).warnings.filter(x => x.startsWith('rules['))
-      expect(w).toEqual(['rules[0]: takes every message through app sales, so desk, which listens on slack:#b, never hears it through that app'])
+      const w = ok(rule('target = "specialist:deals"\napp = "sales"', spec('deals', 'pinned_to = ["sales"]') + spec('crm', 'listens = ["slack:#a"]') + spec('desk', 'pinned_to = ["sales", "support"]\nlistens = ["slack:#b"]'))).warnings.filter(x => /never matches|gets only some apps/.test(x))
+      expect(w).toEqual(['specialists.desk.listens[0]: gets only some apps: rules[0] already takes every message through app sales, so desk does not answer it through app sales'])
     })
   })
 
@@ -818,8 +824,8 @@ bot_token_env = "SUPPORT_BOT"
       // rules[0] to p (pinned to sales) takes only sales; rules[1] to the unpinned u takes the other apps: both can match
       const specs = spec('p', 'pinned_to = ["sales"]') + spec('u')
       expect(rules(specs, '[[rules]]\nplace = "slack:#x"\ntarget = "specialist:p"\n[[rules]]\nplace = "slack:#x"\ntarget = "specialist:u"\n')).toEqual([])
-      // two rules to unpinned specialists at the same place, with no pins at all, shadow as before
-      expect(rules(spec('u') + spec('v'), '[[rules]]\nplace = "slack:#x"\ntarget = "specialist:u"\n[[rules]]\nplace = "slack:#x"\ntarget = "specialist:v"\n')).toEqual(['rules[1]: never matches: rules[0] already takes every message at slack:#x'])
+      // two rules to unpinned specialists at the same place, with no pins at all, are the same clash as two `listens`: an error
+      expect(() => rules(spec('u') + spec('v'), '[[rules]]\nplace = "slack:#x"\ntarget = "specialist:u"\n[[rules]]\nplace = "slack:#x"\ntarget = "specialist:v"\n')).toThrow('rules[1]: sends every message at slack:#x through any app to specialist:v, but rules[0] already sends them to specialist:u')
     })
     test('a rule to an unpinned specialist does not shadow a listener pinned to an app that rule skips', () => {
       const specs = spec('v') + spec('p', 'pinned_to = ["sales"]\nlistens = ["slack:#x"]')

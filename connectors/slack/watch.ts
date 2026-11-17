@@ -214,14 +214,13 @@ export function placesOf(cfg: Pick<SlackWatchConfig, 'hydra' | 'directory'>, cha
 export const placeName = (cfg: Pick<SlackWatchConfig, 'hydra' | 'directory'>, channel: string): Place => placesOf(cfg, channel).at(-1) ?? `slack:${channel}`
 
 /**
- * The Slack channels hydra.toml names, in `listens` and `[[rules]]` (those with a `place`), as written: channels only, to be read by id
+ * The Slack channels hydra.toml names in `[[rules]]` (those with a `place`), as written: channels only, to be read by id
  * (not DMs, and not `namedPlace`, which asks whether one event's place is named at all). For one `app`: only those it
  * can deliver to (`reachableBy`), so an app is not asked to read a channel it has nothing to do in.
  */
 export function namedChannels(h: HydraConfig, app?: string): Place[] {
   const r = reachableBy(h, app)
-  const all = [...r.specialists.flatMap(s => s.listens), ...r.rules.map(x => x.place)]
-  return [...new Set(all.filter((p): p is Place => !!p && p.startsWith('slack:') && namesAChannel(p)))]
+  return [...new Set(r.rules.map(x => x.place).filter((p): p is Place => !!p && p.startsWith('slack:') && namesAChannel(p)))]
 }
 
 const channelIdOf = (cfg: Pick<SlackWatchConfig, 'directory'>, place: Place): string | undefined => {
@@ -240,19 +239,19 @@ export function unresolvedPlaces(cfg: Pick<SlackWatchConfig, 'hydra' | 'director
   return namedChannels(cfg.hydra, cfg.app).filter(p => !channelIdOf(cfg, p))
 }
 
-/** Whether a specialist or a rule that app (none: any) serves names `slack:dm`, the DM with the bot: DMs someone declared they want, as opposed to the operator's own. */
+/** Whether a rule that app (none: any) serves names `slack:dm`, the DM with the bot: DMs someone declared they want, as opposed to the operator's own. */
 export function dmsDeclared(cfg: Pick<SlackWatchConfig, 'hydra' | 'app'>): boolean {
   const r = reachableBy(cfg.hydra, cfg.app)
-  return r.specialists.some(s => s.listens.includes(SLACK_DM)) || r.rules.some(x => x.place === SLACK_DM)
+  return r.rules.some(x => x.place === SLACK_DM)
 }
 
 /**
- * Whether one event's places (`placesOf`) are named: by a rule or a specialist's `listens` this app delivers to, or by a `[places]` entry
+ * Whether one event's places (`placesOf`) are named: by a rule this app delivers to, or by a `[places]` entry
  * (an option set for the place is a name too, wider than `namedChannels`). The early gate asks it of every kind of place.
  */
 export function namedPlace(cfg: Pick<SlackWatchConfig, 'hydra' | 'app'>, at: Place[], app?: string): boolean {
   const r = reachableBy(cfg.hydra, app ?? cfg.app)
-  return at.some(p => Object.hasOwn(cfg.hydra.places, p) || r.rules.some(x => x.place === p) || r.specialists.some(s => s.listens.includes(p)))
+  return at.some(p => Object.hasOwn(cfg.hydra.places, p) || r.rules.some(x => x.place === p))
 }
 
 /**
@@ -789,13 +788,13 @@ export class SlackWatcher {
     const existing = this.get(ev.channel, threadTs, app)
     const boundApp = through[0]
     // With the operator's token the app hears every channel, DM and group DM the operator is in. Hearing is not delivering: a place no
-    // rule, `listens`, `[places]` entry or open conversation names is nobody's, passed over before it opens, counts, reacts to or owes
+    // rule, `[places]` entry or open conversation names is nobody's, passed over before it opens, counts, reacts to or owes
     // anything. The bot's own DM is the one place that needs no name (the operator's goes to `main`). A tag in a channel still gets its
     // answer, as it would without the token; a DM with a person or a group DM never does, since nothing there asked the bot.
     if (!existing && !at.includes(SLACK_DM) && !namedPlace(cfg, at, app) && (inNoBotDm || (!tagged && cfg.hydra.slackApps[app]?.operatorTokenEnv))) return 'ignored'
 
     if (own) {
-      // The bot's own top-level post opens a conversation, bound to whoever listens there. Its replies are not echoed back.
+      // The bot's own top-level post opens a conversation, bound to whoever hears there. Its replies are not echoed back.
       if (isReply) return 'ignored'
       // Already recorded: a deep pass rereads the thread and Slack always returns its parent. Seen before, so not missed.
       if (existing?.delivered?.includes(ev.ts)) return 'ignored'

@@ -27,10 +27,13 @@ const errors = (text: string) => {
 const specialist = (restricted: string, allow: string, places = '') => `
 [specialists.ops]
 workdir = "~/agents/ops"
-listens = ["slack:#ops"]
 allow = [${allow}]
 restricted = ${restricted}
-${places}`
+${places}
+[[rules]]
+place = "slack:#ops"
+target = "specialist:ops"
+`
 
 describe('link_previews', () => {
   test('defaults to on, for a place that sets other options and for a place not declared at all', () => {
@@ -71,9 +74,17 @@ describe('the load warning', () => {
     const t = `
 [specialists.ops]
 workdir = "~/agents/ops"
-listens = ["slack:#ops", "slack:#faq", "slack:#quiet"]
 allow = ["anyone"]
 restricted = true
+[[rules]]
+place = "slack:#ops"
+target = "specialist:ops"
+[[rules]]
+place = "slack:#faq"
+target = "specialist:ops"
+[[rules]]
+place = "slack:#quiet"
+target = "specialist:ops"
 [places."slack:#quiet"]
 link_previews = false
 `
@@ -83,9 +94,11 @@ link_previews = false
     const t = `
 [specialists.ops]
 workdir = "~/agents/ops"
-listens = ["cli"]
 allow = ["anyone"]
 restricted = true
+[[rules]]
+place = "cli"
+target = "specialist:ops"
 `
     expect(warn(ok(t).warnings)).toEqual([])
   })
@@ -103,10 +116,12 @@ describe('a Discord channel given by name', () => {
     const t = `
 [specialists.ops]
 workdir = "~/agents/ops"
-listens = ["discord:#ops"]
 allow = ["anyone"]
 restricted = true
 home = "slack:#esc"
+[[rules]]
+place = "discord:#ops"
+target = "specialist:ops"
 `
     const w = ok(t).warnings.filter(x => x.includes('link_previews') || x.includes('previews'))
     expect(w).toEqual(['specialists.ops: anyone can talk to it in discord:#ops, where a link in its answer unfurls a preview that can show readers content they could not open themselves; hydra can switch previews off in a Discord channel only by id, so list it as discord:<channel id> and set link_previews = false there'])

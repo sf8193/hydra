@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { resolveConfig, statePlatform } from './helpers.js'
 import { formatIssues, loadHydraConfig, systemEnv } from '../config/load.js'
+import { answersLines } from '../routing/route.js'
 import { SESSION_NAMES } from '../shared/session-catalog.js'
 
 export function configCheckCommand(platformArg: string | undefined, stateDirOpt: string | undefined): number {
@@ -25,5 +26,6 @@ export function configCheckCommand(platformArg: string | undefined, stateDirOpt:
   if (op && !op.addresses.some(a => a.startsWith(`${platform}:`))) lines.unshift(`hydra.toml operator: ${op.id} has no ${platform}: address, so on ${platform} nobody passes admin checks or reaches main by DM`)
   console.log(`${path}: loads${lines.length ? `, with ${lines.length} warning${lines.length > 1 ? 's' : ''}` : ' clean'}`)
   if (lines.length) console.log(lines.join('\n'))
+  if (Object.keys(r.config.specialists).length) console.log(answersLines(r.config).join('\n'))
   return 0
 }

@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { hydra, oneListener, sharedChannel, BASE, TWO_APPS } from './slack-config.js'
+import { alsoHeard, hydra, oneListener, sharedChannel, BASE, TWO_APPS } from './slack-config.js'
 import { slackManifest, SLACK_APP_NEEDS, SLACK_APP_DEFAULTS, appKey } from '../app.js'
 import { scopesNeeded } from '../listener.js'
 
@@ -53,7 +53,7 @@ describe('slackManifest', () => {
 
   test('the bot scopes are exactly the ones the startup scope check asks for, with every option on', () => {
     // Channels by name, DMs (the operator has a slack: address), group DMs and files: every option scopesNeeded knows.
-    const h = hydra(oneListener('#food', 'helper', '["anyone"]', '[places."slack:#food"]\nfiles = true\n').replace('listens = ["slack:#food"]', 'listens = ["slack:#food", "slack:group-dm"]'))
+    const h = hydra(alsoHeard(oneListener('#food', 'helper', '["anyone"]', '[places."slack:#food"]\nfiles = true\n'), 'helper', 'slack:group-dm'))
     const checked = scopesNeeded(h)
     expect(checked).toEqual(Object.values(SLACK_APP_NEEDS.botScopes))
     const manifest = Bun.YAML.parse(slackManifest(h.slackApps.default)) as Manifest
@@ -64,7 +64,7 @@ describe('slackManifest', () => {
 describe('DMs and group DMs: one list', () => {
   // Every message event needs the history scope of its kind: message.channels → channels:history, message.im → im:history, and so on.
   const historyOf = (event: string) => `${event.replace('message.', '')}:history`
-  const everyOption = () => hydra(oneListener('#food').replace('listens = ["slack:#food"]', 'listens = ["slack:#food", "slack:dm", "slack:group-dm"]').replace('socket_token_env = "SLOPBOT_SLACK_APP_TOKEN"', 'socket_token_env = "SLOPBOT_SLACK_APP_TOKEN"\noperator_token_env = "HYDRA_SLACK_USER_TOKEN"'))
+  const everyOption = () => hydra(alsoHeard(oneListener('#food'), 'helper', 'slack:dm', 'slack:group-dm').replace('socket_token_env = "SLOPBOT_SLACK_APP_TOKEN"', 'socket_token_env = "SLOPBOT_SLACK_APP_TOKEN"\noperator_token_env = "HYDRA_SLACK_USER_TOKEN"'))
 
   test('the manifest, the events and the startup scope check all follow SLACK_APP_NEEDS, and every message event has its history scope', () => {
     const h = everyOption()
@@ -106,7 +106,7 @@ describe('several apps in one hydra', () => {
     // An app that serves no specialist and no rule reads no channel, so it is not asked who is in one.
     expect(scopesNeeded(hydra(TWO_APPS), 'sales')).not.toContain(SLACK_APP_NEEDS.membership.public)
     // A private channel is named: the groups scope is checked too, for the app that reaches it.
-    const withPrivate = hydra(`${TWO_APPS}\n[specialists.x]\nworkdir = "/w/x"\nlistens = ["slack:G0PRIV"]\nallow = ["anyone"]\n`)
+    const withPrivate = hydra(`${TWO_APPS}\n[specialists.x]\nworkdir = "/w/x"\nallow = ["anyone"]\n[[rules]]\nplace = "slack:G0PRIV"\ntarget = "specialist:x"\n`)
     expect(scopesNeeded(withPrivate).slice(-2)).toEqual([SLACK_APP_NEEDS.membership.public, SLACK_APP_NEEDS.membership.private])
     // Both are scopes the manifest already grants for channel names.
     const m = Bun.YAML.parse(slackManifest(hydra(TWO_APPS).slackApps.sales)) as Manifest

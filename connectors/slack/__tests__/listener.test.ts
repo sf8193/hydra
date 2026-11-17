@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'fs'
 import { tmpdir } from 'os'
 import { join, dirname } from 'path'
 import { SlackWatcher, placesOf } from '../watch.js'
-import { hydra as load, oneListener, view, BASE } from './slack-config.js'
+import { alsoHeard, hydra as load, oneListener, view, BASE } from './slack-config.js'
 import { EMPTY_CONFIG } from '../../../config/load.js'
 import type { HydraConfig } from '../../../config/types.js'
 import { SlackListener, DM_LIST_BACKOFF_MS, postPayload, DOWN_ALERT_AFTER_MS, implicitScopeOptions, type ToldScopes, CATCH_UP_STALE_AFTER_MS, explainSlackError, readReplies, type SlackAppLike, type RawEvent } from '../listener.js'
@@ -117,7 +117,7 @@ describe('diagnosing a refused token', () => {
   })
 
   test('a live DM with a file: downloaded, delivered to the slack:dm listener, and acked', async () => {
-    const t = setup({ toml: TOML + `[people.bea]\naddresses = ["slack:UB"]\nname = "Bea B"\nroles = ["owner"]\n[specialists.assistant]\nworkdir = "/w/a"\nlistens = ["slack:dm"]\nallow = ["owner"]\n[places."slack:dm"]\nfiles = true\nack = "eyes"\n` })
+    const t = setup({ toml: TOML + `[people.bea]\naddresses = ["slack:UB"]\nname = "Bea B"\nroles = ["owner"]\n[specialists.assistant]\nworkdir = "/w/a"\nallow = ["owner"]\n[[rules]]\nplace = "slack:dm"\ntarget = "specialist:assistant"\n[places."slack:dm"]\nfiles = true\nack = "eyes"\n` })
     await t.listener.start()
     t.apps[0].handler({ channel: 'D0BEA0001', ts: '1793000001.000001', user: 'UB', text: 'see attached', channel_type: 'im',
       files: [{ id: 'F1', name: 'a.pdf', size: 3, url_private_download: 'https://files.slack.com/F1' }] } as RawEvent)
@@ -558,7 +558,7 @@ describe('an old single-app config runs unchanged', () => {
     const t = setup({ scopes: ALL })
     await t.listener.start()
     const d = route(t.listener.view()!.hydra, { from: 'slack:UB', at: [`slack:${CH}`], addressed: true, app: 'default' })
-    expect(d).toMatchObject({ fate: 'deliver', to: 'helper', via: 'listens' })
+    expect(d).toMatchObject({ fate: 'deliver', to: 'helper', via: 'rule' })
     t.apps[0].handler(message({ ts: '1100.000001' }))
     await t.watcher.flush()
     expect(t.watcher.get(CH, '1100.000001')).toMatchObject({ specialist: 'helper' })
@@ -629,7 +629,7 @@ describe('the scope check alerts for what was declared, once per episode', () =>
   })
 
   test('the same DM scopes, when a specialist names slack:dm, are declared: they alert', async () => {
-    const t = setup({ scopes: without('im:history', 'im:read'), toml: oneListener(CH, 'helper', '["anyone"]').replace(`listens = ["slack:${CH}"]`, `listens = ["slack:${CH}", "slack:dm"]`) })
+    const t = setup({ scopes: without('im:history', 'im:read'), toml: alsoHeard(oneListener(CH, "helper", "[\"anyone\"]"), "helper", "slack:dm") })
     await t.listener.start()
     expect(t.alerts).toHaveLength(1)
     expect(t.alerts[0]).toContain('im:history (dms)')
@@ -780,7 +780,7 @@ describe("the operator's own app hears DMs and group DMs", () => {
   })
 
   test("an app with no operator token hears only the bot's DMs: every DM is the bot's, and it reads no list", async () => {
-    const t = setup({ toml: TOML + `[people.bea]\naddresses = ["slack:UB"]\nroles = ["owner"]\n[specialists.assistant]\nworkdir = "/w/a"\nlistens = ["slack:dm"]\nallow = ["owner"]\n`, dms: [], otherParties: [] })
+    const t = setup({ toml: TOML + `[people.bea]\naddresses = ["slack:UB"]\nroles = ["owner"]\n[specialists.assistant]\nworkdir = "/w/a"\nallow = ["owner"]\n[[rules]]\nplace = "slack:dm"\ntarget = "specialist:assistant"\n`, dms: [], otherParties: [] })
     await t.listener.start()
     const base = reads(t, 'dms')
     live(t, { channel: 'D0BEA0001', user: 'UB', channel_type: 'im', text: 'a DM to the bot' })

@@ -22,27 +22,33 @@ addresses = ["slack:U0ALICE"]
 roles = ["staff"]
 [people.bob]
 addresses = ["slack:U0BOB"]
+[[rules]]
+place = "slack:#help"
+person = "alice"
+target = "specialist:crm-finance"
 [specialists.crm]
 workdir = "/a/crm"
-listens = ["slack:#help"]
 allow = ["staff"]
+[[rules]]
+place = "slack:#help"
+target = "specialist:crm"
 [specialists.crm-finance]
 workdir = "/a/fin"
 allow = ["staff"]
 [specialists.assistant]
 workdir = "/a/asst"
-listens = ["slack:dm"]
 allow = []
+[[rules]]
+place = "slack:dm"
+target = "specialist:assistant"
 [specialists.open]
 workdir = "/a/open"
-listens = ["slack:#lobby"]
 allow = ["anyone"]
+[[rules]]
+place = "slack:#lobby"
+target = "specialist:open"
 [places."slack:#lobby"]
 messages = "all"
-[[rules]]
-place = "slack:#help"
-person = "alice"
-target = "specialist:crm-finance"
 `)
 
 const msg = (from: string | undefined, at: string[], extra: Partial<Inbound> = {}): Inbound =>
@@ -57,21 +63,21 @@ describe('who', () => {
 })
 
 describe('where: the order', () => {
-  test('listens: a mention in #help reaches crm and binds the conversation', () => {
+  test('a rule for everyone at #help: a mention reaches crm and binds the conversation', () => {
     const d = route(CFG, msg('slack:U0BOB', ['slack:C0HELP', 'slack:#help']))
     // bob is on the roster but lacks staff: routed, then refused
-    expect(d).toMatchObject({ fate: 'refused', to: 'crm', via: 'listens' })
+    expect(d).toMatchObject({ fate: 'refused', to: 'crm', via: 'rule' })
     const op = route(CFG, msg('slack:U0OP', ['slack:C0HELP', 'slack:#help']))
-    expect(op).toMatchObject({ fate: 'deliver', to: 'crm', via: 'listens', bind: true })
+    expect(op).toMatchObject({ fate: 'deliver', to: 'crm', via: 'rule', bind: true })
   })
 
-  test('a rule at the place outranks listens, and names the place it refines', () => {
+  test('a rule for a person at the place outranks the rule for everyone there, and the trace says it was skipped', () => {
     const d = route(CFG, msg('slack:U0ALICE', ['slack:C0HELP', 'slack:#help']))
     expect(d).toMatchObject({ fate: 'deliver', to: 'crm-finance', via: 'rule', bind: true })
-    expect(d.trace.find(s => s.via === 'listens')).toMatchObject({ to: 'crm', matched: false })
+    expect(d.trace.find(s => s.to === 'crm')).toMatchObject({ via: 'rule', matched: false, why: 'rules[1] matches, but an earlier rule won' })
   })
 
-  test('a binding outranks rules and listens, and follows a rename through `renamed_from`', () => {
+  test('a binding outranks rules, and follows a rename through `renamed_from`', () => {
     expect(route(CFG, msg('slack:U0ALICE', ['slack:#help'], { bound: 'crm' }))).toMatchObject({ fate: 'deliver', to: 'crm', via: 'binding', bind: false })
     const renamed = load(`
 operator = "op"
@@ -79,20 +85,21 @@ operator = "op"
 addresses = ["slack:U0OP"]
 [specialists.desk]
 workdir = "/a/desk"
-listens = ["slack:#help"]
 renamed_from = ["crm"]
+[[rules]]
+place = "slack:#help"
+target = "specialist:desk"
 `)
     expect(route(renamed, msg('slack:U0OP', ['slack:#help'], { bound: 'crm' }))).toMatchObject({ fate: 'deliver', to: 'desk', via: 'binding' })
   })
 
-  test('a specialist on the channel id outranks one on its name', () => {
+  test('a rule on the channel id outranks one on its name, when the rules are written in that order', () => {
     const cfg = structuredClone(CFG)
-    cfg.specialists['crm-finance'].listens = ['slack:C0HELP']
-    cfg.rules = []
+    cfg.rules = [{ place: 'slack:C0HELP', target: 'crm-finance' }, { place: 'slack:#help', target: 'crm' }]
     expect(route(cfg, msg('slack:U0OP', ['slack:C0HELP', 'slack:#help']))).toMatchObject({ fate: 'deliver', to: 'crm-finance' })
   })
 
-  test('the operator\'s DM goes to the specialist on slack:dm, else to main', () => {
+  test('the operator\'s DM goes to the specialist a rule sends slack:dm to, else to main', () => {
     expect(route(CFG, msg('slack:U0OP', ['slack:D0OP', 'slack:dm']))).toMatchObject({ fate: 'deliver', to: 'assistant' })
     const empty = load('')
     // an empty file has no operator: nothing is heard
@@ -101,7 +108,7 @@ renamed_from = ["crm"]
     expect(route(bare, msg('slack:U0OP', ['slack:D0OP', 'slack:dm']))).toMatchObject({ fate: 'deliver', to: 'main', via: 'operator-dm' })
   })
 
-  test('a mention where nobody listens is unrouted; ambient chatter is ignored unless messages = "all"', () => {
+  test('a mention at a place no rule names is unrouted; ambient chatter is ignored unless messages = "all"', () => {
     expect(route(CFG, msg('slack:U0ALICE', ['slack:C0X', 'slack:#random'])).fate).toBe('unrouted')
     expect(route(CFG, msg('slack:U0ALICE', ['slack:#help'], { addressed: false })).fate).toBe('ignored')
     expect(route(CFG, msg('slack:U0NOPE', ['slack:#lobby'], { addressed: false }))).toMatchObject({ fate: 'deliver', to: 'open' })
@@ -132,7 +139,9 @@ test('explain prints every candidate and why the winner won', () => {
   expect(out).toBe([
     'person: alice, roles staff, people, anyone',
     '  → rule specialist:crm-finance: rules[0]: first rule that matches',
-    '    listens specialist:crm: listens on slack:#help, but a rule won',
+    '    rule specialist:crm: rules[1] matches, but an earlier rule won',
+    '    rule specialist:assistant: rules[2] is for place slack:dm',
+    '    rule specialist:open: rules[3] is for place slack:#lobby',
     'delivers to specialist:crm-finance (by rule), and binds the conversation to it',
     'then the guard judges it: /bin/guard',
   ].join('\n'))
@@ -160,13 +169,20 @@ roles = ["staff"]
 const TWO = load(`${APPS}
 [specialists.crm]
 workdir = "/a/crm"
-listens = ["slack:#help", "slack:#lobby"]
 allow = ["staff"]
+[[rules]]
+place = "slack:#help"
+target = "specialist:crm"
+[[rules]]
+place = "slack:#lobby"
+target = "specialist:crm"
 [specialists.deals]
 workdir = "/a/deals"
 pinned_to = ["sales"]
-listens = ["slack:#help"]
 allow = ["staff"]
+[[rules]]
+place = "slack:#help"
+target = "specialist:deals"
 [specialists.desk]
 workdir = "/a/desk"
 pinned_to = ["support"]
@@ -201,39 +217,36 @@ describe('old configs route as before', () => {
 })
 
 describe('rules match an app, a place, or both', () => {
-  const withRules = (rules: string) => load(`${APPS}
-[specialists.crm]
-workdir = "/a/crm"
-listens = ["slack:#help"]
-allow = ["staff"]
-[specialists.sales-desk]
+  // `crm` is sent #help unless a test names a rule for #help itself: two rules that take everything at one place are an error.
+  const withRules = (rules: string, baseline = '[[rules]]\nplace = "slack:#help"\ntarget = "specialist:crm"\n') => load(`${APPS}
+${rules}[specialists.crm]\nworkdir = "/a/crm"\nallow = ["staff"]\n${baseline}[specialists.sales-desk]
 workdir = "/a/sd"
 allow = ["staff"]
 [specialists.ops-desk]
 workdir = "/a/od"
 allow = ["staff"]
-${rules}`)
+`)
   const to = (cfg: HydraConfig, m: Inbound) => { const d = route(cfg, m); return 'to' in d ? `${d.to} (${d.via})` : d.fate }
 
   test('a rule with only an app takes every place that app hears', () => {
     const cfg = withRules('[[rules]]\napp = "sales"\ntarget = "specialist:sales-desk"\n')
     expect(to(cfg, inApp('sales'))).toBe('sales-desk (rule)')
     expect(to(cfg, msg('slack:U0ALICE', ['slack:C0ELSE', 'slack:#else'], { app: 'sales' }))).toBe('sales-desk (rule)')
-    expect(to(cfg, inApp('default'))).toBe('crm (listens)')
+    expect(to(cfg, inApp('default'))).toBe('crm (rule)')
   })
   test('a rule with only a place matches every app (and an old rule behaves as before)', () => {
-    const cfg = withRules('[[rules]]\nplace = "slack:#help"\ntarget = "specialist:ops-desk"\n')
+    const cfg = withRules('[[rules]]\nplace = "slack:#help"\ntarget = "specialist:ops-desk"\n', '')
     for (const a of ['default', 'sales', 'support']) expect(to(cfg, inApp(a))).toBe('ops-desk (rule)')
     expect(to(cfg, msg('slack:U0ALICE', ['slack:#help']))).toBe('ops-desk (rule)')   // no app given: default
   })
   test('a rule with both takes that place through that app only', () => {
     const cfg = withRules('[[rules]]\nplace = "slack:#help"\napp = "sales"\ntarget = "specialist:sales-desk"\n')
     expect(to(cfg, inApp('sales'))).toBe('sales-desk (rule)')
-    expect(to(cfg, inApp('default'))).toBe('crm (listens)')
+    expect(to(cfg, inApp('default'))).toBe('crm (rule)')
     expect(to(cfg, msg('slack:U0ALICE', ['slack:#else'], { app: 'sales' }))).toBe('unrouted')
   })
   test('first match wins across kinds, in file order; from refines app and place', () => {
-    const cfg = withRules('[[rules]]\napp = "sales"\nperson = "alice"\ntarget = "specialist:sales-desk"\n[[rules]]\nplace = "slack:#help"\ntarget = "specialist:ops-desk"\n')
+    const cfg = withRules('[[rules]]\napp = "sales"\nperson = "alice"\ntarget = "specialist:sales-desk"\n[[rules]]\nplace = "slack:#help"\ntarget = "specialist:ops-desk"\n', '')
     expect(to(cfg, inApp('sales'))).toBe('sales-desk (rule)')
     expect(to(cfg, msg('slack:U0OP', HELP, { app: 'sales' }))).toBe('ops-desk (rule)')
     const d = route(cfg, inApp('support'))
@@ -243,32 +256,36 @@ ${rules}`)
 
 describe('a specialist pinned to apps', () => {
   test('hears only those apps; unpinned specialists hear every app nobody pins', () => {
-    expect(route(TWO, inApp('sales'))).toMatchObject({ fate: 'deliver', to: 'deals', via: 'listens' })
-    expect(route(TWO, inApp('default'))).toMatchObject({ fate: 'deliver', to: 'crm', via: 'listens' })
-    // #lobby only crm listens: through sales (pinned by deals) crm cannot hear it, and support reaches only desk
+    expect(route(TWO, inApp('sales'))).toMatchObject({ fate: 'deliver', to: 'deals', via: 'rule' })
+    expect(route(TWO, inApp('default'))).toMatchObject({ fate: 'deliver', to: 'crm', via: 'rule' })
+    // #lobby only crm is sent: through sales (pinned by deals) crm cannot hear it, and support reaches only desk
     for (const a of ['sales', 'support']) expect(route(TWO, msg('slack:U0ALICE', ['slack:#lobby'], { app: a })).fate).toBe('unrouted')
   })
-  test('is unreachable through any other app, by listens', () => {
+  test('is unreachable through any other app, by the rule that names it', () => {
     const d = route(TWO, inApp('default'))
-    expect(d.trace.find(s => s.to === 'deals')).toMatchObject({ via: 'listens', matched: false, why: 'listens on slack:#help, but deals is pinned to app sales, and this message came through app default' })
+    // crm's rule is first and serves `default`; deals' rule at the same place is for sales alone, so it is not the one that matched
+    expect(d).toMatchObject({ to: 'crm' })
+    expect(d.trace.find(s => s.to === 'deals')).toMatchObject({ via: 'rule', matched: false, why: 'rules[2] matches, but an earlier rule won' })
   })
   test('is unreachable through another app by a rule, which is skipped, not delivered', () => {
     const cfg = load(`${APPS}
+[[rules]]
+place = "slack:#help"
+target = "specialist:deals"
 [specialists.deals]
 workdir = "/a/deals"
 pinned_to = ["sales"]
 allow = ["staff"]
 [specialists.crm]
 workdir = "/a/crm"
-listens = ["slack:#help"]
 allow = ["staff"]
 [[rules]]
 place = "slack:#help"
-target = "specialist:deals"
+target = "specialist:crm"
 `)
     expect(route(cfg, inApp('sales'))).toMatchObject({ fate: 'deliver', to: 'deals', via: 'rule' })
     const d = route(cfg, inApp('default'))
-    expect(d).toMatchObject({ fate: 'deliver', to: 'crm', via: 'listens' })
+    expect(d).toMatchObject({ fate: 'deliver', to: 'crm', via: 'rule' })
     expect(d.trace[0]).toMatchObject({ via: 'rule', to: 'deals', matched: false })
     expect(d.trace[0].why).toContain('skipped')
   })
@@ -276,7 +293,7 @@ target = "specialist:deals"
     const d = route(TWO, inApp('default', { bound: 'deals' }))
     expect(d.trace[0]).toMatchObject({ via: 'binding', to: 'deals', matched: false })
     expect(d.trace[0].why).toBe('this conversation is bound to deals, but deals is pinned to app sales, and this message came through app default; routed anew')
-    expect(d).toMatchObject({ fate: 'deliver', to: 'crm', via: 'listens' })
+    expect(d).toMatchObject({ fate: 'deliver', to: 'crm', via: 'rule' })
     // through its own app the binding holds
     expect(route(TWO, inApp('sales', { bound: 'deals' }))).toMatchObject({ fate: 'deliver', to: 'deals', via: 'binding', bind: false })
   })
@@ -285,26 +302,28 @@ target = "specialist:deals"
 [specialists.deals]
 workdir = "/a/deals"
 pinned_to = ["sales"]
-listens = ["slack:dm"]
 allow = []
+[[rules]]
+place = "slack:dm"
+target = "specialist:deals"
 `)
     const dm = (app: string) => msg('slack:U0OP', ['slack:D0OP', 'slack:dm'], { app })
-    expect(route(cfg, dm('sales'))).toMatchObject({ to: 'deals', via: 'listens' })
+    expect(route(cfg, dm('sales'))).toMatchObject({ to: 'deals', via: 'rule' })
     expect(route(cfg, dm('default'))).toMatchObject({ fate: 'deliver', to: 'main', via: 'operator-dm' })
     expect(route(cfg, dm('support'))).toMatchObject({ fate: 'deliver', to: 'main', via: 'operator-dm' })
     expect(route(cfg, msg('slack:U0OP', ['slack:dm'], { app: 'default', bound: 'main' }))).toMatchObject({ to: 'main', via: 'binding' })
   })
-  test('an app that has pinned specialists reaches only them: not an unpinned one, by listens, rule or binding', () => {
-    // sales is pinned by deals, so crm (unpinned) is unreachable through it even where crm listens
+  test('an app that has pinned specialists reaches only them: not an unpinned one, by rule or binding', () => {
+    // sales is pinned by deals, so crm (unpinned) is unreachable through it even where a rule names crm
     const d = route(TWO, msg('slack:U0ALICE', ['slack:#lobby'], { app: 'sales' }))
     expect(d.trace.find(s => s.to === 'crm')).toMatchObject({ matched: false })
-    expect(d.trace.find(s => s.to === 'crm')?.why).toBe('listens on slack:#lobby, but app sales serves only specialists pinned to it (deals), and crm is not pinned')
+    expect(d.trace.find(s => s.to === 'crm' && s.why.startsWith('rules[1]'))?.why).toBe('rules[1] matches, but app sales serves only specialists pinned to it (deals), and crm is not pinned; skipped')
     expect(route(TWO, inApp('sales', { bound: 'crm' })).trace[0].why).toContain('app sales serves only specialists pinned to it')
-    expect(route(TWO, inApp('sales', { bound: 'crm' }))).toMatchObject({ to: 'deals', via: 'listens' })
+    expect(route(TWO, inApp('sales', { bound: 'crm' }))).toMatchObject({ to: 'deals', via: 'rule' })
   })
   test('a message that came through no Slack app reaches no pinned specialist', () => {
     const cfg = structuredClone(TWO)
-    cfg.specialists.deals.listens = ['discord:#feed']   // the loader refuses this; routing still holds the line
+    cfg.rules = [{ place: 'discord:#feed', target: 'deals' }]   // the loader refuses this; routing still holds the line
     expect(route(cfg, msg('slack:U0OP', ['discord:#feed'])).fate).toBe('unrouted')
   })
 })
@@ -326,7 +345,7 @@ describe('two apps in one channel: exactly one owns it', () => {
   })
   test('no tag, no default_app, `default` not among them: the first declared app owns it', () => {
     const cfg = structuredClone(TWO)
-    cfg.specialists.desk.listens = ['slack:#help']   // support now delivers to someone here too
+    cfg.rules.push({ place: 'slack:#help', target: 'desk' })   // support now delivers to someone here too
     const r = asEach(cfg, { heardBy: ['support', 'sales'], app: undefined })
     // the same message, seen by each app; `default` did not hear it
     const each = Object.fromEntries(['support', 'sales'].map(a => [a, route(cfg, { ...inApp(a), heardBy: ['support', 'sales'] })]))
@@ -384,9 +403,9 @@ describe('two apps in one channel: exactly one owns it', () => {
       expect(Object.values(r).filter(d => d.fate !== 'ignored').length).toBe(1)
     }
   })
-  test('a fallback skips an app that would deliver to no one here: the only listener is pinned to sales, no tag, no default_app', () => {
+  test('a fallback skips an app that would deliver to no one here: the only rule for #help is for a specialist pinned to sales, no tag, no default_app', () => {
     const cfg = structuredClone(TWO)
-    cfg.specialists.crm.listens = []   // only deals (pinned to sales) listens on #help
+    cfg.rules = cfg.rules.filter(r => r.target !== 'crm')   // only deals (pinned to sales) is sent #help
     const r = asEach(cfg, both())
     expect(owners(r)).toEqual(['sales'])
     expect(r.sales).toMatchObject({ fate: 'deliver', to: 'deals', owner: 'sales' })
@@ -394,7 +413,7 @@ describe('two apps in one channel: exactly one owns it', () => {
   })
   test('an explicit default_app is honored even if it reaches no one: the message is unrouted, never handed on', () => {
     const cfg = structuredClone(TWO)
-    cfg.specialists.crm.listens = []
+    cfg.rules = cfg.rules.filter(r => r.target !== 'crm')
     placeDefault(cfg, 'default')
     const r = asEach(cfg, both())
     expect(r.default).toMatchObject({ fate: 'unrouted', owner: 'default' })
@@ -402,7 +421,7 @@ describe('two apps in one channel: exactly one owns it', () => {
   })
   test('when no heard app delivers to anyone, the plain pick applies: `default`, else first declared', () => {
     const cfg = structuredClone(TWO)
-    cfg.specialists.crm.listens = []; cfg.specialists.deals.listens = []
+    cfg.rules = []
     expect(owners(asEach(cfg, both()))).toEqual(['default'])
     expect(owners(Object.fromEntries(['support', 'sales'].map(a => [a, route(cfg, { ...inApp(a), heardBy: ['support', 'sales'] })])))).toEqual(['sales'])
   })
@@ -420,10 +439,10 @@ describe('two apps in one channel: exactly one owns it', () => {
     expect(owningApp(TWO, { at: ['slack:#else'] })).toMatchObject({ app: 'default', contested: false })
     expect(owningApp(TWO, { at: ['cli'] })).toBeUndefined()
   })
-  test('reachesAnyone: a rule target or a listener the app serves, or main in a DM', () => {
+  test('reachesAnyone: a rule target the app serves, or main in a DM', () => {
     expect(reachesAnyone(TWO, 'default', HELP)).toBe(true)
     expect(reachesAnyone(TWO, 'sales', HELP)).toBe(true)
-    expect(reachesAnyone(TWO, 'support', HELP)).toBe(false)   // desk is pinned to support but listens nowhere
+    expect(reachesAnyone(TWO, 'support', HELP)).toBe(false)   // desk is pinned to support but no rule names a place for it
     expect(reachesAnyone(TWO, 'support', ['slack:dm'])).toBe(true)
   })
 })
@@ -432,12 +451,12 @@ describe('a binding that is skipped counts as no binding', () => {
   test('unaddressed chatter in a thread bound to a specialist this app cannot be served by is ignored, not rerouted and bound', () => {
     const chatter = (extra: Partial<Inbound>) => route(TWO, msg('slack:U0ALICE', HELP, { app: 'default', addressed: false, ...extra }))
     expect(chatter({ bound: 'deals' })).toMatchObject({ fate: 'ignored' })
-    expect(chatter({ bound: 'deals' }).trace.map(s => s.via)).toEqual(['binding', 'listens'])
+    expect(chatter({ bound: 'deals' }).trace.map(s => s.via)).toEqual(['binding', 'trigger'])
     // a binding that holds still carries it; addressed again, it is routed anew
     expect(chatter({ bound: 'crm' })).toMatchObject({ fate: 'deliver', to: 'crm', via: 'binding' })
-    expect(chatter({ bound: 'deals', addressed: true })).toMatchObject({ fate: 'deliver', to: 'crm', via: 'listens', bind: true })
+    expect(chatter({ bound: 'deals', addressed: true })).toMatchObject({ fate: 'deliver', to: 'crm', via: 'rule', bind: true })
     // a specialist gone from hydra.toml is different: the conversation goes on, and its new owner takes it
-    expect(chatter({ bound: 'vanished' })).toMatchObject({ fate: 'deliver', to: 'crm', via: 'listens' })
+    expect(chatter({ bound: 'vanished' })).toMatchObject({ fate: 'deliver', to: 'crm', via: 'rule' })
   })
 })
 
@@ -473,16 +492,22 @@ ids = ["slack:U0OP"]
 ids = ["slack:U0ALICE"]
 [specialists.assistant]
 workdir = "/a/asst"
-listens = ["slack:dm"]
 allow = ["anyone"]
+[[rules]]
+place = "slack:dm"
+target = "specialist:assistant"
 [specialists.alices]
 workdir = "/a/alices"
-listens = ["slack:dm:alice"]
 allow = ["anyone"]
+[[rules]]
+place = "slack:dm:alice"
+target = "specialist:alices"
 [specialists.huddle]
 workdir = "/a/huddle"
-listens = ["slack:group-dm"]
 allow = ["anyone"]
+[[rules]]
+place = "slack:group-dm"
+target = "specialist:huddle"
 `)
   test('slack:dm is the bot\'s DM; a DM with alice is slack:dm:alice, which slack:dm\'s listener never hears', () => {
     expect(route(DMS, msg('slack:U0ALICE', ['slack:dm']))).toMatchObject({ fate: 'deliver', to: 'assistant' })

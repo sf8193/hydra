@@ -3,8 +3,8 @@
 //
 //   (the file existing)               → [slack.apps.default], with the token variables the Slack connector has always read
 //   people {U…: {name, role}}         → [people.<id>] addresses = ["slack:U…"], roles = [<role>]
-//   route {channels, to}              → [specialists.<to>] listens = ["slack:C…"]
-//   route {dms: true, to}             → listens = ["slack:dm"]
+//   route {channels, to}              → [[rules]] place = "slack:C…", target = "specialist:<to>"
+//   route {dms: true, to}             → [[rules]] place = "slack:dm", target = "specialist:<to>"
 //   route from                        → that specialist's allow (user ids get a role of their own)
 //   route files / ack                 → [places."slack:…"] files / ack
 //   beforeDeliver                     → [guard]
@@ -15,7 +15,9 @@ export type SlackWatchMigration = {
   slack: { apps: { default: { bot_token_env: string; socket_token_env: string } } }
   people: Record<string, { addresses: string[]; roles?: string[]; name?: string }>
   /** Only the keys this file decides; the specialist's workdir and kickoff come from specialists.json. */
-  specialists: Record<string, { listens: string[]; allow: string[] }>
+  specialists: Record<string, { allow: string[] }>
+  /** Where each specialist is heard: one rule per place, in route order. */
+  rules: { place: string; target: string }[]
   places: Record<string, { files?: true; ack?: string }>
   guard?: { command: string; timeout?: string; include_text?: true }
   /** One line each, for the operator to read. */
@@ -35,7 +37,7 @@ export function migrateSlackWatch(raw: unknown): SlackWatchMigration {
   if (!isObj(raw)) throw new Error('slack-watch.json: must be an object')
   const out: SlackWatchMigration = {
     slack: { apps: { default: { bot_token_env: 'SLOPBOT_SLACK_BOT_TOKEN', socket_token_env: 'SLOPBOT_SLACK_APP_TOKEN' } } },
-    people: {}, specialists: {}, places: {}, notes: [],
+    people: {}, specialists: {}, rules: [], places: {}, notes: [],
   }
   const note = (s: string) => { out.notes.push(s) }
 
@@ -69,13 +71,13 @@ export function migrateSlackWatch(raw: unknown): SlackWatchMigration {
   for (const [i, r] of routes.entries()) {
     const to = typeof r.to === 'string' ? r.to.trim() : ''
     if (!to) { note(`routes[${i}]: no "to"; left out`); continue }
-    const s = out.specialists[to] ??= { listens: [], allow: [] }
+    const s = out.specialists[to] ??= { allow: [] }
     const places = [
       ...(Array.isArray(r.channels) ? r.channels.filter((c): c is string => typeof c === 'string').map(c => `slack:${c}`) : []),
       ...(r.dms === true ? ['slack:dm'] : []),
     ]
     for (const p of places) {
-      if (!s.listens.includes(p)) s.listens.push(p)
+      if (!out.rules.some(x => x.place === p && x.target === `specialist:${to}`)) out.rules.push({ place: p, target: `specialist:${to}` })
       if (r.files === true || (typeof r.ack === 'string' && r.ack)) {
         out.places[p] = { ...(r.files === true && { files: true as const }), ...(typeof r.ack === 'string' && r.ack && { ack: r.ack }) }
       }

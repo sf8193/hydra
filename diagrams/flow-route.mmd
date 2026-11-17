@@ -9,8 +9,7 @@ flowchart TD
   bd{"that specialist still declared,<br/>and served by this app?<br/>(renamed_from renames followed)"}
   ad{"addressed, or a place here<br/>has messages = all?<br/>(a skipped binding does not count,<br/>unless its specialist is gone)"}
   ign(["ignored: not for hydra"])
-  r{"first [[rules]] entry whose at (if set) is a name here,<br/>whose app (if set) is this app, and whose from<br/>is the sender or a role they hold<br/>and whose target is served by this app"}
-  l{"a specialist that listens on a name here<br/>(the id before the #name)<br/>and is served by this app"}
+  r{"first [[rules]] entry whose place (if set) is a name here,<br/>whose app (if set) is this app, and whose person<br/>is the sender or a role they hold<br/>and whose target is served by this app<br/>(an old listens is read as rules after the explicit ones,<br/>a place named by its id before one named #name)"}
   od{"the operator, in a DM?"}
   main["main (served by every app)"]
   unr(["unrouted → 🚫 on a mention or DM"])
@@ -27,9 +26,7 @@ flowchart TD
   ad -->|no| ign
   ad -->|yes| r
   r -->|match| allow
-  r -->|none| l
-  l -->|match| allow
-  l -->|none| od
+  r -->|none| od
   od -->|yes| main --> allow
   od -->|no| unr
   allow -->|no| ref

@@ -19,14 +19,18 @@ const OPS = 'ops-t'
 const TOML = `${TWO_APPS}
 [specialists.${CRM}]
 workdir = "/w/crm"
-listens = ["slack:C1"]
 allow = ["anyone"]
 home = "slack:C9"
+[[rules]]
+place = "slack:C1"
+target = "specialist:${CRM}"
 [specialists.${OPS}]
 workdir = "/w/ops"
-listens = ["slack:C2"]
 allow = ["anyone"]
 home = "slack:C8"
+[[rules]]
+place = "slack:C2"
+target = "specialist:${OPS}"
 `
 const KEPT: [string, string][] = [['reply', 'chat_id'], ['react', 'chat_id'], ['edit_message', 'chat_id'], ['delete_message', 'chat_id'], ['download_attachment', 'chat_id'], ['fetch_messages', 'channel']]
 const ids: string[] = []

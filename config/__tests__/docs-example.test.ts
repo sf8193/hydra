@@ -4,6 +4,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { formatIssues, loadHydraConfig } from '../load.js'
+import { placesAnsweredBy } from '../types.js'
 import { testLoadEnv } from './load-env.js'
 
 const DOC = readFileSync(join(import.meta.dir, '..', '..', 'docs', 'slack.md'), 'utf8')
@@ -30,8 +31,10 @@ describe('docs/slack.md: the ops specialist example', () => {
   test('is the confined specialist, its server, its place, and the specialist it hands off to', () => {
     const r = loadHydraConfig(text, env)
     if (!r.ok) throw new Error(formatIssues(r.errors))
-    expect(r.config.specialists.ops).toMatchObject({ restricted: true, tools: ['Read', 'Grep', 'Glob'], mcp: ['datadog'], listens: ['slack:#ops'], allow: ['staff'], talksTo: ['ops-deep'], workdir: '/home/op/specialists/ops' })
-    expect(r.config.specialists['ops-deep']).toMatchObject({ restricted: true, listens: [], allow: [], talksTo: ['ops'], workdir: '/home/op/specialists/ops-deep' })
+    expect(r.config.specialists.ops).toMatchObject({ restricted: true, tools: ['Read', 'Grep', 'Glob'], mcp: ['datadog'], allow: ['staff'], talksTo: ['ops-deep'], workdir: '/home/op/specialists/ops' })
+    expect(r.config.specialists['ops-deep']).toMatchObject({ restricted: true, allow: [], talksTo: ['ops'], workdir: '/home/op/specialists/ops-deep' })
+    expect(placesAnsweredBy(r.config, 'ops')).toEqual(['slack:#ops'])
+    expect(placesAnsweredBy(r.config, 'ops-deep')).toEqual([])
     expect(r.config.mcpServers?.datadog).toEqual({ name: 'datadog', command: '/usr/local/bin/datadog-mcp', tokenEnv: ['DD_API_KEY'], tools: ['search_logs', 'get_monitor'] })
     expect(r.config.places['slack:#ops']).toMatchObject({ messages: 'all', linkPreviews: false })
   })

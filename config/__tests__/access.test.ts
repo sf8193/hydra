@@ -38,7 +38,7 @@ tools = ["search_logs", "get_monitor"]
 [mcp.empty]
 command = "bun"
 `
-const spec = (body: string, workdir = '~/agents/ops') => `${BASE}\n[specialists.ops]\nworkdir = "${workdir}"\nlistens = ["slack:dm"]\nallow = []\n${body}\n`
+const spec = (body: string, workdir = '~/agents/ops') => `${BASE}\n[specialists.ops]\nworkdir = "${workdir}"\nallow = []\n${body}\n[[rules]]\nplace = "slack:dm"\ntarget = "specialist:ops"\n`
 
 const load = (text: string, e: LoadEnv = env) => loadHydraConfig(text, e)
 const errorsOf = (text: string, e: LoadEnv = env): string[] => {
@@ -286,7 +286,7 @@ describe('engine', () => {
 describe('[defaults.specialist]', () => {
   test.each(['restricted = true', 'tools = ["Read"]', 'mcp = ["datadog"]', 'talks_to = ["y"]'])('%s is refused as a default', line => {
     const key = line.split(' ')[0]
-    const text = `${BASE}\n[defaults.specialist]\nworkdir = "~/agents/ops"\n${line}\n[specialists.ops]\nlistens = ["slack:dm"]\nallow = []\n`
+    const text = `${BASE}\n[defaults.specialist]\nworkdir = "~/agents/ops"\n${line}\n[specialists.ops]\nallow = []\n[[rules]]\nplace = "slack:dm"\ntarget = "specialist:ops"\n`
     expect(errorsOf(text)).toEqual([`defaults.specialist.${key}: can't be a default: ${key} says what one specialist's session may reach. Set it under [specialists.<id>] by editing hydra.toml`])
   })
 })
@@ -322,7 +322,7 @@ describe('the warning for an operator-access specialist someone else can talk to
       expect(warnings('', 'listens = ["slack:C0CF123", "slack:C0CF456"]\nallow = ["anyone", "people", "staff"]\nsessions = "per-conversation"\nidle = "1h"', WITH_ALICE)).toEqual(WARN('anyone in slack:C0CF123 and slack:C0CF456'))
     })
     test('a github: place, for anyone', () => {
-      const t = `${BASE}\n[connectors.github]\nrepos = ["acme/widget"]\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["github:acme/widget"]\nallow = ["anyone"]\n`
+      const t = `${BASE}\n[connectors.github]\nrepos = ["acme/widget"]\n[specialists.ops]\nworkdir = "~/agents/ops"\nallow = ["anyone"]\n[[rules]]\nplace = "github:acme/widget"\ntarget = "specialist:ops"\n`
       expect(ok(t).warnings.filter(w => w.includes("the operator's account"))).toEqual(WARN('anyone who can comment on github:acme/widget'))
       const alone = t.replace('allow = ["anyone"]', 'allow = []')
       expect(ok(alone).warnings.filter(w => w.includes("the operator's account"))).toEqual([])

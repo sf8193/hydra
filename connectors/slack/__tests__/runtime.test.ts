@@ -14,7 +14,7 @@ import { emit } from '../../../daemon/event-bus.js'
 import { transport } from '../../../daemon/bridge-transport.js'
 import { handleCLIRequest, type CLIRequest } from '../../../daemon/cli-handler.js'
 import { executeTool } from '../../../daemon/bridge-dispatch.js'
-import { BASE, hydra, view } from './slack-config.js'
+import { alsoHeard, BASE, hydra, view } from './slack-config.js'
 import { slackEnvNames } from '../../../config/token-vars.js'
 import { defaultSlackApp } from '../../../config/types.js'
 import { registerSpawnVars } from '../../../shared/spawn-env.js'
@@ -32,12 +32,16 @@ addresses = ["slack:UOWNER"]
 roles = ["owner"]
 [specialists.${FOOD}]
 workdir = "/w/food"
-listens = ["slack:C1"]
 allow = ["anyone"]
+[[rules]]
+place = "slack:C1"
+target = "specialist:${FOOD}"
 [specialists.${OPS}]
 workdir = "/w/ops"
-listens = ["slack:C2"]
 allow = ["owner"]
+[[rules]]
+place = "slack:C2"
+target = "specialist:${OPS}"
 `
 let current = TOML
 function configure(toml = TOML, over: Parameters<typeof view>[1] = {}) {
@@ -239,7 +243,7 @@ describe('bind_conversation / unbind_conversation', () => {
   test("another session, a place it doesn't hear, another specialist's conversation, a malformed id, and a full table are all refused", async () => {
     await expect(bindConversation(stranger, 'slack:C1:1.000001')).rejects.toThrow('no thread to bind')   // its thread id is no session thread
     await expect(bindConversation(undefined, 'slack:C1:1.000001')).rejects.toThrow('no thread to bind')
-    await expect(bindConversation(food, 'slack:C2:1.000001')).rejects.toThrow(`${FOOD} doesn't listen on slack:C2`)
+    await expect(bindConversation(food, 'slack:C2:1.000001')).rejects.toThrow(`${FOOD} doesn't answer slack:C2`)
     await expect(bindConversation(food, 'C1:yesterday')).rejects.toThrow('conversation must look like')
     getSlackWatcher().bind('C1', '9.000001', OPS)
     await expect(bindConversation(food, 'slack:C1:9.000001')).rejects.toThrow(`is bound to ${OPS}; only the operator moves it`)
@@ -250,11 +254,11 @@ describe('bind_conversation / unbind_conversation', () => {
 
   test("a rule there doesn't count: it takes chosen people's messages, not the place", async () => {
     configure(`${TOML}[[rules]]\nplace = "slack:C2"\nperson = "olive"\ntarget = "specialist:${FOOD}"\n`)
-    await expect(bindConversation(food, 'slack:C2:1.000001')).rejects.toThrow(`${FOOD} doesn't listen on slack:C2`)
+    await expect(bindConversation(food, 'slack:C2:1.000001')).rejects.toThrow(`${FOOD} doesn't answer slack:C2`)
   })
 
   test("a DM or a place's top level is never bound by hand: the operator's DM stays main's", async () => {
-    configure(`${TOML.replace('listens = ["slack:C1"]', 'listens = ["slack:C1", "slack:dm"]')}`)
+    configure(alsoHeard(TOML, FOOD, 'slack:dm'))
     getSlackWatcher().bind('D0OP', '0.000000', 'main')
     await expect(bindConversation(food, 'slack:D0OP')).rejects.toThrow('only a thread can be bound by hand')
     await expect(bindConversation(food, 'slack:C1')).rejects.toThrow('only a thread can be bound by hand')
@@ -541,11 +545,11 @@ describe('the operator: hydra conversations and hydra route', () => {
   })
 
   test('hydra route prints every candidate and why the winner won, and binds nothing', async () => {
-    configure(`${TOML}[[rules]]\nplace = "slack:C2"\nperson = "owner"\ntarget = "specialist:${FOOD}"\n`)
+    configure(TOML.replace(`[specialists.${FOOD}]`, `[[rules]]\nplace = "slack:C2"\nperson = "owner"\ntarget = "specialist:${FOOD}"\n[specialists.${FOOD}]`))
     const r = await handleCLIRequest(req('route', { person: 'olive', place: 'slack:C2' }))
     expect(r).toMatchObject({ ok: true, data: { fate: 'deliver', to: FOOD } })
     expect((r.data as any).report).toContain(`→ rule specialist:${FOOD}: rules[0]: first rule that matches`)
-    expect((r.data as any).report).toContain(`listens specialist:${OPS}: listens on slack:C2, but a rule won`)
+    expect((r.data as any).report).toContain(`rule specialist:${OPS}: rules[2] matches, but an earlier rule won`)
     expect(await handleCLIRequest(req('route', { person: 'stranger', place: 'slack:C2' }))).toMatchObject({ ok: true, data: { fate: 'refused', to: OPS } })
     expect(await handleCLIRequest(req('route', { person: 'slack:UNEW', place: 'slack:C9' }))).toMatchObject({ ok: true, data: { fate: 'unrouted' } })
     expect(await handleCLIRequest(req('route', { person: 'nobody', place: 'slack:C2' }))).toMatchObject({ ok: false })
@@ -569,7 +573,7 @@ describe('the operator: hydra conversations and hydra route', () => {
   })
 
   test('health flags a #name place no channel answers to, and omits the line without an app named default', async () => {
-    configure(TOML.replace('listens = ["slack:C2"]', 'listens = ["slack:#ops-room"]'))
+    configure(TOML.replace('place = "slack:C2"', 'place = "slack:#ops-room"'))
     expect(slackWatchHealth()!.places.find(p => p.to === OPS)!.note).toContain('no channel answers to this name')
     configure('')
     expect(slackWatchHealth()).toBeNull()

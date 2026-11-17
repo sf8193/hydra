@@ -36,10 +36,12 @@ addresses = ["slack:U0OP"]
 bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"
 [specialists.ops]
 workdir = "~/agents/ops"
-listens = ["slack:C0OPS"]
 allow = ["anyone"]
 restricted = true
 talks_to = ["deep"]
+[[rules]]
+place = "slack:C0OPS"
+target = "specialist:ops"
 [specialists.deep]
 workdir = "~/agents/deep"
 allow = []
@@ -47,13 +49,17 @@ restricted = true
 talks_to = ["ops"]
 [specialists.plain]
 workdir = "~/agents/plain"
-listens = ["slack:C0PLAIN"]
 allow = ["anyone"]
 restricted = true
+[[rules]]
+place = "slack:C0PLAIN"
+target = "specialist:plain"
 [specialists.full]
 workdir = "~/agents/full"
-listens = ["slack:C0FULL"]
 allow = ["people"]
+[[rules]]
+place = "slack:C0FULL"
+target = "specialist:full"
 `
 const ids: string[] = []
 const session = (id: string, threadId: string, extra: Record<string, unknown> = {}): SessionInfo => {
@@ -153,7 +159,7 @@ describe('the call is held to the specialists named in talks_to', () => {
   })
   test('the list is read as hydra.toml has it now: removing a target stops the very next call', async () => {
     expect((await send('ops-s', ask())).isError).toBeUndefined()
-    _setHydraConfigForTesting(load(TOML.replace('talks_to = ["deep"]\n[specialists.deep]', '[specialists.deep]')))
+    _setHydraConfigForTesting(load(TOML.replace('talks_to = ["deep"]\n', '')))
     expect((await send('ops-s', ask())).isError).toBe(true)
     expect(landed).toHaveLength(1)
   })

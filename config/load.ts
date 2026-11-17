@@ -11,12 +11,12 @@ import { ENV_NAME_RE, tokenVarRefusal } from '../shared/spawn-env.js'
 import { offLimitRoots, workdirRestrictionIssues } from './restricted-workdir.js'
 import { sandboxIssues, unquotablePath } from './server-sandbox.js'
 import { engineConfinesAccess } from '../shared/engine-capabilities.js'
-import { noSuchApp, pinnersOf, serves, speaksAsOf, whyNotServed } from './pins.js'
+import { noSuchApp, pinnersOf, speaksAsOf, whyNotServed } from './pins.js'
 import { SLACK_APP_DEFAULTS } from '../connectors/slack/app.js'
 import { invalidSpecialistName } from '../shared/specialist-name.js'
 import { bareOf, readTarget, spelled } from '../shared/target-kind.js'
 import {
-  BUILTIN_ROLES, DEFAULT_SLACK_APP, SLACK_DM, SLACK_GROUP_DM, dmPerson, isDmPlace, namesAChannel, namesDmWithOthers, type Address, type ConfigIssue, type Connectors, type Gateways, type Guard, type HydraConfig, type LoadEnv, type LoadResult,
+  BUILTIN_ROLES, DEFAULT_SLACK_APP, SLACK_DM, SLACK_GROUP_DM, dmPerson, isDmPlace, namesAChannel, namesDmWithOthers, placesAnsweredBy, type Address, type ConfigIssue, type Connectors, type Gateways, type Guard, type HydraConfig, type LoadEnv, type LoadResult,
   type McpServer, type WorkdirScan, type Person, type Place, type PlaceOptions, type Platform, type Rule, type Schedule, type SessionsMode, type SlackApp, type Specialist, type Vitals,
   WORKDIR_TOOLS,
 } from './types.js'
@@ -57,8 +57,10 @@ const MAX_DAY_MS = 86_400_000
 const GUARD_TIMEOUT_MAX_MS = 30_000 // deliveries for a conversation wait on the guard
 const MAX_ALERT_AFTER_MS = 30 * MAX_DAY_MS
 const BUILTIN: readonly string[] = BUILTIN_ROLES
+const MAIN_TARGET = 'main'
 
 const TOP_KEYS = ['operator', 'gateways', 'connectors', 'slack', 'people', 'specialists', 'defaults', 'places', 'schedules', 'rules', 'guard', 'vitals', 'mcp']
+/** `listens` is the old way to say where a specialist is heard: still read, as `[[rules]]` (see `legacyRules`), and warned. */
 const SPECIALIST_KEYS = ['workdir', 'kickoff', 'kickoff_file', 'listens', 'pinned_to', 'speaks_as', 'allow', 'sessions', 'max_sessions', 'idle', 'home', 'model', 'engine', 'env_file', 'renamed_from', 'restricted', 'tools', 'mcp', 'talks_to']
 /** A specialist's keys under their old names, read as the new ones (`restricted = true` is `restricted = true`). */
 export const SPECIALIST_RENAMES: readonly Rename[] = [
@@ -523,8 +525,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   const checkWorkdirRestriction = (at: string, workdir: string) => { for (const why of workdirRestrictionIssues(env, workdir, privateRoots)) error(at, why) }
 
   const specialists: Record<string, Specialist> = {}
-  /** Who listens on each place, with the apps they are pinned to (undefined: unpinned). */
-  const listener = new Map<Place, { id: string; pinnedTo?: string[] }[]>()
+  /** Every place an old `listens` names, with who it names and where in the file: read as rules once the explicit ones are. */
+  const legacyRules: { place: Place; target: string; path: string }[] = []
   const formerly = new Map<string, string>()
   const specialistTables = table(doc.specialists, 'specialists') ?? {}
   for (const [id, raw] of Object.entries(specialistTables)) {
@@ -576,23 +578,19 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       else if (pinnedTo && !pinnedTo.includes(speaksAs)) error(at('speaks_as'), `${speaksAs} is not one of the apps ${id} is pinned to (${pinnedTo.join(', ')}): a pinned specialist speaks only through its own apps`)
     }
 
-    const listens: Place[] = []
-    for (const [i, rawPlace] of (strList(t, 'listens', path) ?? []).entries()) {
-      const p = place(rawPlace, `${at('listens')}[${i}]`)
-      if (!p) continue
-      if (pinnedTo && !p.startsWith('slack:')) error(`${at('listens')}[${i}]`, `${p} is not a Slack place, and \`pinned_to\` pins this specialist to Slack apps: remove \`pinned_to\`, or listen on a \`slack:\` place`)
-      const here = listener.get(p) ?? []
-      if (here.some(o => o.id === id)) continue
-      // An unpinned specialist takes only apps nobody is pinned to, so a pinned one and an unpinned one never share an app.
-      const mine = pinnedTo
-      const bothUnpinned = (o: { pinnedTo?: string[] }) => !o.pinnedTo && !mine
-      const shareAnApp = (o: { pinnedTo?: string[] }) => !!o.pinnedTo && !!mine && o.pinnedTo.some(a => mine.includes(a))
-      const clash = here.find(o => bothUnpinned(o) || shareAnApp(o))
-      if (clash) {
-        const via = clash.pinnedTo && pinnedTo ? `app ${pinnedTo.filter(a => clash.pinnedTo!.includes(a)).join(', ')}` : 'every app nobody is pinned to'
-        error(`${at('listens')}[${i}]`, `${clash.id} already listens on ${p}, and ${via} reaches both: two specialists may share a place only when no app reaches both: give one a \`pinned_to\` app the other lacks, or pin only one of them`)
-      } else listener.set(p, [...here, { id, ...(pinnedTo && { pinnedTo }) }])
-      listens.push(p)
+    // `listens` (the old form): each place is read as a `[[rules]]` entry `{place, target = this specialist}`, added after the explicit rules.
+    const listensRaw = strList(t, 'listens', path)
+    if (listensRaw !== undefined) {
+      const heard: Place[] = []
+      for (const [i, rawPlace] of listensRaw.entries()) {
+        // Checked as a rule's place is, once the explicit rules are read; a place that is none stays as written until then.
+        const p = normalizePlace(rawPlace) ?? rawPlace
+        if (heard.includes(p)) continue
+        heard.push(p)
+        if (!why) legacyRules.push({ place: p, target: id, path: `${at('listens')}[${i}]` })
+      }
+      // An empty `listens` says nothing, and is how a specialist opts out of a default `listens`: no notice.
+      if (heard.length) warn(at('listens'), `\`listens\` is now \`[[rules]]\`: add a \`[[rules]]\` table for each place, with \`place = "x"\` and \`target = "specialist:${id}"\` on separate lines (places: ${heard.join(', ')}); \`listens\` still loads as those rules, after the explicit ones, and will be removed`)
     }
 
     const allow = strList(t, 'allow', path) ?? ['people']
@@ -650,7 +648,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       if (workdirRaw !== undefined && isAbsolute(workdir) && env.isDir(workdir)) checkWorkdirRestriction(at('workdir'), workdir)
     }
     specialists[id] = {
-      id, workdir, listens, allow,
+      id, workdir, allow,
       ...(pinnedTo && { pinnedTo }),
       ...(speaksAs !== undefined && Object.hasOwn(slackApps, speaksAs) && { speaksAs }),
       sessions: oneOf(t, 'sessions', path, SESSIONS) ?? 'shared',
@@ -669,7 +667,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       ...(envFile !== undefined && { envFile: underWorkdir(envFile) }),
     }
   }
-  // A target value says its kind: `main` (the built-in specialist: never declared, never in `listens`) or `specialist:<name>` (declared here).
+  // A target value says its kind: `main` (the built-in specialist: never declared) or `specialist:<name>` (declared here).
   // A bare name still loads, as the same target, with a warning that says how to write it. Read by `readTarget`, as delivery and the CLI read it;
   // the loaded config holds the bare form (`main`, a specialist's id), which is what routing and the schedules compare against.
   const targetOf = (raw: string, path: string, owner: 'rule' | 'schedule'): string | undefined => {
@@ -760,35 +758,52 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   // --- rules (checked now, applied by a later step) ------------------------------------------------------------------
 
   const rules: Rule[] = []
-  if (doc.rules !== undefined && !(Array.isArray(doc.rules) && doc.rules.every(isTable))) error('rules', 'must be [[rules]] tables')
-  else for (const [i, t0] of ((doc.rules ?? []) as Table[]).entries()) {
-    const path = `rules[${i}]`
-    const t = renamed(t0, path, [{ from: 'at', to: 'place' }, { from: 'from', to: 'person' }, { from: 'to', to: 'target' }])
+  /** Where each rule in `rules` was written: `rules[2]`, or the `listens` entry it was read from. */
+  const ruleAt: string[] = []
+  /** The rules read from an old `listens`, by their index in `rules`. */
+  const fromListens = new Set<number>()
+  /** One rule's table checked and added. `at` names the key an error is about: `<path>.<key>`, or for a `listens` entry the entry itself. */
+  const readRule = (t: Table, path: string, at: (key: string) => string, source: 'rules' | 'listens') => {
     unknownKeys(t, ['place', 'app', 'person', 'target'], path)
     const placeRaw = str(t, 'place', path)
     const appRaw = str(t, 'app', path)
     if (t.place === undefined && t.app === undefined) error(path, 'a rule needs `place`, `app` or both; `person` only narrows who it applies to')
-    const rulePlace = placeRaw === undefined ? undefined : place(placeRaw, `${path}.place`)
+    const rulePlace = placeRaw === undefined ? undefined : place(placeRaw, at('place'))
     let app: string | undefined
     if (appRaw !== undefined) {
-      if (!Object.hasOwn(slackApps, appRaw)) error(`${path}.app`, noSuchApp(appRaw, Object.keys(slackApps)))
+      if (!Object.hasOwn(slackApps, appRaw)) error(at('app'), noSuchApp(appRaw, Object.keys(slackApps)))
       else app = appRaw
-      if (rulePlace && !rulePlace.startsWith('slack:')) error(`${path}.app`, `an app is a Slack app, but ${rulePlace} is not a Slack place: set \`place\` to a \`slack:\` place, remove \`place\`, or remove \`app\``)
+      if (rulePlace && !rulePlace.startsWith('slack:')) error(at('app'), `an app is a Slack app, but ${rulePlace} is not a Slack place: set \`place\` to a \`slack:\` place, remove \`place\`, or remove \`app\``)
     }
     const person = str(t, 'person', path)
-    if (person !== undefined && !has(people, person) && !isRole(person)) error(`${path}.person`, `"${person}" is neither a person nor a role anyone holds`)
+    if (person !== undefined && !has(people, person) && !isRole(person)) error(at('person'), `"${person}" is neither a person nor a role anyone holds`)
     const ruleTargetRaw = str(t, 'target', path)
-    if (t.target === undefined) error(`${path}.target`, 'is required: specialist:<name>, or main')
-    const ruleTarget = ruleTargetRaw === undefined ? undefined : targetOf(ruleTargetRaw, `${path}.target`, 'rule')
+    if (t.target === undefined) error(at('target'), 'is required: specialist:<name>, or main')
+    const ruleTarget = ruleTargetRaw === undefined ? undefined : targetOf(ruleTargetRaw, at('target'), 'rule')
     // Whether `target` can ever take what the rule matches: a pinned specialist only through its `pinned_to` apps, and an app that any specialist is pinned to delivers only to them.
     const specialist = ruleTarget !== undefined ? specialists[ruleTarget] : undefined
     if (specialist && ruleTarget !== undefined) {
       const pin = `add ${app} to ${ruleTarget}'s \`pinned_to\`, or change the rule's \`app\``
-      if (app && specialist.pinnedTo && !specialist.pinnedTo.includes(app)) error(`${path}.target`, `${ruleTarget} is pinned to ${specialist.pinnedTo.join(', ')}, so app ${app} can never deliver to it: ${pin}`)
-      else if (app && !specialist.pinnedTo && pinnersOf(specialists, app).length) error(`${path}.target`, `app ${app} serves only specialists pinned to it (${pinnersOf(specialists, app).join(', ')}), and ${ruleTarget} is not pinned to it: ${pin}`)
-      else if (specialist.pinnedTo && !app && rulePlace && !rulePlace.startsWith('slack:')) error(`${path}.target`, `${ruleTarget} is pinned to Slack apps, so it can never take a message at ${rulePlace}: remove \`pinned_to\` from ${ruleTarget}, or change \`place\` to a \`slack:\` place`)
+      if (app && specialist.pinnedTo && !specialist.pinnedTo.includes(app)) error(at('target'), `${ruleTarget} is pinned to ${specialist.pinnedTo.join(', ')}, so app ${app} can never deliver to it: ${pin}`)
+      else if (app && !specialist.pinnedTo && pinnersOf(specialists, app).length) error(at('target'), `app ${app} serves only specialists pinned to it (${pinnersOf(specialists, app).join(', ')}), and ${ruleTarget} is not pinned to it: ${pin}`)
+      else if (specialist.pinnedTo && !app && rulePlace && !rulePlace.startsWith('slack:')) error(at('target'), `${ruleTarget} is pinned to Slack apps, so it can never take a message at ${rulePlace}: remove \`pinned_to\` from ${ruleTarget}, or send it a \`slack:\` place instead`)
     }
-    if ((rulePlace || app) && ruleTarget) rules.push({ target: ruleTarget, ...(rulePlace && { place: rulePlace }), ...(app && { app }), ...(person !== undefined && { person }) })
+    if ((rulePlace || app) && ruleTarget) {
+      if (source === 'listens') fromListens.add(rules.length)
+      ruleAt.push(path)
+      rules.push({ target: ruleTarget, ...(rulePlace && { place: rulePlace }), ...(app && { app }), ...(person !== undefined && { person }) })
+    }
+  }
+  if (doc.rules !== undefined && !(Array.isArray(doc.rules) && doc.rules.every(isTable))) error('rules', 'must be [[rules]] tables')
+  else for (const [i, t0] of ((doc.rules ?? []) as Table[]).entries()) {
+    const path = `rules[${i}]`
+    readRule(renamed(t0, path, [{ from: 'at', to: 'place' }, { from: 'from', to: 'person' }, { from: 'to', to: 'target' }]), path, k => join2(path, k), 'rules')
+  }
+  // An old `listens` is read as rules after the explicit ones, a place named by its id before one named `#name`, before every group DM (what `route()` always did: the most specific name first).
+  // (`placesOf` in connectors/slack/watch.ts lists a channel's names: its id, then `#name`, then `slack:group-dm`.)
+  const nameRank = (p: Place) => p === SLACK_GROUP_DM ? 2 : p.includes('#') ? 1 : 0
+  for (const l of [...legacyRules].sort((x, y) => nameRank(x.place) - nameRank(y.place))) {
+    readRule({ place: l.place, target: `specialist:${l.target}` }, l.path, () => l.path, 'listens')
   }
   // A rule never matches when an earlier one takes everything it would: its place and app are the same or wider, and who `later`
   // names is a subset of who `earlier` names. Absent and `anyone` include strangers; `people` is the roster; a role, its holders.
@@ -818,22 +833,47 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     const e = appsOf(earlier), l = appsOf(later)
     return e === 'any' || (l !== 'any' && l.every(a => e.includes(a)))
   }
+  // Two rules that take every message at one place through one app are a mistake, not a preference: the earlier wins and the later never gets
+  // them. That is an error, naming both. (An old `listens` that an explicit rule already covers stays the warning it was: the file still loads.)
+  const takesEveryone = (r: Rule) => senders(r.person) === 'everyone'
+  const clashApps = (earlier: Rule, later: Rule): string | undefined => {
+    const e = appsOf(earlier), l = appsOf(later)
+    const shared = e === 'any' ? l : l === 'any' ? e : l.filter(a => e.includes(a))
+    // Both name apps (a pin, or an `app`): sharing one is a clash even if each also has another. 'any' on one side clashes only when the other is wholly covered.
+    if (e !== 'any' && l !== 'any') return shared.length ? `app ${(shared as string[]).join(', ')}` : undefined
+    return appsCover(earlier, later) && !(l !== 'any' && l.length === 0) ? 'any app' : undefined
+  }
+  /** The apps both rules apply to (an empty list: none; `any` pins play no part on a side, so the other side's apps). */
+  const sharedApps = (x: Rule, y: Rule): string[] => {
+    const ax = appsOf(x), ay = appsOf(y)
+    return ax === 'any' ? (ay === 'any' ? ['any'] : ay) : ay === 'any' ? ax : ax.filter(app => ay.includes(app))
+  }
+  const clashed = new Set<number>()
   for (const [j, later] of rules.entries()) {
-    const i = rules.findIndex((earlier, k) => k < j && (earlier.place === undefined || earlier.place === later.place) && appsCover(earlier, later) && covers(earlier.person, later.person))
-    if (i >= 0) warn(`rules[${j}]`, `never matches: rules[${i}] already takes ${later.person ? `${later.person}'s messages` : 'every message'} ${where(later)}`)
-  }
-  // A rule for everyone is checked before `listens`, so a specialist that listens where it applies, and takes one of its apps, never hears it there.
-  const takesAppOf = (s: Specialist, r: Rule): boolean => {
-    const via = appsOf(r)
-    return via === 'any' || via.some(a => serves(specialists, s, a))
-  }
-  for (const [i, r] of rules.entries()) {
-    if (senders(r.person) !== 'everyone') continue
-    for (const s of Object.values(specialists)) {
-      if (s.id === r.target || !takesAppOf(s, r) || (r.place !== undefined && !s.listens.includes(r.place)) || !s.listens.length) continue
-      warn(`rules[${i}]`, r.place ? `takes every message ${where(r)}, so ${s.id}, which listens there, never hears it` : `takes every message ${where(r)}, so ${s.id}, which listens on ${s.listens.join(', ')}, never hears it through that app`)
+    if (later.place === undefined || !takesEveryone(later)) continue
+    for (const [i, earlier] of rules.slice(0, j).entries()) {
+      // The same target twice is a redundant rule, not a shadowed one: it keeps its `never matches` warning, and so does an old `listens` an explicit rule covers.
+      if (earlier.place !== later.place || !takesEveryone(earlier) || earlier.target === later.target || (fromListens.has(j) && !fromListens.has(i))) continue
+      const via = clashApps(earlier, later)
+      if (via === undefined) continue
+      const named = (r: Rule) => r.target === MAIN_TARGET ? 'main' : `specialist:${r.target}`
+      error(ruleAt[j], `sends every message at ${later.place} through ${via} to ${named(later)}, but ${ruleAt[i]} already sends them to ${named(earlier)}: give ${ruleAt[j]} a \`person\`, or remove it`)
+      clashed.add(j)
+      break
     }
   }
+  for (const [j, later] of rules.entries()) {
+    if (clashed.has(j)) continue
+    // An old `listens` an earlier rule to the same target already covers is redundant, not shadowed: said nowhere.
+    const i = rules.findIndex((earlier, k) => k < j && !(fromListens.has(j) && earlier.target === later.target) && (earlier.place === undefined || earlier.place === later.place) && appsCover(earlier, later) && covers(earlier.person, later.person))
+    if (i >= 0) { warn(ruleAt[j], `never matches: ${ruleAt[i]} already takes ${later.person ? `${later.person}'s messages` : 'every message'} ${where(later)}`); continue }
+    // An old `listens` is not told apart from a rule for everyone by who it takes: when an explicit rule for everyone takes some of its apps (not all), it still loses those.
+    if (!fromListens.has(j)) continue
+    const k = rules.findIndex((earlier, m) => m < j && !fromListens.has(m) && earlier.target !== later.target && takesEveryone(earlier) && (earlier.place === undefined || earlier.place === later.place) && sharedApps(earlier, later).length > 0)
+    if (k >= 0) warn(ruleAt[j], `gets only some apps: ${ruleAt[k]} already takes every message ${where(rules[k])}, so ${later.target} does not answer it through app ${sharedApps(rules[k], later).join(', ')}`)
+  }
+  /** Where a specialist answers every message (see `placesAnsweredBy`). */
+  const answered = (id: string): Place[] => placesAnsweredBy({ rules }, id)
 
   // --- guard (checked now, run by a later step) ----------------------------------------------------------------------
 
@@ -910,7 +950,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
    * Reading its replies is not talking to it: a place others only read adds nothing here.
    */
   function reachedBy(s: Specialist): string[] {
-    const shared = s.listens.filter(p => p !== 'cli' && !isDmPlace(p) && dmPerson(p) === undefined)
+    const shared = answered(s.id).filter(p => p !== 'cli' && !isDmPlace(p) && dmPerson(p) === undefined)
     const others = (people_: Person[]) => people_.filter(p => p.id !== operator).map(p => p.id)
     const who: string[] = []
     if (s.allow.includes('anyone')) {
@@ -929,7 +969,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
         who.push(role === 'people' ? `${listJoin(fresh)} (allow = ${JSON.stringify(s.allow)})` : `${listJoin(fresh)} (role "${role}")`)
       }
     }
-    for (const p of s.listens) if (p !== 'cli' && places[p]?.bots) who.push(`any other bot in ${p}`)
+    for (const p of answered(s.id)) if (p !== 'cli' && places[p]?.bots) who.push(`any other bot in ${p}`)
     return who
   }
   const listJoin = (items: string[]) => items.length <= 2 ? items.join(' and ') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
@@ -948,13 +988,12 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     }
   }
 
-  const ruleTargets = new Set([...rules.map(r => r.target), ...Object.values(specialists).flatMap(s => s.talksTo ?? [])])
+  const ruleOrTalksToTargets = new Set([...rules.map(r => r.target), ...Object.values(specialists).flatMap(s => s.talksTo ?? [])])
   const scheduleTargets = new Set(Object.values(schedules).map(s => s.target))
   for (const s of Object.values(specialists)) {
     const path = `specialists.${s.id}`
-    if (s.listens.length === 0 && !ruleTargets.has(s.id) && !scheduleTargets.has(s.id)) {
-      warn(path, 'nobody can reach it: it listens nowhere, and no rule or schedule sends to it')
-    }
+    const answeredAt = answered(s.id)
+    if (!ruleOrTalksToTargets.has(s.id) && !scheduleTargets.has(s.id)) warn(path, 'nobody can reach it: no rule, schedule or `talks_to` names it')
     // An unrestricted session runs under the operator's account, so whoever can talk to it can use that account through it.
     if (!s.restricted) {
       const who = reachedBy(s)
@@ -963,34 +1002,36 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     // A restricted specialist's answer can carry a link; where previews are on, the preview shows readers content they could not open themselves.
     // Previews can be switched off in a Slack channel (by id or name) and a Discord channel by id; a Discord channel given by name is not one hydra can match.
     if (s.restricted && s.allow.includes('anyone')) {
-      const chat = s.listens.filter(p => (p.startsWith('slack:') || p.startsWith('discord:')) && places[p]?.linkPreviews !== false)
+      const chat = answeredAt.filter(p => (p.startsWith('slack:') || p.startsWith('discord:')) && places[p]?.linkPreviews !== false)
       const open = chat.filter(p => !p.startsWith('discord:#') && !namesDmWithOthers(p))
       const named = chat.filter(p => p.startsWith('discord:#'))
       const lead = `anyone can talk to it in`
       const why = 'where a link in its answer unfurls a preview that can show readers content they could not open themselves'
       if (open.length) warn(path, `${lead} ${listJoin(open)}, ${why}; set link_previews = false in ${open.map(p => `[places.${JSON.stringify(p)}]`).join(' and ')}`)
       const noSwitch = chat.filter(namesDmWithOthers)
-      if (noSwitch.length) warn(path, `${lead} ${listJoin(noSwitch)}, ${why}; previews cannot be switched off there, so let it listen elsewhere or narrow \`allow\``)
+      if (noSwitch.length) warn(path, `${lead} ${listJoin(noSwitch)}, ${why}; previews cannot be switched off there, so let it hear another place, or narrow \`allow\``)
       if (named.length) warn(path, `${lead} ${listJoin(named)}, ${why}; hydra can switch previews off in a Discord channel only by id, so list it as discord:<channel id> and set link_previews = false there`)
     }
     if (s.sessions === 'shared') {
-      if (s.listens.length >= 2) warn(path, `one shared session hears ${s.listens.join(', ')}, so what's said in one place is remembered in the others; use sessions = "per-conversation" or one specialist per place`)
-      else if (s.listens.includes(SLACK_GROUP_DM) && s.allow.length > 0) warn(path, `one shared session hears every group DM (allow = ${JSON.stringify(s.allow)}), so what one group says is remembered in another; use sessions = "per-conversation" or allow = []`)
-      else if (s.listens.some(isDmPlace) && s.allow.length > 0) warn(path, `one shared session hears everyone's DMs (allow = ${JSON.stringify(s.allow)}), so one person's DM is remembered in another's; use sessions = "per-conversation" or allow = []`)
+      if (answeredAt.length >= 2) warn(path, `one shared session hears ${answeredAt.join(', ')}, so what's said in one place is remembered in the others; use sessions = "per-conversation" or one specialist per place`)
+      else if (answeredAt.includes(SLACK_GROUP_DM) && s.allow.length > 0) warn(path, `one shared session hears every group DM (allow = ${JSON.stringify(s.allow)}), so what one group says is remembered in another; use sessions = "per-conversation" or allow = []`)
+      else if (answeredAt.some(isDmPlace) && s.allow.length > 0) warn(path, `one shared session hears everyone's DMs (allow = ${JSON.stringify(s.allow)}), so one person's DM is remembered in another's; use sessions = "per-conversation" or allow = []`)
     }
     // Without idle, a per-conversation session never ends on its own, so its slot under max_sessions never frees.
     if (s.sessions === 'per-conversation' && s.idleMs === undefined) warn(path, `conversations past max_sessions (${s.maxSessions}) will wait until a session is ended by hand; set idle`)
-    // Pinning an app takes it from every unpinned specialist: one that listens where no pinned specialist does has lost that app there.
+    // Pinning an app takes it from every unpinned specialist: one that answers a place where no pinned specialist does has lost that app there.
+    // (A rule with its own `app` answers through that app only, so it is not a place every app delivers.)
+    const answeredViaEveryApp = (id: string) => placesAnsweredBy({ rules: rules.filter(r => r.app === undefined) }, id)
     if (!s.pinnedTo) for (const app of Object.keys(slackApps)) {
       const by = pinnersOf(specialists, app)
-      const lost = s.listens.find(p => p.startsWith('slack:') && !by.some(y => specialists[y].listens.includes(p)))
+      const lost = answeredViaEveryApp(s.id).find(p => p.startsWith('slack:') && !by.some(y => answeredViaEveryApp(y).includes(p)))
       if (by.length && lost) warn(path, `${s.id} is unpinned, and app ${app} is pinned by ${by.join(', ')}, so ${s.id} no longer hears ${app} on ${lost}`)
     }
-    for (const p of s.listens) {
+    for (const p of answeredAt) {
       const platform = p.split(':')[0] as Platform | 'cli'
       if (platform === 'cli') continue
-      if (!connected(platform)) warn(path, platform === 'slack' ? `listens on ${p}, but hydra.toml declares no Slack app: add [slack.apps.<id>], or it won't hear it` : `listens on ${p}, but [${platform === 'discord' ? 'gateways' : 'connectors'}.${platform}] isn't set, so it won't hear it`)
-      else if (platform === 'github' && !connectors.github!.repos.includes(p.slice('github:'.length))) warn(path, `listens on ${p}, but connectors.github.repos doesn't include it`)
+      if (!connected(platform)) warn(path, platform === 'slack' ? `a rule sends ${p} to it, but hydra.toml declares no Slack app: add [slack.apps.<id>], or it won't hear it` : `a rule sends ${p} to it, but [${platform === 'discord' ? 'gateways' : 'connectors'}.${platform}] isn't set, so it won't hear it`)
+      else if (platform === 'github' && !connectors.github!.repos.includes(p.slice('github:'.length))) warn(path, `a rule sends ${p} to it, but connectors.github.repos doesn't include it`)
     }
   }
 
