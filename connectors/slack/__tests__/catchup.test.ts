@@ -66,6 +66,84 @@ describe('catchUp: a thread a session listens to, where no specialist listens', 
   })
 })
 
+describe('catchUp: a bind takes only what comes after it', () => {
+  // Slack returns a thread's parent with every replies call, whatever `oldest` is.
+  const PARENT = '1792999000.000001'
+  const parentAlways = (thread: RawMessage[]): SlackApi => ({ ...fakeApi({ [CH]: [] }).api, async replies() { return { messages: thread } } })
+  const parent: RawMessage = { ts: PARENT, user: 'UA', text: 'posted before the bind', reply_count: 1 }
+
+  for (const [kind, to, by] of [['a specialist', 'helper', 'tool'], ['a session thread', '1552619225032425525', 'tool'], ['a home post', 'helper', 'home']] as const) {
+    test(`${kind} bound to a thread (by '${by}') is not sent the thread's parent, and the pass does not say the live stream missed it`, async () => {
+      const { w, sent } = setup()
+      w.bind(CH, PARENT, to, by)
+      for (let i = 0; i < 2; i++) expect((await catchUp(w, parentAlways([parent]), cfg, opts({ deep: true }))).accepted).toBe(0)
+      await w.flush()
+      expect(sent).toHaveLength(0)
+    })
+  }
+
+  test("the operator's bind of a thread whose request the live stream missed still delivers that request", async () => {
+    const { w, sent } = setup()
+    const tag: RawMessage = { ts: PARENT, user: 'UA', text: mention, reply_count: 0 }
+    w.bind(CH, PARENT, 'helper', 'cli')                                  // the tag was posted while the daemon was down, and was never delivered
+    await catchUp(w, parentAlways([tag]), cfg, opts({ deep: true }))
+    await w.flush()
+    expect(sent.join()).toContain('a cart please')
+  })
+
+  test('a reply posted before the bind, after the channel cursor, is not delivered; one after it is', async () => {
+    const { w, sent } = setup()
+    w.handle({ channel: CH, ts: '1792990000.000001', user: 'UA', text: 'old chat' })  // the channel's cursor
+    w.bind(CH, PARENT, 'helper', 'tool')                                       // at 1793000000
+    const before = { ts: '1792999500.000001', thread_ts: PARENT, user: 'UA', text: 'before the bind' }
+    const after = { ts: '1793000100.000001', thread_ts: PARENT, user: 'UA', text: 'after the bind' }
+    await catchUp(w, fakeApi({ [CH]: [] }, { [`${CH}:${PARENT}`]: [parent, before, after] }).api, cfg, opts({ deep: true }))
+    await w.flush()
+    expect(sent.join()).toContain('after the bind')
+    expect(sent.join()).not.toContain('before the bind')
+  })
+
+  test('a reply after the bind is still delivered, and counts as missed', async () => {
+    const { w, sent } = setup()
+    w.bind(CH, PARENT, 'helper', 'tool')
+    const reply = { ts: '1793000100.000001', thread_ts: PARENT, user: 'UA', text: 'after the bind' }
+    expect((await catchUp(w, parentAlways([parent, reply]), cfg, opts({ deep: true }))).accepted).toBe(1)
+    await w.flush()
+    expect(sent.join()).toContain('after the bind')
+    expect(sent.join()).not.toContain('posted before the bind')
+  })
+
+  test('after a handoff the successor session gets m2 and m3 in order, and the parent is not delivered again', async () => {
+    const SESSION = '1552619225032425525'
+    let successor = false
+    const { w, sent } = setup(() => successor ? { ok: true } : { ok: false, error: 'the session is gone' })
+    w.bind(CH, PARENT, SESSION, 'tool')                                          // the thread keeps its binding through the handoff
+    const m2 = { ts: '1793000200.000001', thread_ts: PARENT, user: 'UA', text: 'm2' }
+    const m3 = { ts: '1793000300.000001', thread_ts: PARENT, user: 'UA', text: 'm3' }
+    for (const m of [m2, m3]) w.handle({ channel: CH, ts: m.ts, threadTs: PARENT, user: m.user, text: m.text })
+    await w.flush()
+    expect(w.get(CH, PARENT)).toMatchObject({ specialist: SESSION, owed: [m2.ts, m3.ts] })
+    successor = true                                                             // the successor registers; catch-up rereads from the oldest owed
+    sent.length = 0                                                              // forget the failed attempts
+    const r = await catchUp(w, parentAlways([parent, m2, m3]), cfg, opts({ deep: true }))
+    await w.flush()
+    expect(r.accepted).toBe(2)                                                   // the two owed, not the parent
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).not.toContain('posted before the bind')
+    expect(sent[0].indexOf('m2')).toBeGreaterThan(-1)
+    expect(sent[0].indexOf('m2')).toBeLessThan(sent[0].indexOf('m3'))
+    expect(w.get(CH, PARENT)).toMatchObject({ specialist: SESSION, delivered: [PARENT, m2.ts, m3.ts] })
+  })
+
+  test('binding a conversation that is already open leaves what it owes alone', async () => {
+    const { w, sent } = setup()
+    w.handle({ channel: CH, ts: PARENT, user: 'UA', text: mention }) // the parent is a tag: accepted, owed
+    w.bind(CH, PARENT, 'helper', 'tool')
+    await w.flush()
+    expect(sent.join()).toContain('a cart please')
+  })
+})
+
 describe('catchUp', () => {
   test('a refused sender found in the gap is refused once, like live, and is not counted as recovered', async () => {
     const closed: SlackWatchConfig = view(oneListener(CH, 'helper', '["people"]') + '[people.owner]\naddresses = ["slack:UOWNER"]\nname = "Owner"\nroles = ["boss"]\n')

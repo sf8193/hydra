@@ -273,6 +273,6 @@ describe('where a watcher alert lands, by app', () => {
     _reloadSpecialists()
     const r = await sendTo('sales', 'a gap', () => getSlackWatcher().catchUpGap('C0NOWHERE', '1000.000001', '1900.000001', 200, 'sales'))
     expect(r.channels).not.toContain(CRM_THREAD)
-    expect(r.channels.length > 0 || r.logged.includes('slack connector alert with no specialist thread')).toBe(true)
+    expect(r.channels.length > 0 || r.logged.includes('slack connector alert, logged only')).toBe(true)
   })
 })

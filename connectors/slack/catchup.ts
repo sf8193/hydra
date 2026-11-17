@@ -2,9 +2,12 @@ import { route } from '../../routing/route.js'
 import { DEFAULT_SLACK_APP, SLACK_DM } from '../../config/types.js'
 import { cmpTs, routedChannels, hearsDms, addressOf, TOP_LEVEL, OPERATOR_TOKEN_REFUSED, type SlackFile, type SlackMessageEvent, type SlackWatchConfig, type CatchUpWatch } from './watch.js'
 
-/** Where a watched thread is reread from when no specialist's channel cursor covers it (a session listening): its newest delivered message, else when it was bound. */
+/** Slack's clock and ours differ a little: a thread is read from this long before its bind, so a reply just after it is not passed over. */
+const BIND_SKEW_S = 10
+
+/** Where a watched thread is reread from at the earliest: its newest delivered message, else when it was bound. Nothing posted before the bind is replayed. */
 function ownCursor(e: { delivered?: string[]; createdAt: number }): string {
-  const bound = `${Math.floor(e.createdAt / 1000)}.000000`
+  const bound = `${Math.floor(e.createdAt / 1000) - BIND_SKEW_S}.000000`
   const last = e.delivered?.[e.delivered.length - 1]
   return last && cmpTs(last, bound) > 0 ? last : bound
 }
@@ -186,8 +189,13 @@ export async function catchUp(watcher: CatchUpWatch, api: SlackApi, cfg: SlackWa
     // they need are known, and kept back from the DM scans below.
     if (opts.deep) {
       for (const e of [...watcher.list()].filter(e => e.threadTs !== TOP_LEVEL).sort((a, b) => b.lastEventAt - a.lastEventAt)) {
-        const cursor = watcher.channelCursor(e.channel) ?? ownCursor(e)
-        if (cursor) want(e.channel, e.threadTs, cursor)
+        const own = ownCursor(e)
+        const held = watcher.channelCursor(e.channel)
+        // A conversation opened by a bind starts at the bind: an older channel cursor must not bring back what was posted before it.
+        // One opened by a message starts at that message, which the channel cursor already covers.
+        const bound = e.mentionedBy === 'tool' || e.mentionedBy === 'cli' || e.mentionedBy === 'home'
+        const cursor = held && !(bound && cmpTs(held, own) < 0) ? held : own
+        want(e.channel, e.threadTs, cursor)
       }
     }
 

@@ -571,10 +571,17 @@ export class SlackWatcher {
     return entry
   }
 
-  /** `bind_conversation`: bind a conversation to `specialist`, opening it if need be. What is still owed follows the new binding. */
+  /**
+   * `bind_conversation`: bind a conversation to `specialist`, opening it if need be. What is still owed follows the new binding.
+   * A conversation opened by a binder that has seen its parent (a session reading the thread, a specialist posting it) counts
+   * the parent as seen: Slack returns it with every thread read, and it would be delivered as a follow-up. The operator's CLI
+   * has not necessarily seen it, so it stays undelivered: a request the live stream missed is still delivered.
+   */
   bind(channel: string, threadTs: string, specialist: string, by?: string, app?: string): SlackWatchEntry | undefined {
+    const seenParent = !this.get(channel, threadTs, app) && (by === 'tool' || by === 'home')
     const entry = this.watch(channel, threadTs, specialist, by, app)
     if (!entry) return undefined
+    if (seenParent && threadTs !== TOP_LEVEL) { entry.delivered = insertTs(entry.delivered, threadTs, DELIVERED_KEEP); this.persist() }
     if (entry.specialist !== specialist) {
       this.deps.log(`daemon: slack connector: ${conversationId(entry)} moved from ${entry.specialist} to ${specialist}\n`)
       entry.specialist = specialist
