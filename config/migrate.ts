@@ -6,7 +6,7 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'fs'
 import { dirname, isAbsolute, join, resolve } from 'path'
-import { parseIdleTtl } from '../shared/constants.js'
+import { parseIdleTtl, SPECIALIST_THREADS } from '../shared/constants.js'
 import { invalidSpecialistName } from '../shared/specialist-name.js'
 import { loadHydraConfig, normalizeAddress, formatIssues } from './load.js'
 import { parsePlace, placeKey } from './types.js'
@@ -15,8 +15,6 @@ import { slackWatchStep } from './migrate-slack-watch.js'
 import { jobsStep } from './migrate-jobs.js'
 
 export const HYDRA_TOML = 'hydra.toml'
-/** The daemon's specialist pointers, as specialists/specialists.ts keeps them. */
-export const SPECIALIST_THREADS = 'specialist-threads.json'
 
 export type MigrateInput = {
   stateDir: string
