@@ -3,7 +3,7 @@
 // Named sessions die and are replaced; a sender who addresses the name that has
 // just been retired means whoever holds that seat now. These cases pin the walk
 // that finds them: live session first, then the threads the name has occupied,
-// most recent occupancy first.
+// the thread of the name's most recent occupancy; older threads never answer.
 //
 // Both registries are injected rather than driven through the global ones: the
 // daemon under test shares its state file with the operator's live daemon, whose
@@ -129,13 +129,36 @@ describe('resolveSendTarget', () => {
     expect(resolveSendTarget('spark', reg, reversed)?.session.sessionId).toBe('s-new-seat')
   })
 
-  test('falls through to an older thread when the newest has no live occupant', () => {
-    const reg = fakeRegistry([{ sessionId: 's-old-seat', tmuxName: 'moss', threadId: 'thread-old' }])
+  test('does not fall through to an older thread when the newest has no live occupant (#778)', () => {
+    // Name X died in thread A (newest, now empty). An older X sat in thread B, which Y holds now.
+    // A send to X must be refused, never delivered to Y.
+    const reg = fakeRegistry([{ sessionId: 's-y', tmuxName: 'moss', threadId: 'thread-b' }])
     const threads = fakeThreads({
-      'thread-old': ['spark@1000', 'moss@2000'],
-      'thread-new': ['spark@8000'],
+      'thread-b': ['spark@1000', 'moss@2000'],
+      'thread-a': ['spark@8000'],
     })
-    expect(resolveSendTarget('spark', reg, threads)?.session.sessionId).toBe('s-old-seat')
+    expect(resolveSendTarget('spark', reg, threads)).toBeUndefined()
+  })
+
+  test('a stamped-dead record still holding its newest thread does not open the older threads (#778, restart case)', () => {
+    const reg = fakeRegistry([
+      { sessionId: 's-x-dead', tmuxName: 'spark', threadId: 'thread-a', deadAt: 8000 },
+      { sessionId: 's-y', tmuxName: 'moss', threadId: 'thread-b' },
+    ])
+    const threads = fakeThreads({ 'thread-b': ['spark@1000', 'moss@2000'] })
+    expect(resolveSendTarget('spark', reg, threads)).toBeUndefined()
+  })
+
+  test('still hands off to the live successor in the newest thread while an older thread also has an occupant', () => {
+    const reg = fakeRegistry([
+      { sessionId: 's-y', tmuxName: 'moss', threadId: 'thread-b' },
+      { sessionId: 's-succ', tmuxName: 'glyph', threadId: 'thread-a' },
+    ])
+    const threads = fakeThreads({
+      'thread-b': ['spark@1000', 'moss@2000'],
+      'thread-a': ['spark@8000', 'glyph@9000'],
+    })
+    expect(resolveSendTarget('spark', reg, threads)?.session.sessionId).toBe('s-succ')
   })
 
   test('does not redirect to the corpse still holding its own thread mapping', () => {
