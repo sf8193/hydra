@@ -1,6 +1,6 @@
 // A can_only_write_to specialist through the session lifecycle: the gates every start passes (folder, worktree, token, engine), the start check, and the delivery gate.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync } from 'fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { gateway } from '../config.js'
@@ -184,6 +184,22 @@ describe('a start of a write-confined specialist', () => {
     await expect(start()).rejects.toThrow(PolicyRefusal)
     expect(launches).toHaveLength(0)
     expect(told.join('\n')).toMatch(/\.mcp\.json already declares an MCP server named browser; Claude Code's allowlist matches by name/)
+  })
+
+  test('a real ~/.claude.json (a file in a throwaway HOME, read by the real reader) that declares the listed name refuses the start; with no such file the start goes', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'clash-home-'))
+    try {
+      _setLoadEnvForTesting(macLike({ home, claudeConfigDir: join(home, '.claude') }))
+      seedDead()
+      await start()
+      expect(launches).toHaveLength(1)   // control: nothing declares it, the same start goes
+      launches.length = 0; told.length = 0
+      writeFileSync(join(home, '.claude.json'), JSON.stringify({ mcpServers: { browser: { command: '/usr/bin/false' } } }))
+      seedDead()
+      await expect(start()).rejects.toThrow(PolicyRefusal)
+      expect(launches).toHaveLength(0)
+      expect(told.join('\n')).toContain(`${join(home, '.claude.json')} already declares an MCP server named browser; Claude Code's allowlist matches by name`)
+    } finally { rmSync(home, { recursive: true, force: true }) }
   })
 
   test('a parent .mcp.json or a file that cannot be read refuses the start (the probe walks up and fails closed)', async () => {
