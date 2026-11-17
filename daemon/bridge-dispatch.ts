@@ -18,6 +18,8 @@ import { formatContextPercent, type DeliveryResult } from './engines/engine-adap
 import { resolveEngine } from './engines/instances.js'
 import { dispatchAdvance, finishPrivateProtocolChildLaunch, isProtocolParticipant, markPrivateProtocolChildLaunching, protocolChildRequiresPrivate, protocolSpawnRequiresPrivate, registerProtocolChild, registerProtocolChildResult } from './protocol-registry.js'
 import { watchPr, unwatchPr, listWatches, getWatchesBySession, formatWatchEntry, detectPrUrl, WATCH_ERRORS } from '../connectors/github/pr-watch.js'
+import { fileArgTools, snapshotConfinedFiles } from './write-confinement.js'
+import { fileRefusal } from '../config/write-confinement.js'
 import { bindConversation, unbindConversation, formatConversationsFor, replyInConversation, conversationBelongsTo } from '../connectors/slack/runtime.js'
 import { refreshSessionVisual, emojiOf, emojiOfName } from './anchor-state.js'
 import { refreshDashboard } from './dashboard.js'
@@ -25,7 +27,7 @@ import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle }
 import { fetchPrTitle, parsePrUrl } from '../connectors/github/pr-watch.js'
 import { SEND_TYPES, type SendType } from '../shared/tool-definitions.js'
 import { ASK_PREDECESSOR_TIMEOUT_MS, engineOfModel, normalizeReviewRounds } from '../shared/constants.js'
-import { isRestrictedSession, isToolAllowed, predecessorAsker, refusalText } from './tool-surface.js'
+import { isRestrictedSession, isToolAllowed, isWriteConfinedSession, predecessorAsker, refusalText } from './tool-surface.js'
 import { deliveryRefusal } from './restricted.js'
 import { parseRateLimits, reportUsage } from './usage-alerts.js'
 import { markYourTurn } from './home-status.js'
@@ -194,18 +196,24 @@ const RESTRICTED_PLACE_ARG: Readonly<Record<string, string>> = {
  * `sends_to` names (sends-to.ts). isToolAllowed has already refused the tools it does not keep.
  */
 export function restrictedRefusal(callerSessionId: string, name: string, args: Record<string, unknown>): string | undefined {
-  if (name === 'set_description') return args.session_id === callerSessionId ? undefined : "set_description: a restricted session describes only itself; session_id must be this session's own"
   if (name === 'reply' && Array.isArray(args.files) && args.files.length) return 'reply: a restricted session may not attach files of its own, so remove files (attachments are not sent)'
   if (name === 'send_to_thread') { const why = sendsToRefusal(callerSessionId, args); if (why) return why }
+  return ownPlaceRefusal(callerSessionId, name, args, 'a restricted session')
+}
+
+/** The place rule a restricted and a write-confined session share: it describes only itself and acts only in its own conversation (or a Slack one bound to its specialist). */
+export function ownPlaceRefusal(callerSessionId: string, name: string, args: Record<string, unknown>, who: string): string | undefined {
+  if (name === 'set_description') return args.session_id === callerSessionId ? undefined : `set_description: ${who} describes only itself; session_id must be this session's own`
   const arg = RESTRICTED_PLACE_ARG[name]
   const target = arg ? args[arg] : undefined
   const own = registry.get(callerSessionId)
   if (typeof target === 'string' && ((!!own && target === own.threadId) || conversationBelongsTo(callerSessionId, target))) return undefined
   if (typeof target !== 'string' || !target) return `${name}: ${arg ?? 'chat_id'} is required: pass the ${arg ?? 'chat_id'} of ${arg === 'channel' ? 'the conversation you are reading' : 'the message you are answering'}`
-  return `${name}: ${arg} ${target} is not this session's own conversation; a restricted session acts only in its own thread or in a Slack conversation bound to its specialist`
+  return `${name}: ${arg} ${target} is not this session's own conversation; ${who} acts only in its own thread or in a Slack conversation bound to its specialist`
 }
 
 export async function executeTool(name: string, args: Record<string, unknown>, callerSessionId?: string): Promise<ToolResult> {
+  const cleanups: (() => void)[] = []
   try {
     // Bridge-server enforces this at the socket boundary. Keep the dispatcher
     // fail-closed too: Codex advertises phase-scoped tools statically, and tests
@@ -217,6 +225,21 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
     if (callerSessionId && isRestrictedSession(callerSessionId)) {
       const refusal = restrictedRefusal(callerSessionId, name, args)
       if (refusal) throw new Error(refusal)
+    }
+    // A write-confined session keeps only the tools tool-surface gives it (CONFINED_TOOLS), and those only in its own conversation.
+    if (callerSessionId && isWriteConfinedSession(callerSessionId)) {
+      const refusal = ownPlaceRefusal(callerSessionId, name, args, 'a write-confined session')
+      if (refusal) throw new Error(refusal)
+    }
+    // The bridge posts with the daemon's file access, outside the sandbox that holds a write-confined session's own tools: what it names to attach is
+    // checked here, once, for every tool it holds that takes `files`; the gateway is given daemon-owned copies, never the session's paths. A session
+    // known to be confined only by its bridge's declaration (no record, so no policy) attaches nothing.
+    if (callerSessionId && isWriteConfinedSession(callerSessionId) && fileArgTools().includes(name) && args.files !== undefined) {
+      const w = registry.get(callerSessionId)?.policy?.canOnlyWriteTo
+      const checked = w && Array.isArray(args.files) ? snapshotConfinedFiles(w, args.files) : { refusal: w ? fileRefusal(String(args.files)) : 'this session is write-confined but has no record to say which files it may read, so nothing is attached' }
+      if ('refusal' in checked) throw new Error(`${name}: ${checked.refusal}`)
+      cleanups.push(checked.cleanup)
+      args = { ...args, files: checked.files }
     }
     // A private protocol helper must not bypass send_to_thread's visibility
     // policy through another gateway-mutating tool. Keep this centralized so
@@ -891,5 +914,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       content: [{ type: 'text', text: msg.startsWith(`${name} `) || msg.startsWith(`${name}:`) ? msg : `${name} failed: ${msg}` }],
       isError: true,
     }
+  } finally {
+    for (const c of cleanups) c()
   }
 }

@@ -266,7 +266,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       }
 
       // Only a registration that was accepted may declare: a refused newcomer must not narrow the session it was refused for.
-      noteDeclaredSessionType(sessionId, msg.sessionType)
+      noteDeclaredSessionType(sessionId, msg.sessionType, msg.writeConfined)
       transport.set(sessionId, conn)
       const tools = getToolsForSession(sessionId)
       transport.sendToBridge(conn, {

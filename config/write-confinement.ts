@@ -102,4 +102,28 @@ export const readDenyRule = (root: string): string => `Read(/${root}/**)`
  * write-confined specialist someone else can reach.
  */
 export const confinementWarning = (workdir: string): string =>
-  `can reach the operator's account: Bash and Edit/Write writes are confined to ${workdir}, and Claude Code's tools and shell cannot read the credential folders (~/.ssh, ~/.aws and the like), hydra's state folder or other specialists' workdirs; ~/Library/Keychains is one of those folders, so \`security\` and git's keychain helper fail in its shell (shown with a throwaway keychain; login keychain: not proven live; the git helper cannot be told apart on the real one without writing an item; a store the keychain service holds without a file is not separately blocked); the browser and MCP servers can read them, and other reads, network, MCP servers' own writes and credentials are not confined; it sees only the MCP servers it lists (hydra's bridge aside), and a listed server that declares a profile folder uses its own profile in ${workdir} while one that declares none keeps its default; attachments sent to it are unreadable (the shared inbox is denied). Credential separation (run_as) is planned, not built.`
+  `can reach the operator's account: Bash and Edit/Write writes are confined to ${workdir}, and Claude Code's tools and shell cannot read the credential folders (~/.ssh, ~/.aws and the like), hydra's state folder or other specialists' workdirs; ~/Library/Keychains is one of those folders, so \`security\` and git's keychain helper fail in its shell (shown with a throwaway keychain; login keychain: not proven live; the git helper cannot be told apart on the real one without writing an item; a store the keychain service holds without a file is not separately blocked); the browser and MCP servers can read them; the daemon attaches, for it, only a file in its folder or temp folder that is in none of those places, and it holds no tool that reaches another session (spawn, list, peek, kill, send_to_thread, handoff, watch, bind) and uses its reading and reply tools only in its own conversation; and other reads, network, MCP servers' own writes and credentials are not confined; it sees only the MCP servers it lists (hydra's bridge aside), and a listed server that declares a profile folder uses its own profile in ${workdir} while one that declares none keeps its default; attachments sent to it are unreadable (the shared inbox is denied). Credential separation (run_as) is planned, not built.`
+
+/** What a bridge tool's `files` check needs: the session's folder and temp folder, the places its tools are denied, and how a path resolves. */
+export type FileSendEnv = { workdir: string; tmpDir: string; deny: readonly string[]; realpath: (p: string) => string }
+
+/** The one refusal, whatever the cause (absent, outside, denied, a link that leads out): it must not tell the session which of them it was, or where a link leads. */
+export const fileRefusal = (path: string): string =>
+  `${path} is not attached: a write-confined session attaches only a file in its own folder or temp folder that it can read`
+
+/**
+ * Whether a write-confined session may attach `path` with a bridge tool. The bridge posts with the daemon's own file access, outside the sandbox
+ * that holds the session's shell and Read tool, so the daemon asks what the session could read itself: the file, as it resolves (symlinks followed,
+ * a relative path being its folder's, `~` not expanded), lies in the session's folder or temp folder and in none of the places `readDenyRoots`
+ * denies. Returns the resolved path, or the refusal's text (one text for every cause).
+ * This is the decision on a string; the daemon opens what it decides on once and sends a copy (daemon/write-confinement.ts `snapshotConfinedFiles`).
+ */
+export function fileSendDecision(path: string, env: FileSendEnv): { path: string; refusal?: undefined } | { path?: undefined; refusal: string } {
+  const abs = path.startsWith('/') ? path : `${trim(env.workdir)}/${path}`
+  let real: string
+  try { real = trim(env.realpath(abs)) } catch { return { refusal: fileRefusal(path) } }
+  if (env.deny.some(d => within(real, trim(d)))) return { refusal: fileRefusal(path) }
+  const homes = [env.workdir, env.tmpDir].map(p => { try { return trim(env.realpath(trim(p))) } catch { return trim(p) } })
+  if (!homes.some(h => within(real, h))) return { refusal: fileRefusal(path) }
+  return { path: real }
+}
