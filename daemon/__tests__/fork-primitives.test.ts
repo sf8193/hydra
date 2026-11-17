@@ -193,6 +193,29 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
   }
   const live = () => registry.get(registry.getByThread(THREAD)!)!
 
+  test('hydraMade: a thread hydra posts the anchor for and makes is marked, one spawned into is not, and a respawn keeps the mark', async () => {
+    const origCreate = gateway.createThread
+    const origFetch = gateway.fetchChannel
+    ;(gateway as any).createThread = async () => ({ id: THREAD })
+    ;(gateway as any).fetchChannel = async () => ({ isThread: false, isDM: false, parentId: null })
+    try {
+      await doSpawnSession('t', 'some-channel')
+      expect(threadRegistry.get(THREAD)?.hydraMade).toBe(true)
+      live().deadAt = Date.now()
+      await doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD })
+      expect(threadRegistry.get(THREAD)?.hydraMade).toBe(true)
+    } finally {
+      ;(gateway as any).createThread = origCreate
+      ;(gateway as any).fetchChannel = origFetch
+    }
+  })
+
+  test('hydraMade: absent when a spawn joins a thread that already existed', async () => {
+    seedDead()
+    await doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD })
+    expect(threadRegistry.get(THREAD)?.hydraMade).toBeUndefined()
+  })
+
   test('opts.predecessor lands on the new record', async () => {
     seedDead()
     await doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, predecessor: pred })

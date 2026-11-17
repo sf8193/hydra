@@ -154,6 +154,7 @@ hydra spawn <prompt>           # Spawn a new session
 hydra list                     # List active sessions
 hydra status <name>            # Session details
 hydra kill <name>              # Kill a session
+hydra kill <name> --destroy    # ...then delete its Discord thread (permanent; alias +d). Run from inside a session, only for sessions it spawned, as kill_session
 hydra peek [name]              # View live sessions (chooser or direct attach)
 hydra health                   # Daemon diagnostics
 hydra clear-key <key>          # Clear a stuck idempotency key
@@ -493,7 +494,7 @@ live-but-slow one delays only the voice message itself, up to
 | `create_thread` | Create a thread on a message or standalone. |
 | `spawn_session` | Spawn a new Claude session for a topic (main session only). |
 | `list_sessions` | List active spawned sessions (main session only). |
-| `kill_session` | Kill a spawned session (main session only). |
+| `kill_session` | Kill a session you spawned (main: any). `destroy: true` also deletes its Discord thread, through the same step as `kill +d`; a session may destroy only a thread hydra created for that spawn and no other session answers in, else it is refused before anything is killed. |
 
 ## Sessions
 
@@ -503,6 +504,7 @@ Spawn isolated Claude sessions from chat:
 |---------|--------|
 | `spawn: <topic>` | Create a new session with a thread |
 | `kill: <name>` | Kill a session by name |
+| `kill +d` (in a thread) | Kill this thread's session, then delete the thread |
 | `/sessions` | List active sessions |
 | `listen` / `pause` | Toggle auto-routing in a session thread |
 | `help` / `commands` | Show all available commands |

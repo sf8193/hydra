@@ -59,7 +59,7 @@ Session management:
   hydra spawn --specialist <name>      Spawn the session for a declared specialist (its kickoff is the prompt; refuses if it is already filled)
   hydra list                           List active sessions
   hydra status <name>                  Session details
-  hydra kill <name>                    Kill a session
+  hydra kill <name> [--destroy]        Kill a session; --destroy (or +d) then deletes its Discord thread, permanently
   hydra peek [name]                    Read-only view of live sessions
   hydra attach <name>                  Attach to a running session's tmux surface
                                        <name>: a session's name or id, a specialist's name, or a thread id
@@ -413,13 +413,15 @@ async function main(): Promise<void> {
     }
 
     case 'kill': {
-      const name = filtered[1]
+      const rest = filtered.slice(1)
+      const destroy = rest.some(a => a === '--destroy' || a === '+d' || a === '+destroy')
+      const name = rest.find(a => a !== '--destroy' && a !== '+d' && a !== '+destroy')
       if (!name) {
         console.error('error: session name required')
         process.exit(1)
       }
       const response = await sendRequest(socketPath(), {
-        type: 'cli', command: 'kill', id: randomUUID(), params: { name },
+        type: 'cli', command: 'kill', id: randomUUID(), params: { name, ...(destroy && { destroy, ...(process.env.HYDRA_SESSION_ID && { callerSessionId: process.env.HYDRA_SESSION_ID }) }) },
       })
       printResponse(response, json)
       break

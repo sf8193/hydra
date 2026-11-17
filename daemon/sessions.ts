@@ -232,6 +232,8 @@ export type ThreadMetadata = {
   sessionHistory: ThreadSessionEntry[]
   listenOverride?: boolean
   parentChannelId?: string
+  /** Hydra posted the anchor message and made the thread itself: nothing in it belongs to a human, so a session that spawned into it may destroy it. Absent for a thread spawned into, or anchored on, someone's message or thread. */
+  hydraMade?: boolean
 }
 
 // The session a handoff successor took over from, snapshotted before its kill: the
@@ -618,7 +620,7 @@ export class ThreadRegistry {
     respawnCount: number, sessionId: string, tmuxName: string,
     originType: 'spawn' | 'fork' | 'handoff' | 'resurrect', originFrom?: string,
     model?: string, parentChannelId?: string, claudeSessionId?: string,
-    label: SessionLabel | undefined, policy?: LaunchPolicy,
+    label: SessionLabel | undefined, policy?: LaunchPolicy, hydraMade?: boolean,
   }): void {
     const now = Date.now()
     let thread = this.threads.get(threadId)
@@ -635,6 +637,7 @@ export class ThreadRegistry {
         totalMessages: 0,
         sessionHistory: [],
         parentChannelId: opts.parentChannelId,
+        ...(opts.hydraMade && { hydraMade: true }),
       }
       this.threads.set(threadId, thread)
     } else {
