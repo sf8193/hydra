@@ -32,6 +32,8 @@ export type Loaded = {
   plugins: string[]
   /** The permission rules it applied under `--settings`. Undefined when it applied none. */
   allow: string[] | undefined
+  /** The deny rules it applied under `--settings`. Undefined when it applied none. */
+  deny: string[] | undefined
   /** Allow rules applied anywhere else (user, project, local or managed settings, the command line): destination to rules. */
   otherAllow: Record<string, string[]>
   /** The line that says claude.ai connectors were disabled by the environment was there. */
@@ -62,6 +64,7 @@ export function readLoaded(log: string): Loaded {
   const servers = new Set<string>(), connected = new Set<string>(), plugins = new Set<string>(), builtin = new Set<string>(), registered = new Set<string>()
   const registrations: Registration[] = []
   let allow: Set<string> | undefined
+  let deny: Set<string> | undefined
   const otherAllow: Record<string, Set<string>> = {}
   let connectorsOff = false
   let connectorActivity = false
@@ -91,6 +94,9 @@ export function readLoaded(log: string): Loaded {
       registrations.push(r)
       if (r.id === `${r.name}@builtin` && (r.kind === 'builtin' || r.kind === 'prepend')) builtin.add(r.name)
     }
+    else if ((m = line.match(/^(?:Applying permission update: )?(Adding|Replacing all) (?:\d+ )?deny rule(?:\(s\)|s) (?:to|for) destination 'flagSettings'(?: with \d+ rule\(s\))?: (\[.*\])\s*$/))) {
+      try { const list = flatten(JSON.parse(m[2])); deny = m[1] !== 'Adding' ? new Set(list) : new Set([...(deny ?? []), ...list]) } catch { /* an unreadable list is not a rule we can name */ }
+    }
     else if ((m = line.match(/^(?:Applying permission update: )?(Adding|Replacing all) (?:\d+ )?allow rule(?:\(s\)|s) (?:to|for) destination '([^']+)'(?: with \d+ rule\(s\))?: (\[.*\])\s*$/))) {
       try { rules(m[2], flatten(JSON.parse(m[3])), m[1] !== 'Adding') } catch { /* an unreadable list is not a rule we can name */ }
     }
@@ -100,7 +106,7 @@ export function readLoaded(log: string): Loaded {
     }
   }
   return {
-    servers: [...servers], connected: [...connected], plugins: [...plugins], allow: allow ? [...allow] : undefined,
+    servers: [...servers], connected: [...connected], plugins: [...plugins], allow: allow ? [...allow] : undefined, deny: deny ? [...deny] : undefined,
     otherAllow: Object.fromEntries(Object.entries(otherAllow).filter(([, v]) => v.size).map(([k, v]) => [k, [...v]])),
     connectorsOff, connectorActivity, builtinPlugins: [...builtin], registeredPlugins: [...registered], registrations,
   }
@@ -223,4 +229,41 @@ export async function verifyLaunch(policy: Pick<ConfinedPolicy, 'servers'>, path
   if (!got) return { ok: false, why: `its debug file ${path} could not be read within ${Math.round(deps.deadlineMs / 1000)}s (${readError ?? 'no such file'}), so what it loaded is unknown` }
   const short = shortfall(policy, got)
   return { ok: false, why: `it had not finished loading after ${Math.round(deps.deadlineMs / 1000)}s: ${short.join('; ')}` }
+}
+
+/**
+ * What a write-confined launch's debug file can show: that Claude Code read the launch's `--settings` and applied the rules in it, the deny rules that
+ * keep reads out of the credential places and the allow rule that opens the network. A restricted launch is judged by everything it loaded
+ * (`verifyLaunch`); this layer runs the operator's own account, so only its own rules are judged, and nothing else the session loads is.
+ *
+ * What it cannot show: the `sandbox.*` keys and `permissions.blockWritesOutsideWorkingDirectories`. Claude Code 2.1.326 logs no line for them that
+ * hydra has seen, so a version that ignored or renamed one would pass here. The rules passing proves the settings file was read and applied
+ * (a renamed *rule* key fails here), not that every other key in it was understood; the launch's version gate and the live smoke test cover the rest.
+ */
+export function confinementShortfall(want: { allow: readonly string[]; deny: readonly string[] }, got: Loaded): string[] {
+  const out: string[] = []
+  const missingDeny = want.deny.filter(r => !(got.deny ?? []).includes(r))
+  const missingAllow = want.allow.filter(r => !(got.allow ?? []).includes(r))
+  if (missingDeny.length) out.push(`it did not apply these deny rules: ${list(missingDeny)}`)
+  if (missingAllow.length) out.push(`it did not apply these allow rules: ${list(missingAllow)}`)
+  return out
+}
+
+/** Whether the launch whose debug file is `path` applied the write-confined layer's rules; polls the file until it has, or the deadline: never "no news, good news". */
+export async function verifyConfinement(want: { allow: readonly string[]; deny: readonly string[] }, path: string | undefined, deps: typeof verifyDeps = verifyDeps): Promise<Verdict> {
+  if (!path) return { ok: false, why: 'the launch wrote no debug file to check what it applied' }
+  const start = deps.now()
+  let readError: string | undefined
+  let short: string[] = ['nothing yet']
+  for (;;) {
+    try {
+      short = confinementShortfall(want, readLoaded(deps.read(path)))
+      readError = undefined
+      if (!short.length) return { ok: true }
+    } catch (err) { readError = err instanceof Error ? err.message : String(err) }
+    if (deps.now() - start >= deps.deadlineMs) break
+    await deps.sleep(deps.pollMs)
+  }
+  if (readError) return { ok: false, why: `its debug file ${path} could not be read within ${Math.round(deps.deadlineMs / 1000)}s (${readError}), so what it applied is unknown` }
+  return { ok: false, why: `after ${Math.round(deps.deadlineMs / 1000)}s: ${short.join('; ')} (Claude Code may have ignored or renamed a key in the launch's settings)` }
 }

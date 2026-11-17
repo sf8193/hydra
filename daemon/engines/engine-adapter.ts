@@ -189,6 +189,8 @@ export interface EngineAdapter {
   launch(input: LaunchInput): Promise<LaunchResult>
   /** A confined launch's check, from the engine's own record of what it loaded: refuse (with the cause) or pass. Absent: the engine cannot say, so it cannot run a confined session. */
   verifyLaunch?(policy: ConfinedPolicy, launched: LaunchResult): Promise<{ ok: true } | { ok: false; why: string }>
+  /** What a write-confined launch (`can_only_write_to`) applied, from the engine's own record, judged against its policy. Absent: the engine cannot run that layer. */
+  verifyConfinement?(policy: LaunchPolicy, launched: LaunchResult): Promise<{ ok: true } | { ok: false; why: string }>
   // Deliver one notification. Claude: strip the intents, then write to the
   // owning transport's session bridge, else enqueue there; the write is
   // synchronous (no await before it). Codex: optional → rejected; lowPriority

@@ -29,14 +29,15 @@ import { gateway } from '../config.js'
 import { SESSION_IDENTITY_VARS, capturedSpawnVars, scrubbedSpawnEnv, withRaisedFdLimit } from '../../shared/spawn-env.js'
 import { modsExport } from '../../shared/mods.js'
 import { BRIDGE_CHANNEL_FLAG, BRIDGE_MCP_SERVER_KEY, BRIDGE_PLUGIN_ID, BRIDGE_TOOLS_PERMISSION } from '../plugin-manifest.js'
-import { confined, deliveryRefusal, missingTokenRefusal, PolicyRefusal, remedy, RESTRICTED_MODS, RESTRICTED_PREAMBLE, sandboxInputs, serverToolRule, type ConfinedPolicy } from '../restricted.js'
-import { verifyLaunch as verifyLoaded, type Verdict } from './claude-verify.js'
+import { confined, deliveryRefusal, type LaunchPolicy, missingTokenRefusal, PolicyRefusal, remedy, RESTRICTED_MODS, RESTRICTED_PREAMBLE, sandboxInputs, serverToolRule, type ConfinedPolicy } from '../restricted.js'
+import { verifyConfinement as verifyConfinementLoaded, verifyLaunch as verifyLoaded, type Verdict } from './claude-verify.js'
 import { ENGINE_CAPABILITIES } from '../../shared/engine-capabilities.js'
 import { removeSpawnPrompt, writeSpawnPrompt } from '../launch-files.js'
 import { makeServerTmpDirs, removeRestrictedFiles, serverTmpDir, serverTmpRoot, writeRestrictedFiles } from '../restricted-files.js'
 import { sandboxedServer, sandboxIssues } from '../../config/server-sandbox.js'
 import type { PrivateRoot } from '../../config/restricted-workdir.js'
 import type { LoadEnv } from '../../config/types.js'
+import { claudeVersionRefusal, confinementRules, makeBrowserDirs, confinementLogLine, confinementMcp, confinementSettings } from '../write-confinement.js'
 import { clearNeedsAuthEntry, describeSetAt, NEEDS_AUTH_CLEARED_NOTE } from './claude-needs-auth.js'
 
 // What the pane-and-transcript methods read. The byte (main) has no SessionInfo, so these take only this.
@@ -111,6 +112,21 @@ function writeRestrictedConfig(policy: ConfinedPolicy, tmuxName: string, session
     removeRestrictedFiles({ tmuxName, sessionId }, true)   // a refused launch leaves no folder behind
     throw err
   }
+}
+
+/**
+ * Writes a write-confined launch's settings and MCP config (restricted-files.ts) and makes the browser's own folders in the workdir.
+ * Everything that can refuse does so before a file is written; a launch that fails after leaves nothing behind.
+ */
+function writeConfinementConfig(w: NonNullable<LaunchPolicy['canOnlyWriteTo']>, specialist: string, tmuxName: string, sessionId: string): { settings: string; mcp: string } {
+  const policy = { specialist, ...w }
+  const refusal = claudeVersionRefusal(policy, tmuxName)
+  if (refusal) throw new PolicyRefusal(refusal)
+  const mcp = confinementMcp(policy, tmuxName, process.env, capturedSpawnVars(), ENV_FILE)
+  try { makeBrowserDirs(w.workdir) } catch (err) {
+    throw new PolicyRefusal(`specialist ${specialist}: cannot make its browser folders in ${w.workdir}: ${err instanceof Error ? err.message : String(err)}. No session starts until that is fixed; after you fix it, ${remedy(tmuxName)}`)
+  }
+  return writeRestrictedFiles(tmuxName, sessionId, { settings: confinementSettings(policy), mcp })
 }
 
 // Spawn env whitelist: explicit construction, not ambient inheritance. Each env var the byte
@@ -306,6 +322,12 @@ export class ClaudeEngine implements EngineAdapter {
   /** What a confined launch loaded, from its own debug file, against the policy (claude-verify.ts). */
   verifyLaunch(policy: ConfinedPolicy, launched: LaunchResult): Promise<Verdict> { return verifyLoaded(policy, launched.debugLogPath) }
 
+  /** What a write-confined launch applied, from its own debug file, against its policy (claude-verify.ts `verifyConfinement`). */
+  verifyConfinement(policy: LaunchPolicy, launched: LaunchResult): Promise<Verdict> {
+    const w = policy.canOnlyWriteTo
+    return w ? verifyConfinementLoaded(confinementRules(w), launched.debugLogPath) : Promise.resolve({ ok: false, why: 'the policy confines nothing to check' })
+  }
+
   async launch(input: LaunchInput): Promise<LaunchResult> {
     try {
       return await this.launchSession(input)
@@ -313,7 +335,7 @@ export class ClaudeEngine implements EngineAdapter {
       // A confined launch writes a file holding token values before it starts anything; one that fails then has no session record
       // whose kill or death would remove it, so it is removed here.
       removeSpawnPrompt(input)
-      if (input.policy?.access === 'workdir') removeRestrictedFiles({ tmuxName: input.tmuxName, sessionId: input.sessionId })
+      if (input.policy?.access === 'workdir' || input.policy?.canOnlyWriteTo) removeRestrictedFiles({ tmuxName: input.tmuxName, sessionId: input.sessionId })
       throw err
     }
   }
@@ -324,8 +346,10 @@ export class ClaudeEngine implements EngineAdapter {
     // The folder, flags, env and files of a launch come from the launch policy here, whatever cwd the caller passed. A policy that
     // cannot be read refuses (never the operator's account).
     const restricted = confined(input.policy, tmuxName)
-    const effectiveCwd = restricted ? restricted.workdir : input.cwd
-    const spawnCwd = restricted ? restricted.workdir : input.originalCwd
+    // `can_only_write_to`: the operator's tools, started in the folder its writes are confined to, with the settings below (every start passes here).
+    const writes = !restricted ? input.policy?.canOnlyWriteTo : undefined
+    const effectiveCwd = restricted ? restricted.workdir : writes ? writes.workdir : input.cwd
+    const spawnCwd = restricted ? restricted.workdir : writes ? writes.workdir : input.originalCwd
     const worktreePath = input.worktreePath
     const worktreeTarget = !!input.forkFromOriginalCwd
     const isFork = !!input.forkFrom?.claudeSessionId
@@ -349,6 +373,13 @@ export class ClaudeEngine implements EngineAdapter {
     let assignedClaudeSessionId: string | undefined
     const disallowed = input.disallowedTools?.length ? ` --disallowedTools ${shq(input.disallowedTools.join(','))}` : ''
     const toolsFlag = input.tools?.length ? ` --tools ${shq(input.tools.join(','))}` : ''
+    // After the prompt and the other flags, as `disallowed` is: the settings that confine writes, and the servers that get their own browser folders.
+    let confinementFlags = ''
+    if (writes) {
+      const files = writeConfinementConfig(writes, input.policy!.specialist, tmuxName, sessionId)
+      confinementFlags = ` --settings ${shq(files.settings)}${writes.servers.length ? ` --mcp-config ${shq(files.mcp)}` : ''}`
+      process.stderr.write(`${confinementLogLine(tmuxName, { specialist: input.policy!.specialist, ...writes })}\n`)
+    }
     if (restricted) {
       // A specialist with restricted = true: no --dangerously-skip-permissions (--permission-mode dontAsk instead), the
       // prompt positional before the variadic flags, and the generated settings and MCP config (see restrictedConfig).
@@ -371,7 +402,7 @@ export class ClaudeEngine implements EngineAdapter {
         `--channels ${shq(channelFlag)}`,
         `--dangerously-skip-permissions`,
         promptFile!.ref,
-      ].join(' ') + disallowed + toolsFlag
+      ].join(' ') + disallowed + toolsFlag + confinementFlags
     } else if (isResume) {
       claudeArgs = [
         `claude`,
@@ -379,10 +410,10 @@ export class ClaudeEngine implements EngineAdapter {
         `--model ${shq(model)}`,
         `--channels ${shq(channelFlag)}`,
         `--dangerously-skip-permissions`,
-      ].join(' ') + disallowed + toolsFlag
+      ].join(' ') + disallowed + toolsFlag + confinementFlags
     } else {
       assignedClaudeSessionId = randomUUID()
-      claudeArgs = `claude --session-id ${shq(assignedClaudeSessionId)} --model ${shq(model)} --channels ${shq(channelFlag)} --dangerously-skip-permissions ${promptFile!.ref}${disallowed}${toolsFlag}`
+      claudeArgs = `claude --session-id ${shq(assignedClaudeSessionId)} --model ${shq(model)} --channels ${shq(channelFlag)} --dangerously-skip-permissions ${promptFile!.ref}${disallowed}${toolsFlag}${confinementFlags}`
     }
     if (disallowed) process.stderr.write(`daemon: disallowedTools flag: ${disallowed}\n`)
     if (restricted) process.stderr.write(`daemon: restricted launch ${tmuxName}: specialist ${restricted.specialist}, tools ${restricted.tools.join(',')}, servers ${restricted.servers.map(x => x.name).join(',') || 'none'}\n`)

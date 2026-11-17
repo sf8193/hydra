@@ -11,6 +11,7 @@ import { ENV_NAME_RE, tokenVarRefusal } from '../shared/spawn-env.js'
 import { offLimitRoots, workdirRestrictionIssues } from './restricted-workdir.js'
 import { ALLOW_UNPROVEN_MACOS, macosGateIssue, sandboxIssues, unquotablePath } from './server-sandbox.js'
 import { engineConfinesAccess } from '../shared/engine-capabilities.js'
+import { CAN_ONLY_WRITE_TO_VALUES, confinementWarning, hasPlaceholder, readDenyRoots, unknownPlaceholders, unreadableWorkdir } from './write-confinement.js'
 import { noSuchApp, pinnersOf, speaksAsOf, whyNotServed } from './pins.js'
 import { SLACK_APP_DEFAULTS } from '../connectors/slack/app.js'
 import { emojiProblem, reactionNameProblem } from '../shared/emoji.js'
@@ -65,11 +66,11 @@ const TOP_KEYS = ['operator', 'main', 'gateways', 'connectors', 'slack', 'people
 const OPERATOR_FREE_KEYS = ['operator', 'main']
 /** `[main]`: the operator's harness, as `[specialists.<id>]` is a specialist. */
 const MAIN_KEYS = ['model']
-const SPECIALIST_KEYS = ['workdir', 'kickoff', 'kickoff_file', 'pinned_to', 'speaks_as', 'reachable_by', 'sessions', 'max_sessions', 'idle', 'home_place', 'model', 'emoji', 'engine', 'env_file', 'renamed_from', 'restricted', 'tools', 'mcp_servers', 'sends_to']
+const SPECIALIST_KEYS = ['workdir', 'kickoff', 'kickoff_file', 'pinned_to', 'speaks_as', 'reachable_by', 'sessions', 'max_sessions', 'idle', 'home_place', 'model', 'emoji', 'engine', 'env_file', 'renamed_from', 'restricted', 'can_only_write_to', 'cannot_read', 'deny_commands', 'tools', 'mcp_servers', 'sends_to']
 /** A Slack app's keys, as `[slack.apps.<id>]` spells them. */
 const SLACK_APP_KEYS = ['bot_token_env', 'socket_token_env', 'operator_token_env', 'display_name', 'description']
 /** Keys only a hand edit of one specialist's own table sets: a default would reach every specialist, a fragment's table is someone else's. */
-export const RESTRICTION_KEYS = ['restricted', 'tools', 'mcp_servers', 'sends_to'] as const
+export const RESTRICTION_KEYS = ['restricted', 'can_only_write_to', 'cannot_read', 'deny_commands', 'tools', 'mcp_servers', 'sends_to'] as const
 
 type Table = Record<string, unknown>
 /** Own keys only: a name like `constructor` must not resolve through the prototype. */
@@ -352,7 +353,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (!ID_RE.test(name)) { error(path, `"${name}" is not a valid server name: lowercase letters, digits and dashes`); continue }
     const t = table(raw, path)
     if (!t) continue
-    unknownKeys(t, ['command', 'token_env', 'tools'], path)
+    unknownKeys(t, ['command', 'token_env', 'tools', 'profile_args', 'profile_env'], path)
     const command = str(t, 'command', path)
     if (t.command === undefined) error(`${path}.command`, 'is required: the server\'s executable, pinned (a path or a versioned binary, not `npx -y` latest)')
     else if (command !== undefined && !env.isCommand(expand(command))) error(`${path}.command`, `${expand(command)} is not an executable file or a command on PATH`)
@@ -368,7 +369,21 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       if (!MCP_TOOL_RE.test(v)) { error(`${path}.tools[${i}]`, `"${v}" must be a tool name the server offers, like search_logs (no wildcards)`); continue }
       if (!tools.includes(v)) tools.push(v)
     }
-    if (command !== undefined) mcpServers[name] = { name, command: expand(command), tokenEnv, tools }
+    // How the server takes its own browser profile and download folders, for a `can_only_write_to` specialist that lists it: arguments and variables
+    // with {profile_dir} and {download_dir} in them. The declaration is the only place a server is described; nothing here knows a server by name.
+    const profileArgs = strList(t, 'profile_args', path)
+    const profileEnvRaw = table(t.profile_env, `${path}.profile_env`)
+    const profileEnv: Record<string, string> = {}
+    const profileText: string[] = [...(profileArgs ?? [])]
+    for (const [i, a] of (profileArgs ?? []).entries()) for (const u of unknownPlaceholders(a)) error(`${path}.profile_args[${i}]`, `"${a}" names ${u}; a placeholder is {profile_dir} or {download_dir}`)
+    for (const [k, v] of Object.entries(profileEnvRaw ?? {})) {
+      if (typeof v !== 'string') { error(`${path}.profile_env.${k}`, 'must be a string'); continue }
+      if (!ENV_NAME_RE.test(k)) { error(`${path}.profile_env.${k}`, `"${k}" must be an environment variable name`); continue }
+      for (const u of unknownPlaceholders(v)) error(`${path}.profile_env.${k}`, `"${v}" names ${u}; a placeholder is {profile_dir} or {download_dir}`)
+      profileEnv[k] = v; profileText.push(v)
+    }
+    if (profileText.length && !profileText.some(hasPlaceholder)) error(path, 'profile_args and profile_env hold no {profile_dir} or {download_dir}, so the server would never be given its own profile')
+    if (command !== undefined) mcpServers[name] = { name, command: expand(command), tokenEnv, tools, ...(profileArgs && { profileArgs }), ...(Object.keys(profileEnv).length && { profileEnv }) }
   }
 
   // --- people --------------------------------------------------------------------------------------------------------
@@ -508,7 +523,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     str(t, 'workdir', path); str(t, 'kickoff', path); str(t, 'kickoff_file', path); strList(t, 'pinned_to', path); str(t, 'speaks_as', path); strList(t, 'reachable_by', path)
     oneOf(t, 'sessions', path, SESSIONS_MODES); positiveInt(t, 'max_sessions', path); str(t, 'idle', path); str(t, 'home_place', path); str(t, 'model', path)
     oneOf(t, 'engine', path, ENGINES); str(t, 'env_file', path); strList(t, 'renamed_from', path)
-    bool(t, 'restricted', path); strList(t, 'tools', path); strList(t, 'mcp_servers', path); strList(t, 'sends_to', path)
+    bool(t, 'restricted', path); strList(t, 'cannot_read', path); strList(t, 'deny_commands', path); strList(t, 'tools', path); strList(t, 'mcp_servers', path); strList(t, 'sends_to', path)
   }
   function positiveInt(t: Table, k: string, path: string): number | undefined {
     const v = t[k]
@@ -610,8 +625,63 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     const sendsToRaw = strList(t, 'sends_to', path)
     let tools: string[] | undefined
     let mcpServerNames: string[] | undefined
+    // `can_only_write_to`: the operator's account, tools and servers, with Bash and Edit/Write writes confined to the folder and Claude Code's tools and shell
+    // denied the operator's credential places (the launch's settings). `cannot_read` adds places to those and `deny_commands` adds commands to refuse; neither means
+    // anything alone. `restricted` already does all of it.
+    const writeKey = t.can_only_write_to
+    let canOnlyWriteTo: 'workdir' | undefined
+    if (writeKey !== undefined) {
+      const items = typeof writeKey === 'string' ? [writeKey] : Array.isArray(writeKey) && writeKey.every(x => typeof x === 'string') ? (writeKey as string[]) : undefined
+      if (!items || items.length === 0 || items.some(x => !(CAN_ONLY_WRITE_TO_VALUES as readonly string[]).includes(x))) error(`${path}.can_only_write_to`, 'must be "workdir" (or a list holding only "workdir")')
+      else canOnlyWriteTo = 'workdir'
+    }
+    const cannotReadRaw = strList(t, 'cannot_read', path)
+    const denyCommandsRaw = strList(t, 'deny_commands', path)
+    const keyed = t.can_only_write_to !== undefined
+    if (restricted && keyed) error(`${path}.can_only_write_to`, 'restricted = true already confines writes and reads (and more); set restricted, or can_only_write_to, not both')
+    const confinesWrites = keyed && !restricted
+    for (const k of ['cannot_read', 'deny_commands'] as const) {
+      if (t[k] === undefined || confinesWrites) continue
+      error(`${path}.${k}`, restricted ? 'restricted = true already confines reads and commands (and more); remove it, or set restricted = false and can_only_write_to' : `has no effect without can_only_write_to = "workdir"; it ${k === 'cannot_read' ? 'adds to the places that layer denies reading' : 'adds to the commands that layer denies'}`)
+    }
+    const cannotRead: string[] = []
+    if (confinesWrites) for (const [i, raw] of (cannotReadRaw ?? []).entries()) {
+      const root = expand(raw)
+      if (!isAbsolute(root)) error(`${path}.cannot_read[${i}]`, `"${raw}" must be an absolute path or start with ~`)
+      else if (unquotablePath(root)) error(`${path}.cannot_read[${i}]`, unquotablePath(root)!)
+      else if (!cannotRead.includes(root)) cannotRead.push(root)
+    }
+    const denyCommands: string[] = []
+    if (confinesWrites) for (const [i, c] of (denyCommandsRaw ?? []).entries()) {
+      if (c.trim() === '') error(`${path}.deny_commands[${i}]`, 'must not be empty')
+      else if (/[()]/.test(c)) error(`${path}.deny_commands[${i}]`, `"${c}" has a parenthesis, which a Bash rule cannot hold; write the command without it`)
+      else if (!denyCommands.includes(c)) denyCommands.push(c)
+    }
+    if (confinesWrites && engine !== undefined && engine !== 'claude') error(`${path}.engine`, `${engine} can't run a write-confined specialist: only Claude Code's own sandbox does the confining; set engine = "claude", or remove can_only_write_to`)
+    // A folder the layer would deny reading is no folder for the specialist: it could not read its own workdir.
+    if (confinesWrites && workdirRaw !== undefined && isAbsolute(workdir)) {
+      const inside = unreadableWorkdir(workdir, readDenyRoots(env, workdir, [], cannotRead), env.realpath)
+      if (inside) error(at('workdir'), `${workdir} is, or holds, ${inside}, which the layer denies reading: the specialist could not read its own folder; give it a folder of its own`)
+    }
     if (!restricted) {
-      for (const k of ['tools', 'mcp_servers', 'sends_to'] as const) if (t[k] !== undefined) error(`${path}.${k}`, `has no effect while restricted = false: it already has every tool and server the operator does${k === 'sends_to' ? ', and send_to_thread to any session' : ''}; set restricted = true to choose them`)
+      for (const k of ['tools', 'mcp_servers', 'sends_to'] as const) {
+        if (t[k] === undefined) continue
+        // A write-confined specialist lists the servers that get its own browser profile; every tool of them stays callable, as for any unrestricted session.
+        if (k === 'mcp_servers' && confinesWrites) continue
+        error(`${path}.${k}`, `has no effect while restricted = false: it already has every tool and server the operator does${k === 'sends_to' ? ', and send_to_thread to any session' : ''}; set restricted = true to choose them`)
+      }
+      if (confinesWrites) {
+        mcpServerNames = [...new Set(mcpServerNamesRaw ?? [])]
+        for (const [i, name] of (mcpServerNamesRaw ?? []).entries()) {
+          if (!Object.hasOwn(mcpServers, name)) { error(`${path}.mcp_servers[${i}]`, `no [mcp_servers.${name}]: declare the server in hydra.toml first`); continue }
+          const server = mcpServers[name]
+          for (const v of server.tokenEnv) if (!env.envFileHas(v)) warn(`${path}.mcp_servers[${i}]`, `[mcp_servers.${name}] needs ${v}, and ${join(env.stateDir, '.env')} does not set it, so no session of this specialist can start until it does: add ${v}=<value> there and restart the daemon`)
+          // A server that says nothing about its profile keeps its own default one, which is the operator's: only a declared profile is the specialist's.
+          if (!server.profileArgs?.length && !Object.keys(server.profileEnv ?? {}).length) warn(`${path}.mcp_servers[${i}]`, `[mcp_servers.${name}] declares no profile_args or profile_env, so it keeps its own default browser profile (the operator's, if it is a browser): declare how it takes a profile folder, or accept that`)
+          // Its profile is one folder in the workdir: two sessions of the specialist at once would share it, and a browser locks its profile.
+          else if (t.sessions === 'per-conversation') error(`${path}.sessions`, `"per-conversation" would start several sessions at once, all sharing the one browser profile [mcp_servers.${name}] is given in the workdir, which a browser locks: use sessions = "shared", or drop ${name} from mcp_servers`)
+        }
+      }
     } else {
       tools = [...new Set(toolsRaw ?? WORKDIR_TOOLS)]
       for (const [i, name] of (toolsRaw ?? []).entries()) {
@@ -651,6 +721,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       ...(t.emoji !== undefined && !emojiWhy && { emoji: t.emoji as string }),
       ...(engine !== undefined && { engine }),
       restricted,
+      ...(confinesWrites && { canOnlyWriteTo: 'workdir' as const, cannotRead }),
+      ...(confinesWrites && denyCommands.length && { denyCommands }),
       ...(tools && { tools }),
       ...(mcpServerNames && { mcpServerNames }),
       ...(sendsToRaw && restricted && { sendsTo: [...new Set(sendsToRaw)] }),
@@ -975,7 +1047,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     // An unrestricted session runs under the operator's account, so whoever can reach it can use that account through it.
     if (!s.restricted) {
       const who = reachedBy(s)
-      if (who.length) warn(path, `${listJoin(who)} can reach the operator's account through it; set restricted = true`)
+      // At its own level: a write-confined specialist is still the operator's account, and the warning says what is and is not confined.
+      if (who.length) warn(path, s.canOnlyWriteTo ? `${listJoin(who)} ${confinementWarning(s.workdir)}` : `${listJoin(who)} can reach the operator's account through it; set restricted = true`)
     }
     // A restricted specialist's answer can carry a link; where previews are on, the preview shows readers content they could not open themselves.
     // Previews can be switched off in a Slack channel (by id or name) and a Discord channel by id; a Discord channel given by name is not one hydra can match.

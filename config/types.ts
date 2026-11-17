@@ -76,6 +76,10 @@ export type McpServer = {
   tokenEnv: string[]
   /** The server's tools a specialist may call. */
   tools: string[]
+  /** For a `can_only_write_to` specialist: arguments added to the server's command, with {profile_dir} and {download_dir} for its own browser folders. */
+  profileArgs?: string[]
+  /** For a `can_only_write_to` specialist: variables set for the server, same placeholders. */
+  profileEnv?: Record<string, string>
 }
 
 export type Specialist = {
@@ -112,9 +116,15 @@ export type Specialist = {
    * `false` (default): the operator's account, with all their tools, servers and files.
    */
   restricted: boolean
+  /** `can_only_write_to = "workdir"` (not with `restricted`): the operator's account and tools, with Bash and Edit/Write writes confined to `workdir` and its own browser profile in it. Absent: writes anywhere. */
+  canOnlyWriteTo?: 'workdir'
+  /** `can_only_write_to` or `cannot_read` set: paths Claude Code's tools and shell may not read, added to the built-in credential places (those, and the other specialists' workdirs, are worked out at launch). */
+  cannotRead?: string[]
+  /** The layer's: Bash command patterns it may not run, on top of the confinement. */
+  denyCommands?: string[]
   /** `restricted` only: the built-in tools it may use (default Read, Grep, Glob). */
   tools?: string[]
-  /** `restricted` only: the `[mcp_servers.<name>]` servers it may use (default none). */
+  /** `restricted`: the `[mcp_servers.<name>]` servers it may use (default none). `can_only_write_to`: the servers started for it with its own browser profile. */
   mcpServerNames?: string[]
   /** `restricted` only: the specialists its session may send to with `send_to_thread` (default none). Shared-session specialists; never `main`. */
   sendsTo?: string[]
