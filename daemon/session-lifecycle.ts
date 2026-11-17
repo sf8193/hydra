@@ -32,7 +32,7 @@ import { buildSpawnPrompt, buildForkPrompt, buildHandoffPrompt, buildResurrectPr
 import { hydraPrompt } from './prompts/request.js'
 import { readHandoffTemplate } from './handoff-templates.js'
 import { projectDirName, transcriptPathFor } from './usage.js'
-import { refreshSessionVisual } from './anchor-state.js'
+import { refreshSessionVisual, threadEmoji } from './anchor-state.js'
 import { unwatchBySession } from '../connectors/github/pr-watch.js'
 import { loadAccess } from './access.js'
 import { emit } from './event-bus.js'
@@ -786,7 +786,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   // it here would instead leak the name on any throw before registry.set (no try/finally on
   // this large function), which is worse than the self-healing collision it would prevent.
   const cleanTopic = topic.replace(/\*\*/g, '').replace(/\*/g, '').replace(/[\[\]<>]/g, '').replace(/\s+/g, ' ').trim()
-  const threadName = `${sessionEmoji(tmuxName)} ${cleanTopic || tmuxName} · ${tmuxName}`.slice(0, 100)
+  const threadName = `${threadEmoji({ tmuxName }, opts?.specialist)} ${cleanTopic || tmuxName} · ${tmuxName}`.slice(0, 100)
   const isFork = !!opts?.forkFrom
   const isHandoff = !!opts?.handedOffFrom
   const isResume = !!opts?.resumeFrom

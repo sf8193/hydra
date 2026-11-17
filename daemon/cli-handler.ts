@@ -366,7 +366,7 @@ async function handleSpecialist(req: CLIRequest): Promise<CLIResponse> {
   // hydra.toml's restricted (with the tools and servers a restricted specialist may use) and sessions mode, and maxSessions only where it applies (per-conversation).
   const mode = (name: string) => {
     const d = Object.hasOwn(currentHydraConfig().specialists, name) ? currentHydraConfig().specialists[name] : undefined
-    return d && { restricted: d.restricted, ...(d.restricted && { tools: d.tools, mcpServers: d.mcpServers }), sessions: d.sessions, ...(d.sessions === 'per-conversation' && { maxSessions: d.maxSessions }) }
+    return d && { ...(d.emoji && { emoji: d.emoji }), restricted: d.restricted, ...(d.restricted && { tools: d.tools, mcpServers: d.mcpServers }), sessions: d.sessions, ...(d.sessions === 'per-conversation' && { maxSessions: d.maxSessions }) }
   }
   const view = (name: string, s: Specialist & { invalid?: string }) => ({ name, ...s, ...mode(name), ...specialistStatus(name) })
   switch (p.action) {

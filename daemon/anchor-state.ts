@@ -1,5 +1,6 @@
 import { gateway, DEFAULT_SESSION_CHANNEL } from './config.js'
-import { registry, sessionEmoji } from './sessions.js'
+import { registry, sessionEmoji, type SessionInfo } from './sessions.js'
+import { specialistEmoji, specialistOf } from '../specialists/specialists.js'
 import { occupancy } from './session-reachability.js'
 import { COUNT_EMOJI, SUPERSCRIPT, SUBSCRIPT } from '../gateways/gateway.js'
 
@@ -63,6 +64,20 @@ export function formatPhaseBadge(emoji: string, phase: string): string {
 // Single visual entry point — callers declare intent, this projects state
 // ---------------------------------------------------------------------------
 
+/**
+ * The emoji a session wears in its thread name and on its anchor: the one chokepoint every thread name goes through (the first name at spawn, and every
+ * refresh after it: respawn, handoff, rename, protocol badge, pause, death). Other places that show a session's emoji (announcements, `status`, the dashboard)
+ * still call `sessionEmoji`. `contentEmoji` is checked first but nothing sets it today. Its specialist's `emoji` from hydra.toml, read live, else its catalog emoji.
+ * The specialist is the one the session was born for (stored on its policy), else the one whose thread it sits in. Only this glyph changes: the
+ * presence precedence (dead, paused, protocol) in the gateway's `formatThreadName` is untouched.
+ */
+export function threadEmoji(
+  info: Pick<SessionInfo, 'tmuxName'> & Partial<Pick<SessionInfo, 'threadId' | 'policy' | 'contentEmoji'>>,
+  specialist: string | undefined = info.policy?.specialist ?? specialistOf(info),
+): string {
+  return info.contentEmoji || specialistEmoji(specialist) || sessionEmoji(info.tmuxName)
+}
+
 export function refreshSessionVisual(threadId: string, opts?: { state?: AnchorState, badge?: string }): void {
   if (!gateway.updateSessionVisual) return
   const sessionId = registry.getByThread(threadId)
@@ -70,7 +85,7 @@ export function refreshSessionVisual(threadId: string, opts?: { state?: AnchorSt
   const info = registry.get(sessionId)
   if (!info) return
 
-  const emoji = info.contentEmoji || sessionEmoji(info.tmuxName)
+  const emoji = threadEmoji(info)
   const badge = opts?.badge ?? getActiveProtocolBadge(threadId)
   const state = opts?.state ?? (occupancy(info) === 'dead' ? 'crashed' : info.respawnCount ? 'zombie' : 'live')
   const anchor = gateway.getThreadAnchor(threadId)

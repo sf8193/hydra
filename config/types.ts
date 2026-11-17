@@ -89,6 +89,8 @@ export type Specialist = {
   /** Where you watch it (its threads open there), and where replies with no conversation go: a place or a channel id. Absent: the operator's channel. */
   home?: string
   model?: string
+  /** Shown in its sessions' thread names in place of the default session emoji: one emoji character. Absent: the default. */
+  emoji?: string
   engine?: 'claude' | 'codex' | 'omp'
   /**
    * `true`: its session runs in its folder with only the tools and servers it lists, and it can answer only its own conversation.
