@@ -269,6 +269,13 @@ export function conversationSpecialistOf(tmuxName: string | undefined): string |
   return s?.sessions === 'per-conversation' ? s.id : undefined
 }
 
+/** A declared specialist's `emoji`, by its id or by an id it was renamed from (a session records the id it was born under); undefined when it has none or is not declared. */
+export function specialistEmoji(id: string | undefined, h: HydraConfig = currentHydraConfig()): string | undefined {
+  if (id === undefined) return undefined
+  const declared = Object.hasOwn(h.specialists, id) ? h.specialists[id] : Object.values(h.specialists).find(s => s.renamedFrom.includes(id))
+  return declared?.emoji
+}
+
 /**
  * The specialist this session acts for: it sits in the specialist's thread, or it is one of a per-conversation
  * specialist's conversation sessions (named `<id>_…`). A conversation session answers only its own conversation

@@ -71,6 +71,7 @@ idle = "8h"
 workdir = "~/agents/ops"              # required: the folder it runs in (must exist). Its CLAUDE.md, skills and files live there
 home = "discord:200000000000000001"   # where its threads open and replies with no conversation go (default: the operator's channel)
 model = "claude-opus-5-5"
+emoji = "🛠️"                          # shown in its threads' names in place of the default session emoji: one emoji character (not a :name:). Dead and paused still show their own mark. Default: the session's own emoji
 renamed_from = ["operations"]         # old ids, so a rename keeps its thread, session and owed messages
 
 # One session per conversation: staff questions in a channel, each thread on its own.

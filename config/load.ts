@@ -13,6 +13,7 @@ import { sandboxIssues, unquotablePath } from './server-sandbox.js'
 import { engineConfinesAccess } from '../shared/engine-capabilities.js'
 import { noSuchApp, pinnersOf, speaksAsOf, whyNotServed } from './pins.js'
 import { SLACK_APP_DEFAULTS } from '../connectors/slack/app.js'
+import { emojiProblem } from '../shared/emoji.js'
 import { invalidSpecialistName } from '../shared/specialist-name.js'
 import { bareOf, readTarget, spelled } from '../shared/target-kind.js'
 import {
@@ -65,7 +66,7 @@ const OPERATOR_FREE_KEYS = ['operator', 'main']
 /** `[main]`: the operator's harness, as `[specialists.<id>]` is a specialist. */
 const MAIN_KEYS = ['model']
 /** `listens` is the old way to say where a specialist is heard: still read, as `[[rules]]` (see `legacyRules`), and warned. */
-const SPECIALIST_KEYS = ['workdir', 'kickoff', 'kickoff_file', 'listens', 'pinned_to', 'speaks_as', 'reachable_by', 'sessions', 'max_sessions', 'idle', 'home', 'model', 'engine', 'env_file', 'renamed_from', 'restricted', 'tools', 'mcp_servers', 'sends_to']
+const SPECIALIST_KEYS = ['workdir', 'kickoff', 'kickoff_file', 'listens', 'pinned_to', 'speaks_as', 'reachable_by', 'sessions', 'max_sessions', 'idle', 'home', 'model', 'emoji', 'engine', 'env_file', 'renamed_from', 'restricted', 'tools', 'mcp_servers', 'sends_to']
 /** A specialist's keys under their old names, read as the new ones (`restricted = true` is `restricted = true`). */
 export const SPECIALIST_RENAMES: readonly Rename[] = [
   { from: 'access', to: 'restricted', values: { workdir: true, operator: false }, badValue: 'must be "workdir" or "operator"; `restricted = true` or `restricted = false` says the same' },
@@ -508,6 +509,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   unknownKeys(defaults, SPECIALIST_KEYS, 'defaults.specialist')
   // A default reaches every specialist, including ones nobody meant to scope: these are set on one specialist's own table.
   for (const k of RESTRICTION_KEYS) if (has(defaults, k)) error(`defaults.specialist.${k}`, `can't be a default: ${k} says what one specialist's session may reach. Set it under [specialists.<id>] by editing hydra.toml`)
+  if (has(defaults, 'emoji')) error('defaults.specialist.emoji', "can't be a default: an emoji tells one specialist's threads from the others'. Set it under [specialists.<id>]")
   if (defaults.workdir !== undefined && typeof defaults.workdir === 'string' && !defaults.workdir.includes('{id}')) {
     warn('defaults.specialist.workdir', 'has no {id}, so every specialist without its own workdir shares one folder')
   }
@@ -515,7 +517,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   // Defaults are type-checked once, here, so a bad default is reported once, not once per specialist.
   const goodDefaults: Table = {}
   for (const k of Object.keys(defaults)) {
-    if (!SPECIALIST_KEYS.includes(k) || (RESTRICTION_KEYS as readonly string[]).includes(k)) continue
+    if (!SPECIALIST_KEYS.includes(k) || k === 'emoji' || (RESTRICTION_KEYS as readonly string[]).includes(k)) continue
     const n = errors.length
     readSpecialistKeyTypes({ [k]: defaults[k] }, 'defaults.specialist')
     if (errors.length === n && k === 'idle') checkIdle(defaults.idle as string, 'defaults.specialist.idle')
@@ -641,6 +643,9 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     // A place, or a channel by its platform id: where its threads open.
     if (home !== undefined && !normalizePlace(home) && !/^\d+$/.test(home)) error(at('home'), `"${home}" must be a place (slack:#channel, discord:#channel, …) or a channel id`)
     const model = str(t, 'model', path)
+    // One emoji character, for its threads' names (shared/emoji.ts). Read raw, so an empty or spaced value gets what to write, not the generic string message.
+    const emojiWhy = t.emoji === undefined ? undefined : emojiProblem(t.emoji)
+    if (emojiWhy) error(at('emoji'), emojiWhy)
     const engine = oneOf(t, 'engine', path, ENGINES)
 
     // `restricted`: its session runs in its folder, with only what it lists. Everything below refuses what would let a restricted session reach past its folder.
@@ -686,6 +691,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       ...(idleMs !== undefined && { idleMs }),
       ...(home !== undefined && { home: normalizePlace(home) ?? home }),
       ...(model !== undefined && { model }),
+      ...(t.emoji !== undefined && !emojiWhy && { emoji: t.emoji as string }),
       ...(engine !== undefined && { engine }),
       restricted,
       ...(tools && { tools }),
