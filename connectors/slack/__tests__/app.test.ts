@@ -5,7 +5,7 @@ import { scopesNeeded } from '../listener.js'
 
 type Manifest = {
   display_information: { name: string; description: string }
-  features: { bot_user: { display_name: string; always_online: boolean } }
+  features: { app_home: { messages_tab_enabled: boolean; messages_tab_read_only_enabled: boolean }; bot_user: { display_name: string; always_online: boolean } }
   oauth_config: { scopes: { bot: string[]; user?: string[] } }
   settings: { event_subscriptions: { bot_events: string[]; user_events?: string[] }; socket_mode_enabled: boolean; org_deploy_enabled: boolean }
 }
@@ -30,6 +30,10 @@ describe('slackManifest', () => {
     expect(m.display_information).toEqual({ name: 'Acme helper: #1', description: 'Answers threads # in Slack.' })
     expect(m.features.bot_user).toEqual({ display_name: 'Acme helper: #1', always_online: true })
     expect(m.settings).toMatchObject({ socket_mode_enabled: true, org_deploy_enabled: false })
+  })
+
+  test('the Messages tab is on and not read-only, so the operator can DM the app', () => {
+    expect(manifestOf(BASE).features.app_home).toEqual({ messages_tab_enabled: true, messages_tab_read_only_enabled: false })
   })
 
   test('without display_name or description, the defaults', () => {

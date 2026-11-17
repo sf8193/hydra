@@ -162,7 +162,9 @@ socket_token_env = "SALES_SLACK_APP_TOKEN"
 - Token variable names are uppercase. Hydra keeps every variable hydra.toml names as a token from the sessions it starts, so name only variables the daemon needs. These are refused when hydra.toml loads: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMUX`, `TERM`, `PWD`, `TMPDIR`, `LANG`, `ANTHROPIC_API_KEY`, `GH_TOKEN`, `SSH_AUTH_SOCK`, and anything starting `HYDRA_` (except `HYDRA_SLACK_`), `CLAUDE_`, `LC_` or `XDG_`.
 - Every app declared connects, whatever it is named, when hydra.toml loads, with no restart, if its token variables are already in the daemon's environment (a variable that is new needs one). An app whose tokens are not set is skipped: the daemon says which key to fix, in the thread of each specialist that app serves and that hears Slack (main's channel when none does), and logs `slack connector for the app named <id> off (…)`; the others connect.
 
-`hydra slack manifest [<app>]` prints one app's manifest. Leave the name out when hydra.toml declares one app; with several, a missing or unknown name lists the ones declared.
+`hydra slack manifest [<app>]` prints one app's manifest. Leave the name out when hydra.toml declares one app; with several, a missing or unknown name lists the ones declared. The manifest turns on the app's Messages tab and leaves it writable (`features.app_home`: `messages_tab_enabled: true`, `messages_tab_read_only_enabled: false`); without that, Slack refuses the operator's DM to the app (`restricted_action_read_only_channel`).
+
+**An app already created?** Paste the new manifest over its current one: api.slack.com/apps → the app → App Manifest → paste → Save, then reinstall the app if Slack asks.
 
 ## Apps and routing
 
