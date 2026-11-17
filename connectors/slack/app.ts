@@ -57,7 +57,7 @@ export const SLACK_APP_DEFAULTS = {
 /**
  * A Slack app manifest (YAML) for one of this hydra's apps: its name and description from hydra.toml, its scopes and events
  * from `SLACK_APP_NEEDS`. User scopes and events only when an operator token is configured; the membership events only when
- * hydra.toml declares `several` apps. Socket Mode on, org deploy off.
+ * hydra.toml declares `several` apps. The Messages tab on and not read-only: Slack refuses the operator's DM to an app whose tab is read-only. Socket Mode on, org deploy off.
  */
 export function slackManifest(app?: SlackApp, opts: { several?: boolean } = {}): string {
   // With no app at all (no hydra.toml), the defaults.
@@ -73,6 +73,9 @@ export function slackManifest(app?: SlackApp, opts: { several?: boolean } = {}):
     `  name: ${q(name)}`,
     `  description: ${q(description)}`,
     'features:',
+    '  app_home:',
+    '    messages_tab_enabled: true',
+    '    messages_tab_read_only_enabled: false',
     '  bot_user:',
     `    display_name: ${q(name)}`,
     '    always_online: true',
