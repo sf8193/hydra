@@ -22,6 +22,7 @@ type World = {
   direct: [string, string | undefined][]
   logs: string[]
   mainOk: boolean
+  mainStuck: string | null
   directOk: boolean
   nextPid: number
   spawnMode: 'ok' | 'throw' | 'no-pid'
@@ -62,6 +63,7 @@ function deps(over: Partial<ClockDeps> = {}): ClockDeps {
     gatewayConnected: () => w.gateway,
     captiveProbe: async () => { w.probes++; await w.probeGate; if (w.probe === 'throw') throw new Error('ENOTFOUND'); return w.probe },
     toMain: text => { if (w.mainOk) w.main.push(text); return w.mainOk },
+    mainStuck: () => w.mainStuck,
     direct: async (text, channel) => { w.directCalls++; await w.directGate; w.direct.push([text, channel]); return w.directOk },
     homeChannel: () => 'home',
     systemZone: () => w.zone,
@@ -122,7 +124,7 @@ beforeEach(() => {
   w = {
     dir: mkdtempSync(join(tmpdir(), 'jobs-clock-')), t: new Date('2026-11-04T10:00:30-08:00'),
     procs: new Map(), spawns: [], kills: [], main: [], direct: [], logs: [],
-    mainOk: true, directOk: true, directCalls: 0, nextPid: 1000, spawnMode: 'ok', zone: null, tz: undefined,
+    mainOk: true, mainStuck: null, directOk: true, directCalls: 0, nextPid: 1000, spawnMode: 'ok', zone: null, tz: undefined,
     events: [], gateway: true, probe: true, probes: 0,
   }
 })
@@ -1413,6 +1415,44 @@ describe('alerts: one per failure run, after alert_after', () => {
     const c = await failingHourly()
     for (let h = 0; h < 49; h++) await failAt(c, new Date(Date.parse('2026-11-04T10:00:05-08:00') + h * 3_600_000).toISOString())
     expect(w.direct.filter(d => d[0].includes('has been failing since'))).toEqual([[expect.any(String), 'home']])
+  })
+
+  test('main stuck: the alert still goes to main and is also posted to the channel, naming the stuck state', async () => {
+    w.mainStuck = 'waiting on a login'
+    const c = await failingHourly()
+    for (let h = 0; h < 49; h++) await failAt(c, new Date(Date.parse('2026-11-04T10:00:05-08:00') + h * 3_600_000).toISOString())
+    expect(w.main.filter(m => m.includes('has been failing since'))).toHaveLength(1)
+    const posted = w.direct.filter(d => d[0].includes('has been failing since'))
+    expect(posted).toEqual([[expect.stringContaining('waiting on a login'), 'home']])
+    expect(posted[0][0]).toContain('so it cannot tell you.')
+    expect(posted[0][0]).not.toContain('..')
+    expect(posted[0][0]).not.toContain('Tell the user')   // the channel post is for the operator, not an instruction to main
+  })
+
+  test('main stuck and the channel post fails: not alerted, so the next tick tries again', async () => {
+    w.mainStuck = 'waiting on a login'; w.directOk = false
+    const c = await failingHourly()
+    for (let h = 0; h < 49; h++) await failAt(c, new Date(Date.parse('2026-11-04T10:00:05-08:00') + h * 3_600_000).toISOString())
+    expect(state('sync').alertedFor).toBeUndefined()
+    w.directOk = true
+    await failAt(c, '2026-11-06T12:00:05-08:00')
+    expect(state('sync').alertedFor).toBe(state('sync').failingSince)
+  })
+
+  test('main healthy: the alert goes to main only', async () => {
+    const c = await failingHourly()
+    for (let h = 0; h < 49; h++) await failAt(c, new Date(Date.parse('2026-11-04T10:00:05-08:00') + h * 3_600_000).toISOString())
+    expect(w.main.filter(m => m.includes('has been failing since'))).toHaveLength(1)
+    expect(w.direct).toEqual([])
+  })
+
+  test('main stuck and refusing: one channel post, not two', async () => {
+    w.mainStuck = 'waiting on a login'; w.mainOk = false
+    const c = await failingHourly()
+    for (let h = 0; h < 49; h++) await failAt(c, new Date(Date.parse('2026-11-04T10:00:05-08:00') + h * 3_600_000).toISOString())
+    const posted = w.direct.filter(d => d[0].includes('has been failing since'))
+    expect(posted).toHaveLength(1)
+    expect(posted[0][0]).toContain('waiting on a login')
   })
 })
 

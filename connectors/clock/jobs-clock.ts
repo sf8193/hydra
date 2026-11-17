@@ -55,6 +55,8 @@ export type ClockDeps = {
   schedulesLoadedOk?: () => boolean
   /** Delivers to a job's `to` target (a specialist or a thread). False if it can't. Absent: alerts start at main. */
   toTarget?: (to: string, text: string, initiator: string) => Promise<boolean>
+  /** What main is stuck on, in words ("stuck on a login screen"), or null if it can act. */
+  mainStuck: () => string | null
   /** Posts straight to a channel (safeSend). False if it couldn't. */
   direct: (text: string, channel: string | undefined) => Promise<boolean>
   homeChannel: () => string | undefined
@@ -633,7 +635,7 @@ export class JobsClock {
 
   /**
    * Once per failure run: when the latest outcome is a failure and the run is older than alert_after (alerted iff
-   * alertedFor === failingSince). To main, else straight to a channel. Lateness and not-now are never alerted.
+   * alertedFor === failingSince). To main, else straight to a channel; also to the channel when main is stuck. Lateness and not-now are never alerted.
    */
   private async reportFailures(cfg: JobsConfig): Promise<void> {
     for (const job of cfg.jobs) {
@@ -661,7 +663,13 @@ export class JobsClock {
       try { if (await this.d.toTarget(to, ask, initiator)) return true } catch (err) { this.d.log(`jobs: ${job.name}: alert to ${to} failed: ${err}`) }
       if (this.stopped) return false
     }
-    return this.d.toMain(ask, initiator) || await this.d.direct(text, job.channel ?? cfg.channel ?? this.d.homeChannel())
+    const channel = job.channel ?? cfg.channel ?? this.d.homeChannel()
+    const delivered = this.d.toMain(ask, initiator)
+    // A main stuck on a prompt takes the message but cannot tell the operator, so the channel hears it too, with the cause.
+    // Only that post counts as the alert: a retry re-queues to main, which is harmless. The reading can lag, so main is still told.
+    const stuck = this.d.mainStuck()
+    if (stuck) return this.d.direct(`${text.replace(/\.$/, '')}. Main is ${stuck}, so it cannot tell you.`, channel)
+    return delivered || await this.d.direct(text, channel)
   }
 
   /** Separate from the tick, so a dead tick is noticed. Flags once per stale episode, on the direct path. */
@@ -792,7 +800,7 @@ export function systemZone(): string | null {
 }
 
 /** Real deps, minus what only the daemon knows (how to reach main and a channel). */
-export function realDeps(o: Pick<ClockDeps, 'stateDir' | 'platform' | 'hydraEntry' | 'toMain' | 'toTarget' | 'schedules' | 'reloadSchedules' | 'schedulesLoadedOk' | 'direct' | 'homeChannel' | 'gatewayConnected'> & { log?: (m: string) => void }): ClockDeps {
+export function realDeps(o: Pick<ClockDeps, 'stateDir' | 'platform' | 'hydraEntry' | 'toMain' | 'mainStuck' | 'toTarget' | 'schedules' | 'reloadSchedules' | 'schedulesLoadedOk' | 'direct' | 'homeChannel' | 'gatewayConnected'> & { log?: (m: string) => void }): ClockDeps {
   return {
     ...o,
     now: () => new Date(),
