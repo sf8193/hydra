@@ -152,7 +152,7 @@ describe('the settings', () => {
     expect(s.disableClaudeAiConnectors).toBe(true)
   })
 
-  // Claude Code 2.1.326 matches a stdio server by its full command once any serverCommand entry (the bridge's) exists: a name no longer admits it (F-16).
+  // Claude Code 2.1.326 matches a stdio server by its full command once any serverCommand entry (the bridge's) exists: a name no longer admits it. See #772.
   test('the allowlist admits the MCP config it ships with: every server\'s command, as the config runs it, is an entry', () => {
     const policy = { specialist: 's', workdir: '/w', denyCommands: [], cannotRead: [], servers: [server, { ...server, name: 'second', command: 'npx', profileArgs: ['-y', 'pkg', '--out', '{download_dir}'] }], browserProfile: '/w/p1' }
     const mcp: any = confinementMcp(policy, 's', { BR_TOKEN: 't' }, {}, '/env')
