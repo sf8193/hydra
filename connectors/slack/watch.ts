@@ -869,9 +869,10 @@ export class SlackWatcher {
     const viaOperator = dm ? [] : mentioned.filter(m => m !== app && !!cfg.hydra.slackApps[m]?.operatorTokenEnv)
     const heardBy = dm ? [app] : [...new Set([app, ...(cfg.heardBy?.(ev.channel) ?? []), ...through, ...unreachable, ...viaOperator])]
     // A tagged app whose membership was never read may or may not receive the message. It owns the tag only when no tagged app is known to
-    // hear it and no thread binding holds: a tag then reaches it rather than vanishing, and a known hearer is never outranked by a guess.
+    // hear it: a tag then reaches it rather than vanishing (rule 1: a tag goes to the tagged app, in a bound thread too), and a known hearer
+    // is never outranked by a guess. Only a tag makes a guess, so an untagged follow-up still goes to the app the thread is bound through.
     const unread = dm || own ? [] : (cfg.unread?.(ev.channel, mentioned.filter(m => m !== app)) ?? [])
-    const guessed = mentioned.some(m => heardBy.includes(m)) || through.length ? [] : unread
+    const guessed = mentioned.some(m => heardBy.includes(m)) ? [] : unread
     heardBy.push(...guessed)
     // Tagged apps known unable to hear it: bot read as not in the channel, and no operator token.
     const unheard = dm || own ? [] : mentioned.filter(m => m !== app && !heardBy.includes(m) && !unread.includes(m))

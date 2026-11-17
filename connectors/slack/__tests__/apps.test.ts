@@ -273,13 +273,58 @@ describe('two apps in one channel: exactly one answers', () => {
     expect(t.sent.map(s => [s.to, s.conversation])).toEqual([['crm', `slack:${CH}:1200.000001`]])
   })
 
-  test('in a thread bound to the app that heard it, a tag of an unreadable app does not take the thread: the bound app answers, as before', async () => {
+  test('a tag of an app whose membership was never read, in a thread bound through another app, reaches the tagged app, though the bound app decides first', async () => {
+    const t = setup(sharedChannel(CH), { members: { default: [], [SALES]: [] }, probeError: { default: 'missing_scope: the token needs groups:read' } })
+    await t.start()
+    t.watcher.bind(CH, '1200.000001', 'deals', 'tool', SALES)
+    const tag = { ts: '1201.000001', thread_ts: '1200.000001', user: 'UC', text: `<@${BOT}> over to you` }
+    t.say(tag, [SALES])
+    await t.settle()
+    t.say(tag, ['default'])
+    await t.settle()
+    expect(t.sent.map(s => [s.to, s.conversation])).toEqual([['crm', `slack:${CH}:1200.000001`]])
+  })
+
+  test('the same thread, an untagged follow-up: it still goes to the bound app', async () => {
+    const t = setup(sharedChannel(CH), { members: { default: [], [SALES]: [] }, probeError: { default: 'missing_scope: the token needs groups:read' } })
+    await t.start()
+    t.watcher.bind(CH, '1200.000001', 'deals', 'tool', SALES)
+    t.say({ ts: '1202.000001', thread_ts: '1200.000001', user: 'UC', text: 'and another' }, [SALES, 'default'])
+    await t.settle()
+    expect(t.sent.map(s => [s.to, s.conversation])).toEqual([['deals', `slack:${SALES}:${CH}:1200.000001`]])
+  })
+
+  test('the tagged app is the one the thread is bound through: unchanged, it answers', async () => {
+    const t = setup(sharedChannel(CH), { members: BOTH, probeError: { default: 'missing_scope: the token needs groups:read' } })
+    await t.start()
+    t.watcher.bind(CH, '1200.000001', 'deals', 'tool', SALES)
+    t.say({ ts: '1201.000001', thread_ts: '1200.000001', user: 'UC', text: `<@${SALES_BOT}> again` })
+    await t.settle()
+    expect(t.sent.map(s => [s.to, s.conversation])).toEqual([['deals', `slack:${SALES}:${CH}:1200.000001`]])
+  })
+
+  test('a tag of an app known not to be in the channel, in a bound thread, stays with the binding as before', async () => {
+    const t = setup(sharedChannel(CH), { members: { default: [], [SALES]: [CH] } })   // default is read as not in the channel; no operator token
+    await t.start()
+    t.watcher.bind(CH, '1200.000001', 'deals', 'tool', SALES)
+    t.say({ ts: '1201.000001', thread_ts: '1200.000001', user: 'UC', text: `<@${BOT}> over to you` }, [SALES])
+    await t.settle()
+    expect(t.sent.map(s => [s.to, s.conversation])).toEqual([['deals', `slack:${SALES}:${CH}:1200.000001`]])
+  })
+
+  test('in a thread bound to the app that heard it, a tag of an unreadable app goes to the tagged app; if that app never receives it, the log says so once', async () => {
     const t = setup(sharedChannel(CH), { members: BOTH, probeError: { [SALES]: 'missing_scope: the token needs groups:read' } })
     await t.start()
     t.watcher.bind(CH, '1200.000001', 'crm', 'tool', 'default')
-    t.say({ ts: '1201.000001', thread_ts: '1200.000001', user: 'UC', text: `<@${SALES_BOT}> over to you` }, ['default'])
+    const tag = (ts: string) => ({ ts, thread_ts: '1200.000001', user: 'UC', text: `<@${SALES_BOT}> over to you` })
+    t.say(tag('1201.000001'), ['default'])
+    t.say(tag('1202.000001'), ['default'])
     await t.settle()
-    expect(t.sent.map(s => [s.to, s.conversation])).toEqual([['crm', `slack:${CH}:1200.000001`]])
+    expect(t.sent).toEqual([])   // the residual: the tagged app was not shown to hear it, and did not
+    expect(t.logs.filter(l => l.includes('a tag of the app named sales') && l.includes('could not be read'))).toHaveLength(1)
+    t.say(tag('1203.000001'))
+    await t.settle()
+    expect(t.sent.map(s => [s.to, s.conversation])).toEqual([['deals', `slack:${SALES}:${CH}:1200.000001`]])
   })
 
   test('a top-level tag left to an app that cannot be shown to hear it is said once, naming the app and the scopes', async () => {
