@@ -14,7 +14,7 @@ process.stderr.write = (() => true) as any
 const ALL: string[] = UNIVERSAL_TOOLS.map(t => t.name)
 const namesOf = (id: string): string[] => getToolsForSession(id).map(t => t.name).sort()
 const KEPT = ['reply', 'react', 'edit_message', 'delete_message', 'fetch_messages', 'download_attachment', 'set_description', 'send_to_thread']
-/** Advertised to a specialist with no talks_to: send_to_thread is held back (the gate refuses it either way). */
+/** Advertised to a specialist with no sends_to: send_to_thread is held back (the gate refuses it either way). */
 const NO_TALKS = KEPT.filter(n => n !== 'send_to_thread')
 const REMOVED = ['spawn_session', 'kill_session', 'peek_session', 'list_sessions', 'handoff', 'bind_conversation', 'watch_pr', 'ask_predecessor']
 
@@ -38,7 +38,7 @@ describe('the surface of a restricted session', () => {
     expect(isToolAllowed(id, tool)).toBe(false)
     const r = await executeTool(tool, {}, id)
     expect(r.isError).toBe(true)
-    expect(r.content[0].text).toBe(`${tool} is not available to a restricted session: it has set_description (on itself) and, each only in its own conversation, reply, react, edit_message, delete_message, fetch_messages, download_attachment`)   // once: the wrapper does not repeat the tool name; send_to_thread is not listed for a specialist with no talks_to
+    expect(r.content[0].text).toBe(`${tool} is not available to a restricted session: it has set_description (on itself) and, each only in its own conversation, reply, react, edit_message, delete_message, fetch_messages, download_attachment`)   // once: the wrapper does not repeat the tool name; send_to_thread is not listed for a specialist with no sends_to
   })
   test('no capability or predecessor grants a restricted session a removed tool', () => {
     const id = restricted({ capabilities: ['protocol_spawn', 'protocol_context', 'main_handoff'], predecessor: { engine: 'claude', fork: { claudeSessionId: 'p', parentName: 'x' }, cwd: '/x' } })

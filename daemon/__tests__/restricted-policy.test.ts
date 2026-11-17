@@ -101,12 +101,12 @@ describe('NoticeLimiter: at most once a minute per cause, and bounded', () => {
 describe('bornPolicy from a config that skipped the loader', () => {
   const config = (over: Record<string, unknown>): HydraConfig => ({
     connectors: {}, gateways: {}, slackApps: {}, people: {}, places: {}, schedules: {}, rules: [],
-    specialists: { ops: { id: 'ops', workdir: '/w/ops', allow: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: true, ...over } as any },
+    specialists: { ops: { id: 'ops', workdir: '/w/ops', reachableBy: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: true, ...over } as any },
   })
   test('a workdir specialist with no tools list gets Read, Grep, Glob: the narrowest set, never every tool', () => {
     expect(bornPolicy('ops', config({}))!.tools).toEqual(['Read', 'Grep', 'Glob'])
   })
   test('a listed server nobody declared refuses, with the remedy', () => {
-    expect(() => bornPolicy('ops', config({ mcp: ['nope'] }), 'ops-sess')).toThrow(/lists \[mcp\.nope\].*Run `hydra kill ops-sess`/s)
+    expect(() => bornPolicy('ops', config({ mcpServers: ['nope'] }), 'ops-sess')).toThrow(/lists \[mcp\.nope\].*Run `hydra kill ops-sess`/s)
   })
 })

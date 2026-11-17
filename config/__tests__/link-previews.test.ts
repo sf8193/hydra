@@ -27,7 +27,7 @@ const errors = (text: string) => {
 const specialist = (restricted: string, allow: string, places = '') => `
 [specialists.ops]
 workdir = "~/agents/ops"
-allow = [${allow}]
+reachable_by = [${allow}]
 restricted = ${restricted}
 ${places}
 [[rules]]
@@ -55,7 +55,7 @@ describe('the load warning', () => {
   const warn = (w: string[]) => w.filter(x => x.includes('link_previews'))
   test('a confined specialist anyone can talk to, on a place with previews on, warns and names the place and the fix', () => {
     const { warnings } = ok(specialist('true', '"anyone"'))
-    expect(warn(warnings)).toEqual(['specialists.ops: anyone can talk to it in slack:#ops, where a link in its answer unfurls a preview that can show readers content they could not open themselves; set link_previews = false in [places."slack:#ops"]'])
+    expect(warn(warnings)).toEqual(['specialists.ops: anyone can reach it in slack:#ops, where a link in its answer unfurls a preview that can show readers content they could not open themselves; set link_previews = false in [places."slack:#ops"]'])
   })
   test('the same place with previews off does not warn', () => {
     expect(warn(ok(specialist('true', '"anyone"', '[places."slack:#ops"]\nlink_previews = false\n')).warnings)).toEqual([])
@@ -74,7 +74,7 @@ describe('the load warning', () => {
     const t = `
 [specialists.ops]
 workdir = "~/agents/ops"
-allow = ["anyone"]
+reachable_by = ["anyone"]
 restricted = true
 [[rules]]
 place = "slack:#ops"
@@ -88,13 +88,13 @@ target = "specialist:ops"
 [places."slack:#quiet"]
 link_previews = false
 `
-    expect(warn(ok(t).warnings)).toEqual(['specialists.ops: anyone can talk to it in slack:#ops and slack:#faq, where a link in its answer unfurls a preview that can show readers content they could not open themselves; set link_previews = false in [places."slack:#ops"] and [places."slack:#faq"]'])
+    expect(warn(ok(t).warnings)).toEqual(['specialists.ops: anyone can reach it in slack:#ops and slack:#faq, where a link in its answer unfurls a preview that can show readers content they could not open themselves; set link_previews = false in [places."slack:#ops"] and [places."slack:#faq"]'])
   })
   test('cli and github are not places with previews', () => {
     const t = `
 [specialists.ops]
 workdir = "~/agents/ops"
-allow = ["anyone"]
+reachable_by = ["anyone"]
 restricted = true
 [[rules]]
 place = "cli"
@@ -116,7 +116,7 @@ describe('a Discord channel given by name', () => {
     const t = `
 [specialists.ops]
 workdir = "~/agents/ops"
-allow = ["anyone"]
+reachable_by = ["anyone"]
 restricted = true
 home = "slack:#esc"
 [[rules]]
@@ -124,6 +124,6 @@ place = "discord:#ops"
 target = "specialist:ops"
 `
     const w = ok(t).warnings.filter(x => x.includes('link_previews') || x.includes('previews'))
-    expect(w).toEqual(['specialists.ops: anyone can talk to it in discord:#ops, where a link in its answer unfurls a preview that can show readers content they could not open themselves; hydra can switch previews off in a Discord channel only by id, so list it as discord:<channel id> and set link_previews = false there'])
+    expect(w).toEqual(['specialists.ops: anyone can reach it in discord:#ops, where a link in its answer unfurls a preview that can show readers content they could not open themselves; hydra can switch previews off in a Discord channel only by id, so list it as discord:<channel id> and set link_previews = false there'])
   })
 })

@@ -33,7 +33,7 @@ const workdir = mkdtempSync(join(tmpdir(), 'restricted-launch-'))
 afterAll(() => rmSync(workdir, { recursive: true, force: true }))
 
 const spec = (id: string, over: Partial<Specialist> = {}): Specialist => ({
-  id, workdir, allow: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false, ...over,
+  id, workdir, reachableBy: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false, ...over,
 })
 const configWith = (specialists: Specialist[]): HydraConfig => ({
   operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
@@ -41,9 +41,9 @@ const configWith = (specialists: Specialist[]): HydraConfig => ({
   specialists: Object.fromEntries(specialists.map(s => [s.id, s])),
   mcpServers: { datadog: { name: 'datadog', command: '/usr/local/bin/datadog-mcp', tokenEnv: ['DD_API_KEY'], tools: ['search_logs'] } },
 })
-const OPS = spec('ops', { restricted: true, tools: ['Read', 'Grep'], mcp: ['datadog'] })
+const OPS = spec('ops', { restricted: true, tools: ['Read', 'Grep'], mcpServers: ['datadog'] })
 const DESK = spec('desk')
-const CRM = spec('crm', { restricted: true, tools: ['Read', 'Grep', 'Glob'], mcp: [], sessions: 'per-conversation' })
+const CRM = spec('crm', { restricted: true, tools: ['Read', 'Grep', 'Glob'], mcpServers: [], sessions: 'per-conversation' })
 const use = (...s: Specialist[]) => _setHydraConfigForTesting(configWith(s))
 
 let fake: FakeTmux
@@ -135,7 +135,7 @@ describe('the launch policy of a specialist', () => {
   test('its id changes with the tools, a server or its tools, and the workdir, and with nothing else', () => {
     const base = bornPolicy('ops')!.id
     expect(base).toMatch(/^workdir:[0-9a-f]{12}$/)
-    use({ ...OPS, home: 'slack:#x', allow: ['people'] }); expect(bornPolicy('ops')!.id).toBe(base)
+    use({ ...OPS, home: 'slack:#x', reachableBy: ['people'] }); expect(bornPolicy('ops')!.id).toBe(base)
     use({ ...OPS, tools: ['Read'] }); expect(bornPolicy('ops')!.id).not.toBe(base)
     use({ ...OPS, workdir: '/elsewhere' }); expect(bornPolicy('ops')!.id).not.toBe(base)
     _setHydraConfigForTesting({ ...configWith([OPS]), mcpServers: { datadog: { name: 'datadog', command: '/usr/local/bin/datadog-mcp', tokenEnv: ['DD_API_KEY'], tools: ['search_logs', 'get_monitor'] } } })
@@ -292,7 +292,7 @@ describe('a policy change starts fresh', () => {
   })
   test('a specialist flipped from workdir back to operator is not resumed either', async () => {
     seedDead({ policy: opsPolicy() })
-    use({ ...OPS, restricted: false, tools: undefined, mcp: undefined })
+    use({ ...OPS, restricted: false, tools: undefined, mcpServers: undefined })
     expect(await revive()).toMatchObject({ ok: true, method: 'respawned' })
     expect(launches[0].policy?.access === 'workdir').toBe(false)
   })

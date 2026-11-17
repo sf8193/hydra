@@ -50,7 +50,7 @@
         "listens": [
           "slack:dm"
         ],
-        "allow": [],
+        "reachableBy": [],
         "sessions": "shared",
         "maxSessions": 20,
         "renamedFrom": [],

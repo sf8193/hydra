@@ -59,14 +59,14 @@ idle = "4h"
 [specialists.crm]
 workdir = "~/agents/crm"
 listens = ["slack:#help"]
-allow = ["staff"]
+reachable_by = ["staff"]
 sessions = "per-conversation"
 max_sessions = 5
 [specialists.ops]
 workdir = "~/agents/ops"
 kickoff_file = "kickoff.md"
 listens = ["slack:dm"]
-allow = []
+reachable_by = []
 engine = "codex"
 renamed_from = ["old-ops"]
 [specialists.review]
@@ -96,13 +96,13 @@ timeout = "2s"
     expect(config.people.op).toEqual({ id: 'op', addresses: ['slack:U0OP', 'github:op-login'], roles: [], name: 'op' })
     expect(config.people.alice.name).toBe('Alice')
     expect(config.specialists.crm).toEqual({
-      id: 'crm', workdir: '/home/op/agents/crm', kickoff: '/orient crm', allow: ['staff'],
+      id: 'crm', workdir: '/home/op/agents/crm', kickoff: '/orient crm', reachableBy: ['staff'],
       sessions: 'per-conversation', maxSessions: 5, idleMs: 4 * 3_600_000, renamedFrom: [], restricted: false,
     })
     // Its own kickoff_file replaces the default kickoff; a relative kickoff_file is under the workdir.
-    expect(config.specialists.ops).toMatchObject({ kickoffFile: '/home/op/agents/ops/kickoff.md', allow: [], engine: 'codex', renamedFrom: ['old-ops'], sessions: 'shared', maxSessions: 20 })
+    expect(config.specialists.ops).toMatchObject({ kickoffFile: '/home/op/agents/ops/kickoff.md', reachableBy: [], engine: 'codex', renamedFrom: ['old-ops'], sessions: 'shared', maxSessions: 20 })
     expect(config.specialists.ops.kickoff).toBeUndefined()
-    expect(config.specialists.review.allow).toEqual(['people'])
+    expect(config.specialists.review.reachableBy).toEqual(['people'])
     expect(config.places['slack:#help']).toEqual({ ack: 'eyes', files: false, messages: 'all', bots: false, linkPreviews: true })
     expect(config.schedules.nightly).toEqual({ id: 'nightly', cron: '0 3 * * *', target: 'ops', message: 'Nightly run.', runner: 'launchd' })
     expect(config.rules).toEqual([{ place: 'slack:#help', person: 'alice', target: 'ops' }, { place: 'slack:dm', target: 'ops' }, { place: 'github:acme/widget', target: 'review' }, { place: 'slack:#help', target: 'crm' }])
@@ -209,7 +209,7 @@ describe('load errors', () => {
   const spec = (body: string, id = 'ops') => `${BASE}\n[specialists.${id}]\nworkdir = "~/agents/ops"\nlistens = ["slack:#ops"]\n${body}`
 
   test('an unknown specialist, person or role reference', () => {
-    expect(errorsOf(`${spec('allow = ["staff"]')}
+    expect(errorsOf(`${spec('reachable_by = ["staff"]')}
 [schedules.nightly]
 cron = "0 3 * * *"
 target = "specialist:nobody"
@@ -218,14 +218,14 @@ place = "slack:#ops"
 person = "bob"
 target = "specialist:ghost"
 `)).toEqual([
-      'specialists.ops.allow[0]: no one holds the role "staff"',
+      'specialists.ops.reachable_by[0]: no one holds the role "staff": reachable_by lists roles, so give a person that role in [people.<id>] roles',
       'schedules.nightly.target: no specialist "nobody": declare [specialists.nobody], or use main',
       'rules[0].person: "bob" is neither a person nor a role anyone holds',
       'rules[0].target: no specialist "ghost": declare [specialists.ghost], or use main',
     ])
     expect(errorsOf('operator = "ghost"\n')).toEqual(['operator: "ghost" is not a person: declare [people.ghost]'])
-    expect(errorsOf(`${spec('allow = ["alice"]')}\n[people.alice]\naddresses = ["slack:U0A"]\n`))
-      .toEqual(['specialists.ops.allow[0]: "alice" is a person, not a role: give them a role and allow that'])
+    expect(errorsOf(`${spec('reachable_by = ["alice"]')}\n[people.alice]\naddresses = ["slack:U0A"]\n`))
+      .toEqual(['specialists.ops.reachable_by[0]: "alice" is a person, and reachable_by lists roles: give them a role in [people.alice] and list that role'])
   })
 
   test('two specialists listening on the same place', () => {
@@ -316,7 +316,7 @@ addresses = ["github:alice"]
 
   test('a DM with a person is slack:dm:<person>, a group DM slack:group-dm or its id; slack:dm stays the bot\'s', () => {
     const base = `${BASE}\n[people.alice]\naddresses = ["slack:U0A"]\n`
-    const c = ok(`${base}[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:group-dm", "slack:dm:alice", "slack:G0GROUP1"]\nallow = []\n[places."slack:dm:alice"]\nack = "eyes"\n[[rules]]\nplace = "slack:dm:alice"\ntarget = "specialist:ops"\n`).config
+    const c = ok(`${base}[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:group-dm", "slack:dm:alice", "slack:G0GROUP1"]\nreachable_by = []\n[places."slack:dm:alice"]\nack = "eyes"\n[[rules]]\nplace = "slack:dm:alice"\ntarget = "specialist:ops"\n`).config
     expect(placesAnsweredBy(c, 'ops')).toEqual(['slack:dm:alice', 'slack:G0GROUP1', 'slack:group-dm'])
     expect(c.places['slack:dm:alice'].ack).toBe('eyes')
     expect(c.rules[0].place).toBe('slack:dm:alice')
@@ -324,7 +324,7 @@ addresses = ["github:alice"]
   })
 
   test('slack:dm:<person> names a person declared in [people] with a Slack address', () => {
-    const spec = (place: string, people = '[people.alice]\naddresses = ["slack:U0A"]\n') => `${BASE}\n${people}[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["${place}"]\nallow = []\n`
+    const spec = (place: string, people = '[people.alice]\naddresses = ["slack:U0A"]\n') => `${BASE}\n${people}[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["${place}"]\nreachable_by = []\n`
     expect(errorsOf(spec('slack:dm:ghost'))).toEqual(['specialists.ops.listens[0]: "slack:dm:ghost": ghost is not a person: declare [people.ghost]'])
     expect(errorsOf(spec('slack:dm:bea', '[people.bea]\naddresses = ["github:bea"]\n'))).toEqual(['specialists.ops.listens[0]: "slack:dm:bea": bea has no slack: address; add one to people.bea.addresses'])
     expect(errorsOf(`${BASE}\n[[rules]]\nplace = "slack:dm:ghost"\ntarget = "main"\n`)).toEqual(['rules[0].place: "slack:dm:ghost": ghost is not a person: declare [people.ghost]'])
@@ -396,12 +396,12 @@ describe('found in review', () => {
   test('a guard command\'s program is found past env assignments and quotes', () => {
     expect(ok(`${BASE}\n[guard]\ncommand = "FOO=1 '~/bin/guard' --x"\n`).config.guard?.command).toBe("FOO=1 '~/bin/guard' --x")
   })
-  test('a bad default is reported once, and a default allow is checked with no specialists', () => {
-    expect(errorsOf(`${BASE}\n[defaults.specialist]\nidle = "banana"\nallow = ["ghost"]\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:#a"]\n[specialists.crm]\nworkdir = "~/agents/crm"\nlistens = ["slack:#b"]\n`)).toEqual([
+  test('a bad default is reported once, and a default reachable_by is checked with no specialists', () => {
+    expect(errorsOf(`${BASE}\n[defaults.specialist]\nidle = "banana"\nreachable_by = ["ghost"]\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:#a"]\n[specialists.crm]\nworkdir = "~/agents/crm"\nlistens = ["slack:#b"]\n`)).toEqual([
       'defaults.specialist.idle: "banana" must be a duration like 90m, 12h or 4d, at most 7d',
-      'defaults.specialist.allow[0]: no one holds the role "ghost"',
+      'defaults.specialist.reachable_by[0]: no one holds the role "ghost": reachable_by lists roles, so give a person that role in [people.<id>] roles',
     ])
-    expect(errorsOf(`${BASE}\n[defaults.specialist]\nallow = ["ghost"]\n`)).toEqual(['defaults.specialist.allow[0]: no one holds the role "ghost"'])
+    expect(errorsOf(`${BASE}\n[defaults.specialist]\nreachable_by = ["ghost"]\n`)).toEqual(['defaults.specialist.reachable_by[0]: no one holds the role "ghost": reachable_by lists roles, so give a person that role in [people.<id>] roles'])
   })
 })
 
@@ -490,7 +490,7 @@ target = "specialist:desk"
 
   test('a specialist nobody can reach', () => {
     expect(ok(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\n`).warnings)
-      .toEqual(['specialists.ops: nobody can reach it: no rule, schedule or `talks_to` names it'])
+      .toEqual(['specialists.ops: nobody can reach it: no rule, schedule or `sends_to` names it'])
     // A schedule's `to` is a way in.
     expect(ok(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\n[schedules.daily]\ncron = "@daily"\ntarget = "specialist:ops"\n`).warnings).toEqual([])
   })
@@ -499,11 +499,11 @@ target = "specialist:desk"
     expect(ok(`${BASE}\n[slack.apps.default]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:#a", "slack:#b"]\n`).warnings)
       .toEqual(['specialists.ops: one shared session hears slack:#a, slack:#b, so what\'s said in one place is remembered in the others; use sessions = "per-conversation" or one specialist per place'])
     expect(ok(`${BASE}\n[slack.apps.default]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:dm"]\n`).warnings)
-      .toEqual(['specialists.ops: one shared session hears everyone\'s DMs (allow = ["people"]), so one person\'s DM is remembered in another\'s; use sessions = "per-conversation" or allow = []'])
+      .toEqual(['specialists.ops: one shared session hears everyone\'s DMs (reachable_by = ["people"]), so one person\'s DM is remembered in another\'s; use sessions = "per-conversation" or reachable_by = []'])
     expect(ok(`${BASE}\n[slack.apps.default]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:group-dm"]\n`).warnings)
-      .toEqual(['specialists.ops: one shared session hears every group DM (allow = ["people"]), so what one group says is remembered in another; use sessions = "per-conversation" or allow = []'])
+      .toEqual(['specialists.ops: one shared session hears every group DM (reachable_by = ["people"]), so what one group says is remembered in another; use sessions = "per-conversation" or reachable_by = []'])
     // Only the operator's DMs, or one session per conversation: one audience each.
-    expect(ok(`${BASE}\n[slack.apps.default]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:dm"]\nallow = []\n`).warnings).toEqual([])
+    expect(ok(`${BASE}\n[slack.apps.default]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:dm"]\nreachable_by = []\n`).warnings).toEqual([])
     expect(ok(`${BASE}\n[slack.apps.default]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:#a", "slack:#b"]\nsessions = "per-conversation"\nidle = "1h"\n`).warnings).toEqual([])
   })
 

@@ -23,8 +23,8 @@ describe('hydra.example.toml', () => {
     expect(r.config.specialists.deals.pinnedTo).toEqual(['sales'])
     expect(r.config.places['slack:#help'].defaultApp).toBe('default')
     // The confined specialist, its server and its place.
-    expect(r.config.specialists.helpdesk).toMatchObject({ restricted: true, tools: ['Read', 'Grep', 'Glob'], mcp: ['datadog'], talksTo: ['triage'] })
-    expect(r.config.specialists.triage).toMatchObject({ restricted: true, talksTo: ['helpdesk'] })
+    expect(r.config.specialists.helpdesk).toMatchObject({ restricted: true, tools: ['Read', 'Grep', 'Glob'], mcpServers: ['datadog'], sendsTo: ['triage'] })
+    expect(r.config.specialists.triage).toMatchObject({ restricted: true, sendsTo: ['helpdesk'] })
     expect(placesAnsweredBy(r.config, 'triage')).toEqual([])
     expect(placesAnsweredBy(r.config, 'crm')).toEqual(['slack:#help'])
     expect(r.config.mcpServers?.datadog.tools).toEqual(['search_logs', 'get_monitor'])

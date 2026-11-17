@@ -1,4 +1,4 @@
-// `talks_to`: a restricted session keeps send_to_thread, to the specialists its hydra.toml names and no one else. One rule per test:
+// `sends_to`: a restricted session keeps send_to_thread, to the specialists its hydra.toml names and no one else. One rule per test:
 // the call is held to the list at the one place a restricted call is judged; what the receiver reads is rendered by hydra, with no
 // sender text in a header; the question budget is per conversation and taken before the first await; whatever any session sends into
 // a restricted one is fenced and capped the same way.
@@ -9,7 +9,7 @@ import { STATE_DIR, gateway } from '../config.js'
 import { registry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { executeTool, restrictedRefusal } from '../bridge-dispatch.js'
-import { renderTalk, sendTalk, talkDeps, talksToRefusal, _resetTalks, TALK_MAX_PER_WINDOW, TALK_WINDOW_MS, TALK_NOTICE } from '../talks-to.js'
+import { renderTalk, sendTalk, talkDeps, sendsToRefusal, _resetTalks, TALK_MAX_PER_WINDOW, TALK_WINDOW_MS, TALK_NOTICE } from '../sends-to.js'
 import { getToolsForSession, isToolAllowed, noteDeclaredSessionType } from '../tool-surface.js'
 import { UNIVERSAL_TOOLS } from '../../shared/tool-definitions.js'
 import { _setHydraConfigForTesting } from '../hydra-config.js'
@@ -36,27 +36,27 @@ addresses = ["slack:U0OP"]
 bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"
 [specialists.ops]
 workdir = "~/agents/ops"
-allow = ["anyone"]
+reachable_by = ["anyone"]
 restricted = true
-talks_to = ["deep"]
+sends_to = ["deep"]
 [[rules]]
 place = "slack:C0OPS"
 target = "specialist:ops"
 [specialists.deep]
 workdir = "~/agents/deep"
-allow = []
+reachable_by = []
 restricted = true
-talks_to = ["ops"]
+sends_to = ["ops"]
 [specialists.plain]
 workdir = "~/agents/plain"
-allow = ["anyone"]
+reachable_by = ["anyone"]
 restricted = true
 [[rules]]
 place = "slack:C0PLAIN"
 target = "specialist:plain"
 [specialists.full]
 workdir = "~/agents/full"
-allow = ["people"]
+reachable_by = ["people"]
 [[rules]]
 place = "slack:C0FULL"
 target = "specialist:full"
@@ -91,7 +91,7 @@ afterEach(() => {
 const send = (caller: string, args: Record<string, unknown>) => executeTool('send_to_thread', args, caller)
 const ask = (over: Record<string, unknown> = {}) => ({ target: 'deep', type: 'question', text: 'what is the ledger window?', chat_id: 'ops-thread', ...over })
 
-describe('the call is held to the specialists named in talks_to', () => {
+describe('the call is held to the specialists named in sends_to', () => {
   test('a listed target in its own conversation lands once, as the specialist that sent it', async () => {
     const r = await send('ops-s', ask())
     expect(r.isError).toBeUndefined()
@@ -109,7 +109,7 @@ describe('the call is held to the specialists named in talks_to', () => {
   ])('%s (%s) is refused, nothing lands', async (target) => {
     const r = await send('ops-s', ask({ target }))
     expect(r.isError).toBe(true)
-    expect(r.content[0].text).toMatch(/^send_to_thread: .*a specialist you may talk to \(deep\)/)
+    expect(r.content[0].text).toMatch(/^send_to_thread: .*a specialist in your sends_to \(deep\)/)
     expect(landed).toEqual([])
   })
   test('the target is matched exactly: a prefix, another case and a padded name are not the listed one, but padding is trimmed', async () => {
@@ -117,11 +117,11 @@ describe('the call is held to the specialists named in talks_to', () => {
     expect((await send('ops-s', ask({ target: '  deep  ' }))).isError).toBeUndefined()
     expect(landed.map(l => l.target)).toEqual(['deep'])
   })
-  test('a specialist with no talks_to has the tool allowed at isToolAllowed but is refused, and is not offered it', async () => {
+  test('a specialist with no sends_to has the tool allowed at isToolAllowed but is refused, and is not offered it', async () => {
     expect(isToolAllowed('plain-s', 'send_to_thread')).toBe(true)
     const r = await send('plain-s', ask({ chat_id: 'plain-thread' }))
     expect(r.isError).toBe(true)
-    expect(r.content[0].text).toBe('send_to_thread: your specialist has no talks_to, so you cannot send to another session; answer in your own conversation with reply')
+    expect(r.content[0].text).toBe('send_to_thread: your specialist has no sends_to, so you cannot send to another session; answer in your own conversation with reply')
     expect(getToolsForSession('plain-s').map(t => t.name)).not.toContain('send_to_thread')
     expect(landed).toEqual([])
   })
@@ -148,7 +148,7 @@ describe('the call is held to the specialists named in talks_to', () => {
   })
   test('the same gate answers for restrictedRefusal and executeTool: this is the one place a restricted call is judged', () => {
     expect(restrictedRefusal('ops-s', 'send_to_thread', ask())).toBeUndefined()
-    expect(restrictedRefusal('ops-s', 'send_to_thread', ask({ target: 'main' }))).toBe(talksToRefusal('ops-s', ask({ target: 'main' })))
+    expect(restrictedRefusal('ops-s', 'send_to_thread', ask({ target: 'main' }))).toBe(sendsToRefusal('ops-s', ask({ target: 'main' })))
   })
   test('a bridge that declared restricted with no record has no specialist, so no target: refused', async () => {
     noteDeclaredSessionType('ghost-talk', 'scoped')
@@ -159,21 +159,21 @@ describe('the call is held to the specialists named in talks_to', () => {
   })
   test('the list is read as hydra.toml has it now: removing a target stops the very next call', async () => {
     expect((await send('ops-s', ask())).isError).toBeUndefined()
-    _setHydraConfigForTesting(load(TOML.replace('talks_to = ["deep"]\n', '')))
+    _setHydraConfigForTesting(load(TOML.replace('sends_to = ["deep"]\n', '')))
     expect((await send('ops-s', ask())).isError).toBe(true)
     expect(landed).toHaveLength(1)
   })
-  test('a session that is not restricted is not held to talks_to: it keeps today\'s route', async () => {
+  test('a session that is not restricted is not held to sends_to: it keeps today\'s route', async () => {
     expect(isToolAllowed('full-s', 'send_to_thread')).toBe(true)
     const r = await send('full-s', { target: 'nobody-here', type: 'progress', text: 'x' })
-    expect(r.content[0].text).toContain('no session named "nobody-here"')   // the ordinary route's own refusal, not talks_to's
+    expect(r.content[0].text).toContain('no session named "nobody-here"')   // the ordinary route's own refusal, not sends_to's
     expect(landed).toEqual([])
   })
 })
 
 describe('what the restricted session is shown of the tool', () => {
   const tool = (id: string) => getToolsForSession(id).find(t => t.name === 'send_to_thread') as { description: string; inputSchema: { properties: Record<string, unknown>; required: string[] } }
-  test('with a talks_to it is advertised with only the four arguments, chat_id required: no files, no visibility, no summary', () => {
+  test('with a sends_to it is advertised with only the four arguments, chat_id required: no files, no visibility, no summary', () => {
     const t = tool('ops-s')
     expect(Object.keys(t.inputSchema.properties).sort()).toEqual(['chat_id', 'target', 'text', 'type'])
     expect(t.inputSchema.required.sort()).toEqual(['chat_id', 'target', 'text', 'type'])
@@ -366,12 +366,12 @@ describe('a landing on the real session', () => {
     expect(r.content[0].text).toStartWith('delivered to deep.')
     expect(got).toHaveLength(1)
     expect(String(got[0].content)).toStartWith('<<<SESSION-UNTRUSTED-')
-    expect(got[0].meta).toMatchObject({ source: 'talks_to', initiator: 'talks_to:ops', chat_id: 'deep-thread', specialist: 'deep' })
+    expect(got[0].meta).toMatchObject({ source: 'sends_to', initiator: 'sends_to:ops', chat_id: 'deep-thread', specialist: 'deep' })
     registry.deleteThread('deep-thread')
   })
 })
 
-describe('the one delivery gate holds for a talks_to like any other delivery', () => {
+describe('the one delivery gate holds for a sends_to like any other delivery', () => {
   test('a confined target whose start has not been verified takes nothing, and the sender is told it could not be reached', async () => {
     Object.assign(talkDeps, real)
     talkDeps.linkOf = async () => undefined
@@ -389,7 +389,7 @@ describe('the one delivery gate holds for a talks_to like any other delivery', (
 })
 
 describe('a refusal does not offer what the session does not have', () => {
-  test('a restricted session with no talks_to is not told it has send_to_thread; one with talks_to is', async () => {
+  test('a restricted session with no sends_to is not told it has send_to_thread; one with sends_to is', async () => {
     const plain = await send('plain-s', { target: 'x', type: 'progress', text: 'x' }).then(() => executeTool('spawn_session', {}, 'plain-s'))
     expect(plain.content[0].text).not.toContain('send_to_thread')
     const withTalks = await executeTool('spawn_session', {}, 'ops-s')

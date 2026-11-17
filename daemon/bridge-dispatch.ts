@@ -8,7 +8,7 @@ import { quietSend, shouldQuiet } from './quiet-send.js'
 import { beginMainHandoff } from './main-handoff.js'
 import { getSpecialist } from '../specialists/specialists.js'
 import { ensureSpecialist } from '../specialists/specialist-deliver.js'
-import { envelopeFor, sendTalk, talksToRefusal } from './talks-to.js'
+import { envelopeFor, sendTalk, sendsToRefusal } from './sends-to.js'
 import { READ_ONLY_DISALLOWED_TOOLS, claudeLaunchCwd, doSpawnSession, handOff, handoffNoteFate, killSession, predecessorOf, runPreHandoffHook, sessionDir, type PreHandoffVerdict } from './session-lifecycle.js'
 import { fallbackDescription, formatDuration, chunk, assertSendable, parseDuration, withOutbound } from './util.js'
 import { tmuxHasSession } from './tmux.js'
@@ -156,12 +156,12 @@ const RESTRICTED_PLACE_ARG: Readonly<Record<string, string>> = {
  * Why a restricted session may not make this call, or undefined. The tools it keeps work only where it speaks: its own session
  * thread, or a Slack conversation bound to its specialist (not its home channel). It attaches no files of its own (the
  * gateway may attach pictures it drew from the session's text). `send_to_thread` also goes only to a specialist its
- * `talks_to` names (talks-to.ts). isToolAllowed has already refused the tools it does not keep.
+ * `sends_to` names (sends-to.ts). isToolAllowed has already refused the tools it does not keep.
  */
 export function restrictedRefusal(callerSessionId: string, name: string, args: Record<string, unknown>): string | undefined {
   if (name === 'set_description') return args.session_id === callerSessionId ? undefined : "set_description: a restricted session describes only itself; session_id must be this session's own"
   if (name === 'reply' && Array.isArray(args.files) && args.files.length) return 'reply: a restricted session may not attach files of its own, so remove files (attachments are not sent)'
-  if (name === 'send_to_thread') { const why = talksToRefusal(callerSessionId, args); if (why) return why }
+  if (name === 'send_to_thread') { const why = sendsToRefusal(callerSessionId, args); if (why) return why }
   const arg = RESTRICTED_PLACE_ARG[name]
   const target = arg ? args[arg] : undefined
   const own = registry.get(callerSessionId)
@@ -631,7 +631,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       }
 
       case 'send_to_thread': {
-        // A restricted caller was held to its talks_to above (restrictedRefusal): what it sends is rendered and landed by talks-to.ts, not by the route below.
+        // A restricted caller was held to its sends_to above (restrictedRefusal): what it sends is rendered and landed by sends-to.ts, not by the route below.
         if (callerSessionId && isRestrictedSession(callerSessionId)) return { content: [{ type: 'text', text: await sendTalk(callerSessionId, args) }] }
         const target = (args.target as string)?.trim()
         const msgType = (args.type as string)?.trim()
@@ -761,7 +761,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const replyInstruction = msgType === 'question'
           ? `\nRespond via send_to_thread(target="${senderName}", type="result", text="...").`
           : ''
-        // Into a restricted session, whoever sends: quoted, cut and labelled by hydra (talks-to.ts), never behind a header the sender can write into.
+        // Into a restricted session, whoever sends: quoted, cut and labelled by hydra (sends-to.ts), never behind a header the sender can write into.
         const intoRestricted = isRestrictedSession(targetSession.sessionId)
         transport.sendOrQueue(targetSession.sessionId, {
           type: 'notification',

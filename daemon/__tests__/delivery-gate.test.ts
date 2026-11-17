@@ -16,14 +16,14 @@ import type { HydraConfig, Specialist } from '../../config/types.js'
 
 process.stderr.write = (() => true) as any
 
-const spec = (over: Partial<Specialist> = {}): Specialist => ({ id: 'ops', workdir: '/srv/ops', allow: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false, ...over })
+const spec = (over: Partial<Specialist> = {}): Specialist => ({ id: 'ops', workdir: '/srv/ops', reachableBy: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false, ...over })
 const configure = (over: Partial<Specialist> = {}): void => _setHydraConfigForTesting({
   operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
   people: { op: { id: 'op', addresses: ['discord:100000000000000001'], roles: [], name: 'op' } },
   specialists: { ops: spec(over) },
 } as HydraConfig)
 const operatorPolicy: LaunchPolicy = { specialist: 'ops', access: 'operator', id: 'operator' }
-const flip = () => configure({ restricted: true, tools: ['Read'], mcp: [] })
+const flip = () => configure({ restricted: true, tools: ['Read'], mcpServers: [] })
 
 const ids: string[] = []
 /** The real Claude adapter (the gate is in its `deliver`), reported alive, for a session of the operator-access specialist `ops`. */

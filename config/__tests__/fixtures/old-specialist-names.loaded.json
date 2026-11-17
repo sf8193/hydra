@@ -34,7 +34,7 @@
         "listens": [
           "slack:#help"
         ],
-        "allow": [
+        "reachableBy": [
           "people"
         ],
         "sessions": "per-conversation",
@@ -50,8 +50,8 @@
           "Grep",
           "Glob"
         ],
-        "mcp": [],
-        "talksTo": [
+        "mcpServers": [],
+        "sendsTo": [
           "ops"
         ]
       },
@@ -61,7 +61,7 @@
         "listens": [
           "slack:dm"
         ],
-        "allow": [
+        "reachableBy": [
           "people"
         ],
         "sessions": "shared",
@@ -77,7 +77,7 @@
         "listens": [
           "slack:#deals"
         ],
-        "allow": [
+        "reachableBy": [
           "people"
         ],
         "apps": [
@@ -97,7 +97,7 @@
         "listens": [
           "slack:#plain"
         ],
-        "allow": [
+        "reachableBy": [
           "people"
         ],
         "sessions": "shared",
@@ -123,7 +123,7 @@
     },
     {
       "path": "specialists.ops",
-      "message": "one shared session hears everyone's DMs (allow = [\"people\"]), so one person's DM is remembered in another's; use sessions = \"per-conversation\" or allow = []"
+      "message": "one shared session hears everyone's DMs (reachable_by = [\"people\"]), so one person's DM is remembered in another's; use sessions = \"per-conversation\" or reachable_by = []"
     },
     {
       "path": "specialists.ops",

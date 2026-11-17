@@ -141,7 +141,7 @@ export const specialistsStep: MigrateStep = {
     }
     if (Object.keys(specialists).length) {
       notes.push(`each specialist's workdir is ${spawnCwd}, where sessions start today; point it at the specialist's own folder when it has one.`)
-      notes.push('a "nobody can reach it" warning counts only rules, schedules and talks_to: hydra deliver and jobs still reach these specialists as before.')
+      notes.push('a "nobody can reach it" warning counts only rules, schedules and sends_to: hydra deliver and jobs still reach these specialists as before.')
     }
     // Pointers already here (a hydra.toml tried earlier) are kept; per name, the more recently updated one wins.
     const writes: Record<string, string> = {}

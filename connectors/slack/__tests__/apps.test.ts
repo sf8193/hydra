@@ -31,7 +31,7 @@ type Sent = { to: string; conversation?: string; key: string; msg: string }
 type Fake = { client?: FakeClient; historyError?: string; scopes?: string[]; handler: (e: RawEvent) => void; stopped: boolean; calls: string[]; history: RawMessage[]; threads: Record<string, RawMessage[]>; members: Set<string>; probes: string[]; probeError?: string }
 
 /** Two real listeners (the app `default` and `sales`) on one watcher, with fake Slack behind each. */
-function setup(toml: string, over: { members?: Record<string, string[]>; probeError?: Record<string, string>; cursors?: Record<string, string>; guard?: (to: string) => { fate: 'deliver'; to: string }; seed?: Record<string, { botUserId: string }>; failStart?: Record<string, number>; firstRetryBaseMs?: number; authGate?: Promise<void>; probeGate?: (channel: string) => Promise<void>; membershipWaitMs?: number; expectJoin?: boolean; scopes?: Record<string, string[]>; historyError?: Record<string, string> } = {}) {
+function setup(toml: string, over: { members?: Record<string, string[]>; probeError?: Record<string, string>; cursors?: Record<string, string>; guard?: (to: string) => { fate: 'deliver'; target: string }; seed?: Record<string, { botUserId: string }>; failStart?: Record<string, number>; firstRetryBaseMs?: number; authGate?: Promise<void>; probeGate?: (channel: string) => Promise<void>; membershipWaitMs?: number; expectJoin?: boolean; scopes?: Record<string, string[]>; historyError?: Record<string, string> } = {}) {
   const h = load(toml)
   const dir = mkdtempSync(join(tmpdir(), 'slack-apps-'))
   dirs.push(dir)
@@ -215,7 +215,7 @@ describe('membership', () => {
 describe('a pinned specialist is not reached through another app, even by the guard', () => {
   const guarded = `${sharedChannel(CH, LISTEN_ALL)}[guard]\ncommand = "/bin/true"\n`
   test('a guard that redirects an app’s message to a specialist pinned elsewhere is overruled, once, and the message goes where it was bound', async () => {
-    const t = setup(guarded, { members: BOTH, guard: () => ({ fate: 'deliver', to: 'deals' }) })
+    const t = setup(guarded, { members: BOTH, guard: () => ({ fate: 'deliver', target: 'deals' }) })
     await t.start()
     t.say({ ts: '1100.000001' })   // untagged: the app `default` answers, to crm
     await t.settle()
@@ -225,7 +225,7 @@ describe('a pinned specialist is not reached through another app, even by the gu
   })
 
   test('through its own app the same redirect is honoured', async () => {
-    const t = setup(guarded, { members: BOTH, guard: () => ({ fate: 'deliver', to: 'deals' }) })
+    const t = setup(guarded, { members: BOTH, guard: () => ({ fate: 'deliver', target: 'deals' }) })
     await t.start()
     t.say({ ts: '1200.000001', text: `<@${SALES_BOT}> a quote` })
     await t.settle()
@@ -600,7 +600,7 @@ describe('health is per app: scopes', () => {
   })
 
   test('a lone `default` says no app, and names the manifest command without one', async () => {
-    const t = setup(`${TWO_APPS}`.split('[slack.apps.sales]')[0] + '[specialists.crm]\nworkdir = "/w/crm"\nallow = ["anyone"]\n[[rules]]\nplace = "slack:C0FOOD"\ntarget = "specialist:crm"\n', { scopes: { default: ['channels:history'] } })
+    const t = setup(`${TWO_APPS}`.split('[slack.apps.sales]')[0] + '[specialists.crm]\nworkdir = "/w/crm"\nreachable_by = ["anyone"]\n[[rules]]\nplace = "slack:C0FOOD"\ntarget = "specialist:crm"\n', { scopes: { default: ['channels:history'] } })
     await t.listeners.default.start()
     const said = t.alerts.filter(a => a.includes('bot token'))
     expect(said).toHaveLength(1)
@@ -621,14 +621,14 @@ socket_token_env = "S_APP"
 addresses = ["github:op"]
 [specialists.crm]
 workdir = "/w/crm"
-allow = ["anyone"]
+reachable_by = ["anyone"]
 [[rules]]
 place = "slack:G0PRIV"
 target = "specialist:crm"
 [specialists.deals]
 workdir = "/w/deals"
 pinned_to = ["sales"]
-allow = ["anyone"]
+reachable_by = ["anyone"]
 [[rules]]
 place = "slack:dm"
 target = "specialist:deals"
@@ -741,7 +741,7 @@ describe('a two-app config routes, replies and catches up per app', () => {
 
 describe('a pinned specialist cannot be reached through any other app', () => {
   test('where only a specialist pinned to sales listens, a tag of the app `default` reaches no one, and a tag of sales reaches it', async () => {
-    const toml = `${TWO_APPS}\n[specialists.deals]\nworkdir = "/w/deals"\npinned_to = ["sales"]\nallow = ["anyone"]\n[[rules]]\nplace = "slack:${CH}"\ntarget = "specialist:deals"\n`
+    const toml = `${TWO_APPS}\n[specialists.deals]\nworkdir = "/w/deals"\npinned_to = ["sales"]\nreachable_by = ["anyone"]\n[[rules]]\nplace = "slack:${CH}"\ntarget = "specialist:deals"\n`
     const t = setup(toml, { members: BOTH })
     await t.start()
     t.say({ ts: '1100.000001', text: `<@${BOT}> hello?` })

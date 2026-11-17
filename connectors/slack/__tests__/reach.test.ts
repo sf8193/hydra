@@ -12,14 +12,14 @@ import { SLACK_APP_NEEDS } from '../app.js'
 const TOML = `${TWO_APPS}
 [specialists.crm]
 workdir = "/w/crm"
-allow = ["anyone"]
+reachable_by = ["anyone"]
 [[rules]]
 place = "slack:#help"
 target = "specialist:crm"
 [specialists.deals]
 workdir = "/w/deals"
 pinned_to = ["sales"]
-allow = ["anyone"]
+reachable_by = ["anyone"]
 [[rules]]
 place = "slack:C0DEALS"
 target = "specialist:deals"
@@ -29,7 +29,7 @@ target = "specialist:deals"
 [specialists.ops]
 workdir = "/w/ops"
 pinned_to = ["sales"]
-allow = ["anyone"]
+reachable_by = ["anyone"]
 [[rules]]
 place = "slack:G0PRIV"
 target = "specialist:crm"
@@ -87,7 +87,7 @@ describe('what an app is asked for, by what it reaches', () => {
   const NO_ADDRESS = (t: string) => t.replace('slack:UOP', 'github:op')
 
   test('an app-only rule reaches every place and asks for channel history, with no named place', () => {
-    const t = NO_ADDRESS(`${TWO_APPS}\n[specialists.x]\nworkdir = "/w/x"\npinned_to = ["sales"]\nallow = ["anyone"]\n[[rules]]\napp = "sales"\ntarget = "specialist:x"\n`)
+    const t = NO_ADDRESS(`${TWO_APPS}\n[specialists.x]\nworkdir = "/w/x"\npinned_to = ["sales"]\nreachable_by = ["anyone"]\n[[rules]]\napp = "sales"\ntarget = "specialist:x"\n`)
     expect(needs(t, 'sales')).toContain(SLACK_APP_NEEDS.botScopes.channels)
     // …and not DMs: nothing names slack:dm, and the operator has no Slack address.
     expect(needs(t, 'sales')).not.toContain(SLACK_APP_NEEDS.botScopes.dms)
@@ -95,13 +95,13 @@ describe('what an app is asked for, by what it reaches', () => {
   })
 
   test('a specialist with no `listens` that an app serves answers only bound threads, and still needs channel history', () => {
-    const t = NO_ADDRESS(`${TWO_APPS}\n[specialists.x]\nworkdir = "/w/x"\npinned_to = ["sales"]\nallow = ["anyone"]\n`)
+    const t = NO_ADDRESS(`${TWO_APPS}\n[specialists.x]\nworkdir = "/w/x"\npinned_to = ["sales"]\nreachable_by = ["anyone"]\n`)
     expect(needs(t, 'sales')).toContain(SLACK_APP_NEEDS.botScopes.channels)
     expect(needs(t, 'default')).not.toContain(SLACK_APP_NEEDS.botScopes.channels)
   })
 
   test('files:read only when a place the app reaches has files', () => {
-    const base = NO_ADDRESS(`${TWO_APPS}\n[specialists.crm]\nworkdir = "/w/c"\nallow = ["anyone"]\n[[rules]]\nplace = "slack:C0A"\ntarget = "specialist:crm"\n[specialists.deals]\nworkdir = "/w/d"\npinned_to = ["sales"]\nallow = ["anyone"]\n[[rules]]\nplace = "slack:C0B"\ntarget = "specialist:deals"\n`)
+    const base = NO_ADDRESS(`${TWO_APPS}\n[specialists.crm]\nworkdir = "/w/c"\nreachable_by = ["anyone"]\n[[rules]]\nplace = "slack:C0A"\ntarget = "specialist:crm"\n[specialists.deals]\nworkdir = "/w/d"\npinned_to = ["sales"]\nreachable_by = ["anyone"]\n[[rules]]\nplace = "slack:C0B"\ntarget = "specialist:deals"\n`)
     const files = `${base}[places."slack:C0B"]\nfiles = true\n`
     expect(needs(files, 'sales')).toContain(SLACK_APP_NEEDS.botScopes.files)
     expect(needs(files, 'default')).not.toContain(SLACK_APP_NEEDS.botScopes.files)
@@ -110,7 +110,7 @@ describe('what an app is asked for, by what it reaches', () => {
 
   test('the membership read is asked only of an app that reads channels, and only with several apps', () => {
     // sales is pinned to a specialist that hears only DMs, so it reads no channel.
-    const t = NO_ADDRESS(`${TWO_APPS}\n[specialists.crm]\nworkdir = "/w/c"\nallow = ["anyone"]\n[[rules]]\nplace = "slack:C0A"\ntarget = "specialist:crm"\n[specialists.dm]\nworkdir = "/w/d"\npinned_to = ["sales"]\nallow = ["anyone"]\n[[rules]]\nplace = "slack:dm"\ntarget = "specialist:dm"\n`)
+    const t = NO_ADDRESS(`${TWO_APPS}\n[specialists.crm]\nworkdir = "/w/c"\nreachable_by = ["anyone"]\n[[rules]]\nplace = "slack:C0A"\ntarget = "specialist:crm"\n[specialists.dm]\nworkdir = "/w/d"\npinned_to = ["sales"]\nreachable_by = ["anyone"]\n[[rules]]\nplace = "slack:dm"\ntarget = "specialist:dm"\n`)
     expect(needs(t, 'default')).toContain(SLACK_APP_NEEDS.membership.public)
     expect(needs(t, 'sales')).not.toContain(SLACK_APP_NEEDS.membership.public)
   })

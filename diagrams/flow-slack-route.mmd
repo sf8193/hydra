@@ -1,6 +1,6 @@
 %% A Slack message's path from event to delivery, derived from the code, with every refusal and drop.
 %% REFUSED / UNROUTED: logged once, counted (by sender / in all), removed from owed, never alerted; a mention, or a refused DM, gets 🚫; an unrouted DM gets none.
-%% Routing itself (binding → rules → the operator's DM to main, then allow) is routing/route.ts: see flow-route.mmd.
+%% Routing itself (binding → rules → the operator's DM to main, then reachable_by) is routing/route.ts: see flow-route.mmd.
 %% DROP: logged, counted by kind, alerted once per episode (an hour from its start), per app, kind and target. Guard drops are not alerted.
 %% One connection per Slack app (connectors/slack/connections.ts): each has its own listener, catch-up, cursors and alert episodes; a message and its reply go through the same app.
 flowchart TD
@@ -64,7 +64,7 @@ flowchart TD
   og -->|"no: nobody's, nothing touched, no 🚫"| ign
   og -->|yes| rt
   rt -->|"ignored: not addressed,<br/>no messages = all"| ign
-  rt -->|"refused (allow) or unrouted<br/>(in a DM with a person or a group DM: ignored, no 🚫)"| ref
+  rt -->|"refused (reachable_by) or unrouted<br/>(in a DM with a person or a group DM: ignored, no 🚫)"| ref
   ref --> react
   rt -->|deliver| cap
   cap -->|over| dcap[["DROP tag-cap"]]
@@ -78,14 +78,14 @@ flowchart TD
   subgraph deliver["deliverBatches, once per burst"]
     r0{"binding declared in hydra.toml?<br/>(renamed_from renames followed)"}
     unr(["no: stays owed;<br/>its replay is routed anew"])
-    r1{"allow re-judged, current config"}
+    r1{"reachable_by re-judged, current config"}
     nm["who: person, roles, operator from hydra.toml;<br/>a stranger's Slack name without mentions"]
     g{"[guard], per message, ≤4<br/>never for the operator"}
     gopen["other exit, timeout, >4 KB,<br/>no start, throw: logged"]
     g10[["DROP guard, settled, not alerted"]]
     g75{"75: older than owed_max?"}
     g75o(["no: stays owed"])
-    grp["group by target, order kept<br/>a redirect whose allow refuses the sender,<br/>or names no specialist (alerted) → the binding"]
+    grp["group by target, order kept<br/>a redirect whose reachable_by refuses the sender,<br/>or names no specialist (alerted) → the binding"]
     fl["files ≤2 at once: place files, link, ≤20 MB,<br/>connected → .part 0600 → rename,<br/>one download per file however many ask<br/>else listed with why"]
     snd["global send chain → packItems ≤8 KB<br/>envelope: place, conversation, link; per item person, roles, operator<br/>deliverToTarget(to, key incl. target)"]
     ok["ok or exit 2 → place ack reaction → settle<br/>delivered never trimmed past the oldest owed, nor the parent"]

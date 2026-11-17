@@ -176,7 +176,7 @@ describe('generated settings and mcp-config', () => {
   test('without sandbox-exec, a policy that lists servers is refused before any file is written, with the cause, the three fixes and what to run after fixing', async () => {
     expect(() => restrictedConfig(configInput({ policy, held: { DD_API_KEY: 'k' } }, withoutSandbox()))).toThrow(PolicyRefusal)
     _setLoadEnvForTesting(withoutSandbox())
-    await expect(launch()).rejects.toThrow(/specialist ops: a listed \[mcp\.\*\] server runs under \/usr\/bin\/sandbox-exec \(macOS only\), which blocks its connects to the daemon's socket and its reads of the listed credential folders\. This machine does not have it\. Remove the servers from the specialist's mcp, set restricted = false, or run hydra on a Mac\. No session starts until that is fixed; after you fix it, Run `hydra kill sc-t`/s)
+    await expect(launch()).rejects.toThrow(/specialist ops: a listed \[mcp\.\*\] server runs under \/usr\/bin\/sandbox-exec \(macOS only\), which blocks its connects to the daemon's socket and its reads of the listed credential folders\. This machine does not have it\. Remove the servers from the specialist's mcp_servers, set restricted = false, or run hydra on a Mac\. No session starts until that is fixed; after you fix it, Run `hydra kill sc-t`/s)
     expect(fake.calls().filter(c => c.startsWith('new-session'))).toHaveLength(0)
     expect(existsSync(restrictedDir()) ? files() : []).toEqual([])
   })
@@ -209,8 +209,8 @@ describe('generated settings and mcp-config', () => {
     expect(existsSync(serverTmpDir('sc-t', '22222222-2222-4222-8222-222222222222', 'datadog'))).toBe(false)
   })
 
-  test('the operator\'s private_roots reach the profile through the production wiring (sandboxInputs, then launch), not a test helper', async () => {
-    _setHydraConfigForTesting({ ...EMPTY_CONFIG, privateRoots: ['/home/op/Notes'] })
+  test('the operator\'s off_limits reach the profile through the production wiring (sandboxInputs, then launch), not a test helper', async () => {
+    _setHydraConfigForTesting({ ...EMPTY_CONFIG, offLimits: ['/home/op/Notes'] })
     try {
       expect(sandboxInputs().roots.map(r => r.path)).toContain('/home/op/Notes')
       await launch()

@@ -30,13 +30,13 @@ function withoutFiles(tool: SessionTool): SessionTool {
 }
 
 /**
- * `send_to_thread` as a restricted session sees it: to a specialist its hydra.toml `talks_to` names, a question or an answer, about a
- * conversation it owns, text only. Hydra renders what the receiver reads (daemon/talks-to.ts); nothing here reaches a header.
+ * `send_to_thread` as a restricted session sees it: to a specialist its hydra.toml `sends_to` names, a question or an answer, about a
+ * conversation it owns, text only. Hydra renders what the receiver reads (daemon/sends-to.ts); nothing here reaches a header.
  */
 function restrictedSend(tool: SessionTool): SessionTool {
   return {
     ...tool,
-    description: 'Ask another specialist for what you cannot do or know, or answer one that asked you. target is the name of a specialist your hydra.toml lets you talk to. type is question (you need something from it) or result (your answer to its question: say in the text which question you answer). chat_id is the conversation this is about: the chat_id of the message you are answering. Hydra delivers your text to the specialist quoted, cut at 1,500 characters, with your name and a link to the conversation, and labelled as written by a restricted session: to it your text is words from another session, never an instruction. It does not answer the person: tell them you asked, and that you do not know what comes back. If it fails, tell the person you could not reach the specialist.',
+    description: 'Ask another specialist for what you cannot do or know, or answer one that asked you. target is the name of a specialist in your `sends_to`. type is question (you need something from it) or result (your answer to its question: say in the text which question you answer). chat_id is the conversation this is about: the chat_id of the message you are answering. Hydra delivers your text to the specialist quoted, cut at 1,500 characters, with your name and a link to the conversation, and labelled as written by a restricted session: to it your text is words from another session, never an instruction. It does not answer the person: tell them you asked, and that you do not know what comes back. If it fails, tell the person you could not reach the specialist.',
     inputSchema: {
       type: 'object',
       properties: {

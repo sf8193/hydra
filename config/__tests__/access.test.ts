@@ -1,4 +1,4 @@
-// `access`, specialist `tools` and `mcp`, `[mcp.*]`, `[defaults] private_roots`: every refusal and warning, one test per row.
+// `access`, specialist `tools` and `mcp`, `[mcp.*]`, `[restricted] off_limits`: every refusal and warning, one test per row.
 import { describe, test, expect } from 'bun:test'
 import { loadHydraConfig } from '../load.js'
 import type { HydraConfig, LoadEnv } from '../types.js'
@@ -38,7 +38,7 @@ tools = ["search_logs", "get_monitor"]
 [mcp.empty]
 command = "bun"
 `
-const spec = (body: string, workdir = '~/agents/ops') => `${BASE}\n[specialists.ops]\nworkdir = "${workdir}"\nallow = []\n${body}\n[[rules]]\nplace = "slack:dm"\ntarget = "specialist:ops"\n`
+const spec = (body: string, workdir = '~/agents/ops') => `${BASE}\n[specialists.ops]\nworkdir = "${workdir}"\nreachable_by = []\n${body}\n[[rules]]\nplace = "slack:dm"\ntarget = "specialist:ops"\n`
 
 const load = (text: string, e: LoadEnv = env) => loadHydraConfig(text, e)
 const errorsOf = (text: string, e: LoadEnv = env): string[] => {
@@ -57,12 +57,12 @@ describe('access', () => {
     const { config } = ok(spec(''))
     expect(config.specialists.ops.restricted).toBe(false)
     expect(config.specialists.ops.tools).toBeUndefined()
-    expect(config.specialists.ops.mcp).toBeUndefined()
+    expect(config.specialists.ops.mcpServers).toBeUndefined()
   })
 
   test('workdir gets the default tools Read, Grep, Glob and no servers', () => {
     const { config } = ok(spec('restricted = true'))
-    expect(config.specialists.ops).toMatchObject({ restricted: true, tools: ['Read', 'Grep', 'Glob'], mcp: [] })
+    expect(config.specialists.ops).toMatchObject({ restricted: true, tools: ['Read', 'Grep', 'Glob'], mcpServers: [] })
   })
 
   test('a value other than true or false is an error', () => {
@@ -70,10 +70,10 @@ describe('access', () => {
   })
 
   test('tools and mcp on an operator specialist are refused: nothing passes silently', () => {
-    const errs = errorsOf(spec('tools = ["Read"]\nmcp = ["datadog"]'))
+    const errs = errorsOf(spec('tools = ["Read"]\nmcp_servers = ["datadog"]'))
     expect(errs).toEqual([
       'specialists.ops.tools: has no effect while restricted = false: it already has every tool and server the operator does; set restricted = true to choose them',
-      'specialists.ops.mcp: has no effect while restricted = false: it already has every tool and server the operator does; set restricted = true to choose them',
+      'specialists.ops.mcp_servers: has no effect while restricted = false: it already has every tool and server the operator does; set restricted = true to choose them',
     ])
   })
 })
@@ -96,7 +96,7 @@ describe('tools (restricted = true)', () => {
   test('WebFetch loads, with a warning', () => {
     const { config, warnings } = ok(spec('restricted = true\ntools = ["Read", "WebFetch"]'))
     expect(config.specialists.ops.restricted).toBe(true)
-    expect(warnings).toEqual(['specialists.ops.tools[1]: WebFetch can fetch an outside URL with data in it; anyone who can talk to this specialist can choose that URL'])
+    expect(warnings).toEqual(['specialists.ops.tools[1]: WebFetch can fetch an outside URL with data in it; anyone who can reach this specialist can choose that URL'])
   })
 })
 
@@ -127,13 +127,13 @@ describe('workdir (restricted = true)', () => {
     expect(errorsOf(spec('restricted = true', '/srv/s'), apart)[0]).toContain('contains the state folder /srv/s/state')
   })
   test('an operator-configured private root, which lives in config and not in code', () => {
-    const text = spec('restricted = true', '~/notes/hydra').replace('operator = "op"', 'operator = "op"\n[defaults]\nprivate_roots = ["~/notes"]')
-    expect(errorsOf(text)).toEqual(['specialists.ops.workdir: /home/op/notes/hydra is inside /home/op/notes (a private root in [defaults]), which holds what a restricted specialist must not know'])
+    const text = spec('restricted = true', '~/notes/hydra').replace('operator = "op"', 'operator = "op"\n[restricted]\noff_limits = ["~/notes"]')
+    expect(errorsOf(text)).toEqual(['specialists.ops.workdir: /home/op/notes/hydra is inside /home/op/notes (listed in [restricted] off_limits), which holds what a restricted specialist must not know'])
     // The same folder with no private root configured loads: the loader knows no operator's paths.
     expect(ok(spec('restricted = true', '~/notes/hydra')).config.specialists.ops.restricted).toBe(true)
   })
-  test('private_roots must be absolute', () => {
-    expect(errorsOf(`${BASE}\n[defaults]\nprivate_roots = ["notes"]`)).toEqual(['defaults.private_roots[0]: "notes" must be an absolute path or start with ~'])
+  test('off_limits must be absolute', () => {
+    expect(errorsOf(`${BASE}\n[restricted]\noff_limits = ["notes"]`)).toEqual(['restricted.off_limits[0]: "notes" must be an absolute path or start with ~'])
   })
   test('a git work tree is refused', () => {
     expect(wd('~/agents/repo')[0]).toContain('is a git work tree')
@@ -159,7 +159,7 @@ describe('workdir (restricted = true)', () => {
 describe('workdir (restricted = true): what Claude Code could still reach', () => {
   const wd = (path: string, e: LoadEnv = env) => errorsOf(spec('restricted = true', path), e)
   test('a git repository nested inside it is refused, and the refusal says why although --restricted would not read it', () => {
-    expect(wd('~/agents/nested')).toEqual(['specialists.ops.workdir: /home/op/agents/nested holds a git repository (/home/op/agents/nested/vendor/lib/.git): its history is in reach of anyone who can talk to this specialist; remove it, or give the specialist a folder with no repository in it'])
+    expect(wd('~/agents/nested')).toEqual(['specialists.ops.workdir: /home/op/agents/nested holds a git repository (/home/op/agents/nested/vendor/lib/.git): its history is in reach of anyone who can reach this specialist; remove it, or give the specialist a folder with no repository in it'])
   })
   test('a .mcp.json in a folder above it is refused (--restricted ignores it, but a restricted folder sits under none)', () => {
     expect(wd('~/agents/under-mcp/work')).toEqual(['specialists.ops.workdir: /home/op/agents/under-mcp/work sits under a .mcp.json (/home/op/agents/under-mcp/.mcp.json): Claude Code reads that file for sessions started below it, and --restricted only happens to ignore it; move the folder, or remove the file'])
@@ -185,22 +185,22 @@ describe('LoadEnv: nothing is optional', () => {
 
 describe('mcp (restricted = true)', () => {
   test('a declared server with tools loads, in file order', () => {
-    expect(ok(spec('restricted = true\nmcp = ["datadog"]')).config.specialists.ops.mcp).toEqual(['datadog'])
+    expect(ok(spec('restricted = true\nmcp_servers = ["datadog"]')).config.specialists.ops.mcpServers).toEqual(['datadog'])
   })
   test('a name with no [mcp.<name>] is refused', () => {
-    expect(errorsOf(spec('restricted = true\nmcp = ["datadog", "nope"]'))).toEqual(['specialists.ops.mcp[1]: no [mcp.nope]: declare the server in hydra.toml first'])
+    expect(errorsOf(spec('restricted = true\nmcp_servers = ["datadog", "nope"]'))).toEqual(['specialists.ops.mcp_servers[1]: no [mcp.nope]: declare the server in hydra.toml first'])
   })
   test('a server with no tools is refused', () => {
-    expect(errorsOf(spec('restricted = true\nmcp = ["empty"]'))).toEqual(['specialists.ops.mcp[0]: [mcp.empty] lists no tools, so a specialist could call none of them: set its `tools`'])
+    expect(errorsOf(spec('restricted = true\nmcp_servers = ["empty"]'))).toEqual(['specialists.ops.mcp_servers[0]: [mcp.empty] lists no tools, so a specialist could call none of them: set its `tools`'])
   })
 })
 
 describe('a machine without sandbox-exec (a listed server runs under it)', () => {
   const noSandbox = testLoadEnv({ ...env, isCommand: c => c !== SANDBOX_EXEC && env.isCommand(c) })
   test('a workdir specialist listing a server is refused, naming the cause and both fixes', () => {
-    const e = errorsOf(spec('restricted = true\nmcp = ["datadog"]'), noSandbox)
+    const e = errorsOf(spec('restricted = true\nmcp_servers = ["datadog"]'), noSandbox)
     expect(e).toHaveLength(1)
-    expect(e[0]).toMatch(/^specialists\.ops\.mcp: a listed \[mcp\.\*\] server runs under \/usr\/bin\/sandbox-exec \(macOS only\), which blocks its connects to the daemon's socket and its reads of the listed credential folders\. This machine does not have it\. Remove the servers from the specialist's mcp, set restricted = false, or run hydra on a Mac$/)
+    expect(e[0]).toMatch(/^specialists\.ops\.mcp_servers: a listed \[mcp\.\*\] server runs under \/usr\/bin\/sandbox-exec \(macOS only\), which blocks its connects to the daemon's socket and its reads of the listed credential folders\. This machine does not have it\. Remove the servers from the specialist's mcp_servers, set restricted = false, or run hydra on a Mac$/)
   })
   test('a workdir specialist listing none loads as before', () => {
     expect(ok(spec('restricted = true'), noSandbox).config.specialists.ops.restricted).toBe(true)
@@ -211,7 +211,7 @@ describe('a machine without sandbox-exec (a listed server runs under it)', () =>
 })
 
 describe('one list of off-limits roots, for the workdir check and the sandbox profile', () => {
-  test('a folder inside any place privateRoots lists is refused as a workdir, with that place named', () => {
+  test('a folder inside any place offLimits lists is refused as a workdir, with that place named', () => {
     const roots = offLimitRoots(env, ['/home/op/Notes'])
     expect(roots.length).toBeGreaterThanOrEqual(12)
     // Some roots sit inside others here (the state dir is under ~/.claude), so the place named may be the outer one.
@@ -220,17 +220,17 @@ describe('one list of off-limits roots, for the workdir check and the sandbox pr
 })
 
 describe('a path the sandbox profile cannot hold (a control character), refused at load', () => {
-  test('a private_roots entry with a newline is refused where it is written, with the fix', () => {
-    const e = errorsOf(`${BASE}\n[defaults]\nprivate_roots = ["/home/op/a\\nb"]`)
+  test('an off_limits entry with a newline is refused where it is written, with the fix', () => {
+    const e = errorsOf(`${BASE}\n[restricted]\noff_limits = ["/home/op/a\\nb"]`)
     expect(e).toHaveLength(1)
-    expect(e[0]).toMatch(/^defaults\.private_roots\[0\]: .*control character.*remove it from the path$/)
+    expect(e[0]).toMatch(/^restricted\.off_limits\[0\]: .*control character.*remove it from the path$/)
   })
-  test('a quote, a parenthesis and a backslash in a private_roots entry are fine: they are escaped', () => {
-    expect(ok(`${BASE}\n[defaults]\nprivate_roots = ["/home/op/a\\"b)c(d\\\\e"]`).config.privateRoots).toEqual(['/home/op/a"b)c(d\\e'])
+  test('a quote, a parenthesis and a backslash in an off_limits entry are fine: they are escaped', () => {
+    expect(ok(`${BASE}\n[restricted]\noff_limits = ["/home/op/a\\"b)c(d\\\\e"]`).config.offLimits).toEqual(['/home/op/a"b)c(d\\e'])
   })
   test('a state dir or Claude config dir with a newline refuses a specialist that lists a server (it is in the profile), and no one else', () => {
-    const e = errorsOf(spec('restricted = true\nmcp = ["datadog"]'), testLoadEnv({ ...env, stateDir: '/srv/hy\ndra' }))
-    expect(e.some(m => /^specialists\.ops\.mcp: .*control character/.test(m))).toBe(true)
+    const e = errorsOf(spec('restricted = true\nmcp_servers = ["datadog"]'), testLoadEnv({ ...env, stateDir: '/srv/hy\ndra' }))
+    expect(e.some(m => /^specialists\.ops\.mcp_servers: .*control character/.test(m))).toBe(true)
     expect(ok(spec('restricted = true'), testLoadEnv({ ...env, stateDir: '/srv/hy\ndra', isDir: p => DIRS.includes(p) })).config.specialists.ops.restricted).toBe(true)
   })
 })
@@ -238,14 +238,14 @@ describe('a path the sandbox profile cannot hold (a control character), refused 
 describe('a listed server whose token variable the state .env does not set (a warning: .env can change, the launch is the hard check)', () => {
   const noDdKey = testLoadEnv({ ...env, envFileHas: n => n !== 'DD_API_KEY' })
   test('a workdir specialist listing it warns, naming the variable, the file and the restart', () => {
-    const r = ok(spec('restricted = true\nmcp = ["datadog"]'), noDdKey)
-    expect(r.warnings).toEqual([`specialists.ops.mcp[0]: [mcp.datadog] needs DD_API_KEY, and ${STATE}/.env does not set it, so no session of this specialist can start until it does: add DD_API_KEY=<value> there and restart the daemon`])
+    const r = ok(spec('restricted = true\nmcp_servers = ["datadog"]'), noDdKey)
+    expect(r.warnings).toEqual([`specialists.ops.mcp_servers[0]: [mcp.datadog] needs DD_API_KEY, and ${STATE}/.env does not set it, so no session of this specialist can start until it does: add DD_API_KEY=<value> there and restart the daemon`])
   })
   test('it loads (a warning, not an error)', () => {
-    expect(ok(spec('restricted = true\nmcp = ["datadog"]'), noDdKey).config.specialists.ops.mcp).toEqual(['datadog'])
+    expect(ok(spec('restricted = true\nmcp_servers = ["datadog"]'), noDdKey).config.specialists.ops.mcpServers).toEqual(['datadog'])
   })
   test('with the variable set, no warning; a server nobody lists, or a server with no token variable, warns about nothing', () => {
-    expect(ok(spec('restricted = true\nmcp = ["datadog"]')).warnings).toEqual([])
+    expect(ok(spec('restricted = true\nmcp_servers = ["datadog"]')).warnings).toEqual([])
     expect(ok(spec(''), noDdKey).warnings.filter(w => w.includes('DD_API_KEY'))).toEqual([])
   })
   test('an operator-access specialist lists no servers, so there is nothing to check', () => {
@@ -284,9 +284,9 @@ describe('engine', () => {
 })
 
 describe('[defaults.specialist]', () => {
-  test.each(['restricted = true', 'tools = ["Read"]', 'mcp = ["datadog"]', 'talks_to = ["y"]'])('%s is refused as a default', line => {
+  test.each(['restricted = true', 'tools = ["Read"]', 'mcp_servers = ["datadog"]', 'sends_to = ["y"]'])('%s is refused as a default', line => {
     const key = line.split(' ')[0]
-    const text = `${BASE}\n[defaults.specialist]\nworkdir = "~/agents/ops"\n${line}\n[specialists.ops]\nallow = []\n[[rules]]\nplace = "slack:dm"\ntarget = "specialist:ops"\n`
+    const text = `${BASE}\n[defaults.specialist]\nworkdir = "~/agents/ops"\n${line}\n[specialists.ops]\nreachable_by = []\n[[rules]]\nplace = "slack:dm"\ntarget = "specialist:ops"\n`
     expect(errorsOf(text)).toEqual([`defaults.specialist.${key}: can't be a default: ${key} says what one specialist's session may reach. Set it under [specialists.<id>] by editing hydra.toml`])
   })
 })
@@ -298,48 +298,48 @@ describe('the warning for an operator-access specialist someone else can talk to
   const WARN = (who: string) => [`specialists.ops: ${who} can reach the operator's account through it; set restricted = true`]
 
   describe('who can talk to it', () => {
-    test('allow = []: only the operator, whatever place it is in', () => {
-      expect(warnings('', 'listens = ["slack:dm"]\nallow = []')).toEqual([])
-      expect(warnings('', 'listens = ["slack:C0CF123"]\nallow = []')).toEqual([])
+    test('reachable_by = []: only the operator, whatever place it is in', () => {
+      expect(warnings('', 'listens = ["slack:dm"]\nreachable_by = []')).toEqual([])
+      expect(warnings('', 'listens = ["slack:C0CF123"]\nreachable_by = []')).toEqual([])
     })
-    test('the default allow = ["people"] with a roster of only the operator: no one else, no warning', () => {
+    test('the default reachable_by = ["people"] with a roster of only the operator: no one else, no warning', () => {
       expect(warnings('', 'listens = ["slack:dm"]')).toEqual([])
       expect(warnings('', 'listens = ["slack:C0CF123"]')).toEqual([])
     })
-    test('allow = ["people"] with others on the roster names them', () => {
-      expect(warnings('', 'listens = ["slack:dm"]\nallow = ["people"]', WITH_ALICE)).toEqual(WARN('alice and bob (allow = ["people"])'))
+    test('reachable_by = ["people"] with others on the roster names them', () => {
+      expect(warnings('', 'listens = ["slack:dm"]\nreachable_by = ["people"]', WITH_ALICE)).toEqual(WARN('alice and bob (reachable_by = ["people"])'))
     })
     test('a role names its holders other than the operator', () => {
-      expect(warnings('', 'listens = ["slack:dm"]\nallow = ["staff"]', WITH_ALICE)).toEqual(WARN('alice (role "staff")'))
+      expect(warnings('', 'listens = ["slack:dm"]\nreachable_by = ["staff"]', WITH_ALICE)).toEqual(WARN('alice (role "staff")'))
     })
-    test('allow = ["anyone"]', () => {
-      expect(warnings('', 'listens = ["slack:dm"]\nallow = ["anyone"]')).toEqual(WARN('anyone'))
+    test('reachable_by = ["anyone"]', () => {
+      expect(warnings('', 'listens = ["slack:dm"]\nreachable_by = ["anyone"]')).toEqual(WARN('anyone'))
     })
     test('anyone in a shared or public place says which', () => {
-      expect(warnings('', 'listens = ["slack:C0CF123"]\nallow = ["anyone"]')).toEqual(WARN('anyone in slack:C0CF123'))
+      expect(warnings('', 'listens = ["slack:C0CF123"]\nreachable_by = ["anyone"]')).toEqual(WARN('anyone in slack:C0CF123'))
     })
     test('anyone, named once, however many roles and places say it', () => {
-      expect(warnings('', 'listens = ["slack:C0CF123", "slack:C0CF456"]\nallow = ["anyone", "people", "staff"]\nsessions = "per-conversation"\nidle = "1h"', WITH_ALICE)).toEqual(WARN('anyone in slack:C0CF123 and slack:C0CF456'))
+      expect(warnings('', 'listens = ["slack:C0CF123", "slack:C0CF456"]\nreachable_by = ["anyone", "people", "staff"]\nsessions = "per-conversation"\nidle = "1h"', WITH_ALICE)).toEqual(WARN('anyone in slack:C0CF123 and slack:C0CF456'))
     })
     test('a github: place, for anyone', () => {
-      const t = `${BASE}\n[connectors.github]\nrepos = ["acme/widget"]\n[specialists.ops]\nworkdir = "~/agents/ops"\nallow = ["anyone"]\n[[rules]]\nplace = "github:acme/widget"\ntarget = "specialist:ops"\n`
+      const t = `${BASE}\n[connectors.github]\nrepos = ["acme/widget"]\n[specialists.ops]\nworkdir = "~/agents/ops"\nreachable_by = ["anyone"]\n[[rules]]\nplace = "github:acme/widget"\ntarget = "specialist:ops"\n`
       expect(ok(t).warnings.filter(w => w.includes("the operator's account"))).toEqual(WARN('anyone who can comment on github:acme/widget'))
-      const alone = t.replace('allow = ["anyone"]', 'allow = []')
+      const alone = t.replace('reachable_by = ["anyone"]', 'reachable_by = []')
       expect(ok(alone).warnings.filter(w => w.includes("the operator's account"))).toEqual([])
     })
     test('a bots = true place: other bots talk to it whatever allow says', () => {
-      expect(warnings('[places."slack:dm"]\nbots = true', 'listens = ["slack:dm"]\nallow = []')).toEqual(WARN('any other bot in slack:dm'))
+      expect(warnings('[places."slack:dm"]\nbots = true', 'listens = ["slack:dm"]\nreachable_by = []')).toEqual(WARN('any other bot in slack:dm'))
     })
   })
 
   describe('who can only read its replies', () => {
     test('is not enough to warn: only the operator can talk to it', () => {
-      expect(warnings('', 'listens = ["slack:C0CF123", "github:acme/widget"]\nallow = []\nsessions = "per-conversation"\nidle = "1h"').length).toBe(0)
+      expect(warnings('', 'listens = ["slack:C0CF123", "github:acme/widget"]\nreachable_by = []\nsessions = "per-conversation"\nidle = "1h"').length).toBe(0)
     })
   })
 
   test('restricted = true has nothing to warn about', () => {
-    expect(warnings('', 'restricted = true\nlistens = ["slack:C0CF123"]\nallow = ["anyone"]')).toEqual([])
+    expect(warnings('', 'restricted = true\nlistens = ["slack:C0CF123"]\nreachable_by = ["anyone"]')).toEqual([])
   })
 })
 
@@ -359,7 +359,7 @@ describe('hydra config add refuses what only a hand edit sets', () => {
       return { r, after: readFileSync(join(dir, 'hydra.toml'), 'utf8') }
     } finally { rmSync(dir, { recursive: true, force: true }) }
   }
-  test.each(['restricted = true', 'tools = ["Read"]', 'mcp = ["datadog"]'])('a specialist table with %s is refused and nothing is written', line => {
+  test.each(['restricted = true', 'tools = ["Read"]', 'mcp_servers = ["datadog"]'])('a specialist table with %s is refused and nothing is written', line => {
     const { r, after } = run(`[specialists.x]\nworkdir = "~/x"\n${line}\n`)
     expect(r.ok).toBe(false)
     expect(!r.ok && r.error).toContain(`[specialists.x] ${line.split(' ')[0]}`)

@@ -50,7 +50,7 @@ const TOOL_REFUSALS: Readonly<Record<string, string>> = {
 }
 /** Warned, not refused: a fetch can carry data to a URL the readers chose. */
 const TOOL_WARNINGS: Readonly<Record<string, string>> = {
-  WebFetch: 'can fetch an outside URL with data in it; anyone who can talk to this specialist can choose that URL',
+  WebFetch: 'can fetch an outside URL with data in it; anyone who can reach this specialist can choose that URL',
 }
 const MCP_TOOL_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/
 const MAX_DAY_MS = 86_400_000
@@ -59,18 +59,19 @@ const MAX_ALERT_AFTER_MS = 30 * MAX_DAY_MS
 const BUILTIN: readonly string[] = BUILTIN_ROLES
 const MAIN_TARGET = 'main'
 
-const TOP_KEYS = ['operator', 'main', 'gateways', 'connectors', 'slack', 'people', 'specialists', 'defaults', 'places', 'schedules', 'rules', 'guard', 'vitals', 'mcp']
+const TOP_KEYS = ['operator', 'main', 'gateways', 'connectors', 'slack', 'people', 'specialists', 'defaults', 'places', 'schedules', 'rules', 'guard', 'vitals', 'mcp', 'restricted']
 /** Keys a file may set without an operator: the operator itself, and `[main]`, which says how main runs, not who reaches it. */
 const OPERATOR_FREE_KEYS = ['operator', 'main']
 /** `[main]`: the operator's harness, as `[specialists.<id>]` is a specialist. */
 const MAIN_KEYS = ['model']
 /** `listens` is the old way to say where a specialist is heard: still read, as `[[rules]]` (see `legacyRules`), and warned. */
-const SPECIALIST_KEYS = ['workdir', 'kickoff', 'kickoff_file', 'listens', 'pinned_to', 'speaks_as', 'allow', 'sessions', 'max_sessions', 'idle', 'home', 'model', 'engine', 'env_file', 'renamed_from', 'restricted', 'tools', 'mcp', 'talks_to']
+const SPECIALIST_KEYS = ['workdir', 'kickoff', 'kickoff_file', 'listens', 'pinned_to', 'speaks_as', 'reachable_by', 'sessions', 'max_sessions', 'idle', 'home', 'model', 'engine', 'env_file', 'renamed_from', 'restricted', 'tools', 'mcp_servers', 'sends_to']
 /** A specialist's keys under their old names, read as the new ones (`restricted = true` is `restricted = true`). */
 export const SPECIALIST_RENAMES: readonly Rename[] = [
   { from: 'access', to: 'restricted', values: { workdir: true, operator: false }, badValue: 'must be "workdir" or "operator"; `restricted = true` or `restricted = false` says the same' },
   { from: 'prompt', to: 'kickoff' }, { from: 'prompt_file', to: 'kickoff_file' },
   { from: 'max', to: 'max_sessions' }, { from: 'was', to: 'renamed_from' }, { from: 'apps', to: 'pinned_to' },
+  { from: 'allow', to: 'reachable_by' }, { from: 'mcp', to: 'mcp_servers' }, { from: 'talks_to', to: 'sends_to' },
 ]
 /** A Slack app's keys, as `[slack.apps.<id>]` spells them. */
 const SLACK_APP_KEYS = ['bot_token_env', 'socket_token_env', 'operator_token_env', 'display_name', 'description']
@@ -81,7 +82,7 @@ const CONNECTORS_SLACK_RENAMES: readonly Rename[] = [...SLACK_APP_RENAMES, { fro
 /** A schedule's keys under their old names. */
 export const SCHEDULE_RENAMES: readonly Rename[] = [{ from: 'to', to: 'target' }, { from: 'prompt', to: 'message' }, { from: 'cwd', to: 'workdir' }]
 /** Keys only a hand edit of one specialist's own table sets: a default would reach every specialist, a fragment's table is someone else's. */
-export const RESTRICTION_KEYS = ['restricted', 'tools', 'mcp', 'talks_to'] as const
+export const RESTRICTION_KEYS = ['restricted', 'tools', 'mcp_servers', 'sends_to'] as const
 /** The old name of one of them, still read: a fragment may not set it either. */
 export const RESTRICTION_OLD_KEYS = ['access'] as const
 
@@ -187,7 +188,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     return path
   }
   const error = (path: string, message: string) => { errors.push({ path: oldPath(path), message }) }
-  const warn = (path: string, message: string) => { warnings.push({ path, message }) }
+  const warn = (path: string, message: string) => { warnings.push({ path: oldPath(path), message }) }
 
   let doc: Table
   try {
@@ -480,14 +481,25 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   // --- specialists, with [defaults.specialist] -----------------------------------------------------------------------
 
   const defaultsTable = table(doc.defaults, 'defaults') ?? {}
+  // `private_roots` is the old name of `[restricted] off_limits`: still read from [defaults].
   unknownKeys(defaultsTable, ['specialist', 'private_roots'], 'defaults')
+  const restrictedTable = table(doc.restricted, 'restricted') ?? {}
+  unknownKeys(restrictedTable, ['off_limits'], 'restricted')
+  if (has(defaultsTable, 'private_roots')) {
+    if (has(restrictedTable, 'off_limits')) error('defaults.private_roots', bothNames('`[defaults] private_roots`', '`[restricted] off_limits`'))
+    else {
+      viaOld.set('restricted.off_limits', 'defaults.private_roots')
+      warn('defaults.private_roots', 'rename `private_roots` in [defaults] to `off_limits` in [restricted]; `private_roots` still loads and will be removed')
+    }
+  }
   // Folders no restricted specialist may use, beyond the built-in ones: per-operator, so they live here and never in code.
-  const privateRoots: string[] = []
-  for (const [i, raw] of (strList(defaultsTable, 'private_roots', 'defaults') ?? []).entries()) {
+  const offLimits: string[] = []
+  const offLimitsFrom = has(restrictedTable, 'off_limits') || !has(defaultsTable, 'private_roots') ? { t: restrictedTable, at: 'restricted', k: 'off_limits' } : { t: defaultsTable, at: 'defaults', k: 'private_roots' }
+  for (const [i, raw] of (strList(offLimitsFrom.t, offLimitsFrom.k, offLimitsFrom.at) ?? []).entries()) {
     const root = expand(raw)
-    if (!isAbsolute(root)) error(`defaults.private_roots[${i}]`, `"${raw}" must be an absolute path or start with ~`)
-    else if (unquotablePath(root)) error(`defaults.private_roots[${i}]`, unquotablePath(root)!)
-    else privateRoots.push(root)
+    if (!isAbsolute(root)) error(`restricted.off_limits[${i}]`, `"${raw}" must be an absolute path or start with ~`)
+    else if (unquotablePath(root)) error(`restricted.off_limits[${i}]`, unquotablePath(root)!)
+    else offLimits.push(root)
   }
   const defaults0 = table(defaultsTable.specialist, 'defaults.specialist') ?? {}
   const defaults = renamed(defaults0, 'defaults.specialist', SPECIALIST_RENAMES)
@@ -507,7 +519,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     const n = errors.length
     readSpecialistKeyTypes({ [k]: defaults[k] }, 'defaults.specialist')
     if (errors.length === n && k === 'idle') checkIdle(defaults.idle as string, 'defaults.specialist.idle')
-    if (errors.length === n && k === 'allow') checkAllow(defaults.allow as string[], 'defaults.specialist.allow')
+    if (errors.length === n && k === 'reachable_by') checkReachableBy(defaults.reachable_by as string[], 'defaults.specialist.reachable_by')
     if (errors.length === n) goodDefaults[k] = defaults[k]
   }
 
@@ -516,18 +528,18 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (ms === null) error(path, `"${raw}" must be a duration like 90m, 12h or 4d, at most 7d`)
     return ms ?? undefined
   }
-  function checkAllow(allow: string[], path: string) {
-    for (const [i, r] of allow.entries()) {
+  function checkReachableBy(roles: string[], path: string) {
+    for (const [i, r] of roles.entries()) {
       if (isRole(r)) continue
-      error(`${path}[${i}]`, has(people, r) ? `"${r}" is a person, not a role: give them a role and allow that` : `no one holds the role "${r}"`)
+      error(`${path}[${i}]`, has(people, r) ? `"${r}" is a person, and reachable_by lists roles: give them a role in [people.${r}] and list that role` : `no one holds the role "${r}": reachable_by lists roles, so give a person that role in [people.<id>] roles`)
     }
   }
 
   function readSpecialistKeyTypes(t: Table, path: string) {
-    str(t, 'workdir', path); str(t, 'kickoff', path); str(t, 'kickoff_file', path); strList(t, 'listens', path); strList(t, 'pinned_to', path); str(t, 'speaks_as', path); strList(t, 'allow', path)
+    str(t, 'workdir', path); str(t, 'kickoff', path); str(t, 'kickoff_file', path); strList(t, 'listens', path); strList(t, 'pinned_to', path); str(t, 'speaks_as', path); strList(t, 'reachable_by', path)
     oneOf(t, 'sessions', path, SESSIONS); positiveInt(t, 'max_sessions', path); str(t, 'idle', path); str(t, 'home', path); str(t, 'model', path)
     oneOf(t, 'engine', path, ENGINES); str(t, 'env_file', path); strList(t, 'renamed_from', path)
-    bool(t, 'restricted', path); strList(t, 'tools', path); strList(t, 'mcp', path); strList(t, 'talks_to', path)
+    bool(t, 'restricted', path); strList(t, 'tools', path); strList(t, 'mcp_servers', path); strList(t, 'sends_to', path)
   }
   function positiveInt(t: Table, k: string, path: string): number | undefined {
     const v = t[k]
@@ -537,7 +549,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     return undefined
   }
 
-  const checkWorkdirRestriction = (at: string, workdir: string) => { for (const why of workdirRestrictionIssues(env, workdir, privateRoots)) error(at, why) }
+  const checkWorkdirRestriction = (at: string, workdir: string) => { for (const why of workdirRestrictionIssues(env, workdir, offLimits)) error(at, why) }
 
   const specialists: Record<string, Specialist> = {}
   /** Every place an old `listens` names, with who it names and where in the file: read as rules once the explicit ones are. */
@@ -608,8 +620,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       if (heard.length) warn(at('listens'), `\`listens\` is now \`[[rules]]\`: add a \`[[rules]]\` table for each place, with \`place = "x"\` and \`target = "specialist:${id}"\` on separate lines (places: ${heard.join(', ')}); \`listens\` still loads as those rules, after the explicit ones, and will be removed`)
     }
 
-    const allow = strList(t, 'allow', path) ?? ['people']
-    if (has(own, 'allow')) checkAllow(allow, `${path}.allow`)
+    const reachableBy = strList(t, 'reachable_by', path) ?? ['people']
+    if (has(own, 'reachable_by')) checkReachableBy(reachableBy, `${path}.reachable_by`)
 
     const idleRaw = str(t, 'idle', path)
     // An inherited idle was checked once, at the default.
@@ -634,12 +646,12 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     // `restricted`: its session runs in its folder, with only what it lists. Everything below refuses what would let a restricted session reach past its folder.
     const restricted = bool(t, 'restricted', path) ?? false
     const toolsRaw = strList(t, 'tools', path)
-    const mcpRaw = strList(t, 'mcp', path)
-    const talksToRaw = strList(t, 'talks_to', path)
+    const mcpServersRaw = strList(t, 'mcp_servers', path)
+    const sendsToRaw = strList(t, 'sends_to', path)
     let tools: string[] | undefined
-    let mcp: string[] | undefined
+    let mcpServersList: string[] | undefined
     if (!restricted) {
-      for (const k of ['tools', 'mcp', 'talks_to'] as const) if (t[k] !== undefined) error(`${path}.${k}`, `has no effect while restricted = false: it already has every tool and server the operator does${k === 'talks_to' ? ', and send_to_thread to any session' : ''}; set restricted = true to choose them`)
+      for (const k of ['tools', 'mcp_servers', 'sends_to'] as const) if (t[k] !== undefined) error(`${path}.${k}`, `has no effect while restricted = false: it already has every tool and server the operator does${k === 'sends_to' ? ', and send_to_thread to any session' : ''}; set restricted = true to choose them`)
     } else {
       tools = [...new Set(toolsRaw ?? WORKDIR_TOOLS)]
       for (const [i, name] of (toolsRaw ?? []).entries()) {
@@ -647,23 +659,23 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
         if (Object.hasOwn(TOOL_WARNINGS, name)) { warn(`${path}.tools[${i}]`, `${name} ${TOOL_WARNINGS[name]}`); continue }
         error(`${path}.tools[${i}]`, `${name} ${Object.hasOwn(TOOL_REFUSALS, name) ? TOOL_REFUSALS[name] : `is not a tool a restricted specialist may use (${WORKDIR_TOOLS.join(', ')})`}; remove it or set restricted = false`)
       }
-      mcp = [...new Set(mcpRaw ?? [])]
-      for (const [i, name] of (mcpRaw ?? []).entries()) {
-        if (!Object.hasOwn(mcpServers, name)) error(`${path}.mcp[${i}]`, `no [mcp.${name}]: declare the server in hydra.toml first`)
-        else if (mcpServers[name].tools.length === 0) error(`${path}.mcp[${i}]`, `[mcp.${name}] lists no tools, so a specialist could call none of them: set its \`tools\``)
-        else for (const v of mcpServers[name].tokenEnv) if (!env.envFileHas(v)) warn(`${path}.mcp[${i}]`, `[mcp.${name}] needs ${v}, and ${join(env.stateDir, '.env')} does not set it, so no session of this specialist can start until it does: add ${v}=<value> there and restart the daemon`)
+      mcpServersList = [...new Set(mcpServersRaw ?? [])]
+      for (const [i, name] of (mcpServersRaw ?? []).entries()) {
+        if (!Object.hasOwn(mcpServers, name)) error(`${path}.mcp_servers[${i}]`, `no [mcp.${name}]: declare the server in hydra.toml first`)
+        else if (mcpServers[name].tools.length === 0) error(`${path}.mcp_servers[${i}]`, `[mcp.${name}] lists no tools, so a specialist could call none of them: set its \`tools\``)
+        else for (const v of mcpServers[name].tokenEnv) if (!env.envFileHas(v)) warn(`${path}.mcp_servers[${i}]`, `[mcp.${name}] needs ${v}, and ${join(env.stateDir, '.env')} does not set it, so no session of this specialist can start until it does: add ${v}=<value> there and restart the daemon`)
       }
       // A listed server runs under sandbox-exec; a machine without it cannot host the specialist (the launch checks again).
-      if (mcp.length) {
-        const why = sandboxIssues(env.isCommand, offLimitRoots(env, privateRoots))
-        if (why) error(`${path}.mcp`, why)
+      if (mcpServersList.length) {
+        const why = sandboxIssues(env.isCommand, offLimitRoots(env, offLimits))
+        if (why) error(`${path}.mcp_servers`, why)
       }
       // The engine actually used comes from thread history and `handoff <model>` can switch it, so launch checks it again.
       if (engine !== undefined && !engineConfinesAccess(engine)) error(`${path}.engine`, `${engine} can't run a restricted specialist: that engine cannot confine its tools; set engine = "claude", or set restricted = false`)
       if (workdirRaw !== undefined && isAbsolute(workdir) && env.isDir(workdir)) checkWorkdirRestriction(at('workdir'), workdir)
     }
     specialists[id] = {
-      id, workdir, allow,
+      id, workdir, reachableBy,
       ...(pinnedTo && { pinnedTo }),
       ...(speaksAs !== undefined && Object.hasOwn(slackApps, speaksAs) && { speaksAs }),
       sessions: oneOf(t, 'sessions', path, SESSIONS) ?? 'shared',
@@ -677,8 +689,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       ...(engine !== undefined && { engine }),
       restricted,
       ...(tools && { tools }),
-      ...(mcp && { mcp }),
-      ...(talksToRaw && restricted && { talksTo: [...new Set(talksToRaw)] }),
+      ...(mcpServersList && { mcpServers: mcpServersList }),
+      ...(sendsToRaw && restricted && { sendsTo: [...new Set(sendsToRaw)] }),
       ...(envFile !== undefined && { envFile: underWorkdir(envFile) }),
     }
   }
@@ -960,15 +972,15 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   }
 
   /**
-   * Who, besides the operator, can talk to this specialist: the people `allow` lets in (other than the operator), anyone if
-   * `allow` says so (with where they would be: a shared or public place, a repo), and other bots where a place hears them.
+   * Who, besides the operator, can reach this specialist: the people `reachable_by` lets in (other than the operator), anyone if
+   * `reachable_by` says so (with where they would be: a shared or public place, a repo), and other bots where a place hears them.
    * Reading its replies is not talking to it: a place others only read adds nothing here.
    */
   function reachedBy(s: Specialist): string[] {
     const shared = answered(s.id).filter(p => p !== 'cli' && !isDmPlace(p) && dmPerson(p) === undefined)
     const others = (people_: Person[]) => people_.filter(p => p.id !== operator).map(p => p.id)
     const who: string[] = []
-    if (s.allow.includes('anyone')) {
+    if (s.reachableBy.includes('anyone')) {
       const where = shared.map(p => p.startsWith('github:') ? `who can comment on ${p}` : `in ${p}`)
       // "anyone in A and B", "anyone who can comment on R"; one phrase per kind of place.
       const inPlaces = where.filter(w => w.startsWith('in '))
@@ -976,12 +988,12 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       who.push(`anyone${inPlaces.length ? ` ${inPlaces[0]}${inPlaces.slice(1).map(w => ` and ${w.slice(3)}`).join('')}` : ''}${onRepos.length ? `${inPlaces.length ? ', ' : ' '}${onRepos.join(' and ')}` : ''}`)
     } else {
       const named = new Set<string>()
-      for (const role of s.allow) {
+      for (const role of s.reachableBy) {
         const holders = others(role === 'people' ? Object.values(people) : Object.values(people).filter(p => p.roles.includes(role)))
         const fresh = holders.filter(id => !named.has(id))
         if (!fresh.length) continue
         fresh.forEach(id => named.add(id))
-        who.push(role === 'people' ? `${listJoin(fresh)} (allow = ${JSON.stringify(s.allow)})` : `${listJoin(fresh)} (role "${role}")`)
+        who.push(role === 'people' ? `${listJoin(fresh)} (reachable_by = ${JSON.stringify(s.reachableBy)})` : `${listJoin(fresh)} (role "${role}")`)
       }
     }
     for (const p of answered(s.id)) if (p !== 'cli' && places[p]?.bots) who.push(`any other bot in ${p}`)
@@ -989,48 +1001,48 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   }
   const listJoin = (items: string[]) => items.length <= 2 ? items.join(' and ') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
 
-  // `talks_to`: the specialists a restricted session may send to (send_to_thread). Only specialists: never `main`, byte or a session by name. The
+  // `sends_to`: the specialists a restricted session may send to (send_to_thread). Only specialists: never `main`, byte or a session by name. The
   // target must be a shared-session specialist, which has one session to land in. A target that runs under the operator's account is a way in for
   // whatever a restricted session was talked into saying, so it loads with a warning that says so.
   for (const s of Object.values(specialists)) {
-    for (const [i, target] of (s.talksTo ?? []).entries()) {
+    for (const [i, target] of (s.sendsTo ?? []).entries()) {
       const id = s.id
-      const at = `specialists.${id}.talks_to[${i}]`
-      if (target === id) { error(at, `${id} cannot talk to itself`); continue }
-      if (target === 'main' || !has(specialists, target)) { error(at, target === 'main' ? 'main is the operator\'s own session: talks_to names specialists only' : `no [specialists.${target}]: talks_to names a specialist declared in hydra.toml`); continue }
-      if (specialists[target].sessions !== 'shared') { error(at, `${target} has sessions = "per-conversation": a hand-off needs one session to land in; talk to a shared specialist`); continue }
+      const at = `specialists.${id}.sends_to[${i}]`
+      if (target === id) { error(at, `${id} cannot send to itself`); continue }
+      if (target === 'main' || !has(specialists, target)) { error(at, target === 'main' ? 'main is the operator\'s own session: sends_to names specialists only' : `no [specialists.${target}]: sends_to names a specialist declared in hydra.toml`); continue }
+      if (specialists[target].sessions !== 'shared') { error(at, `${target} has sessions = "per-conversation": a hand-off needs one session to land in; send to a shared specialist`); continue }
       if (!specialists[target].restricted) warn(at, `${target} runs under the operator's account (restricted = false): whatever ${id} is talked into sending reaches that account, quoted and labelled but read by a session that can act as the operator; make ${target} restricted = true, with the broader folder it needs`)
     }
   }
 
-  const ruleOrTalksToTargets = new Set([...rules.map(r => r.target), ...Object.values(specialists).flatMap(s => s.talksTo ?? [])])
+  const ruleOrSendsToTargets = new Set([...rules.map(r => r.target), ...Object.values(specialists).flatMap(s => s.sendsTo ?? [])])
   const scheduleTargets = new Set(Object.values(schedules).map(s => s.target))
   for (const s of Object.values(specialists)) {
     const path = `specialists.${s.id}`
     const answeredAt = answered(s.id)
-    if (!ruleOrTalksToTargets.has(s.id) && !scheduleTargets.has(s.id)) warn(path, 'nobody can reach it: no rule, schedule or `talks_to` names it')
-    // An unrestricted session runs under the operator's account, so whoever can talk to it can use that account through it.
+    if (!ruleOrSendsToTargets.has(s.id) && !scheduleTargets.has(s.id)) warn(path, 'nobody can reach it: no rule, schedule or `sends_to` names it')
+    // An unrestricted session runs under the operator's account, so whoever can reach it can use that account through it.
     if (!s.restricted) {
       const who = reachedBy(s)
       if (who.length) warn(path, `${listJoin(who)} can reach the operator's account through it; set restricted = true`)
     }
     // A restricted specialist's answer can carry a link; where previews are on, the preview shows readers content they could not open themselves.
     // Previews can be switched off in a Slack channel (by id or name) and a Discord channel by id; a Discord channel given by name is not one hydra can match.
-    if (s.restricted && s.allow.includes('anyone')) {
+    if (s.restricted && s.reachableBy.includes('anyone')) {
       const chat = answeredAt.filter(p => (p.startsWith('slack:') || p.startsWith('discord:')) && places[p]?.linkPreviews !== false)
       const open = chat.filter(p => !p.startsWith('discord:#') && !namesDmWithOthers(p))
       const named = chat.filter(p => p.startsWith('discord:#'))
-      const lead = `anyone can talk to it in`
+      const lead = `anyone can reach it in`
       const why = 'where a link in its answer unfurls a preview that can show readers content they could not open themselves'
       if (open.length) warn(path, `${lead} ${listJoin(open)}, ${why}; set link_previews = false in ${open.map(p => `[places.${JSON.stringify(p)}]`).join(' and ')}`)
       const noSwitch = chat.filter(namesDmWithOthers)
-      if (noSwitch.length) warn(path, `${lead} ${listJoin(noSwitch)}, ${why}; previews cannot be switched off there, so let it hear another place, or narrow \`allow\``)
+      if (noSwitch.length) warn(path, `${lead} ${listJoin(noSwitch)}, ${why}; previews cannot be switched off there, so let it hear another place, or narrow \`reachable_by\``)
       if (named.length) warn(path, `${lead} ${listJoin(named)}, ${why}; hydra can switch previews off in a Discord channel only by id, so list it as discord:<channel id> and set link_previews = false there`)
     }
     if (s.sessions === 'shared') {
       if (answeredAt.length >= 2) warn(path, `one shared session hears ${answeredAt.join(', ')}, so what's said in one place is remembered in the others; use sessions = "per-conversation" or one specialist per place`)
-      else if (answeredAt.includes(SLACK_GROUP_DM) && s.allow.length > 0) warn(path, `one shared session hears every group DM (allow = ${JSON.stringify(s.allow)}), so what one group says is remembered in another; use sessions = "per-conversation" or allow = []`)
-      else if (answeredAt.some(isDmPlace) && s.allow.length > 0) warn(path, `one shared session hears everyone's DMs (allow = ${JSON.stringify(s.allow)}), so one person's DM is remembered in another's; use sessions = "per-conversation" or allow = []`)
+      else if (answeredAt.includes(SLACK_GROUP_DM) && s.reachableBy.length > 0) warn(path, `one shared session hears every group DM (reachable_by = ${JSON.stringify(s.reachableBy)}), so what one group says is remembered in another; use sessions = "per-conversation" or reachable_by = []`)
+      else if (answeredAt.some(isDmPlace) && s.reachableBy.length > 0) warn(path, `one shared session hears everyone's DMs (reachable_by = ${JSON.stringify(s.reachableBy)}), so one person's DM is remembered in another's; use sessions = "per-conversation" or reachable_by = []`)
     }
     // Without idle, a per-conversation session never ends on its own, so its slot under max_sessions never frees.
     if (s.sessions === 'per-conversation' && s.idleMs === undefined) warn(path, `conversations past max_sessions (${s.maxSessions}) will wait until a session is ended by hand; set idle`)
@@ -1051,7 +1063,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   }
 
   if (errors.length) return { ok: false, errors, warnings }
-  return { ok: true, config: { ...(operator && { operator }), ...(main && { main }), connectors, gateways, slackApps, people, specialists, places, schedules, rules, ...(Object.keys(mcpServers).length && { mcpServers }), ...(privateRoots.length && { privateRoots }), ...(guard && { guard }), ...(vitals && { vitals }) }, warnings }
+  return { ok: true, config: { ...(operator && { operator }), ...(main && { main }), connectors, gateways, slackApps, people, specialists, places, schedules, rules, ...(Object.keys(mcpServers).length && { mcpServers }), ...(offLimits.length && { offLimits }), ...(guard && { guard }), ...(vitals && { vitals }) }, warnings }
 }
 
 /** The program a `sh -c` command runs: past any leading VAR=value, with one level of quotes removed. */

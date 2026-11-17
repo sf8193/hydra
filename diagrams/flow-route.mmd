@@ -13,7 +13,7 @@ flowchart TD
   od{"the operator, in a DM?"}
   main["main (served by every app)"]
   unr(["unrouted → 🚫 on a mention or DM"])
-  allow{"allow: the operator always;<br/>main only the operator;<br/>else a role in the specialist's allow"}
+  allow{"reachable_by: the operator always;<br/>main only the operator;<br/>else a role in the specialist's reachable_by"}
   ref(["refused → 🚫 on a mention or DM<br/>nothing bound, nothing owed"])
   del(["deliver to it; a new conversation is bound to it"])
   in --> who --> own

@@ -28,22 +28,22 @@ person = "alice"
 target = "specialist:crm-finance"
 [specialists.crm]
 workdir = "/a/crm"
-allow = ["staff"]
+reachable_by = ["staff"]
 [[rules]]
 place = "slack:#help"
 target = "specialist:crm"
 [specialists.crm-finance]
 workdir = "/a/fin"
-allow = ["staff"]
+reachable_by = ["staff"]
 [specialists.assistant]
 workdir = "/a/asst"
-allow = []
+reachable_by = []
 [[rules]]
 place = "slack:dm"
 target = "specialist:assistant"
 [specialists.open]
 workdir = "/a/open"
-allow = ["anyone"]
+reachable_by = ["anyone"]
 [[rules]]
 place = "slack:#lobby"
 target = "specialist:open"
@@ -116,12 +116,12 @@ target = "specialist:desk"
 })
 
 describe('allow', () => {
-  test('the operator reaches every specialist, even allow = []', () => {
+  test('the operator reaches every specialist, even reachable_by = []', () => {
     expect(route(CFG, msg('slack:U0OP', ['slack:#help'], { bound: 'assistant' })).fate).toBe('deliver')
   })
   test('a stranger reaches only anyone; someone else\'s DM to the operator-only assistant is refused', () => {
     expect(route(CFG, msg('slack:U0NOPE', ['slack:#help']))).toMatchObject({ fate: 'refused', to: 'crm' })
-    expect(route(CFG, msg('slack:U0ALICE', ['slack:D0A', 'slack:dm']))).toMatchObject({ fate: 'refused', to: 'assistant', why: 'assistant allows only the operator' })
+    expect(route(CFG, msg('slack:U0ALICE', ['slack:D0A', 'slack:dm']))).toMatchObject({ fate: 'refused', to: 'assistant', why: 'assistant has reachable_by = [], so only the operator reaches it' })
     expect(route(CFG, msg(undefined, ['slack:#lobby'])).fate).toBe('deliver')
   })
   test('allow is checked again on a bound conversation: a role taken away refuses at once', () => {
@@ -169,7 +169,7 @@ roles = ["staff"]
 const TWO = load(`${APPS}
 [specialists.crm]
 workdir = "/a/crm"
-allow = ["staff"]
+reachable_by = ["staff"]
 [[rules]]
 place = "slack:#help"
 target = "specialist:crm"
@@ -179,17 +179,17 @@ target = "specialist:crm"
 [specialists.deals]
 workdir = "/a/deals"
 pinned_to = ["sales"]
-allow = ["staff"]
+reachable_by = ["staff"]
 [[rules]]
 place = "slack:#help"
 target = "specialist:deals"
 [specialists.desk]
 workdir = "/a/desk"
 pinned_to = ["support"]
-allow = ["staff"]
+reachable_by = ["staff"]
 [specialists.triage]
 workdir = "/a/triage"
-allow = ["staff"]
+reachable_by = ["staff"]
 `)
 const HELP = ['slack:C0HELP', 'slack:#help']
 const inApp = (app: string, extra: Partial<Inbound> = {}) => msg('slack:U0ALICE', HELP, { app, ...extra })
@@ -219,12 +219,12 @@ describe('old configs route as before', () => {
 describe('rules match an app, a place, or both', () => {
   // `crm` is sent #help unless a test names a rule for #help itself: two rules that take everything at one place are an error.
   const withRules = (rules: string, baseline = '[[rules]]\nplace = "slack:#help"\ntarget = "specialist:crm"\n') => load(`${APPS}
-${rules}[specialists.crm]\nworkdir = "/a/crm"\nallow = ["staff"]\n${baseline}[specialists.sales-desk]
+${rules}[specialists.crm]\nworkdir = "/a/crm"\nreachable_by = ["staff"]\n${baseline}[specialists.sales-desk]
 workdir = "/a/sd"
-allow = ["staff"]
+reachable_by = ["staff"]
 [specialists.ops-desk]
 workdir = "/a/od"
-allow = ["staff"]
+reachable_by = ["staff"]
 `)
   const to = (cfg: HydraConfig, m: Inbound) => { const d = route(cfg, m); return 'to' in d ? `${d.to} (${d.via})` : d.fate }
 
@@ -275,10 +275,10 @@ target = "specialist:deals"
 [specialists.deals]
 workdir = "/a/deals"
 pinned_to = ["sales"]
-allow = ["staff"]
+reachable_by = ["staff"]
 [specialists.crm]
 workdir = "/a/crm"
-allow = ["staff"]
+reachable_by = ["staff"]
 [[rules]]
 place = "slack:#help"
 target = "specialist:crm"
@@ -302,7 +302,7 @@ target = "specialist:crm"
 [specialists.deals]
 workdir = "/a/deals"
 pinned_to = ["sales"]
-allow = []
+reachable_by = []
 [[rules]]
 place = "slack:dm"
 target = "specialist:deals"
@@ -492,19 +492,19 @@ ids = ["slack:U0OP"]
 ids = ["slack:U0ALICE"]
 [specialists.assistant]
 workdir = "/a/asst"
-allow = ["anyone"]
+reachable_by = ["anyone"]
 [[rules]]
 place = "slack:dm"
 target = "specialist:assistant"
 [specialists.alices]
 workdir = "/a/alices"
-allow = ["anyone"]
+reachable_by = ["anyone"]
 [[rules]]
 place = "slack:dm:alice"
 target = "specialist:alices"
 [specialists.huddle]
 workdir = "/a/huddle"
-allow = ["anyone"]
+reachable_by = ["anyone"]
 [[rules]]
 place = "slack:group-dm"
 target = "specialist:huddle"

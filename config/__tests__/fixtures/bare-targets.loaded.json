@@ -34,7 +34,7 @@
         "listens": [
           "slack:dm"
         ],
-        "allow": [
+        "reachableBy": [
           "people"
         ],
         "sessions": "shared",
@@ -48,7 +48,7 @@
         "listens": [
           "slack:#deals"
         ],
-        "allow": [
+        "reachableBy": [
           "people"
         ],
         "pinnedTo": [
@@ -64,7 +64,7 @@
         "id": "crm",
         "workdir": "/home/op/crm",
         "listens": [],
-        "allow": [
+        "reachableBy": [
           "people"
         ],
         "sessions": "per-conversation",
@@ -121,7 +121,7 @@
     },
     {
       "path": "specialists.ops",
-      "message": "one shared session hears everyone's DMs (allow = [\"people\"]), so one person's DM is remembered in another's; use sessions = \"per-conversation\" or allow = []"
+      "message": "one shared session hears everyone's DMs (reachable_by = [\"people\"]), so one person's DM is remembered in another's; use sessions = \"per-conversation\" or reachable_by = []"
     },
     {
       "path": "specialists.ops",

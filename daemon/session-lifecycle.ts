@@ -1004,7 +1004,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     if (worktreeTarget || reuseWorktree) await refuse(`specialist ${confinedPolicy.specialist} runs only in its workdir ${confinedPolicy.workdir}: a confined session never gets a git worktree: start it without one`)
     if (!existsSync(confinedPolicy.workdir)) await refuse(`specialist ${confinedPolicy.specialist}: its workdir ${confinedPolicy.workdir} does not exist, so no confined session starts: create it (or change workdir in hydra.toml). ${remedy(sessionName)}`)
     // The folder can change after hydra.toml loaded (a repository cloned into it, a symlink added): the load's checks run again.
-    const why = workdirRestrictionIssues(hydraLoadEnv(), confinedPolicy.workdir, currentHydraConfig().privateRoots ?? [])
+    const why = workdirRestrictionIssues(hydraLoadEnv(), confinedPolicy.workdir, currentHydraConfig().offLimits ?? [])
     if (why.length) await refuse(`specialist ${confinedPolicy.specialist}: its workdir no longer passes the checks hydra.toml was loaded with, so no confined session starts: ${why.join('; ')}. ${remedy(sessionName)}`)
     // A listed server's token variable must be set: checked here, with the other refusals, so the thread hears it.
     const noToken = missingTokenRefusal(confinedPolicy, ENV_FILE, sessionName, process.env, capturedSpawnVars())
