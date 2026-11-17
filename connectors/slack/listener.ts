@@ -507,7 +507,7 @@ export class SlackListener {
     // Hold every cursor before the socket opens: a live message must not move a cursor past the downtime gap the
     // catch-up pass that follows has yet to read. Each pass releases what it reads.
     const view = this.view()
-    this.w.beginCatchUp([...routedChannels(view), ...(hearsDms(view) ? this.w.dmChannels() : [])])
+    this.w.beginCatchUp([...routedChannels(view), ...this.w.taggedChannels(), ...(hearsDms(view) ? this.w.dmChannels() : [])])
     await app.start()
     await stale(app)
     const needed = scopesNeeded(h, this.id)

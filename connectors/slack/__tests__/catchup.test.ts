@@ -1,8 +1,8 @@
 import { describe, test, expect, afterEach } from 'bun:test'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { SlackWatcher, type SlackWatchConfig, type DeliverResult } from '../watch.js'
+import { SlackWatcher, TAGGED_CHANNELS_MAX, type SlackWatchConfig, type DeliverResult } from '../watch.js'
 import { catchUp, toEvent, _resetCatchUpLogs, type SlackApi, type RawMessage, type Page } from '../catchup.js'
 
 import { BASE, BOT, oneListener, view } from './slack-config.js'
@@ -387,6 +387,136 @@ target = "specialist:ops"
     await w.flush()
     expect(sent.sort()).toEqual(['food', 'ops'])
     expect(w.channelCursor('C0OPS')).toBe('1006.000001')
+  })
+})
+
+describe('catch-up where the app was tagged, though no rule names the channel', () => {
+  const ELSE = 'C0ELSE'
+
+  test('a tag missed while the app was down, in a channel where an earlier tag of it was heard, gets its unrouted fate', async () => {
+    const { w } = setup()
+    expect(w.handle({ channel: ELSE, ts: '1000.000001', user: 'UA', text: mention })).toBe('unrouted')
+    expect(w.stats().unrouted).toBe(1)
+    const { api, calls } = fakeApi({ [ELSE]: [{ ts: '1010.000001', user: 'UB', text: mention }] })
+    const r = await catchUp(w, api, cfg, opts())
+    expect(r).toMatchObject({ complete: true, handled: 1 })
+    expect(calls.map(c => c.args.channel)).toEqual([ELSE])
+    expect(calls[0].args.oldest).toBe('1000.000001')
+    expect(w.stats().unrouted).toBe(2)
+    expect(w.channelCursor(ELSE)).toBe('1010.000001')
+  })
+
+  test('chatter that does not tag the app opens no cursor there: nothing is read, as before', async () => {
+    const { w } = setup()
+    expect(w.handle({ channel: ELSE, ts: '1000.000001', user: 'UA', text: 'just talking' })).toBe('ignored')
+    const { api, calls } = fakeApi({ [ELSE]: [{ ts: '1010.000001', user: 'UB', text: mention }] })
+    await catchUp(w, api, cfg, opts())
+    expect(calls).toHaveLength(0)
+    expect(w.channelCursor(ELSE)).toBeUndefined()
+  })
+
+  test('a channel the bot can no longer read costs a log line, not the pass; the routed channel is still read', async () => {
+    _resetCatchUpLogs()
+    const { w } = setup()
+    w.handle({ channel: ELSE, ts: '1000.000001', user: 'UA', text: mention })
+    w.handle({ channel: CH, ts: '1000.000001', user: 'UA', text: 'old chat' })
+    const { api } = fakeApi({ [CH]: [{ ts: '1005.000001', user: 'UB', text: mention }] })
+    const history = api.history
+    api.history = async a => { if (a.channel === ELSE) throw new Error('not_in_channel'); return history(a) }
+    const logs: string[] = []
+    const r = await catchUp(w, api, cfg, opts({ log: (l: string) => logs.push(l) }))
+    expect(r).toMatchObject({ complete: true, accepted: 1 })
+    expect(w.channelCursor(ELSE)).toBe('1000.000001')
+    expect(logs.join()).toContain(ELSE)
+  })
+
+  test('only the newest few such channels are read, so the reads stay bounded', async () => {
+    const { w } = setup()
+    const name = (i: number) => `C0T${String(i).padStart(3, '0')}`
+    for (let i = 0; i < TAGGED_CHANNELS_MAX + 5; i++) w.handle({ channel: name(i), ts: `${1000 + i}.000001`, user: 'UA', text: mention })
+    expect(w.taggedChannels()).toHaveLength(TAGGED_CHANNELS_MAX)
+    expect(w.taggedChannels()).toContain(name(TAGGED_CHANNELS_MAX + 4))
+    expect(w.taggedChannels()).not.toContain(name(0))
+    // and the store forgets the rest, so it does not grow without bound
+    w.sweep()
+    expect(w.channelCursor(name(0))).toBeUndefined()
+    expect(w.channelCursor(name(TAGGED_CHANNELS_MAX + 4))).toBeDefined()
+  })
+})
+
+describe("tagged channels: when the app was tagged, not when the channel was last read", () => {
+  const name = (i: number) => `C0T${String(i).padStart(3, "0")}`
+  const ELSE = "C0ELSE"
+
+  test("a channel tagged just now is not forgotten because a quiet pass moved every cursor to now", async () => {
+    const { w } = setup()
+    for (let i = 0; i < TAGGED_CHANNELS_MAX; i++) w.handle({ channel: name(i), ts: `${1000 + i}.000001`, user: "UA", text: mention })
+    expect((await catchUp(w, fakeApi({}).api, cfg, opts())).complete).toBe(true)
+    expect(w.channelCursor(name(0))).toBe("1793000000.000000")
+    w.handle({ channel: name(TAGGED_CHANNELS_MAX), ts: "1500.000001", user: "UA", text: mention })
+    w.sweep()
+    expect(w.taggedChannels()).toContain(name(TAGGED_CHANNELS_MAX))
+    expect(w.channelCursor(name(TAGGED_CHANNELS_MAX))).toBeDefined()
+    expect(w.taggedChannels()).not.toContain(name(0))
+    expect(w.channelCursor(name(0))).toBeUndefined()
+  })
+
+  test("channels are ranked by their last tag; a later tag moves one up", () => {
+    const { w } = setup()
+    w.handle({ channel: "C0A", ts: "1000.000001", user: "UA", text: mention })
+    w.handle({ channel: "C0B", ts: "2000.000001", user: "UA", text: mention })
+    expect(w.taggedChannels()).toEqual(["C0B", "C0A"])
+    w.handle({ channel: "C0A", ts: "3000.000001", user: "UA", text: mention })
+    expect(w.taggedChannels()).toEqual(["C0A", "C0B"])
+  })
+
+  test("a store that kept the channels alone loads them as the oldest; a damaged one loads what it can", () => {
+    const dir = mkdtempSync(join(tmpdir(), "slack-catchup-"))
+    dirs.push(dir)
+    const file = join(dir, "w.json")
+    const open = () => new SlackWatcher({ now: () => 1_793_000_000_000, file, log: () => {}, config: () => cfg, deliver: async () => ({ ok: true }) })
+    writeFileSync(file, JSON.stringify({ entries: [], channelCursors: { C0OLD: "900.000001" }, taggedIn: ["C0OLD"] }))
+    const w = open()
+    expect(w.taggedChannels()).toEqual(["C0OLD"])
+    w.handle({ channel: "C0NEW", ts: "1000.000001", user: "UA", text: mention })
+    expect(w.taggedChannels()).toEqual(["C0NEW", "C0OLD"])
+    for (const taggedIn of [5, "x", null, { C0X: 3, C0Y: "1000.000001" }, [1, "C0Z"]]) {
+      writeFileSync(file, JSON.stringify({ entries: [], channelCursors: {}, taggedIn }))
+      expect(() => open().taggedChannels()).not.toThrow()
+    }
+    writeFileSync(file, JSON.stringify({ entries: [], channelCursors: {}, taggedIn: { C0X: 3, C0Y: "1000.000001" } }))
+    expect(open().taggedChannels()).toEqual(["C0Y"])
+  })
+
+  for (const why of ["is_archived", "access_denied", "restricted_action"]) {
+    test(`a tagged channel failing with ${why} costs a log line once, not the pass`, async () => {
+      _resetCatchUpLogs()
+      const { w } = setup()
+      w.handle({ channel: ELSE, ts: "1000.000001", user: "UA", text: mention })
+      w.handle({ channel: CH, ts: "1000.000001", user: "UA", text: "old chat" })
+      const { api } = fakeApi({ [CH]: [{ ts: "1005.000001", user: "UB", text: mention }] })
+      const history = api.history
+      api.history = async a => { if (a.channel === ELSE) throw new Error(why); return history(a) }
+      const log: string[] = []
+      const r = await catchUp(w, api, cfg, opts({ log: (l: string) => log.push(l) }))
+      expect(r).toMatchObject({ complete: true, accepted: 1 })
+      expect(w.channelCursor(ELSE)).toBe("1000.000001")
+      expect(log.join()).toContain(`invite the bot to ${ELSE}`)
+      const again: string[] = []
+      await catchUp(w, api, cfg, opts({ log: (l: string) => again.push(l) }))
+      expect(again.join()).not.toContain(ELSE)
+    })
+  }
+
+  test("a rate limit on a tagged channel still fails the pass and holds every cursor", async () => {
+    const { w } = setup()
+    w.handle({ channel: ELSE, ts: "1000.000001", user: "UA", text: mention })
+    w.handle({ channel: CH, ts: "1000.000001", user: "UA", text: "old chat" })
+    const { api } = fakeApi({ [CH]: [{ ts: "1005.000001", user: "UB", text: mention }] })
+    api.history = async () => { throw new Error("ratelimited") }
+    const r = await catchUp(w, api, cfg, opts())
+    expect(r.complete).toBe(false)
+    expect(w.channelCursor(CH)).toBe("1000.000001")
   })
 })
 

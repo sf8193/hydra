@@ -140,6 +140,20 @@ describe('diagnosing a refused token', () => {
     expect(t.watcher.channelCursor(CH)).toBe('1100.000001')
   })
 
+  test('a channel no rule names, where the app was tagged before, is held and read from its cursor like a routed one', async () => {
+    const ELSE = 'C0ELSE'
+    const t = setup({
+      history: [{ ts: '1050.000001', user: 'UB', text: mention }],
+      duringStart: live => live({ channel: ELSE, ts: '1100.000001', user: 'UC', text: mention }),
+    })
+    t.watcher.handle({ channel: ELSE, ts: '1000.000001', user: 'UB', text: mention })
+    await t.listener.start()
+    await t.watcher.flush()
+    // the tag at 1050, missed while down, is replayed even though a live tag at 1100 came in while the socket opened
+    expect(t.watcher.stats().unrouted).toBe(3)
+    expect(t.apps[0].apiCalls.filter(c => c.startsWith('history:'))).toEqual(['history:1000.000001', 'history:1000.000001'])
+  })
+
   test('startup names the scopes each enabled option needs, and warns for each one the token lacks', async () => {
     const t = setup({ toml: oneListener('#food', 'helper', '["anyone"]', `[places."slack:#food"]\nfiles = true\nack = "eyes"\n`), scopes: ['channels:history', 'users:read', 'im:history'] })
     await t.listener.start()
