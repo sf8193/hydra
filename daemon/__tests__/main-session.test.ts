@@ -8,7 +8,7 @@ const { gateway, STATE_DIR } = await import('../config.js')
 const { writeMainRecord } = await import('../../shared/main-record.js')
 const { handleUsageIntercept } = await import('../commands/status.js')
 const { handlePeekIntercept } = await import('../commands/thread.js')
-const { mainAlive, mainContext } = await import('../main-session.js')
+const { mainAlive, mainContext, mainLaunchModel } = await import('../main-session.js')
 const { withFakeTmux } = await import('./fake-tmux.js')
 const { projectDirName, projectsRoot } = await import('../usage.js')
 type FakeTmux = ReturnType<typeof withFakeTmux>
@@ -108,5 +108,22 @@ describe('main channel usage / peek', () => {
     tmux.alive(BYTE); tmux.pane(BYTE, pane(7))
     await handlePeekIntercept(msg('thread-x', true), BYTE)
     expect(sent.join('\n')).toContain('No session named')
+  })
+})
+
+describe('mainLaunchModel: the model main launched on', () => {
+  afterEach(() => rmSync(join(STATE_DIR, 'main.json'), { force: true }))
+
+  test('is the model its launch recorded, not the spawn default', () => {
+    const saved = process.env.HYDRA_MODEL
+    process.env.HYDRA_MODEL = 'claude-sonnet-5-5[1m]'
+    try {
+      writeMainRecord(STATE_DIR, { model: 'claude-opus-5-5[1m]' })
+      expect(mainLaunchModel()).toBe('claude-opus-5-5[1m]')
+    } finally { if (saved === undefined) delete process.env.HYDRA_MODEL; else process.env.HYDRA_MODEL = saved }
+  })
+
+  test('says nothing, rather than guess, when no record was written', () => {
+    expect(mainLaunchModel()).toBeUndefined()
   })
 })

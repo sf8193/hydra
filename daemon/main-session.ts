@@ -12,8 +12,10 @@ import type { InboundMessage } from '../gateways/gateway.js'
 // Claude, so it is asked through ClaudeSubject: no forged SessionInfo. The recorded model lets usage() read
 // main's transcript on the same scale as every other session's; with none, it falls back to the pane footer.
 export const mainTmux = (): string => byteTmuxName(PLATFORM)
+/** The model `hydra up` launched main on ([main] model, else the spawn default); undefined when no record was written. */
+export const mainLaunchModel = (): string | undefined => readMainRecord(STATE_DIR)?.model
 export const mainSubject = () => {
-  const model = readMainRecord(STATE_DIR)?.model
+  const model = mainLaunchModel()
   return { tmuxName: mainTmux(), ...(model ? { sessionMetadata: { model } } : {}) }
 }
 export const mainAlive = (): boolean => claudeEngine.isAlive(mainSubject())
