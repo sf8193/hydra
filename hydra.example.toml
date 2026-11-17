@@ -5,9 +5,17 @@
 # Another repo's specialist and schedules: ship them as a fragment of [specialists.*] and [schedules.*] tables, and
 # add it with `hydra config add <fragment.toml>` (README › Configuration).
 # Every key below is optional unless it says required. Unknown keys are errors, so a typo never passes silently.
+#
+# Two kinds of door. A gateway is where the operator talks to hydra (Discord, Slack). A connector is where outside events arrive
+# (Slack, GitHub, a clock). Slack is both: its gateway needs no table here, its connector is the [slack.apps.*] tables below.
+#
+# Kind prefixes. A value naming a place, address, target, person, role or app says which, or it is an error: `slack:#help`,
+# `discord:<id>`, `github:owner/repo`, `cli`; `main` or `specialist:<id>`; `person:<id>`; `role:<name>`; `app:<id>`.
+# These take a bare name: `operator` (a [people] id), `sends_to` and `renamed_from` (specialist ids), `mcp_servers` (server names),
+# a person's `roles` (written `role:<name>` wherever used), `needs` (a precondition) and `ack` (an emoji name).
 
 # The one person whose DMs reach main and who passes every admin check and every specialist's `reachable_by`.
-# Required once anything else is declared.
+# Required once anything else is declared. A bare [people] id, not an address or a name.
 operator = "op"
 
 # --- main: how the operator's harness runs. Read each time main starts (`hydra up`, a watchdog revival), so an edit applies at its next start (not `hydra restart`, which restarts only the daemon). ---
@@ -37,11 +45,12 @@ bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"   # required
 socket_token_env = "CONNECTOR_SLACK_APP_TOKEN"   # the Socket Mode token (xapp-): required for Slack to connect, not for `hydra slack manifest`
 display_name = "Acme helper"          # the Slack app's name: `hydra slack manifest` creates it with this name, and every alert and `hydra health` line names the app by it (default "hydra" for `default`, else the id; at most 35 characters)
 description = "Answers Acme's Slack threads it is tagged in."  # what the app says it does there (at most 140)
+operator_token_env = "CONNECTOR_SLACK_USER_TOKEN"   # optional: hear the channels, DMs and group DMs the operator is in, as the operator; never posts (a DM or group DM is delivered only where a place names it).
+                                      # What it hears arrives through this app: see the `slack:dm:alice` rule
 
 [slack.apps.sales]                    # another app: its own tokens, named by its id when it sets no display_name
 bot_token_env = "SALES_SLACK_BOT_TOKEN"
 socket_token_env = "SALES_SLACK_APP_TOKEN"
-operator_token_env = "SALES_SLACK_USER_TOKEN"   # optional: hear the channels, DMs and group DMs the operator is in, as the operator; never posts (a DM or group DM is delivered only where a place names it)
 
 # --- people: whom hydra recognizes. Anyone not here is a stranger. ---
 
@@ -51,7 +60,7 @@ name = "Op"                           # shown to specialists (default: the sende
 
 [people.alice]
 addresses = ["slack:U0ALICE"]
-roles = ["staff"]                     # labels for `reachable_by` and a rule's `person`, written `role:staff` there. Built in: `role:people` (everyone here), `role:anyone`
+roles = ["staff"]                     # bare role names; `reachable_by` and a rule's `person` write them `role:staff`. Built in: `role:people` (everyone here), `role:anyone`
 
 [people.bob]
 addresses = ["slack:U0BOB", "github:bob"]
@@ -61,17 +70,17 @@ roles = ["staff", "finance"]
 
 [defaults.specialist]
 kickoff = "/orient {id}"              # what a fresh session is told first (a revive resumes instead)
-idle = "8h"
+idle = "8h"                          # a session quiet this long is ended and resumes on the next message
 
 # --- specialists: standing agents. hydra keeps each one alive; what it knows lives in its workdir, never here. ---
 
 # One shared session that the operator reaches from the CLI and a schedule.
 [specialists.ops]
 workdir = "~/agents/ops"              # required: the folder it runs in (must exist). Its CLAUDE.md, skills and files live there
-home = "discord:200000000000000001"   # where its threads open and replies with no conversation go (default: the operator's channel)
+home = "discord:200000000000000001"   # a chat place, not a folder: where its threads open and replies with no conversation go (default: the operator's channel)
 model = "claude-opus-5-5"
 emoji = "🛠️"                          # shown in its threads' names in place of the default session emoji: one emoji character (not a :name:). Dead and paused still show their own mark. Default: the session's own emoji
-renamed_from = ["operations"]         # old ids, so a rename keeps its thread, session and owed messages
+renamed_from = ["operations"]         # old ids (bare), so a rename keeps its thread, session and messages accepted but not yet delivered
 
 # One session per conversation: staff questions in a channel, each thread on its own.
 [specialists.crm]
@@ -79,15 +88,15 @@ workdir = "~/agents/crm"
 kickoff_file = "kickoff.md"           # instead of kickoff; relative to workdir, read at each fresh start
 reachable_by = ["role:staff"]          # roles (never people), each `role:<name>`, that may reach it (default ["role:people"]; [] = only the operator)
 sessions = "per-conversation"         # "shared" (default): one session for everything; "per-conversation": one per thread
-max_sessions = 5                      # per-conversation cap (default 20); a conversation past it waits, its messages owed, for at most 3 days, then they are dropped and alerted
+max_sessions = 5                      # per-conversation cap (default 20); a conversation past it waits, its messages accepted but undelivered, for at most 3 days, then they are dropped and alerted
 idle = "2h"                           # end a quiet session and resume it on the next message (without it, per-conversation slots never free)
 
 # Pinned to the app `sales`: it answers only messages through that app, and that app delivers only to specialists pinned to it.
 # It shares #help with crm (which answers every app nobody is pinned to, here `default`) because no app reaches both: see the rules below.
 [specialists.deals]
 workdir = "~/agents/ops"
-pinned_to = ["app:sales"]             # Slack apps (declared above), each `app:<id>`. Absent: unpinned. Only Slack places: a pinned specialist can't be sent a discord: or github: place
-speaks_as = "app:sales"               # the app it posts as when it answers no message (its home, a new thread); one of `pinned_to` if pinned.
+pinned_to = ["app:sales"]             # Slack apps (declared above), each `app:<id>`: only these apps deliver to it, and it takes nothing from other apps. Absent: unpinned. Only Slack places: a pinned specialist can't be sent a discord: or github: place
+speaks_as = "app:sales"               # the Slack app whose bot posts for it when it answers no message (its home, a new thread); one of `pinned_to` if pinned.
                                       # Absent: its first pinned app; if unpinned, `default`, else the only app declared. With several apps and no `default`, required for a specialist with a Slack home. A `#name` home is resolved through that app's workspace.
 
 # A specialist other people talk to, restricted: it knows only its workdir, uses only the tools and servers it lists, and answers only its own
@@ -102,7 +111,7 @@ reachable_by = ["role:staff"]
 restricted = true
 tools = ["Read", "Grep", "Glob"]      # built-in tools; these three are the default and all it may list
 mcp_servers = ["datadog"]             # names from [mcp_servers.*] below
-sends_to = ["triage"]                  # the specialists it may send to with send_to_thread (shared-session specialists, never main); refused unless restricted = true
+sends_to = ["triage"]                  # bare specialist ids: the specialists it may send to with send_to_thread (shared-session specialists, never main); refused unless restricted = true
 
 # What helpdesk hands a question to: restricted too, with a folder of its own. No rule sends a place to it; only helpdesk's sends_to reaches it.
 [specialists.triage]
@@ -114,7 +123,7 @@ sends_to = ["helpdesk"]                # the way back: its answer is a send_to_t
 # PR reviews on one repo.
 [specialists.reviewer]
 workdir = "~/code/widget"
-engine = "claude"                     # claude | codex | omp
+engine = "claude"                     # which agent program runs its sessions: claude | codex | omp (oh-my-pi)
 env_file = ".env.reviewer"            # extra environment for its sessions; relative to workdir
 
 # --- restricted: folders no restricted specialist's workdir may be, hold or sit inside, beyond the built-in ones ---
@@ -140,8 +149,8 @@ messages = "all"                      # "addressed" (default): only a DM or a ta
 ack = "eyes"                          # a reaction added once a message is delivered
 files = true                          # download attachments (default false)
 bots = false                          # hear other bots (default false; hydra's own bot is never heard)
-default_app = "app:default"           # a Slack channel only: when two apps are in it, the app that answers a message that tags neither (a tag always picks the app).
-                                      # Absent: the app named `default`, else the first app above, among those that deliver to someone here. An untagged follow-up stays with the app that opened the conversation.
+default_app = "app:default"           # a Slack channel only: when two apps are in it, the app that answers a message that tags neither (a tag always picks the app); not the app named `default`
+                                      # (here they happen to match). Absent: the app named `default`, else the first app above, among those that deliver to someone here. An untagged follow-up stays with the app that opened the conversation.
 link_previews = true                  # false: no link previews (Slack unfurl_links/unfurl_media, Discord suppress-embeds) on what hydra posts here: replies, new threads, DMs, alerts; not Slack edits (default true)
 
 # The channel helpdesk answers: it hears every top-level post, and its answers carry no previews.
@@ -169,8 +178,8 @@ workdir = "~/agents/ops"              # the check's working dir (absolute or ~/)
 [schedules.backup-watch]
 cron = "0 * * * *"
 check = "~/bin/backup-fresh.sh"
-runner = "daemon"                     # "launchd" (default) tries once; "daemon" keeps trying while hydra runs
-needs = ["internet"]                  # daemon runner only: not now while offline
+runner = "daemon"                     # what runs the check: "launchd" (default) tries once; "daemon" keeps trying while hydra runs
+needs = ["internet"]                  # a bare precondition name (only `internet` is known); daemon runner only: not now while offline
 alert_after = "2d"                    # daemon runner only: how long a failure run lasts before it is alerted (default 1d)
 
 # --- rules: who hears what. Each names a place, an app, or both, and the target that answers; first match in file order wins. This is the one home of where a specialist is heard. ---
@@ -178,14 +187,16 @@ alert_after = "2d"                    # daemon runner only: how long a failure r
 # A place is slack:#name, slack:C0ID, slack:dm (the bot's DMs only), slack:dm:<person>, slack:group-dm, discord:#name, discord:<id>, discord:dm, github:owner/repo or cli.
 # Two rules that take every message at one place through one app (no `person`) are an error: the later could never match. A rule with a `person` goes before the rule for everyone.
 
+# Finance in #help goes to ops. A rule whose target the app that heard the message cannot deliver to is skipped, not a dead end:
+# through `sales` (it delivers only to specialists pinned to it) this rule is skipped and the next one that fits decides.
 [[rules]]
 place = "slack:#help"
 person = "role:finance"               # `person:<id>` or `role:<name>` (absent: anyone there)
 target = "specialist:ops"            # "main", or "specialist:<name>"
 
 [[rules]]
-place = "slack:dm:alice"              # with operator_token_env: the operator's DM with the person alice (a [people] id with a Slack address); slack:dm is the DM with the bot, slack:group-dm every group DM
-app = "app:default"                # only through this app: the `sales` app is pinned, so it never delivers to ops
+place = "slack:dm:alice"              # needs an app with operator_token_env: the operator's DM with the person alice (a [people] id with a Slack address); slack:dm is the DM with the bot, slack:group-dm every group DM
+app = "app:default"                # only through this app, the one holding operator_token_env, so that is the app that hears this DM
 target = "specialist:ops"
 
 [[rules]]
@@ -194,7 +205,8 @@ app = "app:sales"                     # an app alone matches every message that 
 person = "role:finance"
 target = "specialist:deals"          # must be a specialist the app can reach: pinned to sales, or any specialist while no one pins sales
 
-# Everyone's messages at a place, to the specialist that answers there.
+# Everyone's messages at a place, to the specialist that answers there. Two rules for one place with no `person` or `app` are
+# not duplicates here: each specialist is served by a different app (crm by `default`, deals only by `sales`), so a message matches one.
 [[rules]]
 place = "slack:#help"
 target = "specialist:crm"             # unpinned: it answers through the apps nobody is pinned to, here `default`
@@ -217,7 +229,7 @@ target = "specialist:reviewer"
 command = "~/bin/hydra-guard"         # required: stdin {person, roles, place, conversation, target}; exit 0 delivers (print {"target": "specialist:x"} to redirect), 10 drops, 75 "not now"
 timeout = "5s"                        # past this, the message is delivered and the timeout logged (at most 30s)
 include_text = false
-owed_max = "1h"                       # how long "not now" may keep a message owed before it fails visibly
+owed_max = "1h"                       # how long "not now" may keep a message accepted but undelivered before it fails visibly
 
 # --- vitals: when the once-a-minute vitals tick tells the operator the host is in trouble (every key optional) ---
 
