@@ -574,6 +574,10 @@
     ],
     [
       "daemon_bridge-dispatch",
+      "shared_tool-definitions"
+    ],
+    [
+      "daemon_bridge-dispatch",
       "shared_constants"
     ],
     [

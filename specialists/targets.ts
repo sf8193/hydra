@@ -12,7 +12,7 @@ import { transport } from '../daemon/bridge-transport.js'
 import { gateway } from '../daemon/config.js'
 import { occupancy, occupied, ORPHAN_GRACE_MS, bridgeWaitMs } from '../daemon/session-reachability.js'
 import { confirmedStuckState } from '../daemon/pane-probe.js'
-import { deliveryOutcome } from '../daemon/delivery-outcome.js'
+import { landingOf } from '../daemon/landing.js'
 import { checkIdempotency, clearIdempotency, registerIdempotency, DELIVER_IDEMPOTENCY_TTL_MS } from '../daemon/idempotency.js'
 import { DELIVER_MAX_MESSAGE_BYTES, parseIdleTtl } from '../shared/constants.js'
 import { getSpecialist, specialistForThread, withTargetLock, type Specialist } from './specialists.js'
@@ -123,7 +123,7 @@ export async function deliverToSession(info: SessionInfo, text: string, opts: { 
   } catch (err) {
     result = { status: 'unknown', reason: String(err) }
   }
-  const outcome = deliveryOutcome(result, !!opts.queue)
+  const outcome = landingOf(result, !!opts.queue)
   if (!outcome.ok) return { ok: false, exit: outcome.exitCode === 6 ? 6 : 3, reason: outcome.error }
   // Queued behind a session that died after it was chosen: nobody will drain that queue.
   if (outcome.status === 'queued' && occupancy(info) === 'dead') return { ok: false, exit: 6, reason: `${info.tmuxName} died during delivery` }

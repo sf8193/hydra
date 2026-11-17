@@ -6,9 +6,9 @@
 //   (macOS); elsewhere, or when that read fails, a stall of 60 s or more holds overload back like a sleep.
 // - Memory. It fills silently (11 Nov: 15.1 of 16 GB swap, from long-lived helpers). On macOS the swap total grows by
 //   whole swap files on demand, so used/total moves with allocation, not with pressure: the OS's own pressure level is
-//   judged instead, as two episodes. Short: warn or critical for `ticks` in a row. Critical: critical, at once, so it
-//   escalates past a short alert already sent. On macOS a missing level is no reading. Off macOS (Linux, whose swap
-//   has a fixed size) short is swap used % of total. The alert names the biggest processes and whose they are.
+//   judged instead, as two episodes. Memory-low: warn or critical for `ticks` in a row. Critical: critical, at once, so it
+//   escalates past a memory-low alert already sent. On macOS a missing level is no reading. Off macOS (Linux, whose swap
+//   has a fixed size) memory-low is swap used % of total. The alert names the biggest processes and whose they are.
 // Each condition alerts once per episode, and re-arms once it clears or the alert is not delivered; a retry after an
 // undelivered alert waits RETRY_UNDELIVERED_MS, since with nobody to tell every send fails. Episodes and the memory
 // cooldowns (one per memory episode) live in memory: a daemon restart starts them afresh.
@@ -82,17 +82,17 @@ export function overloaded(p: SystemPressure, v: Vitals): boolean | undefined {
 }
 
 /**
- * The two memory conditions; undefined is no reading. macOS: `short` is a level of warn or critical, `critical` is
- * critical, and a missing level is no reading for either, never the swap rule. Elsewhere: `short` is swap used % of
+ * The two memory conditions; undefined is no reading. macOS: `low` is a level of warn or critical, `critical` is
+ * critical, and a missing level is no reading for either, never the swap rule. Elsewhere: `low` is swap used % of
  * total, and there is no `critical`.
  */
-export function memoryState(p: SystemPressure, v: Vitals): { short: boolean | undefined; critical: boolean | undefined } {
+export function memoryState(p: SystemPressure, v: Vitals): { low: boolean | undefined; critical: boolean | undefined } {
   if (p.platform === 'darwin') {
     const level = p.memoryPressure
-    return level === undefined ? { short: undefined, critical: undefined } : { short: level !== 'normal', critical: level === 'critical' }
+    return level === undefined ? { low: undefined, critical: undefined } : { low: level !== 'normal', critical: level === 'critical' }
   }
   const swap = swapPct(p)
-  return { short: swap === undefined ? undefined : swap >= v.swapUsedPct, critical: false }
+  return { low: swap === undefined ? undefined : swap >= v.swapUsedPct, critical: false }
 }
 
 export function swapPct(p: SystemPressure): number | undefined {
@@ -133,8 +133,8 @@ export function formatOverloadAlert(p: SystemPressure, v: Vitals): string {
   return `🔥 **The host is overloaded**: 15-minute load ${p.load15!.toFixed(1)} on ${p.cores} cores (alert at ${v.overloadLoadPerCore}× cores) with CPU ${pct(p.idlePct!)} idle, for at least ${v.ticks} vitals ticks. (${formatPressure(p)})`
 }
 
-/** Which memory episode alerts: `critical` (macOS only) or `short`. */
-export type MemoryAlert = 'critical' | 'short'
+/** Which memory episode alerts: `critical` (macOS only) or `memory-low`. */
+export type MemoryAlert = 'critical' | 'memory-low'
 
 const levelHeader = (which: MemoryAlert, level: MemoryPressure, v: Vitals) =>
   which === 'critical' ? '**Memory pressure is critical**'
@@ -175,7 +175,7 @@ export function createHostHealth({
   resumedWithin = (ms, now) => { const s = suspendedSince(now - ms, now); return s !== null && s.cause !== 'stalled' },
 }: HostHealthDeps) {
   const overload = createEpisode()
-  const short = createEpisode()
+  const low = createEpisode()
   const critical = createEpisode()
   const send = (what: string, text: string, retract: () => void) => {
     void alert(text).then(
@@ -194,14 +194,14 @@ export function createHostHealth({
       }
       const m = memoryState(p, v)
       const criticalFired = critical.observe(m.critical, now, 1, v.memoryCooldownMs)
-      const shortFired = short.observe(m.short, now, v.ticks, v.memoryCooldownMs)
-      // Critical covers short: one alert, and short counts as alerted, so a critical is never followed by a short.
-      const which: MemoryAlert | undefined = criticalFired !== undefined ? 'critical' : shortFired !== undefined ? 'short' : undefined
+      const lowFired = low.observe(m.low, now, v.ticks, v.memoryCooldownMs)
+      // Critical covers memory-low: one alert, and memory-low counts as alerted, so a critical is never followed by a memory-low.
+      const which: MemoryAlert | undefined = criticalFired !== undefined ? 'critical' : lowFired !== undefined ? 'memory-low' : undefined
       if (which) {
-        const covered = which === 'critical' ? shortFired ?? short.cover(now) : shortFired
+        const covered = which === 'critical' ? lowFired ?? low.cover(now) : lowFired
         const retract = () => {
           if (criticalFired !== undefined) critical.retract(criticalFired)
-          if (covered !== undefined) short.retract(covered)
+          if (covered !== undefined) low.retract(covered)
         }
         const top = procs ? topByRss(procs, roots) : undefined
         log(`daemon: host memory ${which} (${formatPressure(p)}); largest: ${top ? top.map(t => `${t.comm} ${t.pid} ${t.rssMB}MB ${t.owner}`).join(', ') : 'process list unread'}\n`)

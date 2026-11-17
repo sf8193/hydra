@@ -1,6 +1,6 @@
 import type { DeliveryResult } from './engines/engine-adapter.js'
 
-export type DeliveryOutcome =
+export type Landing =
   | { ok: true; status: 'delivered' | 'queued'; proof: 'socket_write' | 'persisted' | 'adapter' }
   | { ok: false; error: string; exitCode?: number }
 
@@ -10,7 +10,7 @@ export type DeliveryOutcome =
  * expected the message to wait for a bridge: Claude's contract fails (exit 6)
  * unless the write hit the socket or the caller asked for the queue.
  */
-export function deliveryOutcome(result: DeliveryResult, queued: boolean): DeliveryOutcome {
+export function landingOf(result: DeliveryResult, queued: boolean): Landing {
   const via = result.status === 'accepted' ? result.via : undefined
   if (result.status === 'rejected') return { ok: false, error: `delivery rejected: ${result.reason}` }
   if (result.status === 'unknown') return { ok: false, error: `delivery outcome unknown: ${result.reason} — transient, retry`, exitCode: 6 }

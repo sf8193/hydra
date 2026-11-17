@@ -6,7 +6,10 @@
 // specialist may use, and `sends_to` names the specialists it may send to.
 
 /** A platform hydra can connect to. A person's address and most places start with one. */
-export type Platform = 'discord' | 'slack' | 'github'
+export const PLATFORMS = ['discord', 'slack', 'github'] as const
+export type Platform = typeof PLATFORMS[number]
+/** A platform a daemon can run as its chat gateway (`CHAT_PLATFORM`): every Platform but the code host. */
+export type ChatPlatform = Exclude<Platform, 'github'>
 
 /** Where a person can be reached: `discord:<user id>`, `slack:<user id>`, `github:<login>` (lowercased). One address, one person. */
 export type Address = `${Platform}:${string}`
@@ -47,7 +50,19 @@ export type Person = {
   name?: string
 }
 
-export type SessionsMode = 'shared' | 'per-conversation'
+export const SESSIONS_MODES = ['shared', 'per-conversation'] as const
+export type SessionsMode = typeof SESSIONS_MODES[number]
+
+/**
+ * What fires a schedule's slot. launchd (the default): a launchd calendar entry runs the check at each slot, once on wake
+ * for a slot missed asleep, and leaves its result for the daemon to deliver. daemon: the daemon's clock, which retries a slot until it is done.
+ */
+export const RUNNERS = ['launchd', 'daemon'] as const
+export type Runner = typeof RUNNERS[number]
+
+/** A precondition the daemon checks before a daemon schedule's slot runs. */
+export const NEEDS = ['internet'] as const
+export type Need = typeof NEEDS[number]
 
 /** The built-in tools a restricted specialist (`restricted = true`) may list. Anything else runs code or reaches past its folder. */
 export const WORKDIR_TOOLS = ['Read', 'Grep', 'Glob'] as const
@@ -192,9 +207,9 @@ export type Schedule = {
   /** Absolute, `~` expanded. A relative `envFile` is under it. */
   workdir?: string
   envFile?: string
-  runner: 'launchd' | 'daemon'
+  runner: Runner
   /** Daemon runner only: preconditions checked before a run; unmet is "not now", and the slot stays owed. */
-  needs?: 'internet'[]
+  needs?: Need[]
   /** Daemon runner only: how long a failure run lasts before the operator is alerted, once. Default 1 day. */
   alertAfterMs?: number
 }
@@ -317,7 +332,7 @@ export type LoadEnv = {
   /** `sw_vers -productVersion` on macOS (`15.7.9`); undefined when this is not macOS. */
   macosVersion: string | undefined
   /** The chat platform this daemon runs. On `slack` the gateway holds `SLACK_GATEWAY_TOKEN_ENVS`, so no connector app may name them. */
-  platform: 'discord' | 'slack'
+  platform: ChatPlatform
 }
 
 /** What looking through a folder found. `truncated`: it stopped at its entry cap, so the rest is unseen. */

@@ -2,6 +2,7 @@ import { mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'fs'
 import { randomBytes } from 'crypto'
 import { join } from 'path'
 import { clean } from '../shared/untrusted-text.js'
+import type { SendType } from '../shared/tool-definitions.js'
 
 // Session-to-session sends reach the recipient's session in full. Each thread shows one
 // subtext line instead of the whole text: 📨 in the recipient's, 📤 in the sender's.
@@ -13,8 +14,7 @@ const HEAD_MAX_CHARS = 600
 const NOTE_SUMMARY_MAX = 140
 const SPILL_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
-const TYPE_MARK = { progress: '', question: '❓ ', result: '✅ ' } as const
-export type SendType = keyof typeof TYPE_MARK
+const TYPE_MARK: Record<SendType, string> = { progress: '', question: '❓ ', result: '✅ ' }
 
 /** A session as the line names it. Its URL links its own thread. */
 export type Party = { name: string; emoji: string; url?: string }

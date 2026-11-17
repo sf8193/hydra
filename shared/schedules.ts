@@ -9,7 +9,7 @@ import { join } from 'path'
 import { launchdCalendar } from './jobs-launchd.js'
 import { jobsToml, readDaemonState, type DaemonState, type Job } from './jobs.js'
 import { formatIssues, loadHydraConfig, systemEnv } from '../config/load.js'
-import type { HydraConfig } from '../config/types.js'
+import type { ChatPlatform, HydraConfig } from '../config/types.js'
 
 const DEFAULT_ALERT_AFTER_MS = 24 * 60 * 60_000
 
@@ -64,7 +64,7 @@ export function jobsFromSchedules(cfg: Pick<HydraConfig, 'schedules' | 'speciali
  * as hydra.toml; otherwise hydra.toml itself, which covers the time between migrate and the daemon's first tick, and
  * an edit the daemon hasn't read. A hydra.toml that doesn't load falls back to the record.
  */
-export function cliSchedules(stateDir: string, platform: 'discord' | 'slack'): { jobs: Job[]; from: string } | { error: string } {
+export function cliSchedules(stateDir: string, platform: ChatPlatform): { jobs: Job[]; from: string } | { error: string } {
   const state = readDaemonState(stateDir).state
   const file = join(stateDir, 'hydra.toml')
   let changed = 0

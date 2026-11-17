@@ -422,7 +422,7 @@ export async function handleDestroyIntercept(msg: InboundMessage): Promise<void>
     void gateway.react(msg.channelId, msg.id, '💀').catch(() => {})
   })
   if (out.ok) return
-  if (out.kind === 'occupied' || out.kind === 'alive') void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
+  if (out.kind === 'protocol-running' || out.kind === 'alive') void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
   const where = out.kind === 'delete-failed' ? out.parentChannelId ?? msg.channelId : msg.channelId
   void safeSend(where, `_${out.text}_`)
 }
