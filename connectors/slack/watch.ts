@@ -178,9 +178,9 @@ export type SlackMessageEvent = {
 export type DeliverResult =
   | { ok: true; duplicate?: boolean }
   // `permanent`: this message can never be delivered (too large). It is dropped, not retried.
-  // `exit` 8: the binding names no such specialist. Kept owed (a fixed config delivers it) and alerted.
+  // `exit` 8: the binding names no such specialist, or (`malformed`) a target hydra cannot read. Kept owed (a fixed config delivers it) and alerted.
   // `wait`: its specialist runs `max_sessions` conversation sessions already. Kept owed, and never expires while it waits.
-  | { ok: false; error: string; permanent?: boolean; exit?: number; wait?: true }
+  | { ok: false; error: string; permanent?: boolean; exit?: number; wait?: true; malformed?: true }
 
 export type SlackWatchDeps = {
   now: () => number
@@ -199,6 +199,7 @@ export type SlackWatchDeps = {
   guard?: (g: Guard, input: GuardInput) => Promise<GuardVerdict>
   /** A plain message to a person (not a session turn): how a drop is surfaced. `to`: the specialist it concerns, whose `home_place` should hear it. */
   alert?: (text: string, to?: string, app?: string) => void
+  hosted?: (threadId: string) => boolean
 }
 
 /** `refused`: `reachable_by` does not admit the sender. `unrouted`: a mention or DM no specialist hears. */
@@ -997,11 +998,22 @@ export class SlackWatcher {
     this.persist()
   }
 
+  private releasedByHost(key: string, entry: SlackWatchEntry): boolean {
+    const host = `${entry.channel}:${entry.threadTs}`
+    if (!entry.specialist || !isSessionThread(entry.specialist) || !this.deps.hosted?.(host)) return false
+    if (this.entries.get(key) !== entry) return true
+    const owed = entry.owed?.length ?? 0
+    this.unwatch(entry.channel, entry.threadTs, entry.app, true)
+    this.deps.alert?.(`ℹ️ ${conversationId(entry)} is now a hydra session's own thread, so this session stopped listening to it${owed ? ` (${owed} owed dropped)` : ''}.`, entry.specialist, appOfEntry(entry))
+    return true
+  }
+
   /**
    * One reaction, sent as a message would be: to the conversation's binding, if it still admits the person, after the guard, named as the
    * roster names them. It is never owed: Slack does not replay it, and a message's retry (catch-up reading the thread again) would not find it.
    */
   private async deliverReaction(key: string, entry: SlackWatchEntry, item: Item, mark: string, enqueuedCfg: SlackWatchConfig): Promise<void> {
+    if (this.releasedByHost(key, entry)) return
     const cfg = this.deps.config(entry.app) ?? enqueuedCfg
     const to = entry.specialist ? currentId(cfg.hydra, entry.specialist) : undefined
     if (!to || !isLive(cfg.hydra, to)) return this.undo(entry, mark)
@@ -1406,6 +1418,7 @@ export class SlackWatcher {
   }
 
   private async deliverBatches(key: string, entry: SlackWatchEntry, items: Item[], enqueuedCfg: SlackWatchConfig): Promise<void> {
+    if (this.releasedByHost(key, entry)) return
     // Where each message goes was fixed when its conversation opened: its binding. Who may reach it is read now, from the current config, so a role taken away refuses at once. Read once for
     // the whole burst, so a split burst lands in one place.
     const app = appOfEntry(entry)
@@ -1626,7 +1639,7 @@ export class SlackWatcher {
           await this.deliverGroup(key, entry, { to: fallback }, batch, cfg)
           continue
         }
-        if (result.exit === 8) this.alertOnce(`no-such-specialist:${target.to}`, undefined, `⚠️ Slack messages in ${placeName(cfg, entry.channel)} are owed but undeliverable: ${result.error}. The conversation is bound to "${target.to}", which has no session record; check [specialists.${target.to}] in hydra.toml. They stay owed for up to a day.`, appOfEntry(entry))
+        if (result.exit === 8) this.alertOnce(`no-such-specialist:${target.to}`, undefined, `⚠️ Slack messages in ${placeName(cfg, entry.channel)} are owed but undeliverable: ${result.error}. The conversation is bound to "${target.to}", ${result.malformed ? 'which hydra cannot read as a target' : `which has no session record; check [specialists.${target.to}] in hydra.toml`}. They stay owed for up to a day.`, appOfEntry(entry))
         const cut = batch.map(i => i.ts).filter(ts => !entry.owed?.includes(ts))
         if (cut.length && this.entries.get(key) === entry) this.drop('owed-full', entry, cut, OWED_FULL_WHY)
         continue

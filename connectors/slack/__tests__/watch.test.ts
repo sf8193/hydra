@@ -1296,6 +1296,15 @@ target = "specialist:assistant"
     expect(s.alerts[0]).toContain('no such specialist: helper')
     expect(s.alertTo).toEqual([undefined]) // not to the missing specialist's thread: to every Slack specialist's
   })
+
+  test('a binding hydra cannot read (exit 8, malformed) is not called a missing specialist', async () => {
+    const s = setup({}, () => ({ ok: false, error: 'not a kind of target', exit: 8, malformed: true }))
+    s.w.handle(ev({ ts: '1.000001', text: mention }))
+    await s.w.flush()
+    expect(s.alerts).toHaveLength(1)
+    expect(s.alerts[0]).toContain('which hydra cannot read as a target')
+    expect(s.alerts[0]).not.toContain('no session record')
+  })
 })
 
 describe('the guard', () => {

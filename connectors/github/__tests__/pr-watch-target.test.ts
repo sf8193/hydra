@@ -172,6 +172,29 @@ describe('poll → target', () => {
     expect(entry()).toBeUndefined()
     expect(posted.some(t => t.includes('Stopped watching') && t.includes('no such specialist'))).toBe(true)
   })
+
+  test('a target hydra cannot read keeps the watch: the update stays owed for the next poll', async () => {
+    seed({ to: 'D0BE3RB4Y00:1792616731.235729' })
+    answer = { ok: false, exit: 8, reason: 'not a kind of target', malformed: true }
+    await _pollForTesting(entry()!)
+    await _pollForTesting(entry()!)
+    expect(entry()).toMatchObject({ lastReviewCommentId: 10 })
+    expect(posted.some(t => t.includes('Stopped watching'))).toBe(false)
+    expect(posted.filter(t => t.includes("Can't deliver updates") && t.includes('Still watching'))).toHaveLength(1)
+    unwatchPr(URL)
+    seed({ to: 'D0BE3RB4Y00:1792616731.235729' })
+    await _pollForTesting(entry()!)
+    expect(posted.filter(t => t.includes("Can't deliver updates"))).toHaveLength(2)
+  })
+
+  test('a retargeted watch is told again if its new target cannot be read either', async () => {
+    seed({ to: 'D0BE3RB4Y00:x', threadId: 'thread-w' })
+    answer = { ok: false, exit: 8, reason: 'not a kind of target', malformed: true }
+    await _pollForTesting(entry()!)
+    retargetWatches({ sessionId: 's-old', threadId: 'D0BE3RB4Y00:x' }, { sessionId: 's-new', threadId: 'thread-z' })
+    await _pollForTesting(entry()!)
+    expect(posted.filter(t => t.includes("Can't deliver updates"))).toHaveLength(2)
+  })
 })
 
 describe('the target outlives its sessions', () => {

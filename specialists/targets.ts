@@ -35,10 +35,10 @@ export type DeliverOutcome =
   /** `duplicate`: this idempotency key already landed; a sender counts it as sent (the CLI's exit 2). */
   | { ok: true; sessionName: string; threadId: string; revived: boolean; sessionId: string; status: 'delivered' | 'queued'; proof?: string; duplicate?: true; specialist?: string }
   /** 3 gone/refused, 4 orphaned, 5 not now (booting, busy, or stuck), 6 backing off or failed, 7 a delivery with this key
-   *  is still in flight, 8 no such specialist. `permanent`: this message can never be delivered (too large); drop it,
+   *  is still in flight, 8 no such specialist, or a target hydra cannot read (`malformed`). `permanent`: this message can never be delivered (too large); drop it,
    *  alert, never retry. */
   /** `atMax`: a per-conversation specialist already runs `max_sessions` sessions; this conversation waits its turn (exit 5). */
-  | { ok: false; exit: 3 | 4 | 5 | 6 | 7 | 8; reason: string; permanent?: true; atMax?: true }
+  | { ok: false; exit: 3 | 4 | 5 | 6 | 7 | 8; reason: string; permanent?: true; atMax?: true; malformed?: true }
 
 /** `lowPriority`: an engine where every delivery is a priced turn (Codex) may hold it for the next turn. `wanted`: a sender
  *  that can withdraw (a PR watch ended by a kill), asked under the thread's lock just before a revive; false is exit 3. */
@@ -52,9 +52,9 @@ export const targetDeps = { stuckState: confirmedStuckState }
  * `thread:<id>`. A caller inside hydra holds the stored form (`refOfBare`: a specialist's name, a thread id), which this also takes.
  * Anything else is unknown, with the reason (exit 8).
  */
-export function resolveTo(to: string): TargetRef | { kind: 'unknown'; reason: string } {
+export function resolveTo(to: string): TargetRef | { kind: 'unknown'; reason: string; malformed: boolean } {
   const r = readTarget(spelledTo(to), name => !!getSpecialist(name))
-  return r.ok ? r.ref : { kind: 'unknown', reason: r.error ?? `no such specialist: ${r.undeclared}` }
+  return r.ok ? r.ref : { kind: 'unknown', reason: r.error ?? `no such specialist: ${r.undeclared}`, malformed: r.error !== undefined }
 }
 
 /**
@@ -179,7 +179,7 @@ async function route(t: Target, text: string, opts: DeliverOpts): Promise<Delive
   switch (to.kind) {
     case 'main': return toMain(text, opts)
     case 'specialist': return toSpecialist(to.name, text, opts)
-    case 'unknown': return { ok: false, exit: 8, reason: to.reason }
+    case 'unknown': return { ok: false, exit: 8, reason: to.reason, ...(to.malformed && { malformed: true }) }
     case 'thread': return toThread(to.threadId, text, opts, !!t.revive)
   }
 }
