@@ -57,11 +57,16 @@ listens = ["slack:${channel}"]
 allow = ${allow}
 ${extra}`
 
-export function directory(names: Record<string, string> = {}): SlackDirectory {
-  return { nameOf: id => names[id], idOf: name => Object.entries(names).find(([, n]) => n === name)?.[0] }
+/** `dms`: who each DM channel is with (a Slack user id, or 'bot'); given, the directory knows DMs, as an app with the operator's user token does. `groupDms`: channels that are group DMs. */
+export function directory(names: Record<string, string> = {}, dms?: Record<string, string>, groupDms: string[] = []): SlackDirectory {
+  return {
+    nameOf: id => names[id], idOf: name => Object.entries(names).find(([, n]) => n === name)?.[0],
+    isGroupDm: c => groupDms.includes(c),
+    ...(dms && { otherPartyOf: (dm: string) => dms[dm] === undefined ? undefined : dms[dm] === 'bot' ? 'bot' as const : { user: dms[dm] } }),
+  }
 }
 
-export type ViewOver = Partial<Omit<SlackWatchConfig, 'hydra' | 'directory'>> & { toml?: string; names?: Record<string, string> }
-export function view(defaultToml: string, { toml, names, ...over }: ViewOver = {}): SlackWatchConfig {
-  return { hydra: hydra(toml ?? defaultToml), botUserId: BOT, workspaceUrl: 'https://x.slack.com', directory: directory(names), ...SLACK_LIMITS, coalesceMs: 5, ...over }
+export type ViewOver = Partial<Omit<SlackWatchConfig, 'hydra' | 'directory'>> & { toml?: string; names?: Record<string, string>; dms?: Record<string, string>; groupDms?: string[] }
+export function view(defaultToml: string, { toml, names, dms, groupDms, ...over }: ViewOver = {}): SlackWatchConfig {
+  return { hydra: hydra(toml ?? defaultToml), botUserId: BOT, workspaceUrl: 'https://x.slack.com', directory: directory(names, dms, groupDms), ...SLACK_LIMITS, coalesceMs: 5, ...over }
 }

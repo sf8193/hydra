@@ -18,7 +18,7 @@
         "appTokenEnv": "SALES_SLACK_APP_TOKEN",
         "userTokenEnv": "SALES_SLACK_USER_TOKEN",
         "displayName": "Sales helper",
-        "description": "Answers the Slack threads it is tagged in, and its DMs, using Claude. It can also read threads its installer can see."
+        "description": "Answers the Slack threads it is tagged in, and its DMs, using Claude. It can also read the threads, DMs and group DMs its installer can see."
       }
     },
     "people": {

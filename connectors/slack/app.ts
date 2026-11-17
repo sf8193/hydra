@@ -17,16 +17,20 @@ export const SLACK_APP_NEEDS = {
     senderNames: { option: 'sender names', any: ['users:read'] },
     dms: { option: 'dms', any: ['im:history'] },
     dmCatchUp: { option: 'catching up DMs opened while disconnected', any: ['im:read'] },
+    groupDms: { option: 'group dms (slack:group-dm)', any: ['mpim:history'] },
     files: { option: 'files', any: ['files:read'] },
     reactions: { option: 'ack and 🚫 reactions', any: ['reactions:write'] },
     replies: { option: 'replies', any: ['chat:write'] },
   } as const satisfies Record<string, ScopeNeed>,
-  /** With `operator_token_env`: reading threads in channels the bot isn't in. Never a write scope, never DMs. */
-  userScopes: ['channels:history', 'groups:history'],
+  /**
+   * With `operator_token_env`: hearing every channel, DM and group DM the operator is in, and reading threads in channels the bot isn't in;
+   * `im:read` lists the operator's DMs, which is how a DM with a person gets its place (the bot's own DM comes from the bot's list). Never a write scope.
+   */
+  userScopes: ['channels:history', 'groups:history', 'im:history', 'mpim:history', 'im:read'],
   /** `renames` are the events the listener subscribes to by name; messages arrive through Bolt's message handler. */
-  botEvents: { messages: ['message.channels', 'message.groups', 'message.im'], renames: ['channel_rename', 'group_rename'] },
+  botEvents: { messages: ['message.channels', 'message.groups', 'message.im', 'message.mpim'], renames: ['channel_rename', 'group_rename'] },
   /** With `operator_token_env`. */
-  userEvents: ['message.channels', 'message.groups'],
+  userEvents: ['message.channels', 'message.groups', 'message.im', 'message.mpim'],
   /**
    * Only when hydra.toml declares several apps: which of them are in a channel, so exactly one answers a message they all hear.
    * `public` is read for every public channel, `private` for private ones (asked only when a `slack:G…` place is named); each is a
@@ -47,7 +51,7 @@ export const SLACK_APP_NEEDS = {
 export const SLACK_APP_DEFAULTS = {
   name: 'hydra',
   description: 'Answers the Slack threads it is tagged in, and its DMs, using Claude.',
-  operatorTokenNote: ' It can also read threads its installer can see.',
+  operatorTokenNote: ' It can also read the threads, DMs and group DMs its installer can see.',
 } as const
 
 /**

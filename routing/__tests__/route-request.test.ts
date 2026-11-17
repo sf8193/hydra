@@ -81,3 +81,29 @@ describe('hydra route --app', () => {
     expect(ROUTE_USAGE).toContain('[--app <app>]')
   })
 })
+
+describe('hydra route --place slack:dm:<person>', () => {
+  const o = loadHydraConfig(`
+operator = "op"
+[connectors.slack]
+bot_token_env = "BOT"
+[people.op]
+ids = ["slack:U0OP"]
+[people.alice]
+ids = ["slack:U0ALICE"]
+[specialists.assistant]
+workdir = "/a/asst"
+listens = ["slack:dm"]
+allow = ["anyone"]
+[specialists.alices]
+workdir = "/a/alices"
+listens = ["slack:dm:alice"]
+allow = ["anyone"]
+`, env)
+  if (!o.ok) throw new Error(JSON.stringify(o.errors))
+  const ask = (place: string) => routeFor(o.config, { person: 'alice', place }, p => [p])
+  test('simulates a DM with Alice with no new flag: the place says whose DM it is', () => {
+    expect(ask('slack:dm:alice')).toMatchObject({ ok: true, fate: 'deliver', to: 'alices' })
+    expect(ask('slack:dm')).toMatchObject({ ok: true, fate: 'deliver', to: 'assistant' })
+  })
+})

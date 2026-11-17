@@ -461,3 +461,46 @@ test('explain shows the app, who owns the message, and a non-owner standing down
   expect(other).toContain('app: sales (does not own it: default does)')
   expect(other.split('\n').at(-1)).toBe('ignored: default owns this message, so sales does not answer')
 })
+
+describe('DM places: one name, one meaning', () => {
+  const DMS = load(`
+operator = "op"
+[connectors.slack]
+bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"
+[people.op]
+ids = ["slack:U0OP"]
+[people.alice]
+ids = ["slack:U0ALICE"]
+[specialists.assistant]
+workdir = "/a/asst"
+listens = ["slack:dm"]
+allow = ["anyone"]
+[specialists.alices]
+workdir = "/a/alices"
+listens = ["slack:dm:alice"]
+allow = ["anyone"]
+[specialists.huddle]
+workdir = "/a/huddle"
+listens = ["slack:group-dm"]
+allow = ["anyone"]
+`)
+  test('slack:dm is the bot\'s DM; a DM with alice is slack:dm:alice, which slack:dm\'s listener never hears', () => {
+    expect(route(DMS, msg('slack:U0ALICE', ['slack:dm']))).toMatchObject({ fate: 'deliver', to: 'assistant' })
+    expect(route(DMS, msg('slack:U0ALICE', ['slack:dm:alice']))).toMatchObject({ fate: 'deliver', to: 'alices' })
+    expect(route(DMS, msg('slack:U0ALICE', ['slack:dm:bob'])).fate).toBe('unrouted')
+  })
+  test("the operator's DM goes to main only for the bot's DM", () => {
+    const bare = load('operator = "op"\n[people.op]\naddresses = ["slack:U0OP"]\n[people.alice]\naddresses = ["slack:U0ALICE"]\n')
+    expect(route(bare, msg('slack:U0OP', ['slack:dm']))).toMatchObject({ fate: 'deliver', to: 'main', via: 'operator-dm' })
+    expect(route(bare, msg('slack:U0OP', ['slack:dm:alice'])).fate).toBe('unrouted')
+    expect(route(bare, msg('slack:U0OP', ['slack:G0GROUP1', 'slack:group-dm'])).fate).toBe('unrouted')
+  })
+  test('a person whose id is dm does not turn slack:dm:dm into the bot\'s DM', () => {
+    const odd = load('operator = "op"\n[people.op]\naddresses = ["slack:U0OP"]\n[people.dm]\naddresses = ["slack:U0DM"]\n')
+    expect(route(odd, msg('slack:U0OP', ['slack:dm:dm'])).fate).toBe('unrouted')
+    expect(route(odd, msg('slack:U0OP', ['slack:dm']))).toMatchObject({ fate: 'deliver', to: 'main', via: 'operator-dm' })
+  })
+  test('a group DM goes by its id, then slack:group-dm', () => {
+    expect(route(DMS, msg('slack:U0ALICE', ['slack:G0GROUP1', 'slack:group-dm']))).toMatchObject({ fate: 'deliver', to: 'huddle' })
+  })
+})

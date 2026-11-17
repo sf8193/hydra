@@ -18,7 +18,7 @@ import { mainChannel } from '../../daemon/main-session.js'
 import { currentHydraConfig, onHydraConfigLoad } from '../../daemon/hydra-config.js'
 import { MAIN, currentId, isSessionThread, slackSpecialistsOf } from '../../routing/route.js'
 import { chunk } from '../../daemon/util.js'
-import { DEFAULT_SLACK_APP, slackConfigured, type HydraConfig, type SlackApp } from '../../config/types.js'
+import { DEFAULT_SLACK_APP, namesAChannel, slackConfigured, type HydraConfig, type SlackApp } from '../../config/types.js'
 import { speaksAsOf, noSuchApp } from '../../config/pins.js'
 import { notServedBy } from '../../routing/route.js'
 import { NO_SLACK_APP, notConnected } from './app.js'
@@ -495,7 +495,7 @@ export function slackConversationLink(conversation: string): string | undefined 
 /** A specialist's `home`, when it names a Slack place: that channel's id (a `#name` resolved once names are read, through the app it speaks as). */
 function homeChannel(h: HydraConfig, id: string, app?: string): string | undefined {
   const home = h.specialists[id]?.home
-  if (!home?.startsWith('slack:') || home === 'slack:dm') return undefined
+  if (!home?.startsWith('slack:') || !namesAChannel(home)) return undefined
   const rest = home.slice('slack:'.length)
   return rest.startsWith('#') ? offlineView(app).directory.idOf(rest.slice(1)) : rest
 }
@@ -563,7 +563,7 @@ export function operatorUnbind(conversation: string): string {
 /** The live session in a thread, by name. */
 const sessionNameIn = (threadId: string): string | undefined => [...registry.values()].find(s => s.threadId === threadId && s.deadAt === undefined)?.tmuxName
 
-const line = (v: Pick<SlackWatchConfig, 'directory'>, e: SlackWatchEntry, now: number): string => {
+const line = (v: Pick<SlackWatchConfig, 'hydra' | 'directory'>, e: SlackWatchEntry, now: number): string => {
   const idle = Math.max(0, Math.round((now - e.lastEventAt) / 3_600_000))
   const owed = e.owed?.length ? ` · ${e.owed.length} owed` : ''
   const via = e.via === 'user' ? ' · read as the operator' : ''

@@ -5,8 +5,8 @@ import { catchUp, toEvent, type CatchUpResult, type Page, type RawMessage, type 
 import { mkdirSync, openSync, writeSync, closeSync, renameSync, rmSync } from 'fs'
 import { dirname } from 'path'
 import { linkPreviewsOff } from '../../shared/link-previews.js'
-import { routedChannels, hearsDms, dmsDeclared, namedChannels, unresolvedPlaces, isDm, mentionedApps, NOT_A_MEMBER, OPERATOR_TOKEN_REFUSED, NO_DIRECTORY, SLACK_LIMITS, type AppWatch, type SlackDirectory, type SlackWatchConfig, type SlackWatcher } from './watch.js'
-import { DEFAULT_SLACK_APP, type HydraConfig, type SlackApp } from '../../config/types.js'
+import { routedChannels, hearsDms, dmsDeclared, namedChannels, unresolvedPlaces, isDm, mentionedApps, NOT_A_MEMBER, OPERATOR_TOKEN_REFUSED, NO_DIRECTORY, SLACK_LIMITS, type AppWatch, type DmOtherParty, type SlackDirectory, type SlackWatchConfig, type SlackWatcher } from './watch.js'
+import { DEFAULT_SLACK_APP, SLACK_DM, SLACK_GROUP_DM, type HydraConfig, type SlackApp } from '../../config/types.js'
 import { reachableBy } from '../../routing/route.js'
 import { SLACK_APP_NEEDS, NO_SLACK_APP, appKey, appSuffix, type ScopeNeed } from './app.js'
 import { ConnectedApps } from './apps.js'
@@ -77,6 +77,9 @@ export const POST_TIMEOUT_MS = 30_000
 export const CATCH_UP_INTERVAL_MS = 10 * 60_000
 export const CATCH_UP_RETRY_MS = 60_000
 export const ALERT_CHECK_MS = 60_000
+/** After a failed read of the bot's DM list, how long before the next: one read per window, however many DMs wait. */
+export const DM_LIST_BACKOFF_MS = 60_000
+
 export const DOWN_ALERT_AFTER_MS = 5 * 60_000
 export const CATCH_UP_STALE_AFTER_MS = CATCH_UP_INTERVAL_MS * 2.5
 const MISSED_LIVE_ALERT_EVERY_MS = 60 * 60_000
@@ -130,13 +133,15 @@ export function scopesNeeded(h: HydraConfig, app: string = DEFAULT_SLACK_APP): S
   const dms = hearsDms({ hydra: h, app })
   const everyPlace = r.rules.some(x => x.place === undefined)
   const channels = places.length > 0 || everyPlace || r.specialists.some(sp => sp.listens.length === 0)
-  const slackOpts = Object.entries(h.places).filter(([p]) => p.startsWith('slack:') && (everyPlace || places.includes(p) || (p === 'slack:dm' && dms))).map(([, o]) => o)
+  const groupDms = r.specialists.some(sp => sp.listens.includes(SLACK_GROUP_DM)) || r.rules.some(x => x.place === SLACK_GROUP_DM)
+  const slackOpts = Object.entries(h.places).filter(([p]) => p.startsWith('slack:') && (everyPlace || places.includes(p) || (p === SLACK_DM && dms) || (p === SLACK_GROUP_DM && groupDms))).map(([, o]) => o)
   const s = SLACK_APP_NEEDS.botScopes
   return [
     ...(channels ? [s.channels] : []),
     ...(places.some(p => p.startsWith('slack:#')) ? [s.channelNames] : []),
     s.senderNames,
     ...(dms ? [s.dms, s.dmCatchUp] : []),
+    ...(groupDms ? [s.groupDms] : []),
     ...(slackOpts.some(o => o.files) ? [s.files] : []),
     s.reactions,
     s.replies,
@@ -217,6 +222,50 @@ export type ListenerDeps = {
   fetch?: (url: string, init: { signal: AbortSignal }) => Promise<{ ok: boolean }>
 }
 
+/**
+ * One list of the operator's DMs, read one read at a time and shared by every DM waiting on it. `settle` answers whether a channel is on it:
+ * 'known' (it is), 'absent' (it is not, on a read that began after the channel's message arrived: final), or 'unknown' (a read failed or
+ * is backing off). A channel missing from a read that began before its message arrived (a DM opened while that read was in flight) is read
+ * for again once, so a brand-new DM is never left nameless. A failed read is not tried again for `DM_LIST_BACKOFF_MS`.
+ */
+class DmList {
+  private listing: { done: Promise<boolean>; startedAt: number } | null = null
+  private failedAt = -Infinity
+  private loggedAt = -Infinity
+  constructor(private readonly now: () => number, private readonly fetch: () => Promise<void>, private readonly onFail: (err: string) => void) {}
+
+  /** Read the list now, or join the read in flight. False when it failed or is backing off. */
+  read(): Promise<boolean> { return this.start()?.done ?? Promise.resolve(false) }
+
+  private start(): { done: Promise<boolean>; startedAt: number } | null {
+    if (this.now() - this.failedAt < DM_LIST_BACKOFF_MS) return null
+    this.listing ??= (() => {
+      const startedAt = this.now()
+      const done = (async () => {
+        try { await this.fetch(); return true } catch (err) {
+          this.failedAt = this.now()
+          // Said once an hour: the cause (a missing scope) does not change between messages.
+          if (this.now() - this.loggedAt >= 60 * 60_000) { this.loggedAt = this.now(); this.onFail(err instanceof Error ? err.message : String(err)) }
+          return false
+        } finally { this.listing = null }
+      })()
+      return { done, startedAt }
+    })()
+    return this.listing
+  }
+
+  async settle(channel: string, arrivedAt: number, isKnown: () => boolean): Promise<'known' | 'absent' | 'unknown'> {
+    for (let reads = 0; reads < 2; reads++) {
+      if (isKnown()) return 'known'
+      const read = this.start()
+      if (!read || !await read.done) return 'unknown'
+      if (isKnown()) return 'known'
+      if (read.startedAt >= arrivedAt) return 'absent'
+    }
+    return 'unknown'
+  }
+}
+
 export class SlackListener {
   private readonly now: () => number
   private readonly resumes: Pick<ResumeDetector, 'awakeSince' | 'suspendedSince'>
@@ -253,6 +302,15 @@ export class SlackListener {
   private readonly w: AppWatch
   /** Per channel, the events waiting for who is in it to be read, in the order they came: none is handled ahead of one before it. A channel with nothing waiting never queues. */
   private readonly queues = new Map<string, Promise<void>>()
+  /** With the operator's user token: the bot's own DM channels (from the bot's list, or the bot posting in one), and who is on the other end of the rest (a DM's two ends never change, so an answer is final). */
+  private readonly botDms = new Set<string>()
+  private readonly otherParties = new Map<string, string>()
+  /** DM channels on neither list, read after their message arrived: they go by no name. */
+  private readonly absentDms = new Set<string>()
+  private botDmList!: DmList
+  private userDmList!: DmList
+  /** Channels an event called a group DM (`channel_type` mpim): their id looks like a channel's. */
+  private readonly groupDms = new Set<string>()
 
   constructor(private readonly d: ListenerDeps) {
     this.now = d.now ?? Date.now
@@ -260,6 +318,12 @@ export class SlackListener {
     this.id = d.app ?? DEFAULT_SLACK_APP
     this.apps = d.apps ?? new ConnectedApps({ now: this.now, log: d.log, alert: t => d.alert(t) })
     this.w = d.watcher.forApp(this.id)
+    const absorb = (list: { channel: string; user?: string }[]) => {
+      const bot = this.identity?.botUserId
+      for (const x of list) if (x.user) { if (x.user === bot) this.botDms.add(x.channel); else this.otherParties.set(x.channel, x.user) }
+    }
+    this.botDmList = new DmList(this.now, async () => (await this.app?.api.dms?.() ?? []).forEach(x => this.botDms.add(x.channel)), err => this.d.log(`daemon: slack connector: listing the bot's DMs failed, so a DM with the bot is not known (tried again in ${DM_LIST_BACKOFF_MS / 1000}s): ${err}\n`))
+    this.userDmList = new DmList(this.now, async () => absorb(await this.app?.api.otherParties?.() ?? []), err => this.d.log(`daemon: slack connector: listing the operator's DMs failed (it needs im:read on the user token), so a DM with a person names no place and is dropped until it works (tried again in ${DM_LIST_BACKOFF_MS / 1000}s): ${err}\n`))
     const mine = new Map<string, string>()
     this.told = d.told ?? { get: app => mine.get(app), set: (app, key) => { if (key === null) mine.delete(app); else mine.set(app, key) } }
   }
@@ -284,7 +348,7 @@ export class SlackListener {
       connected: () => this.apps.connectedApps(),
       // With one app connected there is nothing to tell apart, and nothing to remember.
       ...(this.apps.several() && { decideOwner: (channel: string, ts: string, decide: () => string) => this.apps.decideOwner(channel, ts, decide) }),
-      directory: this.directoryRead ? this.directory : NO_DIRECTORY, ...SLACK_LIMITS,
+      directory: this.directoryView(), ...SLACK_LIMITS,
     }
   }
 
@@ -435,6 +499,8 @@ export class SlackListener {
     this.apps.join(this.id, { botUserId: this.identity.botUserId, ...(this.identity.botId && { botId: this.identity.botId }) }, channel => app.isMember ? app.isMember(channel) : Promise.reject(new Error('this Slack client cannot read channel membership')))
     await this.refreshDirectory(app)
     await stale(app)
+    // With the operator's token, whose each DM is: known before the first event and the first catch-up read.
+    if (this.hasOperatorToken()) { await Promise.all([this.botDmList.read(), this.userDmList.read()]); await stale(app) }
     // Hold every cursor before the socket opens: a live message must not move a cursor past the downtime gap the
     // catch-up pass that follows has yet to read. Each pass releases what it reads.
     const view = this.view()
@@ -469,10 +535,15 @@ export class SlackListener {
       const channel = raw.channel
       if (!channel) return
       const tagged = this.taggedElsewhere(raw.text)
-      if (!this.queues.has(channel) && (isDm(channel) || this.apps.settled(channel, this.id, tagged))) { this.ingest(raw); return }
+      const arrivedAt = this.now()
+      // A DM or a group DM is this app's alone: no other app's membership decides it. With the operator's token, a DM
+      // not yet known to be the bot's waits (briefly) to learn whose it is.
+      const chat = isDm(channel) || raw.channel_type === 'mpim'
+      if (!this.queues.has(channel) && !this.unknownDm(channel) && (chat || this.apps.settled(channel, this.id, tagged))) { this.ingest(raw); return }
       const behind = this.queues.get(channel) ?? Promise.resolve()
       const next: Promise<void> = behind.then(async () => {
-        await this.knowMembers([channel], tagged)
+        if (this.unknownDm(channel)) await this.learnDm(channel, arrivedAt)
+        await this.knowMembers(chat ? [] : [channel], tagged)
         this.ingestOrHold(raw, channel)
       }).catch(err => {
         this.d.log(`daemon: slack connector: handling a message failed: ${err instanceof Error ? err.stack ?? err.message : err}\n`)
@@ -498,11 +569,54 @@ export class SlackListener {
     this.ingest(raw)
   }
 
+  /** Whether this app hears DMs between the operator and others: it has the operator's user token. Only then does a DM's other party need asking. */
+  private hasOperatorToken(): boolean { return !!this.declared()?.operatorTokenEnv }
+
+  /** A DM that is not known to be the bot's, nor to be with a named other party, nor found on neither list: its message waits (briefly) to learn whose it is. */
+  private unknownDm(channel: string): boolean {
+    return this.hasOperatorToken() && isDm(channel) && !this.botDms.has(channel) && !this.otherParties.has(channel) && !this.absentDms.has(channel)
+  }
+
+  /**
+   * Whose a DM is, from two lists that answer two questions. The BOT token's list (`users.conversations`, which has only the bot's own
+   * DMs, scope `im:read` on the bot) says whether it is the bot's: that DM is `slack:dm`. For one that is not, the USER token's list
+   * (scope `im:read` on the user token) says who is on the other end, which is how `slack:dm:<person>` is found. An app without that user
+   * scope loses only the second: the bot's DM still works, and a DM with a person goes by no name. Each list is read one read at a time
+   * (see `DmList`); a DM on neither, after a read that began after its message arrived, goes by no name for good.
+   */
+  private async learnDm(channel: string, arrivedAt: number): Promise<void> {
+    if (await this.botDmList.settle(channel, arrivedAt, () => this.botDms.has(channel)) === 'known') return
+    const found = await this.userDmList.settle(channel, arrivedAt, () => this.botDms.has(channel) || this.otherParties.has(channel))
+    if (found === 'absent') this.absentDms.add(channel)
+  }
+
+  /** The directory this app routes with: channel names, and (with the operator's token) whose each DM is and which channels are group DMs. */
+  private directoryView(): SlackDirectory {
+    const base = this.directoryRead ? this.directory : NO_DIRECTORY
+    return {
+      nameOf: id => base.nameOf(id),
+      idOf: name => base.idOf(name),
+      isGroupDm: channel => this.groupDms.has(channel),
+      ...(this.hasOperatorToken() && { otherPartyOf: (dm: string): DmOtherParty | undefined => this.botDms.has(dm) ? 'bot' : this.otherParties.has(dm) ? { user: this.otherParties.get(dm)! } : undefined }),
+    }
+  }
+
+  /** Catch-up's reads. The bot's own DM list is the bot's DMs, so each is known to be the bot's. */
+  private catchUpApi(): SlackApi {
+    const api = this.app!.api
+    const dms = api.dms
+    return dms ? { ...api, dms: async () => { const list = await dms.call(api); for (const d of list) this.botDms.add(d.channel); return list } } : api
+  }
+
   private ingest(raw: RawEvent): void {
     try {
       if (!raw.channel) return
       const ev = toEvent(raw.channel, raw)
-      if (ev) this.w.handle(ev)
+      if (!ev) return
+      // The bot posting in a DM proves it is the bot's; the event says when a channel is a group DM.
+      if (isDm(raw.channel) && this.identity && (raw.user === this.identity.botUserId || (!!raw.bot_id && raw.bot_id === this.identity.botId))) this.botDms.add(raw.channel)
+      if (raw.channel_type === 'mpim') this.groupDms.add(raw.channel)
+      this.w.handle(ev)
     } catch (err) {
       this.d.log(`daemon: slack connector: handling a message failed: ${err instanceof Error ? err.stack ?? err.message : err}\n`)
     }
@@ -563,7 +677,7 @@ export class SlackListener {
       await this.refreshDirectory(this.app)
       // Which apps are in each channel this pass will read, known before it hands a message to routing.
       await this.knowMembers([...routedChannels(this.view()), ...this.w.list().map(e => e.channel)])
-      result = await catchUp(this.w, this.app.api, this.view()!, { deep, now: this.now, log: this.d.log })
+      result = await catchUp(this.w, this.catchUpApi(), this.view()!, { deep, now: this.now, log: this.d.log })
       this.lastCatchUp = { at: this.now(), result }
       // What this pass found was posted after the last complete pass started. Only a complete pass moves that mark:
       // an incomplete one may have left a channel unread.
@@ -764,6 +878,17 @@ export function boltApp(tokens: { app: string; bot: string; user?: string }): Sl
         }
         return out
       },
+      ...(tokens.user && { otherParties: async () => {
+        const out: { channel: string; user?: string }[] = []
+        let cursor: string | undefined
+        for (let i = 0; i < 25; i++) {
+          const r = await client.users.conversations({ token: tokens.user, types: 'im', limit: 200, ...(cursor && { cursor }) }).catch(e => { throw explainSlackError(e) })
+          for (const c of (r.channels ?? []) as { id?: string; user?: string }[]) if (c.id) out.push({ channel: c.id, ...(c.user && { user: c.user }) })
+          cursor = r.response_metadata?.next_cursor || undefined
+          if (!cursor) break
+        }
+        return out
+      } }),
       replies: a => readReplies(token => client.conversations.replies({ token, channel: a.channel, ts: a.ts, oldest: a.oldest, inclusive: a.inclusive, limit: a.limit ?? 200, ...(a.cursor && { cursor: a.cursor }) })
         .then(page, e => { throw explainSlackError(e) }), tokens),
     },

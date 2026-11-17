@@ -43,7 +43,7 @@ describe('slackManifest', () => {
     const bot = manifestOf(BASE)
     expect(bot.oauth_config.scopes.user).toBeUndefined()
     expect(bot.settings.event_subscriptions.user_events).toBeUndefined()
-    expect(bot.settings.event_subscriptions.bot_events).toEqual(['message.channels', 'message.groups', 'message.im', 'channel_rename', 'group_rename'])
+    expect(bot.settings.event_subscriptions.bot_events).toEqual(['message.channels', 'message.groups', 'message.im', 'message.mpim', 'channel_rename', 'group_rename'])
     const user = manifestOf(withSlack('operator_token_env = "HYDRA_SLACK_USER_TOKEN"'))
     // The default description tells coworkers the app can read as its installer.
     expect(user.display_information.description).toBe(SLACK_APP_DEFAULTS.description + SLACK_APP_DEFAULTS.operatorTokenNote)
@@ -52,12 +52,47 @@ describe('slackManifest', () => {
   })
 
   test('the bot scopes are exactly the ones the startup scope check asks for, with every option on', () => {
-    // Channels by name, DMs (the operator has a slack: address) and files: every option scopesNeeded knows.
-    const h = hydra(oneListener('#food', 'helper', '["anyone"]', '[places."slack:#food"]\nfiles = true\n'))
+    // Channels by name, DMs (the operator has a slack: address), group DMs and files: every option scopesNeeded knows.
+    const h = hydra(oneListener('#food', 'helper', '["anyone"]', '[places."slack:#food"]\nfiles = true\n').replace('listens = ["slack:#food"]', 'listens = ["slack:#food", "slack:group-dm"]'))
     const checked = scopesNeeded(h)
     expect(checked).toEqual(Object.values(SLACK_APP_NEEDS.botScopes))
     const manifest = Bun.YAML.parse(slackManifest(h.slackApps.default)) as Manifest
     expect(manifest.oauth_config.scopes.bot).toEqual([...new Set(checked.flatMap(n => n.any))])
+  })
+})
+
+describe('DMs and group DMs: one list', () => {
+  // Every message event needs the history scope of its kind: message.channels → channels:history, message.im → im:history, and so on.
+  const historyOf = (event: string) => `${event.replace('message.', '')}:history`
+  const everyOption = () => hydra(oneListener('#food').replace('listens = ["slack:#food"]', 'listens = ["slack:#food", "slack:dm", "slack:group-dm"]').replace('socket_token_env = "SLOPBOT_SLACK_APP_TOKEN"', 'socket_token_env = "SLOPBOT_SLACK_APP_TOKEN"\noperator_token_env = "HYDRA_SLACK_USER_TOKEN"'))
+
+  test('the manifest, the events and the startup scope check all follow SLACK_APP_NEEDS, and every message event has its history scope', () => {
+    const h = everyOption()
+    const m = Bun.YAML.parse(slackManifest(h.slackApps.default)) as Manifest
+    const needs = SLACK_APP_NEEDS
+    expect(m.oauth_config.scopes.user).toEqual([...needs.userScopes])
+    expect(m.settings.event_subscriptions.user_events).toEqual([...needs.userEvents])
+    expect(m.settings.event_subscriptions.bot_events).toEqual(expect.arrayContaining([...needs.botEvents.messages, ...needs.botEvents.renames]))
+    // The user token hears what the user events say, so it holds the history scope of each.
+    for (const e of needs.userEvents) expect([...needs.userScopes] as string[]).toContain(historyOf(e))
+    // The bot hears what the bot events say: the scope check asks for the history scope of each, and the manifest grants it.
+    const checked = scopesNeeded(h).flatMap(n => n.any)
+    for (const e of needs.botEvents.messages) {
+      expect(checked).toContain(historyOf(e))
+      expect(m.oauth_config.scopes.bot).toContain(historyOf(e))
+    }
+  })
+
+  test('the operator\'s app subscribes to DMs and group DMs, as the operator and as the bot, and lists the operator\'s DMs', () => {
+    expect(SLACK_APP_NEEDS.userScopes).toEqual(expect.arrayContaining(['im:history', 'mpim:history', 'im:read']))
+    expect(SLACK_APP_NEEDS.userEvents).toEqual(expect.arrayContaining(['message.im', 'message.mpim']))
+    expect(SLACK_APP_NEEDS.botEvents.messages).toEqual(expect.arrayContaining(['message.im', 'message.mpim']))
+    expect(SLACK_APP_NEEDS.botScopes.groupDms.any).toEqual(['mpim:history'])
+  })
+
+  test('mpim:history is asked for only where slack:group-dm is named', () => {
+    expect(scopesNeeded(hydra(oneListener('#food'))).flatMap(n => n.any)).not.toContain('mpim:history')
+    expect(scopesNeeded(everyOption()).flatMap(n => n.any)).toContain('mpim:history')
   })
 })
 
