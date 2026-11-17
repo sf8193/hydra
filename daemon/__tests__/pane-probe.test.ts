@@ -129,6 +129,18 @@ const USAGE_LIMIT_TAIL = `❯ /rate-limit-options
 
   Enter to confirm · Esc to cancel`
 
+const SPEND_LIMIT_TAIL = `  ⎿  You've hit your individual spend limit · run /usage-credits to ask your admin for a higher limit     │
+                                                                                                        │
+✻ Worked for 11m 29s · done 5:06 PM                                                                     │
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+   What do you want to do?
+
+   ❯ 1. Stop and wait for limit to reset
+     2. Wait here, then continue automatically at Nov 30 at 4pm
+     3. You've already sent a usage credit request to your admin.
+
+   Enter to confirm · Esc to cancel`
+
 const RESUME_WITH_LOGIN_EXPIRED = `● Login expired · Please run /login
 
 ✱ Churned for 0s
@@ -257,7 +269,7 @@ function makeTestIO(): PaneProbeIO {
 // Records carry an adapter, as in production (SessionInfo.adapter is required).
 const claudeAdapter = { channel: 'bridge', detectBlockingState: (_i: unknown, tail: string) => detectBlockingState(tail) } as any
 const codexAdapter = { channel: 'engine', detectBlockingState: () => null } as any
-function addSession(sessionId: string, opts: { tmuxName: string; threadId: string; deadAt?: number; engine?: string }) {
+function addSession(sessionId: string, opts: { tmuxName: string; threadId: string; deadAt?: number; engine?: string; threadUrl?: string }) {
   const adapter = opts.engine === 'codex' ? codexAdapter : claudeAdapter
   registryEntries.set(sessionId, { sessionId, ...opts, adapter, createdAt: T0, lastActive: T0, listening: true })
 }
@@ -351,6 +363,10 @@ describe('detectBlockingState (pure)', () => {
     expect(detectBlockingState('  ❯ 1. Stop and wait for limit to reset\nsomething else')).toBeNull()
   })
 
+  it('detects the spend-limit dialog, whose options differ from the plan-limit one', () => {
+    expect(detectBlockingState(SPEND_LIMIT_TAIL)?.kind).toBe('usage_limit')
+  })
+
   it('flags any other CC selection dialog as unknown_dialog', () => {
     const tail = `Allow access to ~/secrets?\n❯ 1. Yes\n  2. No\n\nEnter to confirm · Esc to cancel`
     expect(detectBlockingState(tail)?.kind).toBe('unknown_dialog')
@@ -412,6 +428,7 @@ describe('probeAllSessions', () => {
     windowActivity.clear()
     keysSent.length = 0
     fileContents.clear()
+    transportMessages.length = 0
     _setIO(makeTestIO())
   })
 
@@ -819,6 +836,7 @@ describe('probeAllSessions', () => {
       await flush()
 
       expect(keysSent.find(k => k.tmuxName === 'discord-byte' && k.keys === 'Escape')).not.toBeUndefined()
+      expect(sentMessages.filter(m => m.channelId === 'root-channel-123')).toHaveLength(1)
       const msg = sentMessages.find(m => m.channelId === 'root-channel-123')
       expect(msg?.text).toContain('usage-limit dialog')
       expect(msg?.text).toContain('dismissed')
@@ -826,6 +844,110 @@ describe('probeAllSessions', () => {
     } finally {
       if (origEnv !== undefined) process.env.HYDRA_AUTO_LOGIN = origEnv
     }
+  })
+
+  const homePosts = () => sentMessages.filter(m => m.channelId === 'root-channel-123')
+  const usageEpisode = async (tmuxName: string, tail: string, t: number) => {
+    const idle = (at: number) => windowActivity.set(tmuxName, Math.floor(at / 1000) - 60)
+    paneTails.set(tmuxName, tail)
+    idle(t); await probeAllSessions(t)
+    idle(t + 60_000); await probeAllSessions(t + 60_000)
+    await flush()
+    paneTails.set(tmuxName, 'idle at a prompt')
+    idle(t + 120_000); await probeAllSessions(t + 120_000)
+  }
+
+  it('alerts home once per spend-limit reset and day when a spawned session hits it', async () => {
+    addSession('s-dusk', { tmuxName: 'dusk', threadId: 'thread-dusk' })
+
+    await usageEpisode('dusk', SPEND_LIMIT_TAIL, T0)
+    expect(keysSent.filter(k => k.tmuxName === 'dusk' && k.keys === 'Escape')).toHaveLength(1)
+    expect(sentMessages.find(m => m.channelId === 'thread-dusk')?.text).toContain('hit your individual spend limit (resets Nov 30 at 4pm)')
+    expect(homePosts()).toHaveLength(1)
+    expect(homePosts()[0].text).toContain('**dusk** hit your individual spend limit (resets Nov 30 at 4pm)')
+    expect(homePosts()[0].text).toContain('say "continue" in its thread.')
+    expect(transportMessages.filter(m => m.sessionId === 's-dusk')).toHaveLength(0)
+
+    await usageEpisode('dusk', SPEND_LIMIT_TAIL, T0 + 30 * 60_000)
+    expect(keysSent.filter(k => k.tmuxName === 'dusk' && k.keys === 'Escape')).toHaveLength(2)
+    expect(homePosts()).toHaveLength(1)
+
+    await usageEpisode('dusk', SPEND_LIMIT_TAIL.replace('Nov 30 at 4pm', 'Dec 1 at 9am'), T0 + 60 * 60_000)
+    expect(homePosts()).toHaveLength(2)
+    expect(homePosts()[1].text).toContain('(resets Dec 1 at 9am)')
+
+    await usageEpisode('dusk', SPEND_LIMIT_TAIL.replace('Nov 30 at 4pm', 'Dec 1 at 9am'), T0 + 23 * 60 * 60_000)
+    expect(homePosts()).toHaveLength(2)
+    await usageEpisode('dusk', SPEND_LIMIT_TAIL.replace('Nov 30 at 4pm', 'Dec 1 at 9am'), T0 + 25 * 60 * 60_000)
+    expect(homePosts()).toHaveLength(3)
+  })
+
+  it('alerts home again for a new thread\'s session that reuses an old name', async () => {
+    addSession('s-dusk', { tmuxName: 'dusk', threadId: 'thread-dusk' })
+    await usageEpisode('dusk', SPEND_LIMIT_TAIL, T0)
+    registryEntries.clear()
+    addSession('s-dusk-2', { tmuxName: 'dusk', threadId: 'thread-dusk-2' })
+    await usageEpisode('dusk', SPEND_LIMIT_TAIL, T0 + 30 * 60_000)
+    expect(homePosts()).toHaveLength(2)
+  })
+
+  it('reads the reset time from a dialog row drawn with a right border', async () => {
+    addSession('s-dusk', { tmuxName: 'dusk', threadId: 'thread-dusk' })
+    await usageEpisode('dusk', SPEND_LIMIT_TAIL.replace('Nov 30 at 4pm', 'Nov 30 at 4pm     │'), T0)
+    expect(homePosts()[0]?.text).toContain('(resets Nov 30 at 4pm).')
+  })
+
+  it('alerts home for each session sharing a thread', async () => {
+    addSession('s-owner', { tmuxName: 'dusk', threadId: 'thread-shared' })
+    addSession('s-guest', { tmuxName: 'jade', threadId: 'thread-shared' })
+    await usageEpisode('dusk', SPEND_LIMIT_TAIL, T0)
+    await usageEpisode('jade', SPEND_LIMIT_TAIL, T0)
+    expect(homePosts().map(m => m.text)).toEqual([expect.stringContaining('**dusk**'), expect.stringContaining('**jade**')])
+  })
+
+  it('re-alerts home when the dialog it said was open is later dismissed', async () => {
+    addSession('s-dusk', { tmuxName: 'dusk', threadId: 'thread-dusk' })
+    _setIO({ ...makeTestIO(), sendKeys: async () => false })
+    await usageEpisode('dusk', SPEND_LIMIT_TAIL, T0)
+    expect(homePosts().map(m => m.text)).toEqual([expect.stringContaining('dialog is still open: `tmux attach -t dusk`')])
+    expect(sentMessages.find(m => m.channelId === 'thread-dusk')?.text).toContain('is stuck on the usage-limit dialog')
+    _setIO(makeTestIO())
+    await usageEpisode('dusk', SPEND_LIMIT_TAIL, T0 + 30 * 60_000)
+    expect(homePosts()[1]?.text).toContain('Its work is stopped')
+  })
+
+  it('alerts home on every plan-limit hit, which shows no reset time', async () => {
+    addSession('s-dusk', { tmuxName: 'dusk', threadId: 'thread-dusk' })
+    await usageEpisode('dusk', USAGE_LIMIT_TAIL, T0)
+    await usageEpisode('dusk', USAGE_LIMIT_TAIL, T0 + 30 * 60_000)
+    expect(homePosts().map(m => m.text)).toEqual([
+      expect.stringContaining('**dusk** hit your usage limit. Its work is stopped'),
+      expect.stringContaining('**dusk** hit your usage limit. Its work is stopped'),
+    ])
+  })
+
+  it('retries the home alert on the next hit when sending it failed', async () => {
+    addSession('s-dusk', { tmuxName: 'dusk', threadId: 'thread-dusk' })
+    const io = makeTestIO()
+    _setIO({ ...io, safeSend: async (ch, text) => ch === 'root-channel-123' ? [] : io.safeSend(ch, text) })
+    await usageEpisode('dusk', SPEND_LIMIT_TAIL, T0)
+    expect(homePosts()).toHaveLength(0)
+    _setIO(io)
+    await usageEpisode('dusk', SPEND_LIMIT_TAIL, T0 + 30 * 60_000)
+    expect(homePosts()).toHaveLength(1)
+  })
+
+  it('links the home spend-limit alert to the thread post, else to the thread', async () => {
+    _setIO({ ...makeTestIO(), getMessageUrl: (ch, id) => `https://chat/${ch}/${id}` })
+    addSession('s-jade', { tmuxName: 'jade', threadId: 'thread-jade' })
+    await usageEpisode('jade', SPEND_LIMIT_TAIL, T0)
+    const threadPost = sentMessages.findIndex(m => m.channelId === 'thread-jade')
+    expect(homePosts()[0]?.text).toContain(`[its thread](https://chat/thread-jade/msg-${threadPost + 1})`)
+
+    _setIO(makeTestIO())
+    addSession('s-dusk', { tmuxName: 'dusk', threadId: 'thread-dusk', threadUrl: 'https://chat/thread-dusk' })
+    await usageEpisode('dusk', SPEND_LIMIT_TAIL, T0)
+    expect(homePosts()[1]?.text).toContain('[its thread](https://chat/thread-dusk)')
   })
 
   it('alerts once per weekly-usage threshold from byte\'s footer, re-arming after a reset', async () => {

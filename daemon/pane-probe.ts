@@ -160,7 +160,7 @@ const defaultIO: PaneProbeIO = {
   platform: PLATFORM,
   claudeStatus: (tmuxName) => readClaudeStatus(tmuxName),
   getMessageUrl: (channelId, messageId) => gateway.getMessageUrl(channelId, messageId),
-  defaultChannel: DEFAULT_SESSION_CHANNEL,
+  get defaultChannel() { return DEFAULT_SESSION_CHANNEL },
 }
 
 let io: PaneProbeIO = defaultIO
@@ -245,6 +245,9 @@ const ESC_ENDS_SESSION_RE = /No, exit/
 const USAGE_OPTION_A = /Stop and wait for limit to reset/
 const USAGE_OPTION_B = /Add funds to continue with extra usage/
 const USAGE_OPTION_C = /Upgrade your plan/
+const USAGE_OPTION_WAIT = /Wait here, then continue automatically/
+const USAGE_RESUME_AT_RE = /continue automatically at ([^\n│]+?)\s*(?:│|$)/m
+const USAGE_LIMIT_NAME_RE = /You've hit your ([^\n│·]*?limit)/
 const RESUME_OPTION_A = /Resume from summary/
 const RESUME_OPTION_B = /Resume full session/
 const RESUME_OPTION_C = /Don't ask me again/
@@ -356,6 +359,7 @@ function setVerdict(key: string, v: SessionVerdict, at: number): void {
 
 // Sessions whose login just succeeded while their spawn prompt is still unanswered.
 const resendAfterLogin = new Set<string>()
+const homeUsageAlerts = new Map<string, { key: string; at: number }>()
 const findSession = (tmuxName: string) => [...io.getSessions()].find(s => s.tmuxName === tmuxName && io.occupancy(s) !== 'dead')
 
 const threadIntercepts = new Map<string, {
@@ -531,7 +535,14 @@ async function confirmAndDismissLoginSuccess(tmuxName: string): Promise<boolean>
 }
 
 function isUsageLimitOnScreen(tail: string): boolean {
-  return [USAGE_OPTION_A, USAGE_OPTION_B, USAGE_OPTION_C].filter(re => re.test(tail)).length >= 2
+  return [USAGE_OPTION_A, USAGE_OPTION_B, USAGE_OPTION_C, USAGE_OPTION_WAIT].filter(re => re.test(tail)).length >= 2
+}
+
+function describeUsageLimit(tail: string): { limit: string; resetsAt: string | null } {
+  return {
+    limit: tail.match(USAGE_LIMIT_NAME_RE)?.[1]?.trim() || 'usage limit',
+    resetsAt: tail.match(USAGE_RESUME_AT_RE)?.[1]?.trim() || null,
+  }
 }
 
 function isResumePromptOnScreen(tail: string): boolean {
@@ -559,17 +570,38 @@ async function notifyUsageLimit(entry: ProbeEntry, now: number): Promise<void> {
     const channelId = entry.isMain ? io.defaultChannel : entry.threadId
     const tail = await io.capturePaneTail(name, PANE_TAIL_LINES)
     const dismissed = !!tail && isUsageLimitOnScreen(tail) && await press(name, 'Escape')
-    if (channelId) {
-      await io.safeSend(channelId, dismissed
-        ? `> ⏸️ **${name}** was stuck on the usage-limit dialog — dismissed it. If the limit is still active it will come back.`
-        : `> ⏸️ **${name}** is stuck on the usage-limit dialog. Run: \`tmux attach -t ${name}\` and press Esc.`)
-    }
     entry.notifiedAt = now
     entry.notifyCount++
     process.stderr.write(`daemon: pane-probe: ${name} usage-limit dialog, dismissed=${dismissed}\n`)
+    const { limit, resetsAt } = describeUsageLimit(tail ?? '')
+    const what = `hit your ${limit}${resetsAt ? ` (resets ${resetsAt})` : ''}`
+    const ids = channelId
+      ? await io.safeSend(channelId, dismissed
+        ? `> ⏸️ **${name}** ${what}, so hydra dismissed the usage-limit dialog and it is idle. If the limit is still active it will come back.`
+        : `> ⏸️ **${name}** ${what} and is stuck on the usage-limit dialog. Run: \`tmux attach -t ${name}\` and press Esc.`)
+      : []
+    if (!entry.isMain) await alertHomeUsageLimit(entry, ids[0] ?? '', what, resetsAt, dismissed, now)
   } finally {
     entry.notifying = false
   }
+}
+
+const HOME_USAGE_ALERT_TTL_MS = 24 * 60 * 60_000
+
+// Outlives the probe entry, which Esc clears, so retries against the same limit alert home once.
+async function alertHomeUsageLimit(entry: ProbeEntry, messageId: string, what: string, resetsAt: string | null, dismissed: boolean, now: number): Promise<void> {
+  const name = entry.tmuxName
+  const key = `${resetsAt}|${dismissed}`
+  const slot = `${entry.threadId}|${name}`
+  const last = homeUsageAlerts.get(slot)
+  if (resetsAt && last?.key === key && now - last.at < HOME_USAGE_ALERT_TTL_MS) return
+  const url = (messageId ? io.getMessageUrl?.(entry.threadId, messageId) : '') || findSession(name)?.threadUrl || ''
+  const thread = url ? `[its thread](${url})` : 'its thread'
+  const next = dismissed
+    ? `Its work is stopped. Once the limit is raised or resets, say "continue" in ${thread}.`
+    : `Its dialog is still open: \`tmux attach -t ${name}\`. Details in ${thread}.`
+  const sent = await io.safeSend(io.defaultChannel, `> 🛑 **${name}** ${what}. ${next}`)
+  if (sent.length) homeUsageAlerts.set(slot, { key, at: now })
 }
 
 // Claude Code's footer shows "You've used 91% of your weekly limit · resets …" once usage
@@ -1053,6 +1085,7 @@ export function _resetForTesting(): void {
   probingSince = null
   threadIntercepts.clear()
   resendAfterLogin.clear()
+  homeUsageAlerts.clear()
 }
 
 export const _CONFIRM_PROBES = CONFIRM_PROBES
