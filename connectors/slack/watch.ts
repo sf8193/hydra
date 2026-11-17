@@ -583,14 +583,14 @@ export class SlackWatcher {
     return entry
   }
 
-  /** Let go of a conversation. What it still owed will never be delivered now: a drop, surfaced. */
-  unwatch(channel: string, threadTs: string, app?: string): boolean {
+  /** Unbind a conversation. What it still owed will never be delivered now: a drop, surfaced (`quiet`: counted and logged only, for a caller that says it itself). */
+  unwatch(channel: string, threadTs: string, app?: string, quiet = false): boolean {
     const key = watchKey(app, channel, threadTs)
     const pending = this.pending.get(key)
     if (pending) { clearTimeout(pending.timer); this.pending.delete(key) }
     const entry = this.entries.get(key)
     if (!entry) return false
-    if (entry.owed?.length) this.drop('unbound', entry, entry.owed, 'its conversation was unbound before they were delivered')
+    if (entry.owed?.length) this.drop('unbound', entry, entry.owed, 'its conversation was unbound before they were delivered', !quiet)
     this.entries.delete(key)
     this.persist()
     return true
@@ -1026,7 +1026,9 @@ export class SlackWatcher {
     const fresh = ts.filter(t => this.firstTime(this.noted.dropped, `${scoped(where.app, where.channel)}:${t}`))
     if (!fresh.length) return
     this.stats_.dropped[kind] = (this.stats_.dropped[kind] ?? 0) + fresh.length
-    const line = `dropped ${fresh.length} Slack message${fresh.length === 1 ? '' : 's'} in ${keyOf(where)} (${kind}, ts ${fresh.join(', ')}): ${why}`
+    // A session thread's owed messages go undelivered when no session is in it: say what to do.
+    const vacantAdvice = where.specialist && isSessionThread(where.specialist) && (kind === 'expired' || kind === 'owed-full') ? '. No session is in this thread: resume it, or `unbind_conversation`' : ''
+    const line = `dropped ${fresh.length} Slack message${fresh.length === 1 ? '' : 's'} in ${keyOf(where)} (${kind}, ts ${fresh.join(', ')}): ${why}${vacantAdvice}`
     this.deps.log(`daemon: slack connector: ${line}\n`)
     // Keyed by kind and by who hears it: one specialist's trouble does not silence another's.
     const to = where.specialist ?? listenerOf(this.deps.config(where.app), where.channel)

@@ -53,7 +53,7 @@ const ALLOWED: Record<string, { why: string; lines: string[] }> = {
   'event-bus.ts': {
     why: 'the death event carries when it happened',
     lines: [
-      "'session:death': { sessionId: string; threadId: string; wasOwner: boolean; tmuxName: string; deadAt?: number; claudeSessionId?: string; engine?: ProviderId; codexThreadId?: string; codexHomeName?: string }",
+      "'session:death': { deliberate?: boolean; sessionId: string; threadId: string; wasOwner: boolean; tmuxName: string; deadAt?: number; claudeSessionId?: string; engine?: ProviderId; codexThreadId?: string; codexHomeName?: string }",
     ],
   },
   'observability.ts': {

@@ -81,6 +81,84 @@ describe("a thread bound to a session's own thread (any session listening)", () 
   })
 })
 
+describe("a session thread with no session in it (killed, or between a handoff and its successor)", () => {
+  const SESSION = '1552619225032425525'
+  const NOBODY: DeliverResult = { ok: false, error: `thread ${SESSION}'s session is gone` }
+  const reply = (n: number) => ev({ channel: 'C0OTHER', ts: `${2001 + n}.000001`, threadTs: '2000.000001', user: 'USTRANGER', text: `message ${n}` })
+
+  test('messages stay owed, not dropped, and are delivered once and in order when a session registers; a replay delivers nothing twice', async () => {
+    let home = false
+    const s = setup({}, () => home ? { ok: true } : NOBODY)
+    s.w.bind('C0OTHER', '2000.000001', SESSION, 'tool')
+    for (const n of [1, 2, 3]) s.w.handle(reply(n))
+    await s.w.flush()
+    expect(s.w.get('C0OTHER', '2000.000001')).toMatchObject({ specialist: SESSION, owed: ['2002.000001', '2003.000001', '2004.000001'] })
+    expect(s.alerts).toEqual([])                                           // owed quietly: nothing dropped, nothing to say
+    s.tick(10 * 60_000)                                                    // a session registers after the old 60 s grace; catch-up delivers them again, in any order it reads them
+    home = true
+    s.sent.length = 0
+    for (const n of [3, 1, 2]) s.w.handle(reply(n))
+    await s.w.flush()
+    expect(s.sent.map(x => x.specialist)).toEqual([SESSION])
+    const body = s.sent[0].msg
+    expect(body.indexOf('message 1')).toBeGreaterThan(-1)
+    expect(body.indexOf('message 1')).toBeLessThan(body.indexOf('message 2'))
+    expect(body.indexOf('message 2')).toBeLessThan(body.indexOf('message 3'))
+    expect(s.w.get('C0OTHER', '2000.000001')).toMatchObject({ delivered: ['2002.000001', '2003.000001', '2004.000001'] })
+    expect(s.w.get('C0OTHER', '2000.000001')!.owed).toBeUndefined()
+    for (const n of [1, 2, 3]) s.w.handle(reply(n))                        // a second catch-up pass finds the same messages
+    await s.w.flush()
+    expect(s.sent).toHaveLength(1)
+  })
+
+  test('the owed cap holds for a vacant thread: past 200 the oldest is dropped, and said in that thread', async () => {
+    const s = setup({}, () => NOBODY)
+    s.w.bind('C0OTHER', '2000.000001', SESSION, 'tool')
+    for (let n = 1; n <= 201; n++) s.w.handle(ev({ channel: 'C0OTHER', ts: `${3000 + n}.000001`, threadTs: '2000.000001', user: 'USTRANGER', text: `m${n}` }))
+    await s.w.flush()
+    expect(s.w.get('C0OTHER', '2000.000001')!.owed).toHaveLength(200)
+    expect(s.alerts.join()).toContain('owed-full')
+    expect(s.alerts.join()).toContain('No session is in this thread: resume it, or `unbind_conversation`')
+    expect(s.alertTo).toContain(SESSION)
+  })
+
+  test('what is still owed a day later expires, alerted in the thread; the conversation itself stays bound', async () => {
+    const s = setup({}, () => NOBODY)
+    s.w.bind('C0OTHER', '2000.000001', SESSION, 'tool')
+    s.w.handle(ev({ channel: 'C0OTHER', ts: String(Math.floor(s.now() / 1000)) + '.000001', threadTs: '2000.000001', user: 'USTRANGER', text: 'held' }))
+    await s.w.flush()
+    expect(s.w.get('C0OTHER', '2000.000001')!.owed).toHaveLength(1)
+    s.tick(25 * 3600_000)
+    s.w.sweep()
+    expect(s.w.get('C0OTHER', '2000.000001')?.specialist).toBe(SESSION)
+    expect(s.w.get('C0OTHER', '2000.000001')!.owed).toBeUndefined()
+    expect(s.alerts.join()).toContain('still undelivered after 24h')
+    expect(s.alerts.join()).toContain('No session is in this thread: resume it, or `unbind_conversation`')
+    expect(s.alertTo).toContain(SESSION)
+  })
+
+  test('it stays bound for the whole idle week, and is let go after it', () => {
+    const s = setup({})
+    s.w.bind('C0OTHER', '2000.000001', SESSION, 'tool')
+    s.tick(7 * 86_400_000 - 1000)
+    s.w.sweep()
+    expect(s.w.get('C0OTHER', '2000.000001')?.specialist).toBe(SESSION)
+    s.tick(2000)
+    s.w.sweep()
+    expect(s.w.get('C0OTHER', '2000.000001')).toBeUndefined()
+  })
+
+  test('a conversation of a deleted thread is let go by the next catch-up that cannot read it, said in the session thread', async () => {
+    const s = setup({}, () => NOBODY)
+    s.w.bind('C0OTHER', '2000.000001', SESSION, 'tool')
+    s.w.handle(reply(1))
+    await s.w.flush()
+    s.w.threadGone('C0OTHER', '2000.000001', 'thread_not_found')
+    expect(s.w.get('C0OTHER', '2000.000001')).toBeUndefined()
+    expect(s.alertTo).toContain(SESSION)
+  })
+})
+
 describe('what opens and continues a conversation', () => {
   test('a tagged top-level message opens a conversation bound to the listener, delivered as a mention', async () => {
     const { w, sent } = setup()

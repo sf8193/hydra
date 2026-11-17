@@ -206,8 +206,10 @@ export function nextResumeCount(sessions: Iterable<SessionInfo>, resumeFrom: str
   return predecessor ? (predecessor.resumeCount ?? 0) + 1 : 0
 }
 
-export function emitSessionDeath(info: SessionInfo): void {
+/** `deliberate`: the operator or a parent ended it (a kill), as opposed to a crash, a handoff, a respawn or a resumable idle end: what ends on purpose takes its watches and subscriptions with it. */
+export function emitSessionDeath(info: SessionInfo, deliberate = false): void {
   emit('session:death', {
+    deliberate,
     sessionId: info.sessionId,
     threadId: info.threadId,
     wasOwner: info.sessionType !== 'thread_guest',
@@ -560,7 +562,8 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
   const replaced = nameHeldByAnother(info)
   // A watch delivers to the thread, not this session. A deliberate end ends it first, before any await, so no poll
   // in flight can revive the thread; a guest, or a record a successor replaced, speaks for no thread's watches.
-  if (!opts?.keepRecord && !opts?.keepWatches && !replaced && info.sessionType !== 'thread_guest') {
+  const deliberate = !opts?.keepRecord && !opts?.keepWatches && !replaced && info.sessionType !== 'thread_guest'
+  if (deliberate) {
     const removedWatches = unwatchBySession(info)
     if (removedWatches > 0) process.stderr.write(`daemon: removed ${removedWatches} PR watch(es) for session ${info.sessionId}\n`)
   }
@@ -670,7 +673,7 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
     }
 
     removeRestrictedFiles(info)
-    emitSessionDeath(info)
+    emitSessionDeath(info, deliberate)
     runKillHook(info, reason)
 
     setTimeout(() => {
