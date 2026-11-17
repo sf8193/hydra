@@ -587,7 +587,7 @@ Nothing is dropped silently: a message dropped because it stayed owed past a day
 
 ### Schedules (formerly jobs)
 
-A schedule is a clock that sends a message to a specialist. It's declared in `<state>/hydra.toml` under `[schedules.<id>]`: `cron` (5 fields, local time), `target` (`specialist:<name>`, or `main`; none makes it a sensor), `message`, and an optional `check` script whose output is appended (empty output sends nothing), run in `workdir` if set. See `signal-routing.md`'s `[schedules.<id>]`. A schedule's message carries the operator's authority; a failure alerts the operator. A run to a `sessions = "per-conversation"` specialist opens a new conversation for that slot: a fresh session in a new thread in the specialist's home_place, run as `jobs:<id>`.
+A schedule is a clock that sends a message to a specialist. It's declared in `<state>/hydra.toml` under `[schedules.<id>]`: `cron` (5 fields, local time), `target` (`specialist:<name>`, or `main`; none makes it a sensor), `message`, and an optional `check` script whose output is appended (empty output sends nothing), run in `workdir` if set. See `signal-routing.md`'s `[schedules.<id>]`. A schedule's message carries the operator's authority; a failure alerts the operator: main is told, and when main is stuck on a prompt it cannot answer (a login, the usage-limit dialog), the channel is told too, naming the state. A run to a `sessions = "per-conversation"` specialist opens a new conversation for that slot: a fresh session in a new thread in the specialist's home_place, run as `jobs:<id>`.
 
 ```toml
 [schedules.ledger-review]

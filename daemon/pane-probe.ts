@@ -379,6 +379,25 @@ export function confirmedStuckState(tmuxName: string): BlockingState | null {
   return entry.state
 }
 
+// How an alert names a stuck session's state to the operator.
+const STUCK_PHRASE: Record<BlockingKind, string> = {
+  plan_mode: 'stuck waiting for plan approval',
+  login_required: 'stuck on a login screen',
+  resume_prompt: 'stuck on a resume prompt',
+  usage_limit: 'stuck on the usage-limit dialog',
+  unknown_dialog: 'stuck on a dialog',
+}
+
+/**
+ * What main is confirmed stuck on, in words ("stuck on a login screen"), or null when it can act. The same reading as
+ * sessionVerdict, so a probe loop that stopped reads as not stuck rather than as a standing claim. The probe can still
+ * lag, so a caller still delivers to main.
+ */
+export function mainStuckCause(now: number = io.now()): string | null {
+  const { verdict } = sessionVerdict(probeByteTmuxName(), 0, now)
+  return verdict?.verdict === 'stuck' ? STUCK_PHRASE[verdict.kind] : null
+}
+
 const HOME_ACTIONS: Record<BlockingKind, { keys: string[]; done: string }> = {
   plan_mode: { keys: ['Enter'], done: 'plan approved, resuming' },
   resume_prompt: { keys: ['Enter'], done: 'resumed from the summary' },

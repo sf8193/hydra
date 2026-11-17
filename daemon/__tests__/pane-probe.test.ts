@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
+import { readFileSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
 import { claudeConfigDir } from '../../shared/constants.js'
@@ -33,6 +34,7 @@ import {
   _PANE_TAIL_LINES,
   _INTERCEPT_GRACE_MS,
   probeByteTmuxName,
+  mainStuckCause,
   sessionVerdict,
   type PaneProbeIO,
   type BlockingState,
@@ -1490,6 +1492,52 @@ describe('probeByteTmuxName', () => {
   })
 })
 
+
+describe('mainStuckCause: what an alert for main reads before choosing where to go', () => {
+  beforeEach(() => {
+    _resetForTesting()
+    paneTails.clear()
+    windowActivity.clear()
+    sentMessages.length = 0
+    registryEntries.clear()
+    occupancies.clear()
+    _setIO(makeTestIO())
+  })
+  afterEach(() => { _resetIO() })
+
+  it('names the confirmed state main is stuck on, and nothing before the second probe or once it clears', async () => {
+    windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 60)
+    paneTails.set('discord-byte', LOGIN_SELECT_METHOD_TAIL)
+    await probeAllSessions(T0)
+    expect(mainStuckCause()).toBeNull()
+    await probeAllSessions(T0 + 60_000)
+    expect(mainStuckCause()).toContain('login')
+    paneTails.set('discord-byte', 'all done\n❯\n  ctx: 1%')
+    await probeAllSessions(T0 + 120_000)
+    expect(mainStuckCause()).toBeNull()
+  })
+
+  it('reads a verdict older than the probe loop keeps as not stuck', async () => {
+    windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 60)
+    paneTails.set('discord-byte', LOGIN_SELECT_METHOD_TAIL)
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000)
+    expect(mainStuckCause(T0 + 60_000 + 2 * 60_000)).toContain('login')
+    expect(mainStuckCause(T0 + 60_000 + 4 * 60_000)).toBeNull()
+  })
+
+  it('is what the daemon hands the jobs clock', () => {
+    expect(readFileSync(new URL('../../daemon.ts', import.meta.url), 'utf8')).toContain('mainStuck: mainStuckCause,')
+  })
+
+  it('does not read the login expiring footer as stuck: main can still act', async () => {
+    windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 60)
+    paneTails.set('discord-byte', LOGIN_EXPIRING_TAIL)
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000)
+    expect(mainStuckCause()).toBeNull()
+  })
+})
 
 describe('resolveStuckFromHome', () => {
   const origEnv = process.env.HYDRA_AUTO_LOGIN

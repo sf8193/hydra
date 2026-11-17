@@ -254,7 +254,7 @@ import { jobsFromSchedules, schedulesAreSource } from './shared/schedules.js'
 import { readDaemonState } from './shared/jobs.js'
 import { pollActivityOnce } from './daemon/reply-guard.js'
 import { flushAllHeld } from './daemon/typed-delivery.js'
-import { probeAllSessions } from './daemon/pane-probe.js'
+import { probeAllSessions, mainStuckCause } from './daemon/pane-probe.js'
 import { safeSend } from './daemon/util.js'
 import { tmuxHasSession } from './daemon/tmux.js'
 
@@ -531,7 +531,7 @@ setInterval(() => timed('pane-probe', () => { probeAllSessions().catch(err => pr
 
 // Jobs clock: runs jobs.toml's jobs, or once migrate has moved them, hydra.toml's [schedules], as detached attempts and
 // applies their results (connectors/clock/jobs-clock.ts). A job's failure goes to its `to` target, then main; a schedule's to its `target`, then main;
-// if neither can take one, straight to a channel.
+// if neither can take one, straight to a channel. A main stuck on a prompt is told and the channel hears it too, with the cause.
 startJobsClock(realDeps({
   stateDir: STATE_DIR,
   platform: PLATFORM,
@@ -541,6 +541,7 @@ startJobsClock(realDeps({
     transport.sendOrQueue('main', { type: 'notification', content: text, meta: { source: 'jobs', initiator } })
     return true
   },
+  mainStuck: mainStuckCause,
   toTarget: async (to, text, initiator) => (await deliverToTarget({ to }, text, { initiator, queue: true })).ok,
   schedules: () => jobsFromSchedules(currentHydraConfig()),
   reloadSchedules: reloadHydraConfig,
