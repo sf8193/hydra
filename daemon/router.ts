@@ -40,6 +40,8 @@ import type { ProviderId, TmuxKeyAction } from './engines/engine-adapter.js'
 import { RESPAWN_RE } from './recovery-selection.js'
 import { listTemplates, getTemplate } from './templates.js'
 import { markUserMessaged } from './home-status.js'
+import { specialistForThread } from '../specialists/specialists.js'
+import { holdForSpecialist, holdingFor, setHeldDelivery } from './specialist-thread.js'
 
 // Global command prefixes — gated on the operator (operatorIds). Thread-scoped
 // commands (fork, watch, build, respawn, resume) are excluded: those are
@@ -318,6 +320,13 @@ async function deliverToSession(msg: InboundMessage, targetSessionId: string, ac
 
   return enqueueUserMessage(msg, targetSessionId, chatId, before)
 }
+
+// A held message lands in the started session as any message in its thread does; one restored at boot lands the same way.
+setHeldDelivery(async (msg, info) => {
+  info.lastActive = Date.now()
+  registry.debouncedPersist()
+  await enqueueUserMessage(msg, info.sessionId, info.threadId)
+})
 
 /**
  * Reserve the session's ingress slot synchronously, then enrich and deliver
@@ -890,6 +899,14 @@ gateway.onMessage(async (msg: InboundMessage) => {
     if (msg.isThread) {
       const resolvedThreadId = registry.resolveThreadId(msg)
 
+      // Behind an answer already held for this thread's specialist: the started session may already be registered, and
+      // this one still goes after the held one.
+      const holding = holdingFor(resolvedThreadId)
+      if (holding) {
+        holdForSpecialist(resolvedThreadId, holding, msg)
+        return
+      }
+
       // Pane-probe temporary intercept: "approve" / "reject" for plan-mode stuck sessions.
       // Gated on the operator — sending keystrokes to a tmux pane is a privileged action.
       const intercept = getThreadIntercept(resolvedThreadId)
@@ -1141,6 +1158,13 @@ gateway.onMessage(async (msg: InboundMessage) => {
         registry.debouncedPersist()
         effectiveChatId = info.threadId
       }
+    }
+    // A specialist's own thread with nobody home: the operator's answer is the specialist's, never main's. It is held
+    // and the specialist is started by the rule; the message then lands in its thread like any other.
+    const owner = targetSessionId === 'main' && isAllowed ? specialistForThread(rtid) : undefined
+    if (owner) {
+      holdForSpecialist(rtid, owner, msg)
+      return
     }
   }
   if (targetSessionId === 'main' && !msg.isThread) noteMainChannel(msg.channelId)
