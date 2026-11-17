@@ -266,9 +266,10 @@ let unsubscribe: (() => void) | undefined
 export function startSlackWatch(): void {
   if (sweepTimer) return
   const w = getSlackWatcher()
-  w.sweep()
+  reconcileVacancy()
+  w.sweep(false)   // not yet releasing vacant threads: recovery is about to revive sessions, whose registering stops the clock
   void unbindDeletedThreads()
-  sweepTimer = setInterval(() => timed('slack-watch-sweep', () => { w.sweep(); void unbindDeletedThreads() }), SWEEP_INTERVAL_MS)
+  sweepTimer = setInterval(() => timed('slack-watch-sweep', () => { reconcileVacancy(); w.sweep(); void unbindDeletedThreads() }), SWEEP_INTERVAL_MS)
   ;(sweepTimer as { unref?: () => void }).unref?.()
   refreshSlackSpecialistSurface()
   const offConfig = onHydraConfigLoad(() => queueMicrotask(refreshSlackSpecialistSurface))
@@ -281,11 +282,11 @@ export function startSlackWatch(): void {
   }
   // A session thread keeps its bound conversations while no session is in it (a kill, a handoff, a respawn): what arrives stays
   // owed, and is delivered when a session's bridge registers there. They end on unbind, when the thread is deleted, when Slack
-  // can no longer read the conversation, or when idle a week: the ends of any conversation.
-  const offRegistered = on('session:bridge-registered', ({ threadId }) => deliverOwedIn(threadId), 'slack connector: deliver what a session thread is owed when a session registers in it')
+  // can no longer read the conversation, when idle a week, or when no session has been in the thread for VACANT_RELEASE_MS (a day).
+  const offRegistered = on('session:bridge-registered', ({ threadId }) => { getSlackWatcher().occupy(threadId); deliverOwedIn(threadId) }, 'slack connector: a session is in the thread again: stop its vacancy clock, and deliver what it is owed')
   // A deleted thread is found by asking the platform (the gateway's `threadExists`): when its session ends, at start, and at each sweep.
   // What the operator ends ends: a killed session takes its thread's subscriptions with it, said once in the thread. A crash, a handoff or a respawn does not.
-  const offDeleted = on('session:death', ({ threadId, deliberate }) => { if (deliberate) unbindOnKill(threadId); else void unbindIfThreadDeleted(threadId) }, 'slack connector: unbind a killed session thread\'s conversations, or those of a deleted one')
+  const offDeleted = on('session:death', ({ threadId, deliberate, sessionId }) => { if (deliberate) unbindOnKill(threadId); else { void unbindIfThreadDeleted(threadId); reconcileVacancy(threadId, sessionId) } }, 'slack connector: unbind a killed session thread\'s conversations, or those of a deleted one')
   const offDeath = on('session:death', freed, 'slack connector: wake conversations waiting at max')
   const offDead = on('session:marked-dead', freed, 'slack connector: wake conversations waiting at max (found dead)')
   // After a sleep the socket is likely dead and Slack replays nothing: replace it and catch up now, not when a timer notices.
@@ -307,6 +308,18 @@ function unbindOnKill(threadId: string | undefined): void {
   const owed = bound.reduce((n, e) => n + (e.owed?.length ?? 0), 0)
   for (const e of bound) getSlackWatcher().unwatch(e.channel, e.threadTs, e.app, true)
   alert(`ℹ️ This session was killed, so it stopped listening to ${bound.map(conversationId).join(', ')}${owed ? ` (${owed} owed dropped)` : ''}. Bind again with \`bind_conversation\` to resume.`, threadId)
+}
+
+/**
+ * Starts or stops the vacancy clock of each session thread that conversations are bound to (of one, when given): vacant when no live session is in it.
+ * `leaving`: a session that is dying, not counted as in the thread. The clock keeps its first start, so a restart neither resets nor doubles it.
+ */
+function reconcileVacancy(only?: string, leaving?: string): void {
+  const w = getSlackWatcher()
+  for (const t of only ? [only] : boundThreads()) {
+    const home = [...registry.values()].some(s => s.threadId === t && s.sessionType !== 'thread_guest' && s.deadAt === undefined && s.sessionId !== leaving)
+    if (home) w.occupy(t); else w.vacate(t)
+  }
 }
 
 /** The session threads that conversations are bound to. */

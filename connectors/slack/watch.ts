@@ -129,6 +129,8 @@ export type SlackWatchEntry = {
   heldSince?: Record<string, number>
   /** Since when it has waited for a session of its own (its specialist at `max_sessions`): its owed messages don't expire meanwhile, and the oldest waiter takes the next freed place. */
   waitingSince?: number
+  /** Since when no session has been in the session thread this is bound to (see `VACANT_RELEASE_MS`). Set once, kept across restarts, cleared when a session is there again; a conversation bound to an empty thread starts its clock at the next reconcile (a session's death, or the hourly sweep). */
+  vacantSince?: number
   /** Read with the operator's user token, because the bot is not in the channel: heard live through the app's events as the operator, and reread by every deep catch-up. Absent: the bot reads it. */
   via?: 'user'
 }
@@ -338,6 +340,13 @@ const WAIT_MAX_MS = 3 * 86_400_000
 const oneOff = (e: SlackWatchEntry): boolean => !!e.ambient && !e.owed?.length && (e.delivered?.length ?? 0) <= 1
 const OWED_KEEP = 200
 const OWED_MAX_AGE_S = 24 * 3600
+/**
+ * How long a session thread keeps its bound conversations with no session in it. Counted from when the thread became vacant, not from the last
+ * Slack message: a busy conversation nobody is home to hear would otherwise never be let go, and what it owes already expires after
+ * OWED_MAX_AGE_S. Occupied threads are unchanged (idle `idleExpiryMs`, any message resets it). A specialist's own thread is out of scope: its
+ * conversations are bound to the specialist, not to a thread, and it is refilled rather than let go.
+ */
+export const VACANT_RELEASE_MS = 24 * 3600_000
 const MENTION_WINDOW_MS = 10 * 60_000
 const NAME_TTL_MS = 24 * 3600_000
 const NAME_MISS_TTL_MS = 5 * 60_000
@@ -374,6 +383,13 @@ const watchKey = (app: string | undefined, channel: string, threadTs: string) =>
 const keyOf = (e: Pick<SlackWatchEntry, 'app' | 'channel' | 'threadTs'>) => watchKey(e.app, e.channel, e.threadTs)
 /** How long an app's bot that was told it is not in a channel is left alone before a reaction is tried there again. */
 const NO_REACTION_RETRY_MS = 10 * 60_000
+/** A span in the unit a person reads it in: `a day`, `7 days`, `6 hours`. */
+const spanText = (ms: number): string => {
+  const h = Math.round(ms / 3_600_000)
+  if (h < 24) return h === 1 ? 'an hour' : `${h} hours`
+  const d = Math.round(h / 24)
+  return d === 1 ? 'a day' : `${d} days`
+}
 /** How many channels an app's bot is remembered as not being in, for reactions. */
 const NO_REACTION_KEEP = 500
 const scoped = (app: string | undefined, channel: string) => scopeKey(app, channel)
@@ -624,6 +640,7 @@ export class SlackWatcher {
    */
   private setBinding(entry: SlackWatchEntry, to: string): void {
     entry.specialist = to
+    delete entry.vacantSince   // a vacancy belongs to the thread the conversation was bound to; the next reconcile starts the new one's
     this.tellSessionsTaken(entry)
   }
 
@@ -673,21 +690,40 @@ export class SlackWatcher {
     return true
   }
 
-  /** Drop entries idle past the expiry and owed ts too old to be worth chasing. Returns how many entries went. */
-  sweep(): number {
+  /**
+ * Drop entries idle past the expiry and owed ts too old to be worth chasing. Returns how many entries went.
+ * `vacancy` false: no vacant session thread is let go (the boot sweep, which runs before recovery has revived the sessions that are about to register).
+ */
+  sweep(vacancy = true): number {
     // Runs whether or not Slack is connected: what is idle or too old expires either way.
     const now = this.deps.now()
     const idleExpiryMs = this.deps.config()?.idleExpiryMs ?? SLACK_LIMITS.idleExpiryMs
     const owedFloor = `${Math.floor(now / 1000) - OWED_MAX_AGE_S}.000000`
     let n = 0
+    // A session thread that let conversations go says so once (per app, per reason), after the loop.
+    const letGo = new Map<string, { thread: string; app: string; why: 'vacant' | 'idle'; idleMs: number; names: string[]; owed: number }>()
+    const note = (e: SlackWatchEntry, why: 'vacant' | 'idle', idleMs: number, owed: number): void => {
+      if (!e.specialist || !isSessionThread(e.specialist)) return
+      const k = `${e.specialist}|${appOfEntry(e)}|${why}`
+      const g = letGo.get(k) ?? { thread: e.specialist, app: appOfEntry(e), why, idleMs, names: [], owed: 0 }
+      g.names.push(conversationId(e)); g.owed += owed
+      letGo.set(k, g)
+    }
     for (const [key, e] of this.entries) {
       const cfg = this.deps.config(e.app)   // the app that heard it: null while that app is not connected
       const idle = cfg?.idleExpiryMs ?? idleExpiryMs
       const cutoff = now - idle
       // Chatter's conversations are cheap to open again: they go after a day, so a busy place frees its half of the table.
       const ambientCutoff = now - Math.min(idle, AMBIENT_IDLE_MS)
+      // A session thread nobody has been in for VACANT_RELEASE_MS lets go of its conversations, and what they owed.
+      if (vacancy && e.vacantSince !== undefined && e.specialist && isSessionThread(e.specialist) && now - e.vacantSince >= VACANT_RELEASE_MS && !this.pending.has(key)) {
+        note(e, 'vacant', idle, e.owed?.length ?? 0)
+        this.unwatch(e.channel, e.threadTs, e.app, true)
+        n++
+        continue
+      }
       // An entry still owed messages is not idle: its owed ts expire first (and are alerted), then it goes.
-      if (e.lastEventAt < (e.ambient ? ambientCutoff : cutoff) && !this.pending.has(key) && !e.owed?.length) { this.entries.delete(key); n++; continue }
+      if (e.lastEventAt < (e.ambient ? ambientCutoff : cutoff) && !this.pending.has(key) && !e.owed?.length) { note(e, 'idle', idle, 0); this.entries.delete(key); n++; continue }
       // Owed to a specialist hydra.toml no longer declares, at a place catch-up no longer reads: no replay will come to
       // route it anew, so it is lost now, not a day from now. (Where catch-up still reads, the replay routes it as its
       // sender: delivered anew, or dropped then.) Not while a batch for it waits in the window: that delivery decides.
@@ -717,10 +753,34 @@ export class SlackWatcher {
     }
     for (const k of [...this.failing.keys()]) if (!this.entries.get(k)?.owed?.length) this.failing.delete(k)
     if (n) this.persist()
+    for (const g of letGo.values()) {
+      const list = g.names.join(', ')
+      const lost = g.owed ? ` (${g.owed} owed message${g.owed === 1 ? '' : 's'} dropped)` : ''
+      const text = g.why === 'vacant'
+        ? `ℹ️ No session has been in this thread for ${spanText(VACANT_RELEASE_MS)}, so hydra let go of ${list}${lost}. Bind again with \`bind_conversation\` to listen.`
+        : `ℹ️ ${list} had no message for ${spanText(g.idleMs)}, so hydra let go of it. Bind again with \`bind_conversation\` to listen.`
+      this.deps.alert?.(text, g.thread, g.app)
+    }
     this.pruneDmCursors(now, idleExpiryMs)
     this.pruneTaggedCursors()
     this.sweepFiles(now)
     return n
+  }
+
+  /** No session is in `threadId`: the conversations bound to it start their vacancy clock now. A clock already running is kept. */
+  vacate(threadId: string): void {
+    if (!isSessionThread(threadId)) return
+    const now = this.deps.now()
+    let changed = false
+    for (const e of this.entries.values()) if (e.specialist === threadId && e.vacantSince === undefined) { e.vacantSince = now; changed = true }
+    if (changed) this.persist()
+  }
+
+  /** A session is in `threadId` again: the vacancy clock of its conversations stops. */
+  occupy(threadId: string): void {
+    let changed = false
+    for (const e of this.entries.values()) if (e.specialist === threadId && e.vacantSince !== undefined) { delete e.vacantSince; changed = true }
+    if (changed) this.persist()
   }
 
   // -- catch-up support (the listener drives this) ---------------------------
