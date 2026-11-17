@@ -1,6 +1,7 @@
 import { spawn } from 'child_process'
 import type { Guard } from '../config/types.js'
 import { SPECIALIST_NAME_RE, isSessionThread } from '../shared/specialist-name.js'
+import { EX_TEMPFAIL } from '../shared/exit-codes.js'
 import { bareOf, readTarget } from '../shared/target-kind.js'
 
 /**
@@ -8,7 +9,7 @@ import { bareOf, readTarget } from '../shared/target-kind.js'
  * It judges; it never produces the content. Its exit code decides the message's verdict:
  *   0   deliver (stdout `{"target": "<specialist>"}` redirects it, and that specialist's `reachable_by` is checked again)
  *   10  drop it: logged, counted, never delivered
- *   75  not now: it stays owed, for at most `owed_max`, and the next catch-up pass offers it again
+ *   75  deferred: it stays owed, for at most `owed_max`, and the next catch-up pass offers it again
  *   anything else, a timeout, too much output, or a command that will not start: deliver anyway,
  *   and log why, so a broken guard never silences anyone.
  *
@@ -32,11 +33,10 @@ export type GuardInput = {
 export type GuardVerdict =
   | { verdict: 'deliver'; target?: string }
   | { verdict: 'drop' }
-  | { verdict: 'later' }
+  | { verdict: 'deferred' }
   | { verdict: 'open'; why: string }
 
 export const GUARD_DROP = 10
-export const GUARD_LATER = 75
 export const GUARD_STDOUT_MAX = 4096
 /** After the guard exits, how long a child it left behind may keep stdout open before it is killed. */
 const STDOUT_GRACE_MS = 200
@@ -96,7 +96,7 @@ export function runGuard(g: Pick<Guard, 'command' | 'timeoutMs'>, input: GuardIn
 
 function judge(code: number | null, out: string): GuardVerdict {
   if (code === GUARD_DROP) return { verdict: 'drop' }
-  if (code === GUARD_LATER) return { verdict: 'later' }
+  if (code === EX_TEMPFAIL) return { verdict: 'deferred' }
   if (code !== 0) return { verdict: 'open', why: `exited ${code}` }
   const text = out.trim()
   if (!text) return { verdict: 'deliver' }

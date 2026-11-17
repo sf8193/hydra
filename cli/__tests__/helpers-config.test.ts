@@ -1,4 +1,4 @@
-import { test, expect, beforeAll, beforeEach, afterEach } from 'bun:test'
+import { test, expect, describe, beforeAll, beforeEach, afterEach } from 'bun:test'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir, homedir } from 'node:os'
@@ -267,4 +267,29 @@ test('buildDaemonEnvs leads PATH with the pinned bun, so the daemon and every bu
 test('buildDaemonEnvs leaves PATH alone when no bun path resolved', () => {
   process.env.PATH = '/usr/bin'
   expect(buildDaemonEnvs(cfg({ daemonLog: join(stateDir, 'd.log') }), { path: 'bun', fallback: 'x' })).toStartWith(`PATH='/usr/bin' `)
+})
+
+describe('a refused deliver, in text mode', () => {
+  const refused = (response: Record<string, unknown>): { stderr: string[]; exit: number | undefined } => {
+    const stderr: string[] = []
+    let exit: number | undefined
+    const err = console.error, ex = process.exit
+    console.error = (...a: unknown[]) => { stderr.push(a.join(' ')) }
+    process.exit = ((c?: number) => { exit = c; throw new Error('exit') }) as never
+    try { printResponse(response, false) } catch (e) { if ((e as Error).message !== 'exit') throw e } finally { console.error = err; process.exit = ex }
+    return { stderr, exit }
+  }
+
+  test('a deferred error line ends with [deferred], and the exit code is the daemon\'s, unchanged', () => {
+    expect(refused({ ok: false, command: 'deliver', error: 'x is still booting', exitCode: 5, result: 'deferred' })).toEqual({ stderr: ['error: x is still booting [deferred]'], exit: 5 })
+  })
+
+  test('failed and done carry no suffix', () => {
+    expect(refused({ ok: false, command: 'deliver', error: 'stuck: unknown_dialog', exitCode: 5, result: 'failed' })).toEqual({ stderr: ['error: stuck: unknown_dialog'], exit: 5 })
+    expect(refused({ ok: false, command: 'deliver', error: 'already delivered', exitCode: 2, result: 'done' })).toEqual({ stderr: ['error: already delivered'], exit: 2 })
+  })
+
+  test('an error with no result word (any other command) prints as it always did', () => {
+    expect(refused({ ok: false, command: 'kill', error: 'no such session' })).toEqual({ stderr: ['error: no such session'], exit: 1 })
+  })
 })

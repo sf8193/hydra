@@ -535,10 +535,10 @@ test('owed threads follow their binding: refetched even once no specialist liste
 
 test('a message the guard put off (exit 75) is refetched by catch-up and judged again, like any owed message', async () => {
   const guarded: SlackWatchConfig = view(oneListener(CH, 'helper', '["role:anyone"]', '[guard]\ncommand = "g"\n'))
-  const T = '1792999990.000001' // within owed_max of now: a "not now" holds it rather than failing it
+  const T = '1792999990.000001' // within owed_max of now: a "deferred" holds it rather than failing it
   const dir = mkdtempSync(join(tmpdir(), 'slack-catchup-'))
   dirs.push(dir)
-  let verdict: 'later' | 'deliver' = 'later'
+  let verdict: 'deferred' | 'deliver' = 'deferred'
   const sent: string[] = []
   const w = new SlackWatcher({ now: () => 1_793_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => guarded,
     guard: async () => ({ verdict }), deliver: async (_t, msg) => { sent.push(msg); return { ok: true } } })

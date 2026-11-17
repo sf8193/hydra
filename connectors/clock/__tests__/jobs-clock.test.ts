@@ -339,12 +339,12 @@ describe('applying results', () => {
     expect(s.last).toMatchObject({ result: 'nothing', dispatch: 3 })
   })
 
-  test('not-now (a cancel) records notNow, leaves last and the slot alone', async () => {
+  test('deferred (a cancel) records deferred, leaves last and the slot alone', async () => {
     const c = await dispatched()
     const before = state('sweep')
-    at('2026-11-04T10:06:00-08:00'); finish('sweep', 1, 'not-now', 'cancelled', 1000); await c.tick()
+    at('2026-11-04T10:06:00-08:00'); finish('sweep', 1, 'deferred', 'cancelled', 1000); await c.tick()
     const s = state('sweep')
-    expect(s.notNow).toEqual({ since: w.t.toISOString(), reason: 'cancelled', dispatch: 1 })
+    expect(s.deferred).toEqual({ since: w.t.toISOString(), reason: 'cancelled', dispatch: 1 })
     expect(s.last).toEqual(before.last)
     expect(s.covered).toEqual(before.covered)
     expect(s.appliedDispatch).toBe(1)
@@ -416,15 +416,15 @@ describe('applying results', () => {
     expect(state('sweep').last).toMatchObject({ note: 'ended without a result' })
   })
 
-  test('SIGTERM at the deadline lets the attempt report: its not-now result is applied, nothing is killed', async () => {
+  test('SIGTERM at the deadline lets the attempt report: its deferred result is applied, nothing is killed', async () => {
     const c = await dispatched()
     const deadline = new Date(state('sweep').dispatch!.deadline).getTime()
     await walk(c, deadline + KILL_GRACE_MS + 60_000)
     expect(w.kills).toEqual([[1000, 'SIGTERM']])
-    finish('sweep', 1, 'not-now', 'cancelled', 1000)
+    finish('sweep', 1, 'deferred', 'cancelled', 1000)
     w.t = new Date(w.t.getTime() + 60_000); await c.tick()
     expect(w.kills).toEqual([[1000, 'SIGTERM']])
-    expect(state('sweep').notNow).toMatchObject({ reason: 'cancelled' })
+    expect(state('sweep').deferred).toMatchObject({ reason: 'cancelled' })
     expect(state('sweep').last?.result).not.toBe('failed')
   })
 
@@ -1095,16 +1095,16 @@ describe('needs = ["internet"]: two witnesses, decided by the daemon', () => {
     return c
   }
 
-  test('offline (gateway down, probe fails): not now, no attempt, the slot stays owed; online again: it runs', async () => {
+  test('offline (gateway down, probe fails): deferred, no attempt, the slot stays owed; online again: it runs', async () => {
     const c = await owing()
     w.gateway = false; w.probe = false
     await c.tick()
     expect(w.spawns).toHaveLength(0)
-    expect(state('sync').notNow).toEqual({ since: w.t.toISOString(), reason: 'offline' })
-    expect(state('sync').last?.note).toBe('baseline: no work ran')     // not-now never touches last
+    expect(state('sync').deferred).toEqual({ since: w.t.toISOString(), reason: 'offline' })
+    expect(state('sync').last?.note).toBe('baseline: no work ran')     // deferred never touches last
     expect(state('sync').failures).toBe(0)
     at('2026-11-04T11:01:30-08:00'); await c.tick()
-    expect(state('sync').notNow!.since).toBe(new Date('2026-11-04T11:00:30-08:00').toISOString())   // since holds
+    expect(state('sync').deferred!.since).toBe(new Date('2026-11-04T11:00:30-08:00').toISOString())   // since holds
     w.probe = true
     at('2026-11-04T11:02:30-08:00'); await c.tick()
     expect(w.spawns).toHaveLength(1)
@@ -1175,7 +1175,7 @@ describe('needs = ["internet"]: two witnesses, decided by the daemon', () => {
     c.stop()
     release()
     await ticking
-    expect(state('sync')).toEqual(before)                // no "not now: offline" written by a stopped clock
+    expect(state('sync')).toEqual(before)                // no "deferred: offline" written by a stopped clock
     expect(w.spawns).toHaveLength(0)
   })
 
@@ -1196,14 +1196,14 @@ describe('needs = ["internet"]: two witnesses, decided by the daemon', () => {
   })
 })
 
-describe('exit 75 and other not-now results', () => {
+describe('exit 75 and other deferred results', () => {
   test('plain job, exit 75: not an attempt, no slot used, no failure, no message; retried next tick', async () => {
     toml(FIVE)
     const c = clock(); await c.tick()
     at('2026-11-04T10:05:01-08:00'); await c.tick()
-    at('2026-11-04T10:05:30-08:00'); await run(c, 'sweep', 'not-now', 'check exited 75')
+    at('2026-11-04T10:05:30-08:00'); await run(c, 'sweep', 'deferred', 'check exited 75')
     const s = state('sweep')
-    expect(s.notNow).toEqual({ since: w.t.toISOString(), reason: 'check exited 75', dispatch: 1 })
+    expect(s.deferred).toEqual({ since: w.t.toISOString(), reason: 'check exited 75', dispatch: 1 })
     expect(s.covered?.slot).toBe('2026-11-04 10:00')
     expect(s.failures).toBe(0)
     expect(w.main).toEqual([])
@@ -1216,18 +1216,18 @@ describe('exit 75 and other not-now results', () => {
     toml(FIVE)
     const c = clock(); await c.tick()
     at('2026-11-04T10:05:01-08:00'); await c.tick()
-    finish('sweep', 1, 'not-now', 'check exited 75', 1000)
+    finish('sweep', 1, 'deferred', 'check exited 75', 1000)
     at('2026-11-04T10:06:01-08:00'); await c.tick()     // one tick: applied, then dispatched again
-    expect(state('sweep').notNow?.dispatch).toBe(1)
+    expect(state('sweep').deferred?.dispatch).toBe(1)
     expect(w.spawns).toHaveLength(2)
   })
 
-  test('a duplicate-key "pending" result is not now; "served" is done, served by the session', async () => {
+  test('a duplicate-key "pending" result is deferred; "served" is done, served by the session', async () => {
     toml(DUR5)
     const c = clock(); await c.tick()
     at('2026-11-04T10:05:01-08:00'); await c.tick()
-    at('2026-11-04T10:05:30-08:00'); await run(c, 'pull', 'not-now', 'duplicate key jobs-pull-2026-11-04 10:05 still pending')
-    expect(state('pull').notNow?.dispatch).toBe(1)
+    at('2026-11-04T10:05:30-08:00'); await run(c, 'pull', 'deferred', 'duplicate key jobs-pull-2026-11-04 10:05 still pending')
+    expect(state('pull').deferred?.dispatch).toBe(1)
     at('2026-11-04T10:06:30-08:00'); await c.tick()
     const d = state('pull').dispatch!
     writeAtomic(rfile('pull', d.id), JSON.stringify({ dispatch: d.id, at: w.t.toISOString(), result: 'done', note: 'duplicate key: already served', servedBy: 'sess-9' }))
@@ -1237,16 +1237,16 @@ describe('exit 75 and other not-now results', () => {
     expect(state('pull').covered?.slot).toBe('2026-11-04 10:05')
   })
 
-  test('the notNow since resets on a new reason, and after a result has landed', () => {
+  test('the deferred since resets on a new reason, and after a result has landed', () => {
     const s: JobState = {}
-    applyOutcome(s, { at: 'T1', result: 'not-now', note: 'offline' }, null)
-    applyOutcome(s, { at: 'T2', result: 'not-now', note: 'offline' }, null)
-    expect(s.notNow!.since).toBe('T1')
-    applyOutcome(s, { at: 'T3', result: 'not-now', note: 'check exited 75' }, null)
-    expect(s.notNow!.since).toBe('T3')
+    applyOutcome(s, { at: 'T1', result: 'deferred', note: 'offline' }, null)
+    applyOutcome(s, { at: 'T2', result: 'deferred', note: 'offline' }, null)
+    expect(s.deferred!.since).toBe('T1')
+    applyOutcome(s, { at: 'T3', result: 'deferred', note: 'check exited 75' }, null)
+    expect(s.deferred!.since).toBe('T3')
     applyOutcome(s, { at: 'T4', result: 'failed' }, null)
-    applyOutcome(s, { at: 'T5', result: 'not-now', note: 'check exited 75' }, null)
-    expect(s.notNow!.since).toBe('T5')
+    applyOutcome(s, { at: 'T5', result: 'deferred', note: 'check exited 75' }, null)
+    expect(s.deferred!.since).toBe('T5')
   })
 })
 
@@ -1329,7 +1329,7 @@ describe('alerts: one per failure run, after alert_after', () => {
   /** The hourly tick; if backoff (capped at the hour) still holds the slot, the next minute's tick. */
   async function failAt(c: JobsClock, iso: string) {
     at(iso); await c.tick()
-    if (!state('sync').dispatch && !state('sync').notNow?.since?.startsWith(w.t.toISOString().slice(0, 16))) { at(new Date(w.t.getTime() + 60_000).toISOString()); await c.tick() }
+    if (!state('sync').dispatch && !state('sync').deferred?.since?.startsWith(w.t.toISOString().slice(0, 16))) { at(new Date(w.t.getTime() + 60_000).toISOString()); await c.tick() }
     if (state('sync').dispatch) { at(new Date(w.t.getTime() + 10_000).toISOString()); await run(c, 'sync', 'failed', 'server unreachable') }
   }
 
@@ -1381,7 +1381,7 @@ describe('alerts: one per failure run, after alert_after', () => {
     expect(w.main).toEqual([]); expect(w.direct).toEqual([])
   })
 
-  test('offline is never alerted, and not-now neither starts nor ends a run', async () => {
+  test('offline is never alerted, and deferred neither starts nor ends a run', async () => {
     const c = await failingHourly()
     w.gateway = false; w.probe = false
     for (let h = 0; h < 72; h++) { at(new Date(Date.parse('2026-11-04T10:00:05-08:00') + h * 3_600_000).toISOString()); await c.tick() }
@@ -1389,7 +1389,7 @@ describe('alerts: one per failure run, after alert_after', () => {
     expect(state('sync').failingSince).toBeUndefined()
   })
 
-  test('a job alternating between failure and not-now keeps one run, and still alerts', async () => {
+  test('a job alternating between failure and deferred keeps one run, and still alerts', async () => {
     const c = await failingHourly()
     for (let h = 0; h < 50; h++) {
       const iso = new Date(Date.parse('2026-11-04T10:00:05-08:00') + h * 3_600_000).toISOString()
@@ -1627,11 +1627,11 @@ describe('launchd-runner jobs: launchd triggers, the daemon delivers', () => {
     expect(w.spawns[0].args).toContain('--external')
   })
 
-  test('a delivery that comes back "not now" (the daemon restarting under it) leaves the slot owed, and it is sent again', async () => {
+  test('a delivery that comes back "deferred" (the daemon restarting under it) leaves the slot owed, and it is sent again', async () => {
     toml(LD)
     leave('scan', SLOT, '2026-11-04 06:00', { result: 'done', output: 'CVE-1' })
     at('2026-11-04T06:00:40-08:00'); const c = clock(); await c.tick()
-    finish('scan', 1, 'not-now', 'daemon not reachable', 1000)
+    finish('scan', 1, 'deferred', 'daemon not reachable', 1000)
     at('2026-11-04T06:01:40-08:00'); await c.tick()
     expect(state('scan').appliedExternal).toBeUndefined()
     expect(w.spawns).toHaveLength(2)                                                // re-dispatched for the same slot
@@ -1960,12 +1960,12 @@ describe("hydra.toml [schedules]: run once migrate has moved jobs.toml; until th
     const c = clock({ schedules: () => jobsFromSchedules(sweep()), toMain: () => false, direct: async () => false })
     at('2026-11-04T09:59:00-08:00'); await c.tick()
     // three failures in a row, the last at 10:00:40: back-off would hold the 10:05 slot until 10:05:40
-    setState('sweep', { covered: { slot: '2026-11-04 09:55', at: '2026-11-04T17:55:30Z' }, failures: 3, failingSince: '2026-11-04T17:50:00Z', last: { at: '2026-11-04T18:00:40Z', result: 'failed', note: 'boom' }, notNow: { since: '2026-11-04T17:58:00Z', reason: 'offline' } })
+    setState('sweep', { covered: { slot: '2026-11-04 09:55', at: '2026-11-04T17:55:30Z' }, failures: 3, failingSince: '2026-11-04T17:50:00Z', last: { at: '2026-11-04T18:00:40Z', result: 'failed', note: 'boom' }, deferred: { since: '2026-11-04T17:58:00Z', reason: 'offline' } })
     paused = true
     at('2026-11-04T10:01:30-08:00'); await c.tick()
     expect(state('sweep')).toMatchObject({ failures: 0, last: { result: 'failed', note: 'boom' } })
     expect(state('sweep').failingSince).toBeUndefined()
-    expect(state('sweep').notNow).toBeUndefined()
+    expect(state('sweep').deferred).toBeUndefined()
     paused = false
     const heard: string[] = []
     const d = clock({ schedules: () => jobsFromSchedules(sweep()), toMain: t => { heard.push(t); return true } })

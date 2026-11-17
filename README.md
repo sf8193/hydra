@@ -576,7 +576,7 @@ The Slack connector (`connectors/slack/`) is one connector of [routing](diagrams
 
 A message is *owed* from the moment it is accepted until a delivery lands, and that is written to `<state>/slack-watches.json` before anything is sent, so a restart cannot lose it; what was delivered is remembered exactly, so a replay never delivers twice. **DMs, files, ack.** A DM needs no tag; a DM conversation's top-level messages are one conversation (a thread inside a DM is its own), delivered as `[dm …]` items. A refused DM leaves nothing behind, and a conversation quiet past a week is forgotten. `[places]` `files = true` downloads each message's attachments to `<state>/slack-files/<channel>/<file id>-<name>` (`<state>/slack-files/<app>/<channel>/…` for an app other than `default`) at mode 0600 (directories 0700), streamed to disk, one download per file however many messages share it, kept for a week, and lists the paths in the delivery; a file over 20 MB, a failed download, a file Slack gives no download link for, or a place without `files` is listed by name with why, and the message is delivered either way. Files are fetched only for messages the guard lets through. `ack = "eyes"` adds that reaction to each message once it is delivered. Catch-up scans the history of every DM conversation it knows of, and with `im:read` lists the bot's DMs, so a conversation opened while the Slack connector was down is found (read back a day) when its sender's DM would be delivered. A pass reads channels, then DM conversations, then threads; DMs take what the budget leaves, least recently read first, and a DM a pass could not reach keeps its cursor held until one reads it.
 
-**`[guard]`** is your own command, run for each message from anyone but the operator after routing and the `reachable_by` check: `command`, `timeout` (default `5s`, at most 30 s), `include_text`, `owed_max` (default `1h`). Its stdin is `{person, roles, place, conversation, target}`, where `target` says its kind (`specialist:ops`, `main`, `thread:<id>`) and prints back as a redirect unchanged (`conversation` is the id `hydra conversations` prints, as in [Slack setup](docs/slack.md#conversations-and-replies-per-app): for an app other than `default` it starts `slack:<app>:`) (plus `text` with `include_text`). Exit 0 delivers; printing `{"target": "specialist:x"}` (or `"main"`; a thread does not work) redirects that message (not the conversation), and `x`'s `reachable_by` is checked again; a redirect it refuses, or to no declared specialist (alerted once per episode), goes to the binding instead. A bare `"x"` or a `{"to": ...}` is not a redirect: the message is delivered to the binding anyway, and the log says what to print. Exit 10 drops (counted, not alerted). Exit 75 keeps it owed and the next catch-up pass offers it again, for at most `owed_max` from the first "not now", then it is dropped as `expired`. Anything else, a timeout, too much output or a command that will not start delivers anyway and is logged: a broken guard never silences anyone. It runs in its own process group with an allowlisted environment and a 4 KB stdout cap.
+**`[guard]`** is your own command, run for each message from anyone but the operator after routing and the `reachable_by` check: `command`, `timeout` (default `5s`, at most 30 s), `include_text`, `owed_max` (default `1h`). Its stdin is `{person, roles, place, conversation, target}`, where `target` says its kind (`specialist:ops`, `main`, `thread:<id>`) and prints back as a redirect unchanged (`conversation` is the id `hydra conversations` prints, as in [Slack setup](docs/slack.md#conversations-and-replies-per-app): for an app other than `default` it starts `slack:<app>:`) (plus `text` with `include_text`). Exit 0 delivers; printing `{"target": "specialist:x"}` (or `"main"`; a thread does not work) redirects that message (not the conversation), and `x`'s `reachable_by` is checked again; a redirect it refuses, or to no declared specialist (alerted once per episode), goes to the binding instead. A bare `"x"` or a `{"to": ...}` is not a redirect: the message is delivered to the binding anyway, and the log says what to print. Exit 10 drops (counted, not alerted). Exit 75 keeps it owed and the next catch-up pass offers it again, for at most `owed_max` from the first deferred, then it is dropped as `expired`. Anything else, a timeout, too much output or a command that will not start delivers anyway and is logged: a broken guard never silences anyone. It runs in its own process group with an allowlisted environment and a 4 KB stdout cap.
 
 Nothing is dropped silently: a message dropped because it stayed owed past a day (`expired`), more than 200 were owed in its thread (`owed-full`), it can never fit a delivery (`too-large`), its sender opened too many conversations in ten minutes (`tag-cap`), a person's reactions passed their cap (`reaction-cap`: counted and logged, never alerted), the conversation table is full (`table-full`), or catch-up had to skip part of a very busy channel (`catch-up-gap`) is logged, counted by kind, and alerted in the thread of the specialist it concerns once per episode: an episode runs an hour from its first drop, per kind and specialist. Unbinding a conversation that still owed messages drops them (`unbound`, alerted). `hydra conversations` is the operator view, and `hydra health` → `slack` shows the conversation count, the age of the oldest owed message, and the refusal, unrouted and drop counts. A session in a specialist declared in hydra.toml gets `bind_conversation` / `unbind_conversation`, for threads in channels it hears (a rule sends it the place, with no `person`; never a DM or a top level, never one bound elsewhere, at most 10 bound by its own hand), and `list_watches` shows it the conversations bound to it.
 
@@ -738,6 +738,54 @@ spawn_session(fork_from="predecessor", read_only=true, phase_budget="5m", topic=
 ```
 
 The fork gets its own thread, answers with `send_to_thread(type="result")`, and is reaped at its `phase_budget`. Each fork is a full session boot that loads its source's whole context, so it takes seconds and costs that context's tokens.
+
+### Exit codes and result words
+
+One word means "try again later, nothing is wrong": **`deferred`**. A schedule's result, a guard's verdict, `hydra jobs run` and `hydra deliver` all use it. The codes differ by who is speaking. **75 is deferred for the scripts you write** (a guard, a schedule `check`). **`hydra deliver` reports its own codes, 2 to 8**, where 5 and 7 are deferred.
+
+**A script you write, and what hydra does with its exit code**
+
+| Script | Exit | Word | What hydra does |
+|---|---|---|---|
+| `[guard]` | 0 | `deliver` | Delivers. Printed `{"target": ...}` redirects. |
+| | 10 | `drop` | Never delivered; counted, not alerted. |
+| | 75 | `deferred` | Stays owed, up to `owed_max`; the next catch-up pass offers it again. |
+| | anything else, a timeout, over 4 KB, will not start | `open` | Delivers anyway and logs why. |
+| schedule `check` | 0 with output | `done` | The output becomes the message. |
+| | 0, empty | `nothing` | Nothing is sent. |
+| | 75 | `deferred` | No attempt, no slot used, output dropped. |
+| | anything else, will not start | `failed` | Backs off; alerts after the threshold. |
+| `hooks/pre-handoff` | 0 | `pass` | The handoff goes ahead. |
+| | 126, 127, a signal, over 15 s, will not start | `fail-open` | The handoff goes ahead. |
+| | anything else | `refused` | The handoff stops, with the hook's last 1500 characters. |
+
+**What `hydra deliver` tells you** (`--json` adds `result`; text mode ends the `error:` line with `[deferred]` for deferred only)
+
+| Exit | `result` | Meaning |
+|---|---|---|
+| 0 | `done` | Delivered or queued. |
+| 1 | `failed` | Bad request, or a delivery the daemon rejected. |
+| 2 | `done` | Already delivered with this key. |
+| 3 | `failed` | Gone or refused: a dead thread, a withdrawn sender, a message too large. |
+| 4 | `failed` | Running, but its bridge is not connected (or `main` is not). |
+| 5 | `deferred` | Booting, busy, or a per-conversation specialist at `max_sessions`. A session stuck on a dialog (`stuck: <kind>`) is `failed`: waiting does not clear it. |
+| 6 | `failed` | Starting failed or is backing off, the session died during delivery, or the outcome is unknown. |
+| 7 | `deferred` | A delivery with this key is still in flight. |
+| 8 | `failed` | No such specialist, or a target with no kind. |
+| none | no word | The daemon does not answer: exit 1 with `fatal: ...`, and no JSON. `hydra jobs` treats it as deferred. |
+
+**Other commands**
+
+| Command | Exit | Meaning |
+|---|---|---|
+| `hydra jobs run` (`schedules run`) | 0 | `done` or `nothing`. |
+| | 1 | `failed`; also superseded, no daemon, or no answer in time. |
+| | 75 | `deferred`, printed as `<name>: deferred: <reason>`. |
+| | 130 | SIGINT (Ctrl-C), or a cancelled run that ended deferred. |
+| every other `hydra` command | 0 / 1 | Success / `error: ...`. |
+| the daemon at boot | 78 | `hydra.toml` was refused; `hydra health` shows why. |
+
+`--json` exits 0 whenever the daemon answers, even when the command failed: read `ok` and `exitCode` in the JSON. If the daemon does not answer, it exits 1 with `fatal: ...` and no JSON (no word; `hydra jobs` treats that as deferred). Text mode exits with the code.
 
 ## Troubleshooting
 

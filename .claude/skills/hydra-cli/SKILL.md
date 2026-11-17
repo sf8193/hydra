@@ -158,21 +158,23 @@ hydra deliver --session bloom --message "check replies" --queue
 }
 ```
 
-Exit codes: `0` delivered/queued, `1` bad request, `2` idempotency hit, `3` session gone, `4` orphaned, `5` still booting, `6` delivery failed or outcome unknown (transient, retry), `7` a delivery with the same idempotency key is still in flight (retry shortly).
+Exit codes: `0` delivered/queued, `1` bad request, `2` idempotency hit (already delivered), `3` gone or refused, `4` running but unreachable (orphaned), `5` deferred (booting or busy; a session stuck on a dialog says `stuck: <kind>` and is a failure), `6` starting failed or backing off, died during delivery, or outcome unknown, `7` a delivery with the same idempotency key is still in flight (deferred), `8` no such specialist.
+
+`--json` adds a `result` word (`done`, `deferred` or `failed`) to the reply and exits 0 whenever the daemon answers, so read `exitCode` and `result` from the JSON. If the daemon does not answer, it exits 1 with a `fatal:` line on stderr and no JSON. The full table, with the guard and schedule codes: README, "Exit codes and result words".
 
 ### Common Patterns
 
 **Cron nudge with respawn fallback:**
 ```bash
 THREAD="1548796828059963513"
-if ! hydra deliver --thread "$THREAD" --message "NUDGE: check replies" \
-    --initiator "cron:bookkeeper" --idempotency-key "bk-nudge-w37" 2>/dev/null; then
-  if [ $? -eq 3 ]; then
-    hydra spawn "Resume bookkeeper: check replies" \
-      --initiator "cron:bookkeeper" \
-      --idempotency-key "bk-respawn-w37" \
-      --channel "$THREAD" --read-thread 50
-  fi
+code=0   # `|| code=$?` keeps the exit code and is safe under `set -e`; after `if ! cmd; then`, $? is 0 whatever cmd returned
+hydra deliver --thread "$THREAD" --message "NUDGE: check replies" \
+    --initiator "cron:bookkeeper" --idempotency-key "bk-nudge-w37" 2>/dev/null || code=$?
+if [ "$code" -eq 3 ]; then
+  hydra spawn "Resume bookkeeper: check replies" \
+    --initiator "cron:bookkeeper" \
+    --idempotency-key "bk-respawn-w37" \
+    --channel "$THREAD" --read-thread 50
 fi
 ```
 

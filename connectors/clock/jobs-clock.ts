@@ -12,7 +12,7 @@ import { closeSync, constants as fsc, existsSync, mkdirSync, openSync, readdirSy
 import { latestSlot, nextSlot, type Slot } from '../../shared/cron-local.js'
 import {
   ATTEMPT_DEADLINE_MS, KILL_GRACE_MS, NO_REPORT_GRACE_MS, STALE_TICK_MS, jobInitiator, attemptArgv, attemptEnv, listProcesses, lstartOf, type Proc, commandMatches, daemonFile, jobsDir, jobsToml, lockFile, logFile,
-  owedSlot, backoffUntil, parseJobsConfig, type Outcome, parseResultName, parseExternalName, externalFile, externalResults, type ExternalResult, readDaemonState, readJobState, resultFile, resultsDir, stateFile,
+  owedSlot, backoffUntil, parseJobsConfig, type Outcome, parseResultName, parseExternalName, externalFile, externalResults, type ExternalResult, readDaemonState, readJobState, currentResultWord, resultFile, resultsDir, stateFile,
   writeAtomic, type AttemptResult, type DaemonState, type Dispatch, type Job, type JobsConfig, type JobState,
 } from '../../shared/jobs.js'
 import { migratedJobsToml, schedulesAreSource } from '../../shared/schedules.js'
@@ -187,7 +187,7 @@ export class JobsClock {
   }
 
   /**
-   * One job, one tick: compute the owed slot; skip a live dispatch; hold for back-off; record not-now for unmet needs;
+   * One job, one tick: compute the owed slot; skip a live dispatch; hold for back-off; record deferred for unmet needs;
    * else dispatch. A slot is owed until it is done.
    */
   private async decide(job: Job, cfg: JobsConfig, isOnline: () => Promise<boolean>): Promise<void> {
@@ -204,7 +204,7 @@ export class JobsClock {
     if (job.needs?.includes('internet')) {
       const online = await isOnline()
       if (this.stopped) return
-      if (!online) return this.recordOutcome(job, { at: now.toISOString(), result: 'not-now', note: 'offline' }, target)
+      if (!online) return this.recordOutcome(job, { at: now.toISOString(), result: 'deferred', note: 'offline' }, target)
     }
     this.dispatch(job, 'scheduled', slot)
   }
@@ -253,7 +253,7 @@ export class JobsClock {
 
   /**
    * A paused job, either runner. Its slots pass unrun, and each is covered, so unpausing starts at the next slot rather
-   * than at one that was missed. An open failure run, a standing not-now and unanswered missed reports are closed: their alert and back-off are
+   * than at one that was missed. An open failure run, a standing deferred and unanswered missed reports are closed: their alert and back-off are
    * about a time before the pause. `last` stays, so `list` still shows what happened.
    */
   private skipPaused(job: Job): void {
@@ -263,11 +263,11 @@ export class JobsClock {
     const st = daemon ? this.ensureState(job, now) : r.kind === 'ok' ? r.state : null
     if (!st) return
     const slot = daemon && !st.dispatch ? owedSlot(job.schedule, st, now, job.timezone) : null
-    if (!slot && !st.failures && !st.failingSince && !st.notNow && !st.unreported) return
+    if (!slot && !st.failures && !st.failingSince && !st.deferred && !st.unreported) return
     this.update(job.name, job.schedule, s => {
       if (s.failures) s.failures = 0
       delete s.failingSince
-      delete s.notNow   // "not now since…" is about a slot that is no longer owed
+      delete s.deferred   // "deferred since…" is about a slot that is no longer owed
       delete s.unreported   // missed reports of a time before the pause: a late result must not bring the run back
       if (slot) s.covered = { slot: slot.label, at: now.toISOString() }
     })
@@ -280,7 +280,7 @@ export class JobsClock {
     try { return await this.d.captiveProbe() } catch { return false }
   }
 
-  /** An outcome the daemon decides itself (no process): not-now, a baseline, a mark-done. */
+  /** An outcome the daemon decides itself (no process): deferred, a baseline, a mark-done. */
   private recordOutcome(job: Job, o: Recorded, t: Target | null): void {
     this.update(job.name, job.schedule, s => applyOutcome(s, o, t))
     this.d.log(`jobs: ${job.name}: ${o.result}${o.servedBy ? ` (served by ${o.servedBy})` : ''}${o.note ? ` (${o.note})` : ''}`)
@@ -533,7 +533,7 @@ export class JobsClock {
   // -------------------------------------------------------------------------
 
   private readResult(name: string, d: Dispatch): AttemptResult | null {
-    try { return JSON.parse(readFileSync(resultFile(this.d.stateDir, name, d.id, d.nonce), 'utf8')) as AttemptResult } catch { return null }
+    try { return currentResultWord(JSON.parse(readFileSync(resultFile(this.d.stateDir, name, d.id, d.nonce), 'utf8')) as AttemptResult) } catch { return null }
   }
 
   private async applyResults(cfg: JobsConfig): Promise<void> {
@@ -579,7 +579,7 @@ export class JobsClock {
       const drop = (why?: string) => { try { unlinkSync(file) } catch {} if (why) this.d.log(`jobs: ${job.name}: launchd result for ${slotAt} dropped: ${why}`) }
       if (st.appliedExternal && slotAt <= st.appliedExternal) { drop('already applied (a replay)'); continue }
       let res: ExternalResult
-      try { res = JSON.parse(readFileSync(file, 'utf8')) } catch (err) { drop(`unreadable (${err})`); continue }
+      try { res = currentResultWord(JSON.parse(readFileSync(file, 'utf8')) as ExternalResult) } catch (err) { drop(`unreadable (${err})`); continue }
       if (res.result === 'done' && job.target) {
         this.dispatch(job, 'scheduled', { label: res.slot, at: new Date(res.slotAt) }, slotAt)
         return
@@ -642,7 +642,7 @@ export class JobsClock {
     this.update(name, schedule, s => {
       if (s.dispatch?.id === d.id) s.dispatch = { ...s.dispatch, seenAt: new Date(now).toISOString(), deadline: new Date(deadline).toISOString() }
     })
-    // Past the deadline: SIGTERM to the attempt, whose handler writes not-now (or done if the action landed) and then
+    // Past the deadline: SIGTERM to the attempt, whose handler writes deferred (or done if the action landed) and then
     // kills its own group. Only a grace later, if it is still there, SIGKILL to the group.
     const overdue = now - deadline
     if (overdue <= KILL_GRACE_MS || ask(() => this.d.lstartOf(d.pid!)) !== d.lstart) return
@@ -666,13 +666,13 @@ export class JobsClock {
       applyOutcome(s, { ...res, dispatch: d.id }, { kind: d.kind, slot: d.slot, at: coveredAt(d) })
       if (s.dispatch?.id === d.id) delete s.dispatch
       s.appliedDispatch = d.id
-      if (d.external && res.result !== 'not-now') { s.appliedExternal = d.external; answerMisses(s, d.external, since) }
+      if (d.external && res.result !== 'deferred') { s.appliedExternal = d.external; answerMisses(s, d.external, since) }
     })
     if (!applied) return   // state went unreadable: keep the result for the tick after the reset
     if (d.kind === 'manual') this.manualEnded.add(name)
     try { unlinkSync(resultFile(this.d.stateDir, name, d.id, d.nonce)) } catch {}
-    // A delivery that was "not now" (the daemon restarting under it, a key still pending) leaves the result owed.
-    if (d.external && res.result !== 'not-now') try { unlinkSync(externalFile(this.d.stateDir, name, d.external)) } catch {}
+    // A delivery that was deferred (the daemon restarting under it, a key still pending) leaves the result owed.
+    if (d.external && res.result !== 'deferred') try { unlinkSync(externalFile(this.d.stateDir, name, d.external)) } catch {}
     this.d.log(`jobs: ${name}: dispatch ${d.id} -> ${res.result}${res.note ? ` (${res.note})` : ''}`)
   }
 
@@ -713,7 +713,7 @@ export class JobsClock {
 
   /**
    * Once per failure run: when the latest outcome is a failure and the run is older than alert_after (alerted iff
-   * alertedFor === failingSince). To main, else straight to a channel; also to the channel when main is stuck. Lateness and not-now are never alerted.
+   * alertedFor === failingSince). To main, else straight to a channel; also to the channel when main is stuck. Lateness and deferred are never alerted.
    */
   private async reportFailures(cfg: JobsConfig): Promise<void> {
     for (const job of cfg.jobs) {
@@ -795,16 +795,16 @@ export class JobsClock {
  * The outcome table, in one place.
  * - Success: failures reset, the run ended.
  * - Failure: failures +1; the run starts if it hasn't.
- * - Not-now: notNow only (its `since` holds while the reason is unchanged and no result has landed). Never `last`,
+ * - Deferred: deferred only (its `since` holds while the reason is unchanged and no result has landed). Never `last`,
  *   never the slot.
  * - What covers a slot, the one record the owed rule reads: only a success, manual ones included. A failed slot stays
  *   owed, retried with back-off.
  */
 export function applyOutcome(s: JobState, o: Recorded, t: Target | null): void {
-  if (o.result === 'not-now') {
-    const reason = o.note ?? 'not now'
-    const keep = s.notNow?.reason === reason && (!s.last || s.notNow.since > s.last.at)
-    s.notNow = { since: keep ? s.notNow!.since : o.at, reason, ...(o.dispatch !== undefined && { dispatch: o.dispatch }) }
+  if (o.result === 'deferred') {
+    const reason = o.note ?? 'deferred'
+    const keep = s.deferred?.reason === reason && (!s.last || s.deferred.since > s.last.at)
+    s.deferred = { since: keep ? s.deferred!.since : o.at, reason, ...(o.dispatch !== undefined && { dispatch: o.dispatch }) }
     return
   }
   s.last = { at: o.at, ...(o.dispatch !== undefined && { dispatch: o.dispatch }), result: o.result, ...(o.note && { note: o.note }), ...(o.servedBy && { servedBy: o.servedBy }) }

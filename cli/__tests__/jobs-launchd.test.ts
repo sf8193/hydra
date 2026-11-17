@@ -133,7 +133,7 @@ describe('jobs sync registers launchd-runner jobs', () => {
 describe('jobs launchd-run: stopped by launchd', () => {
   const realJ = { ...jobsIO }, realR = { ...runIO }, realA = { ...attemptIO }
   afterEach(() => { Object.assign(jobsIO, realJ); Object.assign(runIO, realR); Object.assign(attemptIO, realA) })
-  test('a bootout while the check runs leaves a not-now result for the slot, then ends its group', async () => {
+  test('a bootout while the check runs leaves a deferred result for the slot, then ends its group', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ld-term-'))
     let sigterm = () => {}
     let killed = 0
@@ -147,10 +147,10 @@ describe('jobs launchd-run: stopped by launchd', () => {
       await Bun.sleep(5)
       sigterm()
       const slot = new Date('2026-11-04T14:00:00Z').toISOString()
-      expect(JSON.parse(readFileSync(externalFile(dir, 'scan', slot), 'utf8'))).toMatchObject({ result: 'not-now', note: 'stopped by launchd (its entry was re-registered)' })
+      expect(JSON.parse(readFileSync(externalFile(dir, 'scan', slot), 'utf8'))).toMatchObject({ result: 'deferred', note: 'stopped by launchd (its entry was re-registered)' })
       expect(killed).toBe(1)
       release(); await run
-      expect(JSON.parse(readFileSync(externalFile(dir, 'scan', slot), 'utf8')).result).toBe('not-now')   // written once
+      expect(JSON.parse(readFileSync(externalFile(dir, 'scan', slot), 'utf8')).result).toBe('deferred')   // written once
     } finally { rmSync(dir, { recursive: true }) }
   })
 })

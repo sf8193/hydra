@@ -3,7 +3,7 @@
  *
  * A target names an address (a specialist, `main`, a thread, or one conversation's own session of a specialist) or
  * a recipe (a fresh session each time). Each resolves to a session, and every delivery lands through `deliverToSession`: occupancy decides
- * dead (3), orphaned (4) and booting (5), a session stuck on a dialog is "not now" (5), and the engine's adapter
+ * dead (3), orphaned (4) and booting (5), a session stuck on a dialog is a failure (5, `stuck:`), and the engine's adapter
  * carries the message. Healing a dead session is the specialist's rule (specialist-deliver.ts) or, for a thread
  * id, an explicit `revive`.
  */
@@ -21,6 +21,7 @@ import { ensureSpecialist, SpecialistError } from './specialist-deliver.js'
 import { currentRecoveryDeps, reviveThreadForDelivery } from '../daemon/recovery.js'
 import type { DeliveryResult } from '../daemon/engines/engine-adapter.js'
 import { readTarget, spelledTo, TARGET_FORMS, type TargetRef } from '../shared/target-kind.js'
+import { STUCK_PREFIX } from '../shared/exit-codes.js'
 
 export type Recipe = { channel: string; kickoff?: string; kickoffFile?: string; model?: string; idle?: string }
 export type Target =
@@ -34,7 +35,7 @@ export type Target =
 export type DeliverOutcome =
   /** `duplicate`: this idempotency key already landed; a sender counts it as sent (the CLI's exit 2). */
   | { ok: true; sessionName: string; threadId: string; revived: boolean; sessionId: string; status: 'delivered' | 'queued'; proof?: string; duplicate?: true; specialist?: string }
-  /** 3 gone/refused, 4 orphaned, 5 not now (booting, busy, or stuck), 6 backing off or failed, 7 a delivery with this key
+  /** 3 gone/refused, 4 orphaned, 5 booting or busy (deferred), or stuck on a dialog (failed), 6 backing off or failed, 7 a delivery with this key
    *  is still in flight, 8 no such specialist, or a target hydra cannot read (`malformed`). `permanent`: this message can never be delivered (too large); drop it,
    *  alert, never retry. */
   /** `atMax`: a per-conversation specialist already runs `max_sessions` sessions; this conversation waits its turn (exit 5). */
@@ -109,7 +110,7 @@ export async function deliverToSession(info: SessionInfo, text: string, opts: { 
   if (occ === 'starting' && !opts.queue) return { ok: false, exit: 5, reason: `${info.tmuxName} is still booting — retry in ~${Math.max(1, Math.ceil((ORPHAN_GRACE_MS - bridgeWaitMs(info.createdAt)) / 1000))}s` }
   if (occ === 'reachable') {
     const stuck = targetDeps.stuckState(info.tmuxName)
-    if (stuck) return { ok: false, exit: 5, reason: `stuck: ${stuck.kind}` }
+    if (stuck) return { ok: false, exit: 5, reason: `${STUCK_PREFIX} ${stuck.kind}` }
   }
 
   const notification = {

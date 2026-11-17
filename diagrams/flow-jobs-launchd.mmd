@@ -10,7 +10,7 @@ flowchart TD
   LS --> EX{"results/NAME@SLOTMS.json waiting?"}
   EX -->|yes| NOOP
   EX -->|no| CK["runCheck (as for a daemon job: env_file, cwd, /bin/sh),<br/>env scrubbed of hydra's credentials"]
-  CK -.->|"SIGTERM (bootout by a re-sync)"| NNW["write not-now for the slot, end the group"]
+  CK -.->|"SIGTERM (bootout by a re-sync)"| NNW["write deferred for the slot, end the group"]
   CK --> EF["write ExternalResult {slot, slotAt, at, result, note, output}"]
   EF -.->|"daemon down: the file waits, owed"| TK["daemon tick: applyExternal, oldest slot first<br/>(also for a job just moved to the daemon)"]
   NNW --> TK
@@ -19,11 +19,11 @@ flowchart TD
   BUSY -->|yes| RP{"slotAt at or below appliedExternal?"}
   RP -->|yes| DROP["drop: a replay"]
   RP -->|no| KIND{"done AND the job has a target?"}
-  KIND -->|"nothing, failed, not-now, or no target (mode none)"| REC["applyOutcome + appliedExternal = slotAt, one write; delete the file"]
+  KIND -->|"nothing, failed, deferred, or no target (mode none)"| REC["applyOutcome + appliedExternal = slotAt, one write; delete the file"]
   KIND -->|yes| DSP["reserve a dispatch, kind scheduled, external = slotAt"]
   DSP --> ATT["jobs attempt --external: runAction on the saved output<br/>key = jobs-NAME-slotAt"]
   ATT --> SET["settle, then apply"]
-  SET -->|"not-now (daemon away, key pending)"| KEEP["the file stays: delivered again next tick"]
+  SET -->|"deferred (daemon away, key pending)"| KEEP["the file stays: delivered again next tick"]
   SET -->|"done or failed"| FIN["appliedExternal = slotAt; delete the file"]
   SET -.->|lost| FIN
   REC & FIN --> AL["reportFailures: alert_after = 0 for launchd, so a run's first failure alerts"]

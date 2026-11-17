@@ -11,6 +11,7 @@ import { engines } from '../engines/instances.js'
 import { emit } from '../event-bus.js'
 import { getIdempotencyEntry } from '../idempotency.js'
 import { _setDaemonStartedAtForTesting } from '../session-reachability.js'
+import { targetDeps } from '../../specialists/targets.js'
 
 // Suppress stderr from daemon modules
 process.stderr.write = (() => true) as any
@@ -252,7 +253,7 @@ describe('cli-handler: deliver (Z2)', () => {
     for (const bad of ['8d', '0m', '1y']) {
       expect(await deliver(info.sessionId, { idempotencyKey: key(), idempotencyTtl: bad })).toMatchObject({ ok: false, error: expect.stringContaining('at most 7d') })
     }
-    expect(await deliver(info.sessionId, { idempotencyTtl: '24h' })).toMatchObject({ ok: false, error: '--idempotency-ttl needs --idempotency-key' })
+    expect(await deliver(info.sessionId, { idempotencyTtl: '24h' })).toMatchObject({ ok: false, error: '--idempotency-ttl needs --idempotency-key', result: 'failed' })
   })
 
   test('--idempotency-ttl shorter than a slow delivery: the in-flight key outlives it, so a retry is 7, not a second send', async () => {
@@ -316,11 +317,11 @@ describe('cli-handler: deliver (Z2)', () => {
     const k = key()
     const first = deliver(info.sessionId, { idempotencyKey: k })
     const second = await deliver(info.sessionId, { idempotencyKey: k })
-    expect(second).toMatchObject({ ok: false, exitCode: 7 })
+    expect(second).toMatchObject({ ok: false, exitCode: 7, result: 'deferred' })
     expect(second.error).toContain('in flight')
     release?.()
     expect(await first).toMatchObject({ ok: true, data: { status: 'delivered' } })
-    expect(await deliver(info.sessionId, { idempotencyKey: k })).toMatchObject({ ok: false, exitCode: 2 })
+    expect(await deliver(info.sessionId, { idempotencyKey: k })).toMatchObject({ ok: false, exitCode: 2, result: 'done' })
   })
 
   test('claude bridge write → delivered/socket_write, key completed', async () => {
@@ -329,7 +330,7 @@ describe('cli-handler: deliver (Z2)', () => {
     const k = key()
     const res = await deliver(info.sessionId, { idempotencyKey: k, initiator: 'op' })
     expect(res).toEqual({ type: 'cli-response', command: 'deliver', id: res.id, ok: true,
-      data: { status: 'delivered', proof: 'socket_write', ...common(info) } })
+      data: { status: 'delivered', proof: 'socket_write', ...common(info) }, result: 'done' })
     expect(written).toHaveLength(1)
     expect(JSON.parse(written[0])).toEqual({ type: 'notification', content: 'whisper', meta: { source: 'cli-deliver', initiator: 'op' } })
     expect(checkIdempotency(k)).toMatchObject({ blocked: true, entry: { status: 'completed' } })
@@ -341,7 +342,7 @@ describe('cli-handler: deliver (Z2)', () => {
     const k = key()
     const res = await deliver(info.sessionId, { idempotencyKey: k })
     expect(res).toEqual({ type: 'cli-response', command: 'deliver', id: res.id, ok: false,
-      error: 'bridge write failed (socket destroyed) — transient, retry', exitCode: 6 })
+      error: 'bridge write failed (socket destroyed) — transient, retry', exitCode: 6, result: 'failed' })
     expect(checkIdempotency(k)).toEqual({ blocked: false })
   })
 
@@ -350,7 +351,7 @@ describe('cli-handler: deliver (Z2)', () => {
     const k = key()
     const res = await deliver(info.sessionId, { idempotencyKey: k, queue: true })
     expect(res).toEqual({ type: 'cli-response', command: 'deliver', id: res.id, ok: true,
-      data: { status: 'queued', proof: 'persisted', ...common(info) } })
+      data: { status: 'queued', proof: 'persisted', ...common(info) }, result: 'done' })
     expect(checkIdempotency(k)).toMatchObject({ blocked: true, entry: { status: 'completed' } })
   })
 
@@ -358,14 +359,24 @@ describe('cli-handler: deliver (Z2)', () => {
     const info = seed('claude', { createdAt: 1 })
     const k = key()
     const res = await deliver(info.sessionId, { idempotencyKey: k })
-    expect(res).toMatchObject({ ok: false, exitCode: 4 })
+    expect(res).toMatchObject({ ok: false, exitCode: 4, result: 'failed' })
     expect(checkIdempotency(k)).toEqual({ blocked: false })
   })
 
   test('claude no bridge right after a daemon restart → exit 5 booting, not orphaned', async () => {
     const info = seed('claude', { createdAt: 1 })
     _setDaemonStartedAtForTesting(Date.now())
-    expect(await deliver(info.sessionId, {})).toMatchObject({ ok: false, exitCode: 5 })
+    expect(await deliver(info.sessionId, {})).toMatchObject({ ok: false, exitCode: 5, result: 'deferred' })
+  })
+
+  test('a session stuck on a dialog → exit 5, and the word is failed: waiting does not clear it', async () => {
+    const info = seed('claude')
+    bridge(info.sessionId, () => true)
+    const was = targetDeps.stuckState
+    targetDeps.stuckState = () => ({ kind: 'unknown_dialog' }) as never
+    try {
+      expect(await deliver(info.sessionId, {})).toMatchObject({ ok: false, exitCode: 5, error: 'stuck: unknown_dialog', result: 'failed' })
+    } finally { targetDeps.stuckState = was }
   })
 
   test('a session stamped dead whose tmux is still running → exit 4 orphaned, not 3 gone', async () => {

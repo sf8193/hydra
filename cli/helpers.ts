@@ -466,7 +466,7 @@ export function printResponse(response: Record<string, unknown>, json: boolean):
   }
 
   if (!response.ok) {
-    console.error(`error: ${response.error}`)
+    console.error(`error: ${response.error}${response.result === 'deferred' ? ' [deferred]' : ''}`)
     process.exit(typeof response.exitCode === 'number' ? response.exitCode : 1)
   }
 

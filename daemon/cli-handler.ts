@@ -17,6 +17,7 @@ import { currentHydraConfig } from './hydra-config.js'
 import { routeFor, type RouteParams } from '../routing/route-request.js'
 import { deliverToTarget, deliverVia, sessionByName, toSession, toThread, type DeliverOutcome } from '../specialists/targets.js'
 import { readTarget, spelled } from '../shared/target-kind.js'
+import { deliverResult, type DeliverResult } from '../shared/exit-codes.js'
 import { gateway } from './config.js'
 import { loadAccess, operatorIds } from './access.js'
 import { on } from './event-bus.js'
@@ -57,6 +58,8 @@ export type CLIResponse = {
   data?: unknown
   error?: string
   exitCode?: number
+  /** deliver only: the one word the outcome means (shared/exit-codes.ts). */
+  result?: DeliverResult
 }
 
 // ---------------------------------------------------------------------------
@@ -75,6 +78,11 @@ function respond(req: CLIRequest, ok: boolean, dataOrError?: unknown, maybeData?
     ...(maybeData !== undefined ? { data: maybeData } : {}),
     ...(exitCode !== undefined ? { exitCode } : {}),
   }
+}
+
+/** Adds the result word to a deliver response: ok is done; a refusal is its exit code's word (1 when the daemon gave none). */
+function withResult(r: CLIResponse): CLIResponse {
+  return { ...r, result: r.ok ? deliverResult(0) : deliverResult(r.exitCode ?? 1, r.error) }
 }
 
 // ---------------------------------------------------------------------------
@@ -503,7 +511,7 @@ export async function handleCLIRequest(req: CLIRequest): Promise<CLIResponse> {
       case 'health': response = handleHealth(req); break
       case 'clear-key': response = handleClearKey(req); break
       case 'check-key': response = handleCheckKey(req); break
-      case 'deliver': response = await handleDeliver(req); break
+      case 'deliver': response = withResult(await handleDeliver(req)); break
       case 'specialist': response = await handleSpecialist(req); break
       case 'conversations': response = handleConversations(req); break
       case 'route': response = handleRoute(req); break

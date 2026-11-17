@@ -36,7 +36,7 @@ export type Job = {
   target?: JobTarget // absent: no agent (mode = "none"); the check runs and its result is recorded
   prompt?: string    // sent with the check output; optional when there is a check (or a spawn kickoff)
   channel?: string   // where a direct alert goes: the job's channel, else the spawn channel, else the top-level one
-  needs?: Need[]     // preconditions the daemon checks before dispatch; unmet = not now
+  needs?: Need[]     // preconditions the daemon checks before dispatch; unmet = deferred
   alertAfterMs: number // how long a failure run lasts before it is alerted, once (alert_after, default 1d)
   notes?: string[]   // what jobs list says about keys that are kept only for old files
   fromSchedule?: true // read from hydra.toml's [schedules]: a failure alerts the operator only, never the target
@@ -269,11 +269,9 @@ export const ATTEMPT_DEADLINE_MS = CHECK_TIMEOUT_MS + ACTION_TIMEOUT_MS + 2 * 60
 // State
 // ---------------------------------------------------------------------------
 
-export type Result = 'done' | 'nothing' | 'failed' | 'not-now'
+export type Result = 'done' | 'nothing' | 'failed' | 'deferred'
 /** What happened: the one result vocabulary for attempts, the daemon's own decisions and the outcome table. */
 export type Outcome = { result: Result; note?: string; servedBy?: string }
-/** `check` exit code for "not now" (EX_TEMPFAIL): not an attempt, uses no slot. `jobs run` exits with it too. */
-export const EX_TEMPFAIL = 75
 export type V0Outcome = 'nothing' | 'findings' | 'failed'
 
 export type Dispatch = {
@@ -303,8 +301,9 @@ export type JobState = {
   unreported?: string[]           // slot instants counted as `no report` and not answered since, oldest first (a late result for an older slot must not clear a newer miss)
   failures?: number
   failingSince?: string
-  last?: { at: string; dispatch?: number; result: Exclude<Result, 'not-now'>; note?: string; servedBy?: string }
-  notNow?: { since: string; reason: string; dispatch?: number }
+  last?: { at: string; dispatch?: number; result: Exclude<Result, 'deferred'>; note?: string; servedBy?: string }
+  deferred?: { since: string; reason: string; dispatch?: number }
+  notNow?: { since: string; reason: string; dispatch?: number }   // `deferred`'s name in a state file written before the rename: read, never written (readRecord)
   alertedFor?: string             // the failingSince already alerted for (alerted iff equal)
 }
 
@@ -321,6 +320,12 @@ export type DaemonState = {
 
 /** What an attempt reports, once, in results/<name>.<id>.json. */
 export type AttemptResult = Outcome & { dispatch: number; at: string }
+
+/** A result file written before `not-now` became `deferred` (an attempt that was running across the upgrade, a launchd result waiting to be applied): read under the new word. */
+export function currentResultWord<T extends { result: string }>(r: T): T {
+  if (r.result === 'not-now') r.result = 'deferred'
+  return r
+}
 
 export const jobsDir = (stateDir: string) => join(stateDir, 'jobs-state')
 export const resultsDir = (stateDir: string) => join(jobsDir(stateDir), 'results')
@@ -375,7 +380,7 @@ export function localDay(d: Date): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
-const V0_RESULT: Record<V0Outcome, Exclude<Result, 'not-now'>> = { findings: 'done', nothing: 'nothing', failed: 'failed' }
+const V0_RESULT: Record<V0Outcome, Exclude<Result, 'deferred'>> = { findings: 'done', nothing: 'nothing', failed: 'failed' }
 
 /**
  * The old runner wrote `{at, outcome, note}`. Translate it rather than treat it as missing: the job then doesn't fire
@@ -418,6 +423,7 @@ function readRecord(f: string, schedule: string | undefined): ReadState {
   if ('outcome' in rec || (rec.dispatch !== undefined && typeof (rec.dispatch as Dispatch)?.id !== 'number')) {
     return { kind: 'unreadable', error: 'unrecognised shape' }
   }
+  if (rec.notNow !== undefined) { if (rec.deferred === undefined) rec.deferred = rec.notNow; delete rec.notNow }
   return { kind: 'ok', state: rec as JobState, translated: false }
 }
 
