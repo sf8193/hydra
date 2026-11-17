@@ -21,7 +21,7 @@ import { MAX_ATTACHMENT_BYTES } from './access.js'
 import { expectedServerNames } from './engines/claude-verify.js'
 import { bridgeCommand } from './plugin-manifest.js'
 import { readdirSync, readFileSync } from 'fs'
-import { PolicyRefusal, missingTokenRefusal, remedy, type ConfinementPolicy, type LaunchPolicy } from './restricted.js'
+import { PolicyRefusal, missingTokenRefusal, remedy, serverToolRule, type ConfinementPolicy, type LaunchPolicy } from './restricted.js'
 
 /** The first Claude Code with `permissions.blockWritesOutsideWorkingDirectories`: an older one ignores the key, which would leave Edit/Write unconfined. */
 export const MIN_CLAUDE_VERSION = [2, 1, 314] as const
@@ -59,13 +59,13 @@ export function confinementSettings(policy: Pick<ConfinementPolicy, 'denyCommand
       // The network is meant to stay open (not proven live; the guarantee is about writes and credentials): without an allowlist entry, a host is asked about, and nobody is there to answer.
       allow: [NETWORK_ALLOW_RULE],
       // Read, Grep and Glob (best effort for the last two, by Claude Code's docs) and the file commands it recognizes in Bash: the same places, as Read rules.
-      deny: [...policy.cannotRead.map(readDenyRule), ...policy.denyCommands.map(c => `Bash(${c})`)],
+      deny: [...policy.cannotRead.map(readDenyRule), ...policy.denyCommands.map(c => `Bash(${c})`), ...(policy.servers ?? []).flatMap(s => (s.denyTools ?? []).map(t => serverToolRule(s.name, t)))],
     },
   }
 }
 
 /** The permission rules the settings carry, as the start check expects to see Claude Code apply them. */
-export function confinementRules(policy: Pick<ConfinementPolicy, 'denyCommands' | 'cannotRead'>): { allow: string[]; deny: string[] } {
+export function confinementRules(policy: Pick<ConfinementPolicy, 'denyCommands' | 'cannotRead'> & Partial<Pick<ConfinementPolicy, 'servers'>>): { allow: string[]; deny: string[] } {
   const p = (confinementSettings(policy) as { permissions: { allow: string[]; deny: string[] } }).permissions
   return { allow: p.allow, deny: p.deny }
 }

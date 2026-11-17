@@ -195,6 +195,8 @@ export type McpServer = {
   profileLocks?: string[]
   /** For a `can_only_write_to` specialist: variables set for the server, same placeholders. */
   profileEnv?: Record<string, string>
+  /** For a `can_only_write_to` specialist: tools of this server its session may not call, each written as a `permissions.deny` rule `mcp__<server>__<tool>`. */
+  denyTools?: string[]
 }
 
 export type Specialist = {

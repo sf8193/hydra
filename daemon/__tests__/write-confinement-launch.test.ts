@@ -9,7 +9,7 @@ import { CLAUDE_CONFIG, STATE_DIR } from '../config.js'
 import { PolicyRefusal, bornPolicy, describePolicy, policyDrifted, policyProblem, confinementIdFor, type LaunchPolicy } from '../restricted.js'
 import { removeRestrictedFiles, restrictedDir } from '../restricted-files.js'
 import { confinementShortfall, confinementSurplus, readLoaded, verifyConfinement, verifyDeps } from '../engines/claude-verify.js'
-import { bridgeServerCommands, claudeSettingsProblems, MIN_CLAUDE_VERSION, claudeVersion, claudeVersionRefusal, confinementSettings } from '../write-confinement.js'
+import { bridgeServerCommands, claudeSettingsProblems, MIN_CLAUDE_VERSION, claudeVersion, claudeVersionRefusal, confinementRules, confinementSettings } from '../write-confinement.js'
 import { EMPTY_CONFIG } from '../../config/load.js'
 import { readDenyRoots } from '../../config/write-confinement.js'
 import { hydraLoadEnv } from '../hydra-config.js'
@@ -309,6 +309,12 @@ describe('the stored policy', () => {
     ...extra,
   })
 
+  test('born from hydra.toml: a listed server\'s deny_tools reach the policy (and none, no key)', () => {
+    const withDeny = cfg({ canOnlyWriteTo: 'workdir', mcpServerNames: ['browser'] }, { mcpServers: { browser: { name: 'browser', command: server.command, tokenEnv: server.tokenEnv, tools: [], profileArgs: server.profileArgs, profileEnv: server.profileEnv, denyTools: ['browser_run_code_unsafe'] } } })
+    expect(bornPolicy('gem', withDeny)!.canOnlyWriteTo!.servers[0].denyTools).toEqual(['browser_run_code_unsafe'])
+    expect('denyTools' in bornPolicy('gem', cfg({ canOnlyWriteTo: 'workdir', mcpServerNames: ['browser'] }))!.canOnlyWriteTo!.servers[0]).toBe(false)
+  })
+
   test('born from hydra.toml: an operator policy carrying canOnlyWriteTo, with its servers\' profile declaration and its own id', () => {
     const p = bornPolicy('gem', cfg({ canOnlyWriteTo: 'workdir', cannotRead: ['/home/op/notes'], denyCommands: ['rm -rf *'], mcpServerNames: ['browser'] }))!
     expect(p.access).toBe('operator')
@@ -497,5 +503,44 @@ describe('what Claude Code 2.1.326 writes for the allowlist, from a real `claude
   })
   test('an invalid entry is skipped in an automated session with this line, and stops at a dialog in an interactive one (the regression)', () => {
     expect(fx('allowlist-invalid-entry-skipped.debug.txt')).toMatch(/Invalid entry was ignored: Server name can only contain letters, numbers, hyphens, and underscores/)
+  })
+})
+
+describe('a listed server\'s deny_tools', () => {
+  const a = { workdir: '/w', denyCommands: [] as string[], cannotRead: ['/s'] }
+  const rule = 'mcp__browser__browser_run_code_unsafe'
+  const denies = (servers: any[]) => ((confinementSettings({ ...a, servers }) as any).permissions.deny as string[])
+  test('each becomes a permissions.deny rule mcp__<server>__<tool>, beside the read and command rules; none without it', () => {
+    expect(denies([{ ...server, denyTools: ['browser_run_code_unsafe'] }])).toContain(rule)
+    expect(denies([{ ...server, denyTools: ['browser_run_code_unsafe'] }]).filter(r => r.startsWith('mcp__'))).toEqual([rule])
+    expect(denies([server]).filter(r => r.startsWith('mcp__'))).toEqual([])
+    expect(denies([{ ...server, denyTools: [] }]).filter(r => r.startsWith('mcp__'))).toEqual([])
+  })
+  test('the start check expects the same rules (confinementRules)', () => {
+    expect(confinementRules({ ...a, servers: [{ ...server, denyTools: ['browser_run_code_unsafe'] }] } as any).deny).toContain(rule)
+  })
+  test('the policy id changes with the list and with nothing else; a server with none keeps the id it had', () => {
+    const base = { ...a, tools: undefined, servers: [server] } as any
+    const withDeny = { ...a, servers: [{ ...server, denyTools: ['browser_run_code_unsafe'] }] } as any
+    expect(confinementIdFor(withDeny)).not.toBe(confinementIdFor(base))
+    expect(confinementIdFor({ ...a, servers: [{ ...server, denyTools: ['b', 'a'] }] } as any)).toBe(confinementIdFor({ ...a, servers: [{ ...server, denyTools: ['a', 'b'] }] } as any))
+    expect(confinementIdFor({ ...a, servers: [{ ...server, denyTools: [] }] } as any)).toBe(confinementIdFor({ ...a, servers: [server] } as any))
+  })
+  test('a stored denyTools that is not a list of strings is not a readable policy (it would otherwise be silently dropped)', () => {
+    const mk = (denyTools: unknown) => { const w = { ...a, servers: [{ ...server, denyTools }] } as any; return { specialist: 'gem', access: 'operator', canOnlyWriteTo: w, id: confinementIdFor({ ...a, servers: [server] } as any) } as any }
+    expect(policyProblem(mk([1]))).toBe('its can_only_write_to has no readable server list')
+    expect(policyProblem(mk('x'))).toBe('its can_only_write_to has no readable server list')
+  })
+  test('the drift check ignores the order of deny_tools', () => {
+    const p = (denyTools: string[]) => { const w = { ...a, servers: [{ ...server, denyTools }] } as any; return { specialist: 'gem', access: 'operator', canOnlyWriteTo: w, id: confinementIdFor(w) } as any }
+    expect(policyDrifted(p(['a', 'b']), p(['b', 'a']))).toEqual([])
+  })
+  test('a stored policy from before the key (no denyTools on its servers) is still read, and a changed list is a drift', () => {
+    const old = { specialist: 'gem', access: 'operator', canOnlyWriteTo: { ...a, servers: [server] }, id: '' } as any
+    old.id = confinementIdFor(old.canOnlyWriteTo)
+    expect(policyProblem(old)).toBeUndefined()
+    const changed = { ...old, canOnlyWriteTo: { ...a, servers: [{ ...server, denyTools: ['x'] }] } } as any
+    changed.id = confinementIdFor(changed.canOnlyWriteTo)
+    expect(policyDrifted(old, changed)).toEqual(['mcp browser: deny_tools changed'])
   })
 })

@@ -190,6 +190,11 @@ describe('mcp (restricted = true)', () => {
   test('a name with no [mcp_servers.<name>] is refused', () => {
     expect(errorsOf(spec('restricted = true\nmcp_servers = ["datadog", "nope"]'))).toEqual(['specialists.ops.mcp_servers[1]: no [mcp_servers.nope]: declare the server in hydra.toml first'])
   })
+  test('deny_tools on a listed server that names a tool the restricted specialist is allowed is refused, not ignored (it is held to the tools list)', () => {
+    const withDeny = (names: string) => spec('restricted = true\nmcp_servers = ["datadog"]').replace('tools = ["search_logs", "get_monitor"]', `tools = ["search_logs", "get_monitor"]\ndeny_tools = ${names}`)
+    expect(errorsOf(withDeny('["get_monitor"]'))).toEqual(['specialists.ops.mcp_servers[0]: [mcp_servers.datadog] deny_tools names get_monitor, which its tools list allows a restricted specialist, and deny_tools is not applied to one (it may call only the tools listed): remove it from tools or from deny_tools (a server needed with the tool by one specialist and without it by another: declare it twice under two [mcp_servers.*] names)'])
+    expect(ok(withDeny('["delete_monitor"]')).config.specialists.ops.mcpServerNames).toEqual(['datadog'])   // a tool it is not allowed anyway: harmless
+  })
   test('a server with no tools is refused', () => {
     expect(errorsOf(spec('restricted = true\nmcp_servers = ["empty"]'))).toEqual(['specialists.ops.mcp_servers[0]: [mcp_servers.empty] lists no tools, so a specialist could call none of them: set its `tools`'])
   })
