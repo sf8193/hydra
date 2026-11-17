@@ -301,7 +301,7 @@ describe('detectBlockingState (pure)', () => {
     const result = detectBlockingState(LOGIN_SELECT_METHOD_TAIL)
     expect(result).not.toBeNull()
     expect(result!.kind).toBe('login_required')
-    expect(result!.loginStage).toBe('blocked')
+    expect(result!.loginStage).toBe('login-blocked')
   })
 
   it('detects OAuth URL screen and extracts URL', () => {
@@ -343,7 +343,7 @@ describe('detectBlockingState (pure)', () => {
     const result = detectBlockingState(LOGIN_EXPIRED_TAIL)
     expect(result).not.toBeNull()
     expect(result!.kind).toBe('login_required')
-    expect(result!.loginStage).toBe('blocked')
+    expect(result!.loginStage).toBe('login-blocked')
   })
 
   it('detects the usage-limit dialog', () => {

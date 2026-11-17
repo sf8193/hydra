@@ -18,7 +18,7 @@ import { removeLaunchFiles } from './launch-files.js'
 
 export type DestroyOutcome =
   | { ok: true }
-  | { ok: false; kind: 'unsupported' | 'occupied' | 'alive' | 'delete-failed'; text: string; parentChannelId?: string }
+  | { ok: false; kind: 'unsupported' | 'protocol-running' | 'alive' | 'delete-failed'; text: string; parentChannelId?: string }
 
 /**
  * Delete `threadId` and its anchor, then forget its session record.
@@ -27,8 +27,8 @@ export type DestroyOutcome =
  */
 export function destroyRefusal(threadId: string): Extract<DestroyOutcome, { ok: false }> | undefined {
   if (!gateway.deleteThread) return { ok: false, kind: 'unsupported', text: '`destroy` is only available on Discord.' }
-  const occupied = isThreadOccupied(threadId)
-  if (occupied) return { ok: false, kind: 'occupied', text: `A **${occupied}** is in progress. Cancel or wait for completion.` }
+  const running = isThreadOccupied(threadId)
+  if (running) return { ok: false, kind: 'protocol-running', text: `A **${running}** is in progress. Cancel or wait for completion.` }
   return undefined
 }
 

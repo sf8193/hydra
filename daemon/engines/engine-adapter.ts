@@ -21,7 +21,7 @@ export type ProviderId = 'claude' | 'codex' | 'omp'
 // Delivery
 // ---------------------------------------------------------------------------
 
-export type DeliveryMode = 'steer-active' | 'next-turn'
+export type DeliveryMode = 'next-turn'
 
 /** The envelope every delivery carries. Claude writes it to the bridge minus the
  *  intents below (bridge.ts forwards meta to the model); Codex reads

@@ -205,7 +205,7 @@ describe('parseHomeStatusClick', () => {
 
 describe('dashboard buttonTarget', () => {
   const target = (...args: Parameters<NonNullable<typeof dashboardTest>['buttonTarget']>) => dashboardTest!.buttonTarget(...args)
-  const login = (loginStage: 'blocked' | 'oauth_url', oauthUrl: string | null = null) => ({ kind: 'login_required' as const, planPath: null, loginStage, oauthUrl })
+  const login = (loginStage: 'login-blocked' | 'oauth_url', oauthUrl: string | null = null) => ({ kind: 'login_required' as const, planPath: null, loginStage, oauthUrl })
   test('Recover is offered for a thread owner but not a guest', () => {
     expect(target('disconnected', null, 'thread_owner', true).actionable).toBe(true)
     expect(target('disconnected', null, 'thread_guest', true).actionable).toBe(false)
@@ -218,7 +218,7 @@ describe('dashboard buttonTarget', () => {
     expect(target('disconnected', null, 'thread_owner', false).actionable).toBe(false)
   })
   test('login: blocked is an action, the OAuth URL stage links to the URL', () => {
-    expect(target('login_required', login('blocked'), 'thread_owner', true)).toEqual({ actionable: true, oauthUrl: null })
+    expect(target('login_required', login('login-blocked'), 'thread_owner', true)).toEqual({ actionable: true, oauthUrl: null })
     expect(target('login_required', login('oauth_url', 'https://claude.com/oauth'), 'thread_owner', true)).toEqual({ actionable: false, oauthUrl: 'https://claude.com/oauth' })
   })
   test('a Disconnected row never links to an OAuth URL', () => {

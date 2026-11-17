@@ -11,7 +11,7 @@ import { transport } from '../bridge-transport.js'
 import { executeTool, restrictedRefusal } from '../bridge-dispatch.js'
 import { renderSend, sendToThread, sendDeps, sendsToRefusal, _resetSends, SEND_MAX_PER_WINDOW, SEND_WINDOW_MS, SEND_NOTICE } from '../sends-to.js'
 import { getToolsForSession, isToolAllowed, noteDeclaredSessionType } from '../tool-surface.js'
-import { UNIVERSAL_TOOLS } from '../../shared/tool-definitions.js'
+import { RESTRICTED_SEND_TYPES, UNIVERSAL_TOOLS } from '../../shared/tool-definitions.js'
 import { _setHydraConfigForTesting } from '../hydra-config.js'
 import { setSpecialistThread, _reloadSpecialists } from '../../specialists/specialists.js'
 import { loadHydraConfig } from '../../config/load.js'
@@ -177,7 +177,7 @@ describe('what the restricted session is shown of the tool', () => {
     const t = tool('ops-s')
     expect(Object.keys(t.inputSchema.properties).sort()).toEqual(['chat_id', 'target', 'text', 'type'])
     expect(t.inputSchema.required.sort()).toEqual(['chat_id', 'target', 'text', 'type'])
-    expect(t.inputSchema.properties.type).toMatchObject({ enum: ['question', 'result'] })
+    expect(t.inputSchema.properties.type).toMatchObject({ enum: [...RESTRICTED_SEND_TYPES] })
     expect(t.description).toContain('1,500 characters')
   })
   test('no other session type sees that variant: the shared definition is unchanged', () => {

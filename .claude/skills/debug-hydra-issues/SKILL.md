@@ -54,7 +54,7 @@ tmux capture-pane -t <session-name> -p -J | tail -30
 
 **Signature worth memorizing:** *daemon green, gateway "connected", session silent on real messages.* The session looks healthy from outside but the model isn't processing. This is the most common failure and the most expensive to find by layer-walking.
 
-The `pane-probe` module (`daemon/pane-probe.ts`) detects these states automatically on a 60s interval — `login_required` (stages: `expiring`, `blocked`, `oauth_url`, `success`), `plan_mode`, `resume_prompt`. If pane-probe hasn't alerted, the session may still be in its boot grace window.
+The `pane-probe` module (`daemon/pane-probe.ts`) detects these states automatically on a 60s interval — `login_required` (stages: `expiring`, `login-blocked`, `oauth_url`, `success`), `plan_mode`, `resume_prompt`. If pane-probe hasn't alerted, the session may still be in its boot grace window.
 
 ## Step 1 — Auth (CC only)
 

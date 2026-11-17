@@ -19,8 +19,8 @@ import { bareOf, readTarget, spelled } from '../shared/target-kind.js'
 import { readValue, spelledApp, spelledPerson, spelledRole, whoSpelled } from '../shared/value-kind.js'
 import {
   BUILTIN_ROLES, DEFAULT_SLACK_APP, SLACK_DM, SLACK_GROUP_DM, dmPerson, isDmPlace, namesAChannel, namesDmWithOthers, placesAnsweredBy, type Address, type ConfigIssue, type Connectors, type Gateways, type Guard, type HydraConfig, type LoadEnv, type LoadResult, type MainOptions,
-  type McpServer, type WorkdirScan, type Person, type Place, type PlaceOptions, type Platform, type Rule, type Schedule, type SessionsMode, type SlackApp, type Specialist, type Vitals,
-  WORKDIR_TOOLS,
+  type McpServer, type WorkdirScan, type Person, type Place, type PlaceOptions, type Platform, type Rule, type Schedule, type SlackApp, type Specialist, type Vitals,
+  NEEDS, RUNNERS, SESSIONS_MODES, WORKDIR_TOOLS, type Need,
 } from './types.js'
 
 export const VITALS_DEFAULTS: Vitals = Object.freeze({
@@ -41,7 +41,6 @@ const ADDRESS_RE: Record<Platform, RegExp> = {
 const REPO_RE = /^[a-z0-9][a-z0-9-]*\/[a-z0-9._-]+$/
 // A channel by name or by the platform's own id (an app without the scopes to list channels only knows ids).
 const CHANNEL_PLACE_RE = /^(slack|discord):(dm|#[a-z0-9][a-z0-9_-]*)$|^slack:group-dm$|^slack:dm:[a-z0-9][a-z0-9-]*$|^slack:[CG][A-Z0-9]+$|^discord:\d+$/
-const SESSIONS: readonly SessionsMode[] = ['shared', 'per-conversation']
 const ENGINES = ['claude', 'codex', 'omp'] as const
 /** Why a built-in tool is not on a restricted specialist's list. Any other name gets the generic refusal. */
 const TOOL_REFUSALS: Readonly<Record<string, string>> = {
@@ -504,7 +503,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
 
   function readSpecialistKeyTypes(t: Table, path: string) {
     str(t, 'workdir', path); str(t, 'kickoff', path); str(t, 'kickoff_file', path); strList(t, 'pinned_to', path); str(t, 'speaks_as', path); strList(t, 'reachable_by', path)
-    oneOf(t, 'sessions', path, SESSIONS); positiveInt(t, 'max_sessions', path); str(t, 'idle', path); str(t, 'home_place', path); str(t, 'model', path)
+    oneOf(t, 'sessions', path, SESSIONS_MODES); positiveInt(t, 'max_sessions', path); str(t, 'idle', path); str(t, 'home_place', path); str(t, 'model', path)
     oneOf(t, 'engine', path, ENGINES); str(t, 'env_file', path); strList(t, 'renamed_from', path)
     bool(t, 'restricted', path); strList(t, 'tools', path); strList(t, 'mcp_servers', path); strList(t, 'sends_to', path)
   }
@@ -631,7 +630,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       id, workdir, reachableBy,
       ...(pinnedTo && { pinnedTo }),
       ...(speaksAs !== undefined && Object.hasOwn(slackApps, speaksAs) && { speaksAs }),
-      sessions: oneOf(t, 'sessions', path, SESSIONS) ?? 'shared',
+      sessions: oneOf(t, 'sessions', path, SESSIONS_MODES) ?? 'shared',
       maxSessions: positiveInt(t, 'max_sessions', path) ?? 20,
       renamedFrom,
       ...(kickoff !== undefined && { kickoff }),
@@ -720,16 +719,16 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     const envFileRaw = str(t, 'env_file', path)
     const envFile = envFileRaw === undefined ? undefined : isAbsolute(expand(envFileRaw)) ? expand(envFileRaw) : workdir && isAbsolute(workdir) ? join(workdir, envFileRaw) : undefined
     if (envFileRaw !== undefined && envFile === undefined) error(`${path}.env_file`, `"${envFileRaw}" is relative, so it needs an absolute workdir`)
-    const runner = oneOf(t, 'runner', path, ['launchd', 'daemon'] as const) ?? 'launchd'
+    const runner = oneOf(t, 'runner', path, RUNNERS) ?? 'launchd'
     // A daemon schedule is retried until done; launchd fires once. needs and alert_after only mean something retried.
     const needs = strList(t, 'needs', path)
-    for (const [i, n] of (needs ?? []).entries()) if (n !== 'internet') error(`${path}.needs[${i}]`, `unknown precondition "${n}" (known: internet)`)
+    for (const [i, n] of (needs ?? []).entries()) if (!(NEEDS as readonly string[]).includes(n)) error(`${path}.needs[${i}]`, `unknown precondition "${n}" (known: ${NEEDS.join(', ')})`)
     const alertAfterMs = duration(t, 'alert_after', path, MAX_ALERT_AFTER_MS)
     for (const k of ['needs', 'alert_after']) if (t[k] !== undefined && runner !== 'daemon') error(`${path}.${k}`, 'needs runner = "daemon"')
     schedules[id] = {
       id, cron: cron ?? '', message, runner,
       ...(target !== undefined && { target }),
-      ...(needs?.length && { needs: [...new Set(needs)] as 'internet'[] }),
+      ...(needs?.length && { needs: [...new Set(needs)] as Need[] }),
       ...(alertAfterMs !== undefined && { alertAfterMs }),
       ...(check !== undefined && { check }),
       ...(workdir !== undefined && { workdir }),
@@ -880,7 +879,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   }
 
   /** Whether hydra connects the platform: Slack through any app it declares. */
-  const connected = (platform: 'discord' | 'slack' | 'github'): boolean => platform === 'slack' ? Object.keys(slackApps).length > 0 : platform === 'discord' ? !!gateways.discord : !!connectors.github
+  const connected = (platform: Platform): boolean => platform === 'slack' ? Object.keys(slackApps).length > 0 : platform === 'discord' ? !!gateways.discord : !!connectors.github
 
   // --- warnings that need the whole file -----------------------------------------------------------------------------
 

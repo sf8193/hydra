@@ -9,6 +9,7 @@ import { isAbsolute, join, normalize } from 'path'
 import { latestSlot, nextSlot, parseCron, type Slot } from './cron-local.js'
 import { parseDuration, parseIdleTtl } from './constants.js'
 import { launchdCalendar } from './jobs-launchd.js'
+import { NEEDS, RUNNERS, type Need, type Runner } from '../config/types.js'
 import type { LoopClock } from './loop-watch.js'
 
 // ---------------------------------------------------------------------------
@@ -42,12 +43,6 @@ export type Job = {
 }
 
 /**
- * launchd (the default): a launchd calendar entry runs the check at each slot, once on wake for a slot missed asleep,
- * and leaves its result for the daemon to deliver. daemon: the daemon's clock, which retries a slot until it is done.
- */
-export type Runner = 'launchd' | 'daemon'
-
-/**
  * The job an attempt reads on stdin. A daemon started before targets existed sends `mode` (and `model`, `idleTtl`)
  * instead of `target`; read that the way the parser reads the old keys, so a slot isn't run as "no agent".
  */
@@ -62,8 +57,6 @@ export function jobFromWire(o: Job & { mode?: string; model?: string; idleTtl?: 
 export const isSpawn = (t: JobTarget | undefined): t is { spawn: Recipe } => !!t && 'spawn' in t
 export const targetLabel = (t: JobTarget | undefined) => !t ? 'none' : 'spawn' in t ? 'spawn' : `to ${t.to}`
 
-export type Need = 'internet'
-const NEEDS: readonly Need[] = ['internet']
 const DEFAULT_ALERT_AFTER_MS = 24 * 60 * 60_000
 const MAX_ALERT_AFTER_MS = 30 * 24 * 60 * 60_000
 
@@ -86,8 +79,8 @@ const expandHome = (v: string) => v === '~' || v.startsWith('~/') ? homedir() + 
 
 export function parseJobsConfig(text: string): JobsConfig {
   const doc = Bun.TOML.parse(text) as Record<string, unknown>
-  if (doc.runner !== undefined && doc.runner !== 'launchd' && doc.runner !== 'daemon') {
-    throw new Error('jobs.toml: top-level runner must be "launchd" or "daemon" (a job named "runner" is not allowed)')
+  if (doc.runner !== undefined && !RUNNERS.includes(doc.runner as Runner)) {
+    throw new Error(`jobs.toml: top-level runner must be ${RUNNERS.map(r => `"${r}"`).join(' or ')} (a job named "runner" is not allowed)`)
   }
   const fileRunner = doc.runner as Runner | undefined
   if (doc.channel !== undefined && typeof doc.channel !== 'string') throw new Error('jobs.toml: top-level channel must be a quoted string (a job named "channel" is not allowed)')
@@ -192,7 +185,7 @@ export function parseJobsConfig(text: string): JobsConfig {
     const alertAfterMs = alertAfter === undefined ? DEFAULT_ALERT_AFTER_MS : parseAlertAfter(alertAfter)
     if (alertAfterMs === null) fail(`alert_after "${alertAfter}" must be a duration like 90m, 12h or 2d, at most 30d`)
     const own = str('runner')
-    if (own !== undefined && own !== 'daemon' && own !== 'launchd') fail('runner must be "launchd" (the default) or "daemon"')
+    if (own !== undefined && !RUNNERS.includes(own as Runner)) fail(`runner must be "${RUNNERS[0]}" (the default) or ${RUNNERS.slice(1).map(r => `"${r}"`).join(' or ')}`)
     let runner = (own ?? fileRunner ?? 'launchd') as Runner
     let runnerFrom: Job['runnerFrom'] = own ? 'job' : fileRunner ? 'file' : 'default'
     if (runner === 'launchd') {

@@ -9,7 +9,7 @@ import { dirname, isAbsolute, join, resolve } from 'path'
 import { parseIdleTtl } from '../shared/constants.js'
 import { invalidSpecialistName } from '../shared/specialist-name.js'
 import { loadHydraConfig, normalizeAddress, normalizePlace, formatIssues } from './load.js'
-import type { ConfigIssue, LoadEnv } from './types.js'
+import type { ChatPlatform, ConfigIssue, LoadEnv } from './types.js'
 import { slackWatchStep } from './migrate-slack-watch.js'
 import { jobsStep } from './migrate-jobs.js'
 
@@ -22,7 +22,7 @@ export type MigrateInput = {
   env: LoadEnv
   /** The folder sessions spawn in today: a migrated specialist's workdir. */
   spawnCwd: string
-  platform: 'discord' | 'slack'
+  platform: ChatPlatform
   /** Where the old daemon ran, which its relative paths (a kickoffFile) were read from. Default: as written. */
   daemonCwd?: string
 }

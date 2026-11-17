@@ -13,7 +13,8 @@
 import { randomBytes } from 'crypto'
 import { registry } from './sessions.js'
 import { emojiOf } from './anchor-state.js'
-import { noteLine, type SendType } from './quiet-send.js'
+import { noteLine } from './quiet-send.js'
+import { RESTRICTED_SEND_TYPES, type SendType } from '../shared/tool-definitions.js'
 import { currentHydraConfig } from './hydra-config.js'
 import { gateway } from './config.js'
 import { occupancy } from './session-reachability.js'
@@ -23,9 +24,6 @@ import { deliverToSession } from '../specialists/targets.js'
 import { slackConversationLink } from '../connectors/slack/runtime.js'
 import { parseConversation, conversationId } from '../connectors/slack/conversation.js'
 import { attr, fence, quoteBody, UNTRUSTED_TEXT_MAX_CHARS } from '../shared/untrusted-text.js'
-
-/** What a restricted session may send: a question, or the answer to one. (`progress` has no place in a hand-off.) */
-export const SEND_TYPES = ['question', 'result'] as const
 
 /** At most this many questions, and this many results, per conversation in the window: one conversation, a hijacked specialist or two specialists answering each other cannot send without end. */
 export const SEND_MAX_PER_WINDOW = 3
@@ -101,7 +99,7 @@ export function sendsToRefusal(callerSessionId: string, args: Record<string, unk
   const target = typeof args.target === 'string' ? args.target.trim() : ''
   if (!allowed.includes(target)) return `send_to_thread: ${target ? `${target} is not` : 'no target given, and it must be'} a specialist in your sends_to (${listed(allowed)})`
   const type = typeof args.type === 'string' ? args.type.trim() : ''
-  if (!(SEND_TYPES as readonly string[]).includes(type)) return `send_to_thread: type must be one of ${SEND_TYPES.join(', ')}`
+  if (!(RESTRICTED_SEND_TYPES as readonly string[]).includes(type)) return `send_to_thread: type must be one of ${RESTRICTED_SEND_TYPES.join(', ')}`
   if (typeof args.text !== 'string' || !args.text.trim()) return 'send_to_thread: the text is empty: say what you need (question) or your answer (result)'
   if (Array.isArray(args.files) && args.files.length) return 'send_to_thread: a restricted session sends text only, so remove files (attachments are not sent)'
   if (args.visibility !== undefined && args.visibility !== 'public') return 'send_to_thread: a restricted session has no private route; leave visibility out'

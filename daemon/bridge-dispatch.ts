@@ -23,6 +23,7 @@ import { refreshSessionVisual, emojiOf, emojiOfName } from './anchor-state.js'
 import { refreshDashboard } from './dashboard.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './artifacts.js'
 import { fetchPrTitle, parsePrUrl } from '../connectors/github/pr-watch.js'
+import { SEND_TYPES, type SendType } from '../shared/tool-definitions.js'
 import { ASK_PREDECESSOR_TIMEOUT_MS, normalizeReviewRounds, resolveCodexModelAlias, resolveOmpModelAlias } from '../shared/constants.js'
 import { isRestrictedSession, isToolAllowed, predecessorAsker, refusalText } from './tool-surface.js'
 import { parseRateLimits, reportUsage } from './usage-alerts.js'
@@ -639,8 +640,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const text = args.text as string
         const files = (args.files as string[] | undefined) ?? []
         if (!target) throw new Error('target is required (session name, e.g. "cedar")')
-        const VALID_TYPES = ['progress', 'question', 'result']
-        if (!msgType || !VALID_TYPES.includes(msgType)) throw new Error(`type is required: ${VALID_TYPES.join(', ')}`)
+        if (!msgType || !(SEND_TYPES as readonly string[]).includes(msgType)) throw new Error(`type is required: ${SEND_TYPES.join(', ')}`)
         if (!text) throw new Error('text is required')
         const summary = args.summary as string | undefined
         const visibility = (args.visibility as string | undefined)?.trim() || 'public'
@@ -725,7 +725,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const quietOutcome = wantsQuiet
           ? await Promise.all([caller ? party(caller) : { name: senderName, emoji: emojiOfName(senderName) }, party(targetSession)])
             .then(([from, to]) => quietSend(
-              { from, to, type: msgType as 'progress' | 'question' | 'result', text, summary, dir: join(STATE_DIR, 'messages') },
+              { from, to, type: msgType as SendType, text, summary, dir: join(STATE_DIR, 'messages') },
               {
                 postLine: line => retrySend(() => gateway.send(threadId, line, { subtext: true })),
                 ...(echoThread ? { postEcho: (line: string) => retrySend(() => gateway.send(echoThread, line, { subtext: true })) } : {}),

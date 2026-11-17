@@ -32,7 +32,7 @@ const execFileAsync = promisify(execFile)
 
 export type BlockingKind = 'plan_mode' | 'login_required' | 'resume_prompt' | 'usage_limit' | 'unknown_dialog'
 
-export type LoginStage = 'expiring' | 'blocked' | 'oauth_url' | 'success'
+export type LoginStage = 'expiring' | 'login-blocked' | 'oauth_url' | 'success'
 
 export type BlockingState = {
   kind: BlockingKind
@@ -282,14 +282,14 @@ export function detectBlockingState(tailText: string): BlockingState | null {
     return { kind: 'login_required', planPath: null, loginStage: 'oauth_url', oauthUrl: urlMatch?.[0] ?? null }
   }
   if (!liveRepl && LOGIN_BLOCKED_PATTERNS.some(p => p.test(tailText))) {
-    return { kind: 'login_required', planPath: null, loginStage: 'blocked', oauthUrl: null }
+    return { kind: 'login_required', planPath: null, loginStage: 'login-blocked', oauthUrl: null }
   }
-  // "Login expired" is functionally identical to "blocked" — session can't proceed.
+  // "Login expired" is functionally identical to "login-blocked" — session can't proceed.
   // No separate LoginStage variant needed; the remediation path is the same.
   // Gated on liveRepl too: a genuine expiry freezes the pane (no working prompt);
   // the banner above a live `❯` is stale scrollback from a resumed session.
   if (!liveRepl && LOGIN_EXPIRED_RE.test(tailText)) {
-    return { kind: 'login_required', planPath: null, loginStage: 'blocked', oauthUrl: null }
+    return { kind: 'login_required', planPath: null, loginStage: 'login-blocked', oauthUrl: null }
   }
   // Expiring is a footer warning that co-renders WITH the working prompt, so it
   // is intentionally not gated on liveRepl — the latch below bounds its spam.
@@ -411,7 +411,7 @@ export function isBlockingKind(value: string): value is BlockingKind {
 }
 
 export function homeActionable(state: BlockingState): boolean {
-  if (state.kind === 'login_required') return state.loginStage === 'blocked'
+  if (state.kind === 'login_required') return state.loginStage === 'login-blocked'
   if (state.kind === 'unknown_dialog') return !state.escEndsSession
   return true
 }
@@ -920,7 +920,7 @@ export async function probeAllSessions(now?: number): Promise<void> {
       } else {
         const first = io.firstAssistantText(sessionInfo)
         if (first === null) { /* no turn yet */ }
-        else if (LOGIN_EXPIRED_RE.test(first)) detected = { kind: 'login_required', planPath: null, loginStage: 'blocked', oauthUrl: null }
+        else if (LOGIN_EXPIRED_RE.test(first)) detected = { kind: 'login_required', planPath: null, loginStage: 'login-blocked', oauthUrl: null }
         else delete sessionInfo.spawnPrompt // first turn ran
       }
     }

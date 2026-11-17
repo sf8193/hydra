@@ -4,7 +4,7 @@
 // Definitions live in shared/tool-definitions.ts. Name sets live in shared/constants.ts.
 import { BASE_TOOLS, ALL_CAPABILITY_TOOLS } from '../shared/constants.js'
 import type { SessionType, Capability, DerivedCapability, ToolName } from '../shared/constants.js'
-import { UNIVERSAL_TOOLS } from '../shared/tool-definitions.js'
+import { RESTRICTED_SEND_TYPES, UNIVERSAL_TOOLS } from '../shared/tool-definitions.js'
 
 export { UNIVERSAL_TOOLS }
 
@@ -41,7 +41,7 @@ function restrictedSend(tool: SessionTool): SessionTool {
       type: 'object',
       properties: {
         target: { type: 'string', description: 'The specialist to send to.' },
-        type: { type: 'string', enum: ['question', 'result'], description: 'question: you need something from it. result: your answer to its question; say in the text which question you answer.' },
+        type: { type: 'string', enum: RESTRICTED_SEND_TYPES, description: 'question: you need something from it. result: your answer to its question; say in the text which question you answer.' },
         text: { type: 'string', description: 'Self-contained: it sees only this and the link.' },
         chat_id: { type: 'string', description: 'The chat_id of the message you are answering: the conversation this is about.' },
       },

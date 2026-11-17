@@ -13,7 +13,7 @@ import { setSpecialist, removeSpecialist } from '../../../specialists/specialist
 import { killSession } from '../../../daemon/session-lifecycle.js'
 import { gateway } from '../../../daemon/config.js'
 import { reviveThreadForDelivery, reviveDeps } from '../../../daemon/recovery.js'
-import { deliveryOutcome } from '../../../daemon/delivery-outcome.js'
+import { landingOf } from '../../../daemon/landing.js'
 
 process.stderr.write = (() => true) as any
 
@@ -237,8 +237,8 @@ describe('a kill and a poll in flight', () => {
   })
 
   test('a write requeued on a dying socket is queued when the sender asked to queue (not exit 6, which would resend it)', () => {
-    expect(deliveryOutcome({ status: 'accepted', via: 'requeued' } as any, true)).toEqual({ ok: true, status: 'queued', proof: 'persisted' })
-    expect(deliveryOutcome({ status: 'accepted', via: 'requeued' } as any, false)).toMatchObject({ ok: false, exitCode: 6 })
+    expect(landingOf({ status: 'accepted', via: 'requeued' } as any, true)).toEqual({ ok: true, status: 'queued', proof: 'persisted' })
+    expect(landingOf({ status: 'accepted', via: 'requeued' } as any, false)).toMatchObject({ ok: false, exitCode: 6 })
   })
 })
 

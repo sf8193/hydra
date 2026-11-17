@@ -19,6 +19,7 @@ import { nextSlot } from '../shared/cron-local.js'
 import { DEFAULT_IDLE_TTL_MS } from '../shared/constants.js'
 import { invalidSpecialistName, isSessionThread } from '../shared/specialist-name.js'
 import { readTarget, spelled, spelledTo } from '../shared/target-kind.js'
+import type { Runner } from './types.js'
 import type { MigrateStep } from './migrate.js'
 
 export type ScheduleTable = {
@@ -28,7 +29,7 @@ export type ScheduleTable = {
   check?: string
   workdir?: string
   env_file?: string
-  runner: 'launchd' | 'daemon'
+  runner: Runner
   needs?: string[]
   alert_after?: string
 }
