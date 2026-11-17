@@ -1,5 +1,5 @@
 import { ConversationTable, namedChannels, cantRead, cmpTs, slackWatchesPath, unresolvedPlaces, conversationId, placeName, isDm, appOfEntry, TOP_LEVEL, NO_DIRECTORY, SLACK_LIMITS, type ConversationConfig, type ConversationEntry, type ConversationStats, type LateOwed } from './watch.js'
-import { parseConversation } from './conversation.js'
+import { parseConversation, THREAD_TS } from './conversation.js'
 import { ConnectedApps, type AppIdentity } from './apps.js'
 import { getSpecialist, conversationSpecialistOf, specialistOf, boundAs } from '../../specialists/specialists.js'
 import { registry } from '../../daemon/sessions.js'
@@ -476,10 +476,10 @@ export function conversationBelongsTo(callerSessionId: string | undefined, conve
 
 /**
  * `reply` with a conversation id as its chat_id: the specialist answers a Slack conversation. Hydra posts the text
- * as given, and only into a conversation bound to the caller's specialist: a reply goes back where its question came from. A thread
+ * as given, and only into a conversation bound to the caller's specialist (with `replyTo`, in a DM, into the thread of that message, bound to the caller): a reply goes back where its question came from. A thread
  * bound to a session's own thread is listen-only.
  */
-export async function replyInConversation(callerSessionId: string | undefined, conversation: unknown, text: string, files: string[] = []): Promise<string> {
+export async function replyInConversation(callerSessionId: string | undefined, conversation: unknown, text: string, files: string[] = [], replyTo?: string): Promise<string> {
   if (files.length) throw new Error('attachments are not posted to Slack yet; reply with text (a link works)')
   if (!text.trim()) throw new Error('nothing to post: the text is empty')
   const h = hydraConfig()
@@ -490,19 +490,13 @@ export async function replyInConversation(callerSessionId: string | undefined, c
   const speaks = spec ? speaksAsOf(spec, Object.keys(h.slackApps)) : undefined
   const homePlaceId = me ? homePlaceChannel(h, me, speaks) : undefined
   if (homePlaceId && (conversation === h.specialists[me!]?.homePlace || conversation === `slack:${homePlaceId}` || conversation === conversationId({ app: speaks, channel: homePlaceId, threadTs: TOP_LEVEL }))) {
+    if (replyTo) throw new Error(`reply_to cannot be used on a post to ${me}'s home_place: it opens a thread of its own`)
     if (!speaks) throw new Error(`${me} has no Slack app to post as: set \`speaks_as\` in [specialists.${me}]`)
     declaredApp(h, speaks)
     const where = `${me}'s home_place (${h.specialists[me!]!.homePlace})`
-    // Its thread is a conversation bound to it as soon as the first part lands (whatever becomes of the rest), counted
-    // with the ones it binds by hand, so a loop can't fill the table. Past that, the post goes unbound, and is alerted.
+    // Its thread is a conversation bound to it as soon as the first part lands (whatever becomes of the rest).
     let unbound: string | undefined
-    const bindThread = (ts: string) => {
-      const w = getConversationTable()
-      const held = w.list().filter(e => (e.mentionedBy === 'tool' || e.mentionedBy === 'home') && e.specialist && currentId(h, e.specialist) === me).length
-      if (held < TOOL_BIND_MAX && w.bind(homePlaceId, ts, me!, 'home', speaks)) return
-      unbound = held >= TOOL_BIND_MAX ? `${me} already holds ${TOOL_BIND_MAX} conversations it opened itself` : 'the conversation table is full'
-      alert(`⚠️ ${me}'s post to its home_place opened no conversation (${unbound}): replies under it go to whoever hears there, not back to ${me}.`, me)
-    }
+    const bindThread = (ts: string) => { unbound = bindOpenedThread(h, me!, homePlaceId, ts, speaks, 'post to its home_place', 'home') }
     await postParts(speaks!, homePlaceId, undefined, text, where, true, () => homePlaceChannel(hydraConfig(), me!, speaks) === homePlaceId, bindThread)
     return unbound ? `posted to ${where}, but its thread is not bound to ${me}: ${unbound}` : `posted to ${where}; replies in its thread come back to ${me}`
   }
@@ -511,16 +505,63 @@ export async function replyInConversation(callerSessionId: string | undefined, c
   const id = conversationId(c)
   const e = getConversationTable().get(c.channel, c.threadTs, app)
   if (!e) throw new Error(`${id} is not an open conversation, so there is nothing there to answer`)
-  const bound = e.specialist ? currentId(h, e.specialist) : undefined
-  // A thread a session bound to itself is listen-only: only a specialist (or main) speaks in Slack.
-  if (bound && isSessionThread(bound)) throw new Error(`${id} is bound to a session to listen to: hydra posts to Slack only for a specialist (or main), so reply to the operator instead`)
   const caller = callerSessionId ? registry.get(callerSessionId) : undefined
-  if (!mayAnswerConversation(h, caller, me, bound, id)) throw new Error(`${id} is bound to ${bound ?? 'no one yet'}${me ? `, not ${me}` : ''}: a reply goes only to a conversation bound to your specialist (or its home_place)${isConversationSession(caller) ? ', and from a conversation\'s own session only to that conversation' : ''}`)
+  /** Throws unless the caller answers this open conversation; returns who it is bound to, which `stillMine` holds it to before every part. */
+  const mayAnswer = (entry: ConversationEntry, entryId: string): string | undefined => {
+    const bound = entry.specialist ? currentId(h, entry.specialist) : undefined
+    // A thread a session bound to itself is listen-only: only a specialist (or main) speaks in Slack.
+    if (bound && isSessionThread(bound)) throw new Error(`${entryId} is bound to a session to listen to: hydra posts to Slack only for a specialist (or main), so reply to the operator instead`)
+    if (!mayAnswerConversation(h, caller, me, bound, entryId)) throw new Error(`${entryId} is bound to ${bound ?? 'no one yet'}${me ? `, not ${me}` : ''}: a reply goes only to a conversation bound to your specialist (or its home_place)${isConversationSession(caller) ? ', and from a conversation\'s own session only to that conversation' : ''}`)
+    return bound
+  }
+  const bound = mayAnswer(e, id)
+  // Which thread the post goes in. A thread conversation is its one thread (Slack threads are flat: no message inside one can be answered on its own);
+  // a top-level conversation (only a DM has one) is answered in the thread of the message `reply_to` names, else at its top level.
+  let thread = c.threadTs === TOP_LEVEL ? undefined : c.threadTs
+  let how = ''
+  let opened: string | undefined
+  let nested: ConversationEntry | undefined
+  if (replyTo) {
+    const ts = THREAD_TS.test(replyTo) ? replyTo.replace(/\.(\d+)$/, (_, f: string) => `.${f.padEnd(6, '0')}`) : undefined
+    if (!ts) throw new Error(`reply_to ${replyTo} is not a Slack message ts (like 1793732224.093059): nothing was posted. Copy the ts of the message you are answering from the delivery`)
+    if (c.threadTs !== TOP_LEVEL) {
+      if (ts !== c.threadTs) how = `; reply_to ${ts} is not this thread's first message, and a Slack reply cannot answer one message inside a thread, so it was posted to the thread as a whole`
+    } else {
+      // Its thread is a new conversation, with a session of its own when the specialist runs one per conversation: not this one's to open.
+      if (isConversationSession(caller)) throw new Error(`reply_to cannot open a thread from a conversation's own session: the thread would be a new conversation with a session of its own. Nothing was posted; answer ${id} without reply_to`)
+      nested = getConversationTable().get(c.channel, ts, app)
+      if (nested) mayAnswer(nested, conversationId({ ...c, threadTs: ts }))
+      thread = ts
+      opened = nested ? undefined : ts
+      how = `, in the thread of message ${ts}`
+    }
+  }
   // Checked again before every part: a conversation moved away mid-reply gets no more of it.
-  const stillMine = () => { const now = getConversationTable().get(c.channel, c.threadTs, app)?.specialist; return !!now && currentId(hydraConfig(), now) === bound }
-  // Through the app that heard the conversation, and no other.
-  const { posted } = await postParts(app, c.channel, c.threadTs === TOP_LEVEL ? undefined : c.threadTs, text, id, false, stillMine)
-  return `posted ${posted} message${posted === 1 ? '' : 's'} to ${id}`
+  const stillBound = (channel: string, threadTs: string, was: string | undefined) => { const now = getConversationTable().get(channel, threadTs, app)?.specialist; return !!now && currentId(hydraConfig(), now) === was }
+  const nestedBound = nested?.specialist ? currentId(h, nested.specialist) : undefined
+  const stillMine = () => stillBound(c.channel, c.threadTs, bound) && (!nested || stillBound(nested.channel, nested.threadTs, nestedBound))
+  // Through the app that heard the conversation, and no other. A thread opened under a message is bound to the replier as its first part lands,
+  // so the person's answer in it comes back to the session that asked, not to whoever the rules name for that place.
+  let unbound: string | undefined
+  const { posted } = await postParts(app, c.channel, thread, text, id, false, stillMine, opened ? () => { unbound = bindOpenedThread(h, me!, c.channel, opened!, app, `reply in the thread of message ${opened}`, 'tool') } : undefined)
+  const said = `posted ${posted} message${posted === 1 ? '' : 's'} to ${id}${how}`
+  return opened ? (unbound ? `${said}; its thread is not bound to ${me}: ${unbound}, so replies in it go to whoever the rules name here` : `${said}; replies in it come back to ${me}`) : said
+}
+
+/**
+ * A thread this session opened by answering under a message is a conversation bound to it, counted with the ones it binds by hand so a loop
+ * can't fill the table. Returns why it is not bound (and alerts), or nothing.
+ */
+function bindOpenedThread(h: HydraConfig, me: string, channel: string, ts: string, app: string, what: string, by: 'home' | 'tool'): string | undefined {
+  const w = getConversationTable()
+  // A thread the person answered into while the first part was posting may already be bound by the rules: never taken from whoever holds it.
+  const now = w.get(channel, ts, app)?.specialist
+  if (now) return currentId(h, now) === me ? undefined : `it is already bound to ${now}`
+  const held = w.list().filter(e => (e.mentionedBy === 'tool' || e.mentionedBy === 'home') && e.specialist && currentId(h, e.specialist) === me).length
+  if (held < TOOL_BIND_MAX && w.bind(channel, ts, me, by, app)) return undefined
+  const why = held >= TOOL_BIND_MAX ? `${me} already holds ${TOOL_BIND_MAX} conversations it opened itself` : 'the conversation table is full'
+  alert(`⚠️ ${me}'s ${what} opened no conversation (${why}): replies under it go to whoever hears there, not back to ${me}.`, me)
+  return why
 }
 
 /** A link to a Slack conversation (`slack:[app:]C…[:ts]`), when the app that heard it knows the workspace's address; undefined otherwise. */
