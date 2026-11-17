@@ -7,7 +7,7 @@ import { SESSION_NAMES, type SessionInfo } from '../daemon/sessions.js'
 import { clearBackoff } from '../daemon/recovery-backoff.js'
 import { SPECIALIST_NAME_RE, invalidSpecialistName as invalidName, isSessionThread } from '../shared/specialist-name.js'
 import { currentHydraConfig, hydraConfigInUse, onHydraConfigLoad } from '../daemon/hydra-config.js'
-import type { HydraConfig, Specialist as DeclaredSpecialist } from '../config/types.js'
+import { isChannelName, parsePlace, type HydraConfig, type Specialist as DeclaredSpecialist } from '../config/types.js'
 import type { EngineName } from '../shared/engine-capabilities.js'
 import { engineOfModel } from '../shared/constants.js'
 
@@ -67,8 +67,8 @@ export const declaredInToml = (): boolean => hydraConfigInUse()
 /** A `home_place` that names a channel id on this platform, or undefined (a `#name` needs a lookup that doesn't exist yet). */
 function homePlaceChannelId(homePlace: string): string | undefined {
   if (/^\d+$/.test(homePlace)) return homePlace
-  const m = homePlace.match(/^(discord|slack):([A-Z0-9]+|\d+)$/)
-  return m && m[1] === PLATFORM ? m[2] : undefined
+  const r = parsePlace(homePlace)
+  return r.ok && r.place.platform === PLATFORM && r.place.kind === 'channel' && !isChannelName(r.place) ? r.place.ref : undefined
 }
 
 /** The channel a hydra.toml specialist opens a new thread in: its `home_place` when usable, else the operator's default channel. */

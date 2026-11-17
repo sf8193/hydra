@@ -12,7 +12,7 @@
 // Then `reachable_by`: the operator is always allowed, `anyone` admits strangers, `people` admits the roster, a role admits who holds it.
 
 import { whyNotServed } from '../config/pins.js'
-import { DEFAULT_SLACK_APP, isDmPlace, type Address, type HydraConfig, type Person, type Place, type Rule, type Specialist } from '../config/types.js'
+import { DEFAULT_SLACK_APP, coversAny, isDmPlace, optionsOf, placeKey, type Address, type HydraConfig, type Person, type Place, type Rule, type Specialist } from '../config/types.js'
 import { isSessionThread } from '../shared/specialist-name.js'
 import { spelledBare } from '../shared/target-kind.js'
 import { spelledApp, spelledPerson, spelledRole, whoSpelled } from '../shared/value-kind.js'
@@ -28,7 +28,7 @@ export type Sender = {
 
 export type Inbound = {
   from?: Address
-  /** Every name this place goes by, most specific first: `slack:C0ABC`, then `slack:#help`. */
+  /** Every concrete place this message happened at, most specific first: `slack:C0ABC`, then `slack:#help`. A place written with `*` names every one of its kind (`coversAny`). */
   at: Place[]
   /** A DM, or a message that tags the bot: either may open a conversation. Ambient chatter may only where `messages = "all"`. */
   addressed: boolean
@@ -112,10 +112,10 @@ export function currentId(cfg: HydraConfig, id: string): string {
 
 /** Whether an unaddressed message at this place may open a conversation: a place with `messages = "all"`. */
 export function messagesAll(cfg: HydraConfig, at: Place[]): boolean {
-  return at.some(p => cfg.places[p]?.messages === 'all')
+  return at.some(p => optionsOf(cfg.places, p)?.messages === 'all')
 }
 
-const isSlackPlace = (p: Place) => p.startsWith('slack:')
+const isSlackPlace = (p: Place) => p.platform === 'slack'
 
 /** The app that heard a message: as given, else `default` on a Slack place, else none. */
 export function appOf(msg: Pick<Inbound, 'app' | 'at'>): string | undefined {
@@ -164,7 +164,7 @@ export function slackSpecialistsOf(cfg: HydraConfig, app?: string): string[] {
 export function reachesAnyone(cfg: HydraConfig, app: string, at: Place[]): boolean {
   if (at.some(isDmPlace)) return true
   const r = reachableBy(cfg, app)
-  return r.rules.some(x => x.place === undefined || at.includes(x.place))
+  return r.rules.some(x => x.place === undefined || coversAny(x.place, at))
 }
 
 /**
@@ -187,7 +187,7 @@ export function owningApp(cfg: HydraConfig, msg: Pick<Inbound, 'app' | 'heardBy'
   if (tagged.length) return pick(tagged[0], `${spelledApp(tagged[0])} is tagged${tagged.length > 1 ? ' first' : ''}`)
   if (msg.boundApp && here.has(msg.boundApp)) return pick(msg.boundApp, `${spelledApp(msg.boundApp)} opened this conversation, and no app is tagged`)
   for (const p of msg.at) {
-    const d = cfg.places[p]?.defaultApp
+    const d = optionsOf(cfg.places, p)?.defaultApp
     if (d && here.has(d)) return pick(d, `${spelledApp(d)} is this place's \`default_app\``)
   }
   const serving = heard.filter(a => reachesAnyone(cfg, a, msg.at))
@@ -239,12 +239,12 @@ export function route(cfg: HydraConfig, msg: Inbound): Decision {
 
   let winner: { to: string; via: Via } | undefined
   for (const [i, r] of cfg.rules.entries()) {
-    const atOk = r.place === undefined || msg.at.includes(r.place)
+    const atOk = r.place === undefined || coversAny(r.place, msg.at)
     const appOk = r.app === undefined || r.app === app
     const fromOk = r.person === undefined || r.person === sender.person?.id || sender.roles.includes(r.person)
     const apart = atOk && appOk && fromOk && !winner ? notServedBy(cfg, r.target, app) : undefined
     const matched = !winner && atOk && appOk && fromOk && !apart
-    const why = !atOk ? `rules[${i}] is for place ${r.place}` : !appOk ? `rules[${i}] is for ${spelledApp(r.app!)}, and this came through ${app ? spelledApp(app) : 'no Slack app'}` : !fromOk ? `rules[${i}] is for ${whoSpelled(cfg.people, r.person!)}` : winner ? `rules[${i}] matches, but an earlier rule won` : apart ? `rules[${i}] matches, but ${apart}; skipped` : `rules[${i}]: first rule that matches`
+    const why = !atOk ? `rules[${i}] is for place ${placeKey(r.place!)}` : !appOk ? `rules[${i}] is for ${spelledApp(r.app!)}, and this came through ${app ? spelledApp(app) : 'no Slack app'}` : !fromOk ? `rules[${i}] is for ${whoSpelled(cfg.people, r.person!)}` : winner ? `rules[${i}] matches, but an earlier rule won` : apart ? `rules[${i}] matches, but ${apart}; skipped` : `rules[${i}]: first rule that matches`
     trace.push({ via: 'rule', to: r.target, matched, why })
     if (matched) winner = { to: r.target, via: 'rule' }
   }
@@ -264,7 +264,7 @@ export function route(cfg: HydraConfig, msg: Inbound): Decision {
  */
 export function answersLines(cfg: HydraConfig): string[] {
   return Object.keys(cfg.specialists).map(id => {
-    const heard = cfg.rules.filter(r => r.target === id).map(r => `${r.place ?? 'every place'}${r.app ? ` via ${spelledApp(r.app)}` : ''}${r.person ? ` for ${whoSpelled(cfg.people, r.person)}` : ''}`)
+    const heard = cfg.rules.filter(r => r.target === id).map(r => `${r.place ? placeKey(r.place) : 'every place'}${r.app ? ` via ${spelledApp(r.app)}` : ''}${r.person ? ` for ${whoSpelled(cfg.people, r.person)}` : ''}`)
     return `${id} answers: ${heard.length ? heard.join(', ') : 'no place (only a conversation bound to it)'}`
   })
 }

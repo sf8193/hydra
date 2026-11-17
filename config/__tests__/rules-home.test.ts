@@ -1,9 +1,9 @@
 // Every subscription is a `[[rules]]` entry: a specialist does not say where it is heard, and `listens` is an unknown key.
 import { describe, test, expect } from 'bun:test'
 import { loadHydraConfig } from '../load.js'
-import { placesAnsweredBy, type HydraConfig } from '../types.js'
+import { mustParsePlace, type HydraConfig } from '../types.js'
 import { answersLines, route } from '../../routing/route.js'
-import { testLoadEnv } from './load-env.js'
+import { testLoadEnv, answeredKeys, ruleKeys } from './load-env.js'
 
 const env = testLoadEnv({ home: '/home/op', isDir: p => p.startsWith('/home/op'), sessionNames: ['spark'] })
 const load = (text: string) => {
@@ -45,10 +45,10 @@ target = "main"
 place = "slack:C0HELP"
 target = "specialist:crm"
 [[rules]]
-place = "slack:dm"
+place = "slack:app-dm:*"
 target = "specialist:deals"
 [[rules]]
-place = "slack:dm"
+place = "slack:app-dm:*"
 target = "specialist:kitchen"
 [[rules]]
 place = "github:acme/w"
@@ -68,8 +68,8 @@ describe('`listens` is gone', () => {
   test('a specialist that says it gets the ordinary unknown-key error, and [[rules]] says where it is heard', () => {
     const r = loadHydraConfig(`${HEAD}[specialists.ops]\nworkdir = "/home/op/ops"\nlistens = ["slack:#help"]\n`, env)
     expect(!r.ok && r.errors.map(e => `${e.path}: ${e.message}`)).toEqual(['specialists.ops.listens: unknown key "listens"'])
-    expect(load(NEW).config.rules.map(r => `${r.place}→${r.target}`)).toEqual([
-      'slack:#ops→main', 'slack:C0HELP→crm', 'slack:dm→deals', 'slack:dm→kitchen', 'github:acme/w→kitchen', 'slack:#help→ops', 'slack:#crm→crm', 'slack:#help→deals',
+    expect(load(NEW).config.rules.map(r => `${r.place ? ruleKeys([r])[0].place : r.place}→${r.target}`)).toEqual([
+      'slack:#ops→main', 'slack:C0HELP→crm', 'slack:app-dm:*→deals', 'slack:app-dm:*→kitchen', 'github:acme/w→kitchen', 'slack:#help→ops', 'slack:#crm→crm', 'slack:#help→deals',
     ])
   })
 })
@@ -98,10 +98,10 @@ target = "specialist:deals"
 `)
 
   test('placesAnsweredBy counts a rule with a place and no person, and no other: a person takes chosen people, not the place', () => {
-    expect(placesAnsweredBy(config, 'ops')).toEqual([])
-    expect(placesAnsweredBy(config, 'crm')).toEqual(['slack:#help'])
-    expect(placesAnsweredBy(config, 'deals')).toEqual(['slack:#help'])
-    expect(placesAnsweredBy(config, 'kitchen')).toEqual([])
+    expect(answeredKeys(config, 'ops')).toEqual([])
+    expect(answeredKeys(config, 'crm')).toEqual(['slack:#help'])
+    expect(answeredKeys(config, 'deals')).toEqual(['slack:#help'])
+    expect(answeredKeys(config, 'kitchen')).toEqual([])
   })
 
   test('hydra config and hydra route print "<specialist> answers: ..." for each, with who and which app a rule narrows to', () => {
@@ -115,9 +115,9 @@ target = "specialist:deals"
 
   test('route has no step called listens: a place is heard by a rule, or not at all', () => {
     const h: HydraConfig = config
-    const d = route(h, { from: 'slack:U0OP', at: ['slack:#help'], addressed: true, app: 'default' })
+    const d = route(h, { from: 'slack:U0OP', at: ['slack:#help'].map(mustParsePlace), addressed: true, app: 'default' })
     expect(d.trace.map(s => s.via)).toEqual(['rule', 'rule', 'rule', 'rule', 'rule'])
-    const quiet = route(h, { from: 'slack:U0OP', at: ['slack:#help'], addressed: false, app: 'default' })
+    const quiet = route(h, { from: 'slack:U0OP', at: ['slack:#help'].map(mustParsePlace), addressed: false, app: 'default' })
     expect(quiet.trace).toEqual([{ via: 'trigger', to: '', matched: false, why: 'not a DM or a mention, and no place here has messages = "all"' }])
   })
 })

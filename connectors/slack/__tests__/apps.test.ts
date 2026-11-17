@@ -881,7 +881,7 @@ workdir = "/w/deals"
 pinned_to = ["app:sales"]
 reachable_by = ["role:anyone"]
 [[rules]]
-place = "slack:dm"
+place = "slack:app-dm:*"
 target = "specialist:deals"
 [[rules]]
 place = "slack:${CH}"

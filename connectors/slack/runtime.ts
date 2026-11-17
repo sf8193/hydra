@@ -19,7 +19,7 @@ import { gateway } from '../../daemon/config.js'
 import { currentHydraConfig, onHydraConfigLoad } from '../../daemon/hydra-config.js'
 import { MAIN, currentId, isSessionThread, slackSpecialistsOf } from '../../routing/route.js'
 import { chunk } from '../../daemon/util.js'
-import { DEFAULT_SLACK_APP, namesAChannel, placesAnsweredBy, slackConfigured, type HydraConfig, type SlackApp } from '../../config/types.js'
+import { DEFAULT_SLACK_APP, coversAny, homePlaceOf, isChannelName, placeKey, placeOf, placesAnsweredBy, samePlace, slackConfigured, type Place, type HydraConfig, type SlackApp } from '../../config/types.js'
 import { speaksAsOf, noSuchApp } from '../../config/pins.js'
 import { notServedBy } from '../../routing/route.js'
 import { NO_SLACK_APP, appKey, notConnected } from './app.js'
@@ -368,7 +368,8 @@ const isConversationSession = (caller: Partial<Pick<SessionInfo, 'tmuxName'>> | 
 function answersIn(v: Pick<SlackWatchConfig, 'hydra' | 'directory'>, to: string, channel: string): boolean {
   const s = v.hydra.specialists[to]
   const name = v.directory.nameOf(channel)
-  return !!s && [`slack:${channel}`, ...(name ? [`slack:#${name}`] : [])].some(p => placesAnsweredBy(v.hydra, to).includes(p))
+  const at = [placeOf('slack', 'channel', channel), ...(name ? [placeOf('slack', 'channel', `#${name}`)] : [])]
+  return !!s && placesAnsweredBy(v.hydra, to).some(p => coversAny(p, at))
 }
 
 /** Conversations one specialist may hold by its own hand at once: the tool must not be a way to fill the table. */
@@ -532,10 +533,9 @@ export function slackConversationLink(conversation: string): string | undefined 
 
 /** A specialist's `home_place`, when it names a Slack place: that channel's id (a `#name` resolved once names are read, through the app it speaks as). */
 function homePlaceChannel(h: HydraConfig, id: string, app?: string): string | undefined {
-  const homePlace = h.specialists[id]?.homePlace
-  if (!homePlace?.startsWith('slack:') || !namesAChannel(homePlace)) return undefined
-  const rest = homePlace.slice('slack:'.length)
-  return rest.startsWith('#') ? offlineView(app).directory.idOf(rest.slice(1)) : rest
+  const home = homePlaceOf(h.specialists[id] ?? {})
+  if (home?.platform !== 'slack' || home.kind !== 'channel') return undefined
+  return isChannelName(home) ? offlineView(app).directory.idOf(home.ref.slice(1)) : home.ref
 }
 
 /**
@@ -634,13 +634,13 @@ export function slackWatchHealth(now = Date.now()): ({ places: { place: string; 
   const oldest = owed.sort(cmpTs)[0]
   // A name no connected app that reaches the place can resolve: each app reads its own workspace's channel names.
   const views = [...connections.listeners().keys()].map(a => offlineView(a))
-  const unresolved = (place: string): boolean => {
-    if (!views.length) return unresolvedPlaces(offlineView()).includes(place)
-    const reaching = views.filter(v => namedChannels(v.hydra, v.app).includes(place))
-    return reaching.length > 0 && reaching.every(v => unresolvedPlaces(v).includes(place))
+  const unresolved = (place: Place): boolean => {
+    if (!views.length) return unresolvedPlaces(offlineView()).some(q => samePlace(q, place))
+    const reaching = views.filter(v => namedChannels(v.hydra, v.app).some(q => samePlace(q, place)))
+    return reaching.length > 0 && reaching.every(v => unresolvedPlaces(v).some(q => samePlace(q, place)))
   }
-  const places = Object.values(h.specialists).flatMap(s => placesAnsweredBy(h, s.id).filter(p => p.startsWith('slack:')).map(place => ({
-    place, to: s.id,
+  const places = Object.values(h.specialists).flatMap(s => placesAnsweredBy(h, s.id).filter(p => p.platform === 'slack').map(place => ({
+    place: placeKey(place), to: s.id,
     ...(unresolved(place) && { note: 'no channel answers to this name (not joined, renamed, or names unreadable without channels:read)' }),
   })))
   const apps = connections.health()
@@ -661,14 +661,18 @@ export function slackWatchHealth(now = Date.now()): ({ places: { place: string; 
 }
 
 /** For `hydra route`: the names a place goes by, most specific first, as the watcher would see them. */
-export function placeAliases(place: string, app?: string): string[] {
+export function placeAliases(place: Place, app?: string): Place[] {
   const v = offlineView(app)
-  if (place.startsWith('slack:#')) {
-    const id = v.directory.idOf(place.slice('slack:#'.length))
-    return id ? [`slack:${id}`, place] : [place]
+  if (place.platform !== 'slack') return [place]
+  if (place.kind === 'channel' && isChannelName(place)) {
+    const id = v.directory.idOf(place.ref.slice(1))
+    return id ? [placeOf('slack', 'channel', id), place] : [place]
   }
-  const m = place.match(/^slack:([CG][A-Z0-9]+)$/)
-  const name = m ? v.directory.nameOf(m[1]) : undefined
-  return name ? [place, `slack:#${name}`] : [place]
+  // A group DM is also a channel by its id, and by its name when it has one (`placesOf`).
+  const id = place.kind === 'channel' || place.kind === 'group-dm' ? place.ref : undefined
+  const name = id && id !== '*' ? v.directory.nameOf(id) : undefined
+  const byName = name ? [placeOf('slack', 'channel', `#${name}`)] : []
+  if (place.kind === 'group-dm' && id !== '*') return [placeOf('slack', 'channel', id!), ...byName, place]
+  return [place, ...byName]
 }
 

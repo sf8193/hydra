@@ -6,7 +6,7 @@ import { mkdirSync, openSync, writeSync, closeSync, renameSync, rmSync } from 'f
 import { dirname } from 'path'
 import { linkPreviewsOff } from '../../shared/link-previews.js'
 import { routedChannels, hearsDms, dmsDeclared, namedChannels, unresolvedPlaces, isDm, type SlackReactionEvent, mentionedApps, NOT_A_MEMBER, OPERATOR_TOKEN_REFUSED, NO_DIRECTORY, SLACK_LIMITS, type AppWatch, type DmOtherParty, type SlackDirectory, type SlackWatchConfig, type SlackWatcher } from './watch.js'
-import { DEFAULT_SLACK_APP, SLACK_DM, SLACK_GROUP_DM, placesAnsweredBy, type HydraConfig, type SlackApp } from '../../config/types.js'
+import { DEFAULT_SLACK_APP, mustParsePlace, placeCovers, placeKey, isChannelName, placeOf, placesAnsweredBy, samePlace, type HydraConfig, type SlackApp } from '../../config/types.js'
 import { reachableBy } from '../../routing/route.js'
 import { SLACK_APP_NEEDS, NO_SLACK_APP, appKey, appSuffix, type Apps, type ScopeNeed } from './app.js'
 import { ConnectedApps } from './apps.js'
@@ -126,7 +126,7 @@ export type SlackAppLike = {
  * The scopes the options of one app need (from `SLACK_APP_NEEDS`), so a missing one is a read at startup rather than a guess later.
  * Each app is asked only for what it does (`reachableBy`): channel history when it reads a named channel, serves a rule for any
  * place, or serves a specialist that hears no place (it answers only threads bound to it); DMs when something it serves names
- * `slack:dm`, or the operator has a Slack address; files when a place it reaches has them; the private-channel read only when one of
+ * `slack:app-dm:<app>` or `slack:app-dm:*`, or the operator has a Slack address; files when a place it reaches has them; the private-channel read only when one of
  * its places is private. One app's missing scope is never another's.
  */
 export function scopesNeeded(h: HydraConfig, app: string = DEFAULT_SLACK_APP): ScopeNeed[] {
@@ -136,12 +136,16 @@ export function scopesNeeded(h: HydraConfig, app: string = DEFAULT_SLACK_APP): S
   const dms = hearsDms({ hydra: h, app })
   const everyPlace = r.rules.some(x => x.place === undefined)
   const channels = places.length > 0 || everyPlace || r.specialists.some(sp => placesAnsweredBy(h, sp.id).length === 0)
-  const groupDms = r.rules.some(x => x.place === SLACK_GROUP_DM)
-  const slackOpts = Object.entries(h.places).filter(([p]) => p.startsWith('slack:') && (everyPlace || places.includes(p) || (p === SLACK_DM && dms) || (p === SLACK_GROUP_DM && groupDms))).map(([, o]) => o)
+  const groupDms = r.rules.some(x => x.place?.kind === 'group-dm')
+  const mine = placeOf('slack', 'app-dm', app)
+  const slackOpts = Object.entries(h.places).flatMap(([key, o]) => {
+    const p = mustParsePlace(key)
+    return p.platform === 'slack' && (everyPlace || places.some(q => samePlace(q, p)) || (p.kind === 'app-dm' && dms && placeCovers(p, mine)) || (p.kind === 'group-dm' && groupDms)) ? [o] : []
+  })
   const s = SLACK_APP_NEEDS.botScopes
   return [
     ...(channels ? [s.channels] : []),
-    ...(places.some(p => p.startsWith('slack:#')) ? [s.channelNames] : []),
+    ...(places.some(isChannelName) ? [s.channelNames] : []),
     s.senderNames,
     ...(dms ? [s.dms, s.dmCatchUp] : []),
     ...(groupDms ? [s.groupDms] : []),
@@ -149,13 +153,13 @@ export function scopesNeeded(h: HydraConfig, app: string = DEFAULT_SLACK_APP): S
     s.reactions,
     ...(slackOpts.some(o => o.reactions !== 'off') ? [s.reactionsRead] : []),
     s.replies,
-    ...(several && channels ? [SLACK_APP_NEEDS.membership.public, ...(places.some(p => /^slack:G/.test(p)) ? [SLACK_APP_NEEDS.membership.private] : [])] : []),
+    ...(several && channels ? [SLACK_APP_NEEDS.membership.public, ...(places.some(p => p.ref.startsWith('G')) ? [SLACK_APP_NEEDS.membership.private] : [])] : []),
   ]
 }
 
 /**
  * The options of `scopesNeeded` that only the operator's own Slack address asks for (their DMs to `main`), because nothing
- * declares `slack:dm`. A token without them still runs everything that was declared, so they are shown in health, never alerted:
+ * declares a DM with the bot (`slack:app-dm:…`). A token without them still runs everything that was declared, so they are shown in health, never alerted:
  * a hydra.toml that ran before must not start paging for an option nobody asked for.
  */
 export function implicitScopeOptions(h: HydraConfig, app: string = DEFAULT_SLACK_APP): string[] {
@@ -367,7 +371,7 @@ export class SlackListener {
   async post(channel: string, threadTs: string | undefined, text: string): Promise<string> {
     if (!this.app || !this.sup?.state.connected) throw new Error(`Slack is not connected${this.appSuffix()}; try again once it is (hydra health shows the slack connector)`)
     // The same predicate the gateway asks (shared/link-previews.ts), with this app's own view of hydra.toml and channel names.
-    const unfurl = linkPreviewsOff('slack', [channel], { config: this.d.hydra(), slackName: id => this.directory.nameOf(id) }) ? { unfurl: false as const } : undefined
+    const unfurl = linkPreviewsOff('slack', [channel], { config: this.d.hydra(), slackName: id => this.directory.nameOf(id), app: this.id }) ? { unfurl: false as const } : undefined
     return this.app.post(channel, threadTs, text, unfurl)
   }
 
@@ -382,9 +386,9 @@ export class SlackListener {
       this.namesWarned = true
       const needed = unresolvedPlaces({ hydra: this.d.hydra(), directory: this.directoryRead ? this.directory : NO_DIRECTORY, app: this.id })
       const why = err instanceof Error ? err.message : String(err)
-      this.d.log(`daemon: slack connector: WARN channel names can't be read (${why}): add channels:read and groups:read and reinstall the app, or name channels by id (slack:C…)${needed.length ? `; ${needed.join(', ')} ${needed.length === 1 ? 'hears' : 'hear'} nothing until then` : ''}\n`)
+      this.d.log(`daemon: slack connector: WARN channel names can't be read (${why}): add channels:read and groups:read and reinstall the app, or name channels by id (slack:C…)${needed.length ? `; ${needed.map(placeKey).join(', ')} ${needed.length === 1 ? 'hears' : 'hear'} nothing until then` : ''}\n`)
       // Said to the specialists this app serves only when a `#name` it needs is unresolved: otherwise the ids work without names.
-      if (needed.length) this.d.alert(`⚠️ Hydra can't read channel names${this.appSuffix()} (${why}), so ${needed.join(', ')} ${needed.length === 1 ? 'hears' : 'hear'} nothing. Add channels:read and groups:read to the app (\`${this.manifestCommand()}\` prints them), reinstall it, put the new bot token in the variable the ${appKey(this.declaredApps(), this.id, 'bot_token_env')} names (in \`.env\`), and restart the daemon; or name the channels by id (slack:C…).`)
+      if (needed.length) this.d.alert(`⚠️ Hydra can't read channel names${this.appSuffix()} (${why}), so ${needed.map(placeKey).join(', ')} ${needed.length === 1 ? 'hears' : 'hear'} nothing. Add channels:read and groups:read to the app (\`${this.manifestCommand()}\` prints them), reinstall it, put the new bot token in the variable the ${appKey(this.declaredApps(), this.id, 'bot_token_env')} names (in \`.env\`), and restart the daemon; or name the channels by id (slack:C…).`)
     }
   }
 
@@ -588,8 +592,8 @@ export class SlackListener {
 
   /**
    * Whose a DM is, from two lists that answer two questions. The BOT token's list (`users.conversations`, which has only the bot's own
-   * DMs, scope `im:read` on the bot) says whether it is the bot's: that DM is `slack:dm`. For one that is not, the USER token's list
-   * (scope `im:read` on the user token) says who is on the other end, which is how `slack:dm:<person>` is found. An app without that user
+   * DMs, scope `im:read` on the bot) says whether it is the bot's: that DM is `slack:app-dm:<app>`. For one that is not, the USER token's list
+   * (scope `im:read` on the user token) says who is on the other end, which is how `slack:person-dm:<person>` is found. An app without that user
    * scope loses only the second: the bot's DM still works, and a DM with a person goes by no name. Each list is read one read at a time
    * (see `DmList`); a DM on neither, after a read that began after its message arrived, goes by no name for good.
    */

@@ -14,27 +14,138 @@ export type ChatPlatform = Exclude<Platform, 'github'>
 /** Where a person can be reached: `discord:<user id>`, `slack:<user id>`, `github:<login>` (lowercased). One address, one person. */
 export type Address = `${Platform}:${string}`
 
+/** A Slack app's id: lowercase, so it can never be taken for a channel id (`C0TEST`); at most 35, since it can become the app's display name. */
+export const SLACK_APP_ID_RE = /^[a-z][a-z0-9_-]{0,34}$/
+/** A person's id in `[people]`: lowercase letters, digits and dashes. */
+export const PERSON_ID_RE = /^[a-z0-9][a-z0-9-]*$/
+const REPO_RE = /^[a-z0-9][a-z0-9-]*\/[a-z0-9._-]+$/
+const CHANNEL_NAME_RE = /^#[a-z0-9][a-z0-9_-]*$/
+/** A Slack conversation id as a group DM or private channel has it: `G…` (older workspaces) or `C…`, then capitals and digits. */
+const SLACK_CONVERSATION_ID_RE = /^[CG][A-Z0-9]+$/
+
 /**
- * An address hydra can hear: `slack:#help`, `slack:dm`, `slack:dm:<person>`, `slack:group-dm`, `discord:#feed`, `discord:dm`, `github:owner/repo` (lowercased), `cli`.
- * A Slack or Discord channel may also be named by its platform id: `slack:C0TEST`, `discord:1234567890`.
+ * What a place is. `channel`: a channel by name or by the platform's id. `person-dm`: the operator's DM with one `[people]` person. `app-dm`: a DM with one
+ * Slack app's bot, from anyone (Discord has one bot, so only every one of them). `group-dm`: one group DM. `repository`: a code repository. `cli`: the command line.
+ */
+export const PLACE_KINDS = ['channel', 'person-dm', 'app-dm', 'group-dm', 'repository', 'cli'] as const
+export type PlaceKind = typeof PLACE_KINDS[number]
+/** The kinds written with `*` for every one of them. A channel or a repository has no such form: a rule that means every place leaves `place` out. */
+export const EVERY_KINDS = ['person-dm', 'app-dm', 'group-dm'] as const
+/** The ref that, on a kind of `EVERY_KINDS`, means every place of that kind. */
+export const EVERY = '*'
+
+/**
+ * Where something happened, once parsed from its toml string (`parsePlace`): the platform, what kind of place, and which one (`ref`).
+ * A concrete place is what an inbound message happened at; a place with ref `*` (`isEvery`) is only ever written, in a rule or `[places]`, and covers every concrete place of its kind.
+ * `ref` is a channel name with its `#` (`#help`), a platform id, a person id, an app id, or `owner/repo` (lowercased); `cli` has the ref `cli`.
  * A place is data hydra keeps, not something declared: a `[[rules]]` entry names the ones a specialist hears.
  */
-export type Place = string
+export type Place = { readonly platform: Platform | 'cli'; readonly kind: PlaceKind; readonly ref: string }
 
-/** The operator's DM with the bot. */
-export const SLACK_DM = 'slack:dm'
-/** Every group DM. One group DM is also named by its channel id, `slack:G0…`. */
-export const SLACK_GROUP_DM = 'slack:group-dm'
-/** The operator's DM with one person, `slack:dm:<person>`: the person is a `[people]` id. */
-export const dmWith = (person: string): Place => `slack:dm:${person}`
-/** The person a `slack:dm:<person>` place names, or undefined for any other place. */
-export const dmPerson = (p: Place): string | undefined => p.startsWith('slack:dm:') ? p.slice('slack:dm:'.length) : undefined
-/** A DM with the bot on any platform (`slack:dm`, `discord:dm`). Exact: no other place ends or starts like it. */
-export const isDmPlace = (p: Place): boolean => p === SLACK_DM || p === 'discord:dm'
-/** A place that is a DM with other people: with one person (`slack:dm:<person>`), or every group DM. The bot is not part of the first. */
-export const namesDmWithOthers = (p: Place): boolean => p === SLACK_GROUP_DM || dmPerson(p) !== undefined
-/** A place that is a channel, by id or name (and any place of another platform), not a DM or a group DM: something to read, join and post to. */
-export const namesAChannel = (p: Place): boolean => p !== SLACK_DM && !namesDmWithOthers(p)
+/** The one string a place is keyed by (`[places]`, log lines, `hydra route`): what the operator writes. `parsePlace(placeKey(p))` is `p`. */
+export function placeKey(p: Place): string {
+  if (p.kind === 'cli') return 'cli'
+  if (p.kind === 'channel' || p.kind === 'repository') return `${p.platform}:${p.ref}`
+  return `${p.platform}:${p.kind}:${p.ref}`
+}
+
+export const placeOf = (platform: Platform | 'cli', kind: PlaceKind, ref: string): Place => ({ platform, kind, ref })
+/** Whether this place is `*` of its kind. */
+export const isEvery = (p: Place): boolean => p.ref === EVERY
+/** `p`'s kind with `*`, when its kind has one: the place that covers `p`. */
+export const everyOf = (p: Place): Place | undefined => (EVERY_KINDS as readonly PlaceKind[]).includes(p.kind) && !isEvery(p) ? { ...p, ref: EVERY } : undefined
+export const samePlace = (a: Place, b: Place): boolean => placeKey(a) === placeKey(b)
+/** A channel written by its name (`#help`), as opposed to its platform id. */
+export const isChannelName = (p: Place): boolean => p.kind === 'channel' && p.ref.startsWith('#')
+/**
+ * Whether a rule at `earlier` takes every message a rule at `later` would: `placeCovers`, or the same Slack conversation by id. The loader cannot tell a
+ * group DM's id from a channel's, so the channel key `slack:G0X` and `slack:group-dm:G0X` name one conversation, and neither is worth more than the other.
+ */
+export const placeShadows = (earlier: Place, later: Place): boolean => {
+  if (placeCovers(earlier, later)) return true
+  const byId = (p: Place) => p.platform === 'slack' && ((p.kind === 'channel' && !isChannelName(p)) || (p.kind === 'group-dm' && !isEvery(p)))
+  return byId(earlier) && byId(later) && earlier.ref === later.ref
+}
+/** Whether `pattern` names `place`: the same platform and kind, and the same ref or `*`. */
+export const placeCovers = (pattern: Place, place: Place): boolean =>
+  pattern.platform === place.platform && pattern.kind === place.kind && (pattern.ref === place.ref || isEvery(pattern))
+/** Whether any of `at` is named by `pattern`. */
+export const coversAny = (pattern: Place, at: readonly Place[]): boolean => at.some(a => placeCovers(pattern, a))
+/** A DM with the bot of an app (on Discord, its one bot). */
+export const isDmPlace = (p: Place): boolean => p.kind === 'app-dm'
+/** A DM between other people: the operator's with one person, or a group DM. The bot is not part of the first. */
+export const namesDmWithOthers = (p: Place): boolean => p.kind === 'person-dm' || p.kind === 'group-dm'
+
+const PLACE_FORMS = 'slack:#channel, slack:<channel id>, slack:person-dm:<person>, slack:app-dm:<app>, slack:group-dm:<G id>, discord:#channel, discord:<channel id>, discord:app-dm:*, github:owner/repo or cli (person-dm, app-dm and group-dm also take * for every one)'
+
+/**
+ * The one reader of a place's toml string, `platform:thing` (or `cli`). Syntax only: whether a person, an app or a repo exists is the loader's to check.
+ * A form an earlier version wrote (`slack:dm`, `slack:dm:<person>`, `slack:group-dm`, `discord:dm`) is an error that names the form to write now.
+ */
+export function parsePlace(raw: string): { ok: true; place: Place } | { ok: false; error: string } {
+  const bad = (why: string) => ({ ok: false as const, error: `"${raw}" ${why}` })
+  if (raw === 'cli') return { ok: true, place: placeOf('cli', 'cli', 'cli') }
+  const colon = raw.indexOf(':')
+  const platform = raw.slice(0, colon) as Platform
+  const rest = raw.slice(colon + 1)
+  if (colon < 0 || !(PLATFORMS as readonly string[]).includes(platform)) return bad(`is not a place: use ${PLACE_FORMS}`)
+  const ok = (kind: PlaceKind, ref: string) => ({ ok: true as const, place: placeOf(platform, kind, ref) })
+  if (platform === 'github') {
+    const repo = rest.toLowerCase()
+    return REPO_RE.test(repo) ? ok('repository', repo) : bad('is not a place: a GitHub place is a repository, github:owner/repo')
+  }
+  // The forms an earlier version wrote, each with its replacement.
+  const gone = 'slack:dm is gone: it named a DM without saying whose. Write slack:person-dm:<person> (the operator\'s DM with one person), slack:app-dm:<app> (a DM with one app\'s bot; a single-app setup\'s app is `default`) or slack:group-dm:<G id> (one group DM); each also takes * for every one'
+  if (rest === 'dm') return bad(platform === 'slack' ? `is the old form of a DM with a Slack app. ${gone}; slack:app-dm:* is what slack:dm meant` : 'is the old form: write discord:app-dm:*')
+  if (platform === 'slack' && rest.startsWith('dm:')) {
+    const person = rest.slice(3)
+    return bad(PERSON_ID_RE.test(person) ? `is the old form of the operator's DM with a person: write slack:person-dm:${person}` : `is not a place. ${gone}`)
+  }
+  if (platform === 'slack' && rest === 'group-dm') return bad('is the old form of every group DM: write slack:group-dm:* (or slack:group-dm:<G id> for one)')
+  if (CHANNEL_NAME_RE.test(rest) || (platform === 'slack' ? SLACK_CONVERSATION_ID_RE.test(rest) : /^\d+$/.test(rest))) return ok('channel', rest)
+  const kind = (['person-dm', 'app-dm', 'group-dm'] as const).find(k => rest.startsWith(`${k}:`))
+  if (!kind) return bad(`is not a place: use ${PLACE_FORMS}`)
+  const ref = rest.slice(kind.length + 1)
+  if (platform === 'discord') {
+    if (kind !== 'app-dm') return bad(`is not a Discord place: Discord has one bot, so there is no ${kind === 'person-dm' ? 'DM with one person' : 'group DM'} to name; its DM is discord:app-dm:*`)
+    return ref === EVERY ? ok(kind, ref) : bad('is not a Discord place: Discord has one bot, so its DM is discord:app-dm:*')
+  }
+  if (ref === EVERY) return ok(kind, ref)
+  if (kind === 'person-dm') return PERSON_ID_RE.test(ref) ? ok(kind, ref) : bad('is not a place: person-dm takes a person id from [people] (lowercase letters, digits, dashes) or *')
+  if (kind === 'app-dm') return SLACK_APP_ID_RE.test(ref) ? ok(kind, ref) : bad('is not a place: app-dm takes the id of a Slack app declared in [slack.apps.<id>] (lowercase) or *')
+  return SLACK_CONVERSATION_ID_RE.test(ref) ? ok(kind, ref) : bad('is not a place: group-dm takes a Slack conversation id (G… or C…) or *')
+}
+
+/** A specialist's `home_place` as a Place, or undefined when it has none or is a bare channel id (which names no platform). */
+export function homePlaceOf(s: { homePlace?: string }): Place | undefined {
+  const r = s.homePlace === undefined ? undefined : parsePlace(s.homePlace)
+  return r?.ok ? r.place : undefined
+}
+
+/** A place known to parse, for code and tests that write one out. Throws on a malformed string. */
+export function mustParsePlace(raw: string): Place {
+  const r = parsePlace(raw)
+  if (!r.ok) throw new Error(r.error)
+  return r.place
+}
+
+/**
+ * The options set for one place: its own entry, else the entry of every place of its kind. The entry is taken whole, so a setting the
+ * specific entry leaves out is not read from the wildcard one. Entries are keyed by `placeKey`.
+ */
+export function optionsOf(places: Readonly<Record<string, PlaceOptions>>, p: Place): PlaceOptions | undefined {
+  const own = placeKey(p)
+  if (Object.hasOwn(places, own)) return places[own]
+  const every = everyOf(p)
+  return every !== undefined && Object.hasOwn(places, placeKey(every)) ? places[placeKey(every)] : undefined
+}
+
+/** The options that apply to a message that happened at `at` (concrete places, most specific first): a specific entry before a wildcard one, then the earliest place. */
+export function optionsAt(places: Readonly<Record<string, PlaceOptions>>, at: readonly Place[]): PlaceOptions | undefined {
+  for (const p of at) if (Object.hasOwn(places, placeKey(p))) return places[placeKey(p)]
+  for (const p of at) { const every = everyOf(p); if (every && Object.hasOwn(places, placeKey(every))) return places[placeKey(every)] }
+  return undefined
+}
 
 /** Labels anyone holds without declaring them: everyone on the roster holds `people`; anyone at all holds `anyone`. */
 export const BUILTIN_ROLES = ['people', 'anyone'] as const
@@ -249,7 +360,7 @@ export type Rule = {
  * A rule with a `person` takes only those people's messages, so it does not make the place the specialist's to answer.
  */
 export const placesAnsweredBy = (cfg: Pick<HydraConfig, 'rules'>, id: string): Place[] =>
-  [...new Set(cfg.rules.flatMap(r => r.target === id && r.place !== undefined && (r.person === undefined || r.person === 'anyone') ? [r.place] : []))]
+  [...new Map(cfg.rules.flatMap(r => r.target === id && r.place !== undefined && (r.person === undefined || r.person === 'anyone') ? [[placeKey(r.place), r.place] as const] : [])).values()]
 
 /** The operator's hook, run after routing and the `reachable_by` check. Checked when hydra.toml loads, run by the Slack watcher after routing. */
 export type Guard = {
@@ -298,7 +409,8 @@ export type HydraConfig = {
   slackApps: Record<string, SlackApp>
   people: Record<string, Person>
   specialists: Record<string, Specialist>
-  places: Record<Place, PlaceOptions>
+  /** Per-place options, keyed by `placeKey`: read through `optionsOf` / `optionsAt`, which put a specific entry before a wildcard one. */
+  places: Record<string, PlaceOptions>
   schedules: Record<string, Schedule>
   rules: Rule[]
   /** The servers specialists may list in `mcp_servers`. Absent when none is declared. */

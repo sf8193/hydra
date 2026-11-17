@@ -1,8 +1,8 @@
 import { describe, test, expect } from 'bun:test'
 import { loadHydraConfig, VITALS_DEFAULTS } from '../load.js'
 import { SLACK_APP_DEFAULTS } from '../../connectors/slack/app.js'
-import { defaultSlackApp, placesAnsweredBy, type HydraConfig, type LoadEnv, type LoadResult } from '../types.js'
-import { testLoadEnv } from './load-env.js'
+import { defaultSlackApp, type HydraConfig, type LoadEnv, type LoadResult } from '../types.js'
+import { testLoadEnv, answeredKeys, ruleKeys } from './load-env.js'
 
 const env: LoadEnv = testLoadEnv({
   home: '/home/op',
@@ -85,7 +85,7 @@ timeout = "2s"
 place = "slack:#help"
 target = "specialist:crm"
 [[rules]]
-place = "slack:dm"
+place = "slack:app-dm:*"
 target = "specialist:ops"
 [[rules]]
 place = "github:acme/widget"
@@ -110,9 +110,9 @@ target = "specialist:review"
     expect(config.specialists.review.reachableBy).toEqual(['people'])
     expect(config.places['slack:#help']).toEqual({ ack: 'eyes', files: false, messages: 'all', bots: false, reactions: 'off', linkPreviews: true })
     expect(config.schedules.nightly).toEqual({ id: 'nightly', cron: '0 3 * * *', target: 'ops', message: 'Nightly run.', runner: 'launchd' })
-    expect(config.rules).toEqual([{ place: 'slack:#help', person: 'alice', target: 'ops' }, { place: 'slack:#help', target: 'crm' }, { place: 'slack:dm', target: 'ops' }, { place: 'github:acme/widget', target: 'review' }])
+    expect(ruleKeys(config.rules)).toEqual([{ place: 'slack:#help', person: 'alice', target: 'ops' }, { place: 'slack:#help', target: 'crm' }, { place: 'slack:app-dm:*', target: 'ops' }, { place: 'github:acme/widget', target: 'review' }])
     // `crm` and `ops` hear where the rules say.
-    expect(placesAnsweredBy(config, 'crm')).toEqual(['slack:#help'])
+    expect(answeredKeys(config, 'crm')).toEqual(['slack:#help'])
     expect(config.guard).toEqual({ command: '~/bin/guard --strict', timeoutMs: 2000, includeText: false, owedMaxMs: 3_600_000 })
   })
 })
@@ -162,7 +162,7 @@ target = "specialist:ops"
 place = "discord:100000000000000001"
 target = "specialist:ops"
 `)
-    expect(placesAnsweredBy(config, 'ops')).toEqual(['slack:C0TEST', 'discord:100000000000000001'])
+    expect(answeredKeys(config, 'ops')).toEqual(['slack:C0TEST', 'discord:100000000000000001'])
     expect(config.places['slack:G0PRIV'].files).toBe(true)
   })
 })
@@ -295,7 +295,7 @@ addresses = ["github:alice"]
   test('main is a target for a schedule or a rule, though never declared', () => {
     const { config } = ok(`${BASE}\n[schedules.digest]\ncron = "@daily"\ntarget = "main"\n[[rules]]\nplace = "slack:#ops"\ntarget = "main"\n`)
     expect(config.schedules.digest.target).toBe('main')
-    expect(config.rules).toEqual([{ place: 'slack:#ops', target: 'main' }])
+    expect(ruleKeys(config.rules)).toEqual([{ place: 'slack:#ops', target: 'main' }])
   })
 
   test('a bad cron', () => {
@@ -333,29 +333,29 @@ addresses = ["github:alice"]
     expect(errorsOf(`${spec('renamed_from = ["crm"]')}\n[specialists.crm]\nworkdir = "~/agents/crm"\n[[rules]]\nplace = "slack:#crm"\ntarget = "specialist:crm"\n`)).toEqual(['specialists.ops.renamed_from[0]: "crm" is a current specialist; an old id can\'t be in use'])
   })
 
-  test('a DM with a person is slack:dm:<person>, a group DM slack:group-dm or its id; slack:dm stays the bot\'s', () => {
+  test('a DM with a person is slack:person-dm:<person>, a group DM slack:group-dm:* or its id; slack:app-dm:* stays the bot\'s', () => {
     const base = `${BASE}\n[people.alice]\naddresses = ["slack:U0A"]\n`
-    const c = ok(`${base}[specialists.ops]\nworkdir = "~/agents/ops"\nreachable_by = []\n[places."slack:dm:alice"]\nack = "eyes"\n[[rules]]\nplace = "slack:dm:alice"\ntarget = "specialist:ops"\n[[rules]]\nplace = "slack:group-dm"\ntarget = "specialist:ops"\n[[rules]]\nplace = "slack:G0GROUP1"\ntarget = "specialist:ops"\n`).config
-    expect(placesAnsweredBy(c, 'ops')).toEqual(['slack:dm:alice', 'slack:group-dm', 'slack:G0GROUP1'])
-    expect(c.places['slack:dm:alice'].ack).toBe('eyes')
-    expect(c.rules[0].place).toBe('slack:dm:alice')
-    expect(errorsOf(`${base}[specialists.ops]\nworkdir = "~/agents/ops"\n[[rules]]\nplace = "slack:group-dm:x"\ntarget = "specialist:ops"\n[[rules]]\nplace = "discord:group-dm"\ntarget = "specialist:ops"\n[[rules]]\nplace = "slack:dm:"\ntarget = "specialist:ops"\n`).map(e => e.split(':')[0])).toEqual(['rules[0].place', 'rules[1].place', 'rules[2].place'])
+    const c = ok(`${base}[specialists.ops]\nworkdir = "~/agents/ops"\nreachable_by = []\n[places."slack:person-dm:alice"]\nack = "eyes"\n[[rules]]\nplace = "slack:person-dm:alice"\ntarget = "specialist:ops"\n[[rules]]\nplace = "slack:group-dm:*"\ntarget = "specialist:ops"\n[[rules]]\nplace = "slack:G0GROUP1"\ntarget = "specialist:ops"\n`).config
+    expect(answeredKeys(c, 'ops')).toEqual(['slack:person-dm:alice', 'slack:group-dm:*', 'slack:G0GROUP1'])
+    expect(c.places['slack:person-dm:alice'].ack).toBe('eyes')
+    expect(ruleKeys(c.rules)[0].place).toBe('slack:person-dm:alice')
+    expect(errorsOf(`${base}[specialists.ops]\nworkdir = "~/agents/ops"\n[[rules]]\nplace = "slack:group-dm:x"\ntarget = "specialist:ops"\n[[rules]]\nplace = "discord:group-dm"\ntarget = "specialist:ops"\n[[rules]]\nplace = "slack:person-dm:"\ntarget = "specialist:ops"\n`).map(e => e.split(':')[0])).toEqual(['rules[0].place', 'rules[1].place', 'rules[2].place'])
   })
 
-  test('slack:dm:<person> names a person declared in [people] with a Slack address', () => {
+  test('slack:person-dm:<person> names a person declared in [people] with a Slack address', () => {
     const spec = (place: string, people = '[people.alice]\naddresses = ["slack:U0A"]\n') => `${BASE}\n${people}[specialists.ops]\nworkdir = "~/agents/ops"\nreachable_by = []\n[[rules]]\nplace = "${place}"\ntarget = "specialist:ops"\n`
-    expect(errorsOf(spec('slack:dm:ghost'))).toEqual(['rules[0].place: "slack:dm:ghost": ghost is not a person: declare [people.ghost]'])
-    expect(errorsOf(spec('slack:dm:bea', '[people.bea]\naddresses = ["github:bea"]\n'))).toEqual(['rules[0].place: "slack:dm:bea": bea has no slack: address; add one to people.bea.addresses'])
-    expect(errorsOf(`${BASE}\n[[rules]]\nplace = "slack:dm:ghost"\ntarget = "main"\n`)).toEqual(['rules[0].place: "slack:dm:ghost": ghost is not a person: declare [people.ghost]'])
+    expect(errorsOf(spec('slack:person-dm:ghost'))).toEqual(['rules[0].place: "slack:person-dm:ghost": ghost is not a person: declare [people.ghost]'])
+    expect(errorsOf(spec('slack:person-dm:bea', '[people.bea]\naddresses = ["github:bea"]\n'))).toEqual(['rules[0].place: "slack:person-dm:bea": bea has no slack: address; add one to people.bea.addresses'])
+    expect(errorsOf(`${BASE}\n[[rules]]\nplace = "slack:person-dm:ghost"\ntarget = "main"\n`)).toEqual(['rules[0].place: "slack:person-dm:ghost": ghost is not a person: declare [people.ghost]'])
   })
 
   test('link_previews, messages and bots on a DM with a person or a group DM are errors (ack and files apply); the bot\'s DM keeps them', () => {
     const people = '[people.alice]\naddresses = ["slack:U0A"]\n'
-    for (const [place, key, value] of [['slack:group-dm', 'link_previews', 'false'], ['slack:dm:alice', 'link_previews', 'false'], ['slack:dm:alice', 'messages', '"all"'], ['slack:group-dm', 'bots', 'true']]) {
+    for (const [place, key, value] of [['slack:group-dm:*', 'link_previews', 'false'], ['slack:person-dm:alice', 'link_previews', 'false'], ['slack:person-dm:alice', 'messages', '"all"'], ['slack:group-dm:*', 'bots', 'true']]) {
       expect(errorsOf(`${BASE}\n${people}[places."${place}"]\n${key} = ${value}\n`)).toEqual([`places."${place}".${key}: ${key} does not apply to ${place}: only ack and files do. Remove it.`])
     }
-    expect(ok(`${BASE}\n[places."slack:dm"]\nlink_previews = false\nbots = true\n`).config.places['slack:dm'].linkPreviews).toBe(false)
-    expect(ok(`${BASE}\n[places."slack:group-dm"]\nack = "eyes"\nfiles = true\n`).config.places['slack:group-dm']).toMatchObject({ ack: 'eyes', files: true })
+    expect(ok(`${BASE}\n[places."slack:app-dm:*"]\nlink_previews = false\nbots = true\n`).config.places['slack:app-dm:*'].linkPreviews).toBe(false)
+    expect(ok(`${BASE}\n[places."slack:group-dm:*"]\nack = "eyes"\nfiles = true\n`).config.places['slack:group-dm:*']).toMatchObject({ ack: 'eyes', files: true })
   })
 
   test('ack is a Slack reaction name: eyes and a skin tone load; a character, a :name: and anything else is refused with what to write', () => {
@@ -370,8 +370,8 @@ addresses = ["github:alice"]
     expect(errorsOf(at('"two words"'))).toHaveLength(1)
   })
 
-  test('a person id is lowercase, so slack:dm:Alice is not a place', () => {
-    expect(errorsOf(`${BASE}\n[people.alice]\naddresses = ["slack:U0A"]\n[specialists.ops]\nworkdir = "~/agents/ops"\n[[rules]]\nplace = "slack:dm:Alice"\ntarget = "specialist:ops"\n`)[0]).toContain('"slack:dm:Alice" is not a place')
+  test('a person id is lowercase, so slack:person-dm:Alice is not a place', () => {
+    expect(errorsOf(`${BASE}\n[people.alice]\naddresses = ["slack:U0A"]\n[specialists.ops]\nworkdir = "~/agents/ops"\n[[rules]]\nplace = "slack:person-dm:Alice"\ntarget = "specialist:ops"\n`)[0]).toContain('"slack:person-dm:Alice" is not a place')
   })
 
   test('strict: unknown keys, malformed places and addresses', () => {
@@ -379,8 +379,8 @@ addresses = ["github:alice"]
     expect(errorsOf(spec('listen = ["slack:#x"]'))).toEqual(['specialists.ops.listen: unknown key "listen"'])
     expect(errorsOf(`${BASE}\n[connectors.irc]\nx = 1\n`)).toEqual(['connectors.irc: unknown key "irc"'])
     expect(errorsOf(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\n[[rules]]\nplace = "slack:help"\ntarget = "specialist:ops"\n[[rules]]\nplace = "discord:#Feed"\ntarget = "specialist:ops"\n`)).toEqual([
-      'rules[0].place: "slack:help" is not a place: use slack:#channel, slack:<channel id>, slack:dm, slack:dm:<person>, slack:group-dm, discord:#channel, discord:<channel id>, discord:dm, github:owner/repo or cli',
-      'rules[1].place: "discord:#Feed" is not a place: use slack:#channel, slack:<channel id>, slack:dm, slack:dm:<person>, slack:group-dm, discord:#channel, discord:<channel id>, discord:dm, github:owner/repo or cli',
+      'rules[0].place: "slack:help" is not a place: use slack:#channel, slack:<channel id>, slack:person-dm:<person>, slack:app-dm:<app>, slack:group-dm:<G id>, discord:#channel, discord:<channel id>, discord:app-dm:*, github:owner/repo or cli (person-dm, app-dm and group-dm also take * for every one)',
+      'rules[1].place: "discord:#Feed" is not a place: use slack:#channel, slack:<channel id>, slack:person-dm:<person>, slack:app-dm:<app>, slack:group-dm:<G id>, discord:#channel, discord:<channel id>, discord:app-dm:*, github:owner/repo or cli (person-dm, app-dm and group-dm also take * for every one)',
     ])
     expect(errorsOf(`operator = "op"\n[people.op]\naddresses = ["U0OP", "discord:abc", "slack:u0op"]\n`)).toEqual([
       'people.op.addresses[0]: "U0OP" is not an address: use discord:<user id>, slack:<user id> or github:<login>',
@@ -450,7 +450,7 @@ describe('found in the second review', () => {
   test('home_place is a place or a channel id', () => {
     expect(ok(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\nhome_place = "discord:#ops"\n[[rules]]\nplace = "cli"\ntarget = "specialist:ops"\n`).config.specialists.ops.homePlace).toBe('discord:#ops')
     expect(ok(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\nhome_place = "1234567890"\n[[rules]]\nplace = "cli"\ntarget = "specialist:ops"\n`).config.specialists.ops.homePlace).toBe('1234567890')
-    expect(errorsOf(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\nhome_place = "my channel"\n[[rules]]\nplace = "cli"\ntarget = "specialist:ops"\n`)).toEqual(['specialists.ops.home_place: "my channel" must be a place (slack:#channel, discord:#channel, …) or a channel id'])
+    expect(errorsOf(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\nhome_place = "my channel"\n[[rules]]\nplace = "cli"\ntarget = "specialist:ops"\n`)).toEqual(['specialists.ops.home_place: "my channel" is not a place: use slack:#channel, slack:<channel id>, slack:person-dm:<person>, slack:app-dm:<app>, slack:group-dm:<G id>, discord:#channel, discord:<channel id>, discord:app-dm:*, github:owner/repo or cli (person-dm, app-dm and group-dm also take * for every one); `home_place` may also be a bare channel id'])
   })
 })
 
@@ -528,12 +528,12 @@ target = "specialist:ops"
   test('a shared session with different audiences: two places, or DMs open beyond the operator', () => {
     expect(ok(`${BASE}\n[slack.apps.default]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\n[[rules]]\nplace = "slack:#a"\ntarget = "specialist:ops"\n[[rules]]\nplace = "slack:#b"\ntarget = "specialist:ops"\n`).warnings)
       .toEqual(['specialists.ops: one shared session hears slack:#a, slack:#b, so what\'s said in one place is remembered in the others; use sessions = "per-conversation" or one specialist per place'])
-    expect(ok(`${BASE}\n[slack.apps.default]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\n[[rules]]\nplace = "slack:dm"\ntarget = "specialist:ops"\n`).warnings)
+    expect(ok(`${BASE}\n[slack.apps.default]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\n[[rules]]\nplace = "slack:app-dm:*"\ntarget = "specialist:ops"\n`).warnings)
       .toEqual(['specialists.ops: one shared session hears everyone\'s DMs (reachable_by = ["role:people"]), so one person\'s DM is remembered in another\'s; use sessions = "per-conversation" or reachable_by = []'])
-    expect(ok(`${BASE}\n[slack.apps.default]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\n[[rules]]\nplace = "slack:group-dm"\ntarget = "specialist:ops"\n`).warnings)
+    expect(ok(`${BASE}\n[slack.apps.default]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\n[[rules]]\nplace = "slack:group-dm:*"\ntarget = "specialist:ops"\n`).warnings)
       .toEqual(['specialists.ops: one shared session hears every group DM (reachable_by = ["role:people"]), so what one group says is remembered in another; use sessions = "per-conversation" or reachable_by = []'])
     // Only the operator's DMs, or one session per conversation: one audience each.
-    expect(ok(`${BASE}\n[slack.apps.default]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nreachable_by = []\n[[rules]]\nplace = "slack:dm"\ntarget = "specialist:ops"\n`).warnings).toEqual([])
+    expect(ok(`${BASE}\n[slack.apps.default]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nreachable_by = []\n[[rules]]\nplace = "slack:app-dm:*"\ntarget = "specialist:ops"\n`).warnings).toEqual([])
     expect(ok(`${BASE}\n[slack.apps.default]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nsessions = "per-conversation"\nidle = "1h"\n[[rules]]\nplace = "slack:#a"\ntarget = "specialist:ops"\n[[rules]]\nplace = "slack:#b"\ntarget = "specialist:ops"\n`).warnings).toEqual([])
   })
 
@@ -794,7 +794,7 @@ bot_token_env = "SUPPORT_BOT"
   describe('sharing a place', () => {
     test('two specialists with disjoint apps may listen on the same place; so may a pinned and an unpinned one', () => {
       const { config, warnings } = ok(`${APPS}${spec('deals', 'pinned_to = ["app:sales"]') + heard('deals', "slack:#help")}${spec('desk', 'pinned_to = ["app:support"]') + heard('desk', "slack:#help")}${spec('crm', '') + heard('crm', "slack:#help")}`)
-      expect(['deals', 'desk', 'crm'].map(id => placesAnsweredBy(config, id))).toEqual([['slack:#help'], ['slack:#help'], ['slack:#help']])
+      expect(['deals', 'desk', 'crm'].map(id => answeredKeys(config, id))).toEqual([['slack:#help'], ['slack:#help'], ['slack:#help']])
       expect(warnings).toEqual([])
     })
     test('overlapping apps, or two unpinned, still clash', () => {
@@ -808,9 +808,9 @@ bot_token_env = "SUPPORT_BOT"
   describe('a rule\'s app', () => {
     const rule = (body: string, specs = spec('deals', 'pinned_to = ["app:sales"]') + spec('crm')) => `${APPS}${specs}[[rules]]\n${body}\n`
     test('a rule needs a place, an app, or both; person alone is an error', () => {
-      expect(ok(rule('app = "app:sales"\ntarget = "specialist:deals"')).config.rules).toEqual([{ app: 'sales', target: 'deals' }])
-      expect(ok(rule('place = "slack:#help"\ntarget = "specialist:crm"')).config.rules).toEqual([{ place: 'slack:#help', target: 'crm' }])
-      expect(ok(rule('place = "slack:#help"\napp = "app:sales"\nperson = "person:alice"\ntarget = "specialist:deals"')).config.rules).toEqual([{ place: 'slack:#help', app: 'sales', person: 'alice', target: 'deals' }])
+      expect(ruleKeys(ok(rule('app = "app:sales"\ntarget = "specialist:deals"')).config.rules)).toEqual([{ app: 'sales', target: 'deals' }])
+      expect(ruleKeys(ok(rule('place = "slack:#help"\ntarget = "specialist:crm"')).config.rules)).toEqual([{ place: 'slack:#help', target: 'crm' }])
+      expect(ruleKeys(ok(rule('place = "slack:#help"\napp = "app:sales"\nperson = "person:alice"\ntarget = "specialist:deals"')).config.rules)).toEqual([{ place: 'slack:#help', app: 'sales', person: 'alice', target: 'deals' }])
       expect(errorsOf(rule('target = "specialist:crm"'))).toEqual(['rules[0]: a rule needs `place`, `app` or both; `person` only narrows who it applies to'])
       expect(errorsOf(rule('person = "person:alice"\ntarget = "specialist:crm"'))).toEqual(['rules[0]: a rule needs `place`, `app` or both; `person` only narrows who it applies to'])
     })
@@ -869,8 +869,8 @@ bot_token_env = "SUPPORT_BOT"
     test('an undeclared app, or a place that is not a Slack channel, is an error at its key path', () => {
       expect(errorsOf(`${APPS}[places."slack:#help"]\ndefault_app = "app:nope"\n`)).toEqual(['places."slack:#help".default_app: no app "nope": declare [slack.apps.nope]; hydra.toml declares app:default, app:sales, app:support'])
       expect(errorsOf(`${APPS}[places."discord:#feed"]\ndefault_app = "app:sales"\n`)).toEqual(['places."discord:#feed".default_app: discord:#feed is not a Slack channel: `default_app` picks among the apps in a channel'])
-      expect(errorsOf(`${APPS}[places."slack:dm"]\ndefault_app = "app:sales"\n`)).toEqual(['places."slack:dm".default_app: slack:dm is not a Slack channel: `default_app` picks among the apps in a channel'])
-      expect(errorsOf(`${APPS}[places."slack:group-dm"]\ndefault_app = "app:sales"\n`)).toEqual(['places."slack:group-dm".default_app: slack:group-dm is not a Slack channel: `default_app` picks among the apps in a channel'])
+      expect(errorsOf(`${APPS}[places."slack:app-dm:*"]\ndefault_app = "app:sales"\n`)).toEqual(['places."slack:app-dm:*".default_app: slack:app-dm:* is not a Slack channel: `default_app` picks among the apps in a channel'])
+      expect(errorsOf(`${APPS}[places."slack:group-dm:*"]\ndefault_app = "app:sales"\n`)).toEqual(['places."slack:group-dm:*".default_app: slack:group-dm:* is not a Slack channel: `default_app` picks among the apps in a channel'])
     })
   })
 })

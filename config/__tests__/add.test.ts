@@ -4,9 +4,8 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { addFragment, planAddFragment } from '../add.js'
 import { loadHydraConfig } from '../load.js'
-import { placesAnsweredBy } from '../types.js'
 import type { LoadEnv } from '../types.js'
-import { testLoadEnv } from './load-env.js'
+import { testLoadEnv, answeredKeys, ruleKeys } from './load-env.js'
 
 const env: LoadEnv = testLoadEnv({ home: '/h', sessionNames: [] })
 
@@ -104,20 +103,20 @@ describe('hydra config add', () => {
     const old = addFragment(d, env, '[schedules.nightly-books]\ncron = "0 3 * * *"\nto = "main"\nprompt = "p"\ncwd = "/srv/books"\n', '/repo/f.toml')
     expect(old.ok).toBe(false)
     expect(!old.ok && old.error).toContain('schedules.nightly-books.to: unknown key "to"')
-    const specialist = addFragment(d, env, '[specialists.books]\nworkdir = "~/Workstreams/Books"\nprompt = "Keep the books."\nlistens = ["slack:dm"]\n', '/repo/f.toml')
+    const specialist = addFragment(d, env, '[specialists.books]\nworkdir = "~/Workstreams/Books"\nprompt = "Keep the books."\nlistens = ["slack:app-dm:*"]\n', '/repo/f.toml')
     expect(!specialist.ok && specialist.error).toContain('specialists.books.listens: unknown key "listens"')
-    const rule = addFragment(d, env, '[[rules]]\nat = "slack:dm"\nto = "ledger-review"\n', '/repo/f.toml')
+    const rule = addFragment(d, env, '[[rules]]\nat = "slack:app-dm:*"\nto = "ledger-review"\n', '/repo/f.toml')
     expect(!rule.ok && rule.error).toContain('rules[0].at: unknown key "at"')
     expect(file()).toBe(before)
   })
 
   test('a fragment\'s [[rules]] are appended after the file\'s own, a rule already there is not added twice, and a rule that clashes is refused', () => {
     const d = at(LIVE)
-    const frag = '[[rules]]\nplace = "slack:#help"\ntarget = "specialist:ledger-review"\n[[rules]]\nplace = "slack:dm"\ntarget = "specialist:ledger-review"\n'
+    const frag = '[[rules]]\nplace = "slack:#help"\ntarget = "specialist:ledger-review"\n[[rules]]\nplace = "slack:app-dm:*"\ntarget = "specialist:ledger-review"\n'
     const first = addFragment(d, env, frag, '/repo/f.toml')
-    expect(first).toMatchObject({ ok: true, added: ['[[rules]] place = "slack:#help", target = "specialist:ledger-review"', '[[rules]] place = "slack:dm", target = "specialist:ledger-review"'] })
-    expect(file().slice(file().indexOf('[[rules]]'))).toBe('[[rules]]\nplace = "slack:#help"\ntarget = "specialist:ledger-review"\n\n[[rules]]\nplace = "slack:dm"\ntarget = "specialist:ledger-review"\n')
-    expect(loaded().rules).toEqual([{ place: 'slack:#help', target: 'ledger-review' }, { place: 'slack:dm', target: 'ledger-review' }])
+    expect(first).toMatchObject({ ok: true, added: ['[[rules]] place = "slack:#help", target = "specialist:ledger-review"', '[[rules]] place = "slack:app-dm:*", target = "specialist:ledger-review"'] })
+    expect(file().slice(file().indexOf('[[rules]]'))).toBe('[[rules]]\nplace = "slack:#help"\ntarget = "specialist:ledger-review"\n\n[[rules]]\nplace = "slack:app-dm:*"\ntarget = "specialist:ledger-review"\n')
+    expect(ruleKeys(loaded().rules)).toEqual([{ place: 'slack:#help', target: 'ledger-review' }, { place: 'slack:app-dm:*', target: 'ledger-review' }])
     // The same fragment again: nothing to add, the file as it was.
     const before = file()
     expect(addFragment(d, env, frag, '/repo/f.toml')).toMatchObject({ ok: true, added: [], already: expect.any(Array) })

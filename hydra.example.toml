@@ -46,7 +46,7 @@ socket_token_env = "CONNECTOR_SLACK_APP_TOKEN"   # the Socket Mode token (xapp-)
 display_name = "Acme helper"          # the Slack app's name: `hydra slack manifest` creates it with this name, and every alert and `hydra health` line names the app by it (default "hydra" for `default`, else the id; at most 35 characters)
 description = "Answers Acme's Slack threads it is tagged in."  # what the app says it does there (at most 140)
 operator_token_env = "CONNECTOR_SLACK_USER_TOKEN"   # optional: hear the channels, DMs and group DMs the operator is in, as the operator; never posts (a DM or group DM is delivered only where a place names it).
-                                      # What it hears arrives through this app: see the `slack:dm:alice` rule
+                                      # What it hears arrives through this app: see the `slack:person-dm:alice` rule
 
 [slack.apps.sales]                    # another app: its own tokens, named by its id when it sets no display_name
 bot_token_env = "SALES_SLACK_BOT_TOKEN"
@@ -224,7 +224,9 @@ timezone = "Asia/Dubai"               # an IANA zone name
 
 # --- rules: who hears what. Each names a place, an app, or both, and the target that answers; first match in file order wins. This is the one home of where a specialist is heard. ---
 # An absent `place` matches every place and an absent `app` every app. `person` only narrows: a rule needs place or app.
-# A place is slack:#name, slack:C0ID, slack:dm (the bot's DMs only), slack:dm:<person>, slack:group-dm, discord:#name, discord:<id>, discord:dm, github:owner/repo or cli.
+# A place is slack:#name, slack:C0ID, slack:person-dm:<person>, slack:app-dm:<app>, slack:group-dm:<G id>, discord:#name, discord:<id>, discord:app-dm:*, github:owner/repo or cli.
+# person-dm, app-dm and group-dm also take * for every one of that kind: slack:app-dm:* is every Slack app's DMs, slack:group-dm:* every group DM. An entry for one (slack:app-dm:sales) wins over the * entry in [places].
+# Discord has one bot, so its only DM place is discord:app-dm:*. The app of a single-app setup is the one named `default`: slack:app-dm:default.
 # Two rules that take every message at one place through one app (no `person`) are an error: the later could never match. A rule with a `person` goes before the rule for everyone.
 
 # Finance in #help goes to ops. A rule whose target the app that heard the message cannot deliver to is skipped, not a dead end:
@@ -235,7 +237,7 @@ person = "role:finance"               # `person:<id>` or `role:<name>` (absent: 
 target = "specialist:ops"            # "main", or "specialist:<name>"
 
 [[rules]]
-place = "slack:dm:alice"              # needs an app with operator_token_env: the operator's DM with the person alice (a [people] id with a Slack address); slack:dm is the DM with the bot, slack:group-dm every group DM
+place = "slack:person-dm:alice"       # needs an app with operator_token_env: the operator's DM with the person alice (a [people] id with a Slack address); slack:app-dm:<app> is a DM with that app's bot, slack:group-dm:* every group DM
 app = "app:default"                # only through this app, the one holding operator_token_env, so that is the app that hears this DM
 target = "specialist:ops"
 

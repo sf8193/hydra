@@ -13,7 +13,7 @@ Checked against code at 42721c5. Bold names are README's core abstractions or th
 | no → nothing | `connectors/slack/listener.ts:670` | returns null |
 | 2. a pass already running? / yes → runs once more when it ends | `connectors/slack/listener.ts:671`, `:704` | `rerun` keeps the deepest request, run as `'queued'` |
 | one pass, in order | `connectors/slack/listener.ts:677-680`; `connectors/slack/catchup.ts:114` | names refreshed, membership read, then `catchUp` |
-| 0. new bot DMs / 0: read back 24 h, if routing would deliver | `connectors/slack/catchup.ts:152-171` | `api.dms()`; `route(… at: [slack:dm], addressed: true).fate === 'deliver'`; from `now - 24 * 3600` |
+| 0. new bot DMs / 0: read back 24 h, if routing would deliver | `connectors/slack/catchup.ts:152-171` | `api.dms()`; `route(… at: [slack:app-dm:<app>], addressed: true).fate === 'deliver'`; from `now - 24 * 3600` |
 | 1. threads with Owed messages / from the first owed message | `connectors/slack/catchup.ts:179-183`; `connectors/slack/watch.ts:645-648` | `owedHints` from `owed[0]`, inclusive |
 | a DM's owed are read in 3 | `connectors/slack/catchup.ts:181`, `:209-210` | a top-level hint sets `dmFrom`; the history scan starts there |
 | 2. every watched thread, if deep | `connectors/slack/catchup.ts:187-192` | from the channel cursor, else `ownCursor` |

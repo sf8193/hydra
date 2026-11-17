@@ -204,8 +204,10 @@ export function createHostHealth({
           if (covered !== undefined) low.retract(covered)
         }
         const top = procs ? topByRss(procs, roots) : undefined
-        log(`daemon: host memory ${which} (${formatPressure(p)}); largest: ${top ? top.map(t => `${t.comm} ${t.pid} ${t.rssMB}MB ${t.owner}`).join(', ') : 'process list unread'}\n`)
-        send(`memory ${which}`, formatMemoryAlert(p, v, which, top), retract)
+        // The kind `memory-low` reads as "host memory low", not "host memory memory-low".
+        const level = which === 'memory-low' ? 'low' : which
+        log(`daemon: host memory ${level} (${formatPressure(p)}); largest: ${top ? top.map(t => `${t.comm} ${t.pid} ${t.rssMB}MB ${t.owner}`).join(', ') : 'process list unread'}\n`)
+        send(`memory ${level}`, formatMemoryAlert(p, v, which, top), retract)
       }
     },
   }

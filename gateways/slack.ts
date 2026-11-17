@@ -530,6 +530,7 @@ export class SlackGateway implements ChatGateway {
    * `link_previews = false` gets `unfurl_links` and `unfurl_media` false. `chat.update` takes no such argument, so an edit is not covered.
    */
   private postMessage(payload: Record<string, unknown>) {
+    // No `app`: the gateway's bot is its own Slack app, never one of hydra.toml's `[slack.apps]` (the loader refuses one app on both), so a DM it sends is `slack:app-dm:*` and no `slack:app-dm:<app>`.
     if (typeof payload.channel === 'string') Object.assign(payload, unfurlFields(linkPreviewsOff('slack', [payload.channel])))
     return this.app!.client.chat.postMessage(payload as any)
   }

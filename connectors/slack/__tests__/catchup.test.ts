@@ -556,7 +556,7 @@ test('a message the guard put off (exit 75) is refetched by catch-up and judged 
 
 describe('catch-up for DMs and files', () => {
   const DM = 'D0ALICE01'
-  const DMS = (allow: string) => oneListener(CH) + `[people.a]\naddresses = ["slack:UA"]\nroles = ["owner"]\n[specialists.assistant]\nworkdir = "/w/assistant"\nreachable_by = ${allow}\n[[rules]]\nplace = "slack:dm"\ntarget = "specialist:assistant"\n`
+  const DMS = (allow: string) => oneListener(CH) + `[people.a]\naddresses = ["slack:UA"]\nroles = ["owner"]\n[specialists.assistant]\nworkdir = "/w/assistant"\nreachable_by = ${allow}\n[[rules]]\nplace = "slack:app-dm:*"\ntarget = "specialist:assistant"\n`
   const dmCfg: SlackWatchConfig = view(DMS('["role:owner"]'))
   const mk = (deliver: () => DeliverResult = () => ({ ok: true })) => {
     const dir = mkdtempSync(join(tmpdir(), 'slack-catchup-'))
