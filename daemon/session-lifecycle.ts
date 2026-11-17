@@ -24,7 +24,7 @@ import { canAskPredecessor, pushToolSurface } from './tool-surface.js'
 import { parseSpawnTopic, resolveSpawnLabel } from './util.js'
 import { startPhaseBudget, clearPhaseBudget } from './phase-budget.js'
 import { clearIdleLimit, resumeIdleLimit } from './idle-limit.js'
-import { resolveLaunchModel, spawnModel, withContextSuffix } from '../shared/constants.js'
+import { resolveLaunchSelection, spawnModel, withContextSuffix } from '../shared/constants.js'
 import type { SessionType, SessionLabel } from '../shared/constants.js'
 import { resolveEngine } from './engines/instances.js'
 import type { EngineAdapter, ProviderId } from './engines/engine-adapter.js'
@@ -757,6 +757,10 @@ export function _resetRefusalNotices(): void { threadNotices.clear() }
 export async function doSpawnSession(topic: string, chatId?: string, messageId?: string, opts?: SpawnOpts): Promise<SpawnResult> {
   // Before a thread is opened: a working dir that has gone away fails the spawn without leaving an empty thread.
   if (opts?.cwd && !existsSync(opts.cwd)) throw new Error(`working directory ${opts.cwd} does not exist`)
+  // One place decides the engine and the model it runs: a caller's explicit engine, else the one its model alias names (a specialist's
+  // `model`, `hydra spawn --model`, a recipe), else claude. Alias or full id: an explicit engine reads the alias in its own table.
+  const selected = opts?.model ? resolveLaunchSelection(opts.model, opts.engine) : undefined
+  const engine = opts?.engine ?? selected?.engine ?? 'claude'
   let threadId: string | undefined
   let anchorMessageId: string | undefined
   let hydraMadeThread = false
@@ -1003,8 +1007,8 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     }
     policy = continuing ? (r.stored ?? r.current) : r.current
     // The engine comes from the thread's history, and `handoff <model>` can change it: only an engine that confines can run a confined session.
-    if (policy?.access === 'workdir' && !resolveEngine(opts?.engine ?? 'claude').confinesAccess) {
-      throw new PolicyRefusal(`specialist ${policy.specialist} has restricted = true, which the ${opts?.engine} engine cannot give: set engine = "claude", or set restricted = false. ${remedy(sessionName)}`)
+    if (policy?.access === 'workdir' && !resolveEngine(engine).confinesAccess) {
+      throw new PolicyRefusal(`specialist ${policy.specialist} has restricted = true, which the ${engine} engine cannot give: set engine = "claude", or set restricted = false. ${remedy(sessionName)}`)
     }
     // The sandbox its servers run under is proven only on some macOS versions: refused here, where every start passes, never run on a guess.
     const unproven = macosRefusal(policy, sessionName)
@@ -1095,7 +1099,6 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   }
 
   const promptParams = { sessionId, tmuxName, threadId: threadId!, topic, topicIsRequest: opts?.topicIsRequest }
-  const engine = opts?.engine ?? 'claude'
   let prompt: string
   let armFirstReply = false
   if (opts?.promptBuilder) {
@@ -1120,10 +1123,9 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   }
   prompt = hydraPrompt(prompt)
 
-  // Central model resolution: alias → full ID → validate. All callers can pass
-  // raw aliases (e.g. "sonnet") or full IDs (e.g. "claude-sonnet-5[1m]").
-  const rawModel = opts?.model
-  const model = rawModel ? resolveLaunchModel(rawModel) : withContextSuffix(spawnModel())
+  // Central model resolution (see `selected` above): callers can pass raw aliases (e.g. "sonnet", "astra") or full IDs.
+  // Codex with no model picks its own default (it asks its app-server); the spawn default is a Claude id, which Codex cannot run.
+  const model = selected?.model ?? (engine === 'codex' ? undefined : withContextSuffix(spawnModel()))
 
 
   // --- Launch via engine adapter ---

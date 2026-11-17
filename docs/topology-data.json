@@ -821,6 +821,10 @@
       "daemon_access"
     ],
     [
+      "daemon_recovery",
+      "shared_constants"
+    ],
+    [
       "daemon_anchor-state",
       "daemon_config"
     ],

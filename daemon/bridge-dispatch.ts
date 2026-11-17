@@ -24,7 +24,7 @@ import { refreshDashboard } from './dashboard.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './artifacts.js'
 import { fetchPrTitle, parsePrUrl } from '../connectors/github/pr-watch.js'
 import { SEND_TYPES, type SendType } from '../shared/tool-definitions.js'
-import { ASK_PREDECESSOR_TIMEOUT_MS, normalizeReviewRounds, resolveCodexModelAlias, resolveOmpModelAlias } from '../shared/constants.js'
+import { ASK_PREDECESSOR_TIMEOUT_MS, engineOfModel, normalizeReviewRounds } from '../shared/constants.js'
 import { isRestrictedSession, isToolAllowed, predecessorAsker, refusalText } from './tool-surface.js'
 import { parseRateLimits, reportUsage } from './usage-alerts.js'
 import { markYourTurn } from './home-status.js'
@@ -378,14 +378,13 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const readOnly = args.read_only === true
         const topic = worktree ? `worktree:${worktree} ${args.topic}` : args.topic as string
         const modelArg = (args.model as string | undefined)?.trim()
-        // A Codex alias (astra, sol, ...) selects the Codex engine, as in chat spawns; otherwise it would launch `claude --model astra`.
-        const codexModel = modelArg ? resolveCodexModelAlias(modelArg) : undefined
-        const ompModel = modelArg ? resolveOmpModelAlias(modelArg) : undefined
-        if (codexModel && source) throw new Error('fork_from cannot be combined with a Codex model — Codex sessions cannot be forked')
-        if (codexModel && readOnly) throw new Error('read_only is not enforced on Codex sessions — use a Claude model')
-        if (ompModel && source) throw new Error('fork_from cannot be combined with an omp model — omp sessions cannot be forked')
-        if (ompModel && readOnly) throw new Error('read_only is not enforced on omp sessions — use a Claude model')
-        const model = codexModel ?? ompModel ?? (modelArg || source?.model)
+        // A Codex or omp alias selects its engine (doSpawnSession reads it); what a spawn_session may ask of that engine is refused here.
+        const aliasOf = modelArg ? engineOfModel(modelArg) : undefined
+        if (aliasOf === 'codex' && source) throw new Error('fork_from cannot be combined with a Codex model — Codex sessions cannot be forked')
+        if (aliasOf === 'codex' && readOnly) throw new Error('read_only is not enforced on Codex sessions — use a Claude model')
+        if (aliasOf === 'omp' && source) throw new Error('fork_from cannot be combined with an omp model — omp sessions cannot be forked')
+        if (aliasOf === 'omp' && readOnly) throw new Error('read_only is not enforced on omp sessions — use a Claude model')
+        const model = modelArg || source?.model
         if (model) process.stderr.write(`daemon: spawn_session model override: ${model}\n`)
         const budgetRaw = (args.phase_budget as string | undefined)?.trim() || undefined
         const phaseBudgetMs = budgetRaw ? parseDuration(budgetRaw) ?? undefined : undefined
@@ -411,8 +410,6 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           ...(model ? { model } : {}),
           // engine: always 'claude' while Codex sources are refused; it matters once Codex forks are supported.
           ...(source ? { forkFrom: source.fork, launchCwd: source.cwd, engine: source.engine } : {}),
-          ...(codexModel ? { engine: 'codex' as const } : {}),
-          ...(ompModel ? { engine: 'omp' as const } : {}),
           ...(readOnly ? { disallowedTools: READ_ONLY_DISALLOWED_TOOLS } : {}),
           ...(phaseBudgetMs ? { phaseBudgetMs } : {}),
           ...(spawnMode.quiet ? { quiet: true } : {}),

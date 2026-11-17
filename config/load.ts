@@ -6,7 +6,7 @@ import { parseEnvLine } from '../shared/env-parse.js'
 import { homedir } from 'os'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'path'
 import { parseCron } from '../shared/cron-local.js'
-import { parseIdleTtl, SLACK_GATEWAY_TOKEN_ENVS } from '../shared/constants.js'
+import { engineOfModel, parseIdleTtl, SLACK_GATEWAY_TOKEN_ENVS } from '../shared/constants.js'
 import { ENV_NAME_RE, tokenVarRefusal } from '../shared/spawn-env.js'
 import { offLimitRoots, workdirRestrictionIssues } from './restricted-workdir.js'
 import { ALLOW_UNPROVEN_MACOS, macosGateIssue, sandboxIssues, unquotablePath } from './server-sandbox.js'
@@ -453,7 +453,10 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     unknownKeys(mainTable, MAIN_KEYS, 'main')
     // As a specialist's `model`: kept as written; the start resolves an alias (resolveLaunchModel).
     const model = str(mainTable, 'model', 'main')
-    if (model !== undefined) main = { model }
+    // Main starts `claude --model <model>` (cli/lifecycle.ts byteLaunch), so a model of another engine would reach Claude as a literal.
+    const mainEngine = model === undefined ? undefined : engineOfModel(model)
+    if (mainEngine !== undefined && mainEngine !== 'claude') error('main.model', `"${model}" is a ${mainEngine} model, and main runs on Claude: use a Claude model (opus, sonnet, ...) or a full Claude model id`)
+    else if (model !== undefined) main = { model }
   }
 
   // --- specialists, with [defaults.specialist] -----------------------------------------------------------------------
@@ -592,9 +595,16 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     const emojiWhy = t.emoji === undefined ? undefined : emojiProblem(t.emoji)
     if (emojiWhy) error(at('emoji'), emojiWhy)
     const engine = oneOf(t, 'engine', path, ENGINES)
+    // One rule for the engine a specialist runs on: its `engine`, else the one its model alias names. omp can't be confined or
+    // pinned to a thread's tools, so no specialist runs on it; an `engine` and a model that name two engines is a mistake.
+    const aliased = model === undefined ? undefined : engineOfModel(model)
+    const runsOn = engine ?? aliased
+    if (runsOn === 'omp') error(engine === 'omp' ? at('engine') : at('model'), `omp cannot confine a session's tools, so a specialist cannot use it; use claude or codex`)
 
     // `restricted`: its session runs in its folder, with only what it lists. Everything below refuses what would let a restricted session reach past its folder.
     const restricted = bool(t, 'restricted', path) ?? false
+    // Two engines named: said once. Not when the restricted refusal below already stands for the same specialist (it names the engine to leave).
+    if (engine !== undefined && aliased !== undefined && aliased !== engine && !(restricted && !engineConfinesAccess(engine))) error(at('model'), `"${model}" is a ${aliased} model, but engine = "${engine}": set engine = "${aliased}", or use a model for ${engine}`)
     const toolsRaw = strList(t, 'tools', path)
     const mcpServerNamesRaw = strList(t, 'mcp_servers', path)
     const sendsToRaw = strList(t, 'sends_to', path)
@@ -623,7 +633,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
         if (unproven) warn(`${path}.mcp_servers`, unproven)
       }
       // The engine actually used comes from thread history and `handoff <model>` can switch it, so launch checks it again.
-      if (engine !== undefined && !engineConfinesAccess(engine)) error(`${path}.engine`, `${engine} can't run a restricted specialist: that engine cannot confine its tools; set engine = "claude", or set restricted = false`)
+      if (runsOn !== undefined && runsOn !== 'omp' && !engineConfinesAccess(runsOn)) error(engine !== undefined ? at('engine') : at('model'), `${runsOn} can't run a restricted specialist: that engine cannot confine its tools; use claude (engine = "claude", or a Claude model), or set restricted = false`)
       if (workdirRaw !== undefined && isAbsolute(workdir) && env.isDir(workdir)) checkWorkdirRestriction(at('workdir'), workdir)
     }
     specialists[id] = {
