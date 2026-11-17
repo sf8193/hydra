@@ -7,44 +7,15 @@
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { withHydraTomlLock, writeIfUnchanged } from './append.js'
-import { formatIssues, loadHydraConfig, RESTRICTION_KEYS, RESTRICTION_OLD_KEYS, SCHEDULE_RENAMES, SPECIALIST_RENAMES } from './load.js'
+import { formatIssues, loadHydraConfig, RESTRICTION_KEYS } from './load.js'
 import { appendOnly, appendText, HYDRA_TOML, hydraTomlInUse, toToml } from './migrate.js'
 import type { LoadEnv } from './types.js'
-import { isSessionThread } from '../shared/specialist-name.js'
-import { readTarget, spelled } from '../shared/target-kind.js'
 
 type Doc = Record<string, unknown>
 const SECTIONS = ['specialists', 'schedules'] as const
 type Section = typeof SECTIONS[number]
 const isTable = (v: unknown): v is Doc => typeof v === 'object' && v !== null && !Array.isArray(v)
 
-/** A fragment still written with a schedule's old `to`, `prompt` or `cwd` is added as `target`, `message` or `workdir`, so hydra.toml gets only the new names (the loader would warn on the old). Both names stay as written: the loader refuses them. */
-const scheduleNamed = (t: Doc): Doc => Object.fromEntries(Object.entries(t).map(([k, v]) => {
-  const r = SCHEDULE_RENAMES.find(x => x.from === k && !(x.to in t))
-  return [r ? r.to : k, v]
-}))
-
-/** A bare specialist name in a schedule's `target` is added as `specialist:<name>`, so hydra.toml gets only the new spelling (the loader would warn on the bare one). `main`, a thread id and a prefixed value stay as written. */
-const targetSpelled = (t: Doc): Doc => {
-  const read = typeof t.target === 'string' ? readTarget(t.target, id => !isSessionThread(id)) : undefined
-  return read?.ok && read.bare && read.ref.kind === 'specialist' ? { ...t, target: spelled(read.ref) } : t
-}
-
-/**
- * A fragment still written with a specialist's old key names is added under the new ones, so hydra.toml gets only the new names (the loader would
- * warn on the old). Both names stay as written: the loader refuses them. `access` is left as written: a fragment may not set it (a restriction), so it is refused below.
- */
-const specialistNamed = (t: Doc): Doc => Object.fromEntries(Object.entries(t).map(([k, v]) => {
-  const r = SPECIALIST_RENAMES.find(x => x.from === k && !x.values && !(x.to in t))
-  return [r ? r.to : k, v]
-}))
-
-/** A rule as hydra.toml writes it: the old key names read as the new, and a bare target spelled with its kind. */
-const ruleNamed = (t: Doc): Doc => {
-  const keys = { at: 'place', from: 'person', to: 'target' } as const
-  const named = Object.fromEntries(Object.entries(t).map(([k, v]) => [Object.hasOwn(keys, k) && !(keys[k as keyof typeof keys] in t) ? keys[k as keyof typeof keys] : k, v]))
-  return targetSpelled(named)
-}
 const describeRule = (r: Doc): string => `[[rules]] ${[r.place !== undefined && `place = ${JSON.stringify(r.place)}`, r.app !== undefined && `app = ${JSON.stringify(r.app)}`, r.person !== undefined && `person = ${JSON.stringify(r.person)}`, `target = ${JSON.stringify(r.target)}`].filter(Boolean).join(', ')}`
 const sameRule = (a: Doc, b: Doc): boolean => Bun.deepEquals(a, b)
 
@@ -58,25 +29,18 @@ export function planAddFragment(stateDir: string, env: LoadEnv, fragmentText: st
   let fragment: Doc
   try { fragment = Bun.TOML.parse(fragmentText) as Doc } catch (e) { return { ok: false, error: `${source} isn't valid TOML (${(e as Error).message})` } }
   const others = Object.keys(fragment).filter(k => !(SECTIONS as readonly string[]).includes(k) && k !== 'rules')
-  if (others.length) return { ok: false, error: `${source} sets ${others.join(', ')}; hydra config add takes only [specialists.<id>] and [schedules.<id>] tables and [[rules]] (a person: hydra people add; anything else, including an [mcp.*] server, is a hand edit)` }
+  if (others.length) return { ok: false, error: `${source} sets ${others.join(', ')}; hydra config add takes only [specialists.<id>] and [schedules.<id>] tables and [[rules]] (a person: hydra people add; anything else, including an [mcp_servers.*] server, is a hand edit)` }
   const flat = SECTIONS.flatMap(sec => {
     const v = fragment[sec]
-    return v === undefined ? [] : isTable(v) && Object.values(v).every(isTable) ? Object.entries(v).map(([id, t]) => ({ sec, id, t: sec === 'schedules' ? targetSpelled(scheduleNamed(t as Doc)) : specialistNamed(t as Doc) })) : [{ sec, id: '', t: {} }]
+    return v === undefined ? [] : isTable(v) && Object.values(v).every(isTable) ? Object.entries(v).map(([id, t]) => ({ sec, id, t: t as Doc })) : [{ sec, id: '', t: {} }]
   })
   const loose = flat.find(e => e.id === '')
   if (loose) return { ok: false, error: `${source}: ${loose.sec} must be [${loose.sec}.<id>] tables` }
   if (fragment.rules !== undefined && !(Array.isArray(fragment.rules) && fragment.rules.every(isTable))) return { ok: false, error: `${source}: rules must be [[rules]] tables` }
-  // An old `listens` on a specialist is added as the rules it means, so hydra.toml gets only [[rules]]: one per place, targeting that specialist.
-  const listened: Doc[] = []
-  for (const e of flat) {
-    if (e.sec !== 'specialists' || !Array.isArray(e.t.listens)) continue
-    for (const p of e.t.listens as unknown[]) if (typeof p === 'string') listened.push({ place: p, target: `specialist:${e.id}` })
-    delete e.t.listens
-  }
-  const fragmentRules = [...((fragment.rules ?? []) as Doc[]).map(ruleNamed), ...listened].filter((r, i, all) => all.findIndex(x => sameRule(x, r)) === i)
+  const fragmentRules = ((fragment.rules ?? []) as Doc[]).filter((r, i, all) => all.findIndex(x => sameRule(x, r)) === i)
   // What a session may reach is the operator's to set by hand: a fragment comes from another repo, and a table it names can't widen or narrow that.
-  const restricted = flat.flatMap(e => e.sec === 'specialists' ? [...RESTRICTION_KEYS, ...RESTRICTION_OLD_KEYS].filter(k => k in e.t).map(k => `[specialists.${e.id}] ${k}`) : [])
-  if (restricted.length) return { ok: false, error: `${source} sets ${restricted.join(', ')}: restricted, tools, mcp_servers and sends_to say what a specialist's session may reach, and only a hand edit of hydra.toml sets them (and the [mcp.*] servers they name)` }
+  const restricted = flat.flatMap(e => e.sec === 'specialists' ? RESTRICTION_KEYS.filter(k => k in e.t).map(k => `[specialists.${e.id}] ${k}`) : [])
+  if (restricted.length) return { ok: false, error: `${source} sets ${restricted.join(', ')}: restricted, tools, mcp_servers and sends_to say what a specialist's session may reach, and only a hand edit of hydra.toml sets them (and the [mcp_servers.*] servers they name)` }
   if (!flat.length && !fragmentRules.length) return { ok: false, error: `${source} has no [specialists.<id>] or [schedules.<id>] table, or [[rules]] entry, to add` }
 
   const existingText = readFileSync(path, 'utf8')
@@ -87,7 +51,7 @@ export function planAddFragment(stateDir: string, env: LoadEnv, fragmentText: st
   const already: string[] = []
   const edits: string[] = []
   const merged = structuredClone(existing)
-  const haveRules = (Array.isArray(existing.rules) ? existing.rules : []).filter(isTable).map(ruleNamed)
+  const haveRules = (Array.isArray(existing.rules) ? existing.rules : []).filter(isTable)
   const newRules = fragmentRules.filter(r => !haveRules.some(h => sameRule(h, r)))
   for (const r of fragmentRules) if (!newRules.includes(r)) already.push(describeRule(r))
   if (newRules.length) merged.rules = [...(Array.isArray(existing.rules) ? existing.rules : []), ...newRules]
@@ -107,14 +71,6 @@ export function planAddFragment(stateDir: string, env: LoadEnv, fragmentText: st
   const text = appendText(existingText, `# Added by \`hydra config add\` from ${source}.\n${toToml(append.doc, false)}`)
   const loaded = loadHydraConfig(text, env)
   if (!loaded.ok) return { ok: false, error: `hydra.toml wouldn't load with ${added.join(', ')}:\n${formatIssues(loaded.errors)}` }
-  // An appended rule comes after the file's own, so one for everyone at a place the file already sends somewhere (even through an old `listens`)
-  // is the one that goes unmatched. Say so rather than quietly take the place: only a warning on the new rules themselves is the fragment's own business.
-  const before = loadHydraConfig(existingText, env)
-  const known = new Set(before.warnings.map(w => `${w.path}: ${w.message}`))
-  const oldRules = Array.isArray(existing.rules) ? existing.rules.length : 0
-  const takesFromFile = loaded.warnings.filter(w => /never matches|gets only some apps/.test(w.message) && !known.has(`${w.path}: ${w.message}`)
-    && !(/^rules\[(\d+)\]$/.test(w.path) && Number(/^rules\[(\d+)\]$/.exec(w.path)![1]) >= oldRules))
-  if (takesFromFile.length) return { ok: false, error: `${added.join(', ')} would take a place from what hydra.toml already says, and hydra config add only adds:\n${takesFromFile.map(w => `- ${w.path}: ${w.message}`).join('\n')}\nGive the rule a \`person\` or an \`app\`, or edit hydra.toml by hand.` }
   return { ok: true, text, from: existingText, added, already }
 }
 

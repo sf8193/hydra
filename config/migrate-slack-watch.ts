@@ -82,13 +82,13 @@ export function migrateSlackWatch(raw: unknown): SlackWatchMigration {
         out.places[p] = { ...(r.files === true && { files: true as const }), ...(typeof r.ack === 'string' && r.ack && { ack: r.ack }) }
       }
     }
-    // from → reachable_by. A user id has no role to name, so it gets one: `<to>-reach`.
+    // from → reachable_by. A user id has no role to name, so it gets one: `reach-<to>`.
     const from = r.from ?? 'people'
     const roleNames = from === 'anyone' ? ['anyone'] : from === 'people' ? ['people'] : Array.isArray(from) ? from.flatMap(x => {
       if (typeof x !== 'string') return []
       if (roleOf.has(x)) return [roleOf.get(x)!]
       if (SLACK_ID.test(x)) {
-        const role = `${slug(to)}-reach`
+        const role = `reach-${slug(to)}`
         if (!personOf.has(x)) addPerson(x)
         const p = out.people[personOf.get(x)!]
         p.roles = [...new Set([...(p.roles ?? []), role])]
@@ -115,7 +115,7 @@ export function migrateSlackWatch(raw: unknown): SlackWatchMigration {
       ...(typeof g.timeout === 'string' && g.timeout && { timeout: g.timeout }),
       ...(g.includeText === true && { include_text: true as const }),
     }
-    note('beforeDeliver is now [guard]: its stdin is {person, roles, place, conversation, target} (it was {from, channel, thread, dm, to}; hydra still sends `to` beside `target`), a redirect is printed as {"target": ...}, and exit 75 holds a message for at most owed_max = "1h" (it was a day)')
+    note('beforeDeliver is now [guard]: its stdin is {person, roles, place, conversation, target} (it was {from, channel, thread, dm, to}), a redirect is printed as {"target": ...}, and exit 75 holds a message for at most owed_max = "1h" (it was a day)')
   }
 
   // What's learned at connect or a constant now.

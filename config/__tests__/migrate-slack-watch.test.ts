@@ -57,7 +57,7 @@ describe('slack-watch.json → hydra.toml', () => {
     expect(m.specialists.books).not.toHaveProperty('listens')
     expect(h.specialists.ops).toMatchObject({ reachableBy: ['people'] })
     expect(placesAnsweredBy(h, 'ops')).toEqual(['slack:C0OPS', 'slack:C0OPS2'])
-    expect(h.specialists.assistant).toMatchObject({ reachableBy: ['owner', 'assistant-reach'] })
+    expect(h.specialists.assistant).toMatchObject({ reachableBy: ['owner', 'reach-assistant'] })
     expect(placesAnsweredBy(h, 'assistant')).toEqual(['slack:dm'])
     // Every place a route names is one rule, aimed at the specialist by its kind.
     expect(m.rules).toContainEqual({ place: 'slack:dm', target: 'specialist:assistant' })
@@ -79,7 +79,7 @@ describe('slack-watch.json → hydra.toml', () => {
     const { notes } = migrateSlackWatch(OLD)
     expect(notes).toEqual([
       'people.U0MAX0000: role "Floor Manager" is now the label "floor-manager"',
-      'routes[3].from: U0GUEST00 is a user id, so they now hold the role "assistant-reach"',
+      'routes[3].from: U0GUEST00 is a user id, so they now hold the role "reach-assistant"',
       expect.stringContaining("routes[3]: the operator's own DMs reach assistant too"),
       expect.stringContaining('beforeDeliver is now [guard]'),
       'maxWatches = 80 has no hydra.toml key; the default (50) applies',

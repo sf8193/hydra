@@ -146,7 +146,7 @@ describe('catchUp: a bind takes only what comes after it', () => {
 
 describe('catchUp', () => {
   test('a refused sender found in the gap is refused once, like live, and is not counted as recovered', async () => {
-    const closed: SlackWatchConfig = view(oneListener(CH, 'helper', '["people"]') + '[people.owner]\naddresses = ["slack:UOWNER"]\nname = "Owner"\nroles = ["boss"]\n')
+    const closed: SlackWatchConfig = view(oneListener(CH, 'helper', '["role:people"]') + '[people.owner]\naddresses = ["slack:UOWNER"]\nname = "Owner"\nroles = ["boss"]\n')
     const { w, sent } = setup(undefined, closed)
     w.handle({ channel: CH, ts: '1000.000001', user: 'UOWNER', text: 'old chat' }) // sets the cursor
     const { api } = fakeApi({ [CH]: [
@@ -534,7 +534,7 @@ test('owed threads follow their binding: refetched even once no specialist liste
 })
 
 test('a message the guard put off (exit 75) is refetched by catch-up and judged again, like any owed message', async () => {
-  const guarded: SlackWatchConfig = view(oneListener(CH, 'helper', '["anyone"]', '[guard]\ncommand = "g"\n'))
+  const guarded: SlackWatchConfig = view(oneListener(CH, 'helper', '["role:anyone"]', '[guard]\ncommand = "g"\n'))
   const T = '1792999990.000001' // within owed_max of now: a "not now" holds it rather than failing it
   const dir = mkdtempSync(join(tmpdir(), 'slack-catchup-'))
   dirs.push(dir)
@@ -557,7 +557,7 @@ test('a message the guard put off (exit 75) is refetched by catch-up and judged 
 describe('catch-up for DMs and files', () => {
   const DM = 'D0ALICE01'
   const DMS = (allow: string) => oneListener(CH) + `[people.a]\naddresses = ["slack:UA"]\nroles = ["owner"]\n[specialists.assistant]\nworkdir = "/w/assistant"\nreachable_by = ${allow}\n[[rules]]\nplace = "slack:dm"\ntarget = "specialist:assistant"\n`
-  const dmCfg: SlackWatchConfig = view(DMS('["owner"]'))
+  const dmCfg: SlackWatchConfig = view(DMS('["role:owner"]'))
   const mk = (deliver: () => DeliverResult = () => ({ ok: true })) => {
     const dir = mkdtempSync(join(tmpdir(), 'slack-catchup-'))
     dirs.push(dir)
@@ -662,7 +662,7 @@ describe('catch-up for DMs and files', () => {
     const dir = mkdtempSync(join(tmpdir(), 'slack-catchup-'))
     dirs.push(dir)
     const sent: string[] = []
-    const openDms: SlackWatchConfig = view(DMS('["anyone"]'), { maxWatches: 1000 })
+    const openDms: SlackWatchConfig = view(DMS('["role:anyone"]'), { maxWatches: 1000 })
     const w = new SlackWatcher({ now: () => now, file: join(dir, 'w.json'), log: () => {}, config: () => openDms, deliver: async (_t, msg) => { sent.push(msg); return { ok: true } } })
     w.handle({ channel: CH, ts: '1792999000.000001', user: 'UA', text: 'chat' })
     const dms = Array.from({ length: 600 }, (_, i) => ({ channel: `D0GAP${String(i).padStart(4, '0')}`, user: 'UA' }))

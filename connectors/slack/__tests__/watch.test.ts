@@ -73,7 +73,7 @@ describe("a thread bound to a session's own thread (any session listening)", () 
   })
 
   test("a guard can't send a conversation's message to a session thread: it goes to the binding, alerted", async () => {
-    const s = setup({ toml: oneListener(CH, 'helper', '["anyone"]', '[guard]\ncommand = "guard"') }, undefined, undefined, async () => ({ fate: 'deliver', target: SESSION }))
+    const s = setup({ toml: oneListener(CH, 'helper', '["role:anyone"]', '[guard]\ncommand = "guard"') }, undefined, undefined, async () => ({ fate: 'deliver', target: SESSION }))
     s.w.handle(ev({ ts: '3000.000001', text: mention }))
     await s.w.flush()
     expect(s.sent.map(x => x.specialist)).toEqual(['helper'])
@@ -305,7 +305,7 @@ describe('what opens and continues a conversation', () => {
   })
 
   test('messages = "all": an untagged top-level message opens its own conversation, its thread, delivered like a mention', async () => {
-    const { w, sent } = setup({ toml: oneListener(CH, 'helper', '["anyone"]', `[places."slack:${CH}"]\nmessages = "all"\n`) })
+    const { w, sent } = setup({ toml: oneListener(CH, 'helper', '["role:anyone"]', `[places."slack:${CH}"]\nmessages = "all"\n`) })
     expect(w.handle(ev({ ts: '1.000001', text: 'chatter' }))).toBe('follow-up')
     expect(w.handle(ev({ ts: '2.000001', threadTs: '1.000001', text: 'a reply under it' }))).toBe('follow-up')
     await w.flush()
@@ -314,7 +314,7 @@ describe('what opens and continues a conversation', () => {
   })
 
   test('messages = "all": each chatter message is its own conversation, bound by its sender: no one captures the place, and a reply under it follows its binding', async () => {
-    const toml = firstRules(oneListener(CH, 'food', '["anyone"]', `[places."slack:${CH}"]\nmessages = "all"\n`) + `
+    const toml = firstRules(oneListener(CH, 'food', '["role:anyone"]', `[places."slack:${CH}"]\nmessages = "all"\n`) + `
 [people.olive]\naddresses = ["slack:UOLIVE"]\n[specialists.finance]\nworkdir = "/w/finance"\nreachable_by = ["role:people"]\n`, `[[rules]]\nplace = "slack:${CH}"\nperson = "person:olive"\ntarget = "specialist:finance"\n`)
     const { w, sent } = setup({ toml })
     w.handle(ev({ ts: '1.000001', user: 'UOLIVE', text: 'books question' }))
@@ -330,7 +330,7 @@ describe('what opens and continues a conversation', () => {
   })
 
   test('chatter still owed (or answered) takes at most half the table; once delivered and unanswered it holds no slot; all of it goes after a day', async () => {
-    const { w, logs, tick } = setup({ toml: oneListener(CH, 'helper', '["anyone"]', `[places."slack:${CH}"]\nmessages = "all"\n`), maxWatches: 4, coalesceMs: 60_000 })
+    const { w, logs, tick } = setup({ toml: oneListener(CH, 'helper', '["role:anyone"]', `[places."slack:${CH}"]\nmessages = "all"\n`), maxWatches: 4, coalesceMs: 60_000 })
     for (let i = 1; i <= 4; i++) w.handle(ev({ ts: `${i}.000001`, text: 'chatter' }))
     expect(w.list().filter(e => e.ambient)).toHaveLength(2) // two owed: half the table
     expect(logs.join()).toContain('conversations opened by untagged chatter already hold half the conversation table (2 of 4)')
@@ -377,7 +377,7 @@ describe('what opens and continues a conversation', () => {
   })
 
   test('other bots are heard only where the place says bots = true', () => {
-    const on = setup({ toml: oneListener(CH, 'helper', '["anyone"]', `[places."slack:${CH}"]\nbots = true\n`) })
+    const on = setup({ toml: oneListener(CH, 'helper', '["role:anyone"]', `[places."slack:${CH}"]\nbots = true\n`) })
     expect(on.w.handle({ channel: CH, ts: '1.000001', botId: 'BOTHER', subtype: 'bot_message', text: `<@${BOT}> hi` })).toBe('mention')
   })
 
@@ -458,7 +458,7 @@ describe('🚫: a refused or unrouted mention or DM', () => {
 
   test('a refused mention gets 🚫; refused chatter in a bound thread does not', async () => {
     const { a, reactions } = actions()
-    const s = setup({ toml: oneListener(CH, 'helper', '["staff"]') + '[people.alice]\naddresses = ["slack:UALICE"]\nroles = ["staff"]\n' })
+    const s = setup({ toml: oneListener(CH, 'helper', '["role:staff"]') + '[people.alice]\naddresses = ["slack:UALICE"]\nroles = ["staff"]\n' })
     s.w.setSlackActions(a)
     expect(s.w.handle(ev({ ts: '1.000001', text: mention }))).toBe('mention')
     expect(s.w.handle(ev({ ts: '2.000001', threadTs: '1.000001', user: 'USTRANGER', text: 'me too' }))).toBe('refused')
@@ -483,7 +483,7 @@ describe('🚫: a refused or unrouted mention or DM', () => {
 
   test('another bot (where bots = true) has its 🚫 capped by its bot id', async () => {
     const { a, reactions } = actions()
-    const s = setup({ toml: oneListener(CH, 'helper', '["people"]', `[places."slack:${CH}"]\nbots = true\n`), maxMentionsPer10Min: 2 })
+    const s = setup({ toml: oneListener(CH, 'helper', '["role:people"]', `[places."slack:${CH}"]\nbots = true\n`), maxMentionsPer10Min: 2 })
     s.w.setSlackActions(a)
     for (let i = 1; i <= 5; i++) s.w.handle({ channel: CH, ts: `${i}.000001`, botId: 'BOTHER', subtype: 'bot_message', text: mention })
     await Bun.sleep(1)
@@ -863,20 +863,20 @@ roles = ["guest"]
   const allowing = (allow: string) => oneListener(CH, 'helper', allow) + ROSTER
 
   test('a message owed before allow was tightened is settled by its refusal, so catch-up stops chasing it', async () => {
-    let config = cfg({ toml: allowing('["anyone"]') })
+    let config = cfg({ toml: allowing('["role:anyone"]') })
     const dir = mkdtempSync(join(tmpdir(), 'slack-watch-'))
     dirs.push(dir)
     const w = new SlackWatcher({ now: () => 1_000_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => config, deliver: async () => ({ ok: false, error: 'down' }) })
     w.handle(ev({ ts: '1.000001', user: 'USTRANGER', text: mention }))
     await w.flush()
     expect(w.owedHints()).toHaveLength(1)
-    config = cfg({ toml: allowing('["owner"]') })
+    config = cfg({ toml: allowing('["role:owner"]') })
     expect(w.handle(ev({ ts: '1.000001', user: 'USTRANGER', text: mention }))).toBe('refused')
     expect(w.owedHints()).toEqual([])
   })
 
   test('a stranger is refused before anything is opened, owed or counted against the tag cap, and a replay counts once', async () => {
-    const { w, sent, logs } = setup({ toml: allowing('["people"]'), maxMentionsPer10Min: 1 })
+    const { w, sent, logs } = setup({ toml: allowing('["role:people"]'), maxMentionsPer10Min: 1 })
     expect(w.handle(ev({ ts: '1.000001', user: 'USTRANGER', text: mention }))).toBe('refused')
     expect(w.handle(ev({ ts: '1.000001', user: 'USTRANGER', text: mention }))).toBe('refused') // catch-up replay
     expect(w.list()).toHaveLength(0)
@@ -888,7 +888,7 @@ roles = ["guest"]
   })
 
   test('roles pick who reaches it, in a bound thread too; untagged chatter where nobody is bound is not a refusal', async () => {
-    const { w, sent } = setup({ toml: allowing('["owner", "guest"]') })
+    const { w, sent } = setup({ toml: allowing('["role:owner", "role:guest"]') })
     expect(w.handle(ev({ ts: '1.000001', user: 'UOWNER', text: mention }))).toBe('mention')
     expect(w.handle(ev({ ts: '2.000001', threadTs: '1.000001', user: 'UMGR', text: 'me too' }))).toBe('refused')
     expect(w.handle(ev({ ts: '3.000001', threadTs: '1.000001', user: 'UGUEST', text: 'and me' }))).toBe('follow-up')
@@ -905,14 +905,14 @@ roles = ["guest"]
   })
 
   test("the bot's own post still opens a conversation under a closed allow", () => {
-    const { w } = setup({ toml: allowing('["owner"]') })
+    const { w } = setup({ toml: allowing('["role:owner"]') })
     expect(w.handle(ev({ ts: '9.000001', user: BOT, text: 'posted' }))).toBe('subscribed')
   })
 
   test('allow is checked again at delivery: a role taken away while a message waits drops it, counted and alerted', async () => {
-    const s = setup({ toml: allowing('["owner", "guest"]'), coalesceMs: 60_000 })
+    const s = setup({ toml: allowing('["role:owner", "role:guest"]'), coalesceMs: 60_000 })
     s.w.handle(ev({ ts: '1.000001', user: 'UGUEST', text: mention }))
-    s.setConfig(cfg({ toml: allowing('["owner"]') }))
+    s.setConfig(cfg({ toml: allowing('["role:owner"]') }))
     await s.w.flush()
     expect(s.sent).toHaveLength(0)
     expect(s.w.owedHints()).toEqual([])
@@ -921,7 +921,7 @@ roles = ["guest"]
   })
 
   test('a flood of refusals does not evict drops: a replayed drop is not counted twice', () => {
-    const { w } = setup({ toml: allowing('["owner"]'), maxWatches: 1 })
+    const { w } = setup({ toml: allowing('["role:owner"]'), maxWatches: 1 })
     w.handle(ev({ ts: '1.000001', user: 'UOWNER', text: mention }))
     w.handle(ev({ ts: '2.000001', user: 'UOWNER', text: mention })) // table-full
     for (let i = 0; i < 10_001; i++) w.handle(ev({ ts: `${100 + i}.000001`, user: 'USTRANGER', text: mention }))
@@ -1298,7 +1298,7 @@ target = "specialist:assistant"
 })
 
 describe('the guard', () => {
-  const GUARDED = (extra = '', reachableBy = '["anyone"]') => oneListener(CH, 'ops', reachableBy, `[guard]\ncommand = "guard"\n${extra}`) + `
+  const GUARDED = (extra = '', reachableBy = '["role:anyone"]') => oneListener(CH, 'ops', reachableBy, `[guard]\ncommand = "guard"\n${extra}`) + `
 [specialists.billing]
 workdir = "/w/billing"
 reachable_by = ["role:anyone"]
@@ -1330,7 +1330,7 @@ roles = ["finance"]
     const s = setup({ toml: GUARDED(), names: { [CH]: 'food' } }, undefined, undefined, fn)
     s.w.handle(ev({ ts: '1.000001', text: mention }))
     await s.w.flush()
-    expect(inputs).toEqual([{ person: 'alice', roles: ['ops', 'people', 'anyone'], place: 'slack:#food', conversation: `slack:${CH}:1.000001`, target: 'ops', to: 'ops' }])
+    expect(inputs).toEqual([{ person: 'alice', roles: ['ops', 'people', 'anyone'], place: 'slack:#food', conversation: `slack:${CH}:1.000001`, target: 'specialist:ops' }])
     s.setConfig(cfg({ toml: GUARDED('include_text = true\n') }))
     s.w.handle(ev({ ts: '2.000001', threadTs: '1.000001', text: 'secret words' }))
     await s.w.flush()
@@ -1543,7 +1543,7 @@ roles = ["finance"]
     dirs.push(dir)
     const script = (name: string, body: string) => { const p = join(dir, name); writeFileSync(p, `#!/bin/sh\n${body}\n`); chmodSync(p, 0o755); return p }
     let command = script('drop.sh', 'cat > /dev/null; exit 10')
-    const config = () => cfg({ toml: oneListener(CH, 'ops', '["anyone"]', `[guard]\ncommand = "${command}"\n`), coalesceMs: 1 })
+    const config = () => cfg({ toml: oneListener(CH, 'ops', '["role:anyone"]', `[guard]\ncommand = "${command}"\n`), coalesceMs: 1 })
     const sent: string[] = []
     const w = new SlackWatcher({ now: () => 1e12, file: join(dir, 'w.json'), log: () => {}, config, deliver: async t => { sent.push(t.to); return { ok: true } } })
     w.handle(ev({ ts: '1.000001', text: mention }))
@@ -1667,7 +1667,7 @@ ${place}
     const s = setup({ toml: PLACES('', '[guard]\ncommand = "g"\n') }, undefined, undefined, async (_g, i) => { inputs.push(i); return { fate: 'deliver' } })
     s.w.handle(ev({ channel: DM, ts: '1.000001', text: 'hi' }))
     await s.w.flush()
-    expect(inputs[0]).toMatchObject({ place: 'slack:dm', conversation: `slack:${DM}`, to: 'assistant' })
+    expect(inputs[0]).toMatchObject({ place: 'slack:dm', conversation: `slack:${DM}`, target: 'specialist:assistant' })
   })
 
   test('a file Slack gives no download link for is still listed, with why', async () => {
@@ -1857,7 +1857,7 @@ describe("the operator's token: broad subscription is not broad delivery", () =>
   const ASSISTANT = '[specialists.assistant]\nworkdir = "/w/a"\nreachable_by = ["role:anyone"]\n[[rules]]\nplace = "slack:dm"\ntarget = "specialist:assistant"\n'
   const ALICE_DM = 'D0ALICE01', BOB_DM = 'D0BOB0001', BOT_DM = 'D0BOT0001', STRANGER_DM = 'D0STRNG01', GROUP = 'G0GROUP01'
   const DMS = { [ALICE_DM]: 'UALICE', [BOB_DM]: 'UBOB', [BOT_DM]: 'bot', [STRANGER_DM]: 'UNOBODY' }
-  const conf = (extra: string) => ({ toml: USER_TOKEN(oneListener(CH, 'helper', '["anyone"]', `${PEOPLE}${DESK}${extra}${ASSISTANT}`)), dms: DMS, groupDms: [GROUP] })
+  const conf = (extra: string) => ({ toml: USER_TOKEN(oneListener(CH, 'helper', '["role:anyone"]', `${PEOPLE}${DESK}${extra}${ASSISTANT}`)), dms: DMS, groupDms: [GROUP] })
   const dm = (over: Partial<SlackMessageEvent>) => ev({ channel: ALICE_DM, ...over })
   const group = (over: Partial<SlackMessageEvent>) => ev({ channel: GROUP, ...over })
 
@@ -1916,7 +1916,7 @@ describe("the operator's token: broad subscription is not broad delivery", () =>
   })
 
   test('a [places] entry alone names a channel: untagged chatter there opens a conversation, where an unnamed channel passes nothing', async () => {
-    const s = setup({ toml: USER_TOKEN(oneListener(CH, 'helper', '["anyone"]', `${DESK}[[rules]]\napp = "app:default"\ntarget = "specialist:desk"\n[places."slack:C0LOUNGE"]\nmessages = "all"\n`)) })
+    const s = setup({ toml: USER_TOKEN(oneListener(CH, 'helper', '["role:anyone"]', `${DESK}[[rules]]\napp = "app:default"\ntarget = "specialist:desk"\n[places."slack:C0LOUNGE"]\nmessages = "all"\n`)) })
     expect(s.w.handle(ev({ channel: 'C0LOUNGE', ts: '1.000001', text: 'chatter in a channel only [places] names' }))).toBe('follow-up')
     expect(s.w.handle(ev({ channel: 'C0ELSE', ts: '2.000001', text: 'chatter in an unnamed channel' }))).toBe('ignored')
     await s.w.flush()
@@ -2056,7 +2056,7 @@ describe('what hydra health says about owed messages and deliveries (#669)', () 
     await wait.w.flush()
     expect(wait.w.lateOwed(20 * MIN)[0].cause).toContain('max_sessions')
 
-    const held = setup({ toml: oneListener(CH, 'helper', '["anyone"]', '[guard]\ncommand = "guard"') }, undefined, undefined, async () => ({ fate: 'later' }))
+    const held = setup({ toml: oneListener(CH, 'helper', '["role:anyone"]', '[guard]\ncommand = "guard"') }, undefined, undefined, async () => ({ fate: 'later' }))
     held.w.handle(ev({ ts: tsAgo(held, 30), text: mention }))
     await held.w.flush()
     expect(held.w.lateOwed(20 * MIN)[0].cause).toContain('exit 75')

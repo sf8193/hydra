@@ -413,13 +413,13 @@ describe('runWork', () => {
   test('to: delivers the check output to the named target; no prompt means the output alone; only main is --queue', async () => {
     checkResult = { code: 0, out: '3 failures\n', err: '' }
     expect((await runWork(toJob(), dir, 'k')).result).toBe('done')
-    expect(calls).toEqual([['deliver', '--to', 'integrator', '--initiator', 'jobs:nb', '--idempotency-key', 'k', '--idempotency-ttl', '1440m', '--message', 'Check output:\n3 failures']])
+    expect(calls).toEqual([['deliver', '--to', 'specialist:integrator', '--initiator', 'jobs:nb', '--idempotency-key', 'k', '--idempotency-ttl', '1440m', '--message', 'Check output:\n3 failures']])
     calls.length = 0
     await runWork(parseJobs(`[t]\nschedule="0 2 * * *"\ncheck="n.sh"\nto="1234567890"`)[0], dir, 'k')   // an orphaned thread answers 4
     expect(calls[0]).not.toContain('--queue')
     calls.length = 0
     await runWork(toJob('revive=true\nprompt="Fix it."'), dir, 'k')
-    expect(calls[0].slice(0, 4)).toEqual(['deliver', '--to', 'integrator', '--revive'])
+    expect(calls[0].slice(0, 4)).toEqual(['deliver', '--to', 'specialist:integrator', '--revive'])
     expect(calls[0].at(-1)).toBe('Fix it.\n\nCheck output:\n3 failures')
   })
 
@@ -427,7 +427,7 @@ describe('runWork', () => {
     checkResult = { code: 0, out: 'week 45\n', err: '' }
     const job = { ...toJob(), target: { to: 'rev', conversation: true as const } }
     expect((await runWork(job, dir, 'jobs-nb-2026-11-13T19:00:00.000Z')).result).toBe('done')
-    expect(calls[0].slice(0, 4)).toEqual(['deliver', '--to', 'rev', '--conversation'])
+    expect(calls[0].slice(0, 4)).toEqual(['deliver', '--to', 'specialist:rev', '--conversation'])
     expect(calls[0][4]).toBe('clock:jobs-nb-2026-11-13T19:00:00.000Z')
     expect(calls[0].at(-1)).toBe('Check output:\nweek 45')
   })

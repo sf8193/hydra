@@ -2,7 +2,7 @@
 // Every default is filled in and every reference checked (config/load.ts), so a consumer reads these as facts.
 // Keys are camelCase here; the file's are snake_case (`kickoff_file` → `kickoffFile`).
 // Content (what may be said, approvals) is out of scope: it belongs to each specialist. What a specialist's session may
-// reach is not: `restricted` says whether it runs in its folder alone, `tools` and `mcp_servers` (with `[mcp.*]`) list what a restricted
+// reach is not: `restricted` says whether it runs in its folder alone, `tools` and `mcp_servers` (with `[mcp_servers.*]`) list what a restricted
 // specialist may use, and `sends_to` names the specialists it may send to.
 
 /** A platform hydra can connect to. A person's address and most places start with one. */
@@ -52,7 +52,7 @@ export type SessionsMode = 'shared' | 'per-conversation'
 /** The built-in tools a restricted specialist (`restricted = true`) may list. Anything else runs code or reaches past its folder. */
 export const WORKDIR_TOOLS = ['Read', 'Grep', 'Glob'] as const
 
-/** A server specialists may list in `mcp_servers`, declared `[mcp.<name>]`. Per-operator: only hydra.toml declares one. */
+/** A server specialists may list in `mcp_servers`, declared `[mcp_servers.<name>]`. Per-operator: only hydra.toml declares one. */
 export type McpServer = {
   name: string
   /** The executable (a path or a name on PATH). */
@@ -99,8 +99,8 @@ export type Specialist = {
   restricted: boolean
   /** `restricted` only: the built-in tools it may use (default Read, Grep, Glob). */
   tools?: string[]
-  /** `restricted` only: the `[mcp.<name>]` servers it may use (default none). */
-  mcpServers?: string[]
+  /** `restricted` only: the `[mcp_servers.<name>]` servers it may use (default none). */
+  mcpServerNames?: string[]
   /** `restricted` only: the specialists its session may send to with `send_to_thread` (default none). Shared-session specialists; never `main`. */
   sendsTo?: string[]
   /** `~` expanded; a relative path is under `workdir`. */
@@ -110,7 +110,7 @@ export type Specialist = {
 }
 
 /**
- * One Slack app this hydra runs as, declared `[slack.apps.<id>]`, or, in the old form, as the app `default` by `[connectors.slack]`.
+ * One Slack app this hydra runs as, declared `[slack.apps.<id>]`.
  * The token fields name environment variables; the tokens themselves stay in `.env`. Defaults are filled in.
  */
 export type SlackApp = {
@@ -127,7 +127,7 @@ export type SlackApp = {
   description: string
 }
 
-/** The id the old `[connectors.slack]` loads as: the one Slack app hydra connects. */
+/** The app named `default`, used where nothing names an app. */
 export const DEFAULT_SLACK_APP = 'default'
 
 /** The Slack app hydra connects (`default`), or undefined when hydra.toml declares none. */
@@ -259,7 +259,7 @@ export type HydraConfig = {
   main?: MainOptions
   connectors: Connectors
   gateways: Gateways
-  /** Every Slack app, by id (no prototype: look one up with Object.hasOwn). The old `[connectors.slack]` loads as the app `default`. */
+  /** Every Slack app, by id (no prototype: look one up with Object.hasOwn). */
   slackApps: Record<string, SlackApp>
   people: Record<string, Person>
   specialists: Record<string, Specialist>

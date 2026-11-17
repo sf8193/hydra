@@ -18,7 +18,7 @@ import { daemonFile, jobInitiator, owedSlot, parseJobsConfig, readDaemonState, r
 import { nextSlot } from '../shared/cron-local.js'
 import { DEFAULT_IDLE_TTL_MS } from '../shared/constants.js'
 import { invalidSpecialistName, isSessionThread } from '../shared/specialist-name.js'
-import { readTarget, spelled } from '../shared/target-kind.js'
+import { readTarget, spelled, spelledTo } from '../shared/target-kind.js'
 import type { MigrateStep } from './migrate.js'
 
 export type ScheduleTable = {
@@ -124,7 +124,7 @@ export function migrateJobs(text: string, opts: JobsMigrationOpts): JobsMigratio
       if (r.idle === undefined) note(`${j.name}: idle ${SPAWN_IDLE}, the default its spawned sessions had`)
     } else {
       // A job's `to` is main, a specialist's name or a thread id, bare or saying its kind; the schedule says it.
-      const ref = readTarget(target.to, id => !isSessionThread(id))
+      const ref = readTarget(spelledTo(target.to), id => !isSessionThread(id))
       if (!ref.ok || ref.ref.kind === 'thread') {
         out.refusals.push(`${j.name}: to = "${target.to}" is ${ref.ok ? 'a thread; declare a specialist for it and send to that' : ref.error ?? 'not a target'}`)
         continue

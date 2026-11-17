@@ -9,7 +9,7 @@ import { quietSend, shouldQuiet } from './quiet-send.js'
 import { beginMainHandoff } from './main-handoff.js'
 import { getSpecialist } from '../specialists/specialists.js'
 import { ensureSpecialist } from '../specialists/specialist-deliver.js'
-import { envelopeFor, sendTalk, sendsToRefusal } from './sends-to.js'
+import { envelopeFor, sendToThread, sendsToRefusal } from './sends-to.js'
 import { READ_ONLY_DISALLOWED_TOOLS, claudeLaunchCwd, doSpawnSession, handOff, handoffNoteFate, killSession, predecessorOf, runPreHandoffHook, sessionDir, type PreHandoffVerdict } from './session-lifecycle.js'
 import { fallbackDescription, formatDuration, chunk, assertSendable, parseDuration, withOutbound } from './util.js'
 import { tmuxHasSession } from './tmux.js'
@@ -633,7 +633,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
 
       case 'send_to_thread': {
         // A restricted caller was held to its sends_to above (restrictedRefusal): what it sends is rendered and landed by sends-to.ts, not by the route below.
-        if (callerSessionId && isRestrictedSession(callerSessionId)) return { content: [{ type: 'text', text: await sendTalk(callerSessionId, args) }] }
+        if (callerSessionId && isRestrictedSession(callerSessionId)) return { content: [{ type: 'text', text: await sendToThread(callerSessionId, args) }] }
         const target = (args.target as string)?.trim()
         const msgType = (args.type as string)?.trim()
         const text = args.text as string

@@ -129,7 +129,7 @@ describe('the daemon\'s live hydra.toml', () => {
     const write = process.stderr.write
     process.stderr.write = ((t: string) => { lines.push(String(t)); return true }) as typeof process.stderr.write
     try {
-      writeFileSync(hydraConfigPath(), config('op') + '[mcp.datadog]\ncommand = "/bin/sh"\ntools = ["search_logs"]\n[specialists.ops]\nworkdir = "/tmp"\nreachable_by = []\nrestricted = true\nmcp_servers = ["datadog"]\n[specialists.desk]\nworkdir = "/tmp"\nreachable_by = []\nrestricted = true\n')
+      writeFileSync(hydraConfigPath(), config('op') + '[mcp_servers.datadog]\ncommand = "/bin/sh"\ntools = ["search_logs"]\n[specialists.ops]\nworkdir = "/tmp"\nreachable_by = []\nrestricted = true\nmcp_servers = ["datadog"]\n[specialists.desk]\nworkdir = "/tmp"\nreachable_by = []\nrestricted = true\n')
       startHydraConfig({ env: { ...env, isCommand: () => true } })
       const trust = lines.filter(l => l.includes('Listing a server means'))
       expect(trust).toEqual([`daemon: hydra.toml: ${serverTrustLine('ops', ['datadog'])}\n`])

@@ -57,7 +57,7 @@ describe('slackManifest', () => {
 
   test('the bot scopes are exactly the ones the startup scope check asks for, with every option on', () => {
     // Channels by name, DMs (the operator has a slack: address), group DMs and files: every option scopesNeeded knows.
-    const h = hydra(alsoHeard(oneListener('#food', 'helper', '["anyone"]', '[places."slack:#food"]\nfiles = true\n'), 'helper', 'slack:group-dm'))
+    const h = hydra(alsoHeard(oneListener('#food', 'helper', '["role:anyone"]', '[places."slack:#food"]\nfiles = true\n'), 'helper', 'slack:group-dm'))
     const checked = scopesNeeded(h)
     expect(checked).toEqual(Object.values(SLACK_APP_NEEDS.botScopes))
     const manifest = Bun.YAML.parse(slackManifest(h.slackApps.default)) as Manifest

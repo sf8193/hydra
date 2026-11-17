@@ -117,10 +117,10 @@ export function bornPolicy(specialistId: string | undefined, h: HydraConfig = cu
     : (Object.hasOwn(h.specialists, specialistId) ? h.specialists[specialistId] : undefined) ?? Object.values(h.specialists).find(s => s.renamedFrom.includes(specialistId))
   if (!declared) return undefined
   if (!declared.restricted) return { specialist: declared.id, access: 'operator', id: OPERATOR_POLICY_ID }
-  const servers = (declared.mcpServers ?? []).map((name): PolicyServer => {
+  const servers = (declared.mcpServerNames ?? []).map((name): PolicyServer => {
     const s = h.mcpServers?.[name]
     // Checked at load; a config that got here without it must not start the specialist with fewer servers than it lists.
-    if (!s) throw new PolicyRefusal(`specialist ${declared.id} lists [mcp.${name}], which hydra.toml does not declare: declare it, or remove it from the specialist's mcp_servers. ${remedy(sessionName)}`)
+    if (!s) throw new PolicyRefusal(`specialist ${declared.id} lists [mcp_servers.${name}], which hydra.toml does not declare: declare it, or remove it from the specialist's mcp_servers. ${remedy(sessionName)}`)
     return { name: s.name, command: s.command, tokenEnv: [...s.tokenEnv], tools: [...s.tools] }
   })
   // A workdir specialist without a tools list (a config that skipped the loader) gets the narrowest set, not every tool.
@@ -134,7 +134,7 @@ export function bornPolicy(specialistId: string | undefined, h: HydraConfig = cu
  */
 export function missingTokenRefusal(p: ConfinedPolicy, envFile: string, sessionName: string, env: NodeJS.ProcessEnv = process.env, held: Readonly<Record<string, string>> = {}): string | undefined {
   for (const s of p.servers) for (const v of s.tokenEnv) {
-    if (env[v] === undefined && held[v] === undefined) return `specialist ${p.specialist}: [mcp.${s.name}] needs ${v}, which is not set: add ${v}=<value> to ${envFile}, then restart the daemon (it reads that file only at start). No session starts without it. ${remedy(sessionName)}`
+    if (env[v] === undefined && held[v] === undefined) return `specialist ${p.specialist}: [mcp_servers.${s.name}] needs ${v}, which is not set: add ${v}=<value> to ${envFile}, then restart the daemon (it reads that file only at start). No session starts without it. ${remedy(sessionName)}`
   }
   return undefined
 }
@@ -155,7 +155,7 @@ export const serverTrustLine = (specialist: string, servers: readonly string[]):
 
 // Once per load, one line for each specialist that lists servers: the load log, not a warning (nothing is wrong).
 onHydraConfigLoad(config => {
-  for (const s of Object.values(config.specialists)) if (s.restricted && s.mcpServers?.length) process.stderr.write(`daemon: hydra.toml: ${serverTrustLine(s.id, s.mcpServers)}\n`)
+  for (const s of Object.values(config.specialists)) if (s.restricted && s.mcpServerNames?.length) process.stderr.write(`daemon: hydra.toml: ${serverTrustLine(s.id, s.mcpServerNames)}\n`)
 })
 
 /** What a restricted launch builds the listed servers' sandbox from, as the daemon has it now: the probes and the places to keep servers out of. */

@@ -51,7 +51,7 @@ function setup(toml: string, over: { members?: Record<string, string[]>; probeEr
   const watcher = new SlackWatcher({
     now: () => now, file, filesDir: join(dir, 'files'), log: l => logs.push(l), config: app => byId[app ?? 'default']?.view() ?? null,
     alert: (t, to) => { alerts.push(t); alertTo.push(to) },
-    ...(over.guard && { guard: async (_g, input) => over.guard!(input.to) }),
+    ...(over.guard && { guard: async (_g, input) => over.guard!(input.target) }),
     deliver: async (t, msg, key) => { sent.push({ to: t.to, ...(t.conversation && { conversation: t.conversation }), key, msg }); return { ok: true } },
   })
   const shared = new ConnectedApps({ now: () => now, log: l => logs.push(l), alert: (t, app) => { alerts.push(t); alertApps.push(app) } })

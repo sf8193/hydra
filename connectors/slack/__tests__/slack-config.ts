@@ -58,7 +58,7 @@ target = "specialist:deals"
 export const alsoHeard = (toml: string, to: string, ...places: string[]) => `${toml.replace(/\n*$/, '\n')}${places.map(p => `[[rules]]\nplace = "${p}"\ntarget = "specialist:${to}"\n`).join('')}`
 
 /** One specialist sent one channel, open to `allow`. */
-export const oneListener = (channel: string, to = 'helper', reachableBy = '["anyone"]', extra = '') => {
+export const oneListener = (channel: string, to = 'helper', reachableBy = '["role:anyone"]', extra = '') => {
   // A rule written in `extra` is the file's own: it goes before the rule that sends the channel to `to`, so that a rule for a person is reached.
   const own = extra.match(/\[\[rules\]\]\n(?:[^\[\n][^\n]*\n)*/g) ?? []
   const rest = own.reduce((e, r) => e.replace(r, ''), extra)

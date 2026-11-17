@@ -49,7 +49,7 @@ export function workdirRestrictionIssues(env: LoadEnv, workdir: string, operator
   if (env.isGitWorkTree(dir)) issues.push(`${workdir} is a git work tree: its history and every branch are in reach of anyone who can reach it; give the specialist a folder of its own, outside any repository`)
   const scan = env.scanWorkdir(dir)
   if (scan.nestedGit.length) issues.push(`${workdir} holds a git repository (${scan.nestedGit[0]}${scan.nestedGit.length > 1 ? ` and ${scan.nestedGit.length - 1} more` : ''}): its history is in reach of anyone who can reach this specialist; remove it, or give the specialist a folder with no repository in it`)
-  if (env.exists(join(dir, '.mcp.json'))) issues.push(`${workdir} holds a .mcp.json, which would declare servers the specialist did not list: remove it, or declare the server in [mcp.*] and list it`)
+  if (env.exists(join(dir, '.mcp.json'))) issues.push(`${workdir} holds a .mcp.json, which would declare servers the specialist did not list: remove it, or declare the server in [mcp_servers.*] and list it`)
   // Claude Code reads a .mcp.json from the folders above the one it starts in; --restricted ignores them today, which is a flag's behaviour, not a promise.
   for (let up = dirname(dir); ; up = dirname(up)) {
     if (env.exists(join(up, '.mcp.json'))) { issues.push(`${workdir} sits under a .mcp.json (${join(up, '.mcp.json')}): Claude Code reads that file for sessions started below it, and --restricted only happens to ignore it; move the folder, or remove the file`); break }

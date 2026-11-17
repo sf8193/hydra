@@ -23,7 +23,7 @@ const configure = (over: Partial<Specialist> = {}): void => _setHydraConfigForTe
   specialists: { ops: spec(over) },
 } as HydraConfig)
 const operatorPolicy: LaunchPolicy = { specialist: 'ops', access: 'operator', id: 'operator' }
-const flip = () => configure({ restricted: true, tools: ['Read'], mcpServers: [] })
+const flip = () => configure({ restricted: true, tools: ['Read'], mcpServerNames: [] })
 
 const ids: string[] = []
 /** The real Claude adapter (the gate is in its `deliver`), reported alive, for a session of the operator-access specialist `ops`. */

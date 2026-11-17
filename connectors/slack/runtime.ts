@@ -573,7 +573,7 @@ async function postParts(app: string, channel: string, thread: string | undefine
 /** `hydra conversations bind`: the operator binds or moves a conversation to any declared specialist, main, or a session's thread (listen-only there). */
 export function operatorBind(conversation: string, target: string): string {
   const h = hydraConfig()
-  // The target says its kind (`ops` and `specialist:ops` are one); a binding stores the bare form, as it always has.
+  // The target must say its kind (a bare `ops` is an error); a binding stores the bare form.
   const ref = readTarget(target, id => Object.hasOwn(h.specialists, id))
   if (!ref.ok) throw new Error(ref.error ?? `no specialist "${ref.undeclared}" in hydra.toml (or a session's thread id)`)
   const to = bareOf(ref.ref)

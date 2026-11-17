@@ -17,7 +17,7 @@ import { resolveConfig, sendRequest } from './helpers.js'
 import { isUnder } from '../shared/path-containment.js'
 import { cliSchedules, schedulesAreSource } from '../shared/schedules.js'
 import { latestSlot, nextSlot } from '../shared/cron-local.js'
-import { readTarget } from '../shared/target-kind.js'
+import { readTarget, spelledTo } from '../shared/target-kind.js'
 import {
   ACTION_TIMEOUT_MS, ATTEMPT_DEADLINE_MS, runWaitMs, CHECK_TIMEOUT_MS, STALE_TICK_MS, backoffUntil, jobInitiator, jobsDir, jobsToml, lstartOf, owedSlot, parseJobsConfig,
   attemptEnv, awakeTimeout, isSpawn, jobFromWire, targetLabel, parseEnvFile, tccFolder, externalFile, externalResults, logFile, runnerLabel, readDaemonState, readJobState, resultFile, resultsDir, writeAtomic, EX_TEMPFAIL, type AttemptArgs, type AttemptResult,
@@ -169,7 +169,7 @@ export async function runAction(job: Job, stateDir: string, key: string, output:
     // --queue for main only: a specialist and a revive queue anyway, and a plain thread's orphaned session must
     // answer 4, not take a message nobody will read until someone resumes it.
     // A per-conversation specialist: each run is its own conversation (a fresh session in a new thread), keyed like the run.
-    : ['deliver', '--to', target.to, ...(target.conversation ? ['--conversation', `clock:${key}`] : []), ...(target.revive ? ['--revive'] : []),
+    : ['deliver', '--to', spelledTo(target.to), ...(target.conversation ? ['--conversation', `clock:${key}`] : []), ...(target.revive ? ['--revive'] : []),
       ...(target.to === 'main' ? ['--queue'] : []), '--initiator', initiator,
       '--idempotency-key', key, '--idempotency-ttl', keyTtl(job.schedule, jobsIO.now()), '--message', message]
   // The dispatching daemon, by its state dir: a scratch or worktree daemon's jobs never reach the live one.
@@ -631,7 +631,7 @@ export function jobWarnings(j: Job, specialists: ReadonlySet<string> = new Set()
   })
   const to = j.target && 'to' in j.target ? j.target.to : undefined
   if (to) {
-    const r = readTarget(to, id => specialists.has(id))
+    const r = readTarget(spelledTo(to), id => specialists.has(id))
     if (!r.ok) out.push(r.error ?? `no such specialist "${r.undeclared}" (hydra specialist list)`)
   }
   return out

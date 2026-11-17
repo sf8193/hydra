@@ -20,11 +20,11 @@ import { currentHydraConfig } from '../daemon/hydra-config.js'
 import { ensureSpecialist, SpecialistError } from './specialist-deliver.js'
 import { currentRecoveryDeps, reviveThreadForDelivery } from '../daemon/recovery.js'
 import type { DeliveryResult } from '../daemon/engines/engine-adapter.js'
-import { readTarget, TARGET_FORMS, type TargetRef } from '../shared/target-kind.js'
+import { readTarget, spelledTo, TARGET_FORMS, type TargetRef } from '../shared/target-kind.js'
 
 export type Recipe = { channel: string; kickoff?: string; kickoffFile?: string; model?: string; idle?: string }
 export type Target =
-  | { to: string; revive?: boolean }   // `main`, `specialist:<name>` or `thread:<id>` (a bare name or thread id still reads: resolveTo)
+  | { to: string; revive?: boolean }   // `main`, `specialist:<name>` or `thread:<id>`; hydra's own callers pass the stored form (a name, a thread id)
   | { spawn: Recipe }
   /**
    * `sessions = "per-conversation"`: the conversation's own session, made from the specialist's recipe and never stored,
@@ -48,12 +48,12 @@ export type DeliverOpts = { initiator: string; idempotencyKey?: string; idempote
 export const targetDeps = { stuckState: confirmedStuckState }
 
 /**
- * What a `to` names: the one place a target value is read, for delivery, the CLI and bindings (the hydra.toml loader reads it through the
- * same `readTarget`). `main`, `specialist:<name>` and `thread:<id>` say their kind. A bare value reads as it always did: `main`, a
- * declared specialist, then an all-digit thread id. Anything else is unknown, with the reason (exit 8).
+ * What a `to` names, for delivery. Typed values (hydra.toml, the CLI) say their kind through `readTarget`: `main`, `specialist:<name>`,
+ * `thread:<id>`. A caller inside hydra holds the stored form (`refOfBare`: a specialist's name, a thread id), which this also takes.
+ * Anything else is unknown, with the reason (exit 8).
  */
 export function resolveTo(to: string): TargetRef | { kind: 'unknown'; reason: string } {
-  const r = readTarget(to, name => !!getSpecialist(name))
+  const r = readTarget(spelledTo(to), name => !!getSpecialist(name))
   return r.ok ? r.ref : { kind: 'unknown', reason: r.error ?? `no such specialist: ${r.undeclared}` }
 }
 

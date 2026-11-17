@@ -157,7 +157,6 @@ socket_token_env = "SALES_SLACK_APP_TOKEN"
 ```
 
 - An app's id is lowercase letters, digits, `-` and `_`, starting with a letter, at most 35 characters. Uppercase is reserved for Slack's own ids (`C0TEST`).
-- The old `[connectors.slack]` still loads, as the app named `default`, with a warning that names `[slack.apps.default]`; it spells the two text keys `app_name` and `app_description` (`display_name` and `description` now). `app_token_env` and `user_token_env` are the old names of `socket_token_env` and `operator_token_env`, and read the same way. Declaring `default` in both tables is an error.
 - Each token needs its own variable: one variable on two keys (two apps, one app, or an app and `[gateways.discord]`) is an error.
 - Token variable names are uppercase. Hydra keeps every variable hydra.toml names as a token from the sessions it starts, so name only variables the daemon needs. These are refused when hydra.toml loads: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMUX`, `TERM`, `PWD`, `TMPDIR`, `LANG`, `ANTHROPIC_API_KEY`, `GH_TOKEN`, `SSH_AUTH_SOCK`, and anything starting `HYDRA_` (except `HYDRA_SLACK_`), `CLAUDE_`, `LC_` or `XDG_`.
 - Every app declared connects, whatever it is named, when hydra.toml loads, with no restart, if its token variables are already in the daemon's environment (a variable that is new needs one). An app whose tokens are not set is skipped: the daemon says which key to fix, in the thread of each specialist that app serves and that hears Slack (main's channel when none does), and logs `slack connector for the app named <id> off (…)`; the others connect.
@@ -172,7 +171,7 @@ socket_token_env = "SALES_SLACK_APP_TOKEN"
 
 An app is a way in: a message reaches hydra through the app whose connection delivered it. Routing knows which, and three things use it. `hydra route --person <person:id> --place <place> --app <app:id>` shows each.
 
-**Rules match an app, a place, or both.** A `[[rules]]` entry names `place`, `app` (an app id), or both; an absent one matches every place or every app, so a rule in a hydra.toml with no `[slack.apps.*]` tables and no `app` keys behaves as it did. `person` only narrows who: a rule with `person` and neither `place` nor `app` is an error. The first rule in file order that matches wins. A `target` says its kind: `main`, or `specialist:<name>` for a declared specialist (a bare name still loads, with a warning that gives the prefixed form; `thread:<id>` is not a rule's target).
+**Rules match an app, a place, or both.** A `[[rules]]` entry names `place`, `app` (an app id), or both; an absent one matches every place or every app, so a rule in a hydra.toml with no `[slack.apps.*]` tables and no `app` keys behaves as it did. `person` only narrows who: a rule with `person` and neither `place` nor `app` is an error. The first rule in file order that matches wins. A `target` says its kind: `main`, or `specialist:<name>` for a declared specialist (`thread:<id>` is not a rule's target).
 
 ```toml
 [[rules]]
@@ -395,7 +394,7 @@ roles = ["staff"]
 
 # A server specialists may list. Per-operator, so only hydra.toml declares one (never a `hydra config add` fragment).
 # Listing a server means running code you trust with your own privileges; `tools` limits which of its tools the specialist may call. Most specialists list none (see [Listed servers](#listed-servers-code-you-trust-run-with-best-effort-hygiene)).
-[mcp.datadog]
+[mcp_servers.datadog]
 command = "/usr/local/bin/datadog-mcp"    # a pinned binary or a versioned package, not `npx -y` latest
 token_env = ["DD_API_KEY"]                # names in the state dir's .env; only these reach the server
 tools = ["search_logs", "get_monitor"]    # the tools of it a specialist may call (default: none, which is refused)
@@ -405,7 +404,7 @@ workdir = "~/specialists/ops"             # runbooks and FAQs: all it may know. 
 reachable_by = ["role:staff"]           # roles only, `role:<name>`; `role:anyone` is allowed too; see link_previews below
 restricted = true
 tools = ["Read", "Grep", "Glob"]          # the default, and all a restricted specialist may list
-mcp_servers = ["datadog"]                # names from [mcp.*]
+mcp_servers = ["datadog"]                # names from [mcp_servers.*]
 sends_to = ["ops-deep"]                 # the specialists it may send to with send_to_thread: shared-session specialists, never main
 
 # The specialist it hands off to: restricted too, with a folder of its own. No rule sends a place to it; only ops reaches it (and the operator).
@@ -427,7 +426,7 @@ link_previews = false                     # no link previews on anything hydra p
 
 **Before you paste.** The checks below run on your machine, so have these ready:
 - the folder `~/specialists/ops` exists and is a folder of its own (a git work tree, your home folder and a folder with symlinks out are refused);
-- the binary at `[mcp.datadog] command` exists and is executable;
+- the binary at `[mcp_servers.datadog] command` exists and is executable;
 - the daemon runs on macOS: a specialist that lists servers is refused where `/usr/bin/sandbox-exec` is missing (remove the servers from its `mcp_servers`, set `restricted = false`, or run hydra on a Mac). `hydra config check` refuses it on any machine without `sandbox-exec`, so run the check on the machine the daemon runs on;
 - `DD_API_KEY=<value>` is in the state dir's `.env`. hydra.toml reloads within a second, but the daemon reads `.env` only when it starts: restart it after adding the variable, or the specialist's first start refuses, naming the variable.
 
@@ -439,7 +438,7 @@ link_previews = false                     # no link previews on anything hydra p
 |---|---|
 | **Knows** | its `workdir` and nothing else: no `CLAUDE.md`, memory, project settings or `.mcp.json` from anywhere, and not the operator's plugins or claude.ai connectors |
 | **Built-in tools** | `tools`: `Read`, `Grep`, `Glob`, nothing that runs code. `Read` and the other two reach only the workdir |
-| **MCP servers** | the ones in `mcp_servers`, each limited to the `tools` the `[mcp.*]` table lists, with only its `token_env` variables; code you trust, run under a best-effort sandbox (below) |
+| **MCP servers** | the ones in `mcp_servers`, each limited to the `tools` the `[mcp_servers.*]` table lists, with only its `token_env` variables; code you trust, run under a best-effort sandbox (below) |
 | **Hydra tools** | `reply` (text only), `react`, `edit_message`, `delete_message`, `fetch_messages`, `download_attachment` and `set_description`, each only in its own thread or a Slack conversation bound to it; and `send_to_thread`, only to the specialists its `sends_to` names |
 | **Never** | `spawn_session`, `kill_session`, `peek_session`, `list_sessions`, `handoff`, `bind_conversation`, `watch_pr`, `ask_predecessor`, `send_to_thread` to anyone its `sends_to` does not name (never `main` or byte), and nothing posted outside its conversation |
 
@@ -447,7 +446,7 @@ hydra.toml refuses, with the key and the fix: a `tools` entry beyond the three; 
 
 ### Listed servers: code you trust, run with best-effort hygiene
 
-**Listing a server means running code you trust with your own privileges.** A listed `[mcp.*]` server is a process of your user: pin it, read it, and trust its authors as you would a program you run yourself. The server's `tools` list limits which of its tools the specialist may call, and it is the primary control. The recommended shape for a specialist other people talk to has no `mcp_servers` at all: `Read`, `Grep`, `Glob`, its folder and its own conversation.
+**Listing a server means running code you trust with your own privileges.** A listed `[mcp_servers.*]` server is a process of your user: pin it, read it, and trust its authors as you would a program you run yourself. The server's `tools` list limits which of its tools the specialist may call, and it is the primary control. The recommended shape for a specialist other people talk to has no `mcp_servers` at all: `Read`, `Grep`, `Glob`, its folder and its own conversation.
 
 For the servers you do list, hydra adds a sandbox on macOS. It is best-effort hygiene, proven by probes on one macOS version, **not containment**: do not rely on it against a hostile server. Each listed server runs under `sandbox-exec` with one profile, the same for every operator, which the server's own children inherit. The profile starts from "allow everything" and takes away:
 

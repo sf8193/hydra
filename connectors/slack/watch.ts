@@ -496,8 +496,6 @@ export function packItems(items: Item[], maxBytes: number = BATCH_MAX_BYTES): It
 type Store = { entries: SlackWatchEntry[]; channelCursors: Record<string, string>; taggedIn?: Record<string, string> | string[] }
 
 export class SlackWatcher {
-  /** The guard has printed the old key `to`: said once per daemon, not once per message. */
-  private warnedGuardOldKey = false
   private readonly entries = new Map<string, SlackWatchEntry>()
   private channelCursors: Record<string, string> = {}
   /** Scoped channel key to the ts of the last tag of the app there. Not the channel cursor, which means "last read": a quiet channel read in full moves it to now. */
@@ -1353,10 +1351,6 @@ export class SlackWatcher {
         return
       }
       if (v.fate === 'open') this.deps.log(`daemon: slack connector: the guard ${v.why} for ${key} ts ${item.ts}; delivering anyway\n`)
-      if (v.fate === 'deliver' && v.viaOldKey && !this.warnedGuardOldKey) {
-        this.warnedGuardOldKey = true
-        this.deps.log('daemon: slack connector: the guard printed {"to": ...}: print {"target": ...} instead; "to" still works and will be removed\n')
-      }
       let to = v.fate === 'deliver' && v.target ? currentId(h, v.target) : home
       if (to !== home && isSessionThread(to)) {
         // A session's thread is held only by that session's own bind: a guard can't send a conversation's message there.
@@ -1434,7 +1428,7 @@ export class SlackWatcher {
   /** One message's verdict from the guard. A guard that throws fails open, like one that crashes. */
   private async judge(g: Guard, entry: SlackWatchEntry, place: Place, to: string, i: Item): Promise<GuardVerdict> {
     const input: GuardInput = {
-      person: i.person ?? null, roles: i.roles ?? ['anyone'], place, conversation: conversationId(entry), target: to, to,
+      person: i.person ?? null, roles: i.roles ?? ['anyone'], place, conversation: conversationId(entry), target: spelledBare(to),
       ...(g.includeText && { text: i.text }),
     }
     try { return await (this.deps.guard ?? runGuard)(g, input) } catch (err) {

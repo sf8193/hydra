@@ -16,7 +16,7 @@ import { SLACK_APP_DEFAULTS } from '../connectors/slack/app.js'
 import { emojiProblem } from '../shared/emoji.js'
 import { invalidSpecialistName } from '../shared/specialist-name.js'
 import { bareOf, readTarget, spelled } from '../shared/target-kind.js'
-import { kindsFor, readValue, spelledApp, spelledPerson, spelledRole, whoSpelled } from '../shared/value-kind.js'
+import { readValue, spelledApp, spelledPerson, spelledRole, whoSpelled } from '../shared/value-kind.js'
 import {
   BUILTIN_ROLES, DEFAULT_SLACK_APP, SLACK_DM, SLACK_GROUP_DM, dmPerson, isDmPlace, namesAChannel, namesDmWithOthers, placesAnsweredBy, type Address, type ConfigIssue, type Connectors, type Gateways, type Guard, type HydraConfig, type LoadEnv, type LoadResult, type MainOptions,
   type McpServer, type WorkdirScan, type Person, type Place, type PlaceOptions, type Platform, type Rule, type Schedule, type SessionsMode, type SlackApp, type Specialist, type Vitals,
@@ -61,36 +61,18 @@ const MAX_ALERT_AFTER_MS = 30 * MAX_DAY_MS
 const BUILTIN: readonly string[] = BUILTIN_ROLES
 const MAIN_TARGET = 'main'
 
-const TOP_KEYS = ['operator', 'main', 'gateways', 'connectors', 'slack', 'people', 'specialists', 'defaults', 'places', 'schedules', 'rules', 'guard', 'vitals', 'mcp', 'restricted']
+const TOP_KEYS = ['operator', 'main', 'gateways', 'connectors', 'slack', 'people', 'specialists', 'defaults', 'places', 'schedules', 'rules', 'guard', 'vitals', 'mcp_servers', 'restricted']
 /** Keys a file may set without an operator: the operator itself, and `[main]`, which says how main runs, not who reaches it. */
 const OPERATOR_FREE_KEYS = ['operator', 'main']
 /** `[main]`: the operator's harness, as `[specialists.<id>]` is a specialist. */
 const MAIN_KEYS = ['model']
-/** `listens` is the old way to say where a specialist is heard: still read, as `[[rules]]` (see `legacyRules`), and warned. */
-const SPECIALIST_KEYS = ['workdir', 'kickoff', 'kickoff_file', 'listens', 'pinned_to', 'speaks_as', 'reachable_by', 'sessions', 'max_sessions', 'idle', 'home', 'model', 'emoji', 'engine', 'env_file', 'renamed_from', 'restricted', 'tools', 'mcp_servers', 'sends_to']
-/** A specialist's keys under their old names, read as the new ones (`restricted = true` is `restricted = true`). */
-export const SPECIALIST_RENAMES: readonly Rename[] = [
-  { from: 'access', to: 'restricted', values: { workdir: true, operator: false }, badValue: 'must be "workdir" or "operator"; `restricted = true` or `restricted = false` says the same' },
-  { from: 'prompt', to: 'kickoff' }, { from: 'prompt_file', to: 'kickoff_file' },
-  { from: 'max', to: 'max_sessions' }, { from: 'was', to: 'renamed_from' }, { from: 'apps', to: 'pinned_to' },
-  { from: 'allow', to: 'reachable_by' }, { from: 'mcp', to: 'mcp_servers' }, { from: 'talks_to', to: 'sends_to' },
-]
+const SPECIALIST_KEYS = ['workdir', 'kickoff', 'kickoff_file', 'pinned_to', 'speaks_as', 'reachable_by', 'sessions', 'max_sessions', 'idle', 'home', 'model', 'emoji', 'engine', 'env_file', 'renamed_from', 'restricted', 'tools', 'mcp_servers', 'sends_to']
 /** A Slack app's keys, as `[slack.apps.<id>]` spells them. */
 const SLACK_APP_KEYS = ['bot_token_env', 'socket_token_env', 'operator_token_env', 'display_name', 'description']
-/** The two token keys under their old names, read as the new ones. */
-const SLACK_APP_RENAMES: readonly Rename[] = [{ from: 'app_token_env', to: 'socket_token_env' }, { from: 'user_token_env', to: 'operator_token_env' }]
-/** The old `[connectors.slack]` table also spells a name and a description `app_name` and `app_description`. */
-const CONNECTORS_SLACK_RENAMES: readonly Rename[] = [...SLACK_APP_RENAMES, { from: 'app_name', to: 'display_name' }, { from: 'app_description', to: 'description' }]
-/** A schedule's keys under their old names. */
-export const SCHEDULE_RENAMES: readonly Rename[] = [{ from: 'to', to: 'target' }, { from: 'prompt', to: 'message' }, { from: 'cwd', to: 'workdir' }]
 /** Keys only a hand edit of one specialist's own table sets: a default would reach every specialist, a fragment's table is someone else's. */
 export const RESTRICTION_KEYS = ['restricted', 'tools', 'mcp_servers', 'sends_to'] as const
-/** The old name of one of them, still read: a fragment may not set it either. */
-export const RESTRICTION_OLD_KEYS = ['access'] as const
 
 type Table = Record<string, unknown>
-/** A key renamed: `values` maps an old value to its new one; `badValue`, when set, is the error for an old value it does not map. */
-export type Rename = { from: string; to: string; values?: Record<string, unknown>; badValue?: string }
 /** Own keys only: a name like `constructor` must not resolve through the prototype. */
 const has = (t: object, k: string) => Object.hasOwn(t, k)
 const isTable = (v: unknown): v is Table => typeof v === 'object' && v !== null && !Array.isArray(v) && !(v instanceof Date)
@@ -183,14 +165,8 @@ export function formatIssues(issues: ConfigIssue[]): string {
 export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   const errors: ConfigIssue[] = []
   const warnings: ConfigIssue[] = []
-  // A value that came in under an old name is reported under that name, so the error points at a key that is in the file.
-  const viaOld = new Map<string, string>()
-  const oldPath = (path: string): string => {
-    for (const [now, old] of viaOld) if (path === now || path.startsWith(`${now}[`)) return old + path.slice(now.length)
-    return path
-  }
-  const error = (path: string, message: string) => { errors.push({ path: oldPath(path), message }) }
-  const warn = (path: string, message: string) => { warnings.push({ path: oldPath(path), message }) }
+  const error = (path: string, message: string) => { errors.push({ path, message }) }
+  const warn = (path: string, message: string) => { warnings.push({ path, message }) }
 
   let doc: Table
   try {
@@ -203,34 +179,6 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
 
   const unknownKeys = (t: Table, known: readonly string[], path: string) => {
     for (const k of Object.keys(t)) if (!known.includes(k)) error(join2(path, k), `unknown key "${k}"`)
-  }
-  /**
-   * A key renamed, still read under its old name. The old name alone loads as the new one and warns, naming the new; both is an error.
-   * `values` maps an old value to its new one (only when read through the old key). Returns the table under the new names only,
-   * so `unknownKeys` stays strict.
-   */
-  const renamed = (t: Table, path: string, renames: readonly Rename[]): Table => {
-    let out = t
-    for (const r of renames) {
-      if (!has(out, r.from)) continue
-      if (has(out, r.to)) {
-        error(join2(path, r.from), bothNames(`\`${r.from}\``, `\`${r.to}\``))
-        out = Object.fromEntries(Object.entries(out).filter(([k]) => k !== r.from))
-        continue
-      }
-      viaOld.set(join2(path, r.to), join2(path, r.from))
-      const v = out[r.from]
-      if (r.badValue !== undefined && !(typeof v === 'string' && r.values && has(r.values, v))) {
-        error(join2(path, r.to), r.badValue)
-        out = Object.fromEntries(Object.entries(out).filter(([k]) => k !== r.from))
-        continue
-      }
-      const mapped = typeof v === 'string' && r.values && has(r.values, v) ? r.values[v] : v
-      const valueNote = mapped !== v ? ` and its value ${JSON.stringify(v)} is now ${JSON.stringify(mapped)}` : ''
-      warn(join2(path, r.from), `rename \`${r.from}\` to \`${r.to}\`${valueNote}; \`${r.from}\` still loads and will be removed`)
-      out = Object.fromEntries(Object.entries(out).map(([k, x]) => k === r.from ? [r.to, mapped] : [k, x]))
-    }
-    return out
   }
   const table = (v: unknown, path: string): Table | undefined => {
     if (v === undefined) return undefined
@@ -301,7 +249,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   const claimEnv = (v: string, path: string): boolean => {
     const other = envOwner.get(v)
     if (other) { error(path, `"${v}" is already the token variable of ${other}: each token needs its own variable${other === GATEWAY ? GATEWAY_HINT : ''}`); return false }
-    envOwner.set(v, oldPath(path))
+    envOwner.set(v, path)
     return true
   }
   const gateways: Gateways = {}
@@ -318,40 +266,28 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   if (gwDiscord) discordGateway(gwDiscord, 'gateways.discord')
 
   const conns = table(doc.connectors, 'connectors') ?? {}
-  for (const [platform, raw] of Object.entries(conns)) {
-    if (platform === 'slack') continue   // with [slack.apps], below
-    const path = `connectors.${platform}`
-    const t = table(raw, path)
-    if (!t) continue
-    if (platform === 'discord') {
-      // The old home of the Discord gateway, which is not an event source. Loads as before until it is removed.
-      if (gwDiscord) error(path, 'declares the same gateway as [gateways.discord]: keep [gateways.discord] and delete [connectors.discord]')
-      else {
-        warn(path, 'moved to [gateways.discord]; [connectors.discord] still loads and will be removed')
-        discordGateway(t, path)
-      }
-    } else if (platform === 'github') {
-      unknownKeys(t, ['repos', 'poll'], path)
-      const repos = strList(t, 'repos', path)
-      if (repos === undefined && t.repos === undefined) error(`${path}.repos`, 'is required: the repos to watch, as "owner/repo"')
-      const good = (repos ?? []).flatMap((r, i) => {
-        if (REPO_RE.test(r.toLowerCase())) return [r.toLowerCase()]
-        error(`${path}.repos[${i}]`, `"${r}" must be owner/repo`)
-        return []
-      })
-      const pollMs = duration(t, 'poll', path, MAX_DAY_MS) ?? 3 * 60_000
-      if (repos) connectors.github = { repos: good, pollMs }
-    } else {
-      error(path, `unknown platform "${platform}": use slack or github`)
-    }
+  unknownKeys(conns, ['github'], 'connectors')
+  const githubTable = table(conns.github, 'connectors.github')
+  if (githubTable) {
+    const path = 'connectors.github'
+    const t = githubTable
+    unknownKeys(t, ['repos', 'poll'], path)
+    const repos = strList(t, 'repos', path)
+    if (repos === undefined && t.repos === undefined) error(`${path}.repos`, 'is required: the repos to watch, as "owner/repo"')
+    const good = (repos ?? []).flatMap((r, i) => {
+      if (REPO_RE.test(r.toLowerCase())) return [r.toLowerCase()]
+      error(`${path}.repos[${i}]`, `"${r}" must be owner/repo`)
+      return []
+    })
+    const pollMs = duration(t, 'poll', path, MAX_DAY_MS) ?? 3 * 60_000
+    if (repos) connectors.github = { repos: good, pollMs }
   }
 
-  // Slack: any number of apps, `[slack.apps.<id>]`. The old `[connectors.slack]` is the app `default` (with a warning), so it can't be declared twice.
+  // Slack: any number of apps, `[slack.apps.<id>]`.
   // No prototype: an id like `constructor` is a valid name.
   const slackApps: Record<string, SlackApp> = Object.create(null)
-  /** One Slack app from its table, its keys under the new names (`renames` reads the old ones). */
-  const slackApp = (id: string, t0: Table, path: string, renames: readonly Rename[] = SLACK_APP_RENAMES): SlackApp | undefined => {
-    const t = renamed(t0, path, renames)
+  /** One Slack app from its table. */
+  const slackApp = (id: string, t: Table, path: string): SlackApp | undefined => {
     unknownKeys(t, SLACK_APP_KEYS, path)
     const envName = (k: string, required: boolean): string | undefined => {
       const v = str(t, k, path)
@@ -377,12 +313,6 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (!botTokenEnv) return undefined
     return { id, botTokenEnv, ...(socketTokenEnv && { socketTokenEnv }), ...(operatorTokenEnv && { operatorTokenEnv }), displayName, description }
   }
-  const connectorsSlack = table(conns.slack, 'connectors.slack')
-  if (connectorsSlack) {
-    warn('connectors.slack', `rename the table [connectors.slack] to [slack.apps.${DEFAULT_SLACK_APP}]; it still loads and will be removed`)
-    const app = slackApp(DEFAULT_SLACK_APP, connectorsSlack, 'connectors.slack', CONNECTORS_SLACK_RENAMES)
-    if (app) slackApps[DEFAULT_SLACK_APP] = app
-  }
   const slackTable = table(doc.slack, 'slack') ?? {}
   unknownKeys(slackTable, ['apps'], 'slack')
   for (const [id, raw] of Object.entries(table(slackTable.apps, 'slack.apps') ?? {})) {
@@ -390,7 +320,6 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (!SLACK_APP_ID_RE.test(id)) { error(path, `"${id}" is not a valid app name: lowercase letters, digits, "-" and "_", starting with a letter, at most 35 characters`); continue }
     const t = table(raw, path)
     if (!t) continue
-    if (id === DEFAULT_SLACK_APP && has(conns, 'slack')) { error(path, 'declares the same app as [connectors.slack]: keep [slack.apps.default] and delete [connectors.slack]'); continue }
     const app = slackApp(id, t, path)
     if (app) slackApps[id] = app
   }
@@ -399,8 +328,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
 
   // Declared here and nowhere else: a server is a process that runs as the operator, so only a hand edit of hydra.toml adds one.
   const mcpServers: Record<string, McpServer> = Object.create(null)
-  for (const [name, raw] of Object.entries(table(doc.mcp, 'mcp') ?? {})) {
-    const path = `mcp.${name}`
+  for (const [name, raw] of Object.entries(table(doc.mcp_servers, 'mcp_servers') ?? {})) {
+    const path = `mcp_servers.${name}`
     if (!ID_RE.test(name)) { error(path, `"${name}" is not a valid server name: lowercase letters, digits and dashes`); continue }
     const t = table(raw, path)
     if (!t) continue
@@ -431,9 +360,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     const path = `people.${id}`
     if (!ID_RE.test(id)) error(path, 'a person\'s id must be lowercase letters, digits and dashes')
     else if (BUILTIN.includes(id)) error(path, `"${id}" is a built-in role; a person needs another id`)
-    const t0 = table(raw, path)
-    if (!t0) continue
-    const t = renamed(t0, path, [{ from: 'ids', to: 'addresses' }])
+    const t = table(raw, path)
+    if (!t) continue
     unknownKeys(t, ['addresses', 'roles', 'name'], path)
     const written = strList(t, 'addresses', path)
     if (t.addresses === undefined || written?.length === 0) error(`${path}.addresses`, 'is required: at least one address, like "slack:U0TEST" or "github:alice"')
@@ -460,34 +388,22 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   const isRole = (r: string) => BUILTIN.includes(r) || declaredRoles.has(r)
 
   // --- named values --------------------------------------------------------------------------------------------------
-  // A value that names a person, a role or an app says its kind: `person:alice`, `role:finance`, `app:sales`. A bare name still loads, as the same
-  // name, with a warning that says how to write it (once per key). The reader is shared/value-kind.ts, as `hydra route` reads it; the loaded
-  // config holds the bare name, which routing compares with. A person and a role never share a name (above), so a bare name has one kind.
-  const kindWarned = new Set<string>()
-  const bareValue = (path: string, raw: string, spelledAs: string) => {
-    if (kindWarned.has(path)) return
-    kindWarned.add(path)
-    warn(path, `write "${spelledAs}" instead of "${raw}": a value says its kind; the bare name still works and will be removed`)
-  }
+  // A value that names a person, a role or an app says its kind: `person:alice`, `role:finance`, `app:sales`. The reader is shared/value-kind.ts,
+  // as `hydra route` reads it; the loaded config holds the bare name, which routing compares with. A person and a role never share a name (above).
   const noRole = (r: string, key = '') => `no one holds the role "${r}": ${key}give a person that role in [people.<id>] roles`
   /** A role someone holds, or a built-in one: `role:<name>`. For a key that lists roles only (`reachable_by`). */
   const roleValue = (raw: string, path: string): string | undefined => {
     const r = readValue(raw, ['role'])
     if (!r.ok) { error(path, r.error); return undefined }
-    if (r.bare && has(people, r.name)) { error(path, `"${raw}" is a person, and reachable_by lists roles: give them a role in [people.${raw}] and list role:<name>`); return undefined }
     if (!isRole(r.name)) { error(path, noRole(r.name, 'reachable_by lists roles, so ')); return undefined }
-    if (r.bare) bareValue(path, raw, spelledRole(r.name))
     return r.name
   }
   /** A person from `[people]` or a role someone holds: `person:<id>` or `role:<name>`. For a rule's `person`. */
   const whoValue = (raw: string, path: string): string | undefined => {
     const r = readValue(raw, ['person', 'role'])
     if (!r.ok) { error(path, r.error); return undefined }
-    const [person, role] = [has(people, r.name), isRole(r.name)]
-    if (r.kind === 'person' && !person) { error(path, `"${raw}" is not a person: declare [people.${r.name}]`); return undefined }
-    if (r.kind === 'role' && !role) { error(path, noRole(r.name)); return undefined }
-    if (r.bare && !person && !role) { error(path, `"${raw}" is neither a person nor a role anyone holds: write ${kindsFor(['person', 'role'])}`); return undefined }
-    if (r.bare) bareValue(path, raw, person ? spelledPerson(r.name) : spelledRole(r.name))
+    if (r.kind === 'person' && !has(people, r.name)) { error(path, `"${raw}" is not a person: declare [people.${r.name}]`); return undefined }
+    if (r.kind === 'role' && !isRole(r.name)) { error(path, noRole(r.name)); return undefined }
     return r.name
   }
   /** A declared Slack app: `app:<id>`. */
@@ -495,7 +411,6 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     const r = readValue(raw, ['app'])
     if (!r.ok) { error(path, r.error); return undefined }
     if (!Object.hasOwn(slackApps, r.name)) { error(path, noSuchApp(r.name, Object.keys(slackApps))); return undefined }
-    if (r.bare) bareValue(path, raw, spelledApp(r.name))
     return r.name
   }
   const appList = (l: readonly string[]) => l.map(spelledApp).join(', ')
@@ -525,30 +440,18 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   // --- specialists, with [defaults.specialist] -----------------------------------------------------------------------
 
   const defaultsTable = table(doc.defaults, 'defaults') ?? {}
-  // `private_roots` is the old name of `[restricted] off_limits`: still read from [defaults].
-  unknownKeys(defaultsTable, ['specialist', 'private_roots'], 'defaults')
+  unknownKeys(defaultsTable, ['specialist'], 'defaults')
   const restrictedTable = table(doc.restricted, 'restricted') ?? {}
   unknownKeys(restrictedTable, ['off_limits'], 'restricted')
-  if (has(defaultsTable, 'private_roots')) {
-    if (has(restrictedTable, 'off_limits')) error('defaults.private_roots', bothNames('`[defaults] private_roots`', '`[restricted] off_limits`'))
-    else {
-      viaOld.set('restricted.off_limits', 'defaults.private_roots')
-      warn('defaults.private_roots', 'rename `private_roots` in [defaults] to `off_limits` in [restricted]; `private_roots` still loads and will be removed')
-    }
-  }
   // Folders no restricted specialist may use, beyond the built-in ones: per-operator, so they live here and never in code.
   const offLimits: string[] = []
-  const offLimitsFrom = has(restrictedTable, 'off_limits') || !has(defaultsTable, 'private_roots') ? { t: restrictedTable, at: 'restricted', k: 'off_limits' } : { t: defaultsTable, at: 'defaults', k: 'private_roots' }
-  for (const [i, raw] of (strList(offLimitsFrom.t, offLimitsFrom.k, offLimitsFrom.at) ?? []).entries()) {
+  for (const [i, raw] of (strList(restrictedTable, 'off_limits', 'restricted') ?? []).entries()) {
     const root = expand(raw)
     if (!isAbsolute(root)) error(`restricted.off_limits[${i}]`, `"${raw}" must be an absolute path or start with ~`)
     else if (unquotablePath(root)) error(`restricted.off_limits[${i}]`, unquotablePath(root)!)
     else offLimits.push(root)
   }
-  const defaults0 = table(defaultsTable.specialist, 'defaults.specialist') ?? {}
-  const defaults = renamed(defaults0, 'defaults.specialist', SPECIALIST_RENAMES)
-  // The old name a default was written under, so an error about it later names a key that is in the file.
-  const defaultsOld = new Map(SPECIALIST_RENAMES.filter(r => has(defaults0, r.from) && !has(defaults0, r.to)).map(r => [r.to, r.from]))
+  const defaults = table(defaultsTable.specialist, 'defaults.specialist') ?? {}
   unknownKeys(defaults, SPECIALIST_KEYS, 'defaults.specialist')
   // A default reaches every specialist, including ones nobody meant to scope: these are set on one specialist's own table.
   for (const k of RESTRICTION_KEYS) if (has(defaults, k)) error(`defaults.specialist.${k}`, `can't be a default: ${k} says what one specialist's session may reach. Set it under [specialists.<id>] by editing hydra.toml`)
@@ -579,7 +482,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   }
 
   function readSpecialistKeyTypes(t: Table, path: string) {
-    str(t, 'workdir', path); str(t, 'kickoff', path); str(t, 'kickoff_file', path); strList(t, 'listens', path); strList(t, 'pinned_to', path); str(t, 'speaks_as', path); strList(t, 'reachable_by', path)
+    str(t, 'workdir', path); str(t, 'kickoff', path); str(t, 'kickoff_file', path); strList(t, 'pinned_to', path); str(t, 'speaks_as', path); strList(t, 'reachable_by', path)
     oneOf(t, 'sessions', path, SESSIONS); positiveInt(t, 'max_sessions', path); str(t, 'idle', path); str(t, 'home', path); str(t, 'model', path)
     oneOf(t, 'engine', path, ENGINES); str(t, 'env_file', path); strList(t, 'renamed_from', path)
     bool(t, 'restricted', path); strList(t, 'tools', path); strList(t, 'mcp_servers', path); strList(t, 'sends_to', path)
@@ -595,17 +498,14 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   const checkWorkdirRestriction = (at: string, workdir: string) => { for (const why of workdirRestrictionIssues(env, workdir, offLimits)) error(at, why) }
 
   const specialists: Record<string, Specialist> = {}
-  /** Every place an old `listens` names, with who it names and where in the file: read as rules once the explicit ones are. */
-  const legacyRules: { place: Place; target: string; path: string }[] = []
   const formerly = new Map<string, string>()
   const specialistTables = table(doc.specialists, 'specialists') ?? {}
   for (const [id, raw] of Object.entries(specialistTables)) {
     const path = `specialists.${id}`
     const why = invalidSpecialistName(id, env.sessionNames)
     if (why) error(path, why)
-    const own0 = table(raw, path)
-    if (!own0) continue
-    const own = renamed(own0, path, SPECIALIST_RENAMES)
+    const own = table(raw, path)
+    if (!own) continue
     unknownKeys(own, SPECIALIST_KEYS, path)
     if (own.kickoff !== undefined && own.kickoff_file !== undefined) error(path, 'set kickoff or kickoff_file, not both')
     // Its own keys win; its own kickoff or kickoff_file replaces both defaults.
@@ -613,7 +513,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       .filter(([k]) => !((k === 'kickoff' || k === 'kickoff_file') && (own.kickoff !== undefined || own.kickoff_file !== undefined)))
       .map(([k, v]) => [k, fillId(v, id)]))
     const t: Table = { ...inherited, ...own }
-    const at = (k: string) => has(own, k) ? `${path}.${k}` : `${path}.${defaultsOld.get(k) ?? k} (from defaults.specialist)`
+    const at = (k: string) => has(own, k) ? `${path}.${k}` : `${path}.${k} (from defaults.specialist)`
 
     const workdirRaw = str(t, 'workdir', path)
     let workdir = ''
@@ -646,21 +546,6 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       if (pinnedTo && !pinnedTo.includes(speaksAs)) error(at('speaks_as'), `${spelledApp(speaksAs)} is not one of the apps ${id} is pinned to (${appList(pinnedTo)}): a pinned specialist speaks only through its own apps`)
     }
 
-    // `listens` (the old form): each place is read as a `[[rules]]` entry `{place, target = this specialist}`, added after the explicit rules.
-    const listensRaw = strList(t, 'listens', path)
-    if (listensRaw !== undefined) {
-      const heard: Place[] = []
-      for (const [i, rawPlace] of listensRaw.entries()) {
-        // Checked as a rule's place is, once the explicit rules are read; a place that is none stays as written until then.
-        const p = normalizePlace(rawPlace) ?? rawPlace
-        if (heard.includes(p)) continue
-        heard.push(p)
-        if (!why) legacyRules.push({ place: p, target: id, path: `${at('listens')}[${i}]` })
-      }
-      // An empty `listens` says nothing, and is how a specialist opts out of a default `listens`: no notice.
-      if (heard.length) warn(at('listens'), `\`listens\` is now \`[[rules]]\`: add a \`[[rules]]\` table for each place, with \`place = "x"\` and \`target = "specialist:${id}"\` on separate lines (places: ${heard.join(', ')}); \`listens\` still loads as those rules, after the explicit ones, and will be removed`)
-    }
-
     // An inherited `reachable_by` was read once, at the default.
     const reachableByRaw = strList(t, 'reachable_by', path) ?? ['people']
     const reachableBy = has(own, 'reachable_by') ? readReachableBy(reachableByRaw, `${path}.reachable_by`) : reachableByRaw
@@ -691,10 +576,10 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     // `restricted`: its session runs in its folder, with only what it lists. Everything below refuses what would let a restricted session reach past its folder.
     const restricted = bool(t, 'restricted', path) ?? false
     const toolsRaw = strList(t, 'tools', path)
-    const mcpServersRaw = strList(t, 'mcp_servers', path)
+    const mcpServerNamesRaw = strList(t, 'mcp_servers', path)
     const sendsToRaw = strList(t, 'sends_to', path)
     let tools: string[] | undefined
-    let mcpServersList: string[] | undefined
+    let mcpServerNames: string[] | undefined
     if (!restricted) {
       for (const k of ['tools', 'mcp_servers', 'sends_to'] as const) if (t[k] !== undefined) error(`${path}.${k}`, `has no effect while restricted = false: it already has every tool and server the operator does${k === 'sends_to' ? ', and send_to_thread to any session' : ''}; set restricted = true to choose them`)
     } else {
@@ -704,14 +589,14 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
         if (Object.hasOwn(TOOL_WARNINGS, name)) { warn(`${path}.tools[${i}]`, `${name} ${TOOL_WARNINGS[name]}`); continue }
         error(`${path}.tools[${i}]`, `${name} ${Object.hasOwn(TOOL_REFUSALS, name) ? TOOL_REFUSALS[name] : `is not a tool a restricted specialist may use (${WORKDIR_TOOLS.join(', ')})`}; remove it or set restricted = false`)
       }
-      mcpServersList = [...new Set(mcpServersRaw ?? [])]
-      for (const [i, name] of (mcpServersRaw ?? []).entries()) {
-        if (!Object.hasOwn(mcpServers, name)) error(`${path}.mcp_servers[${i}]`, `no [mcp.${name}]: declare the server in hydra.toml first`)
-        else if (mcpServers[name].tools.length === 0) error(`${path}.mcp_servers[${i}]`, `[mcp.${name}] lists no tools, so a specialist could call none of them: set its \`tools\``)
-        else for (const v of mcpServers[name].tokenEnv) if (!env.envFileHas(v)) warn(`${path}.mcp_servers[${i}]`, `[mcp.${name}] needs ${v}, and ${join(env.stateDir, '.env')} does not set it, so no session of this specialist can start until it does: add ${v}=<value> there and restart the daemon`)
+      mcpServerNames = [...new Set(mcpServerNamesRaw ?? [])]
+      for (const [i, name] of (mcpServerNamesRaw ?? []).entries()) {
+        if (!Object.hasOwn(mcpServers, name)) error(`${path}.mcp_servers[${i}]`, `no [mcp_servers.${name}]: declare the server in hydra.toml first`)
+        else if (mcpServers[name].tools.length === 0) error(`${path}.mcp_servers[${i}]`, `[mcp_servers.${name}] lists no tools, so a specialist could call none of them: set its \`tools\``)
+        else for (const v of mcpServers[name].tokenEnv) if (!env.envFileHas(v)) warn(`${path}.mcp_servers[${i}]`, `[mcp_servers.${name}] needs ${v}, and ${join(env.stateDir, '.env')} does not set it, so no session of this specialist can start until it does: add ${v}=<value> there and restart the daemon`)
       }
       // A listed server runs under sandbox-exec; a machine without it cannot host the specialist (the launch checks again).
-      if (mcpServersList.length) {
+      if (mcpServerNames.length) {
         const why = sandboxIssues(env.isCommand, offLimitRoots(env, offLimits))
         if (why) error(`${path}.mcp_servers`, why)
       }
@@ -735,19 +620,17 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       ...(engine !== undefined && { engine }),
       restricted,
       ...(tools && { tools }),
-      ...(mcpServersList && { mcpServers: mcpServersList }),
+      ...(mcpServerNames && { mcpServerNames }),
       ...(sendsToRaw && restricted && { sendsTo: [...new Set(sendsToRaw)] }),
       ...(envFile !== undefined && { envFile: underWorkdir(envFile) }),
     }
   }
   // A target value says its kind: `main` (the built-in specialist: never declared) or `specialist:<name>` (declared here).
-  // A bare name still loads, as the same target, with a warning that says how to write it. Read by `readTarget`, as delivery and the CLI read it;
-  // the loaded config holds the bare form (`main`, a specialist's id), which is what routing and the schedules compare against.
+  // Read by `readTarget`, as delivery and the CLI read it; the loaded config holds the bare form (`main`, a specialist's id), which is what routing and the schedules compare against.
   const targetOf = (raw: string, path: string, owner: 'rule' | 'schedule'): string | undefined => {
     const r = readTarget(raw, id => has(specialists, id))
     if (!r.ok) { error(path, r.error ?? `no specialist "${r.undeclared}": declare [specialists.${r.undeclared}], or use main`); return undefined }
     if (r.ref.kind === 'thread') { error(path, `"${raw}" is a thread, and a ${owner}'s target is main or a declared specialist: declare a specialist for that thread, and write specialist:<name>`); return undefined }
-    if (r.bare) warn(path, `write "${spelled(r.ref)}" instead of "${raw}": a target says its kind; the bare name still works and will be removed`)
     return bareOf(r.ref)
   }
 
@@ -757,9 +640,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   for (const [rawPlace, raw] of Object.entries(table(doc.places, 'places') ?? {})) {
     const path = `places."${rawPlace}"`
     const p = place(rawPlace, path)
-    const t0 = table(raw, path)
-    if (!p || !t0) continue
-    const t = renamed(t0, path, [{ from: 'listen', to: 'messages', values: { mentions: 'addressed' } }])
+    const t = table(raw, path)
+    if (!p || !t) continue
     if (has(places, p)) { error(path, `${p} is already set: places compare without case on GitHub`); continue }
     unknownKeys(t, ['ack', 'files', 'messages', 'bots', 'default_app', 'link_previews'], path)
     const ack = str(t, 'ack', path)
@@ -789,9 +671,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   for (const [id, raw] of Object.entries(table(doc.schedules, 'schedules') ?? {})) {
     const path = `schedules.${id}`
     if (!ID_RE.test(id)) error(path, 'a schedule\'s id must be lowercase letters, digits and dashes')
-    const t0 = table(raw, path)
-    if (!t0) continue
-    const t = renamed(t0, path, SCHEDULE_RENAMES)
+    const t = table(raw, path)
+    if (!t) continue
     unknownKeys(t, ['cron', 'target', 'message', 'check', 'workdir', 'env_file', 'runner', 'needs', 'alert_after'], path)
     const cron = str(t, 'cron', path)
     if (t.cron === undefined) error(`${path}.cron`, 'is required: 5 fields, local time')
@@ -832,12 +713,10 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   // --- rules (checked now, applied by a later step) ------------------------------------------------------------------
 
   const rules: Rule[] = []
-  /** Where each rule in `rules` was written: `rules[2]`, or the `listens` entry it was read from. */
+  /** Where each rule in `rules` was written: `rules[2]`. */
   const ruleAt: string[] = []
-  /** The rules read from an old `listens`, by their index in `rules`. */
-  const fromListens = new Set<number>()
-  /** One rule's table checked and added. `at` names the key an error is about: `<path>.<key>`, or for a `listens` entry the entry itself. */
-  const readRule = (t: Table, path: string, at: (key: string) => string, source: 'rules' | 'listens') => {
+  /** One rule's table checked and added. `at` names the key an error is about: `<path>.<key>`. */
+  const readRule = (t: Table, path: string, at: (key: string) => string) => {
     unknownKeys(t, ['place', 'app', 'person', 'target'], path)
     const placeRaw = str(t, 'place', path)
     const appRaw = str(t, 'app', path)
@@ -862,7 +741,6 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       else if (specialist.pinnedTo && !app && rulePlace && !rulePlace.startsWith('slack:')) error(at('target'), `${ruleTarget} is pinned to Slack apps, so it can never take a message at ${rulePlace}: remove \`pinned_to\` from ${ruleTarget}, or send it a \`slack:\` place instead`)
     }
     if ((rulePlace || app) && ruleTarget) {
-      if (source === 'listens') fromListens.add(rules.length)
       ruleAt.push(path)
       rules.push({ target: ruleTarget, ...(rulePlace && { place: rulePlace }), ...(app && { app }), ...(person !== undefined && { person }) })
     }
@@ -870,13 +748,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   if (doc.rules !== undefined && !(Array.isArray(doc.rules) && doc.rules.every(isTable))) error('rules', 'must be [[rules]] tables')
   else for (const [i, t0] of ((doc.rules ?? []) as Table[]).entries()) {
     const path = `rules[${i}]`
-    readRule(renamed(t0, path, [{ from: 'at', to: 'place' }, { from: 'from', to: 'person' }, { from: 'to', to: 'target' }]), path, k => join2(path, k), 'rules')
-  }
-  // An old `listens` is read as rules after the explicit ones, a place named by its id before one named `#name`, before every group DM (what `route()` always did: the most specific name first).
-  // (`placesOf` in connectors/slack/watch.ts lists a channel's names: its id, then `#name`, then `slack:group-dm`.)
-  const nameRank = (p: Place) => p === SLACK_GROUP_DM ? 2 : p.includes('#') ? 1 : 0
-  for (const l of [...legacyRules].sort((x, y) => nameRank(x.place) - nameRank(y.place))) {
-    readRule({ place: l.place, target: `specialist:${l.target}` }, l.path, () => l.path, 'listens')
+    readRule(t0, path, k => join2(path, k))
   }
   // A rule never matches when an earlier one takes everything it would: its place and app are the same or wider, and who `later`
   // names is a subset of who `earlier` names. Absent and `anyone` include strangers; `people` is the roster; a role, its holders.
@@ -907,7 +779,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     return e === 'any' || (l !== 'any' && l.every(a => e.includes(a)))
   }
   // Two rules that take every message at one place through one app are a mistake, not a preference: the earlier wins and the later never gets
-  // them. That is an error, naming both. (An old `listens` that an explicit rule already covers stays the warning it was: the file still loads.)
+  // them. That is an error, naming both.
   const takesEveryone = (r: Rule) => senders(r.person) === 'everyone'
   const clashApps = (earlier: Rule, later: Rule): string | undefined => {
     const e = appsOf(earlier), l = appsOf(later)
@@ -916,17 +788,12 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (e !== 'any' && l !== 'any') return shared.length ? appList(shared as string[]) : undefined
     return appsCover(earlier, later) && !(l !== 'any' && l.length === 0) ? 'any app' : undefined
   }
-  /** The apps both rules apply to (an empty list: none; `any` pins play no part on a side, so the other side's apps). */
-  const sharedApps = (x: Rule, y: Rule): string[] => {
-    const ax = appsOf(x), ay = appsOf(y)
-    return ax === 'any' ? (ay === 'any' ? ['any'] : ay) : ay === 'any' ? ax : ax.filter(app => ay.includes(app))
-  }
   const clashed = new Set<number>()
   for (const [j, later] of rules.entries()) {
     if (later.place === undefined || !takesEveryone(later)) continue
     for (const [i, earlier] of rules.slice(0, j).entries()) {
-      // The same target twice is a redundant rule, not a shadowed one: it keeps its `never matches` warning, and so does an old `listens` an explicit rule covers.
-      if (earlier.place !== later.place || !takesEveryone(earlier) || earlier.target === later.target || (fromListens.has(j) && !fromListens.has(i))) continue
+      // The same target twice is a redundant rule, not a shadowed one: it keeps its `never matches` warning.
+      if (earlier.place !== later.place || !takesEveryone(earlier) || earlier.target === later.target) continue
       const via = clashApps(earlier, later)
       if (via === undefined) continue
       const named = (r: Rule) => r.target === MAIN_TARGET ? 'main' : `specialist:${r.target}`
@@ -937,13 +804,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   }
   for (const [j, later] of rules.entries()) {
     if (clashed.has(j)) continue
-    // An old `listens` an earlier rule to the same target already covers is redundant, not shadowed: said nowhere.
-    const i = rules.findIndex((earlier, k) => k < j && !(fromListens.has(j) && earlier.target === later.target) && (earlier.place === undefined || earlier.place === later.place) && appsCover(earlier, later) && covers(earlier.person, later.person))
-    if (i >= 0) { warn(ruleAt[j], `never matches: ${ruleAt[i]} already takes ${later.person ? `${whoSpelled(people, later.person)}'s messages` : 'every message'} ${where(later)}`); continue }
-    // An old `listens` is not told apart from a rule for everyone by who it takes: when an explicit rule for everyone takes some of its apps (not all), it still loses those.
-    if (!fromListens.has(j)) continue
-    const k = rules.findIndex((earlier, m) => m < j && !fromListens.has(m) && earlier.target !== later.target && takesEveryone(earlier) && (earlier.place === undefined || earlier.place === later.place) && sharedApps(earlier, later).length > 0)
-    if (k >= 0) warn(ruleAt[j], `gets only some apps: ${ruleAt[k]} already takes every message ${where(rules[k])}, so ${later.target} does not answer it through ${appList(sharedApps(rules[k], later))}`)
+    const i = rules.findIndex((earlier, k) => k < j && (earlier.place === undefined || earlier.place === later.place) && appsCover(earlier, later) && covers(earlier.person, later.person))
+    if (i >= 0) warn(ruleAt[j], `never matches: ${ruleAt[i]} already takes ${later.person ? `${whoSpelled(people, later.person)}'s messages` : 'every message'} ${where(later)}`)
   }
   /** Where a specialist answers every message (see `placesAnsweredBy`). */
   const answered = (id: string): Place[] => placesAnsweredBy({ rules }, id)
@@ -1118,9 +980,6 @@ function shellProgram(command: string): string {
   const first = words.find(w => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) ?? ''
   return /^(['"]).*\1$/.test(first) ? first.slice(1, -1) : first
 }
-
-/** What a renamed key's old name says when the new name is also given. The names come formatted by the caller (`a`, or --a). */
-export const bothNames = (old: string, now: string): string => `is the old name of ${now}, which is also set: keep ${now} and delete ${old}`
 
 const join2 = (path: string, key: string) => path ? `${path}.${key}` : key
 

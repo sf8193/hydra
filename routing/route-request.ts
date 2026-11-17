@@ -1,5 +1,5 @@
 // `hydra route`'s request, answered from a loaded config: pure, so the daemon and the tests ask it the same way.
-import { bothNames, normalizeAddress } from '../config/load.js'
+import { normalizeAddress } from '../config/load.js'
 import { noSuchApp } from '../config/pins.js'
 import { DEFAULT_SLACK_APP, type Address, type HydraConfig } from '../config/types.js'
 import { readValue, spelledApp } from '../shared/value-kind.js'
@@ -7,25 +7,14 @@ import { explain, answersLines, route } from './route.js'
 
 export const ROUTE_USAGE = 'usage: hydra route --person <person:id|address|stranger> --place <place> [--app <app:id>] [--heard-by <app:id,app:id>] [--mentioned <app:id,app:id>] [--bound <specialist> [--bound-app <app:id>]]'
 
-/** What `hydra route` asks. The app lists are comma-separated apps, each `app:<id>` (a bare id still reads). */
+/** What `hydra route` asks. The app lists are comma-separated apps, each `app:<id>`. */
 export type RouteParams = { person?: string; place?: string; bound?: string; app?: string; heardBy?: string; mentioned?: string; boundApp?: string }
 
-/** The flags of `hydra route`, read from its arguments. `--as` and `--at` are the old names of `--person` and `--place`: they still work, with a note for stderr. Giving both names of one flag is an error. */
-export function routeFlags(args: string[]): { ok: true; params: RouteParams; notes: string[] } | { ok: false; error: string } {
+/** The flags of `hydra route`, read from its arguments. */
+export function routeFlags(args: string[]): { ok: true; params: RouteParams } {
   const flag = (name: string) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined }
-  const notes: string[] = []
-  const renamed = (now: string, old: string): string | undefined | Error => {
-    const [a, b] = [flag(now), flag(old)]
-    if (b === undefined) return a
-    if (a !== undefined) return new Error(`${old} ${bothNames(old, now)}`)
-    notes.push(`${old} is now ${now}; ${old} still works and will be removed`)
-    return b
-  }
-  const person = renamed('--person', '--as'), place = renamed('--place', '--at')
-  if (person instanceof Error) return { ok: false, error: person.message }
-  if (place instanceof Error) return { ok: false, error: place.message }
-  const [bound, app, heardBy, mentioned, boundApp] = [flag('--bound'), flag('--app'), flag('--heard-by'), flag('--mentioned'), flag('--bound-app')]
-  return { ok: true, notes, params: { person, place, ...(bound && { bound }), ...(app && { app }), ...(heardBy && { heardBy }), ...(mentioned && { mentioned }), ...(boundApp && { boundApp }) } }
+  const [person, place, bound, app, heardBy, mentioned, boundApp] = [flag('--person'), flag('--place'), flag('--bound'), flag('--app'), flag('--heard-by'), flag('--mentioned'), flag('--bound-app')]
+  return { ok: true, params: { person, place, ...(bound && { bound }), ...(app && { app }), ...(heardBy && { heardBy }), ...(mentioned && { mentioned }), ...(boundApp && { boundApp }) } }
 }
 
 /**
@@ -36,7 +25,7 @@ export function routeFlags(args: string[]): { ok: true; params: RouteParams; not
  */
 export function routeFor(h: HydraConfig, p: RouteParams, aliases: (place: string, app?: string) => string[]): { ok: true; fate: string; to?: string; report: string } | { ok: false; error: string } {
   if (!p.person || !p.place) return { ok: false, error: ROUTE_USAGE }
-  // An app is `app:<id>`; a bare id still reads. A person is `person:<id>`, an address (`slack:U0ABC`) or `stranger`.
+  // An app is `app:<id>`. A person is `person:<id>`, an address (`slack:U0ABC`) or `stranger`.
   const appName = (flag: string, v: string): string | Error => { const r = readValue(v, ['app']); return r.ok ? r.name : new Error(`${flag}: ${r.error}`) }
   const named0: [string, string | undefined][] = [['`--app`', p.app], ['`--bound-app`', p.boundApp]]
   for (const [flag, v] of named0) if (v) { const r = appName(flag, v); if (r instanceof Error) return { ok: false, error: r.message } }
@@ -55,9 +44,8 @@ export function routeFor(h: HydraConfig, p: RouteParams, aliases: (place: string
   if (p.boundApp && !p.bound) return { ok: false, error: '--bound-app goes with --bound: it names the app the conversation bound to that specialist is bound through' }
   let from: Address | undefined
   if (person !== 'stranger') {
-    const personId = person.startsWith('person:') ? person.slice('person:'.length) : person
-    const known = h.people[personId]
-    from = known ? known.addresses[0] : normalizeAddress(personId)
+    const known = person.startsWith('person:') ? h.people[person.slice('person:'.length)] : undefined
+    from = known ? known.addresses[0] : normalizeAddress(person)
     if (!from) return { ok: false, error: `"${person}" is neither a person in hydra.toml (person:<id>) nor an address like slack:U0ABC` }
   }
   const at = aliases(place, p.app)   // channel names are read per app: each reads its own workspace's

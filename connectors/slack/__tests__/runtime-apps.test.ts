@@ -145,11 +145,11 @@ describe('a pinned specialist cannot be reached through another app', () => {
   })
 
   test('the operator’s bind carries the app, and refuses a specialist pinned elsewhere, or an app that is not declared', () => {
-    expect(() => operatorBind('slack:C1:5.000001', DEALS)).toThrow('deals-t is pinned to app:sales, and this conversation is through app:default')
-    expect(() => operatorBind('slack:sales:C1:5.000001', CRM)).toThrow('app:sales serves only specialists pinned to it')
-    expect(() => operatorBind('slack:ghost:C1:5.000001', DEALS)).toThrow('no app "ghost"')
-    expect(operatorBind('slack:sales:C1:5.000001', DEALS)).toBe(`slack:sales:C1:5.000001 → ${DEALS}`)
-    expect(operatorBind('slack:C1:5.000001', CRM)).toBe(`slack:C1:5.000001 → ${CRM}`)
+    expect(() => operatorBind('slack:C1:5.000001', `specialist:${DEALS}`)).toThrow('deals-t is pinned to app:sales, and this conversation is through app:default')
+    expect(() => operatorBind('slack:sales:C1:5.000001', `specialist:${CRM}`)).toThrow('app:sales serves only specialists pinned to it')
+    expect(() => operatorBind('slack:ghost:C1:5.000001', `specialist:${DEALS}`)).toThrow('no app "ghost"')
+    expect(operatorBind('slack:sales:C1:5.000001', `specialist:${DEALS}`)).toBe(`slack:sales:C1:5.000001 → ${DEALS}`)
+    expect(operatorBind('slack:C1:5.000001', `specialist:${CRM}`)).toBe(`slack:C1:5.000001 → ${CRM}`)
     expect(getSlackWatcher().list().map(e => [e.app, e.specialist])).toEqual([['sales', DEALS], [undefined, CRM]])
     // main is exempt from pinning.
     expect(operatorBind('slack:sales:C1:7.000001', 'main')).toBe('slack:sales:C1:7.000001 → main')
@@ -159,8 +159,8 @@ describe('a pinned specialist cannot be reached through another app', () => {
   })
 
   test('the list prints every conversation in its own id, the app first where it is not `default`', () => {
-    operatorBind('slack:sales:C1:5.000001', DEALS)
-    operatorBind('slack:C1:6.000001', CRM)
+    operatorBind('slack:sales:C1:5.000001', `specialist:${DEALS}`)
+    operatorBind('slack:C1:6.000001', `specialist:${CRM}`)
     const lines = formatConversations()
     expect(lines[0]).toStartWith(`slack:sales:C1:5.000001 (slack:C1) → ${DEALS}`)
     expect(lines[1]).toStartWith(`slack:C1:6.000001 (slack:C1) → ${CRM}`)

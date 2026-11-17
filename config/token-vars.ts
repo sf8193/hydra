@@ -5,9 +5,8 @@ import { readFileSync } from 'fs'
 import type { HydraConfig } from './types.js'
 import { ENV_NAME_RE, registerSpawnVars, type SpawnVarRefusal } from '../shared/spawn-env.js'
 
-// The old names too (`app_token_env`, `user_token_env`): a file not yet migrated still keeps its token variables from every session.
-const KEYS = ['bot_token_env', 'socket_token_env', 'operator_token_env', 'app_token_env', 'user_token_env']
-const SLACK_TABLE = /^(connectors\.slack|slack\.apps\.[^.\s]+)$/
+const KEYS = ['bot_token_env', 'socket_token_env', 'operator_token_env']
+const SLACK_TABLE = /^slack\.apps\.[^.\s]+$/
 
 /** Every variable a loaded config's Slack apps read tokens from. */
 export function slackEnvNames(config: Pick<HydraConfig, 'slackApps'>): string[] {
@@ -18,7 +17,7 @@ const isTable = (v: unknown): v is Record<string, unknown> => typeof v === 'obje
 
 /**
  * The token variables the file's Slack tables name, valid or not: read from the parsed TOML, or, when the file is not
- * valid TOML, line by line under their `[connectors.slack]` and `[slack.apps.<id>]` headers. Names of the wrong shape
+ * valid TOML, line by line under their `[slack.apps.<id>]` headers. Names of the wrong shape
  * are left out here (the loader reports them).
  */
 export function scanSlackEnvNames(text: string): string[] {
@@ -26,8 +25,7 @@ export function scanSlackEnvNames(text: string): string[] {
   const take = (v: unknown) => { if (typeof v === 'string' && ENV_NAME_RE.test(v)) found.add(v) }
   try {
     const doc = Bun.TOML.parse(text) as Record<string, unknown>
-    const conns = isTable(doc.connectors) ? doc.connectors : {}
-    const tables = [conns.slack, ...(isTable(doc.slack) && isTable(doc.slack.apps) ? Object.values(doc.slack.apps) : [])]
+    const tables = [...(isTable(doc.slack) && isTable(doc.slack.apps) ? Object.values(doc.slack.apps) : [])]
     for (const t of tables) if (isTable(t)) for (const k of KEYS) take(t[k])
   } catch {
     let inSlack = false
