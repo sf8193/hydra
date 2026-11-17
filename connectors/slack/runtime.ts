@@ -94,7 +94,7 @@ function alert(text: string, to?: string, app?: string): void {
     return sent
   }
   if (post(targets) || post([MAIN])) return
-  log(`daemon: slack connector alert with no specialist thread to send it to: ${text}\n`)
+  log(`daemon: slack connector alert, logged only: there is no Slack thread to post it in (a specialist has one once it has started; main has one once its channel is set), so nothing in Slack shows it. Start the specialist or main, and alerts are posted from then on: ${text}\n`)
 }
 
 /** Where a binding's alerts are posted: main's channel for `main`, a session's own thread, else the specialist's thread. */

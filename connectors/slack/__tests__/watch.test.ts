@@ -53,7 +53,7 @@ describe("a thread bound to a session's own thread (any session listening)", () 
     await w.flush()
     expect(sent.map(x => x.specialist)).toEqual([SESSION])
     expect(sent[0].msg).toContain('ship it?')
-    expect(w.get('C0OTHER', '2000.000001')).toMatchObject({ specialist: SESSION, delivered: ['2001.000001'] })
+    expect(w.get('C0OTHER', '2000.000001')).toMatchObject({ specialist: SESSION, delivered: ['2000.000001', '2001.000001'] })
     expect(w.get('C0OTHER', '2000.000001')!.owed).toBeUndefined()
   })
 
@@ -104,7 +104,7 @@ describe("a session thread with no session in it (killed, or between a handoff a
     expect(body.indexOf('message 1')).toBeGreaterThan(-1)
     expect(body.indexOf('message 1')).toBeLessThan(body.indexOf('message 2'))
     expect(body.indexOf('message 2')).toBeLessThan(body.indexOf('message 3'))
-    expect(s.w.get('C0OTHER', '2000.000001')).toMatchObject({ delivered: ['2002.000001', '2003.000001', '2004.000001'] })
+    expect(s.w.get('C0OTHER', '2000.000001')).toMatchObject({ delivered: ['2000.000001', '2002.000001', '2003.000001', '2004.000001'] })
     expect(s.w.get('C0OTHER', '2000.000001')!.owed).toBeUndefined()
     for (const n of [1, 2, 3]) s.w.handle(reply(n))                        // a second catch-up pass finds the same messages
     await s.w.flush()
