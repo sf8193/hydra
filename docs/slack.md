@@ -530,6 +530,57 @@ The built-in tool list is not in that file; it is checked by the live test (`HYD
 
 If hydra.toml later gives a running specialist another `restricted`, `workdir`, `tools` or `mcp_servers`, a message to its session is not delivered: the thread is told to run `hydra kill <session>`, and the next message starts a new session under the new file.
 
+## A specialist that can only write in its folder: `can_only_write_to = "workdir"`
+
+`restricted = true` is for strangers: no shell, no browser. `can_only_write_to = "workdir"` is the level below it, for one trusted person's assistant that needs a shell, edits and a browser but must not be able to damage files outside its own folder. It is the operator's account with Claude Code's own write controls switched on at every start of its session.
+
+```toml
+[specialists.assistant]
+workdir = "~/agents/assistant"
+can_only_write_to = "workdir"
+deny_commands = ["rm -rf *"]      # optional
+mcp_servers = ["browser"]         # started with its own profile, see below
+
+[mcp_servers.browser]
+command = "/usr/local/bin/browser-mcp"
+profile_args = ["--user-data-dir", "{profile_dir}", "--downloads-dir", "{download_dir}"]
+```
+
+**What hydra sets** (in the settings it passes with `--settings`, on a fresh start, a respawn, a handoff successor, a resume and a fork alike; it needs Claude Code 2.1.314 or newer and refuses to start older):
+
+| Setting | Effect |
+|---|---|
+| `sandbox.enabled` | Bash runs in Claude Code's sandbox (Seatbelt on macOS): writes only in the workdir and temp. |
+| `sandbox.failIfUnavailable` | A machine where the sandbox cannot start refuses to run, instead of running commands unsandboxed. |
+| `sandbox.allowUnsandboxedCommands = false` | A session **can** otherwise ask to retry a blocked command outside the sandbox (`dangerouslyDisableSandbox`); this makes Claude Code ignore that. |
+| `sandbox.excludedCommands = []`, `filesystem.disabled = false` | No command is exempt by name, and the filesystem boundary stays on. Claude Code merges lists across settings files, so an `excludedCommands` in your own `~/.claude/settings.json` still applies: keep it empty for a specialist you confine. |
+| `permissions.blockWritesOutsideWorkingDirectories` | Edit, Write and NotebookEdit refuse paths outside the workdir, in every permission mode. |
+| `sandbox.filesystem.denyRead` and `Read(//<path>/**)` deny rules | Claude Code's shell and its Read tool (Grep and Glob on a best-effort basis, by Claude Code's docs) cannot read the credential places: `~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.config/gcloud`, `~/.gnupg`, `~/.netrc`, `~/.npmrc`, `~/.docker`, `~/.kube`, `~/Library/Keychains`, the browsers' own profiles (Chrome, Arc, Firefox, Brave, Edge, Safari, cookies), hydra's whole state folder, every other specialist's `workdir`, and the paths in `cannot_read`. |
+| `permissions.deny` | Those `Read` rules, and one `Bash(<pattern>)` rule for each `deny_commands` entry. |
+| `permissions.allow = ["WebFetch(domain:*)"]` | The network stays open: `sandbox.network.allowedDomains` refuses a bare `*`, but this allow rule feeds the same allowlist and matches every host. Whether the sandbox's proxy then lets everything through is not proven live. |
+
+**Its browser.** Each server in the specialist's `mcp_servers` is started with `profile_args` added to its command and `profile_env` set, with `{profile_dir}` and `{download_dir}` filled in as `<workdir>/.browser/profile` and `<workdir>/.browser/downloads`. A server declares how it takes its profile; hydra knows no server by name. The folders are made at each start and kept: logins in the profile survive the session. A browser server that comes from your own Claude Code setup (a plugin, `~/.claude.json`) is not started by hydra and keeps whatever profile it uses; only servers in `mcp_servers` get the specialist's own.
+
+**What this does not stop.** It confines damage, not knowledge, and it names the level for what it does:
+
+- Reads are open except the places above, and those only for Claude Code's tools and shell: **the browser and MCP servers still read them**, and everything else you can read, the specialist can too (`~/.config` beyond `gh`, other folders of yours).
+- The network is open.
+- **MCP servers and the browser run outside Claude Code's sandbox.** What they write is not confined to the workdir, and a browser can download a file anywhere its own settings allow.
+- Credentials are yours. The profile separates browser logins only, and the denied places bind Claude Code's tools and shell, not the browser or a server. Credential separation is `run_as` (a separate OS user), which is planned and not built.
+- The write block covers Edit, Write and NotebookEdit; the sandbox covers Bash. Neither covers a program a hook or an MCP server runs.
+
+`can_only_write_to` always denies those places (above); `cannot_read = ["~/notes"]` adds yours, and means nothing without `can_only_write_to` (a load error naming the path). A `workdir` that is or holds a denied place is a load error, checked on resolved paths and again at every start. `~/.claude/settings.json` lists merge into the launch's, so an `excludedCommands` or an extra writable folder there still applies (hydra does not stop it); keep them empty for a specialist you confine.
+
+**Every start is checked.** A session takes no message until Claude Code's own debug file shows it applied the launch's deny rules and the network allow rule; one that does not is stopped and the thread told why. The file shows rules, not the `sandbox.*` keys or the write block, so a Claude Code that ignored one of those would not be caught there: the Claude Code version gate and the live smoke test cover them.
+
+**A change of specialists changes every policy.** Every other specialist's `workdir` is in each confined specialist's read-deny list, so adding, removing or moving any specialist changes all of their policies; each running session is refused messages until `hydra kill` replaces it.
+
+**Attachments are not available at this level.** Files people send land in one inbox folder under the state folder, shared by every specialist, and the state folder is denied to a confined specialist so that one business's files cannot leak to another; so it cannot read a file sent to it. A per-specialist inbox is the follow-up that would lift this.
+
+**One browser profile per specialist.** Two sessions of it at once (`sessions = "shared"` with a handoff successor started while its predecessor lives) share the one profile, which a browser locks. Its profile is one folder in its workdir, and a browser locks its profile, so a specialist with a profile-declared server and `sessions = "per-conversation"` is a load error; a listed server that declares no `profile_args` or `profile_env` keeps its own default profile (`hydra config check` names it).
+
+`hydra config check` says it when someone other than you can reach such a specialist: "can reach the operator's account: Bash and Edit/Write writes are confined to <workdir>, and Claude Code's tools and shell cannot read the credential folders (~/.ssh, ~/.aws and the like), hydra's state folder or other specialists' workdirs; the browser and MCP servers can, and other reads, network, MCP servers' own writes and credentials are not confined; only a listed server that declares a profile folder uses its own profile in <workdir>, and servers from the operator's ~/.claude.json or plugins still load and keep theirs; attachments sent to it are unreadable (the shared inbox is denied). Credential separation (run_as) is planned, not built." `restricted = true` together with either key is a load error (restricted already confines writes and reads), `tools` and `sends_to` still belong to `restricted = true`, and only the `claude` engine can run it. Changing `can_only_write_to` in hydra.toml is not applied silently: a message to a running session born under the old setting is refused until `hydra kill` replaces it.
+
 ## Known limits
 
 *Slack connector.*

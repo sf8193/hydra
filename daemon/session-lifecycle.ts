@@ -9,7 +9,8 @@ import { safeSend, formatSpawnLine, atomicWriteFileSync } from './util.js'
 import { tmuxHasSession, tmuxSync, tmuxTimedOut } from './tmux.js'
 import { nameHeldByAnother, occupancy, occupied } from './session-reachability.js'
 import { withThreadLock } from '../specialists/specialists.js'
-import { endVerifying, startVerifying, verifyBackoff, verifyRefusal, confined, describePolicy, macosRefusal, missingTokenRefusal, PolicyRefusal, remedy, resolvePolicy, type LaunchPolicy } from './restricted.js'
+import { unreadableWorkdir } from '../config/write-confinement.js'
+import { confinementRefusal, endVerifying, startVerifying, verifyBackoff, verifyRefusal, confined, describePolicy, macosRefusal, missingTokenRefusal, PolicyRefusal, remedy, resolvePolicy, type LaunchPolicy } from './restricted.js'
 import { threadNotices } from './notice-limit.js'
 import { hydraLoadEnv, currentHydraConfig } from './hydra-config.js'
 import { workdirRestrictionIssues } from '../config/restricted-workdir.js'
@@ -1013,11 +1014,16 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     // The sandbox its servers run under is proven only on some macOS versions: refused here, where every start passes, never run on a guess.
     const unproven = macosRefusal(policy, sessionName)
     if (unproven) throw new PolicyRefusal(unproven)
+    if (policy?.canOnlyWriteTo && !resolveEngine(engine).confinesAccess) {
+      throw new PolicyRefusal(`specialist ${policy.specialist} has can_only_write_to = "workdir", which the ${engine} engine cannot give (only Claude Code's own sandbox confines writes): set engine = "claude", or remove can_only_write_to. ${remedy(sessionName)}`)
+    }
   } catch (err) {
     if (err instanceof PolicyRefusal && threadId) await tellThread(threadId, err.message)
     throw err
   }
   const confinedPolicy = confined(policy, sessionName)
+  // `can_only_write_to`: the operator's account with writes confined to the workdir. Not a restricted session, but it starts in its folder, is checked, and takes no message until it passes.
+  const layerPolicy = !confinedPolicy && policy?.canOnlyWriteTo ? { ...policy, canOnlyWriteTo: policy.canOnlyWriteTo } : undefined
   // The kickoff the conversation was born under: a fresh start names its own; a resume or fork keeps the one it continues, and a
   // handoff successor keeps its predecessor's (it learns its role from the predecessor's letter, which is the old definition).
   const kickoffHash = continuing || isHandoff ? actingRecords.find(r => r?.kickoffHash !== undefined)?.kickoffHash : opts?.kickoffHash
@@ -1051,6 +1057,23 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     launchCwd = confinedPolicy.workdir
     // The operator declared this folder in hydra.toml; without this a first launch there waits on Claude's trust dialog (as for any specialist workdir).
     preApproveClaudeTrust([confinedPolicy.workdir], `workdir ${confinedPolicy.workdir}`)
+  }
+  if (layerPolicy) {
+    const w = layerPolicy.canOnlyWriteTo
+    const refuse = (why: string): Promise<never> => refuseStart(threadId, why)
+    const lastStop = verifyRefused.get(verifyKey(layerPolicy.specialist, threadId, sessionName))
+    if (lastStop && verifyBackoff.now() - lastStop.at < verifyBackoff.ms) await refuse(`specialist ${layerPolicy.specialist}: its last start was stopped ${Math.round((verifyBackoff.now() - lastStop.at) / 1000)}s ago and hydra waits ${verifyBackoff.ms / 1000}s before starting it again (${lastStop.why}). Send another message after that.`)
+    // Its writes are confined to the folder it starts in: a worktree, or any other start, would be a different folder (launch() holds the same line).
+    if (worktreeTarget || reuseWorktree) await refuse(`specialist ${layerPolicy.specialist} can only write in its workdir ${w.workdir}: it never gets a git worktree: start it without one`)
+    if (!existsSync(w.workdir)) await refuse(`specialist ${layerPolicy.specialist}: its workdir ${w.workdir} does not exist, so no session starts: create it (or change workdir in hydra.toml). ${remedy(sessionName)}`)
+    // The folder can change after hydra.toml loaded (a link added into a place the layer denies): the load's check runs again, on resolved paths.
+    const inside = unreadableWorkdir(w.workdir, w.cannotRead, hydraLoadEnv().realpath)
+    if (inside) await refuse(`specialist ${layerPolicy.specialist}: its workdir ${w.workdir} is, or now holds, ${inside}, which the layer denies reading, so it could not read its own folder and no session starts. ${remedy(sessionName)}`)
+    // A listed server's token variable must be set: checked here, with the other refusals, so the thread hears it.
+    const noToken = missingTokenRefusal({ specialist: layerPolicy.specialist, servers: w.servers }, ENV_FILE, sessionName, process.env, capturedSpawnVars())
+    if (noToken) await refuse(noToken)
+    launchCwd = w.workdir
+    preApproveClaudeTrust([w.workdir], `workdir ${w.workdir}`)
   }
   if (launchCwd) {
     // A fork (and its resume) must start where its source started, or --resume can't find the transcript.
@@ -1150,6 +1173,10 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     tools: opts?.tools, disallowedTools,
     forkFrom: opts?.forkFrom, resumeFrom: opts?.resumeFrom, resumeCodex: opts?.resumeCodex, resumeOmp: opts?.resumeOmp,
     threadId, sessionType: spawnType, ...(policy && { policy }),
+  }).catch(async (err: unknown) => {
+    // A refusal the launch itself makes (an old Claude Code, a folder it cannot make) is told to the thread, as the checks above are.
+    if (layerPolicy && err instanceof PolicyRefusal && threadId) await tellThread(threadId, err.message)
+    throw err
   })
 
   const now = Date.now()
@@ -1162,7 +1189,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   }
   const url = await gateway.getThreadUrl(threadId!)
 
-  if (confinedPolicy) startVerifying(sessionId)   // the record below is refused every message until its start passes (restricted.ts `unverified`)
+  if (confinedPolicy || layerPolicy) startVerifying(sessionId)   // the record below is refused every message until its start passes (restricted.ts `unverified`)
   registry.set(sessionId, {
     sessionId, topic, threadId: threadId!, anchorMessageId, anchorChannelId, createdAt: now, lastActive: now,
     tmuxName, listening: resolveListenState(threadId!, chatId), originType, originFrom, sessionMetadata,
@@ -1228,6 +1255,28 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     if (created && created.sessionId === sessionId) { created.verified = true; registry.persist() }
     clearRefusals(confinedPolicy.specialist)   // it starts now: health no longer reports a refusal for it
     process.stderr.write(`daemon: spawn ${tmuxName}: launch verified against its policy from ${launched.debugLogPath}\n`)
+  }
+  // A write-confined session is checked too, on what its settings should have applied (claude-verify.ts `verifyConfinement`): no message reaches it until
+  // Claude Code's own record shows the rules, and one that does not show them is stopped and the start refuses with the cause.
+  if (layerPolicy) {
+    let verdict: { ok: true } | { ok: false; why: string }
+    try {
+      verdict = adapter.verifyConfinement ? await adapter.verifyConfinement(layerPolicy, launched) : { ok: false, why: `the ${engine} engine cannot check what it applied` }
+    } catch (err) {
+      process.stderr.write(`daemon: spawn ${tmuxName}: confinement check threw: ${err}\n`)
+      verdict = { ok: false, why: 'the check itself failed to run, so what it applied is unknown' }
+    } finally { endVerifying(sessionId) }
+    if (!verdict.ok) {
+      keepRefusal(verifyKey(layerPolicy.specialist, threadId, sessionName), verifyBackoff.now(), verdict.why)
+      process.stderr.write(`daemon: spawn ${tmuxName}: confinement check refused: ${verdict.why}\n`)
+      const created = registry.get(sessionId)
+      if (created && created.sessionId === sessionId) await killSession(created, 'stopped: it did not apply the write confinement its launch policy gives', { keepWatches: true }).catch((err: unknown) => process.stderr.write(`daemon: spawn ${tmuxName}: could not stop the unchecked session ${sessionId}: ${err}\n`))
+      await refuseStart(threadId, confinementRefusal(layerPolicy.specialist, sessionName, verdict.why))
+    }
+    const created = registry.get(sessionId)
+    if (created && created.sessionId === sessionId) { created.verified = true; registry.persist() }
+    clearRefusals(layerPolicy.specialist)
+    process.stderr.write(`daemon: spawn ${tmuxName}: write confinement applied, from ${launched.debugLogPath}\n`)
   }
   if (phaseBudgetMs) startPhaseBudget(sessionId)
   if (opts?.ephemeral) resumeIdleLimit(sessionId)

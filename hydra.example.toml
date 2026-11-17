@@ -101,7 +101,7 @@ speaks_as = "app:sales"               # the Slack app whose bot posts for it whe
 
 # A specialist other people talk to, restricted: it knows only its workdir, uses only the tools and servers it lists, and answers only its own
 # conversation. `restricted = false` (the default) is the operator's account, with every tool and server they have. A workdir must be a folder
-# of its own (not $HOME, not a git work tree, no symlinks out). `restricted`, `tools`, `mcp_servers` and `sends_to` are refused in [defaults.specialist] and in `hydra
+# of its own (not $HOME, not a git work tree, no symlinks out). `restricted`, `can_only_write_to`, `deny_commands`, `tools`, `mcp_servers` and `sends_to` are refused in [defaults.specialist] and in `hydra
 # config add` fragments. Each new start is checked against this, from Claude Code's own debug file (docs/slack.md, "A specialist other people talk to",
 # which shows the same kind of specialist as a file of its own, named `ops`). Its `.env` variables are read when the daemon starts.
 [specialists.helpdesk]
@@ -119,6 +119,20 @@ workdir = "~/agents/triage"
 reachable_by = []
 restricted = true
 sends_to = ["helpdesk"]                # the way back: its answer is a send_to_thread(type = "result") to helpdesk
+
+# One trusted person's assistant: the operator's account, tools and servers (a shell, edits, a browser), with Bash and Edit/Write writes confined to its
+# workdir, by Claude Code's own sandboxed Bash and write block (needs Claude Code 2.1.314 or newer), and Claude Code's tools and shell are denied reading the
+# operator's credential places (~/.ssh, ~/.aws, ~/.config/gh, the keychain, browser profiles, hydra's state folder, other specialists' workdirs); the network is meant to stay open (not proven live).
+# It confines damage, and denies those reads to Claude Code only: its MCP servers and browser run outside the sandbox and still read them; the network is open.
+# Credential separation (`run_as`) is planned, not built. `hydra config check` warns when someone can reach it. Not combinable with `restricted = true`.
+[specialists.assistant]
+workdir = "~/agents/assistant"
+reachable_by = []                      # only the operator here; a role added to it makes `hydra config check` warn that it can reach the operator's account
+pinned_to = ["app:sales"]             # (pinned, for the same reason as helpdesk)
+can_only_write_to = "workdir"                  # the place its writes are confined to (a string or a list); today the one value is "workdir". This turns the whole layer on
+cannot_read = ["~/notes"]              # optional, only with can_only_write_to: paths ADDED to the built-in credential places Claude Code's tools and shell may not read
+deny_commands = ["rm -rf *"]           # optional: Bash patterns it may not run, on top of the confinement (each becomes a Bash(...) deny rule)
+mcp_servers = ["browser"]              # servers started for it with its OWN browser profile and download folders, <workdir>/.browser/{profile,downloads}
 
 # PR reviews on one repo.
 [specialists.reviewer]
@@ -143,6 +157,15 @@ tools = ["search_logs", "get_monitor"]   # the tools of it a specialist may call
 # On macOS it also runs under a best-effort sandbox (hygiene, not containment; the network stays open): no unix sockets but name lookup,
 # file writes only in its own temp folder and two devices, /dev/null and /dev/dtracehelper (emptied at each start: a server that must keep data cannot run here), no credential folders,
 # no other process's environment or command line.
+
+# A browser server for a `can_only_write_to` specialist: how it takes its own profile and download folders, which hydra fills in at each start.
+# `profile_args` are added to the command; `profile_env` is set for it. {profile_dir} and {download_dir} are the only placeholders. Nothing else
+# in hydra knows what the server is: this declaration is the whole contract. The browser it drives still runs outside Claude Code's sandbox.
+[mcp_servers.browser]
+command = "/usr/local/bin/browser-mcp"
+profile_args = ["--user-data-dir", "{profile_dir}", "--downloads-dir", "{download_dir}"]
+profile_env = { BROWSER_PROFILE = "{profile_dir}" }
+
 
 # --- places: optional platform options for one place ---
 
@@ -235,6 +258,10 @@ target = "specialist:deals"           # pinned to sales: it answers through that
 [[rules]]
 place = "slack:#ops"
 target = "specialist:helpdesk"
+
+[[rules]]
+place = "slack:#assistant"
+target = "specialist:assistant"
 
 [[rules]]
 place = "github:acme/widget"

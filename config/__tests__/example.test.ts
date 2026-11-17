@@ -21,7 +21,8 @@ describe('hydra.example.toml', () => {
     expect(r.config.specialists.crm.sessions).toBe('per-conversation')
     expect(r.config.schedules['disk-watch'].check).toBeDefined()
     expect(r.config.schedules['backup-watch']).toMatchObject({ runner: 'daemon', needs: ['internet'] })
-    expect(r.config.rules).toHaveLength(7)
+    expect(r.config.rules).toHaveLength(8)
+    expect(r.config.specialists.assistant).toMatchObject({ restricted: false, canOnlyWriteTo: 'workdir', cannotRead: ['/home/op/notes'], denyCommands: ['rm -rf *'], mcpServerNames: ['browser'] })
     expect(r.config.specialists.deals.pinnedTo).toEqual(['sales'])
     expect(r.config.places['slack:#help'].defaultApp).toBe('default')
     // The confined specialist, its server and its place.
