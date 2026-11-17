@@ -12,6 +12,7 @@ import {
 import { peek } from './peek.js'
 import { ROUTE_USAGE, routeFlags } from '../routing/route-request.js'
 import { migrateCommand } from './migrate.js'
+import { browserMain } from './browser.js'
 import { peopleCommand } from './people.js'
 import { configAddCommand } from './config-add.js'
 import { configCheckCommand } from './config-check.js'
@@ -112,6 +113,7 @@ Specialists (named addresses that refill themselves):
                                        a name needs a letter (an all-digit one reads as a thread id);
                                        once hydra.toml declares specialists, recipes live there and set takes only --thread
   hydra specialist show <name> | list | rm <name>   (rm: without hydra.toml only)
+  hydra [--state-dir <dir>] specialist browser <name> [--server <name>] [--trust-existing] [--dry-run]   open a write-confined specialist's browser profile to log it in (run before its first session)
 
 Routing (hydra.toml):
   hydra route --person <person:id|address|stranger> --place <place> [--app <app:id>] [--heard-by <app:id,app:id>] [--mentioned <app:id,app:id>] [--bound <specialist> [--bound-app <app:id>]]
@@ -231,6 +233,12 @@ async function main(): Promise<void> {
     }
     if (sub !== 'check') { console.error('usage: hydra [--state-dir <dir>] config check [<platform>] | config add <fragment.toml> [--dry-run]'); process.exit(1) }
     process.exit(configCheckCommand(platform, stateDirOpt))
+  }
+
+  // `specialist browser` reads hydra.toml and opens a browser on this machine: no daemon is asked.
+  if (command === 'specialist' && filtered[1] === 'browser') {
+    if (daemonName) { console.error('error: specialist browser takes --state-dir <dir>, not --daemon'); process.exit(1) }
+    process.exit(await browserMain(filtered.slice(2), stateDirOpt))
   }
 
   if (command === 'people') {
@@ -546,7 +554,7 @@ async function main(): Promise<void> {
     case 'specialist': {
       const [action, name] = [filtered[1], filtered[2]]
       if (!['set', 'show', 'rm', 'list'].includes(action ?? '')) {
-        console.error('error: usage: hydra specialist set|show|rm|list <name> [flags]')
+        console.error('error: usage: hydra specialist set|show|rm|list|browser <name> [flags]')
         process.exit(1)
       }
       const flags: Record<string, string> = {}

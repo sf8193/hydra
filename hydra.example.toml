@@ -161,12 +161,21 @@ tools = ["search_logs", "get_monitor"]   # the tools of it a specialist may call
 # no other process's environment or command line.
 
 # A browser server for a `can_only_write_to` specialist: how it takes its own profile and download folders, which hydra fills in at each start.
-# `profile_args` are added to the command; `profile_env` is set for it. {profile_dir} and {download_dir} are the only placeholders. Nothing else
-# in hydra knows what the server is: this declaration is the whole contract. The browser it drives still runs outside Claude Code's sandbox.
+# `profile_args` are the arguments added to the command (`profile_env` would be set for it). {profile_dir} and {download_dir} are the only placeholders.
+# Nothing else in hydra knows what the server is: this declaration is the whole contract. The browser it drives still runs outside Claude Code's sandbox.
+# This one is Microsoft's Playwright MCP server (`@playwright/mcp`, pinned) driving the installed Google Chrome. Playwright has no downloads flag:
+# `--output-dir` is where downloads go, and also its auto-named snapshots (one per navigation), screenshots and traces. Do not name the server `playwright`:
+# an operator's own ~/.claude.json very likely declares that name, and hydra refuses the clash (Claude Code's allowlist matches by name).
+# The first start downloads the package into ~/.npm/_npx, and Claude Code waits 30 seconds for a server: run `npx -y @playwright/mcp@0.0.85 --version` once first.
 [mcp_servers.browser]
-command = "/usr/local/bin/browser-mcp"
-profile_args = ["--user-data-dir", "{profile_dir}", "--downloads-dir", "{download_dir}"]
-profile_env = { BROWSER_PROFILE = "{profile_dir}" }
+command = "npx"
+profile_args = ["-y", "@playwright/mcp@0.0.85", "--browser", "chrome", "--user-data-dir", "{profile_dir}", "--output-dir", "{download_dir}"]
+# `hydra specialist browser <name>` opens that specialist's browser on its profile folder, headed, once, to log it in: login_command is the command (its first element
+# an executable; the same placeholders). Playwright starts Chrome with --password-store=basic --use-mock-keychain, so a login made in a Chrome without them is
+# encrypted with the operator's own keychain key, which the specialist's Chrome cannot read: the login command carries both. A Chrome keeps SingletonLock in its
+# profile folder while it runs: profile_locks names it, and the command refuses while it is there. Per-operator: hydra names no browser.
+login_command = ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "--user-data-dir={profile_dir}", "--password-store=basic", "--use-mock-keychain", "--no-first-run"]
+profile_locks = ["SingletonLock"]
 
 
 # --- places: optional platform options for one place ---

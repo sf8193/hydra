@@ -368,7 +368,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (!ID_RE.test(name)) { error(path, `"${name}" is not a valid server name: lowercase letters, digits and dashes`); continue }
     const t = table(raw, path)
     if (!t) continue
-    unknownKeys(t, ['command', 'token_env', 'tools', 'profile_args', 'profile_env'], path)
+    unknownKeys(t, ['command', 'token_env', 'tools', 'profile_args', 'profile_env', 'login_command', 'profile_locks'], path)
     const command = str(t, 'command', path)
     if (t.command === undefined) error(`${path}.command`, 'is required: the server\'s executable, pinned (a path or a versioned binary, not `npx -y` latest)')
     else if (command !== undefined && !env.isCommand(expand(command))) error(`${path}.command`, `${expand(command)} is not an executable file or a command on PATH`)
@@ -398,7 +398,25 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       profileEnv[k] = v; profileText.push(v)
     }
     if (profileText.length && !profileText.some(hasPlaceholder)) error(path, 'profile_args and profile_env hold no {profile_dir} or {download_dir}, so the server would never be given its own profile')
-    if (command !== undefined) mcpServers[name] = { name, command: expand(command), tokenEnv, tools, ...(profileArgs && { profileArgs }), ...(Object.keys(profileEnv).length && { profileEnv }) }
+    // `hydra specialist browser`: how to open this server's browser on a profile folder for a human to log in, and which lock files say it is open.
+    const loginRaw = strList(t, 'login_command', path)
+    let loginCommand: string[] | undefined
+    if (loginRaw !== undefined) {
+      if (loginRaw.length === 0) error(`${path}.login_command`, 'is empty: it is the command that opens the browser, its first element the executable')
+      else {
+        for (const [i, a] of loginRaw.entries()) for (const u of unknownPlaceholders(a)) error(`${path}.login_command[${i}]`, `"${a}" names ${u}; a placeholder is {profile_dir} or {download_dir}`)
+        if (!loginRaw.some(a => a.includes('{profile_dir}'))) error(path, 'login_command holds no {profile_dir}, so it would not open the specialist\'s own profile')
+        else if (!env.isCommand(expand(loginRaw[0]))) error(`${path}.login_command[0]`, `${expand(loginRaw[0])} is not an executable file or a command on PATH`)
+        else loginCommand = [expand(loginRaw[0]), ...loginRaw.slice(1)]
+      }
+    }
+    const locksRaw = strList(t, 'profile_locks', path)
+    const profileLocks: string[] = []
+    for (const [i, f] of (locksRaw ?? []).entries()) {
+      if (f === '' || f.includes('/') || f === '.' || f === '..') error(`${path}.profile_locks[${i}]`, `"${f}" must be a plain file name inside the profile folder, like SingletonLock`)
+      else if (!profileLocks.includes(f)) profileLocks.push(f)
+    }
+    if (command !== undefined) mcpServers[name] = { name, command: expand(command), tokenEnv, tools, ...(loginCommand && { loginCommand }), ...(profileLocks.length && { profileLocks }), ...(profileArgs && { profileArgs }), ...(Object.keys(profileEnv).length && { profileEnv }) }
   }
 
   // --- people --------------------------------------------------------------------------------------------------------

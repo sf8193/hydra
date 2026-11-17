@@ -282,6 +282,24 @@ describe('browser_profile values and the substitution', () => {
   })
 })
 
+describe('[mcp_servers.<name>] login_command and profile_locks (hydra specialist browser)', () => {
+  const decl = (extra: string) => BASE.replace('profile_env = { BROWSER_HOME = "{profile_dir}" }', `profile_env = { BROWSER_HOME = "{profile_dir}" }\n${extra}`)
+  const load = (extra: string) => loadHydraConfig(spec('can_only_write_to = "workdir"\nmcp_servers = ["browser"]').replace(BASE, decl(extra)), env)
+  const errs = (extra: string) => { const r = load(extra); return r.ok ? [] : r.errors.map(i => `${i.path}: ${i.message}`) }
+  test('login_command and profile_locks load, with the executable ~-expanded and the placeholders kept for the command to fill', () => {
+    const r = load('login_command = ["/usr/local/bin/browser-mcp", "--user-data-dir={profile_dir}"]\nprofile_locks = ["SingletonLock", ".parentlock"]')
+    expect(r.ok).toBe(true)
+    expect((r as any).config.mcpServers.browser).toMatchObject({ loginCommand: ['/usr/local/bin/browser-mcp', '--user-data-dir={profile_dir}'], profileLocks: ['SingletonLock', '.parentlock'] })
+  })
+  test('errors: no {profile_dir}, an unknown placeholder, an empty command, an executable that does not exist, a lock name with a slash', () => {
+    expect(errs('login_command = ["/usr/local/bin/browser-mcp"]')).toEqual(["mcp_servers.browser: login_command holds no {profile_dir}, so it would not open the specialist's own profile"])
+    expect(errs('login_command = ["/usr/local/bin/browser-mcp", "{profile_dir}", "{nope}"]')[0]).toContain('names {nope}')
+    expect(errs('login_command = []')).toEqual(['mcp_servers.browser.login_command: is empty: it is the command that opens the browser, its first element the executable'])
+    expect(errs('login_command = ["/no/such/browser", "{profile_dir}"]')[0]).toContain('is not an executable file or a command on PATH')
+    expect(errs('profile_locks = ["a/b"]')[0]).toContain('must be a plain file name inside the profile folder')
+  })
+})
+
 describe('cannot_read', () => {
   test('is valid only with can_only_write_to: alone it is an error naming the path (and says what it extends)', () => {
     expect(errorsOf(spec('cannot_read = ["~/notes"]'))).toEqual(['specialists.ops.cannot_read: has no effect without can_only_write_to = "workdir"; it adds to the places that layer denies reading'])
