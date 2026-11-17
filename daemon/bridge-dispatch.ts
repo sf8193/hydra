@@ -14,7 +14,7 @@ import { READ_ONLY_DISALLOWED_TOOLS, claudeLaunchCwd, doSpawnSession, handOff, h
 import { fallbackDescription, formatDuration, chunk, assertSendable, parseDuration, withOutbound } from './util.js'
 import { tmuxHasSession } from './tmux.js'
 import { occupancy, occupied } from './session-reachability.js'
-import { formatContextPercent } from './engines/engine-adapter.js'
+import { formatContextPercent, type DeliveryResult } from './engines/engine-adapter.js'
 import { resolveEngine } from './engines/instances.js'
 import { dispatchAdvance, finishPrivateProtocolChildLaunch, isProtocolParticipant, markPrivateProtocolChildLaunching, protocolChildRequiresPrivate, protocolSpawnRequiresPrivate, registerProtocolChild, registerProtocolChildResult } from './protocol-registry.js'
 import { watchPr, unwatchPr, listWatches, getWatchesBySession, formatWatchEntry, detectPrUrl, WATCH_ERRORS } from '../connectors/github/pr-watch.js'
@@ -26,6 +26,7 @@ import { fetchPrTitle, parsePrUrl } from '../connectors/github/pr-watch.js'
 import { SEND_TYPES, type SendType } from '../shared/tool-definitions.js'
 import { ASK_PREDECESSOR_TIMEOUT_MS, engineOfModel, normalizeReviewRounds } from '../shared/constants.js'
 import { isRestrictedSession, isToolAllowed, predecessorAsker, refusalText } from './tool-surface.js'
+import { deliveryRefusal } from './restricted.js'
 import { parseRateLimits, reportUsage } from './usage-alerts.js'
 import { markYourTurn } from './home-status.js'
 
@@ -109,6 +110,38 @@ function resolveForkSource(name: string, callerSessionId: string | undefined): P
   // Checked here, before doSpawnSession creates a thread; its own check is the backstop for resumes.
   if (!existsSync(source.cwd)) throw new Error(`cannot fork: the source's launch directory ${source.cwd} no longer exists`)
   return source
+}
+
+/** How long a send_to_thread waits to learn what became of its delivery: a Codex session's takes a request to its app-server, which can run for 30 s. Replaced in tests. */
+export const deliveryWait = { ms: 5000 }
+
+/**
+ * What a send_to_thread tells its sender about the delivery, whoever the sender and whichever refusal: a message is "sent" only once
+ * the session's adapter accepted it. `shown`: what the target's thread already holds, so the error does not claim more (the text in full,
+ * a one-line note on the quiet route, or nothing). Throws for a rejection (its cause and remedy, in the gate's words) and for a delivery
+ * whose outcome is unknown (it may have landed: the sender is told not to resend blindly). `taken` runs once the session accepted it
+ * (the caller records a protocol result there), never for a rejected or unknown one. A delivery still running after `deliveryWait.ms`
+ * is not a failure: returns a note, and `taken` runs only if the late outcome is accepted; a late rejection reaches the thread through
+ * delivery-notice.ts. Returns '' when it was accepted in time.
+ *
+ * This maps the adapter's DeliveryResult to the words an agent reads. landing.ts's `landingOf` maps it to a CLI exit code and advice
+ * ("transient, retry") for a caller with an idempotency key, and deliverToSession adds occupancy refusals (stuck, gone) a send_to_thread
+ * never had; neither fits here, so neither is reused.
+ */
+async function landed(target: string, delivery: Promise<DeliveryResult>, shown: 'text' | 'note' | 'nothing', taken: () => void): Promise<string> {
+  const pending = Symbol('pending')
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const r = await Promise.race([delivery, new Promise<typeof pending>(res => { timer = setTimeout(() => res(pending), deliveryWait.ms); timer.unref?.() })]).finally(() => clearTimeout(timer))
+  if (r === pending) {
+    void delivery.then(late => { if (late.status === 'accepted') taken() }, () => {})
+    return ` It is still being delivered and may land: do not send it again. If it fails, ${target}'s thread says so.`
+  }
+  if (r.status === 'accepted') { taken(); return '' }
+  const where = shown === 'text' ? `The message is posted in ${target}'s thread, but the session did not take it`
+    : shown === 'note' ? `A one-line note of it is in ${target}'s thread, but the session did not take the message`
+    : `The session did not take the message`
+  if (r.status === 'rejected') throw new Error(`send_to_thread failed: ${where}: ${r.reason}${r.retryable ? ' Retrying may succeed.' : ''}`)
+  throw new Error(`send_to_thread: ${where}, or it is not known whether it did (${r.reason}). It may have landed: do not send it again without checking with ${target}.`)
 }
 
 function str(v: unknown): string | undefined {
@@ -663,6 +696,9 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         }
         const targetSession = resolved.session
         const threadId = targetSession.threadId
+        // The delivery gate speaks before anything is posted or recorded: a refused message is neither shown in the thread nor counted as a protocol result.
+        const refusal = deliveryRefusal(targetSession)
+        if (refusal) throw new Error(`send_to_thread failed: nothing was posted or sent. ${refusal}`)
         // Private delivery: child → its own parent only, straight to the parent's
         // session. Never touches the gateway, so nothing lands in any thread.
         if (isPrivate) {
@@ -680,13 +716,14 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           const privateText = text.length > maxPrivateTextChars
             ? `${text.slice(0, maxPrivateTextChars)}\n[private result truncated at ${maxPrivateTextChars} characters]`
             : text
-          if (msgType === 'result') registerProtocolChildResult(callerSessionId!, targetSession.sessionId, privateText)
-          transport.sendOrQueue(targetSession.sessionId, {
+          const lateNote = await landed(target, transport.deliver(targetSession.sessionId, {
             type: 'notification',
             content: `[private ${msgType} from ${sender.tmuxName}] ${privateText}`,
             meta: { chat_id: threadId, message_id: '', user: sender.tmuxName, user_id: 'session', ts: new Date().toISOString() },
-          })
-          return { content: [{ type: 'text', text: `privately delivered to ${targetSession.tmuxName}` }] }
+          }), 'nothing',
+            // Recorded as the child's result only once the parent's session took it: a refused or rejected one never reached the parent.
+            () => { if (msgType === 'result') registerProtocolChildResult(callerSessionId!, targetSession.sessionId, privateText) })
+          return { content: [{ type: 'text', text: `privately delivered to ${targetSession.tmuxName}${lateNote}` }] }
         }
         const redirectNote = resolved.replaced
           ? ` (delivered to ${targetSession.tmuxName}, which replaced ${resolved.replaced} in that thread)`
@@ -748,12 +785,6 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           }
         })
 
-        // A reviewer result counts as complete only once it was actually posted
-        // to the parent thread; failed sends must not unlock step_passed.
-        if (msgType === 'result' && callerSessionId) {
-          registerProtocolChildResult(callerSessionId, targetSession.sessionId, text)
-        }
-
         // Deliver to the target's Claude session so it actually receives the message
         const delivered = quietOutcome?.delivered ?? text
         const replyInstruction = msgType === 'question'
@@ -761,7 +792,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           : ''
         // Into a restricted session, whoever sends: quoted, cut and labelled by hydra (sends-to.ts), never behind a header the sender can write into.
         const intoRestricted = isRestrictedSession(targetSession.sessionId)
-        transport.sendOrQueue(targetSession.sessionId, {
+        const lateNote = await landed(target, transport.deliver(targetSession.sessionId, {
           type: 'notification',
           // The recipient learns what the human already saw, so its reply can add rather than repeat.
           content: intoRestricted
@@ -774,12 +805,15 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
             user_id: 'session',
             ts: new Date().toISOString(),
           },
-        })
+        }), quiet ? 'note' : 'text',
+          // A reviewer result counts as complete only once it was posted to the parent thread and the parent's session took it:
+          // a failed, refused or late-rejected send must not unlock step_passed.
+          () => { if (msgType === 'result' && callerSessionId) registerProtocolChildResult(callerSessionId, targetSession.sessionId, text) })
 
-        if (quiet) return { content: [{ type: 'text', text: `delivered to ${target}${quietOutcome?.posted ? '' : ' (note failed, logged)'}; one-line note in their thread${quietOutcome?.echoed ? ' and yours' : ''}${redirectNote}` }], sentIds }
+        if (quiet) return { content: [{ type: 'text', text: `delivered to ${target}${quietOutcome?.posted ? '' : ' (note failed, logged)'}; one-line note in their thread${quietOutcome?.echoed ? ' and yours' : ''}${redirectNote}${lateNote}` }], sentIds }
         const result = sentIds.length === 1
-          ? `sent to ${target} (id: ${sentIds[0]})${redirectNote}`
-          : `sent ${sentIds.length} parts to ${target} (ids: ${sentIds.join(', ')})${redirectNote}`
+          ? `sent to ${target} (id: ${sentIds[0]})${redirectNote}${lateNote}`
+          : `sent ${sentIds.length} parts to ${target} (ids: ${sentIds.join(', ')})${redirectNote}${lateNote}`
         return { content: [{ type: 'text', text: result }], sentIds }
       }
 

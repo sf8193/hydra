@@ -23,7 +23,7 @@ let n = 0
 const sessions: string[] = []
 const threads: string[] = []
 const names: string[] = []
-const real = { threadExists: reviveDeps.threadExists, stuck: targetDeps.stuckState, send: gateway.send, sendOrQueue: transport.sendOrQueue }
+const real = { threadExists: reviveDeps.threadExists, stuck: targetDeps.stuckState, send: gateway.send, sendOrQueue: transport.sendOrQueue, deliver: transport.deliver }
 let spawns: any[][] = []
 
 /** A session in `threadId`: alive and bridged unless told otherwise; ten minutes old unless just spawned. */
@@ -72,7 +72,7 @@ afterEach(() => {
   _setDaemonStartedAtForTesting(undefined)
   _resetRecoveryDeps(); _resetBackoff()
   Object.assign(reviveDeps, { threadExists: real.threadExists }); targetDeps.stuckState = real.stuck
-  ;(gateway as any).send = real.send; (transport as any).sendOrQueue = real.sendOrQueue
+  ;(gateway as any).send = real.send; (transport as any).sendOrQueue = real.sendOrQueue; (transport as any).deliver = real.deliver
   for (const s of sessions.splice(0)) { registry.delete(s); transport.bridges.delete(s) }
   for (const t of threads.splice(0)) { registry.deleteThread(t); threadRegistry.threads.delete(t) }
   for (const name of names.splice(0)) removeSpecialist(name)
@@ -370,7 +370,7 @@ describe('send_to_thread', () => {
   test('to a specialist with nobody home: it is filled by its rule, and the message reaches the new session', async () => {
     const sent: string[] = [], delivered: string[] = []
     ;(gateway as any).send = async (channel: string) => { sent.push(channel); return { id: 'm', channelId: channel } }
-    ;(transport as any).sendOrQueue = (to: string) => { delivered.push(to) }
+    ;(transport as any).deliver = async (to: string) => { delivered.push(to); return { status: 'accepted' } }
     const name = specialist('tg-heal')
     occupy('tg-heal', { alive: false, connected: false, tmuxName: name })
     const caller = occupy('tg-caller')
@@ -384,7 +384,7 @@ describe('send_to_thread', () => {
   test('a live session holding the name reaches the sender even when the specialist points elsewhere', async () => {
     const delivered: string[] = []
     ;(gateway as any).send = async (channel: string) => ({ id: 'm', channelId: channel })
-    ;(transport as any).sendOrQueue = (to: string) => { delivered.push(to) }
+    ;(transport as any).deliver = async (to: string) => { delivered.push(to); return { status: 'accepted' } }
     const name = specialist('tg-pointed')
     const stray = occupy('tg-stray', { tmuxName: name })
     const caller = occupy('tg-caller2')

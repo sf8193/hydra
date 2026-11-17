@@ -20,16 +20,16 @@ const mk = (id: string, name: string, over: Partial<SessionInfo> = {}): SessionI
 
 const sent: string[] = []
 const delivered: { to: string; content: string }[] = []
-const saved = { send: gateway.send, sendOrQueue: transport.sendOrQueue }
+const saved = { send: gateway.send, deliver: transport.deliver }
 
 beforeEach(() => {
   sent.length = 0; delivered.length = 0
   ;(gateway as any).send = async (channel: string) => { sent.push(channel); return { id: 'm', channelId: channel } }
-  ;(transport as any).sendOrQueue = (to: string, msg: { content: string }) => { delivered.push({ to, content: msg.content }) }
+  ;(transport as any).deliver = async (to: string, msg: { content: string }) => { delivered.push({ to, content: msg.content }); return { status: 'accepted' } }
 })
 afterEach(() => {
   ;(gateway as any).send = saved.send
-  ;(transport as any).sendOrQueue = saved.sendOrQueue
+  ;(transport as any).deliver = saved.deliver
   for (const s of [...registry.values()]) if (s.sessionId.startsWith('hd-')) registry.delete(s.sessionId)
 })
 

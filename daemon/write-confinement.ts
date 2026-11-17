@@ -2,7 +2,7 @@
 // settings, and nothing hydra built itself. The policy is `LaunchPolicy.canOnlyWriteTo` (restricted.ts); the one place it turns into a launch is
 // `launchSession` in engines/claude-engine.ts, which every start passes (fresh, respawn, handoff successor, resume, fork).
 //
-//   sandbox.*                                     Claude Code's sandboxed Bash (Seatbelt): writes limited to the working directory and temp.
+//   sandbox.*                                     Claude Code's sandboxed Bash (Seatbelt): writes limited to the working directory and Claude Code's own per-user $TMPDIR (a shared /tmp is not writable; Claude Code's default, hydra sets neither).
 //   permissions.blockWritesOutsideWorkingDirectories   Edit, Write and NotebookEdit refuse paths outside it, in every permission mode.
 //   permissions.deny                              the operator's optional command deny list.
 //   mcp config                                    the listed servers, started with their own browser profile and download folders.

@@ -454,8 +454,8 @@ describe('protocol-runner.ts', () => {
 // ---------------------------------------------------------------------------
 
 describe('bridge-dispatch.ts: the line a session-to-session send posts in each thread', () => {
-  const real = { sendOrQueue: transport.sendOrQueue }
-  beforeEach(() => { ;(transport as any).sendOrQueue = () => {} })
+  const real = { deliver: transport.deliver }
+  beforeEach(() => { ;(transport as any).deliver = async () => ({ status: 'accepted' }) })
   afterEach(() => { Object.assign(transport, real) })
   const send = (from: string, target: string) => executeTool('send_to_thread', { target, type: 'result', text: 'body', summary: 'PR up' }, from)
 

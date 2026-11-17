@@ -550,7 +550,7 @@ profile_args = ["--user-data-dir", "{profile_dir}", "--downloads-dir", "{downloa
 
 | Setting | Effect |
 |---|---|
-| `sandbox.enabled` | Bash runs in Claude Code's sandbox (Seatbelt on macOS): writes only in the workdir and temp. |
+| `sandbox.enabled` | Bash runs in Claude Code's sandbox (Seatbelt on macOS): writes only in the workdir and Claude Code's own per-user `$TMPDIR` (macOS: `/tmp/claude-<uid>`). A shared `/tmp` is not writable, so a tool that hard-codes `/tmp` fails: point it at `$TMPDIR`. The `$TMPDIR` rule is Claude Code's sandbox default, which hydra neither sets nor changes (seen on a live macOS run, not enforced by hydra code). |
 | `sandbox.failIfUnavailable` | A machine where the sandbox cannot start refuses to run, instead of running commands unsandboxed. |
 | `sandbox.allowUnsandboxedCommands = false` | A session **can** otherwise ask to retry a blocked command outside the sandbox (`dangerouslyDisableSandbox`); this makes Claude Code ignore that. |
 | `sandbox.excludedCommands = []`, `filesystem.disabled = false` | No command is exempt by name, and the filesystem boundary stays on. Claude Code merges lists across settings files, so an `excludedCommands` in your own `~/.claude/settings.json` still applies: keep it empty for a specialist you confine. |
