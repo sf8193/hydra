@@ -245,6 +245,7 @@ if ('homeSpawnHandler' in gateway) {
 
 // Importing router wires up gateway.onMessage / onThreadDelete / onMessageDelete
 import { fetchSlackThreadSummary } from './daemon/router.js'
+import { restoreHeld } from './daemon/specialist-thread.js'
 import { startPrWatcher, backfillTitles, fetchPrTitle, parsePrUrl } from './connectors/github/pr-watch.js'
 import { startSlackWatch, stopSlackWatch, startSlackListener } from './connectors/slack/runtime.js'
 import { startHydraConfig, stopHydraConfig, retryHydraConfigAlert, currentHydraConfig, onHydraConfigLoad, reloadHydraConfig, hydraConfigLoadedOk } from './daemon/hydra-config.js'
@@ -399,6 +400,8 @@ void startGateway().then(async () => {
   await autoRecoverAfterBoot(startupGapMs ?? undefined).catch(err =>
     process.stderr.write(`daemon: auto-recovery failed: ${err instanceof Error ? err.message : err}\n`),
   )
+  // After recovery, so a specialist refill never races it: answers held for a specialist when the daemon last stopped.
+  restoreHeld()
   // After recovery, so a specialist refill never races it. Never throws, never blocks the boot.
   void startSlackListener().catch(err =>
     process.stderr.write(`daemon: slack connector failed to start: ${err instanceof Error ? err.message : err}\n`),
