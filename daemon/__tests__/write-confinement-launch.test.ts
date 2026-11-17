@@ -1,15 +1,15 @@
 // `can_only_write_to = "workdir"`: what every start of such a specialist's session launches with, and how its stored policy is read and compared.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { createHash } from 'crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
+import { existsSync, realpathSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { ClaudeEngine } from '../engines/claude-engine.js'
-import { STATE_DIR } from '../config.js'
+import { CLAUDE_CONFIG, STATE_DIR } from '../config.js'
 import { PolicyRefusal, bornPolicy, describePolicy, policyDrifted, policyProblem, confinementIdFor, type LaunchPolicy } from '../restricted.js'
 import { removeRestrictedFiles, restrictedDir } from '../restricted-files.js'
 import { confinementShortfall, confinementSurplus, readLoaded, verifyConfinement, verifyDeps } from '../engines/claude-verify.js'
-import { MIN_CLAUDE_VERSION, claudeVersion, claudeVersionRefusal, confinementSettings } from '../write-confinement.js'
+import { bridgeServerCommands, claudeSettingsProblems, MIN_CLAUDE_VERSION, claudeVersion, claudeVersionRefusal, confinementSettings } from '../write-confinement.js'
 import { EMPTY_CONFIG } from '../../config/load.js'
 import { readDenyRoots } from '../../config/write-confinement.js'
 import { hydraLoadEnv } from '../hydra-config.js'
@@ -24,6 +24,7 @@ let savedVersion: string | undefined
 const saved: Record<string, string | undefined> = {}
 beforeEach(() => {
   work = mkdtempSync(join(tmpdir(), 'write-confinement-'))
+  mkdirSync(join(CLAUDE_CONFIG, 'plugins', 'cache', 'claude-plugins-official', 'discord', '0.0.4'), { recursive: true })   // the bridge plugin the daemon syncs at boot
   rmSync(restrictedDir(), { recursive: true, force: true })
   fake = withFakeTmux()
   savedVersion = claudeVersion.cache
@@ -44,6 +45,7 @@ const policyOf = (over: Partial<NonNullable<LaunchPolicy['canOnlyWriteTo']>> = {
   const canOnlyWriteTo = { workdir: work, denyCommands: ['rm -rf *'], cannotRead: ['/home/op/.ssh', '/home/op/other'], servers: [server], ...over }
   return { specialist: 'gem', access: 'operator', canOnlyWriteTo, id: confinementIdFor(canOnlyWriteTo) }
 }
+const bridgeCmd = (real = false) => ['bun', 'run', '--cwd', join(real ? realpathSync(CLAUDE_CONFIG) : CLAUDE_CONFIG, 'plugins', 'cache', 'claude-plugins-official', 'discord', '0.0.4'), '--shell=bun', '--silent', 'start']
 const id = '22222222-2222-4222-8222-222222222222'
 const base = { sessionId: id, tmuxName: 'sc-w', cwd: '/operator/spawn', originalCwd: '/operator/spawn', model: 'claude-opus-4-1', prompt: 'hello', sessionType: 'thread_owner' as const }
 const launch = async (extra: Record<string, unknown> = {}, policy: LaunchPolicy | null = policyOf()): Promise<string> => {
@@ -123,7 +125,7 @@ describe('the settings', () => {
   test('pinned exactly: the sandbox on, no unsandboxed retry, no unsandboxed commands, the write block, the deny list', async () => {
     await launch()
     expect(readJson(settingsFile())).toEqual({
-      allowedMcpServers: [{ serverName: 'plugin:discord:discord' }, { serverName: 'browser' }],
+      allowedMcpServers: [{ serverName: 'browser' }, ...[...new Map([bridgeCmd(), bridgeCmd(true)].map(c => [c.join('\0'), { serverCommand: c }])).values()]],
       disableClaudeAiConnectors: true,
       sandbox: { enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, excludedCommands: [], filesystem: { disabled: false, denyRead: ['/home/op/.ssh', '/home/op/other'] }, enableWeakerNestedSandbox: false, autoAllowBashIfSandboxed: true },
       permissions: { blockWritesOutsideWorkingDirectories: true, allow: ['WebFetch(domain:*)'], deny: ['Read(//home/op/.ssh/**)', 'Read(//home/op/other/**)', 'Bash(rm -rf *)'] },
@@ -142,15 +144,73 @@ describe('the settings', () => {
     expect(pick(confinementSettings({ denyCommands: [], cannotRead: [] }))).toEqual(want)
   })
 
-  test.each([
-    ['the allowlist is the bridge plus the listed servers, and nothing else', (s: any) => s.allowedMcpServers.map((e: any) => e.serverName), ['plugin:discord:discord', 'browser']],
-    ['claude.ai connectors are off in the settings too', (s: any) => s.disableClaudeAiConnectors, true],
-  ])('%s', (_what, pick, want) => {
-    expect(pick(confinementSettings({ denyCommands: [], cannotRead: [], servers: [server] }))).toEqual(want)
+  test('the allowlist is the listed servers by name and the bridge by the exact command it runs (never a `plugin:` key: Claude Code rejects a colon in a serverName and stops at a dialog)', () => {
+    const cmd = ['bun', 'run', '--cwd', '/cfg/plugins/cache/claude-plugins-official/discord/0.0.4', '--shell=bun', '--silent', 'start']
+    const s: any = confinementSettings({ denyCommands: [], cannotRead: [], servers: [server], bridgeCommands: [cmd] })
+    expect(s.allowedMcpServers).toEqual([{ serverName: 'browser' }, { serverCommand: cmd }])
+    expect(claudeSettingsProblems(s)).toEqual([])
+    expect(s.disableClaudeAiConnectors).toBe(true)
   })
 
-  test('with no servers listed the allowlist is the bridge alone: a server of the operator\'s is not admitted', () => {
-    expect((confinementSettings({ denyCommands: [], cannotRead: [] }) as any).allowedMcpServers).toEqual([{ serverName: 'plugin:discord:discord' }])
+  test('with no servers listed the allowlist is the bridge alone', () => {
+    const cmd = ['bun', 'run', '--cwd', '/x', '--shell=bun', '--silent', 'start']
+    expect((confinementSettings({ denyCommands: [], cannotRead: [], bridgeCommands: [cmd] }) as any).allowedMcpServers).toEqual([{ serverCommand: cmd }])
+  })
+
+  // The regression: the first allowlist named the bridge `plugin:discord:discord`. Claude Code's schema is ^[a-zA-Z0-9_-]+$ for serverName; it stopped at an interactive
+  // "Settings Warning" (real pane text pinned in fixtures/confinement-settings-warning.txt) and never started MCP.
+  test('an entry Claude Code\'s schema rejects is found before launch: the colon-named bridge of the regression, an empty command, an entry naming nothing', () => {
+    expect(claudeSettingsProblems({ allowedMcpServers: [{ serverName: 'plugin:discord:discord' }] })).toEqual(['allowedMcpServers[0]: server name "plugin:discord:discord" can only contain letters, numbers, hyphens and underscores'])
+    expect(claudeSettingsProblems({ allowedMcpServers: [{ serverCommand: [] }, {}] })).toEqual(['allowedMcpServers[0]: serverCommand must be a non-empty list of strings', 'allowedMcpServers[1]: names no server'])
+    expect(claudeSettingsProblems({ allowedMcpServers: [{ serverName: 'ok_name-1' }] })).toEqual([])
+  })
+  test('the real pane text of the regression names the entry and the rule', () => {
+    const pane = readFileSync(join(import.meta.dir, 'fixtures', 'confinement-settings-warning.txt'), 'utf8')
+    expect(pane).toContain('allowedMcpServers[0]')
+    expect(pane).toContain('Server name can only contain letters, numbers, hyphens, and underscores')
+  })
+
+  const deps = (files: Record<string, string>, folders: Record<string, string[]> = {}, real: (p: string) => string = p => p) => ({
+    read: (p: string) => { if (p in files) return files[p]; throw new Error('ENOENT') },
+    list: (d: string) => { if (d in folders) return folders[d]; throw new Error('ENOENT') },
+    exists: () => true,   // every folder named exists here; the last test is the one where none does
+    real,
+  })
+  const CACHE = '/cfg/plugins/cache/claude-plugins-official/discord'
+  test('the bridge commands use the manifest\'s own command string (bare `bun`), from the install path installed_plugins.json records, and the marketplace source folder; each as written and as resolved', () => {
+    const files = { '/cfg/plugins/installed_plugins.json': JSON.stringify({ version: 2, plugins: { 'discord@claude-plugins-official': [{ scope: 'user', installPath: `${CACHE}/0.0.4`, version: '0.0.4' }] } }) }
+    const got = bridgeServerCommands('/cfg', deps(files, {}, p => (p.endsWith('0.0.4') ? '/real/discord/0.0.4' : p)))
+    expect(got.map(c => c[3])).toEqual([`${CACHE}/0.0.4`, '/real/discord/0.0.4', '/cfg/plugins/marketplaces/claude-plugins-official/external_plugins/discord'])
+    for (const c of got) expect([c[0], c[1], c[2], ...c.slice(4)]).toEqual(['bun', 'run', '--cwd', '--shell=bun', '--silent', 'start'])
+  })
+  test('one rule: installed_plugins.json decides; a stale version folder is not admitted beside it; with no record, every version folder is', () => {
+    const files = { '/cfg/plugins/installed_plugins.json': JSON.stringify({ version: 2, plugins: { 'discord@claude-plugins-official': [{ installPath: `${CACHE}/0.0.5` }] } }) }
+    const withRecord = bridgeServerCommands('/cfg', deps(files, { [CACHE]: ['0.0.3', '0.0.5'] })).map(c => c[3])
+    expect(withRecord).toContain(`${CACHE}/0.0.5`)
+    expect(withRecord).not.toContain(`${CACHE}/0.0.3`)
+    const without = bridgeServerCommands('/cfg', deps({}, { [CACHE]: ['0.0.3', '0.0.4'] })).map(c => c[3])
+    expect(without).toEqual(expect.arrayContaining([`${CACHE}/0.0.3`, `${CACHE}/0.0.4`]))
+  })
+  test('nothing synced and no marketplace folder: no commands', () => {
+    expect(bridgeServerCommands('/cfg', { read: () => { throw new Error('ENOENT') }, list: () => { throw new Error('ENOENT') }, exists: () => false, real: p => p })).toEqual([])
+  })
+
+  test('a launch with no bridge plugin synced refuses and writes nothing (the session could never reach its thread)', async () => {
+    rmSync(join(CLAUDE_CONFIG, 'plugins'), { recursive: true, force: true })
+    await expect(launch()).rejects.toThrow(/hydra's bridge plugin is not synced/)
+    expect(existsSync(settingsFile())).toBe(false)
+  })
+
+  test('settings Claude Code would reject refuse the launch before anything is written (a server name with a colon is the regression)', async () => {
+    await expect(launch({}, policyOf({ servers: [{ ...server, name: 'bad:name' }] }))).rejects.toThrow(/would reject \(allowedMcpServers\[0\]: server name "bad:name" can only contain letters/)
+    expect(existsSync(settingsFile())).toBe(false)
+  })
+
+  test('the written settings carry the bridge command for each synced folder', async () => {
+    await launch()
+    const got = readJson(settingsFile()).allowedMcpServers
+    expect(got[0]).toEqual({ serverName: 'browser' })
+    expect(got.slice(1).every((e: any) => e.serverCommand[0] === 'bun' && e.serverCommand[3].includes('/plugins/cache/claude-plugins-official/discord/0.0.4'))).toBe(true)
   })
 
   test('no extra writable folders are granted: no allowWrite and no additionalDirectories, and the only allow rule is the one for the network', () => {
@@ -375,5 +435,48 @@ describe('the start check reads the rules Claude Code applied (claude-verify.ts)
     const v = await verifyConfinement(rules, '/nope', { ...verifyDeps, read: () => { throw new Error('ENOENT') }, now: () => (t += 20_000), sleep: async () => {}, deadlineMs: 45_000 })
     expect(v).toMatchObject({ ok: false })
     expect((v as any).why).toMatch(/could not be read within 45s \(ENOENT\)/)
+  })
+})
+
+describe('the real debug files of the regression (fixtures, sanitised)', () => {
+  const fx = (n: string) => readFileSync(join(import.meta.dir, 'fixtures', n), 'utf8')
+  const want = { allow: ['WebFetch(domain:*)'], deny: ['Read(//home/op/.ssh/**)', 'Read(//home/op/.aws/**)'], servers: ['plugin:discord:discord'] }
+  test('a start stuck at the settings dialog: rules applied, MCP never resolved; refused, with the dialog named as the likely cause', () => {
+    const got = readLoaded(fx('confined-start-hung.debug.txt'))
+    expect(got.mcpConfigsLoading).toBe(true)
+    expect(got.mcpConfigsResolved).toBe(false)
+    expect(got.allow).toEqual(['WebFetch(domain:*)'])
+    const short = confinementShortfall({ ...want, deny: got.deny ?? [] }, got)
+    expect(short.join('\n')).toMatch(/never finished loading its MCP configs.*Settings Warning/)
+    expect(short.join('\n')).toMatch(/did not connect: `plugin:discord:discord`/)
+    expect(short.join('\n')).toMatch(/nothing says claude\.ai connectors were off/)
+  })
+  test('a working start\'s real lines: MCP resolved, the bridge starts and connects under its `plugin:` key', () => {
+    const got = readLoaded(fx('confined-start-working.debug.txt'))
+    expect(got.mcpConfigsResolved).toBe(true)
+    expect(got.connected).toEqual(['plugin:discord:discord'])
+    expect(confinementSurplus(want, got)).toEqual([])
+  })
+})
+
+describe('what Claude Code 2.1.326 writes for the allowlist, from a real `claude -p` run (write-confinement-mcp.live.test.ts; fixtures, sanitised)', () => {
+  const fx = (n: string) => readFileSync(join(import.meta.dir, 'fixtures', n), 'utf8')
+  test('a server admitted by name, and a plugin\'s server admitted by its exact command, both start and connect; connectors off by the environment variable', () => {
+    for (const [file, key] of [['allowlist-admitted-by-name.debug.txt', 'alpha'], ['allowlist-plugin-admitted-by-command.debug.txt', 'plugin:probebridge:probebridge']] as const) {
+      const got = readLoaded(fx(file))
+      expect(got.mcpConfigsResolved).toBe(true)
+      expect(got.connected).toEqual([key])
+      expect(got.connectorsOff).toBe(true)
+      expect(confinementShortfall({ allow: [], deny: [], servers: [key] }, { ...got, allow: [], deny: [] })).toEqual([])
+    }
+  })
+  test('a server the allowlist refuses is silent in the log (no line at all): only its absence shows, so the start check requires every expected server to connect', () => {
+    const got = readLoaded(fx('allowlist-plugin-refused.debug.txt'))
+    expect(got.mcpConfigsResolved).toBe(true)
+    expect(got.servers).toEqual([])
+    expect(confinementShortfall({ allow: [], deny: [], servers: ['plugin:probebridge:probebridge'] }, { ...got, allow: [], deny: [] }).join('\n')).toMatch(/did not connect: `plugin:probebridge:probebridge`/)
+  })
+  test('an invalid entry is skipped in an automated session with this line, and stops at a dialog in an interactive one (the regression)', () => {
+    expect(fx('allowlist-invalid-entry-skipped.debug.txt')).toMatch(/Invalid entry was ignored: Server name can only contain letters, numbers, hyphens, and underscores/)
   })
 })

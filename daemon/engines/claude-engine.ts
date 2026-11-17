@@ -37,7 +37,7 @@ import { makeServerTmpDirs, removeRestrictedFiles, serverTmpDir, serverTmpRoot, 
 import { sandboxedServer, sandboxIssues } from '../../config/server-sandbox.js'
 import type { PrivateRoot } from '../../config/restricted-workdir.js'
 import type { LoadEnv } from '../../config/types.js'
-import { claudeVersionRefusal, confinementRules, confinementServers, makeBrowserDirs, confinementLogLine, confinementMcp, confinementSettings } from '../write-confinement.js'
+import { bridgeServerCommands, claudeSettingsProblems, claudeVersionRefusal, confinementRules, confinementServers, makeBrowserDirs, confinementLogLine, confinementMcp, confinementSettings } from '../write-confinement.js'
 import { clearNeedsAuthEntry, describeSetAt, NEEDS_AUTH_CLEARED_NOTE } from './claude-needs-auth.js'
 
 // What the pane-and-transcript methods read. The byte (main) has no SessionInfo, so these take only this.
@@ -123,10 +123,17 @@ function writeConfinementConfig(w: NonNullable<LaunchPolicy['canOnlyWriteTo']>, 
   const refusal = claudeVersionRefusal(policy, tmuxName)
   if (refusal) throw new PolicyRefusal(refusal)
   const mcp = confinementMcp(policy, tmuxName, process.env, capturedSpawnVars(), ENV_FILE)
+  // The bridge is allowed by the exact command it runs, one per synced plugin folder: with none, the session could never reach its thread, so nothing starts.
+  const bridgeCommands = bridgeServerCommands(CLAUDE_CONFIG)
+  if (bridgeCommands.length === 0) throw new PolicyRefusal(`specialist ${specialist}: hydra's bridge plugin is not synced under ${CLAUDE_CONFIG}/plugins/cache/claude-plugins-official/discord/, so a session's server allowlist could not admit it and it would have no way to its thread. No session starts until the daemon has synced it (it does at boot); then ${remedy(tmuxName)}`)
+  const settings = confinementSettings({ ...policy, bridgeCommands })
+  // An entry Claude Code's schema rejects makes it stop at an interactive "Settings Warning" and never start: refused here, never written.
+  const invalid = claudeSettingsProblems(settings as { allowedMcpServers?: unknown })
+  if (invalid.length) throw new PolicyRefusal(`specialist ${specialist}: the launch settings hold an entry Claude Code would reject (${invalid.join('; ')}), which stops it at a dialog and never starts the session, so no session starts. ${remedy(tmuxName)}`)
   try { makeBrowserDirs(w.workdir) } catch (err) {
     throw new PolicyRefusal(`specialist ${specialist}: cannot make its browser folders in ${w.workdir}: ${err instanceof Error ? err.message : String(err)}. No session starts until that is fixed; after you fix it, ${remedy(tmuxName)}`)
   }
-  return writeRestrictedFiles(tmuxName, sessionId, { settings: confinementSettings(policy), mcp })
+  return writeRestrictedFiles(tmuxName, sessionId, { settings, mcp })
 }
 
 // Spawn env whitelist: explicit construction, not ambient inheritance. Each env var the byte
