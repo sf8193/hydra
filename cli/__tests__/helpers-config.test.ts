@@ -2,7 +2,7 @@ import { test, expect, describe, beforeAll, beforeEach, afterEach } from 'bun:te
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir, homedir } from 'node:os'
-import { resolveConfig, sourceStateDirEnv, buildDaemonEnvs, printResponse, byteModel } from '../helpers.js'
+import { resolveConfig, defaultPlatform, sourceStateDirEnv, buildDaemonEnvs, printResponse, byteModel } from '../helpers.js'
 import { SCRUBBED_SPAWN_VARS } from '../../shared/spawn-env.js'
 import type { HydraConfig } from '../helpers.js'
 
@@ -291,5 +291,44 @@ describe('a refused deliver, in text mode', () => {
 
   test('an error with no result word (any other command) prints as it always did', () => {
     expect(refused({ ok: false, command: 'kill', error: 'no such session' })).toEqual({ stderr: ['error: no such session'], exit: 1 })
+  })
+})
+
+describe('defaultPlatform: which platform a command without one targets', () => {
+  let channels: string
+  beforeEach(() => {
+    channels = mkdtempSync(join(tmpdir(), 'hydra-channels-'))
+    for (const d of ['discord', 'slack']) mkdirSync(join(channels, d))
+  })
+  afterEach(() => rmSync(channels, { recursive: true, force: true }))
+
+  test('CHAT_PLATFORM names the platform when two platform state dirs exist (#747)', () => {
+    expect(defaultPlatform('discord', channels)).toBe('discord')
+    expect(defaultPlatform(' slack ', channels)).toBe('slack')
+  })
+
+  test('two state dirs and no CHAT_PLATFORM (unset or blank) is refused, saying how to choose', () => {
+    for (const v of [undefined, '  ']) expect(() => defaultPlatform(v, channels)).toThrow(/CHAT_PLATFORM not set and 2 platform state dirs exist\nset CHAT_PLATFORM .*--state-dir/)
+  })
+
+  test('a CHAT_PLATFORM that is not discord or slack is refused, not turned into a state dir', () => {
+    for (const v of ['github', 'foo', '../x']) expect(() => defaultPlatform(v, channels)).toThrow(`CHAT_PLATFORM must be discord or slack, not "${v}"`)
+  })
+
+  test('a directory that is not a platform is no state dir', () => {
+    rmSync(join(channels, 'slack'), { recursive: true })
+    mkdirSync(join(channels, 'github'))
+    expect(defaultPlatform(undefined, channels)).toBe('discord')
+    mkdirSync(join(channels, 'slack'))
+    expect(() => defaultPlatform(undefined, channels)).toThrow('2 platform state dirs')
+  })
+
+  test('one state dir is the platform; none is discord', () => {
+    rmSync(join(channels, 'slack'), { recursive: true })
+    expect(defaultPlatform(undefined, channels)).toBe('discord')
+    rmSync(join(channels, 'discord'), { recursive: true })
+    mkdirSync(join(channels, 'slack'))
+    expect(defaultPlatform(undefined, channels)).toBe('slack')
+    expect(defaultPlatform(undefined, join(channels, 'absent'))).toBe('discord')
   })
 })

@@ -63,6 +63,29 @@ export function sourceStateDirEnv(stateDir: string): { configDir: string; spawnC
   }
 }
 
+/**
+ * The platform for a command that was given none: CHAT_PLATFORM (discord or slack, as the daemon's gateway runs); else the one platform
+ * state dir there is; else discord. Throws, with the words to print, on a CHAT_PLATFORM that is neither, and on several state dirs with
+ * no CHAT_PLATFORM to choose. Not "explicit" to the caller: HYDRA_STATE_DIR keeps beating the platform's default dir.
+ */
+export function defaultPlatform(chatPlatform: string | undefined, channelsDir: string): string {
+  const named = chatPlatform?.trim()
+  if (named) {
+    if (named !== 'discord' && named !== 'slack') throw new Error(`CHAT_PLATFORM must be discord or slack, not "${named}"`)
+    return named
+  }
+  let dirs: string[] = []
+  try {
+    dirs = readdirSync(channelsDir).filter(d => {
+      if (d !== 'discord' && d !== 'slack') return false
+      try { return statSync(join(channelsDir, d)).isDirectory() } catch { return false }
+    })
+  } catch {}
+  if (dirs.length === 1) return dirs[0]
+  if (dirs.length > 1) throw new Error(`CHAT_PLATFORM not set and ${dirs.length} platform state dirs exist\nset CHAT_PLATFORM (discord or slack), or pass --state-dir <dir>`)
+  return 'discord'
+}
+
 export function resolveConfig(platform?: string): HydraConfig {
   // Ensure PATH includes common tool locations (mirrors env-setup.sh).
   // Critical for launchd context where PATH is minimal.
@@ -84,20 +107,10 @@ export function resolveConfig(platform?: string): HydraConfig {
 
   const platformExplicit = !!platform
   if (!platform) {
-    const channelsDir = join(homedir(), '.claude', 'channels')
-    try {
-      const dirs = readdirSync(channelsDir).filter(d => {
-        try { return statSync(join(channelsDir, d)).isDirectory() } catch { return false }
-      })
-      if (dirs.length === 1) {
-        platform = dirs[0]
-      } else if (dirs.length > 1) {
-        console.error(`error: CHAT_PLATFORM not set and ${dirs.length} platform state dirs exist`)
-        console.error('set platform explicitly (e.g. hydra up discord)')
-        process.exit(1)
-      }
-    } catch {}
-    if (!platform) platform = 'discord'
+    try { platform = defaultPlatform(process.env.CHAT_PLATFORM, join(homedir(), '.claude', 'channels')) } catch (err) {
+      console.error(`error: ${(err as Error).message}`)
+      process.exit(1)
+    }
   }
 
   // When platform is explicit, derive stateDir from it — env vars may belong to
