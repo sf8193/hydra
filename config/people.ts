@@ -25,11 +25,11 @@ export function planAddPerson(stateDir: string, env: LoadEnv, p: AddPerson): Add
   try { existing = Bun.TOML.parse(existingText) as Record<string, unknown> } catch (e) {
     return { ok: false, error: `hydra.toml isn't valid TOML (${(e as Error).message}); fix it first` }
   }
-  const people = (existing.people ?? {}) as Record<string, { ids?: string[] }>
-  const owner = Object.entries(people).find(([, q]) => (q.ids ?? []).map(a => normalizeAddress(a) ?? a).includes(address))
+  const people = (existing.people ?? {}) as Record<string, { addresses?: string[] }>
+  const owner = Object.entries(people).find(([, q]) => (q.addresses ?? []).map(a => normalizeAddress(a) ?? a).includes(address))
   if (owner) return { ok: false, error: `${address} already belongs to people.${owner[0]}` }
-  if (Object.hasOwn(people, p.id)) return { ok: false, error: `people.${p.id} already exists: add ${address} to its ids in hydra.toml by hand (under [people.${p.id}]: ids = [..., "${address}"])` }
-  const person = { ids: [address], ...(p.roles?.length && { roles: p.roles }), ...(p.name && { name: p.name }) }
+  if (Object.hasOwn(people, p.id)) return { ok: false, error: `people.${p.id} already exists: add ${address} to its addresses in hydra.toml by hand (under [people.${p.id}]: addresses = [..., "${address}"])` }
+  const person = { addresses: [address], ...(p.roles?.length && { roles: p.roles }), ...(p.name && { name: p.name }) }
   const merged = mergeDocs([existing, { people: { [p.id]: person } }])
   if (merged.conflicts.length) return { ok: false, error: merged.conflicts.join('; ') }
   const added = appendOnly(existing, merged.doc, existingText)

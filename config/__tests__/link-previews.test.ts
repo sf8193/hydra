@@ -8,8 +8,8 @@ const env = testLoadEnv({ home: '/home/op', sessionNames: ['spark'], isCommand: 
 const BASE = `
 operator = "op"
 [people.op]
-ids = ["slack:U0OP", "discord:1"]
-[connectors.slack]
+addresses = ["slack:U0OP", "discord:1"]
+[slack.apps.default]
 bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"
 [gateways.discord]
 bot_token_env = "DISCORD_BOT_TOKEN"

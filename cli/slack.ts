@@ -1,5 +1,5 @@
 // `hydra slack manifest`: print the Slack app manifest for this hydra, from hydra.toml's Slack apps
-// ([slack.apps.<id>], or [connectors.slack] as the app `default`; connectors/slack/app.ts). Stdout only: nothing is written, nothing is sent.
+// ([slack.apps.<id>]; connectors/slack/app.ts). Stdout only: nothing is written, nothing is sent.
 
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'

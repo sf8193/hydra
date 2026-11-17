@@ -22,7 +22,7 @@ export function configCheckCommand(platformArg: string | undefined, stateDirOpt:
   const lines = r.warnings.map(w => `hydra.toml ${w.path}: ${w.message}`)
   const op = r.config.operator ? r.config.people[r.config.operator] : undefined
   // The daemon on this platform passes admin checks only through the operator's address here.
-  if (op && !op.ids.some(a => a.startsWith(`${platform}:`))) lines.unshift(`hydra.toml operator: ${op.id} has no ${platform}: address, so on ${platform} nobody passes admin checks or reaches main by DM`)
+  if (op && !op.addresses.some(a => a.startsWith(`${platform}:`))) lines.unshift(`hydra.toml operator: ${op.id} has no ${platform}: address, so on ${platform} nobody passes admin checks or reaches main by DM`)
   console.log(`${path}: loads${lines.length ? `, with ${lines.length} warning${lines.length > 1 ? 's' : ''}` : ' clean'}`)
   if (lines.length) console.log(lines.join('\n'))
   return 0

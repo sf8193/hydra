@@ -31,8 +31,8 @@ export type AppHealth = ListenerHealth & Pick<AppRecord, 'tokens' | 'connection'
 /** Why an app can't connect for want of tokens, naming the key to fix; undefined when it has both. */
 export function missingTokens(app: SlackApp, t: { app?: string; bot?: string }): string | undefined {
   if (!t.bot) return `${appKey(app.id, 'bot_token_env')} names ${app.botTokenEnv}, which has no value in the daemon's environment`
-  if (!app.appTokenEnv) return `${appKey(app.id, 'app_token_env')} is not set, and Socket Mode needs it`
-  if (!t.app) return `${appKey(app.id, 'app_token_env')} names ${app.appTokenEnv}, which has no value in the daemon's environment`
+  if (!app.socketTokenEnv) return `${appKey(app.id, 'socket_token_env')} is not set, and Socket Mode needs it`
+  if (!t.app) return `${appKey(app.id, 'socket_token_env')} names ${app.socketTokenEnv}, which has no value in the daemon's environment`
   return undefined
 }
 

@@ -27,7 +27,7 @@ const errorsOf = (text: string): string[] => {
 const BASE = `
 operator = "op"
 [people.op]
-ids = ["slack:U0OP"]
+addresses = ["slack:U0OP"]
 `
 
 describe('an empty file', () => {
@@ -40,15 +40,15 @@ describe('an empty file', () => {
 describe('a full file', () => {
   const text = `
 operator = "op"
-[connectors.slack]
+[slack.apps.default]
 bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"
-app_token_env = "CONNECTOR_SLACK_APP_TOKEN"
+socket_token_env = "CONNECTOR_SLACK_APP_TOKEN"
 [connectors.github]
 repos = ["Acme/Widget"]
 [people.op]
-ids = ["slack:U0OP", "github:Op-Login"]
+addresses = ["slack:U0OP", "github:Op-Login"]
 [people.alice]
-ids = ["slack:U0ALICE"]
+addresses = ["slack:U0ALICE"]
 roles = ["staff"]
 name = "Alice"
 [defaults.specialist]
@@ -76,7 +76,7 @@ ack = "eyes"
 [schedules.nightly]
 cron = "0 3 * * *"
 target = "ops"
-prompt = "Nightly run."
+message = "Nightly run."
 [[rules]]
 place = "slack:#help"
 person = "alice"
@@ -90,8 +90,8 @@ timeout = "2s"
     expect(warnings).toEqual([])
     expect(config.operator).toBe('op')
     expect(config.connectors).toEqual({ github: { repos: ['acme/widget'], pollMs: 180_000 } })
-    expect(config.slackApps.default).toEqual({ id: 'default', botTokenEnv: 'CONNECTOR_SLACK_BOT_TOKEN', appTokenEnv: 'CONNECTOR_SLACK_APP_TOKEN', displayName: 'hydra', description: SLACK_APP_DEFAULTS.description })
-    expect(config.people.op).toEqual({ id: 'op', ids: ['slack:U0OP', 'github:op-login'], roles: [], name: 'op' })
+    expect(config.slackApps.default).toEqual({ id: 'default', botTokenEnv: 'CONNECTOR_SLACK_BOT_TOKEN', socketTokenEnv: 'CONNECTOR_SLACK_APP_TOKEN', displayName: 'hydra', description: SLACK_APP_DEFAULTS.description })
+    expect(config.people.op).toEqual({ id: 'op', addresses: ['slack:U0OP', 'github:op-login'], roles: [], name: 'op' })
     expect(config.people.alice.name).toBe('Alice')
     expect(config.specialists.crm).toEqual({
       id: 'crm', workdir: '/home/op/agents/crm', kickoff: '/orient crm', listens: ['slack:#help'], allow: ['staff'],
@@ -102,14 +102,14 @@ timeout = "2s"
     expect(config.specialists.ops.kickoff).toBeUndefined()
     expect(config.specialists.review.allow).toEqual(['people'])
     expect(config.places['slack:#help']).toEqual({ ack: 'eyes', files: false, messages: 'all', bots: false, linkPreviews: true })
-    expect(config.schedules.nightly).toEqual({ id: 'nightly', cron: '0 3 * * *', target: 'ops', prompt: 'Nightly run.', runner: 'launchd' })
+    expect(config.schedules.nightly).toEqual({ id: 'nightly', cron: '0 3 * * *', target: 'ops', message: 'Nightly run.', runner: 'launchd' })
     expect(config.rules).toEqual([{ place: 'slack:#help', person: 'alice', target: 'ops' }])
     expect(config.guard).toEqual({ command: '~/bin/guard --strict', timeoutMs: 2000, includeText: false, owedMaxMs: 3_600_000 })
   })
 })
 
 describe('the Discord gateway: [gateways.discord]', () => {
-  const B = BASE.replace('ids = ["slack:U0OP"]', 'ids = ["slack:U0OP", "discord:1"]')
+  const B = BASE.replace('addresses = ["slack:U0OP"]', 'addresses = ["slack:U0OP", "discord:1"]')
   const GW = '[gateways.discord]\nbot_token_env = "DISCORD_BOT_TOKEN"\n'
   test('loads, with no warning', () => {
     const r = ok(`${B}\n${GW}`)
@@ -155,7 +155,7 @@ describe('the Discord gateway: [gateways.discord]', () => {
 describe('places', () => {
   test('a channel by name or by platform id', () => {
     const { config } = ok(`${BASE}
-[connectors.slack]
+[slack.apps.default]
 bot_token_env = "T"
 [gateways.discord]
 bot_token_env = "D"
@@ -218,7 +218,7 @@ target = "ghost"
       'rules[0].target: no specialist "ghost"',
     ])
     expect(errorsOf('operator = "ghost"\n')).toEqual(['operator: "ghost" is not a person: declare [people.ghost]'])
-    expect(errorsOf(`${spec('allow = ["alice"]')}\n[people.alice]\nids = ["slack:U0A"]\n`))
+    expect(errorsOf(`${spec('allow = ["alice"]')}\n[people.alice]\naddresses = ["slack:U0A"]\n`))
       .toEqual(['specialists.ops.allow[0]: "alice" is a person, not a role: give them a role and allow that'])
   })
 
@@ -233,10 +233,10 @@ listens = ["slack:#ops"]
   test('one address under two people (GitHub logins compare without case)', () => {
     expect(errorsOf(`${BASE}
 [people.alice]
-ids = ["github:Alice"]
+addresses = ["github:Alice"]
 [people.al]
-ids = ["github:alice"]
-`)).toEqual(['people.al.ids[0]: github:alice already belongs to alice: one address, one person'])
+addresses = ["github:alice"]
+`)).toEqual(['people.al.addresses[0]: github:alice already belongs to alice: one address, one person'])
   })
 
   test('a missing workdir key, or a workdir that isn\'t a folder', () => {
@@ -247,18 +247,18 @@ ids = ["github:alice"]
     expect(errorsOf(`${BASE}\n[specialists.ops]\nworkdir = "agents/ops"\nlistens = ["slack:#ops"]\n`)).toEqual(['specialists.ops.workdir: "agents/ops" must be an absolute path or start with ~'])
   })
 
-  test('a schedule with no target is a sensor: it needs a check and takes no prompt', () => {
+  test('a schedule with no target is a sensor: it needs a check and takes no message', () => {
     expect(ok(`${BASE}\n[schedules.keepalive]\ncron = "*/5 * * * *"\ncheck = "~/ensure.sh"\n`).config.schedules.keepalive)
-      .toEqual({ id: 'keepalive', cron: '*/5 * * * *', prompt: '', check: '~/ensure.sh', runner: 'launchd' })
-    expect(errorsOf(`${BASE}\n[schedules.a]\ncron = "@daily"\n[schedules.b]\ncron = "@daily"\ncheck = "c.sh"\nprompt = "hi"\n`)).toEqual([
+      .toEqual({ id: 'keepalive', cron: '*/5 * * * *', message: '', check: '~/ensure.sh', runner: 'launchd' })
+    expect(errorsOf(`${BASE}\n[schedules.a]\ncron = "@daily"\n[schedules.b]\ncron = "@daily"\ncheck = "c.sh"\nmessage = "hi"\n`)).toEqual([
       'schedules.a.target: is required unless there is a check (a sensor): a specialist, or main',
-      'schedules.b.prompt: a schedule with no target sends nothing, so it takes no prompt',
+      'schedules.b.message: a schedule with no target sends nothing, so it takes no message',
     ])
   })
 
   test('needs and alert_after: a daemon schedule\'s, refused on launchd', () => {
     const { config } = ok(`${BASE}\n[schedules.pull]\ncron = "23 * * * *"\ncheck = "pull.sh"\nrunner = "daemon"\nneeds = ["internet", "internet"]\nalert_after = "2d"\n`)
-    expect(config.schedules.pull).toEqual({ id: 'pull', cron: '23 * * * *', prompt: '', check: 'pull.sh', runner: 'daemon', needs: ['internet'], alertAfterMs: 2 * 86_400_000 })
+    expect(config.schedules.pull).toEqual({ id: 'pull', cron: '23 * * * *', message: '', check: 'pull.sh', runner: 'daemon', needs: ['internet'], alertAfterMs: 2 * 86_400_000 })
     expect(errorsOf(`${BASE}\n[schedules.a]\ncron = "@daily"\ncheck = "c.sh"\nneeds = ["internet"]\nalert_after = "1h"\n[schedules.b]\ncron = "@daily"\ncheck = "c.sh"\nrunner = "daemon"\nneeds = ["power"]\nalert_after = "31d"\n`)).toEqual([
       'schedules.a.needs: needs runner = "daemon"',
       'schedules.a.alert_after: needs runner = "daemon"',
@@ -316,17 +316,17 @@ ids = ["github:alice"]
       'specialists.ops.listens[0]: "slack:help" is not a place: use slack:#channel, slack:<channel id>, slack:dm, discord:#channel, discord:<channel id>, discord:dm, github:owner/repo or cli',
       'specialists.ops.listens[1]: "discord:#Feed" is not a place: use slack:#channel, slack:<channel id>, slack:dm, discord:#channel, discord:<channel id>, discord:dm, github:owner/repo or cli',
     ])
-    expect(errorsOf(`operator = "op"\n[people.op]\nids = ["U0OP", "discord:abc", "slack:u0op"]\n`)).toEqual([
-      'people.op.ids[0]: "U0OP" is not an address: use discord:<user id>, slack:<user id> or github:<login>',
-      'people.op.ids[1]: "discord:abc" is not an address: use discord:<user id>, slack:<user id> or github:<login>',
-      'people.op.ids[2]: "slack:u0op" is not an address: use discord:<user id>, slack:<user id> or github:<login>',
+    expect(errorsOf(`operator = "op"\n[people.op]\naddresses = ["U0OP", "discord:abc", "slack:u0op"]\n`)).toEqual([
+      'people.op.addresses[0]: "U0OP" is not an address: use discord:<user id>, slack:<user id> or github:<login>',
+      'people.op.addresses[1]: "discord:abc" is not an address: use discord:<user id>, slack:<user id> or github:<login>',
+      'people.op.addresses[2]: "slack:u0op" is not an address: use discord:<user id>, slack:<user id> or github:<login>',
     ])
     expect(errorsOf(`${BASE}\n[places."slack:#ops"]\nmessages = "everything"\n`)).toEqual(['places."slack:#ops".messages: must be one of "addressed", "all"'])
   })
 
   test('operator is required once anything is declared, and roles can\'t shadow people or built-ins', () => {
-    expect(errorsOf('[people.op]\nids = ["slack:U0OP"]\n')).toEqual(['operator: is required: name the person whose DMs reach main and who may reach every specialist'])
-    expect(errorsOf(`${BASE}\n[people.alice]\nids = ["slack:U0A"]\nroles = ["op", "anyone"]\n`)).toEqual([
+    expect(errorsOf('[people.op]\naddresses = ["slack:U0OP"]\n')).toEqual(['operator: is required: name the person whose DMs reach main and who may reach every specialist'])
+    expect(errorsOf(`${BASE}\n[people.alice]\naddresses = ["slack:U0A"]\nroles = ["op", "anyone"]\n`)).toEqual([
       'people.alice.roles[1]: "anyone" is built in: anyone at all holds it already',
       'people.op: "op" is both a person and a role; rename one',
     ])
@@ -347,7 +347,7 @@ describe('found in review', () => {
     expect(errorsOf('operator = "constructor"\n')).toEqual(['operator: "constructor" is not a person: declare [people.constructor]'])
   })
   test('a person can\'t take a built-in role\'s name', () => {
-    expect(errorsOf(`${BASE}\n[people.anyone]\nids = ["slack:U0X"]\n`)).toEqual(['people.anyone: "anyone" is a built-in role; a person needs another id'])
+    expect(errorsOf(`${BASE}\n[people.anyone]\naddresses = ["slack:U0X"]\n`)).toEqual(['people.anyone: "anyone" is a built-in role; a person needs another id'])
   })
   test('a place listed twice by one specialist is one place, not a collision', () => {
     expect(ok(`${BASE}\n[connectors.github]\nrepos = ["me/r"]\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["github:Me/R", "github:me/r"]\n`).config.specialists.ops.listens).toEqual(['github:me/r'])
@@ -372,16 +372,16 @@ describe('found in review', () => {
 
 describe('found in the second review', () => {
   test('a rule from anyone takes the place from its listener too', () => {
-    expect(ok(`${BASE}\n[connectors.slack]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:#y"]\n[specialists.crm]\nworkdir = "~/agents/crm"\n[[rules]]\nplace = "slack:#y"\nperson = "anyone"\ntarget = "crm"\n`).warnings)
+    expect(ok(`${BASE}\n[slack.apps.default]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:#y"]\n[specialists.crm]\nworkdir = "~/agents/crm"\n[[rules]]\nplace = "slack:#y"\nperson = "anyone"\ntarget = "crm"\n`).warnings)
       .toEqual(['rules[0]: takes every message at slack:#y, so ops, which listens there, never hears it'])
   })
   test('relative paths resolve under the workdir, or the schedule\'s cwd, or are refused', () => {
-    const { config } = ok(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\nenv_file = ".env"\n[schedules.a]\ncron = "@daily"\ntarget = "ops"\ncwd = "~/jobs"\nenv_file = "a.env"\n`)
+    const { config } = ok(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\nenv_file = ".env"\n[schedules.a]\ncron = "@daily"\ntarget = "ops"\nworkdir = "~/jobs"\nenv_file = "a.env"\n`)
     expect(config.specialists.ops.envFile).toBe('/home/op/agents/ops/.env')
-    expect(config.schedules.a).toMatchObject({ cwd: '/home/op/jobs', envFile: '/home/op/jobs/a.env' })
-    expect(errorsOf(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\n[schedules.a]\ncron = "@daily"\ntarget = "ops"\ncwd = "jobs"\n[schedules.b]\ncron = "@daily"\ntarget = "ops"\nenv_file = "b.env"\n`)).toEqual([
-      'schedules.a.cwd: "jobs" must be an absolute path or start with ~',
-      'schedules.b.env_file: "b.env" is relative, so it needs an absolute cwd',
+    expect(config.schedules.a).toMatchObject({ workdir: '/home/op/jobs', envFile: '/home/op/jobs/a.env' })
+    expect(errorsOf(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\n[schedules.a]\ncron = "@daily"\ntarget = "ops"\nworkdir = "jobs"\n[schedules.b]\ncron = "@daily"\ntarget = "ops"\nenv_file = "b.env"\n`)).toEqual([
+      'schedules.a.workdir: "jobs" must be an absolute path or start with ~',
+      'schedules.b.env_file: "b.env" is relative, so it needs an absolute workdir',
     ])
   })
   test('home is a place or a channel id', () => {
@@ -393,16 +393,16 @@ describe('found in the second review', () => {
 
 describe('load warnings', () => {
   test('a rule for everyone at a place takes it from its listener', () => {
-    expect(ok(`${BASE}\n[connectors.slack]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:#y"]\n[specialists.crm]\nworkdir = "~/agents/crm"\n[[rules]]\nplace = "slack:#y"\ntarget = "crm"\n`).warnings)
+    expect(ok(`${BASE}\n[slack.apps.default]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:#y"]\n[specialists.crm]\nworkdir = "~/agents/crm"\n[[rules]]\nplace = "slack:#y"\ntarget = "crm"\n`).warnings)
       .toEqual(['rules[0]: takes every message at slack:#y, so ops, which listens there, never hears it'])
   })
   test('a rule for a role whose holders all hold an earlier rule\'s role is shadowed', () => {
     const { warnings } = ok(`${BASE}
 [people.alice]
-ids = ["slack:U0A"]
+addresses = ["slack:U0A"]
 roles = ["staff", "lead"]
 [people.bob]
-ids = ["slack:U0B"]
+addresses = ["slack:U0B"]
 roles = ["staff"]
 [specialists.crm]
 workdir = "~/agents/crm"
@@ -426,10 +426,10 @@ target = "desk"
 
   test('a rule that an earlier rule shadows', () => {
     const { warnings } = ok(`${BASE}
-[connectors.slack]
+[slack.apps.default]
 bot_token_env = "T"
 [people.alice]
-ids = ["slack:U0A"]
+addresses = ["slack:U0A"]
 roles = ["staff"]
 [specialists.ops]
 workdir = "~/agents/ops"
@@ -461,19 +461,19 @@ target = "desk"
   })
 
   test('a shared session with different audiences: two places, or DMs open beyond the operator', () => {
-    expect(ok(`${BASE}\n[connectors.slack]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:#a", "slack:#b"]\n`).warnings)
+    expect(ok(`${BASE}\n[slack.apps.default]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:#a", "slack:#b"]\n`).warnings)
       .toEqual(['specialists.ops: one shared session hears slack:#a, slack:#b, so what\'s said in one place is remembered in the others; use sessions = "per-conversation" or one specialist per place'])
-    expect(ok(`${BASE}\n[connectors.slack]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:dm"]\n`).warnings)
+    expect(ok(`${BASE}\n[slack.apps.default]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:dm"]\n`).warnings)
       .toEqual(['specialists.ops: one shared session hears everyone\'s DMs (allow = ["people"]), so one person\'s DM is remembered in another\'s; use sessions = "per-conversation" or allow = []'])
     // Only the operator's DMs, or one session per conversation: one audience each.
-    expect(ok(`${BASE}\n[connectors.slack]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:dm"]\nallow = []\n`).warnings).toEqual([])
-    expect(ok(`${BASE}\n[connectors.slack]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:#a", "slack:#b"]\nsessions = "per-conversation"\nidle = "1h"\n`).warnings).toEqual([])
+    expect(ok(`${BASE}\n[slack.apps.default]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:dm"]\nallow = []\n`).warnings).toEqual([])
+    expect(ok(`${BASE}\n[slack.apps.default]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:#a", "slack:#b"]\nsessions = "per-conversation"\nidle = "1h"\n`).warnings).toEqual([])
   })
 
   test('per-conversation sessions with no idle: past max, conversations wait for a session ended by hand', () => {
-    expect(ok(`${BASE}\n[connectors.slack]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:#a"]\nsessions = "per-conversation"\nmax_sessions = 5\n`).warnings)
+    expect(ok(`${BASE}\n[slack.apps.default]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:#a"]\nsessions = "per-conversation"\nmax_sessions = 5\n`).warnings)
       .toEqual(['specialists.ops: conversations past max_sessions (5) will wait until a session is ended by hand; set idle'])
-    expect(ok(`${BASE}\n[connectors.slack]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:#a"]\nsessions = "per-conversation"\nidle = "2h"\n`).warnings).toEqual([])
+    expect(ok(`${BASE}\n[slack.apps.default]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:#a"]\nsessions = "per-conversation"\nidle = "2h"\n`).warnings).toEqual([])
   })
 
   test('a workdir that is the whole home folder warns: hydra won\'t mark it trusted', () => {
@@ -487,9 +487,9 @@ target = "desk"
   })
 
   test('an address naming an inherited property is refused, not a crash', () => {
-    expect(errorsOf(`operator = "op"\n[people.op]\nids = ["constructor:x", "__proto__:y"]\n`)).toEqual([
-      'people.op.ids[0]: "constructor:x" is not an address: use discord:<user id>, slack:<user id> or github:<login>',
-      'people.op.ids[1]: "__proto__:y" is not an address: use discord:<user id>, slack:<user id> or github:<login>',
+    expect(errorsOf(`operator = "op"\n[people.op]\naddresses = ["constructor:x", "__proto__:y"]\n`)).toEqual([
+      'people.op.addresses[0]: "constructor:x" is not an address: use discord:<user id>, slack:<user id> or github:<login>',
+      'people.op.addresses[1]: "__proto__:y" is not an address: use discord:<user id>, slack:<user id> or github:<login>',
     ])
   })
 
@@ -503,55 +503,51 @@ target = "desk"
   })
 })
 
-describe('[connectors.slack] app_name and app_description', () => {
-  const slack = (lines: string) => `${BASE}\n[connectors.slack]\nbot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"\n${lines}\n`
+describe('a Slack app\'s display_name and description', () => {
+  const slack = (lines: string) => `${BASE}\n[slack.apps.default]\nbot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"\n${lines}\n`
   test('are kept as given, and defaulted when unset', () => {
-    expect(ok(slack('app_name = "Acme helper"\napp_description = "Answers the threads it is tagged in."')).config.slackApps.default)
+    expect(ok(slack('display_name = "Acme helper"\ndescription = "Answers the threads it is tagged in."')).config.slackApps.default)
       .toEqual({ id: 'default', botTokenEnv: 'CONNECTOR_SLACK_BOT_TOKEN', displayName: 'Acme helper', description: 'Answers the threads it is tagged in.' })
     expect(ok(slack('')).config.slackApps.default).toEqual({ id: 'default', botTokenEnv: 'CONNECTOR_SLACK_BOT_TOKEN', displayName: 'hydra', description: SLACK_APP_DEFAULTS.description })
   })
   test('past Slack\'s limits (35 and 140 characters) are refused', () => {
     // Characters, not UTF-16 units: 34 letters and an emoji is 35.
-    expect(ok(slack(`app_name = "${'k'.repeat(34)}🦀"\napp_description = "${'d'.repeat(140)}"`)).config.slackApps.default.displayName).toBe(`${'k'.repeat(34)}🦀`)
-    expect(errorsOf(slack(`app_name = "${'k'.repeat(36)}"\napp_description = "${'d'.repeat(141)}"`))).toEqual([
-      'connectors.slack.app_name: is 36 characters; Slack allows at most 35',
-      'connectors.slack.app_description: is 141 characters; Slack allows at most 140',
+    expect(ok(slack(`display_name = "${'k'.repeat(34)}🦀"\ndescription = "${'d'.repeat(140)}"`)).config.slackApps.default.displayName).toBe(`${'k'.repeat(34)}🦀`)
+    expect(errorsOf(slack(`display_name = "${'k'.repeat(36)}"\ndescription = "${'d'.repeat(141)}"`))).toEqual([
+      'slack.apps.default.display_name: is 36 characters; Slack allows at most 35',
+      'slack.apps.default.description: is 141 characters; Slack allows at most 140',
     ])
   })
 })
 
 describe('Slack apps', () => {
-  const single = (lines = '') => `${BASE}\n[connectors.slack]\nbot_token_env = "SLOPBOT_SLACK_BOT_TOKEN"\napp_token_env = "SLOPBOT_SLACK_APP_TOKEN"\n${lines}\n`
+  const single = (lines = '') => `${BASE}\n[slack.apps.default]\nbot_token_env = "SLOPBOT_SLACK_BOT_TOKEN"\nsocket_token_env = "SLOPBOT_SLACK_APP_TOKEN"\n${lines}\n`
   const two = `${BASE}
 [slack.apps.default]
 bot_token_env = "HYDRA_SLACK_BOT_TOKEN"
-app_token_env = "HYDRA_SLACK_APP_TOKEN"
+socket_token_env = "HYDRA_SLACK_APP_TOKEN"
 [slack.apps.sales]
 bot_token_env = "SALES_SLACK_BOT_TOKEN"
-app_token_env = "SALES_SLACK_APP_TOKEN"
-user_token_env = "SALES_SLACK_USER_TOKEN"
+socket_token_env = "SALES_SLACK_APP_TOKEN"
+operator_token_env = "SALES_SLACK_USER_TOKEN"
 display_name = "Sales helper"
 description = "Answers sales threads."
 `
-  test('[connectors.slack] loads as the app `default`, with every default filled in; there is no second copy', () => {
-    const c = ok(single('user_token_env = "HYDRA_SLACK_USER_TOKEN"\napp_name = "Acme helper"\napp_description = "Hears threads."')).config
-    expect(c.slackApps).toEqual({ default: { id: 'default', botTokenEnv: 'SLOPBOT_SLACK_BOT_TOKEN', appTokenEnv: 'SLOPBOT_SLACK_APP_TOKEN', userTokenEnv: 'HYDRA_SLACK_USER_TOKEN', displayName: 'Acme helper', description: 'Hears threads.' } })
+  test('[slack.apps.default] loads as the app `default`, with every default filled in; there is no second copy', () => {
+    const c = ok(single('operator_token_env = "HYDRA_SLACK_USER_TOKEN"\ndisplay_name = "Acme helper"\ndescription = "Hears threads."')).config
+    expect(c.slackApps).toEqual({ default: { id: 'default', botTokenEnv: 'SLOPBOT_SLACK_BOT_TOKEN', socketTokenEnv: 'SLOPBOT_SLACK_APP_TOKEN', operatorTokenEnv: 'HYDRA_SLACK_USER_TOKEN', displayName: 'Acme helper', description: 'Hears threads.' } })
     expect(c.connectors).toEqual({})
     expect(defaultSlackApp(c)).toBe(c.slackApps.default)
   })
-  test('the same single app declared as [slack.apps.default] is the same config', () => {
-    const viaApps = ok(`${BASE}\n[slack.apps.default]\nbot_token_env = "SLOPBOT_SLACK_BOT_TOKEN"\napp_token_env = "SLOPBOT_SLACK_APP_TOKEN"\n`).config
-    expect(viaApps).toEqual(ok(single()).config)
-  })
-  test('defaults: `hydra` for default, the id for another app; the description mentions a user token only when there is one', () => {
-    const c = ok(`${BASE}\n[slack.apps.default]\nbot_token_env = "A_BOT"\nuser_token_env = "A_USER"\n[slack.apps.sales]\nbot_token_env = "S_BOT"\n`).config
-    expect(c.slackApps.default).toMatchObject({ displayName: 'hydra', description: SLACK_APP_DEFAULTS.description + SLACK_APP_DEFAULTS.userTokenNote })
+  test('defaults: `hydra` for default, the id for another app; the description mentions the operator token only when there is one', () => {
+    const c = ok(`${BASE}\n[slack.apps.default]\nbot_token_env = "A_BOT"\noperator_token_env = "A_USER"\n[slack.apps.sales]\nbot_token_env = "S_BOT"\n`).config
+    expect(c.slackApps.default).toMatchObject({ displayName: 'hydra', description: SLACK_APP_DEFAULTS.description + SLACK_APP_DEFAULTS.operatorTokenNote })
     expect(c.slackApps.sales).toMatchObject({ displayName: 'sales', description: SLACK_APP_DEFAULTS.description })
   })
   test('two apps load; the default one is the one hydra connects', () => {
     const r = ok(two)
     expect(Object.keys(r.config.slackApps)).toEqual(['default', 'sales'])
-    expect(r.config.slackApps.sales).toEqual({ id: 'sales', botTokenEnv: 'SALES_SLACK_BOT_TOKEN', appTokenEnv: 'SALES_SLACK_APP_TOKEN', userTokenEnv: 'SALES_SLACK_USER_TOKEN', displayName: 'Sales helper', description: 'Answers sales threads.' })
+    expect(r.config.slackApps.sales).toEqual({ id: 'sales', botTokenEnv: 'SALES_SLACK_BOT_TOKEN', socketTokenEnv: 'SALES_SLACK_APP_TOKEN', operatorTokenEnv: 'SALES_SLACK_USER_TOKEN', displayName: 'Sales helper', description: 'Answers sales threads.' })
     expect(defaultSlackApp(r.config)?.botTokenEnv).toBe('HYDRA_SLACK_BOT_TOKEN')
     expect(r.warnings).toEqual([])
   })
@@ -566,37 +562,34 @@ description = "Answers sales threads."
     const errs = (text: string) => { const r = loadHydraConfig(text, slackEnv); if (r.ok) throw new Error('expected the load to fail'); return r.errors.map(x => `${x.path}: ${x.message}`) }
     const gateway = 'is already the token variable of the Slack gateway (CHAT_PLATFORM=slack): each token needs its own variable; give the connector its own Slack app, with its own variables like CONNECTOR_SLACK_BOT_TOKEN'
     test('a connector app naming either of the gateway\'s variables is refused, naming the key and the fix', () => {
-      expect(errs(`${BASE}\n[slack.apps.default]\nbot_token_env = "SLACK_BOT_TOKEN"\napp_token_env = "SLACK_APP_TOKEN"\n`)).toEqual([
+      expect(errs(`${BASE}\n[slack.apps.default]\nbot_token_env = "SLACK_BOT_TOKEN"\nsocket_token_env = "SLACK_APP_TOKEN"\n`)).toEqual([
         `slack.apps.default.bot_token_env: "SLACK_BOT_TOKEN" ${gateway}`,
-        `slack.apps.default.app_token_env: "SLACK_APP_TOKEN" ${gateway}`,
+        `slack.apps.default.socket_token_env: "SLACK_APP_TOKEN" ${gateway}`,
       ])
-      expect(errs(`${BASE}\n[connectors.slack]\nbot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"\napp_token_env = "SLACK_APP_TOKEN"\n`)).toEqual([
-        `connectors.slack.app_token_env: "SLACK_APP_TOKEN" ${gateway}`,
+      expect(errs(`${BASE}\n[slack.apps.default]\nbot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"\nsocket_token_env = "SLACK_APP_TOKEN"\n`)).toEqual([
+        `slack.apps.default.socket_token_env: "SLACK_APP_TOKEN" ${gateway}`,
       ])
     })
     test('a connector app with its own variables loads', () => {
-      expect(loadHydraConfig(`${BASE}\n[slack.apps.default]\nbot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"\napp_token_env = "CONNECTOR_SLACK_APP_TOKEN"\n`, slackEnv).ok).toBe(true)
+      expect(loadHydraConfig(`${BASE}\n[slack.apps.default]\nbot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"\nsocket_token_env = "CONNECTOR_SLACK_APP_TOKEN"\n`, slackEnv).ok).toBe(true)
     })
     test('an MCP server never gets the gateway\'s variables either', () => {
       expect(errs(`${BASE}\n[mcp.x]\ncommand = "bun"\ntoken_env = ["SLACK_APP_TOKEN"]\n`))
         .toEqual(['mcp.x.token_env[0]: "SLACK_APP_TOKEN" is the token variable of the Slack gateway (CHAT_PLATFORM=slack): a server never gets hydra\'s own tokens'])
     })
     test('on a Discord daemon the same file loads: its gateway holds no Slack tokens', () => {
-      expect(loadHydraConfig(`${BASE}\n[slack.apps.default]\nbot_token_env = "SLACK_BOT_TOKEN"\napp_token_env = "SLACK_APP_TOKEN"\n`, env).ok).toBe(true)
+      expect(loadHydraConfig(`${BASE}\n[slack.apps.default]\nbot_token_env = "SLACK_BOT_TOKEN"\nsocket_token_env = "SLACK_APP_TOKEN"\n`, env).ok).toBe(true)
     })
-  })
-  test('both [connectors.slack] and [slack.apps.default] is an error', () => {
-    expect(errorsOf(`${single()}[slack.apps.default]\nbot_token_env = "OTHER_BOT_TOKEN"\n`)).toEqual(['slack.apps.default: is the same app as [connectors.slack]: declare it once, in either table'])
   })
   test('one variable on two keys is an error at the later one: two apps, one app, or Slack and Discord', () => {
     expect(errorsOf(two.replace('"SALES_SLACK_BOT_TOKEN"', '"HYDRA_SLACK_BOT_TOKEN"'))).toEqual([
       'slack.apps.sales.bot_token_env: "HYDRA_SLACK_BOT_TOKEN" is already the token variable of slack.apps.default.bot_token_env: each token needs its own variable',
     ])
-    expect(errorsOf(`${single()}[slack.apps.sales]\nbot_token_env = "X_BOT"\napp_token_env = "SLOPBOT_SLACK_APP_TOKEN"\n`)).toEqual([
-      'slack.apps.sales.app_token_env: "SLOPBOT_SLACK_APP_TOKEN" is already the token variable of connectors.slack.app_token_env: each token needs its own variable',
+    expect(errorsOf(`${single()}[slack.apps.sales]\nbot_token_env = "X_BOT"\nsocket_token_env = "SLOPBOT_SLACK_APP_TOKEN"\n`)).toEqual([
+      'slack.apps.sales.socket_token_env: "SLOPBOT_SLACK_APP_TOKEN" is already the token variable of slack.apps.default.socket_token_env: each token needs its own variable',
     ])
-    expect(errorsOf(`${BASE}\n[slack.apps.sales]\nbot_token_env = "SAME_TOKEN"\napp_token_env = "SAME_TOKEN"\n`)).toEqual([
-      'slack.apps.sales.app_token_env: "SAME_TOKEN" is already the token variable of slack.apps.sales.bot_token_env: each token needs its own variable',
+    expect(errorsOf(`${BASE}\n[slack.apps.sales]\nbot_token_env = "SAME_TOKEN"\nsocket_token_env = "SAME_TOKEN"\n`)).toEqual([
+      'slack.apps.sales.socket_token_env: "SAME_TOKEN" is already the token variable of slack.apps.sales.bot_token_env: each token needs its own variable',
     ])
     expect(errorsOf(`${BASE}\n[gateways.discord]\nbot_token_env = "DISCORD_BOT_TOKEN"\n[slack.apps.sales]\nbot_token_env = "DISCORD_BOT_TOKEN"\n`)).toEqual([
       'slack.apps.sales.bot_token_env: "DISCORD_BOT_TOKEN" is already the token variable of gateways.discord.bot_token_env: each token needs its own variable',
@@ -605,7 +598,7 @@ description = "Answers sales threads."
   test('a variable sessions need cannot hold a token, however the app is declared', () => {
     const sessions = 'is a variable sessions need, so it cannot hold a token; name one only the daemon needs, like CONNECTOR_SLACK_BOT_TOKEN'
     expect(errorsOf(`${BASE}\n[slack.apps.default]\nbot_token_env = "PATH"\n`)).toEqual([`slack.apps.default.bot_token_env: "PATH" ${sessions}`])
-    expect(errorsOf(`${BASE}\n[connectors.slack]\nbot_token_env = "OK_BOT"\napp_token_env = "HYDRA_SESSION_ID"\n`)).toEqual([`connectors.slack.app_token_env: "HYDRA_SESSION_ID" ${sessions}`])
+    expect(errorsOf(`${BASE}\n[slack.apps.default]\nbot_token_env = "OK_BOT"\nsocket_token_env = "HYDRA_SESSION_ID"\n`)).toEqual([`slack.apps.default.socket_token_env: "HYDRA_SESSION_ID" ${sessions}`])
     for (const v of ['ANTHROPIC_API_KEY', 'GH_TOKEN', 'SSH_AUTH_SOCK', 'LOGNAME', 'CLAUDE_CONFIG_DIR', 'LC_ALL', 'XDG_RUNTIME_DIR']) {
       expect(errorsOf(`${BASE}\n[slack.apps.default]\nbot_token_env = "${v}"\n`)).toHaveLength(1)
     }
@@ -622,14 +615,13 @@ description = "Answers sales threads."
     expect(errorsOf(`${BASE}\n[slack.apps.sales]\nbot_token_env = "lower"\n`)).toEqual([
       'slack.apps.sales.bot_token_env: "lower" must name an environment variable, like CONNECTOR_SLACK_BOT_TOKEN',
     ])
-    expect(errorsOf(`${BASE}\n[slack.apps.sales]\napp_token_env = "A"\nflavor = "x"\ndisplay_name = "${'n'.repeat(36)}"\n`)).toEqual([
+    expect(errorsOf(`${BASE}\n[slack.apps.sales]\nsocket_token_env = "A"\nflavor = "x"\ndisplay_name = "${'n'.repeat(36)}"\n`)).toEqual([
       'slack.apps.sales.flavor: unknown key "flavor"',
       'slack.apps.sales.bot_token_env: is required',
       'slack.apps.sales.display_name: is 36 characters; Slack allows at most 35',
     ])
     expect(errorsOf(`${BASE}\n[slack]\nbogus = 1\n`)).toEqual(['slack.bogus: unknown key "bogus"'])
-    // Only [connectors.slack] spells the name `app_name`; in [slack.apps.<id>] that, and `name`, are unknown.
-    expect(errorsOf(single('display_name = "x"'))).toEqual(['connectors.slack.display_name: unknown key "display_name"'])
+    // `app_name` is the old [connectors.slack] spelling only; in [slack.apps.<id>] that, and `name`, are unknown.
     expect(errorsOf(`${BASE}\n[slack.apps.sales]\nbot_token_env = "X"\napp_name = "x"\nname = "y"\n`)).toEqual(['slack.apps.sales.app_name: unknown key "app_name"', 'slack.apps.sales.name: unknown key "name"'])
   })
   test('an id like `constructor` is a plain app, and an absent one is not found through the prototype', () => {
@@ -690,7 +682,7 @@ bot_token_env = "SUPPORT_SLACK_BOT_TOKEN"
 describe('apps in routing: pinned specialists, rules by app, default_app', () => {
   const APPS = `${BASE}
 [people.alice]
-ids = ["slack:U0ALICE"]
+addresses = ["slack:U0ALICE"]
 roles = ["staff"]
 [slack.apps.default]
 bot_token_env = "DEFAULT_BOT"

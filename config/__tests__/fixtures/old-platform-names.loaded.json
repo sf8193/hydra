@@ -1,0 +1,91 @@
+{
+  "config": {
+    "operator": "op",
+    "connectors": {},
+    "gateways": {},
+    "slackApps": {
+      "default": {
+        "id": "default",
+        "botTokenEnv": "CONNECTOR_SLACK_BOT_TOKEN",
+        "appTokenEnv": "CONNECTOR_SLACK_APP_TOKEN",
+        "userTokenEnv": "CONNECTOR_SLACK_USER_TOKEN",
+        "displayName": "Acme helper",
+        "description": "Answers Acme's Slack threads."
+      },
+      "sales": {
+        "id": "sales",
+        "botTokenEnv": "SALES_SLACK_BOT_TOKEN",
+        "appTokenEnv": "SALES_SLACK_APP_TOKEN",
+        "userTokenEnv": "SALES_SLACK_USER_TOKEN",
+        "displayName": "Sales helper",
+        "description": "Answers the Slack threads it is tagged in, and its DMs, using Claude. It can also read threads its installer can see."
+      }
+    },
+    "people": {
+      "op": {
+        "id": "op",
+        "ids": [
+          "slack:U0OP",
+          "discord:100000000000000001",
+          "github:op"
+        ],
+        "roles": [],
+        "name": "Op"
+      },
+      "alice": {
+        "id": "alice",
+        "ids": [
+          "slack:U0ALICE"
+        ],
+        "roles": [
+          "staff"
+        ],
+        "name": "alice"
+      }
+    },
+    "specialists": {
+      "ops": {
+        "id": "ops",
+        "workdir": "/home/op/agents/ops",
+        "listens": [
+          "slack:dm"
+        ],
+        "allow": [],
+        "sessions": "shared",
+        "maxSessions": 20,
+        "renamedFrom": [],
+        "restricted": false
+      }
+    },
+    "places": {},
+    "schedules": {
+      "nightly": {
+        "id": "nightly",
+        "cron": "0 3 * * *",
+        "prompt": "Nightly run.",
+        "runner": "launchd",
+        "target": "ops"
+      },
+      "disk": {
+        "id": "disk",
+        "cron": "*/30 * * * *",
+        "prompt": "The disk check found something:",
+        "runner": "launchd",
+        "target": "ops",
+        "check": "./scripts/disk-check.sh",
+        "cwd": "/home/op/agents/ops",
+        "envFile": "/home/op/agents/ops/.env"
+      },
+      "sensor": {
+        "id": "sensor",
+        "cron": "@hourly",
+        "prompt": "",
+        "runner": "launchd",
+        "check": "true",
+        "cwd": "/home/op/sensors"
+      }
+    },
+    "rules": []
+  },
+  "warnings": []
+}

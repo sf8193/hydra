@@ -75,13 +75,13 @@ export const accessStep: MigrateStep = {
       const address = normalizeAddress(`${platform}:${id}`)
       if (!address) { notes.push(`allowFrom "${id}" isn't a ${platform} user id; left out`); return }
       const personId = operator === undefined ? 'operator' : `person-${i + 1}`
-      people[personId] = { ids: [address] }
+      people[personId] = { addresses: [address] }
       if (operator === undefined) operator = personId
       else notes.push(`${address} (now people.${personId}) was in allowFrom but isn't the operator: they no longer reach main by DM or use admin commands. Route their DMs to a specialist, or make them the operator.`)
     })
     // Never write a hydra.toml with no operator: allowFrom would be gone and nobody would pass admin checks.
     if (!operator) throw new Error(`no allowFrom id is a ${platform} user id (${found.allowFrom.join(', ')}); is this a ${platform} state dir?`)
-    const chosen = (people.operator as { ids: string[] }).ids[0]
+    const chosen = (people.operator as { addresses: string[] }).addresses[0]
     notes.unshift(`${chosen} is the operator, as people.operator (the first ${platform} id in allowFrom); rename the id if you like, and update operator = to match.`)
     // B1 retires only allowFrom: the rest of access.json (DM policy, groups, pending codes) stays until places replace it.
     const { allowFrom: _gone, ...rest } = found.raw
@@ -209,7 +209,7 @@ function mergeTable(into: Doc, from: Doc, path: string, conflicts: string[]): vo
   }
 }
 
-type PersonDoc = { ids: string[]; roles?: string[]; name?: string }
+type PersonDoc = { addresses: string[]; roles?: string[]; name?: string }
 
 /**
  * Merges the steps' docs. People are merged by address (one address, one person; the first step's id wins, roles
@@ -229,20 +229,20 @@ export function mergeDocs(docs: Doc[]): { doc: Doc; conflicts: string[]; notes: 
     renames.push(rename)
     for (const [id, raw] of Object.entries(isTable(doc.people) ? doc.people : {})) {
       const p = raw as PersonDoc
-      const target = p.ids.map(a => owner.get(a)).find(x => x !== undefined)
+      const target = p.addresses.map(a => owner.get(a)).find(x => x !== undefined)
       let into = target
       if (!into) {
         into = id
         for (let n = 2; people[into]; n++) into = `${id}-${n}`
         if (into !== id) notes.push(`people.${id} from two sources with different addresses: the second is people.${into}`)
-        people[into] = { ids: [] }
+        people[into] = { addresses: [] }
       }
       if (into !== id) rename.set(id, into)
       const merged = people[into]
-      for (const a of p.ids) if (!merged.ids.includes(a)) merged.ids.push(a)
+      for (const a of p.addresses) if (!merged.addresses.includes(a)) merged.addresses.push(a)
       for (const r of p.roles ?? []) if (!(merged.roles ??= []).includes(r)) merged.roles.push(r)
       if (p.name && !merged.name) merged.name = p.name
-      for (const a of merged.ids) owner.set(a, into)
+      for (const a of merged.addresses) owner.set(a, into)
     }
     const renamed = (id: unknown) => typeof id === 'string' ? rename.get(id) ?? id : id
     const { people: _p, rules, operator, ...rest } = doc
@@ -276,7 +276,7 @@ function lookAlikes(people: Record<string, PersonDoc>): string[] {
 
 // --- TOML out ------------------------------------------------------------------------------------------------------
 
-const ORDER = ['operator', 'gateways', 'connectors', 'people', 'defaults', 'specialists', 'places', 'schedules', 'rules', 'guard']
+const ORDER = ['operator', 'gateways', 'connectors', 'slack', 'people', 'defaults', 'specialists', 'places', 'schedules', 'rules', 'guard']
 const key = (k: string) => /^[A-Za-z0-9_-]+$/.test(k) ? k : JSON.stringify(k)
 const value = (v: unknown): string => {
   // A JSON string is a TOML basic string, once DEL is escaped and a lone surrogate (not Unicode) is replaced.
@@ -440,7 +440,7 @@ export function appendOnly(existing: Doc, merged: Doc, existingText = '', by = '
     }
   }
   if (edits.length) return { refusal: `hydra migrate would change what hydra.toml already says, and TOML can't extend a table from the end of the file. Make these edits by hand, then run hydra migrate again:\n${edits.map(e => `- ${e}`).join('\n')}` }
-  // Keys set at the top of the file (`people = { … }`, `people.dan.ids = …`) can't take appended [people.x] tables.
+  // Keys set at the top of the file (`people = { … }`, `people.op.addresses = …`) can't take appended [people.x] tables.
   const firstTable = existingText.search(/^\s*\[/m)
   const top = firstTable < 0 ? existingText : existingText.slice(0, firstTable)
   const inline = new Set([...top.matchAll(/^\s*([A-Za-z0-9_-]+)\s*[.=]/gm)].map(m => m[1]))

@@ -10,7 +10,7 @@ import { testLoadEnv } from '../../config/__tests__/load-env.js'
 
 const env: LoadEnv = testLoadEnv({ home: '/home/op', sessionNames: [] })
 // Discord addresses: the suite runs as the discord platform, and an operator with none there is alerted.
-const config = (op: string) => `operator = "${op}"\n[people.${op}]\nids = ["discord:${[...op].map(c => c.charCodeAt(0)).join('')}"]\n`
+const config = (op: string) => `operator = "${op}"\n[people.${op}]\naddresses = ["discord:${[...op].map(c => c.charCodeAt(0)).join('')}"]\n`
 
 afterEach(() => { _setHydraConfigForTesting(undefined); stopHydraConfig(); rmSync(hydraConfigPath(), { force: true }) })
 
@@ -88,7 +88,7 @@ describe('the daemon\'s live hydra.toml', () => {
   })
 
   test('a load whose operator has no address on this platform alerts: nobody is in charge here', async () => {
-    writeFileSync(hydraConfigPath(), 'operator = "op"\n[people.op]\nids = ["slack:U0OP"]\n')
+    writeFileSync(hydraConfigPath(), 'operator = "op"\n[people.op]\naddresses = ["slack:U0OP"]\n')
     const sent: string[] = []
     startHydraConfig({ env, alert: async t => { sent.push(t); return true } })
     await retryHydraConfigAlert()
@@ -100,7 +100,7 @@ describe('the daemon\'s live hydra.toml', () => {
     const write = process.stderr.write
     process.stderr.write = ((t: string) => { lines.push(String(t)); return true }) as typeof process.stderr.write
     try {
-      writeFileSync(hydraConfigPath(), config('op') + '[people.b]\nids = ["discord:2"]\n')
+      writeFileSync(hydraConfigPath(), config('op') + '[people.b]\naddresses = ["discord:2"]\n')
       startHydraConfig({ env, intervalMs: 20 })
       expect(lines.filter(l => l.includes('hydra.toml loaded:'))).toEqual(['daemon: hydra.toml loaded: operator op, 2 people, 0 specialists, 0 schedules\n'])
       writeFileSync(hydraConfigPath(), config('next'))
@@ -185,7 +185,7 @@ describe('the daemon\'s live hydra.toml', () => {
     process.stderr.write = (() => true) as typeof process.stderr.write
     try {
       // A validation error elsewhere (an operator that is no one), and a token variable on a Slack app.
-      writeFileSync(hydraConfigPath(), 'operator = "ghost"\n[slack.apps.default]\nbot_token_env = "ACME_BAD_FILE_BOT"\n[connectors.slack]\napp_token_env = "ACME_BAD_FILE_APP"\nbot_token_env = "ACME_BAD_FILE_APP"\n')
+      writeFileSync(hydraConfigPath(), 'operator = "ghost"\n[slack.apps.default]\nbot_token_env = "ACME_BAD_FILE_BOT"\n[slack.apps.default]\nsocket_token_env = "ACME_BAD_FILE_APP"\nbot_token_env = "ACME_BAD_FILE_APP"\n')
       expect(startHydraConfig({ env }).ok).toBe(false)
       expect(process.env.ACME_BAD_FILE_BOT).toBeUndefined()
       expect(process.env.ACME_BAD_FILE_APP).toBeUndefined()

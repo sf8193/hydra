@@ -130,7 +130,7 @@ describe('the set of Slack connections', () => {
   })
 
   test('hydra.toml with no Slack app and the old watch file left behind says so, to no app in particular', async () => {
-    const t = setup('operator = "op"\n[people.op]\nids = ["slack:UOP"]\n')
+    const t = setup('operator = "op"\n[people.op]\naddresses = ["slack:UOP"]\n')
     t.setOldFile(true)
     await t.c.start()
     expect(t.told).toHaveLength(1)

@@ -25,32 +25,32 @@ poll = "3m"                           # how often it looks (default 3m)
 # --- slack: one table per Slack app, [slack.apps.<id>]. Tokens stay in .env. `hydra slack manifest [<app>]` prints an app's manifest. ---
 # Every app declared connects, each with its own tokens; an app whose tokens are not set is skipped, and the daemon says which key. A message leaves through the app that heard it.
 # Each app is health-checked and alerted on its own (`hydra health` has a line per app): its scopes are checked against what it does, and its alerts go to the specialists it can reach (pinned to it, or unpinned where none is pinned to it), else main.
-# [connectors.slack] is the app named `default`, with `app_name` and `app_description` for `display_name` and `description`.
+# (The old [connectors.slack] still loads as the app named `default`, with a warning; its `app_name` and `app_description` are `display_name` and `description`.)
 # Each token needs its own variable, one the daemon alone needs (not PATH, HOME, HYDRA_*, ...).
 
 [slack.apps.default]
 bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"   # required
-app_token_env = "CONNECTOR_SLACK_APP_TOKEN"   # Socket Mode's app-level token: required for Slack to connect, not for `hydra slack manifest`
+socket_token_env = "CONNECTOR_SLACK_APP_TOKEN"   # the Socket Mode token (xapp-): required for Slack to connect, not for `hydra slack manifest`
 display_name = "Acme helper"          # the Slack app's name, used by `hydra slack manifest` (default "hydra" for `default`, else the id; at most 35 characters)
 description = "Answers Acme's Slack threads it is tagged in."  # what the app says it does there (at most 140)
 
 [slack.apps.sales]                    # another app: its own tokens, named by its id when it sets no display_name
 bot_token_env = "SALES_SLACK_BOT_TOKEN"
-app_token_env = "SALES_SLACK_APP_TOKEN"
-user_token_env = "SALES_SLACK_USER_TOKEN"   # optional: read threads the bot is not in, as the operator; never posts
+socket_token_env = "SALES_SLACK_APP_TOKEN"
+operator_token_env = "SALES_SLACK_USER_TOKEN"   # optional: read threads the bot is not in, as the operator; never posts
 
 # --- people: whom hydra recognizes. Anyone not here is a stranger. ---
 
 [people.op]
-ids = ["discord:100000000000000001", "slack:U0OP", "github:op"]  # required: one address per platform; one address, one person
+addresses = ["discord:100000000000000001", "slack:U0OP", "github:op"]  # required: one address per platform; one address, one person
 name = "Op"                           # shown to specialists (default: the id)
 
 [people.alice]
-ids = ["slack:U0ALICE"]
+addresses = ["slack:U0ALICE"]
 roles = ["staff"]                     # labels for `allow` and a rule's `person`. Built in: `people` (everyone here), `anyone`
 
 [people.bob]
-ids = ["slack:U0BOB", "github:bob"]
+addresses = ["slack:U0BOB", "github:bob"]
 roles = ["staff", "finance"]
 
 # --- defaults: any specialist key, with {id} filled in, for every specialist that doesn't set it ---
@@ -149,17 +149,17 @@ link_previews = false
 [schedules.nightly-review]
 cron = "0 3 * * *"                    # required: 5 fields, local time
 target = "ops"                        # a specialist, or "main" (required unless it's a sensor, below)
-prompt = "Nightly run: look over yesterday's work."
+message = "Nightly run: look over yesterday's work."
 
-# A check first: empty output sends nothing; anything it prints is appended to the prompt.
+# A check first: empty output sends nothing; anything it prints is appended to the message.
 [schedules.disk-watch]
 cron = "*/30 * * * *"
 target = "ops"
-prompt = "The disk check found something:"
+message = "The disk check found something:"
 check = "./scripts/disk-check.sh"
-cwd = "~/agents/ops"                  # the check's working dir (absolute or ~/); a relative env_file is under it
+workdir = "~/agents/ops"              # the check's working dir (absolute or ~/); a relative env_file is under it
 
-# A sensor: no `target`, so it sends nothing and takes no prompt; only its check runs, and a failure alerts the operator.
+# A sensor: no `target`, so it sends nothing and takes no message; only its check runs, and a failure alerts the operator.
 [schedules.backup-watch]
 cron = "0 * * * *"
 check = "~/bin/backup-fresh.sh"

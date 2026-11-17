@@ -5,12 +5,13 @@ import { readFileSync } from 'fs'
 import type { HydraConfig } from './types.js'
 import { ENV_NAME_RE, registerSpawnVars, type SpawnVarRefusal } from '../shared/spawn-env.js'
 
-const KEYS = ['bot_token_env', 'app_token_env', 'user_token_env']
+// The old names too (`app_token_env`, `user_token_env`): a file not yet migrated still keeps its token variables from every session.
+const KEYS = ['bot_token_env', 'socket_token_env', 'operator_token_env', 'app_token_env', 'user_token_env']
 const SLACK_TABLE = /^(connectors\.slack|slack\.apps\.[^.\s]+)$/
 
 /** Every variable a loaded config's Slack apps read tokens from. */
 export function slackEnvNames(config: Pick<HydraConfig, 'slackApps'>): string[] {
-  return Object.values(config.slackApps).flatMap(a => [a.botTokenEnv, a.appTokenEnv, a.userTokenEnv].filter((v): v is string => !!v))
+  return Object.values(config.slackApps).flatMap(a => [a.botTokenEnv, a.socketTokenEnv, a.operatorTokenEnv].filter((v): v is string => !!v))
 }
 
 const isTable = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)

@@ -14,7 +14,7 @@ const declared = (id: string, extra: Partial<Declared> = {}): Declared =>
   ({ id, workdir: `/srv/${id}`, listens: [], allow: ['people'], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false, ...extra })
 const config = (...specialists: Declared[]): HydraConfig => ({
   operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
-  people: { op: { id: 'op', ids: ['discord:100000000000000001'], roles: [], name: 'op' } },
+  people: { op: { id: 'op', addresses: ['discord:100000000000000001'], roles: [], name: 'op' } },
   specialists: Object.fromEntries(specialists.map(s => [s.id, s])),
 })
 
@@ -76,7 +76,7 @@ describe('specialists declared in hydra.toml', () => {
 
   test('a daemon boot with hydra.toml keeps the pointers on disk (the first load reads the config it loaded)', () => {
     mkdirSync(join(STATE_DIR, 'ops-w'), { recursive: true })
-    writeFileSync(hydraConfigPath(), `operator = "op"\n[people.op]\nids = ["discord:100000000000000001"]\n[specialists.ops]\nworkdir = "/srv/ops"\nkickoff = "p"\nrenamed_from = ["old-ops"]\n`)
+    writeFileSync(hydraConfigPath(), `operator = "op"\n[people.op]\naddresses = ["discord:100000000000000001"]\n[specialists.ops]\nworkdir = "/srv/ops"\nkickoff = "p"\nrenamed_from = ["old-ops"]\n`)
     writeFileSync(threads, JSON.stringify({ ops: { threadId: '900', updatedAt: 7 }, gone: { threadId: '901', updatedAt: 7 } }))
     _reloadSpecialists()
     const seen: (string | undefined)[] = []

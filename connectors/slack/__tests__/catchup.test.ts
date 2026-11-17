@@ -68,7 +68,7 @@ describe('catchUp: a thread a session listens to, where no specialist listens', 
 
 describe('catchUp', () => {
   test('a refused sender found in the gap is refused once, like live, and is not counted as recovered', async () => {
-    const closed: SlackWatchConfig = view(oneListener(CH, 'helper', '["people"]') + '[people.owner]\nids = ["slack:UOWNER"]\nname = "Owner"\nroles = ["boss"]\n')
+    const closed: SlackWatchConfig = view(oneListener(CH, 'helper', '["people"]') + '[people.owner]\naddresses = ["slack:UOWNER"]\nname = "Owner"\nroles = ["boss"]\n')
     const { w, sent } = setup(undefined, closed)
     w.handle({ channel: CH, ts: '1000.000001', user: 'UOWNER', text: 'old chat' }) // sets the cursor
     const { api } = fakeApi({ [CH]: [
@@ -344,7 +344,7 @@ test('a message the guard put off (exit 75) is refetched by catch-up and judged 
 
 describe('catch-up for DMs and files', () => {
   const DM = 'D0ALICE01'
-  const DMS = (allow: string) => oneListener(CH) + `[people.a]\nids = ["slack:UA"]\nroles = ["owner"]\n[specialists.assistant]\nworkdir = "/w/assistant"\nlistens = ["slack:dm"]\nallow = ${allow}\n`
+  const DMS = (allow: string) => oneListener(CH) + `[people.a]\naddresses = ["slack:UA"]\nroles = ["owner"]\n[specialists.assistant]\nworkdir = "/w/assistant"\nlistens = ["slack:dm"]\nallow = ${allow}\n`
   const dmCfg: SlackWatchConfig = view(DMS('["owner"]'))
   const mk = (deliver: () => DeliverResult = () => ({ ok: true })) => {
     const dir = mkdtempSync(join(tmpdir(), 'slack-catchup-'))

@@ -1,11 +1,11 @@
 # A full config in the specialist key names before the rename: access, prompt, prompt_file, max, was, apps. Loaded on the commit before and after.
 operator = "op"
-[connectors.slack]
+[slack.apps.default]
 bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"
 [slack.apps.sales]
 bot_token_env = "SALES_SLACK_BOT_TOKEN"
 [people.op]
-ids = ["slack:U0OP"]
+addresses = ["slack:U0OP"]
 [defaults.specialist]
 workdir = "/home/op/agents/{id}"
 prompt = "Default kickoff."

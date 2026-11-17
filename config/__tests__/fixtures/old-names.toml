@@ -1,14 +1,14 @@
 # A full config in the key names before the rename: rule at/from/to, schedule to, place listen. Loaded on the commit before and after.
 operator = "op"
-[connectors.slack]
+[slack.apps.default]
 bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"
-app_token_env = "CONNECTOR_SLACK_APP_TOKEN"
+socket_token_env = "CONNECTOR_SLACK_APP_TOKEN"
 [slack.apps.sales]
 bot_token_env = "SALES_SLACK_BOT_TOKEN"
 [people.op]
-ids = ["slack:U0OP"]
+addresses = ["slack:U0OP"]
 [people.alice]
-ids = ["slack:U0ALICE"]
+addresses = ["slack:U0ALICE"]
 roles = ["staff"]
 [specialists.crm]
 workdir = "/home/op/agents/crm"
@@ -30,7 +30,7 @@ files = true
 [schedules.nightly]
 cron = "0 3 * * *"
 to = "ops"
-prompt = "Nightly run."
+message = "Nightly run."
 [schedules.sensor]
 cron = "@hourly"
 check = "true"

@@ -37,7 +37,7 @@ const spec = (id: string, over: Partial<Specialist> = {}): Specialist => ({
 })
 const configWith = (specialists: Specialist[]): HydraConfig => ({
   operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
-  people: { op: { id: 'op', ids: ['discord:100000000000000001'], roles: [], name: 'op' } },
+  people: { op: { id: 'op', addresses: ['discord:100000000000000001'], roles: [], name: 'op' } },
   specialists: Object.fromEntries(specialists.map(s => [s.id, s])),
   mcpServers: { datadog: { name: 'datadog', command: '/usr/local/bin/datadog-mcp', tokenEnv: ['DD_API_KEY'], tools: ['search_logs'] } },
 })

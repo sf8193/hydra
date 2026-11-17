@@ -8,8 +8,8 @@ Hydra bridges a Slack app to a Claude Code session: you DM the bot (or @mention 
 |---|---|---|
 | What it is | Slack as the operator's own chat surface (`gateways/slack.ts`, `CHAT_PLATFORM=slack`), as Discord is for a Discord daemon | Slack as a source of events, routed by hydra.toml (`connectors/slack/`, in every daemon, Discord's included) |
 | What it does | the operator talks to the byte, spawns sessions in threads, runs commands | delivers what its apps hear to specialists, to threads bound to sessions, and to restricted specialists; it runs no commands, and routing never reads what a message says |
-| Configured by | `.env` (`SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`) and `access.json` | `[slack.apps.<id>]` (or `[connectors.slack]`), `[[rules]]`, `listens`, `allow` in hydra.toml |
-| Connections | one, on the gateway's app | one per app declared, each with an optional read-only user token |
+| Configured by | `.env` (`SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`) and `access.json` | `[slack.apps.<id>]`, `[[rules]]`, `listens`, `allow` in hydra.toml |
+| Connections | one, on the gateway's app | one per app declared, each with an optional read-only operator token |
 
 Steps 1–6 below set up the gateway. [Apps in hydra.toml](#apps-in-hydratoml) onward is the connector.
 
@@ -92,12 +92,12 @@ SPAWN_CWD=~/work      # must be an existing directory
 }
 ```
 
-**The gateway's app is not a connector app.** The gateway opens its own Socket Mode connection with `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN`. The connector opens one more for each app hydra.toml declares, in every daemon. If hydra.toml declares an app whose `bot_token_env`/`app_token_env` name those same two variables, the same Slack app gets two connections, and Slack hands each event to only one of them, unpredictably. On a Slack daemon (`CHAT_PLATFORM=slack`) hydra.toml refuses such an app when it loads, naming the key; `hydra config check slack` says the same. So to route Slack by specialists and rules beside the gateway, create a **separate** Slack app for the connector and declare that one ([Apps in hydra.toml](#apps-in-hydratoml)), with its own variables:
+**The gateway's app is not a connector app.** The gateway opens its own Socket Mode connection with `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN`. The connector opens one more for each app hydra.toml declares, in every daemon. If hydra.toml declares an app whose `bot_token_env`/`socket_token_env` name those same two variables, the same Slack app gets two connections, and Slack hands each event to only one of them, unpredictably. On a Slack daemon (`CHAT_PLATFORM=slack`) hydra.toml refuses such an app when it loads, naming the key; `hydra config check slack` says the same. So to route Slack by specialists and rules beside the gateway, create a **separate** Slack app for the connector and declare that one ([Apps in hydra.toml](#apps-in-hydratoml)), with its own variables:
 
 ```toml
 [slack.apps.default]
 bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"
-app_token_env = "CONNECTOR_SLACK_APP_TOKEN"
+socket_token_env = "CONNECTOR_SLACK_APP_TOKEN"
 ```
 
 hydra.toml never holds a token, only the names of the variables that do. Keep one connection per token pair: do not point two apps, the gateway and an app, or a second daemon at the same one.
@@ -146,18 +146,18 @@ hydra.toml declares each Slack app by name, `[slack.apps.<id>]`. Tokens stay in 
 ```toml
 [slack.apps.default]
 bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"      # required: the bot token (xoxb-…)
-app_token_env = "CONNECTOR_SLACK_APP_TOKEN"      # Socket Mode's app-level token (xapp-…): required for Slack to connect, not for `hydra slack manifest`
-user_token_env = "SLACK_USER_TOKEN"    # optional: read threads the bot is not in, as the operator; never posts
+socket_token_env = "CONNECTOR_SLACK_APP_TOKEN"      # the Socket Mode token (xapp-…, the app-level token): required for Slack to connect, not for `hydra slack manifest`
+operator_token_env = "SLACK_USER_TOKEN"    # optional: read threads the bot is not in, as the operator; never posts
 display_name = "Acme helper"           # the app's name in `hydra slack manifest` (default: `hydra` for `default`, else the id; at most 35 characters)
 description = "Answers Acme's threads it is tagged in."   # at most 140 characters
 
 [slack.apps.sales]
 bot_token_env = "SALES_SLACK_BOT_TOKEN"
-app_token_env = "SALES_SLACK_APP_TOKEN"
+socket_token_env = "SALES_SLACK_APP_TOKEN"
 ```
 
 - An app's id is lowercase letters, digits, `-` and `_`, starting with a letter, at most 35 characters. Uppercase is reserved for Slack's own ids (`C0TEST`).
-- `[connectors.slack]` still works: it is the app named `default`, and spells the two text keys `app_name` and `app_description`. Declaring `default` in both tables is an error.
+- The old `[connectors.slack]` still loads, as the app named `default`, with a warning that names `[slack.apps.default]`; it spells the two text keys `app_name` and `app_description` (`display_name` and `description` now). `app_token_env` and `user_token_env` are the old names of `socket_token_env` and `operator_token_env`, and read the same way. Declaring `default` in both tables is an error.
 - Each token needs its own variable: one variable on two keys (two apps, one app, or an app and `[gateways.discord]`) is an error.
 - Token variable names are uppercase. Hydra keeps every variable hydra.toml names as a token from the sessions it starts, so name only variables the daemon needs. These are refused when hydra.toml loads: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMUX`, `TERM`, `PWD`, `TMPDIR`, `LANG`, `ANTHROPIC_API_KEY`, `GH_TOKEN`, `SSH_AUTH_SOCK`, and anything starting `HYDRA_` (except `HYDRA_SLACK_`), `CLAUDE_`, `LC_` or `XDG_`.
 - Every app declared connects, whatever it is named, when hydra.toml loads, with no restart, if its token variables are already in the daemon's environment (a variable that is new needs one). An app whose tokens are not set is skipped: the daemon says which key to fix, in the thread of each specialist that app serves and that hears Slack (main's channel when none does), and logs `slack connector for the app named <id> off (…)`; the others connect.
@@ -224,18 +224,18 @@ A message from another app's bot is another bot's message: it is passed over unl
 
 *Slack connector.* Hydra serves two uses through one routing system, and which app listens follows from the use.
 
-- **The operator's harness.** The operator's own app: a bot plus `user_token_env`, the operator's read-only user token. With it, a thread in a channel the bot isn't in is still read, as the operator, and routed to the operator's own sessions (`bind_conversation`), so no bot has to join that channel. A whole channel (a place in hydra.toml) is still read through the bot today, so its bot must be in it. These sessions serve the operator, so they may see what the operator sees.
+- **The operator's harness.** The operator's own app: a bot plus `operator_token_env`, the operator's read-only token (a Slack user token). With it, a thread in a channel the bot isn't in is still read, as the operator, and routed to the operator's own sessions (`bind_conversation`), so no bot has to join that channel. A whole channel (a place in hydra.toml) is still read through the bot today, so its bot must be in it. These sessions serve the operator, so they may see what the operator sees.
 - **Agents for other people.** A restricted app whose own bot sits in the channels its agent serves, routed to specialists, usually restricted specialists (`restricted = true`, [below](#a-specialist-other-people-talk-to-restricted--true)). It listens through its own bot.
 
 **When not to listen through the operator's app.** Give the agent an app of its own that listens through its own bot when any of these is true:
 
-1. **The agent must keep working without the operator.** A user token hears only the channels its user is in, so leaving a channel, or a refused token, would deafen it.
+1. **The agent must keep working without the operator.** An operator token hears only the channels the operator is in, so leaving a channel, or a refused token, would deafen it.
 2. **People tag the agent by its own name.** Slack raises a tag only where that app's bot is a member.
 3. **The agent is in a private channel the operator isn't in.**
 
 The operator's app may still route something the operator saw to a specialist, by a rule or a place in hydra.toml. An app that only speaks or reacts is allowed too. Neither is the default.
 
-**Hearing and speaking are separate.** The user token only reads, and never posts. Replies, reactions and new threads go out through a bot, and only where that bot is a member. So in a channel where only the operator's token hears, hydra can listen and route, but nothing answers there until a bot is invited.
+**Hearing and speaking are separate.** The operator token only reads, and never posts. Replies, reactions and new threads go out through a bot, and only where that bot is a member. So in a channel where only the operator's token hears, hydra can listen and route, but nothing answers there until a bot is invited.
 
 ## Conversations and replies, per app
 
@@ -328,7 +328,7 @@ Start with `hydra health`; `hydra health --json` has every field above.
 
 *Slack connector.*
 
-1. **Declare it:** `[slack.apps.<id>]` in hydra.toml with `bot_token_env` and `app_token_env` (and `user_token_env` if it should read threads as the operator).
+1. **Declare it:** `[slack.apps.<id>]` in hydra.toml with `bot_token_env` and `socket_token_env` (and `operator_token_env` if it should read threads as the operator).
 2. **Create it:** `hydra slack manifest <id>` prints its manifest. Create the app from it at api.slack.com/apps, install it, and put its tokens in the variables the keys name, in `.env`.
 3. **Restart the daemon:** it reads the tokens from its environment when it starts. The app connects when hydra.toml loads, with no restart, if its token variables are already in the daemon's environment.
 4. **Invite the bot** to the channels it should hear. For a channel more than one app is in, `default_app` says which answers an untagged message; `pinned_to` on a specialist pins it to an app.
@@ -348,14 +348,14 @@ operator = "op"
 
 [slack.apps.default]
 bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"
-app_token_env = "CONNECTOR_SLACK_APP_TOKEN"
+socket_token_env = "CONNECTOR_SLACK_APP_TOKEN"
 
 [people.op]
-ids = ["slack:U0OP"]
+addresses = ["slack:U0OP"]
 name = "Op"
 
 [people.alice]
-ids = ["slack:U0ALICE"]
+addresses = ["slack:U0ALICE"]
 roles = ["staff"]
 
 # A server specialists may list. Per-operator, so only hydra.toml declares one (never a `hydra config add` fragment).

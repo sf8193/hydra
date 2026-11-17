@@ -19,7 +19,7 @@ process.stderr.write = (() => true) as any
 const spec = (over: Partial<Specialist> = {}): Specialist => ({ id: 'ops', workdir: '/srv/ops', listens: [], allow: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false, ...over })
 const configure = (over: Partial<Specialist> = {}): void => _setHydraConfigForTesting({
   operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
-  people: { op: { id: 'op', ids: ['discord:100000000000000001'], roles: [], name: 'op' } },
+  people: { op: { id: 'op', addresses: ['discord:100000000000000001'], roles: [], name: 'op' } },
   specialists: { ops: spec(over) },
 } as HydraConfig)
 const operatorPolicy: LaunchPolicy = { specialist: 'ops', access: 'operator', id: 'operator' }

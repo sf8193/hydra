@@ -39,7 +39,7 @@ export function routeFor(h: HydraConfig, p: RouteParams, aliases: (place: string
   let from: Address | undefined
   if (p.person !== 'stranger') {
     const known = h.people[p.person]
-    from = known ? known.ids[0] : normalizeAddress(p.person)
+    from = known ? known.addresses[0] : normalizeAddress(p.person)
     if (!from) return { ok: false, error: `"${p.person}" is neither a person in hydra.toml nor an address like slack:U0ABC` }
   }
   const list = (v: string | undefined) => v ? v.split(',').map(a => a.trim()).filter(Boolean) : undefined

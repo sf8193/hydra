@@ -28,8 +28,8 @@ const env: LoadEnv = testLoadEnv({
 const BASE = `
 operator = "op"
 [people.op]
-ids = ["slack:U0OP"]
-[connectors.slack]
+addresses = ["slack:U0OP"]
+[slack.apps.default]
 bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"
 [mcp.datadog]
 command = "/usr/local/bin/datadog-mcp"
@@ -264,7 +264,7 @@ describe('[mcp.*]', () => {
     expect(errorsOf(`${BASE}\n[mcp.x]\ntools = ["a"]\n`)[0]).toContain('mcp.x.command: is required')
   })
   test('hydra\'s own token variables are never a server\'s', () => {
-    expect(errorsOf(`${BASE}\n[mcp.x]\ncommand = "bun"\ntoken_env = ["CONNECTOR_SLACK_BOT_TOKEN"]\n`)).toEqual(['mcp.x.token_env[0]: "CONNECTOR_SLACK_BOT_TOKEN" is the token variable of connectors.slack.bot_token_env: a server never gets hydra\'s own tokens'])
+    expect(errorsOf(`${BASE}\n[mcp.x]\ncommand = "bun"\ntoken_env = ["CONNECTOR_SLACK_BOT_TOKEN"]\n`)).toEqual(['mcp.x.token_env[0]: "CONNECTOR_SLACK_BOT_TOKEN" is the token variable of slack.apps.default.bot_token_env: a server never gets hydra\'s own tokens'])
   })
   test('a tool name is a name, not a pattern', () => {
     expect(errorsOf(`${BASE}\n[mcp.x]\ncommand = "bun"\ntools = ["search_*"]\n`)[0]).toContain('mcp.x.tools[0]')
@@ -292,7 +292,7 @@ describe('[defaults.specialist]', () => {
 })
 
 describe('the warning for an operator-access specialist someone else can talk to', () => {
-  const WITH_ALICE = BASE.replace('[mcp.datadog]', '[people.alice]\nids = ["slack:U0ALICE"]\nroles = ["staff"]\n[people.bob]\nids = ["slack:U0BOB"]\n[mcp.datadog]')
+  const WITH_ALICE = BASE.replace('[mcp.datadog]', '[people.alice]\naddresses = ["slack:U0ALICE"]\nroles = ["staff"]\n[people.bob]\naddresses = ["slack:U0BOB"]\n[mcp.datadog]')
   const text = (base: string, extra: string, body: string) => `${base}\n[specialists.ops]\nworkdir = "~/agents/ops"\n${body}\n${extra}`
   const warnings = (extra: string, body = '', base = BASE): string[] => ok(text(base, extra, body)).warnings.filter(w => w.includes("the operator's account"))
   const WARN = (who: string) => [`specialists.ops: ${who} can reach the operator's account through it; set restricted = true`]
@@ -350,7 +350,7 @@ import { join } from 'path'
 import { addFragment } from '../add.js'
 
 describe('hydra config add refuses what only a hand edit sets', () => {
-  const LIVE = `operator = "op"\n[people.op]\nids = ["slack:U0OP"]\n[mcp.datadog]\ncommand = "bun"\ntools = ["a"]\n`
+  const LIVE = `operator = "op"\n[people.op]\naddresses = ["slack:U0OP"]\n[mcp.datadog]\ncommand = "bun"\ntools = ["a"]\n`
   const run = (fragment: string) => {
     const dir = mkdtempSync(join(tmpdir(), 'access-add-'))
     try {

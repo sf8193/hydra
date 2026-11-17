@@ -28,7 +28,7 @@ const OPS = 'ops-t'
 const OPS_THREAD = 'ops-thread-1'
 const TOML = `${BASE}
 [people.olive]
-ids = ["slack:UOWNER"]
+addresses = ["slack:UOWNER"]
 roles = ["owner"]
 [specialists.${FOOD}]
 workdir = "/w/food"
@@ -112,7 +112,7 @@ describe('any session listens to a Slack thread: bound to its own thread', () =>
     registry.set('sw-guest', { sessionId: 'sw-guest', tmuxName: 'sw-guest', threadId: MINE, sessionType: 'thread_guest', engine: 'claude', createdAt: Date.now() } as any)
     expect(isToolAllowed('sw-guest', 'bind_conversation')).toBe(false)
     await expect(bindConversation({ threadId: MINE, sessionType: 'thread_guest' }, 'slack:C9:1.000001')).rejects.toThrow('no thread to bind')
-    configure(TOML.replace(/\[connectors\.slack\][^[]*/, ''))
+    configure(TOML.replace(/\[slack\.apps\.default\][^[]*/, ''))
     expect(sessionCapabilities({ threadId: MINE, sessionType: 'thread_owner', capabilities: [], engine: 'claude' } as any).has('conversations')).toBe(false)
     await expect(bindConversation({ threadId: MINE }, 'slack:C9:1.000001')).rejects.toThrow('Slack is not connected')
   })
@@ -177,7 +177,7 @@ describe('any session listens to a Slack thread: bound to its own thread', () =>
     ;(transport as any).sendOrQueue = (id: string, m: any) => { if (m.type === 'tools_update') pushed.push({ id, tools: m.tools.map((t: any) => t.name) }) }
     try {
       refreshSlackSpecialistSurface()                                    // remembers: connected
-      configure(TOML.replace(/\[connectors\.slack\][^[]*/, ''))
+      configure(TOML.replace(/\[slack\.apps\.default\][^[]*/, ''))
       refreshSlackSpecialistSurface()
       expect(pushed.find(p => p.id === 'sw-pushed')?.tools).not.toContain('bind_conversation')
       pushed.length = 0
@@ -639,12 +639,12 @@ describe('tokens: any variable the config names', () => {
 
 describe('tokens: the operator\'s user token', () => {
   test('read from HYDRA_SLACK_USER_TOKEN, a variable every session is kept from', () => {
-    const toml = TOML.replace('app_token_env = "SLOPBOT_SLACK_APP_TOKEN"', 'app_token_env = "SLOPBOT_SLACK_APP_TOKEN"\nuser_token_env = "HYDRA_SLACK_USER_TOKEN"')
+    const toml = TOML.replace('socket_token_env = "SLOPBOT_SLACK_APP_TOKEN"', 'socket_token_env = "SLOPBOT_SLACK_APP_TOKEN"\noperator_token_env = "HYDRA_SLACK_USER_TOKEN"')
     const env = { SLOPBOT_SLACK_BOT_TOKEN: 'xoxb-1', SLOPBOT_SLACK_APP_TOKEN: 'xapp-1', HYDRA_SLACK_USER_TOKEN: 'xoxp-1' }
     expect(slackTokens(appOf(toml), env)).toEqual({ bot: 'xoxb-1', app: 'xapp-1', user: 'xoxp-1' })
     const warned: string[] = []
     expect(slackTokens(appOf(toml.replace('"HYDRA_SLACK_USER_TOKEN"', '"MY_USER_TOKEN"')), { ...env, MY_USER_TOKEN: 'xoxp-leak' }, l => warned.push(l)).user).toBeUndefined()
-    expect(warned[0]).toContain('refusing to read the token in MY_USER_TOKEN, the `user_token_env`')
+    expect(warned[0]).toContain('refusing to read the token in MY_USER_TOKEN, the `operator_token_env`')
   })
 })
 
@@ -652,7 +652,7 @@ describe('bind_conversation asks Slack who can read the thread before it says "l
   const MINE = '1552619225032425525'
   const realRead = slackRuntimeDeps.readThread
   afterEach(() => { slackRuntimeDeps.readThread = realRead })
-  const withUser = () => configure(TOML.replace('app_token_env = "SLOPBOT_SLACK_APP_TOKEN"', 'app_token_env = "SLOPBOT_SLACK_APP_TOKEN"\nuser_token_env = "HYDRA_SLACK_USER_TOKEN"'))
+  const withUser = () => configure(TOML.replace('socket_token_env = "SLOPBOT_SLACK_APP_TOKEN"', 'socket_token_env = "SLOPBOT_SLACK_APP_TOKEN"\noperator_token_env = "HYDRA_SLACK_USER_TOKEN"'))
 
   test('the bot reads it: live', async () => {
     slackRuntimeDeps.readThread = async () => 'bot'

@@ -225,7 +225,7 @@ export function dmsDeclared(cfg: Pick<SlackWatchConfig, 'hydra' | 'app'>): boole
 export function hearsDms(cfg: Pick<SlackWatchConfig, 'hydra' | 'app'> | null | undefined): boolean {
   if (!cfg) return false
   const h = cfg.hydra
-  return dmsDeclared({ hydra: h, app: cfg.app }) || (!!h.operator && !!h.people[h.operator]?.ids.some(a => a.startsWith('slack:')))
+  return dmsDeclared({ hydra: h, app: cfg.app }) || (!!h.operator && !!h.people[h.operator]?.addresses.some(a => a.startsWith('slack:')))
 }
 
 /** A Slack user, as hydra.toml addresses them. */
@@ -237,7 +237,7 @@ export function placeOptions(cfg: Pick<SlackWatchConfig, 'hydra' | 'directory'>,
   return undefined
 }
 
-/** Slack's answer when the bot is not in a channel: a user token may still read it. */
+/** Slack's answer when the bot is not in a channel: the operator's token may still read it. */
 export const NOT_A_MEMBER = /not_in_channel|channel_not_found/
 
 /**
@@ -250,9 +250,9 @@ export function cantRead(app: SlackApp | undefined, place: string, why: string, 
   const bot = botUserId ? `the bot (<@${botUserId}>)` : 'the bot'
   // A session binds again; a specialist's conversation opens again on a tag.
   const after = then === 'bind' ? 'then bind again' : 'then a tag in the thread opens it again'
-  return app?.userTokenEnv
+  return app?.operatorTokenEnv
     ? `neither ${bot} nor the operator is in ${place} (${why}). Ask the operator to invite the bot or join ${place}, ${after}`
-    : `${bot} isn't in ${place} (${why}). Ask the operator to invite it, or to set the ${appKey(appId, 'user_token_env')}, ${after}`
+    : `${bot} isn't in ${place} (${why}). Ask the operator to invite it, or to set the ${appKey(appId, 'operator_token_env')}, ${after}`
 }
 
 /** How a refused operator token is said, so catch-up can tell it from a thread that is gone. */
@@ -264,7 +264,7 @@ const CHANNEL_GONE = /not_in_channel|channel_not_found|is_archived/
 /** The specialist that would answer a new conversation here, whoever asks: where an alert about this channel goes. */
 export function listenerOf(cfg: SlackWatchConfig | null | undefined, channel: string): string | undefined {
   if (!cfg) return undefined
-  const d = route(cfg.hydra, { at: placesOf(cfg, channel), addressed: true, app: appOfEntry(cfg), ...(cfg.hydra.operator && { from: cfg.hydra.people[cfg.hydra.operator]?.ids[0] }) })
+  const d = route(cfg.hydra, { at: placesOf(cfg, channel), addressed: true, app: appOfEntry(cfg), ...(cfg.hydra.operator && { from: cfg.hydra.people[cfg.hydra.operator]?.addresses[0] }) })
   return d.fate === 'deliver' || d.fate === 'refused' ? d.to : undefined
 }
 
@@ -653,7 +653,7 @@ export class SlackWatcher {
   /** The operator's token was refused: the threads read with it are kept, unread until it is replaced. Said once an hour. */
   operatorTokenRefused(why: string, app?: string): void {
     const id = appOfEntry({ app })
-    this.alertOnce('operator-token', undefined, `⚠️ ${why[0].toUpperCase()}${why.slice(1)}: threads read as the operator are not being read. Put a valid user token in the variable the ${appKey(id, 'user_token_env')} names (in \`.env\`), and restart the daemon.`, id)
+    this.alertOnce('operator-token', undefined, `⚠️ ${why[0].toUpperCase()}${why.slice(1)}: threads read as the operator are not being read. Put a valid operator token in the variable the ${appKey(id, 'operator_token_env')} names (in \`.env\`), and restart the daemon.`, id)
   }
 
   /** While catching up, live events must not move the cursor past the gap being filled. */
@@ -751,7 +751,7 @@ export class SlackWatcher {
     // With the operator's token the app hears every channel the operator is in. Untagged chatter outside the places
     // hydra.toml names, in no open conversation, is nobody's: passed over before it opens or counts anything. A tag
     // still gets its answer, as it would without the token.
-    if (!dm && !existing && !tagged && cfg.hydra.slackApps[app]?.userTokenEnv && !routedChannels(cfg).includes(ev.channel)) return 'ignored'
+    if (!dm && !existing && !tagged && cfg.hydra.slackApps[app]?.operatorTokenEnv && !routedChannels(cfg).includes(ev.channel)) return 'ignored'
 
     if (own) {
       // The bot's own top-level post opens a conversation, bound to whoever listens there. Its replies are not echoed back.

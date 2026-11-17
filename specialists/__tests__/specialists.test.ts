@@ -101,7 +101,7 @@ describe('specialists', () => {
     const MCP = { datadog: { name: 'datadog', command: '/usr/local/bin/datadog-mcp', tokenEnv: ['DD_API_KEY'], tools: ['search_logs'] }, loki: { name: 'loki', command: '/usr/local/bin/loki-mcp', tokenEnv: [], tools: ['query'] } }
     const configure = (name: string, over: Record<string, unknown> = {}) => _setHydraConfigForTesting({
       operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [], mcpServers: MCP,
-      people: { op: { id: 'op', ids: ['discord:100000000000000001'], roles: [], name: 'op' } },
+      people: { op: { id: 'op', addresses: ['discord:100000000000000001'], roles: [], name: 'op' } },
       specialists: { [name]: { id: name, workdir: '/srv/x', kickoff: 'k', home: '555', listens: [], allow: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false, ...over } as any },
     })
     afterEach(() => _setHydraConfigForTesting(undefined))
@@ -451,7 +451,7 @@ describe('specialists', () => {
     const name = `t-specialist-${++n}`
     _setHydraConfigForTesting({
       operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
-      people: { op: { id: 'op', ids: ['discord:100000000000000001'], roles: [], name: 'op' } },
+      people: { op: { id: 'op', addresses: ['discord:100000000000000001'], roles: [], name: 'op' } },
       specialists: { [name]: { id: name, workdir: '/srv/x', kickoff: 'be the helper', home: '555', listens: [], allow: ['people'], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false } },
     })
     try {
@@ -478,7 +478,7 @@ describe('specialists', () => {
     const base = { workdir: '/srv/x', kickoff: 'k', home: '555', listens: [], allow: ['people'], renamedFrom: [], restricted: false }
     _setHydraConfigForTesting({
       operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
-      people: { op: { id: 'op', ids: ['discord:100000000000000001'], roles: [], name: 'op' } },
+      people: { op: { id: 'op', addresses: ['discord:100000000000000001'], roles: [], name: 'op' } },
       specialists: {
         [a]: { id: a, ...base, sessions: 'shared', maxSessions: 20 },
         [b]: { id: b, ...base, sessions: 'per-conversation', maxSessions: 3 },
@@ -501,7 +501,7 @@ describe('specialists', () => {
     const base = { workdir: '/srv/x', kickoff: 'k', home: '555', listens: [], allow: ['people'], renamedFrom: [], sessions: 'shared' as const, maxSessions: 20 }
     _setHydraConfigForTesting({
       operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
-      people: { op: { id: 'op', ids: ['discord:100000000000000001'], roles: [], name: 'op' } },
+      people: { op: { id: 'op', addresses: ['discord:100000000000000001'], roles: [], name: 'op' } },
       specialists: {
         [a]: { id: a, ...base, restricted: false },
         [b]: { id: b, ...base, restricted: true, tools: ['Read'], mcp: ['datadog'] },
@@ -521,7 +521,7 @@ describe('specialists', () => {
     const name = `t-specialist-${++n}`
     _setHydraConfigForTesting({
       operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
-      people: { op: { id: 'op', ids: ['discord:100000000000000001'], roles: [], name: 'op' } },
+      people: { op: { id: 'op', addresses: ['discord:100000000000000001'], roles: [], name: 'op' } },
       specialists: { [name]: { id: name, workdir: '/srv/x', kickoff: 'k', home: '555', listens: [], allow: ['people'], renamedFrom: [], sessions: 'per-conversation', maxSessions: 3, restricted: true, tools: ['Read'], mcp: [] } },
     })
     try {
@@ -539,7 +539,7 @@ describe('specialists', () => {
     const name = `t-specialist-${++n}`
     _setHydraConfigForTesting({
       operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
-      people: { op: { id: 'op', ids: ['discord:100000000000000001'], roles: [], name: 'op' } },
+      people: { op: { id: 'op', addresses: ['discord:100000000000000001'], roles: [], name: 'op' } },
       specialists: { [name]: { id: name, workdir: '/srv/ops', kickoff: 'be the helper', home: '555', listens: [], allow: ['people'], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false } },
     })
     try {

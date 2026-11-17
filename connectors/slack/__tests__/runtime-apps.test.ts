@@ -168,9 +168,9 @@ describe('Slack is on when any app is declared', () => {
     const only = `operator = "op"
 [slack.apps.sales]
 bot_token_env = "SALES_SLACK_BOT_TOKEN"
-app_token_env = "SALES_SLACK_APP_TOKEN"
+socket_token_env = "SALES_SLACK_APP_TOKEN"
 [people.op]
-ids = ["slack:UOP"]
+addresses = ["slack:UOP"]
 [specialists.${CRM}]
 workdir = "/w/crm"
 listens = ["slack:C1"]
@@ -215,7 +215,7 @@ describe('an alert about one app goes to the specialists that app can reach', ()
     expect(slackSpecialistsOf(h, 'sales')).toEqual([DEALS])
     expect(slackSpecialistsOf(h, 'default')).toEqual([CRM])
     // A third app that every unpinned specialist is shut out of, and no one is pinned to: no specialist, so main hears it.
-    const three = hydra(`${TOML}\n[slack.apps.ops]\nbot_token_env = "OPS_BOT"\napp_token_env = "OPS_APP"\n`)
+    const three = hydra(`${TOML}\n[slack.apps.ops]\nbot_token_env = "OPS_BOT"\nsocket_token_env = "OPS_APP"\n`)
     expect(slackSpecialistsOf(three, 'ops')).toEqual([CRM])
     const lone = hydra(`${BASE}\n[specialists.${CRM}]\nworkdir = "/w"\nlistens = ["slack:C1"]\nallow = ["anyone"]\n[specialists.${DEALS}]\nworkdir = "/w"\nlistens = ["slack:C2"]\nallow = ["anyone"]\n`)
     // A lone `default` serves every specialist, as the alert always did.
