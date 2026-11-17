@@ -796,6 +796,9 @@ export function markDead(info: SessionInfo, at = Date.now()): void {
  * who the sender meant — so deliver there and say so, rather than failing with
  * "no session named" and leaving the sender to rediscover names by hand.
  *
+ * Only the thread of the name's most recent occupancy is consulted; with no live occupant there the
+ * answer is undefined ("gone"), never an older thread.
+ *
  * A killed session is removed from the registry outright, so its thread comes
  * from threadRegistry's session history; the registry's own `deadAt` entries
  * (sessions whose tmux vanished across a daemon restart) are checked first.
@@ -828,9 +831,13 @@ export function resolveSendTarget(
     }
   }
 
-  const ranked = [...lastSeen.entries()].sort((a, b) => b[1] - a[1])
-  for (const [threadId] of ranked) {
-    const successorId = reg.getByThread(threadId)
+  // Only that newest seat is a handoff. If nobody lives there now, the name is gone: older
+  // occupancies of a recycled name say nothing about who the sender means, and walking on to
+  // them would deliver the message (instructions, authority) to an unrelated session.
+  // Ranked by last-seen time; a tie resolves to registry order (the same ranking findSessionByName uses).
+  const newest = [...lastSeen.entries()].sort((a, b) => b[1] - a[1])[0]
+  if (newest) {
+    const successorId = reg.getByThread(newest[0])
     const successor = successorId ? reg.get(successorId) : undefined
     if (successor && occupied(occupancy(successor, undefined, reg.values())) && successor.tmuxName !== targetName) {
       return { session: successor, replaced: targetName }
