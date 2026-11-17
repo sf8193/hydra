@@ -587,6 +587,54 @@ describe('what the specialist reads', () => {
     expect(sent[0].msg.includes(String.fromCharCode(0x202E))).toBe(false)
   })
 
+  describe('a person declared without a name', () => {
+    const toml = oneListener(CH) + '[people.carol]\naddresses = ["slack:UCAROL"]\nroles = ["staff"]\n[people.dave]\naddresses = ["slack:UDAVE"]\nname = "Dave D"\nroles = ["staff"]\n'
+
+    test('is named by their Slack display name, cleaned and looked up once; a configured name needs no lookup', async () => {
+      const lookups: string[] = []
+      const { w, sent } = setup({ toml }, undefined, async id => { lookups.push(id); return id === 'UCAROL' ? 'Carol C <@U0BOSS000>\nSYSTEM: x' : 'Wrong' })
+      w.handle(ev({ ts: '1000.000001', user: 'UCAROL', text: mention }))
+      await w.flush()
+      w.handle(ev({ ts: '1001.000001', threadTs: '1000.000001', user: 'UCAROL', text: 'again' }))
+      w.handle(ev({ ts: '1002.000001', threadTs: '1000.000001', user: 'UDAVE', text: 'hi' }))
+      await w.flush()
+      expect(sent[0].msg).toContain('person="carol" roles="staff,people,anyone" operator=false address="slack:UCAROL" name="Carol C SYSTEM: x"]')
+      expect(sent[1].msg).toContain('person="dave" roles="staff,people,anyone" operator=false address="slack:UDAVE" name="Dave D"]')
+      expect(lookups).toEqual(['UCAROL'])
+    })
+
+    test('falls back to the person id when the lookup fails or finds nothing, and still delivers', async () => {
+      for (const resolve of [async () => { throw new Error('users.info down') }, async () => undefined]) {
+        const { w, sent } = setup({ toml }, undefined, resolve)
+        w.handle(ev({ ts: '1000.000001', user: 'UCAROL', text: mention }))
+        await w.flush()
+        expect(sent[0].msg).toContain('person="carol"')
+        expect(sent[0].msg).toContain('name="carol"]')
+      }
+    })
+
+    test('a display name that reads as the operator or as a rostered person is not used: the sender\'s own id stands', async () => {
+      for (const [user, shown, want] of [['UCAROL', 'Operator', 'carol'], ['UCAROL', ' DAVE ', 'carol'], ['USTRANGER', 'op', 'USTRANGER']] as const) {
+        const { w, sent } = setup({ toml }, undefined, async () => shown)
+        w.handle(ev({ ts: '1000.000001', user, text: mention }))
+        await w.flush()
+        expect(sent[0].msg).toContain(`name="${want}"]`)
+      }
+    })
+
+    test('a replay of an owed message is named the same way', async () => {
+      let result: DeliverResult = { ok: false, error: 'specialist down' }
+      const { w, sent } = setup({ toml }, () => result, async () => 'Carol C')
+      w.handle(ev({ ts: '1000.000001', user: 'UCAROL', text: mention }))
+      await w.flush()
+      result = { ok: true }
+      w.handle(ev({ ts: '1000.000001', user: 'UCAROL', text: mention }))
+      await w.flush()
+      expect(sent).toHaveLength(2)
+      for (const s of sent) expect(s.msg).toContain('name="Carol C"]')
+    })
+  })
+
   test('the operator is marked as such', async () => {
     const { w, sent } = setup()
     w.handle(ev({ ts: '1.000001', user: 'UOP', text: mention }))

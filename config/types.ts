@@ -43,8 +43,8 @@ export type Person = {
   addresses: Address[]
   /** Labels used only by a specialist's `reachable_by` (and a rule's `person`). */
   roles: string[]
-  /** Shown in the metadata a specialist receives. Default: the id. */
-  name: string
+  /** Shown in the metadata a specialist receives. Absent: the sender's Slack display name, else the id. Only a label: a display name is the sender's own text, so trust `person`, `roles` and `operator`, not this. */
+  name?: string
 }
 
 export type SessionsMode = 'shared' | 'per-conversation'

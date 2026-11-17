@@ -450,7 +450,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       if (BUILTIN.includes(r)) error(`${path}.roles[${i}]`, `"${r}" is built in: ${r === 'people' ? 'everyone on the roster' : 'anyone at all'} holds it already`)
       else if (!ID_RE.test(r)) error(`${path}.roles[${i}]`, `role "${r}" must be lowercase letters, digits and dashes`)
     }
-    people[id] = { id, addresses, roles, name: str(t, 'name', path) ?? id }
+    const name = str(t, 'name', path)
+    people[id] = { id, addresses, roles, ...(name !== undefined && { name }) }
   }
   const declaredRoles = new Set(Object.values(people).flatMap(p => p.roles))
   // A role named like a person would make a rule's `person` ambiguous.

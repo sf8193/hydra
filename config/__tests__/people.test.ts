@@ -27,7 +27,7 @@ describe('hydra people add', () => {
     expect(plan.text.slice(MINE.length)).not.toMatch(/^ids = /m)
     expect(applyAddPerson(d, plan)).toBeUndefined()
     const loaded = loadHydraConfig(readFileSync(join(d, 'hydra.toml'), 'utf8'), env)
-    expect(loaded.ok && loaded.config.people.bob).toEqual({ id: 'bob', addresses: ['discord:100000000000000002'], roles: ['staff'], name: 'bob' })
+    expect(loaded.ok && loaded.config.people.bob).toEqual({ id: 'bob', addresses: ['discord:100000000000000002'], roles: ['staff'] })
     expect(statSync(join(d, 'hydra.toml')).mode & 0o777).toBe(0o640)
   })
 

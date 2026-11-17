@@ -93,7 +93,8 @@ timeout = "2s"
     expect(config.operator).toBe('op')
     expect(config.connectors).toEqual({ github: { repos: ['acme/widget'], pollMs: 180_000 } })
     expect(config.slackApps.default).toEqual({ id: 'default', botTokenEnv: 'CONNECTOR_SLACK_BOT_TOKEN', socketTokenEnv: 'CONNECTOR_SLACK_APP_TOKEN', displayName: 'hydra', description: SLACK_APP_DEFAULTS.description })
-    expect(config.people.op).toEqual({ id: 'op', addresses: ['slack:U0OP', 'github:op-login'], roles: [], name: 'op' })
+    expect(config.people.op).toEqual({ id: 'op', addresses: ['slack:U0OP', 'github:op-login'], roles: [] })
+    expect('name' in config.people.op).toBe(false)
     expect(config.people.alice.name).toBe('Alice')
     expect(config.specialists.crm).toEqual({
       id: 'crm', workdir: '/home/op/agents/crm', kickoff: '/orient crm', reachableBy: ['staff'],

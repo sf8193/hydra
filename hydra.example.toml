@@ -48,7 +48,7 @@ operator_token_env = "SALES_SLACK_USER_TOKEN"   # optional: hear the channels, D
 
 [people.op]
 addresses = ["discord:100000000000000001", "slack:U0OP", "github:op"]  # required: one address per platform; one address, one person
-name = "Op"                           # shown to specialists (default: the id)
+name = "Op"                           # shown to specialists (default: the sender's Slack display name, else the id)
 
 [people.alice]
 addresses = ["slack:U0ALICE"]
