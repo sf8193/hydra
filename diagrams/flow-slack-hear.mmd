@@ -1,0 +1,44 @@
+%%{init: {"theme":"base","themeVariables":{"background":"#ffffff","primaryColor":"#ffffff","primaryBorderColor":"#6b7280","primaryTextColor":"#1f2937","lineColor":"#374151","clusterBkg":"#ffffff","clusterBorder":"#d1d5db"},"flowchart":{"wrappingWidth":420,"useMaxWidth":false}}}%%
+%% How does each Slack app connect, and how does a live message reach the connector?
+%% SlackConnections.reconcile, connectors/slack/connections.ts:91; SlackListener.connect and onMessage, connectors/slack/listener.ts:464 and :532.
+%% Next: flow-slack-accept. What the live stream misses: flow-slack-catchup. Every box's source: diagrams/flow-slack-hear.sources.md.
+flowchart TD
+  app(["each <b>App</b> hydra.toml declares"])
+  g1{"1. both tokens set?"}
+  skip(["skipped, and said once"])
+  conn["connect: who the bot is, channel names,<br/>whose each DM is; then hold the cursors"]
+  nconn["held: every named channel and known DM<br/>DM lists: only with the operator's token<br/>once up: scopes checked, if Slack lists them"]
+  g2{"2. socket up<br/>within 30 s?"}
+  retry["retry: 10 s, doubling to 5 min"]
+  boot(["a boot <b>Catch-up</b> pass:<br/>flow-slack-catchup"])
+  live["a live message, through this app's socket"]
+  g3{"3. must it wait?"}
+  n3["it waits while it is not yet known<br/>whose DM it is, or which apps are in its channel,<br/>or while one ahead of it in its channel waits;<br/>learning the apps: at most 5 s"]
+  g4{"4. an app still joining,<br/>in a named channel?"}
+  held(["not handled now; its <b>Cursor</b> held,<br/>so catch-up reads it"])
+  hand(["to the connector:<br/>flow-slack-accept"])
+
+  app --> g1
+  g1 -->|no| skip
+  g1 -->|yes| conn
+  conn -.- nconn
+  conn --> g2
+  g2 -->|no| retry --> conn
+  g2 -->|yes| boot
+  g2 -->|yes| live
+  live --> g3
+  g3 -.- n3
+  g3 -->|no| hand
+  g3 -->|"yes, then"| g4
+  g4 -->|no| hand
+  g4 -->|yes| held
+
+  classDef gate fill:#fff7ed,stroke:#f97316,color:#1f2937
+  classDef stop fill:#fef2f2,stroke:#ef4444,color:#1f2937
+  classDef wait fill:#f3f4f6,stroke:#9ca3af,color:#1f2937
+  classDef done fill:#ecfdf5,stroke:#10b981,color:#1f2937
+  classDef note fill:#f9fafb,stroke:#d1d5db,color:#4b5563
+  class g1,g2,g3,g4 gate
+  class retry,held wait
+  class hand done
+  class nconn,n3 note

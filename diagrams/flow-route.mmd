@@ -1,33 +1,45 @@
-%% routing/route.ts: which specialist hears a message, and whether its sender may reach it. Pure: it reads who sent a message,
-%% where, and which apps it tags, never the rest of what it says. Every connector asks it; `hydra route` prints its trace.
+%%{init: {"theme":"base","themeVariables":{"background":"#ffffff","primaryColor":"#ffffff","primaryBorderColor":"#6b7280","primaryTextColor":"#1f2937","lineColor":"#374151","clusterBkg":"#ffffff","clusterBorder":"#d1d5db"},"flowchart":{"wrappingWidth":420,"useMaxWidth":false}}}%%
+%% Which target hears a message, and may its sender reach it? route(), routing/route.ts:201. Pure: config and message in, a Fate out.
+%% route() first asks which app owns the message (route.ts:211-218): drawn in flow-route-owner. A Fate is a decision, not an action:
+%% the Slack connector acts on it, and may still drop a "deliver" (flow-slack-accept). Every box's source: diagrams/flow-route.sources.md.
 flowchart TD
-  in(["message: from, at, addressed<br/>app (the app that delivered it)<br/>heardBy (apps in the channel)<br/>mentioned (apps tagged)<br/>bound + boundApp"])
-  who["identify: the person whose ids hold the address<br/>roles = theirs + people + anyone; a stranger holds only anyone<br/>operator = that person is hydra.toml's operator"]
-  own{"more than one app heard it, and this app is not its owner?<br/>owner = first tagged app, else the app that opened the conversation,<br/>else the place's default_app, else the app named default, else the first declared<br/>(the last two: among apps that deliver to someone here)"}
-  stand(["ignored: another app owns it, so exactly one answers"])
-  b{"bound?"}
-  bd{"that specialist still declared,<br/>and served by this app?<br/>(renamed_from renames followed)"}
-  ad{"addressed, or a place here<br/>has messages = all?<br/>(a skipped binding does not count,<br/>unless its specialist is gone)"}
+  in(["a message this app owns<br/>flow-route-owner"])
+  who["<b>Person, roles</b><br/>who sent it; a stranger holds only anyone"]
+  g1{"1. <b>Binding</b>?"}
+  g2{"2. addressed, or a place here<br/>has messages = all?"}
+  n2["addressed: a DM or group DM, a tag,<br/>or an open conversation with no target yet"]
+  g3{"3. the first <b>Rule</b><br/>that matches?"}
+  n3["a rule matches when each key it sets fits:<br/>place: a name of this place<br/>app: this app<br/>person: the sender, or a role they hold<br/>and this app <b>serves</b> its target"]
+  g4{"4. the <b>Operator</b>,<br/>in the bot's DM?"}
+  main["main"]
+  g5{"5. <b>Reach</b>: may the<br/>sender reach it?"}
+  n5["first, this app must serve it; then:<br/>the operator: every target<br/>main: the operator only<br/>a session's own thread: anyone<br/>a specialist: a role in its reachable_by"]
+  del(["deliver<br/>after 3 or 4, bind the conversation to it"])
+  ref(["refused"])
+  unr(["unrouted"])
   ign(["ignored: not for hydra"])
-  r{"first [[rules]] entry whose place (if set) is a name here,<br/>whose app (if set) is this app, and whose person<br/>is the sender or a role they hold<br/>and whose target is served by this app<br/>(an old listens is read as rules after the explicit ones,<br/>a place named by its id before one named #name)"}
-  od{"the operator, in a DM?"}
-  main["main (served by every app)"]
-  unr(["unrouted → 🚫 on a mention or DM"])
-  allow{"reachable_by: the operator always;<br/>main only the operator;<br/>else a role in the specialist's reachable_by"}
-  ref(["refused → 🚫 on a mention or DM<br/>nothing bound, nothing owed"])
-  del(["deliver to it; a new conversation is bound to it"])
-  in --> who --> own
-  own -->|"yes"| stand
-  own -->|"no"| b
-  b -->|yes| bd
-  bd -->|yes| allow
-  bd -->|"no: routed anew"| ad
-  b -->|no| ad
-  ad -->|no| ign
-  ad -->|yes| r
-  r -->|match| allow
-  r -->|none| od
-  od -->|yes| main --> allow
-  od -->|no| unr
-  allow -->|no| ref
-  allow -->|yes| del
+
+  in --> who --> g1
+  g1 -->|"bound, and it holds"| g5
+  g1 -->|"none, or this app<br/>no longer serves it"| g2
+  g1 -->|"bound, but hydra.toml<br/>no longer declares it"| g3
+  g2 -.- n2
+  g2 -->|no| ign
+  g2 -->|yes| g3
+  g3 -.- n3
+  g3 -->|a rule| g5
+  g3 -->|none| g4
+  g4 -->|yes| main --> g5
+  g4 -->|no| unr
+  g5 -.- n5
+  g5 -->|yes| del
+  g5 -->|no| ref
+
+  classDef gate fill:#fff7ed,stroke:#f97316,color:#1f2937
+  classDef stop fill:#fef2f2,stroke:#ef4444,color:#1f2937
+  classDef done fill:#ecfdf5,stroke:#10b981,color:#1f2937
+  classDef note fill:#f9fafb,stroke:#d1d5db,color:#4b5563
+  class g1,g2,g3,g4,g5 gate
+  class ref,unr stop
+  class del done
+  class n2,n3,n5 note
