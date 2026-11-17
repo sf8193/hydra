@@ -108,7 +108,7 @@ target = "specialist:review"
     expect(config.specialists.ops).toMatchObject({ kickoffFile: '/home/op/agents/ops/kickoff.md', reachableBy: [], engine: 'codex', renamedFrom: ['old-ops'], sessions: 'shared', maxSessions: 20 })
     expect(config.specialists.ops.kickoff).toBeUndefined()
     expect(config.specialists.review.reachableBy).toEqual(['people'])
-    expect(config.places['slack:#help']).toEqual({ ack: 'eyes', files: false, messages: 'all', bots: false, linkPreviews: true })
+    expect(config.places['slack:#help']).toEqual({ ack: 'eyes', files: false, messages: 'all', bots: false, reactions: 'off', linkPreviews: true })
     expect(config.schedules.nightly).toEqual({ id: 'nightly', cron: '0 3 * * *', target: 'ops', message: 'Nightly run.', runner: 'launchd' })
     expect(config.rules).toEqual([{ place: 'slack:#help', person: 'alice', target: 'ops' }, { place: 'slack:#help', target: 'crm' }, { place: 'slack:dm', target: 'ops' }, { place: 'github:acme/widget', target: 'review' }])
     // `crm` and `ops` hear where the rules say.

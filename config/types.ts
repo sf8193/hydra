@@ -160,6 +160,12 @@ export type PlaceOptions = {
   /** Hear other bots. Default false; hydra's own bot is never heard. */
   bots: boolean
   /**
+   * A Slack channel or the bot's DM. Whether a person's emoji reaction is delivered to the session that owns the conversation it is in:
+   * `bot-messages` (only on a message the bot posted), `all` (on any message of a conversation hydra holds), or `off`. Default `off`.
+   * Who may be heard is the place's rules, as for a message.
+   */
+  reactions: 'off' | 'bot-messages' | 'all'
+  /**
    * Whether links in what hydra posts here unfurl into previews (Slack `unfurl_links`/`unfurl_media`, Discord's suppress-embeds flag), on each
    * gateway's one sending point: replies, new threads, DMs, buttons, alerts, Discord edits and button clicks. Not Slack edits (`chat.update` has
    * no such argument), and not a Discord channel given by name. Default true. A preview can show readers content they could not open themselves, and fetches the URL with whatever is in it.

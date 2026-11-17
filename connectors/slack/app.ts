@@ -20,6 +20,7 @@ export const SLACK_APP_NEEDS = {
     groupDms: { option: 'group dms (slack:group-dm)', any: ['mpim:history'] },
     files: { option: 'files', any: ['files:read'] },
     reactions: { option: 'ack and 🚫 reactions', any: ['reactions:write'] },
+    reactionsRead: { option: 'reactions (a place with reactions on)', any: ['reactions:read'] },
     replies: { option: 'replies', any: ['chat:write'] },
   } as const satisfies Record<string, ScopeNeed>,
   /**
@@ -28,7 +29,7 @@ export const SLACK_APP_NEEDS = {
    */
   userScopes: ['channels:history', 'groups:history', 'im:history', 'mpim:history', 'im:read'],
   /** `renames` are the events the listener subscribes to by name; messages arrive through Bolt's message handler. */
-  botEvents: { messages: ['message.channels', 'message.groups', 'message.im', 'message.mpim'], renames: ['channel_rename', 'group_rename'] },
+  botEvents: { messages: ['message.channels', 'message.groups', 'message.im', 'message.mpim'], renames: ['channel_rename', 'group_rename'], reactions: ['reaction_added'] },
   /** With `operator_token_env`. */
   userEvents: ['message.channels', 'message.groups', 'message.im', 'message.mpim'],
   /**
@@ -87,7 +88,7 @@ export function slackManifest(app?: SlackApp, opts: { several?: boolean } = {}):
     'settings:',
     '  event_subscriptions:',
     '    bot_events:',
-    ...list('      ', [...SLACK_APP_NEEDS.botEvents.messages, ...SLACK_APP_NEEDS.botEvents.renames, ...(opts.several ? SLACK_APP_NEEDS.membership.botEvents : [])]),
+    ...list('      ', [...SLACK_APP_NEEDS.botEvents.messages, ...SLACK_APP_NEEDS.botEvents.renames, ...SLACK_APP_NEEDS.botEvents.reactions, ...(opts.several ? SLACK_APP_NEEDS.membership.botEvents : [])]),
     ...(withOperatorToken ? ['    user_events:', ...list('      ', SLACK_APP_NEEDS.userEvents)] : []),
     '  socket_mode_enabled: true',
     '  org_deploy_enabled: false',

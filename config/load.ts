@@ -666,7 +666,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     const t = table(raw, path)
     if (!p || !t) continue
     if (has(places, p)) { error(path, `${p} is already set: places compare without case on GitHub`); continue }
-    unknownKeys(t, ['ack', 'files', 'messages', 'bots', 'default_app', 'link_previews'], path)
+    unknownKeys(t, ['ack', 'files', 'messages', 'bots', 'reactions', 'default_app', 'link_previews'], path)
     const ack = str(t, 'ack', path)
     // Which app answers an unmentioned message when several apps are in this channel.
     const defaultAppRaw = str(t, 'default_app', path)
@@ -675,8 +675,9 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       if (!p.startsWith('slack:') || !namesAChannel(p)) error(`${path}.default_app`, `${p} is not a Slack channel: \`default_app\` picks among the apps in a channel`)
       else defaultApp = appValue(defaultAppRaw, `${path}.default_app`)
     }
+    if (Object.hasOwn(t, 'reactions') && !p.startsWith('slack:')) error(`${path}.reactions`, `${p} is not a Slack place: \`reactions\` is heard only from Slack`)
     // Hydra reads a Discord channel by id: a place named `discord:#name` can never be matched to a channel, so previews could not be switched off there.
-    if (namesDmWithOthers(p)) for (const key of ['link_previews', 'messages', 'bots']) if (Object.hasOwn(t, key)) error(`${path}.${key}`, `${key} does not apply to ${p}: only ack and files do. Remove it.`)
+    if (namesDmWithOthers(p)) for (const key of ['link_previews', 'messages', 'bots', 'reactions']) if (Object.hasOwn(t, key)) error(`${path}.${key}`, `${key} does not apply to ${p}: only ack and files do. Remove it.`)
     if (p.startsWith('discord:#') && t.link_previews === false) error(`${path}.link_previews`, 'cannot be set on a Discord channel by name: hydra reads a Discord channel by id, so name it discord:<channel id>')
     places[p] = {
       ...(ack !== undefined && { ack }),
@@ -684,6 +685,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       files: bool(t, 'files', path) ?? false,
       messages: oneOf(t, 'messages', path, ['addressed', 'all'] as const) ?? 'addressed',
       bots: bool(t, 'bots', path) ?? false,
+      reactions: oneOf(t, 'reactions', path, ['off', 'bot-messages', 'all'] as const) ?? 'off',
       linkPreviews: bool(t, 'link_previews', path) ?? true,
     }
   }

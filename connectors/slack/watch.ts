@@ -99,10 +99,12 @@ export type SlackWatchConfig = {
   maxWatches: number
   /** Tags one person may land in ten minutes before the rest are dropped. */
   maxMentionsPer10Min: number
+  /** Reactions one person may land in ten minutes before the rest are dropped. */
+  maxReactionsPer10Min: number
 }
 
 /** The limits hydra.toml has no key for. */
-export const SLACK_LIMITS = { idleExpiryMs: 7 * 86_400_000, coalesceMs: 4000, maxWatches: 50, maxMentionsPer10Min: 10 } as const
+export const SLACK_LIMITS = { idleExpiryMs: 7 * 86_400_000, coalesceMs: 4000, maxWatches: 50, maxMentionsPer10Min: 10, maxReactionsPer10Min: 30 } as const
 
 /**
  * A conversation: a Slack thread (or a DM's top level) and the specialist it is bound to. The binding is fixed when
@@ -133,7 +135,31 @@ export type SlackWatchEntry = {
   vacantSince?: number
   /** Read with the operator's user token, because the bot is not in the channel: heard live through the app's events as the operator, and reread by every deep catch-up. Absent: the bot reads it. */
   via?: 'user'
+  /** `<message ts>:<reaction>:<user>` of the reactions already delivered (recent ones, oldest dropped): the exact dedupe, so Slack sending an event again, or a person adding it twice, delivers once. Never in `delivered`: that is built from messages, and a catch-up cursor follows it. */
+  reacted?: string[]
+  /** ts of the bot's own messages in this conversation (recent ones, oldest dropped), kept only where the place hears reactions: Slack's reaction event names the message, not its thread, so this is how a reaction on the bot's reply is found. */
+  ours?: string[]
 }
+
+/** The fields of a Slack `reaction_added` event this module reads. */
+export type SlackReactionEvent = {
+  /** The app whose connection delivered it. Absent: `default`. */
+  app?: string
+  channel: string
+  /** The message reacted to. */
+  itemTs: string
+  /** Who wrote that message, when Slack says. */
+  itemUser?: string
+  /** The emoji's name, as Slack gives it (`white_check_mark`). */
+  reaction: string
+  /** Who reacted. */
+  user: string
+  /** When they reacted: unique per reaction, and ordered with messages. */
+  eventTs: string
+}
+
+/** `accepted`: it will be delivered to the conversation's session. `ignored`: it is nobody's, silently. */
+export type ReactionOutcome = 'accepted' | 'ignored'
 
 /** The fields of a Slack `message` event this module reads. */
 export type SlackMessageEvent = {
@@ -180,7 +206,7 @@ export type HandleOutcome = 'mention' | 'follow-up' | 'dm' | 'subscribed' | 'ref
 
 /** Why an accepted (or would-be accepted) message will never be delivered. */
 /** `refused` / `unrouted`: accepted and owed, then `reachable_by` or the config changed so it can no longer go anywhere. `unbound`: owed when its conversation was let go. */
-export type DropKind = 'expired' | 'owed-full' | 'too-large' | 'tag-cap' | 'table-full' | 'guard' | 'catch-up-gap' | 'refused' | 'unrouted' | 'unbound'
+export type DropKind = 'reaction-cap' | 'expired' | 'owed-full' | 'too-large' | 'tag-cap' | 'table-full' | 'guard' | 'catch-up-gap' | 'refused' | 'unrouted' | 'unbound'
 
 /** An owed message that has waited past the health threshold: the conversation, who it is for, how many, how long, and why (with what to do). */
 export type LateOwed = { conversation: string; to?: string; count: number; oldestAgeMin: number; cause: string }
@@ -328,6 +354,11 @@ const tsMs = (ts: string): number => Number(tsValue(ts) / 1000n)
 export const cmpTs = (a: string, b: string): number => { const d = tsValue(a) - tsValue(b); return d < 0n ? -1 : d > 0n ? 1 : 0 }
 
 const DELIVERED_KEEP = 300
+/** A reaction's name as Slack gives it: an emoji, and for a skin tone `+1::skin-tone-3`. */
+const REACTION_NAME = /^[A-Za-z0-9_+'-]{1,100}(::skin-tone-[2-6])?$/
+/** How many delivered reactions, and how many of its own messages, a conversation remembers. */
+const REACTED_KEEP = 300
+const OURS_KEEP = 300
 const AMBIENT_IDLE_MS = 86_400_000
 /** The time of a tag in a store that kept none: older than any. */
 const UNKNOWN_TS = '0.000000'
@@ -432,7 +463,7 @@ const PLAIN_SUBTYPES = new Set([undefined, 'thread_broadcast', 'file_share', 'bo
 /** One message. `person`, `roles` and `operator` are who hydra.toml says sent it, filled in at delivery. */
 export type Item = {
   ts: string; user?: string; name?: string; person?: string; roles?: string[]; operator?: boolean
-  kind: 'mention' | 'follow-up' | 'dm'; text: string; files?: SlackFile[]; saved?: FileRef[]
+  kind: 'mention' | 'follow-up' | 'dm' | 'reaction'; text: string; files?: SlackFile[]; saved?: FileRef[]
 }
 
 export const ITEM_TEXT_MAX_CHARS = UNTRUSTED_TEXT_MAX_CHARS
@@ -506,6 +537,7 @@ export class SlackWatcher {
   // Handed to the delivery chain but not yet settled. A replay of one of these (a catch-up pass fires on every reconnect, and a refill can take a while) would otherwise open a second batch and deliver it twice.
   private readonly inflight = new Map<string, Set<string>>()
   private readonly mentionTimes = new Map<string, number[]>()
+  private readonly reactionTimes = new Map<string, number[]>()
   private readonly refusalTimes = new Map<string, number[]>()
   private readonly names = new Map<string, { name?: string; at: number }>()   // by `<app>:<user id>`: a user id belongs to one app's workspace
   private readonly nameFlights = new Map<string, Promise<string | undefined>>()
@@ -901,6 +933,90 @@ export class SlackWatcher {
   }
 
   /**
+   * A person's reaction to a message in a conversation hydra holds, delivered to the session that owns the conversation, as one item
+   * in the form a message takes. The place's `reactions` option lets it in, and past that it is a message from that person
+   * to that conversation: the same rules decide whether they may be heard (`route`, `reachable_by`, the guard), a stranger is passed over
+   * silently (no 🚫, nothing counted), and a reaction never opens a conversation. The bot's own reactions (its `ack`) and its sibling apps' are
+   * never heard. Slack's event names the message but not its thread, so a reaction finds its conversation by the message: a thread's first
+   * message, or one this conversation delivered.
+   */
+  handleReaction(ev: SlackReactionEvent): ReactionOutcome {
+    const cfg = this.deps.config(ev.app)
+    if (!cfg || !TS_RE.test(ev.itemTs) || !TS_RE.test(ev.eventTs) || !REACTION_NAME.test(ev.reaction)) return 'ignored'
+    const mode = placeOptions(cfg, ev.channel)?.reactions ?? 'off'
+    if (mode === 'off' || (mode === 'bot-messages' && ev.itemUser !== cfg.botUserId)) return 'ignored'
+    const app = appOfEntry(cfg)
+    if (ev.user === cfg.botUserId || Object.entries(cfg.identities ?? {}).some(([a, i]) => a !== app && i.botUserId === ev.user)) return 'ignored'
+    const entry = this.get(ev.channel, ev.itemTs, app) ?? this.list().find(e => appOfEntry(e) === app && e.channel === ev.channel && (e.delivered?.includes(ev.itemTs) || e.ours?.includes(ev.itemTs)))
+    // A conversation read with the operator's token is one the bot is not in: Slack sends the app no reactions there, and none is taken from a stand-in.
+    if (!entry?.specialist || entry.via === 'user') return 'ignored'
+    // Several apps in a thread: the one it is bound through keeps it, as with its untagged follow-ups.
+    if (!isDm(ev.channel) && (this.boundThrough(cfg, ev.channel, entry.threadTs)[0] ?? app) !== app) return 'ignored'
+    const d = route(cfg.hydra, { from: addressOf(ev.user), at: placesOf(cfg, ev.channel), addressed: true, app, bound: entry.specialist })
+    if (d.fate !== 'deliver') return 'ignored'
+    const mark = `${ev.itemTs}:${ev.reaction}:${ev.user}`
+    if (entry.reacted?.includes(mark)) return 'ignored'
+    // Past a person's cap in ten minutes a reaction is counted and logged, not delivered: as with tags, one person cannot flood a session.
+    const now = this.deps.now()
+    const recent = (this.reactionTimes.get(ev.user) ?? []).filter(t => now - t < MENTION_WINDOW_MS)
+    this.reactionTimes.set(ev.user, recent)
+    if (recent.length >= cfg.maxReactionsPer10Min) {
+      this.drop('reaction-cap', entry, [ev.eventTs], `${ev.user} reacted ${recent.length} times in 10 minutes (maxReactionsPer10Min)`, false)
+      return 'ignored'
+    }
+    recent.push(now)
+    entry.reacted = [...(entry.reacted ?? []), mark].slice(-REACTED_KEEP)
+    this.persist()
+    const link = cfg.workspaceUrl ? `${cfg.workspaceUrl}/archives/${ev.channel}/p${ev.itemTs.replace('.', '')}${entry.threadTs !== TOP_LEVEL && entry.threadTs !== ev.itemTs ? `?thread_ts=${entry.threadTs}` : ''}` : `message ${ev.itemTs} in ${placeName(cfg, ev.channel)}`
+    const [emoji, tone] = ev.reaction.split('::skin-tone-')
+    const item: Item = { ts: ev.eventTs, user: ev.user, kind: 'reaction', text: `reacted :${emoji}:${tone ? ` (skin tone ${tone})` : ''} to ${link}` }
+    const key = keyOf(entry)
+    const run = (this.threadRuns.get(key) ?? Promise.resolve())
+      .then(() => this.deliverReaction(key, entry, item, mark, cfg))
+      .catch(err => { this.undo(entry, mark); this.deps.log(`daemon: slack connector: delivering a reaction in ${key} failed: ${err instanceof Error ? err.stack ?? err.message : err}\n`) })
+    this.threadRuns.set(key, run)
+    void run.finally(() => { if (this.threadRuns.get(key) === run) this.threadRuns.delete(key) })
+    return 'accepted'
+  }
+
+  /** The bot's own message in a conversation, noted where its place hears reactions, so a reaction on it finds the conversation. */
+  private noteOwn(cfg: SlackWatchConfig, ev: SlackMessageEvent, threadTs: string, app: string): void {
+    if ((placeOptions(cfg, ev.channel)?.reactions ?? 'off') === 'off') return
+    const entry = this.get(ev.channel, threadTs, app)
+    if (!entry || entry.ours?.includes(ev.ts)) return
+    entry.ours = [...(entry.ours ?? []), ev.ts].slice(-OURS_KEEP)
+    this.persist()
+  }
+
+  /** A reaction that did not land is forgotten, so Slack sending it again (or the person adding it again) delivers it. */
+  private undo(entry: SlackWatchEntry, mark: string): void {
+    if (this.entries.get(keyOf(entry)) !== entry || !entry.reacted?.includes(mark)) return
+    entry.reacted = entry.reacted.filter(m => m !== mark)
+    if (!entry.reacted.length) delete entry.reacted
+    this.persist()
+  }
+
+  /**
+   * One reaction, sent as a message would be: to the conversation's binding, if it still admits the person, after the guard, named as the
+   * roster names them. It is never owed: Slack does not replay it, and a message's retry (catch-up reading the thread again) would not find it.
+   */
+  private async deliverReaction(key: string, entry: SlackWatchEntry, item: Item, mark: string, enqueuedCfg: SlackWatchConfig): Promise<void> {
+    const cfg = this.deps.config(entry.app) ?? enqueuedCfg
+    const to = entry.specialist ? currentId(cfg.hydra, entry.specialist) : undefined
+    if (!to || !isLive(cfg.hydra, to)) return this.undo(entry, mark)
+    const { named, verdicts } = await this.admit(entry, cfg, [item], () => to)
+    // Refused now (a role taken away), or the guard says drop or not now: nothing is sent, and the same reaction may come again. A redirect is not followed: it goes to the binding.
+    if (!named.length || verdicts[0].fate === 'drop' || verdicts[0].fate === 'later') return this.undo(entry, mark)
+    const send = this.chain.then(async () => {
+      const result = await this.post(entry, { to }, named, cfg)
+      if (result.ok) this.deps.log(`daemon: slack connector: delivered a reaction in ${key} (to ${item.ts}) to ${spelledBare(to)}${result.duplicate ? ' (already delivered)' : ''}\n`)
+      else { this.undo(entry, mark); this.deps.log(`daemon: slack connector: delivering a reaction in ${key} to ${spelledBare(to)} failed: ${result.error}\n`) }
+    })
+    this.chain = send.catch(() => {})
+    await send
+  }
+
+  /**
    * The apps this thread is bound through, the one most recently active in it first (hydra.toml order breaks a tie): each opened a
    * conversation in it, so each is in the channel whatever the membership cache says, and the first is `boundApp`, which keeps the
    * thread's untagged follow-ups.
@@ -953,6 +1069,7 @@ export class SlackWatcher {
     // conversation is that thread, bound when this message arrives. A thread inside a DM is a thread like any other.
     const threadTs = dm && !isReply ? TOP_LEVEL : ev.threadTs ?? ev.ts
     if (this.inflight.get(watchKey(app, ev.channel, threadTs))?.has(ev.ts)) return 'ignored'
+    if (own) this.noteOwn(cfg, ev, threadTs, app)
     if (dm && own) return 'ignored'
     const existing = this.get(ev.channel, threadTs, app)
     const boundApp = through[0]
@@ -1305,31 +1422,15 @@ export class SlackWatcher {
       if (lost.length < homeless.length) this.deps.log(`daemon: slack connector: ${key}: ${homeless.length - lost.length} message(s) were for a specialist hydra.toml no longer declares; they stay owed and are routed anew when catch-up replays them\n`)
       items = items.filter(i => !homeless.includes(i))
     }
-    const senders = new Map(items.map(i => [i.ts, identify(h, addressOf(i.user))] as const))
-    items = items.filter(i => {
-      const why = refusal(h, homes.get(i.ts)!, senders.get(i.ts)!, { app })
-      if (!why) return true
-      // Accepted, then `reachable_by` changed while it waited: a drop, settled and surfaced.
-      this.drop('refused', entry, [i.ts], `it was accepted, but now ${why}`)
-      this.settle(key, entry, [i.ts])
-      return false
-    })
-    if (!items.length) return
-    // The one place a sender gets a name: the roster's `name` wins; else Slack's display name (a stranger, or a person declared without a `name`); else the person's id.
-    const users = [...new Set(items.filter(i => !senders.get(i.ts)!.person?.name).map(i => i.user).filter((u): u is string => !!u))]
-    const resolved = new Map(await Promise.all(users.map(async u => [u, await this.nameOf(u, app)] as const)))
-    const named = items.map(i => {
-      const who = senders.get(i.ts)!
-      // A Slack display name is the sender's own free text: no mentions or special links (<@U…>, <!here>), so it cannot pose as another sender.
-      const cleaned = i.user ? resolved.get(i.user)?.replace(/<[@!#][^>]*>/g, '') : undefined
-      // A display name that reads as a rostered person or as `operator` is a disguise next to person="carol" operator=false: the sender's own id stands instead.
-      const slackName = cleaned && isDisguise(h, cleaned) ? who.person?.id ?? i.user : cleaned
-      return { ...i, name: who.person?.name ?? slackName ?? who.person?.id, ...(who.person && { person: who.person.id }), roles: who.roles, operator: who.operator }
-    })
     const place = placeName(cfg, entry.channel)
-    // The guard judges each message from anyone but the operator, and may send it somewhere else. Groups keep the burst's order.
     const g = h.guard
-    const verdicts = await mapLimit(named, GUARD_CONCURRENCY, i => g && !i.operator ? this.judge(g, entry, place, homes.get(i.ts)!, i) : Promise.resolve<GuardVerdict>({ fate: 'deliver' }))
+    const { named, verdicts, senders, refused } = await this.admit(entry, cfg, items, i => homes.get(i.ts)!)
+    for (const { item, why } of refused) {
+      // Accepted, then `reachable_by` changed while it waited: a drop, settled and surfaced.
+      this.drop('refused', entry, [item.ts], `it was accepted, but now ${why}`)
+      this.settle(key, entry, [item.ts])
+    }
+    if (!named.length) return
     const groups = new Map<string, Item[]>()
     const fallbackOf = new Map<string, string>()
     named.forEach((item, n) => {
@@ -1430,6 +1531,48 @@ export class SlackWatcher {
     return { ...i, saved }
   }
 
+  /**
+   * The gates every item passes on its way to a session, a message or a reaction alike, so a gate added here covers both: `reachable_by`
+   * read now (a role taken away stops it: `refused`, left for the caller to settle), the sender's name (the roster's `name` wins; else Slack's
+   * display name, cleaned; else the person's id), and the guard, which judges everyone but the operator. `named` and `verdicts` run together.
+   */
+  private async admit(entry: SlackWatchEntry, cfg: SlackWatchConfig, items: Item[], homeOf: (i: Item) => string): Promise<{ named: Item[]; verdicts: GuardVerdict[]; senders: Map<string, ReturnType<typeof identify>>; refused: { item: Item; why: string }[] }> {
+    const h = cfg.hydra
+    const app = appOfEntry(entry)
+    const senders = new Map(items.map(i => [i.ts, identify(h, addressOf(i.user))] as const))
+    const refused: { item: Item; why: string }[] = []
+    items = items.filter(i => {
+      const why = refusal(h, homeOf(i), senders.get(i.ts)!, { app })
+      if (why) refused.push({ item: i, why })
+      return !why
+    })
+    // The one place a sender gets a name: the roster's `name` wins; else Slack's display name (a stranger, or a person declared without a `name`); else the person's id.
+    const users = [...new Set(items.filter(i => !senders.get(i.ts)!.person?.name).map(i => i.user).filter((u): u is string => !!u))]
+    const resolved = new Map(await Promise.all(users.map(async u => [u, await this.nameOf(u, app)] as const)))
+    const named = items.map(i => {
+      const who = senders.get(i.ts)!
+      // A Slack display name is the sender's own free text: no mentions or special links (<@U…>, <!here>), so it cannot pose as another sender.
+      const cleaned = i.user ? resolved.get(i.user)?.replace(/<[@!#][^>]*>/g, '') : undefined
+      // A display name that reads as a rostered person or as `operator` is a disguise next to person="carol" operator=false: the sender's own id stands instead.
+      const slackName = cleaned && isDisguise(h, cleaned) ? who.person?.id ?? i.user : cleaned
+      return { ...i, name: who.person?.name ?? slackName ?? who.person?.id, ...(who.person && { person: who.person.id }), roles: who.roles, operator: who.operator }
+    })
+    // The guard judges each item from anyone but the operator, and may send it somewhere else. Groups keep the burst's order.
+    const g = h.guard
+    const place = placeName(cfg, entry.channel)
+    const verdicts = await mapLimit(named, GUARD_CONCURRENCY, i => g && !i.operator ? this.judge(g, entry, place, homeOf(i), i) : Promise.resolve<GuardVerdict>({ fate: 'deliver' }))
+    return { named, verdicts, senders, refused }
+  }
+
+  /** One send: the items as the session reads them, to `target`. The target is part of the key: the same items re-routed elsewhere are a different send. */
+  private async post(entry: SlackWatchEntry, target: RouteTarget, batch: Item[], cfg: SlackWatchConfig): Promise<DeliverResult> {
+    const message = formatDelivery(entry, batch, { place: placeName(cfg, entry.channel), ...(cfg.workspaceUrl && { workspaceUrl: cfg.workspaceUrl }) })
+    const idempotencyKey = `slack-watch-${appPrefix(entry.app, '-')}${entry.channel}-${entry.threadTs}-${batch[0].ts}-${batch[batch.length - 1].ts}-${target.to}`
+    try { return await this.deps.deliver({ ...target, conversation: conversationId(entry) }, message, idempotencyKey) } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  }
+
   /** One message's verdict from the guard. A guard that throws fails open, like one that crashes. */
   private async judge(g: Guard, entry: SlackWatchEntry, place: Place, to: string, i: Item): Promise<GuardVerdict> {
     const input: GuardInput = {
@@ -1458,13 +1601,7 @@ export class SlackWatcher {
     for (const batch of packItems(items)) {
       const first = batch[0].ts
       const last = batch[batch.length - 1].ts
-      const message = formatDelivery(entry, batch, { place: placeName(cfg, entry.channel), ...(cfg.workspaceUrl && { workspaceUrl: cfg.workspaceUrl }) })
-      // The target is part of the key: the same messages re-routed elsewhere are a different send.
-      const idempotencyKey = `slack-watch-${appPrefix(entry.app, '-')}${entry.channel}-${entry.threadTs}-${first}-${last}-${target.to}`
-      let result: DeliverResult
-      try { result = await this.deps.deliver({ ...target, conversation: conversationId(entry) }, message, idempotencyKey) } catch (err) {
-        result = { ok: false, error: err instanceof Error ? err.message : String(err) }
-      }
+      const result = await this.post(entry, target, batch, cfg)
       if (!result.ok && result.wait) {
         // Not a failure: a turn. Said once an hour while it lasts, so a specialist stuck at max (no idle) is noticed.
         if (entry.waitingSince === undefined) { entry.waitingSince = this.deps.now(); this.persist() }
@@ -1532,6 +1669,7 @@ export class SlackWatcher {
 export class AppWatch {
   constructor(private readonly w: SlackWatcher, readonly app: string) {}
   handle(ev: SlackMessageEvent): HandleOutcome { return this.w.handle({ ...ev, app: this.app }) }
+  handleReaction(ev: SlackReactionEvent): ReactionOutcome { return this.w.handleReaction({ ...ev, app: this.app }) }
   list(): SlackWatchEntry[] { return this.w.list().filter(e => appOfEntry(e) === this.app) }
   channelCursor(channel: string): string | undefined { return this.w.channelCursor(channel, this.app) }
   owedHints(): { channel: string; threadTs: string; fromTs: string }[] { return this.w.owedHints(this.app) }
