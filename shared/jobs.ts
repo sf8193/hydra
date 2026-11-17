@@ -41,6 +41,7 @@ export type Job = {
   notes?: string[]   // what jobs list says about keys that are kept only for old files
   fromSchedule?: true // read from hydra.toml's [schedules]: a failure alerts the operator only, never the target
   paused?: true      // never fires: no dispatch, no launchd entry, no failure alert (a manual run still works)
+  timezone?: string  // an IANA zone: `schedule` is its wall-clock time, not the host's (hydra.toml schedules, daemon runner only)
 }
 
 /**
@@ -443,8 +444,8 @@ export function readDaemonState(stateDir: string): { state: DaemonState; corrupt
  * east, the instant keeps frequent jobs moving after a flight west. Labels come from the matcher, never from
  * formatting an instant. What counts as covering a slot is decided where outcomes are applied, not here.
  */
-export function owedSlot(schedule: string, state: JobState, now: Date): Slot | null {
-  const slot = latestSlot(schedule, now)
+export function owedSlot(schedule: string, state: JobState, now: Date, zone?: string): Slot | null {
+  const slot = latestSlot(schedule, now, zone)
   if (!slot) return null
   const c = state.covered
   if (c && (slot.at.getTime() <= new Date(c.at).getTime() || c.slot === slot.label)) return null
@@ -457,10 +458,10 @@ export function owedSlot(schedule: string, state: JobState, now: Date): Slot | n
  * period), measured from the last failure (`last.at`: with failures > 0 it is always a failure). The period is the
  * gap from the owed slot to the next one. Returns the earliest instant (ms) the slot may be tried, or null for no wait.
  */
-export function backoffUntil(schedule: string, state: JobState, owed: Slot): number | null {
+export function backoffUntil(schedule: string, state: JobState, owed: Slot, zone?: string): number | null {
   const n = state.failures ?? 0
   if (n <= 0 || !state.last) return null
-  const next = nextSlot(schedule, owed.at)
+  const next = nextSlot(schedule, owed.at, zone)
   const period = next ? next.at.getTime() - owed.at.getTime() : Infinity
   const wait = Math.min(2 ** Math.min(n, 20) * 60_000, 3_600_000, period)
   return new Date(state.last.at).getTime() + wait

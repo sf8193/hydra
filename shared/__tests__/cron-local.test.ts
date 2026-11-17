@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
-import { nextSlot, latestSlot, parseCron } from '../cron-local.js'
+import { isZone, nextSlot, latestSlot, parseCron } from '../cron-local.js'
 
 // Instant-only views of the Slot API, for assertions about instants.
 const nextMatch = (e: string, from: Date) => nextSlot(e, from)?.at ?? null
@@ -267,5 +267,60 @@ describe('slotLabel', () => {
     process.env.TZ = 'Europe/Berlin'
     expect(slotLabel(d('2026-11-13T19:00:00Z'))).toBe('2026-11-13 20:00')
     expect(slotLabel(d('2027-01-01T07:30:59Z'))).toBe('2027-01-01 08:30')
+  })
+})
+
+// A schedule's own zone: slots are that zone's wall-clock times, whatever zone the host is in.
+describe('a schedule in its own zone', () => {
+  const host = 'America/Los_Angeles'
+  beforeAll(() => { process.env.TZ = host })
+
+  test('Dubai 09:00 stays 09:00 there across the host\'s fall-back: its instant never moves, the host\'s clock does', () => {
+    const before = nextSlot('0 9 * * *', d('2026-10-30T12:00:00Z'), 'Asia/Dubai')!
+    const after = nextSlot('0 9 * * *', d('2026-11-02T12:00:00Z'), 'Asia/Dubai')!   // the host fell back on Nov 1
+    expect(before).toEqual({ at: d('2026-10-31T05:00:00Z'), label: '2026-10-31 09:00' })
+    expect(after).toEqual({ at: d('2026-11-03T05:00:00Z'), label: '2026-11-03 09:00' })
+    expect(slotLabel(before.at)).toBe('2026-10-30 22:00')                           // host: 22:00 PDT
+    expect(slotLabel(after.at)).toBe('2026-11-02 21:00')                            // host: 21:00 PST
+  })
+
+  test('London 09:00 stays 09:00 across London\'s own fall-back (Oct 25): the instant moves an hour', () => {
+    expect(nextSlot('0 9 * * *', d('2026-10-24T12:00:00Z'), 'Europe/London')).toEqual({ at: d('2026-10-25T09:00:00Z'), label: '2026-10-25 09:00' })
+    expect(latestSlot('0 9 * * *', d('2026-10-24T12:00:00Z'), 'Europe/London')).toEqual({ at: d('2026-10-24T08:00:00Z'), label: '2026-10-24 09:00' })   // BST: 09:00 = 08:00Z
+    // And the spring side: Mar 29 02:00 GMT jumps to 03:00 BST; a 01:30 job sits before the gap, a 09:00 one after
+    expect(nextSlot('0 9 * * *', d('2026-03-28T12:00:00Z'), 'Europe/London')).toEqual({ at: d('2026-03-29T08:00:00Z'), label: '2026-03-29 09:00' })
+  })
+
+  test('a time that does not exist in the zone runs at the first instant after the gap, as on the host', () => {
+    // London, Mar 29 2026: 01:00 GMT jumps to 02:00 BST at 01:00Z, so 01:30 does not exist
+    expect(nextSlot('30 1 * * *', d('2026-03-28T12:00:00Z'), 'Europe/London')).toEqual({ at: d('2026-03-29T01:00:00Z'), label: '2026-03-29 01:30' })
+  })
+
+  // The oracle: a zone argument must give exactly what the host gives when it is in that zone.
+  const zones = ['Europe/London', 'Asia/Dubai', 'America/New_York', 'Australia/Lord_Howe', 'Asia/Kolkata']
+  const exprs = ['0 * * * *', '*/5 * * * *', '30 2 * * *', '0 9 * * 1-5', '15 3 29 * *']
+  const around = ['2026-03-08T10:00:00Z', '2026-03-29T01:00:00Z', '2026-10-25T01:00:00Z', '2026-11-01T06:00:00Z', '2026-04-04T15:00:00Z', '2026-10-03T15:00:00Z']
+  for (const zone of zones) test(`${zone}: nextSlot and latestSlot equal the host's own, around every 2026 transition`, () => {
+    let checked = 0
+    try {
+    for (const expr of exprs) for (const at of around) for (let t = d(at).getTime() - 4 * 3600_000; t <= d(at).getTime() + 4 * 3600_000; t += 7 * 60_000) {
+      const asked = [nextSlot(expr, new Date(t), zone), latestSlot(expr, new Date(t), zone)]
+      process.env.TZ = zone
+      const hosts = [nextSlot(expr, new Date(t)), latestSlot(expr, new Date(t))]
+      process.env.TZ = host
+      expect(asked).toEqual(hosts)
+      checked++
+    }
+    } finally { process.env.TZ = host }
+    expect(checked).toBeGreaterThan(500)
+  })
+
+  test('offsets and abbreviations are not zones: they would not follow daylight saving', () => {
+    for (const z of ['+05:00', 'utc', 'EST', 'GMT+4', 'Asia/']) expect(isZone(z)).toBe(false)
+    for (const z of ['UTC', 'Asia/Dubai', 'America/Argentina/Buenos_Aires', 'Etc/GMT+5']) expect(isZone(z)).toBe(true)
+  })
+
+  test('an unknown zone is an error naming it', () => {
+    expect(() => nextSlot('0 9 * * *', d('2026-11-01T00:00:00Z'), 'Mars/Olympus')).toThrow('Mars/Olympus')
   })
 })

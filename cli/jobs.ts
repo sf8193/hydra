@@ -128,9 +128,9 @@ export async function runCheck(job: Job): Promise<{ output: string } | { outcome
  * How long a delivery's key is remembered: one schedule period, because a slot is retried until the next one is due.
  * A retry inside that window (after a crash, a sleep, a back-off) is then a duplicate. Between 15m and 7d.
  */
-export function keyTtl(schedule: string, now: Date): string {
-  const slot = latestSlot(schedule, now)
-  const next = slot && nextSlot(schedule, slot.at)
+export function keyTtl(schedule: string, now: Date, zone?: string): string {
+  const slot = latestSlot(schedule, now, zone)
+  const next = slot && nextSlot(schedule, slot.at, zone)
   const period = next ? next.at.getTime() - slot!.at.getTime() : MAX_DELIVER_IDEMPOTENCY_TTL_MS
   return `${Math.ceil(Math.min(Math.max(period, 15 * 60_000), MAX_DELIVER_IDEMPOTENCY_TTL_MS) / 60_000)}m`
 }
@@ -171,7 +171,7 @@ export async function runAction(job: Job, stateDir: string, key: string, output:
     // A per-conversation specialist: each run is its own conversation (a fresh session in a new thread), keyed like the run.
     : ['deliver', '--to', spelledTo(target.to), ...(target.conversation ? ['--conversation', `clock:${key}`] : []), ...(target.revive ? ['--revive'] : []),
       ...(target.to === 'main' ? ['--queue'] : []), '--initiator', initiator,
-      '--idempotency-key', key, '--idempotency-ttl', keyTtl(job.schedule, jobsIO.now()), '--message', message]
+      '--idempotency-key', key, '--idempotency-ttl', keyTtl(job.schedule, jobsIO.now(), job.timezone), '--message', message]
   // The dispatching daemon, by its state dir: a scratch or worktree daemon's jobs never reach the live one.
   // --json: the reply carries the duplicate-key status, so a key the daemon already holds is an outcome, not an error.
   const r = await jobsIO.hydra(['--state-dir', stateDir, '--json', ...args])
@@ -653,20 +653,21 @@ function readSpecialistNames(stateDir: string): Set<string> {
 
 /** One `jobs list` line: next slot; owed or not and since when; the last result and its note; not-now; the failure run. */
 export function describeJob(j: Job, r: ReturnType<typeof readJobState>, now: Date): string {
-  const next = nextSlot(j.schedule, now)
-  const parts = [j.paused ? 'paused' : `next ${next ? next.at.toLocaleString() : '-'}`]
+  const next = nextSlot(j.schedule, now, j.timezone)
+  // A zoned schedule is named by its zone's wall clock; the host's time follows, since that is the clock the operator reads.
+  const parts = [j.paused ? 'paused' : `next ${next ? (j.timezone ? `${next.label} ${j.timezone} (${next.at.toLocaleString()} here)` : next.at.toLocaleString()) : '-'}`]
   if (r.kind === 'missing') parts.push('last never')
   else if (r.kind === 'unreadable') parts.push(`state unreadable: ${r.error}`)
   else {
     const s = r.state
-    const owed = j.paused ? null : owedSlot(j.schedule, s, now)
+    const owed = j.paused ? null : owedSlot(j.schedule, s, now, j.timezone)
     if (j.runner === 'daemon' && !j.paused) parts.push(owed ? `owed since ${owed.at.toLocaleString()} (${owed.label})` : 'not owed')
     const last = s.last
     parts.push(last ? `last ${local(last.at)} ${last.result}${last.servedBy ? ` (served by ${last.servedBy})` : ''}${last.note ? ` (${last.note})` : ''}` : 'last never')
     if (s.notNow && (!last || s.notNow.since > last.at)) parts.push(`not now since ${local(s.notNow.since)}: ${s.notNow.reason}`)
     if (s.failingSince) parts.push(`failing since ${local(s.failingSince)} (${s.failures ?? 1}x)`)
     if (owed && j.runner === 'daemon') {
-      const until = backoffUntil(j.schedule, s, owed)
+      const until = backoffUntil(j.schedule, s, owed, j.timezone)
       if (until !== null && until > now.getTime()) parts.push(`retry after ${new Date(until).toLocaleString()}`)
     }
     if (s.dispatch) parts.push(`running: dispatch ${s.dispatch.id} since ${local(s.dispatch.at)}`)

@@ -196,10 +196,10 @@ export class JobsClock {
     const now = this.d.now()
     const state = this.ensureState(job, now)
     if (!state || state.dispatch) return
-    const slot = owedSlot(job.schedule, state, now)
+    const slot = owedSlot(job.schedule, state, now, job.timezone)
     if (!slot) return
     const target: Target = { kind: 'scheduled', slot: slot.label, at: now.toISOString() }
-    const until = backoffUntil(job.schedule, state, slot)
+    const until = backoffUntil(job.schedule, state, slot, job.timezone)
     if (until !== null && now.getTime() < until) return
     if (job.needs?.includes('internet')) {
       const online = await isOnline()
@@ -262,7 +262,7 @@ export class JobsClock {
     const r = readJobState(this.d.stateDir, job.name, job.schedule)
     const st = daemon ? this.ensureState(job, now) : r.kind === 'ok' ? r.state : null
     if (!st) return
-    const slot = daemon && !st.dispatch ? owedSlot(job.schedule, st, now) : null
+    const slot = daemon && !st.dispatch ? owedSlot(job.schedule, st, now, job.timezone) : null
     if (!slot && !st.failures && !st.failingSince && !st.notNow && !st.unreported) return
     this.update(job.name, job.schedule, s => {
       if (s.failures) s.failures = 0
@@ -391,7 +391,7 @@ export class JobsClock {
       return r.state
     }
     const at = now.toISOString()
-    const slot = latestSlot(job.schedule, now)
+    const slot = latestSlot(job.schedule, now, job.timezone)
     // Old result files keep their ids, so new ids start above them: an old file is never taken for a new dispatch's.
     const applied = this.highestResultId(job.name)
     let s: JobState
@@ -444,7 +444,7 @@ export class JobsClock {
     if (s.dispatch) return 'already running'
     const now = this.d.now()
     // The tick decided this slot before an await (the online probe); a mark-done or a result may have covered it since.
-    if (kind === 'scheduled' && !external && owedSlot(job.schedule, s, now)?.label !== slot) return 'not owed'
+    if (kind === 'scheduled' && !external && owedSlot(job.schedule, s, now, job.timezone)?.label !== slot) return 'not owed'
     const d: Dispatch = {
       id: (s.appliedDispatch ?? 0) + 1, nonce: randomBytes(8).toString('hex'), at: now.toISOString(), kind, slot,
       deadline: new Date(now.getTime() + ATTEMPT_DEADLINE_MS).toISOString(), ...(external && { external }),
@@ -477,7 +477,7 @@ export class JobsClock {
     if (!job) return { ok: false, error: noSuch(cfg, name) }
     const now = this.d.now()
     if (!this.ensureState(job, now)) return { ok: false, error: `state for ${name} is unreadable` }
-    const d = this.dispatch(job, 'manual', latestSlot(job.schedule, now))
+    const d = this.dispatch(job, 'manual', latestSlot(job.schedule, now, job.timezone))
     if (d === 'already running') return { ok: false, error: `${name} is already running` }
     if (!d || d === 'not owed') return { ok: false, error: `state for ${name} is unreadable` }   // a manual dispatch is never "not owed"
     return { ok: true, reply: { id: d.id, ...(d.pid && { pid: d.pid, lstart: d.lstart }) } }
@@ -522,7 +522,7 @@ export class JobsClock {
     const st = this.ensureState(job, now)
     if (!st) return { ok: false, error: `state for ${name} is unreadable` }
     if (st.dispatch) return { ok: false, error: `${name} is already running` }
-    const slot = latestSlot(job.schedule, now)
+    const slot = latestSlot(job.schedule, now, job.timezone)
     const at = now.toISOString()
     this.recordOutcome(job, { at, result: 'done', note: 'marked done: no work ran' }, slot ? { kind: 'scheduled', slot: slot.label, at } : null)
     return { ok: true, slot: slot?.label ?? null }

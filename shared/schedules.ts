@@ -48,6 +48,7 @@ export function jobsFromSchedules(cfg: Pick<HydraConfig, 'schedules' | 'speciali
       runnerFrom,
       fromSchedule: true,
       ...(s.paused && { paused: true as const }),
+      ...(s.timezone && { timezone: s.timezone }),
       ...(to && { target: { to, ...(perConversation && { conversation: true as const }) } }),
       ...(s.message && { prompt: s.message }),
       ...(s.check !== undefined && { check: s.check }),
