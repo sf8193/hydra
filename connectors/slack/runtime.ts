@@ -93,8 +93,21 @@ function alert(text: string, to?: string, app?: string): void {
     }
     return sent
   }
+  // A notice addressed to a session thread tells that session something about its own bindings: the post is the record, the input is the telling.
+  if (to && isSessionThread(to)) tellSession(to, text)
   if (post(targets) || post([MAIN])) return
   log(`daemon: slack connector alert, logged only: there is no Slack thread to post it in (a specialist has one once it has started; main has one once its channel is set), so nothing in Slack shows it. Start the specialist or main, and alerts are posted from then on: ${text}\n`)
+}
+
+/**
+ * Gives a live session the notice as input, as every `[system]` notice reaches one (`deliverToTarget` lands it by the session's adapter, queued
+ * while its bridge reconnects). A session that is gone (a kill, a deleted thread) refuses it and is not revived: its thread has the post.
+ * Specialist and main alerts are not told this way: they are the operator's, about the connector, not about a binding the session holds.
+ */
+function tellSession(threadId: string, text: string): void {
+  void deliverToTarget({ to: `thread:${threadId}` }, `[system] ${text}`, { initiator: 'slack-watch', source: 'slack-watch', queue: true })
+    .then(r => { if (!r.ok) log(`daemon: slack connector: the session in thread ${threadId} was not told (${r.reason}); its thread has the notice\n`) })
+    .catch(err => log(`daemon: slack connector: telling the session in thread ${threadId} failed: ${err}\n`))
 }
 
 /** Where a binding's alerts are posted: main's channel for `main`, a session's own thread, else the specialist's thread. */
@@ -402,8 +415,10 @@ export function unbindConversation(caller: Partial<Pick<SessionInfo, 'threadId' 
   if (!e) return `${conversationId(c)} was not bound`
   if (!e.specialist || currentId(hydraConfig(), e.specialist) !== me) throw new Error(`${conversationId(c)} is bound to ${e.specialist ?? 'no one yet'}, not ${me}`)
   const owed = e.owed?.length ?? 0
-  getSlackWatcher().unwatch(c.channel, c.threadTs, appOfEntry(c))
-  return `${conversationId(c)} is unbound${owed ? `; ${owed} message${owed === 1 ? '' : 's'} it still owed were dropped (and alerted)` : ''}`
+  // A session that unbinds learns of its drop from this result; a specialist's drop is alerted in its thread.
+  const own = isSessionThread(me)
+  getSlackWatcher().unwatch(c.channel, c.threadTs, appOfEntry(c), own)
+  return `${conversationId(c)} is unbound${owed ? `; ${owed} message${owed === 1 ? '' : 's'} it still owed were dropped${own ? '' : ' (and alerted)'}` : ''}`
 }
 
 /** Slack's own advice is to keep a message under 4,000 characters; longer ones are split. */

@@ -118,7 +118,7 @@ describe("a session thread with no session in it (killed, or between a handoff a
     await s.w.flush()
     expect(s.w.get('C0OTHER', '2000.000001')!.owed).toHaveLength(200)
     expect(s.alerts.join()).toContain('owed-full')
-    expect(s.alerts.join()).toContain('No session is in this thread: resume it, or `unbind_conversation`')
+    expect(s.alerts.join()).toContain('These never reached a session: if none is running in this thread, resume one; or `unbind_conversation` to let the conversation go')
     expect(s.alertTo).toContain(SESSION)
   })
 
@@ -133,7 +133,7 @@ describe("a session thread with no session in it (killed, or between a handoff a
     expect(s.w.get('C0OTHER', '2000.000001')?.specialist).toBe(SESSION)
     expect(s.w.get('C0OTHER', '2000.000001')!.owed).toBeUndefined()
     expect(s.alerts.join()).toContain('still undelivered after 24h')
-    expect(s.alerts.join()).toContain('No session is in this thread: resume it, or `unbind_conversation`')
+    expect(s.alerts.join()).toContain('These never reached a session: if none is running in this thread, resume one; or `unbind_conversation` to let the conversation go')
     expect(s.alertTo).toContain(SESSION)
   })
 

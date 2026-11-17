@@ -1138,7 +1138,7 @@ export class SlackWatcher {
     if (!fresh.length) return
     this.stats_.dropped[kind] = (this.stats_.dropped[kind] ?? 0) + fresh.length
     // A session thread's owed messages go undelivered when no session is in it: say what to do.
-    const vacantAdvice = where.specialist && isSessionThread(where.specialist) && (kind === 'expired' || kind === 'owed-full') ? '. No session is in this thread: resume it, or `unbind_conversation`' : ''
+    const vacantAdvice = where.specialist && isSessionThread(where.specialist) && (kind === 'expired' || kind === 'owed-full') ? '. These never reached a session: if none is running in this thread, resume one; or `unbind_conversation` to let the conversation go' : ''
     const line = `dropped ${fresh.length} Slack message${fresh.length === 1 ? '' : 's'} in ${keyOf(where)} (${kind}, ts ${fresh.join(', ')}): ${why}${vacantAdvice}`
     this.deps.log(`daemon: slack connector: ${line}\n`)
     // Keyed by kind and by who hears it: one specialist's trouble does not silence another's.
