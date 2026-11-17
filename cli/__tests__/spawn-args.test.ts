@@ -54,6 +54,25 @@ describe('hydra spawn: -- ends the options', () => {
   }, 15_000)
 })
 
+describe('hydra spawn --specialist: what it requires', () => {
+  test('a first call with neither flag names both, with their arguments', async () => {
+    const r = await spawnRequest(['--specialist', 'ops'])
+    expect(r.code).toBe(1)
+    expect(r.err).toContain('error: --idempotency-key <key> and --initiator <who> are required')
+    expect(r.req).toBeUndefined()
+  }, 15_000)
+  test('with one of them, names the other alone', async () => {
+    const r = await spawnRequest(['--specialist', 'ops', '--initiator', 't'])
+    expect(r.err).toContain('error: --idempotency-key <key> is required')
+  }, 15_000)
+  test('the usage line says what a specialist spawn needs', async () => {
+    const p = Bun.spawn([process.execPath, hydra, '--help'], { stdout: 'pipe', stderr: 'pipe' })
+    await p.exited
+    const out = (await new Response(p.stdout).text()) + (await new Response(p.stderr).text())
+    expect(out).toMatch(/spawn --specialist <name> --initiator <who> --idempotency-key <key>\n\s+Spawn the session for a declared specialist \(its kickoff, which it must have/)
+  }, 15_000)
+})
+
 describe('hydra deliver --idempotency-ttl', () => {
   const base = ['--session', 's', '--message', 'm']
   test('sent with the key; refused without one, or when it is not 1m to 7d', async () => {

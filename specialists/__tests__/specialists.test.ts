@@ -383,7 +383,7 @@ describe('specialists', () => {
     const calls = fakeSpawn()
     specialistDeps.threadExists = async () => false
     expect(await deliver(specialist('thread-gone'))).toMatchObject({ ok: false, error: expect.stringContaining('no channel') })
-    expect(await deliver(specialist('thread-gone-2', { kickoff: undefined, channel: 'c' }))).toMatchObject({ ok: false, error: expect.stringContaining('no kickoff') })
+    expect(await deliver(specialist('thread-gone-2', { kickoff: undefined, channel: 'c' }))).toMatchObject({ ok: false, error: expect.stringContaining('no kickoff: set one with `hydra specialist set') })
     expect(await deliver('no-such-specialist')).toMatchObject({ ok: false, exitCode: 8, error: 'no such specialist: no-such-specialist' })
     expect(calls).toHaveLength(0)
   })
@@ -444,6 +444,21 @@ describe('specialists', () => {
     expect((calls[0][3] as any).existingThreadId).toBeUndefined()
     expect((calls[0][3] as any).name).toBe(name)
     expect(getSpecialist(name)!.threadId).toMatch(/^fresh-thread-/)
+  })
+
+  test('a hydra.toml specialist with no kickoff is told to add one to its table, not to run `specialist set` (which hydra.toml refuses)', async () => {
+    const calls = fakeSpawn()
+    const name = `t-specialist-${++n}`
+    _setHydraConfigForTesting({
+      operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
+      people: { op: { id: 'op', addresses: ['discord:100000000000000001'], roles: [], name: 'op' } },
+      specialists: { [name]: { id: name, workdir: '/srv/x', homePlace: '555', reachableBy: ['people'], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false } },
+    })
+    try {
+      const r = await deliver(name)
+      expect(r).toMatchObject({ ok: false, error: expect.stringContaining(`give [specialists.${name}] a kickoff or kickoff_file in hydra.toml`) })
+      expect(calls).toHaveLength(0)
+    } finally { _setHydraConfigForTesting(undefined) }
   })
 
   test('a hydra.toml specialist opens its thread in its home_place on the first delivery; only its pointer is written, and only --thread moves it', async () => {
