@@ -5,7 +5,7 @@ import { statSync, accessSync, lstatSync, readdirSync, readFileSync, realpathSyn
 import { parseEnvLine } from '../shared/env-parse.js'
 import { homedir } from 'os'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'path'
-import { parseCron } from '../shared/cron-local.js'
+import { isZone, parseCron } from '../shared/cron-local.js'
 import { engineOfModel, parseIdleTtl, SLACK_GATEWAY_TOKEN_ENVS } from '../shared/constants.js'
 import { ENV_NAME_RE, tokenVarRefusal } from '../shared/spawn-env.js'
 import { offLimitRoots, workdirRestrictionIssues } from './restricted-workdir.js'
@@ -709,9 +709,9 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (!ID_RE.test(id)) error(path, 'a schedule\'s id must be lowercase letters, digits and dashes')
     const t = table(raw, path)
     if (!t) continue
-    unknownKeys(t, ['cron', 'target', 'message', 'check', 'workdir', 'env_file', 'runner', 'needs', 'alert_after', 'paused'], path)
+    unknownKeys(t, ['cron', 'target', 'message', 'check', 'workdir', 'env_file', 'runner', 'needs', 'alert_after', 'paused', 'timezone'], path)
     const cron = str(t, 'cron', path)
-    if (t.cron === undefined) error(`${path}.cron`, 'is required: 5 fields, local time')
+    if (t.cron === undefined) error(`${path}.cron`, 'is required: 5 fields, in local time (or the schedule\'s `timezone`)')
     else if (cron !== undefined) {
       try { parseCron(cron) } catch (e) { error(`${path}.cron`, (e as Error).message) }
     }
@@ -736,9 +736,14 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     const alertAfterMs = duration(t, 'alert_after', path, MAX_ALERT_AFTER_MS)
     for (const k of ['needs', 'alert_after']) if (t[k] !== undefined && runner !== 'daemon') error(`${path}.${k}`, 'needs runner = "daemon"')
     const paused = bool(t, 'paused', path)
+    const timezone = str(t, 'timezone', path)
+    if (timezone !== undefined && !isZone(timezone)) error(`${path}.timezone`, `"${timezone}" is not a time zone name (an IANA name such as Asia/Dubai)`)
+    // A launchd calendar entry fires in the host's zone, and re-registering it at every daylight-saving change is not what launchd is for.
+    else if (timezone !== undefined && runner !== 'daemon') error(`${path}.timezone`, 'needs runner = "daemon": a launchd entry fires in the host\'s time zone')
     schedules[id] = {
       id, cron: cron ?? '', message, runner,
       ...(paused && { paused: true as const }),
+      ...(timezone !== undefined && { timezone }),
       ...(target !== undefined && { target }),
       ...(needs?.length && { needs: [...new Set(needs)] as Need[] }),
       ...(alertAfterMs !== undefined && { alertAfterMs }),

@@ -270,6 +270,13 @@ describe('runWork', () => {
       '--idempotency-key', 'k', '--idempotency-ttl', '10080m', '--message', 'Run the retro.']])   // weekly: a week
   })
 
+  test("a zoned job's delivery key is sized by its own zone's period, not the host's", async () => {
+    Object.assign(jobsIO, { now: () => new Date('2026-10-24T12:00:00Z') })       // the day before London falls back: its 09:00 to 09:00 is 25 hours
+    const zoned = { ...parseJobs(`[brief]\nschedule="0 9 * * *"\nmode="main"\nprompt="Brief."`)[0], timezone: 'Europe/London' }
+    expect((await runWork(zoned, dir, 'k')).result).toBe('done')
+    expect(calls[0]).toContain('1500m')
+  })
+
   test("a delivery key lives one schedule period, the window a slot is retried in; 15m to 7d", () => {
     const now = new Date(2026, 10, 4, 10, 30)   // local time, like the schedules
     expect(keyTtl('0 * * * *', now)).toBe('60m')
@@ -277,6 +284,12 @@ describe('runWork', () => {
     expect(keyTtl('*/5 * * * *', now)).toBe('15m')        // the floor: the in-flight default
     expect(keyTtl('0 9 1 * *', now)).toBe('10080m')       // monthly: the 7d cap
     expect(keyTtl('0 9,17 * * *', now)).toBe('480m')      // the gap after the latest slot: 09:00 → 17:00
+  })
+
+  test('a zoned schedule\'s delivery key lives its own period: the day London falls back is 25 hours long', () => {
+    const before = new Date('2026-10-24T12:00:00Z')
+    expect(keyTtl('0 9 * * *', before, 'Europe/London')).toBe('1500m')
+    expect(keyTtl('0 9 * * *', before)).toBe('1440m')   // the host's own clock has no change that day
   })
 
   test('failed check: failed, and the attempt itself sends nothing (the daemon reports failures)', async () => {
@@ -1054,6 +1067,14 @@ describe('jobs list lines', () => {
     expect(l).not.toContain('owed')
     expect(l).not.toContain('retry after')
     expect(l).toContain('failed (ssh timeout)')
+  })
+
+  test('a zoned schedule shows its next fire in its zone and in the host\'s time', () => {
+    const zoned = { ...dur, schedule: '0 9 * * *', timezone: 'Asia/Dubai' }
+    const l = line(zoned, {})
+    expect(l).toContain('next 2026-11-05 09:00 Asia/Dubai (')
+    expect(l).toContain(new Date('2026-11-05T05:00:00Z').toLocaleString())
+    expect(l).toContain(' here)')
   })
 
   test('not owed, served, and not now (only when newer than the last result)', () => {

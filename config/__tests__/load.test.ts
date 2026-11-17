@@ -281,6 +281,17 @@ addresses = ["github:alice"]
     ])
   })
 
+  test('timezone: an IANA zone on a daemon schedule; an unknown zone names its path, and launchd cannot hold one', () => {
+    const { config } = ok(`${BASE}\n[schedules.digest]\ncron = "0 9 * * *"\ncheck = "d.sh"\nrunner = "daemon"\ntimezone = "Asia/Dubai"\n`)
+    expect(config.schedules.digest).toEqual({ id: 'digest', cron: '0 9 * * *', message: '', check: 'd.sh', runner: 'daemon', timezone: 'Asia/Dubai' })
+    expect(errorsOf(`${BASE}\n[schedules.a]\ncron = "@daily"\ncheck = "c.sh"\nrunner = "daemon"\ntimezone = "Mars/Olympus"\n[schedules.b]\ncron = "@daily"\ncheck = "c.sh"\ntimezone = "Asia/Dubai"\n[schedules.c]\ncron = "@daily"\ncheck = "c.sh"\nrunner = "daemon"\ntimezone = 4\n[schedules.d]\ncron = "@daily"\ncheck = "c.sh"\nrunner = "daemon"\ntimezone = "+05:00"\n`)).toEqual([
+      'schedules.a.timezone: "Mars/Olympus" is not a time zone name (an IANA name such as Asia/Dubai)',
+      'schedules.b.timezone: needs runner = "daemon": a launchd entry fires in the host\'s time zone',
+      expect.stringContaining('schedules.c.timezone'),
+      'schedules.d.timezone: "+05:00" is not a time zone name (an IANA name such as Asia/Dubai)',
+    ])
+  })
+
   test('main is a target for a schedule or a rule, though never declared', () => {
     const { config } = ok(`${BASE}\n[schedules.digest]\ncron = "@daily"\ntarget = "main"\n[[rules]]\nplace = "slack:#ops"\ntarget = "main"\n`)
     expect(config.schedules.digest.target).toBe('main')

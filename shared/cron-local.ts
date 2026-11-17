@@ -1,6 +1,8 @@
-// A cron matcher in the process's local time zone (TZ respected), for the times jobs fire at.
+// A cron matcher in the process's local time zone (TZ respected), or in a named IANA zone, for the times jobs fire at.
 // Bun.cron.parse can't stand in: it has no previous-match API (the jobs clock needs "the latest slot at or before
 // now"), and its zone depends on the Bun version (UTC on 1.3.14, local on 1.4.2).
+//
+// A zone changes only where wall-clock time comes from: every rule below holds in it as it does on the host.
 //
 // Syntax is what Bun.cron accepts: 5 fields, numbers, `*`, lists, ranges, steps (`a/n` runs a to the field max),
 // case-insensitive month and weekday names (3-letter or full), 0 and 7 both Sunday, and the @yearly/@annually/
@@ -95,25 +97,51 @@ export function parseCron(expr: string): Cron {
   }
 }
 
-// A wall-clock time is carried as a "wall key": the ms value Date.UTC gives its local fields.
-function wallKey(t: number): number {
+const formats = new Map<string, Intl.DateTimeFormat>()
+function formatIn(zone: string): Intl.DateTimeFormat {
+  let f = formats.get(zone)
+  if (!f) {
+    f = new Intl.DateTimeFormat('en-US', { timeZone: zone, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' })
+    formats.set(zone, f)
+  }
+  return f
+}
+
+/**
+ * Whether `zone` is an IANA zone name the runtime knows: `Region/City` or `UTC`. Offsets (`+05:00`) and abbreviations
+ * are refused: they do not follow daylight saving, which is what a zone is for.
+ */
+export function isZone(zone: string): boolean {
+  if (zone !== 'UTC' && !/^[A-Za-z]+(\/[A-Za-z0-9_+-]+)+$/.test(zone)) return false
+  try { formatIn(zone); return true } catch { return false }
+}
+
+// A wall-clock time is carried as a "wall key": the ms value Date.UTC gives its wall-clock fields, in `zone`
+// (the host's zone when absent).
+function wallKey(t: number, zone?: string): number {
+  if (zone) return t + offsetAt(t, zone)
   const d = new Date(t)
   return Date.UTC(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes(), d.getSeconds(), d.getMilliseconds())
 }
 
-const offsetAt = (t: number) => -new Date(t).getTimezoneOffset() * MIN // local = utc + offset
+function offsetAt(t: number, zone?: string): number { // wall = utc + offset
+  if (!zone) return -new Date(t).getTimezoneOffset() * MIN
+  const p: Record<string, number> = {}
+  for (const x of formatIn(zone).formatToParts(new Date(t))) if (x.type !== 'literal') p[x.type] = Number(x.value)
+  return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) - Math.floor(t / 1000) * 1000
+}
 
 // The slot instant of a wall-clock minute: see the rules at the top.
-function instantOf(w: number): number {
-  const before = offsetAt(w - DAY), after = offsetAt(w + DAY)
-  const hits = [w - before, w - offsetAt(w), w - after].filter(t => wallKey(t) === w)
+function instantOf(w: number, zone?: string): number {
+  const before = offsetAt(w - DAY, zone), after = offsetAt(w + DAY, zone)
+  const hits = [w - before, w - offsetAt(w, zone), w - after].filter(t => wallKey(t, zone) === w)
   if (hits.length) return Math.min(...hits)
   // In a gap: the first instant whose wall-clock time is past w.
   let lo = w - Math.max(before, after), hi = w - Math.min(before, after)
-  if (wallKey(lo) >= w || wallKey(hi) <= w) throw new Error(`cannot place local time ${labelOfKey(w)}`)
+  if (wallKey(lo, zone) >= w || wallKey(hi, zone) <= w) throw new Error(`cannot place local time ${labelOfKey(w)}`)
   while (hi - lo > 1) {
     const mid = Math.floor((lo + hi) / 2)
-    if (wallKey(mid) > w) hi = mid
+    if (wallKey(mid, zone) > w) hi = mid
     else lo = mid
   }
   return hi
@@ -149,22 +177,29 @@ function* minutes(c: Cron, from: number, step: 1 | -1): Generator<number> {
   }
 }
 
-/** The first slot whose instant is strictly after `from`, or null if the expression never matches. */
-export function nextSlot(expr: string, from: Date): Slot | null {
+/** Throws for a zone name the runtime does not know, naming it. */
+function checkZone(zone: string | undefined): void {
+  if (zone !== undefined && !isZone(zone)) throw new Error(`unknown time zone "${zone}"`)
+}
+
+/** The first slot whose instant is strictly after `from`, or null if the expression never matches. `zone`: an IANA name; absent, the host's. */
+export function nextSlot(expr: string, from: Date, zone?: string): Slot | null {
+  checkZone(zone)
   // Walking up, the first minute whose instant is past `from` is the earliest minute of that instant.
-  for (const w of minutes(parseCron(expr), wallKey(from.getTime()) - SLACK, 1)) {
-    const t = instantOf(w)
+  for (const w of minutes(parseCron(expr), wallKey(from.getTime(), zone) - SLACK, 1)) {
+    const t = instantOf(w, zone)
     if (t > from.getTime()) return { at: new Date(t), label: labelOfKey(w) }
   }
   return null
 }
 
 /** The latest slot whose instant is at or before `at`, or null if none in the search window. */
-export function latestSlot(expr: string, at: Date): Slot | null {
+export function latestSlot(expr: string, at: Date, zone?: string): Slot | null {
+  checkZone(zone)
   // Walking down, find the first minute at or before `at`, then keep going while minutes share its instant.
   let found: number | undefined, label = 0
-  for (const w of minutes(parseCron(expr), wallKey(at.getTime()) + SLACK, -1)) {
-    const t = instantOf(w)
+  for (const w of minutes(parseCron(expr), wallKey(at.getTime(), zone) + SLACK, -1)) {
+    const t = instantOf(w, zone)
     if (found === undefined) {
       if (t <= at.getTime()) [found, label] = [t, w]
     } else if (t === found) label = w

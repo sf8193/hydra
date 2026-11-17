@@ -2024,6 +2024,21 @@ describe("hydra.toml [schedules]: run once migrate has moved jobs.toml; until th
     expect(state('sync').failingSince).toBeUndefined()
   })
 
+  test('a paused zoned schedule is skipped in its zone: its slot is covered, and unpausing runs the zone\'s next slot, not the missed one', async () => {
+    let paused = true
+    const dubai = () => jobsFromSchedules(cfg(schedule({ id: 'digest', cron: '0 9 * * *', check: 'd.sh', timezone: 'Asia/Dubai', ...(paused && { paused: true as const }) })))
+    const c = clock({ schedules: dubai })
+    at('2026-11-04T20:59:00-08:00'); await c.tick()
+    at('2026-11-04T21:00:30-08:00'); await c.tick()                               // 09:00 in Dubai, paused
+    expect(w.spawns).toEqual([])
+    expect(state('digest').covered?.slot).toBe('2026-11-05 09:00')
+    paused = false
+    at('2026-11-04T21:05:30-08:00'); await c.tick()
+    expect(w.spawns).toEqual([])
+    at('2026-11-05T21:00:30-08:00'); await c.tick()
+    expect(w.spawns).toHaveLength(1)
+  })
+
   test('schedules run still runs a paused schedule once, on request', async () => {
     const c = clock({ schedules: () => jobsFromSchedules(cfg(schedule({ id: 'sweep', check: 'sweep.sh', paused: true }))) })
     at('2026-11-04T09:59:00-08:00'); await c.tick()
@@ -2031,6 +2046,25 @@ describe("hydra.toml [schedules]: run once migrate has moved jobs.toml; until th
     expect(w.spawns).toHaveLength(1)
     at('2026-11-04T10:05:30-08:00'); await c.tick()
     expect(w.spawns).toHaveLength(1)                                              // the clock itself still fires nothing
+  })
+
+  test('a zoned schedule fires at its zone\'s wall-clock slot, not the host\'s, and a restart does not run it again', async () => {
+    const dubai = cfg(schedule({ id: 'digest', cron: '0 9 * * *', check: 'd.sh', timezone: 'Asia/Dubai' }))   // 09:00 there = 21:00 PST the evening before
+    const c = clock({ schedules: () => jobsFromSchedules(dubai) })
+    at('2026-11-04T08:59:00-08:00'); await c.tick()
+    at('2026-11-04T09:00:30-08:00'); await c.tick()                               // 09:00 on the host: not its slot
+    expect(w.spawns).toEqual([])
+    at('2026-11-04T20:59:00-08:00'); await c.tick()
+    expect(w.spawns).toEqual([])
+    at('2026-11-04T21:00:30-08:00'); await c.tick()                               // 09:00 in Dubai
+    expect(w.spawns).toHaveLength(1)
+    finish('digest', 1, 'done', undefined, 1000)
+    at('2026-11-04T21:01:30-08:00'); await c.tick()
+    expect(state('digest').covered?.slot).toBe('2026-11-05 09:00')                // labelled in the zone
+    const again = clock({ schedules: () => jobsFromSchedules(dubai) })
+    c.stop()
+    at('2026-11-04T21:02:30-08:00'); await again.tick()
+    expect(w.spawns).toHaveLength(1)
   })
 
   test("a schedule's failure alerts the operator, never its target", async () => {
