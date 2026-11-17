@@ -22,7 +22,9 @@ describe('hydra.example.toml', () => {
     expect(r.config.schedules['disk-watch'].check).toBeDefined()
     expect(r.config.schedules['backup-watch']).toMatchObject({ runner: 'daemon', needs: ['internet'] })
     expect(r.config.rules).toHaveLength(8)
-    expect(r.config.mcpServers!.browser).toMatchObject({ command: 'npx', profileArgs: ['-y', '@playwright/mcp@0.0.85', '--browser', 'chrome', '--user-data-dir', '{profile_dir}', '--output-dir', '{download_dir}'], loginCommand: ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '--user-data-dir={profile_dir}', '--password-store=basic', '--use-mock-keychain', '--no-first-run'], profileLocks: ['SingletonLock'], denyTools: ['browser_run_code_unsafe'] })
+    expect(r.config.mcpServers!.browser).toMatchObject({ command: 'npx', profileArgs: ['-y', '@playwright/mcp@0.0.85', '--browser', 'chrome', '--headless', '--user-data-dir', '{profile_dir}', '--output-dir', '{download_dir}'], loginCommand: ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '--user-data-dir={profile_dir}', '--password-store=basic', '--use-mock-keychain', '--no-first-run'], profileLocks: ['SingletonLock'], denyTools: ['browser_run_code_unsafe'] })
+    // A session's browser is headless; only the operator's login window is headed.
+    expect(r.config.mcpServers!.browser.loginCommand).not.toContain('--headless')
     expect(r.config.specialists.assistant).toMatchObject({ restricted: false, canOnlyWriteTo: 'workdir', cannotRead: ['/home/op/notes'], denyCommands: ['rm -rf *'], tools: ['Bash', 'Edit', 'Write', 'Read', 'Grep', 'Glob'], browserProfile: '/home/op/agents/assistant/chrome-profile', mcpServerNames: ['browser'] })
     expect(r.config.specialists.deals.pinnedTo).toEqual(['sales'])
     expect(r.config.places['slack:#help'].defaultApp).toBe('default')

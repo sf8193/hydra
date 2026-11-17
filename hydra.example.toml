@@ -167,10 +167,11 @@ tools = ["search_logs", "get_monitor"]   # the tools of it a specialist may call
 # This one is Microsoft's Playwright MCP server (`@playwright/mcp`, pinned) driving the installed Google Chrome. Playwright has no downloads flag:
 # `--output-dir` is where downloads go, and also its auto-named snapshots (one per navigation), screenshots and traces. The server's name is yours to pick (`browser` here; `playwright` is fine too):
 # hydra's allowlist admits it by its exact command, so an operator server of the same name with another command does not start.
+# A session's browser is headless (`--headless`): no window reaches the operator's screen. `--browser chrome` drives the Google Chrome installed on the machine and needs nothing else installed.
 # The first start downloads the package into ~/.npm/_npx, and Claude Code waits 30 seconds for a server: run `npx -y @playwright/mcp@0.0.85 --version` once first.
 [mcp_servers.browser]
 command = "npx"
-profile_args = ["-y", "@playwright/mcp@0.0.85", "--browser", "chrome", "--user-data-dir", "{profile_dir}", "--output-dir", "{download_dir}"]
+profile_args = ["-y", "@playwright/mcp@0.0.85", "--browser", "chrome", "--headless", "--user-data-dir", "{profile_dir}", "--output-dir", "{download_dir}"]
 # `hydra specialist browser <name>` opens that specialist's browser on its profile folder, headed, once, to log it in: login_command is the command (its first element
 # an executable; the same placeholders). Playwright starts Chrome with --password-store=basic --use-mock-keychain, so a login made in a Chrome without them is
 # encrypted with the operator's own keychain key, which the specialist's Chrome cannot read: the login command carries both. A Chrome keeps SingletonLock in its
@@ -182,9 +183,11 @@ profile_locks = ["SingletonLock"]
 # session reads any local file through the browser (`page.goto("file:///...")`), which the server's own file: block on `browser_navigate` does not stop.
 # Names are matched exactly (case included) and a name that matches nothing is accepted: recheck deny_tools whenever you bump the pinned server version, since a renamed tool reopens it.
 deny_tools = ["browser_run_code_unsafe"]
-# To never start your real Chrome, use Playwright's own Chromium instead: run `npx playwright install chromium` once (about 100 MB), change `--browser chrome` to `--browser chromium`
+# To never start your real Chrome, use Playwright's own Chromium (Chrome for Testing, the build the pinned server wants: `--browser chromium`): change `--browser chrome` to `--browser chromium`
 # in profile_args, and open the login window with Playwright too (its launcher adds --password-store=basic --use-mock-keychain to every Chromium launch itself; the version is the one
 # @playwright/mcp@0.0.85 depends on): login_command = ["npx", "-y", "playwright@1.66.0-alpha-2026-11-09", "open", "--browser", "chromium", "--user-data-dir={profile_dir}"]
+# A fresh machine lacks that build, and the first browser tool call fails until it is installed (a few hundred MB, once): setup_command is the command `hydra specialist browser` runs first for it,
+# setup_command = ["npx", "-y", "@playwright/mcp@0.0.85", "install-browser", "chrome-for-testing"]
 # (the server under a write-confined launch was shown with chromium; that headed login window was not run).
 
 
