@@ -1,7 +1,8 @@
 import { readFileSync, statSync } from 'fs'
 import { join } from 'path'
 import { gateway, STATE_DIR, PLATFORM } from '../config.js'
-import { registry, sessionEmoji, threadRegistry } from '../sessions.js'
+import { registry, threadRegistry } from '../sessions.js'
+import { emojiOf, emojiOfName } from '../anchor-state.js'
 import type { SessionInfo } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { fallbackDescription, formatDuration, atomicWriteFileSync, safeSend, safeEdit, chunk, editErrorOutcome, type EditOutcome } from '../util.js'
@@ -43,7 +44,7 @@ function formatSessionEntry(e: SessionEntry, indent?: string): string {
   const msgCount = s.messageCount ?? 0
   const ctx = formatContextPercent(s.adapter, s)
   const badge = transport.has(s.sessionId) ? '' : ' ⚠️'
-  const emoji = sessionEmoji(s.tmuxName)
+  const emoji = emojiOf(s)
   const url = thread?.threadUrl
   const title = url ? `[**${desc}**](${url})` : `**${desc}**`
   const provenanceEmoji = s.originType === 'handoff' ? '🤝' : s.originType === 'resurrect' ? '🫀' : '🍴'
@@ -279,17 +280,17 @@ export async function handleUsageIntercept(msg: InboundMessage): Promise<void> {
 
   const forkCount = [...registry.values()].filter(s => s.originType === 'fork' && s.originFrom === info.tmuxName).length
 
-  const e = sessionEmoji(info.tmuxName)
+  const e = emojiOf(info)
   const lines = [
     `${e} \`${info.tmuxName}\` — ${desc}`,
     `    ◦ ${ctx} · ${msgs} msgs · ${duration} · ${status}`,
   ]
   if (forkCount > 0) lines.push(`    ◦ ${forkCount} fork${forkCount > 1 ? 's' : ''}`)
   if (info.originType === 'handoff' && info.originFrom) {
-    const pe = sessionEmoji(info.originFrom)
+    const pe = emojiOfName(info.originFrom)
     lines.push(`    ◦ 🤝 handed off from ${pe} \`${info.originFrom}\``)
   } else if (info.originType === 'fork' && info.originFrom) {
-    const pe = sessionEmoji(info.originFrom)
+    const pe = emojiOfName(info.originFrom)
     lines.push(`    ◦ 🍴 forked from ${pe} \`${info.originFrom}\``)
   }
 
@@ -306,7 +307,7 @@ async function handleMainUsage(msg: InboundMessage): Promise<void> {
   const ctx = mainContext() ?? '?'
   const name = mainTmux()
   await safeSend(msg.channelId, [
-    `${sessionEmoji(name)} \`${name}\` — main hydra session`,
+    `${emojiOfName(name)} \`${name}\` — main hydra session`,
     `    ◦ ${ctx} · ${formatDuration(Date.now() - mainStartedAt())} · ${transport.has('main') ? 'connected' : 'disconnected'}`,
   ].join('\n'), { replyTo: msg.id })
 }

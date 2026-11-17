@@ -11,7 +11,8 @@
 // Everything a session sends INTO a restricted session is rendered this way (renderSend), whoever sent it.
 
 import { randomBytes } from 'crypto'
-import { registry, sessionEmoji } from './sessions.js'
+import { registry } from './sessions.js'
+import { emojiOf } from './anchor-state.js'
 import { noteLine, type SendType } from './quiet-send.js'
 import { currentHydraConfig } from './hydra-config.js'
 import { gateway } from './config.js'
@@ -156,7 +157,7 @@ export async function sendToThread(callerSessionId: string, args: Record<string,
   log(`delivered for ${conversation}`)
   // The people watching the receiver's thread see that a hand-off arrived, as they do for any session-to-session send. Never stops the send.
   if (landedIn?.threadId) {
-    const line = noteLine('from', { name: me, emoji: sessionEmoji(me) }, type as SendType, text, undefined, undefined, me)
+    const line = noteLine('from', { name: me, emoji: emojiOf({ tmuxName: me }, me) }, type as SendType, text, undefined, undefined, me)
     const hung = new Promise<void>(r => { const t = setTimeout(r, sendDeps.noteTimeoutMs); t.unref?.() })
     await Promise.race([sendDeps.note(landedIn.threadId, line), hung]).catch(err => log(`note in ${landedIn!.threadId} failed: ${err instanceof Error ? err.message : String(err)}`))
   }

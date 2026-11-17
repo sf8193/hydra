@@ -2,11 +2,11 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { unlinkSync } from 'fs'
 import { gateway } from '../config.js'
-import { markDead, registry, sessionEmoji, threadRegistry } from '../sessions.js'
+import { markDead, registry, threadRegistry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { killSession, requestHandoff } from '../session-lifecycle.js'
 import type { SessionInfo } from '../sessions.js'
-import { COUNT_EMOJI } from '../anchor-state.js'
+import { COUNT_EMOJI, emojiOf, emojiOfName } from '../anchor-state.js'
 import { debouncedRefreshListDisplay } from './status.js'
 import { fallbackDescription, formatDuration, reportError, safeSend } from '../util.js'
 import { hasFreeze, paneScreenshot, tmuxHasSession, tmuxSync } from '../tmux.js'
@@ -106,7 +106,7 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
         ephemeral: opts?.ephemeral,
         promptPrefix: `Read the parent thread for context using fetch_messages(channel="${parentThreadId}", limit=50). Reconstruct what was discussed there, then continue the work in YOUR thread.${ephemeralSuffix}`,
       })
-      const e = sessionEmoji(result.name)
+      const e = emojiOfName(result.name)
       const reason = targetEngine !== sourceEngine
         ? `cross-engine continuation from **${info.tmuxName}** — reading thread context`
         : `session not forkable yet — reading thread from **${info.tmuxName}**`
@@ -138,8 +138,8 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
       ...(ephemeralPrefix ? { promptPrefix: ephemeralPrefix } : {}),
     })
 
-    const pe = sessionEmoji(parentName)
-    const ce = sessionEmoji(result.name)
+    const pe = emojiOf(info)
+    const ce = emojiOfName(result.name)
     await gateway.send(msg.channelId, [
       `${ce} \`${result.name}\` — forked from ${pe} \`${parentName}\``,
       forkTopic.startsWith('continuing:') ? '' : forkTopic,
@@ -170,7 +170,7 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
         inheritedLabel: info.label,
         ephemeral: opts?.ephemeral,
       })
-      const e = sessionEmoji(result.name)
+      const e = emojiOfName(result.name)
       await gateway.send(msg.channelId, `${e} \`${result.name}\` spawned (reading thread from **${parentName}**)${result.url ? ` — ${result.url}` : ''}`, { replyTo: msg.id })
       debouncedRefreshListDisplay()
     } catch (spawnErr) {
@@ -190,7 +190,7 @@ export async function handleForksIntercept(msg: InboundMessage): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '🍽️').catch(() => {})
   const forks = [...registry.values()].filter(s => s.originType === 'fork' && s.originFrom === info.tmuxName)
   if (forks.length === 0) {
-    try { await gateway.send(msg.channelId, `No forks from ${sessionEmoji(info.tmuxName)} \`${info.tmuxName}\`.`, { replyTo: msg.id }) } catch {}
+    try { await gateway.send(msg.channelId, `No forks from ${emojiOf(info)} \`${info.tmuxName}\`.`, { replyTo: msg.id }) } catch {}
     return
   }
 
@@ -201,12 +201,12 @@ export async function handleForksIntercept(msg: InboundMessage): Promise<void> {
     const ctx = formatContextPercent(adapterFor(s), s)
     const msgs = s.messageCount ?? 0
     const duration = formatDuration(Date.now() - s.createdAt)
-    const e = sessionEmoji(s.tmuxName)
+    const e = emojiOf(s)
     const title = url ? `[**${desc}**](${url})` : `**${desc}**`
     return `╰ ${e} \`${s.tmuxName}\` — ${title}\n    ◦ ${ctx} (${msgs} msgs · ${duration})`
   })
 
-  const pe = sessionEmoji(info.tmuxName)
+  const pe = emojiOf(info)
   try { await gateway.send(msg.channelId, `Forks from ${pe} \`${info.tmuxName}\`\n\n${lines.join('\n')}`, { replyTo: msg.id }) } catch {}
 }
 
@@ -222,7 +222,7 @@ async function announceRecovery(
   emoji: string,
   lastTmuxName: string,
 ): Promise<void> {
-  const e = sessionEmoji(result.name)
+  const e = emojiOfName(result.name)
   const count = thread.respawnCount
   const countLabel = count > 0 ? ` ${COUNT_EMOJI[Math.min(count - 1, COUNT_EMOJI.length - 1)]}` : ''
   try {
@@ -390,7 +390,7 @@ async function respawnThread(msg: InboundMessage, topic?: string, templateName?:
   })
   const result = outcome.ok ? outcome.result : undefined
   if (result) {
-    const e = sessionEmoji(result.name)
+    const e = emojiOfName(result.name)
     const count = thread?.respawnCount ?? 0
     const countLabel = count > 0 ? ` ${COUNT_EMOJI[Math.min(count - 1, COUNT_EMOJI.length - 1)]}` : ''
     const tplLabel = templateName ? ` (${templateName})` : ''

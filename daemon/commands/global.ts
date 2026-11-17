@@ -3,7 +3,8 @@ import { join } from 'path'
 import { execSync } from 'child_process'
 import { homedir } from 'os'
 import { gateway, STATE_DIR, PLATFORM } from '../config.js'
-import { registry, sessionEmoji } from '../sessions.js'
+import { registry } from '../sessions.js'
+import { emojiOfName } from '../anchor-state.js'
 import { transport } from '../bridge-transport.js'
 import { doSpawnSession, killSession } from '../session-lifecycle.js'
 import { safeSend } from '../util.js'
@@ -106,7 +107,7 @@ async function spawnAndNotify(
     }
 
     if (msg.isDM) {
-      const e = sessionEmoji(result.name)
+      const e = emojiOfName(result.name)
       const suffix = label ? ` (${label})` : ''
       const base = (result.url && !gateway.canThreadInDM)
         ? `Spawned ${e} \`${result.name}\`${suffix} — ${result.url}`
@@ -121,7 +122,7 @@ async function spawnAndNotify(
       const modelSuffix = resolvedModel ? ` [${resolvedModel}]` : ''
       transport.sendToBridge(mainBridge, {
         type: 'notification',
-        content: `[system] Spawned ${sessionEmoji(result.name)} \`${result.name}\`${labelSuffix}${modelSuffix} for: ${topic}${result.url ? ` — ${result.url}` : ''}`,
+        content: `[system] Spawned ${emojiOfName(result.name)} \`${result.name}\`${labelSuffix}${modelSuffix} for: ${topic}${result.url ? ` — ${result.url}` : ''}`,
         meta: { chat_id: msg.channelId, message_id: msg.id, user: 'system', user_id: 'system', ts: new Date().toISOString() },
       })
     }

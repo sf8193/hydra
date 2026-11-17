@@ -1,7 +1,7 @@
 import { existsSync, statSync } from 'fs'
 import { isAbsolute, join, resolve as resolvePath } from 'path'
 import { gateway, INBOX_DIR, STATE_DIR } from './config.js'
-import { isParentOf, parentSessionOf, registry, resolveSendTarget, sessionEmoji, threadRegistry, type Predecessor, type SessionInfo, type ThreadSessionEntry } from './sessions.js'
+import { isParentOf, parentSessionOf, registry, resolveSendTarget, threadRegistry, type Predecessor, type SessionInfo, type ThreadSessionEntry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { callerRefusal, destroyDeclinedText, killThenDestroy } from './destroy.js'
 import { loadAccess, operatorIds, maxChunkLimit, channelPolicy, MAX_ATTACHMENT_BYTES } from './access.js'
@@ -19,7 +19,7 @@ import { resolveEngine } from './engines/instances.js'
 import { dispatchAdvance, finishPrivateProtocolChildLaunch, isProtocolParticipant, markPrivateProtocolChildLaunching, protocolChildRequiresPrivate, protocolSpawnRequiresPrivate, registerProtocolChild, registerProtocolChildResult } from './protocol-registry.js'
 import { watchPr, unwatchPr, listWatches, getWatchesBySession, formatWatchEntry, detectPrUrl, WATCH_ERRORS } from '../connectors/github/pr-watch.js'
 import { bindConversation, unbindConversation, formatConversationsFor, replyInConversation, conversationBelongsTo } from '../connectors/slack/runtime.js'
-import { refreshSessionVisual } from './anchor-state.js'
+import { refreshSessionVisual, emojiOf, emojiOfName } from './anchor-state.js'
 import { refreshDashboard } from './dashboard.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './artifacts.js'
 import { fetchPrTitle, parsePrUrl } from '../connectors/github/pr-watch.js'
@@ -718,12 +718,12 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         // A link is a nicety: a failed lookup leaves the name plain and never blocks delivery.
         const party = async (s: SessionInfo) => ({
           name: s.tmuxName,
-          emoji: sessionEmoji(s.tmuxName),
+          emoji: emojiOf(s),
           url: s.threadUrl || await gateway.getThreadUrl(s.threadId).catch(() => '') || undefined,
         })
         const echoThread = caller?.threadId && caller.threadId !== threadId ? caller.threadId : undefined
         const quietOutcome = wantsQuiet
-          ? await Promise.all([caller ? party(caller) : { name: senderName, emoji: sessionEmoji(senderName) }, party(targetSession)])
+          ? await Promise.all([caller ? party(caller) : { name: senderName, emoji: emojiOfName(senderName) }, party(targetSession)])
             .then(([from, to]) => quietSend(
               { from, to, type: msgType as 'progress' | 'question' | 'result', text, summary, dir: join(STATE_DIR, 'messages') },
               {

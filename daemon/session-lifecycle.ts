@@ -15,7 +15,7 @@ import { hydraLoadEnv, currentHydraConfig } from './hydra-config.js'
 import { workdirRestrictionIssues } from '../config/restricted-workdir.js'
 import { removeLaunchFiles } from './launch-files.js'
 import { capturedSpawnVars } from '../shared/spawn-env.js'
-import { authorityId, markDead, parentSessionOf, registry, repointChildren, sessionEmoji, threadRegistry } from './sessions.js'
+import { authorityId, markDead, parentSessionOf, registry, repointChildren, threadRegistry } from './sessions.js'
 import type { Predecessor, SessionInfo, SessionMetadata, SpawnOpts, SpawnResult } from './sessions.js'
 import { notePendingReply } from './reply-guard.js'
 import { transport } from './bridge-transport.js'
@@ -33,7 +33,7 @@ import { buildSpawnPrompt, buildForkPrompt, buildHandoffPrompt, buildResurrectPr
 import { hydraPrompt } from './prompts/request.js'
 import { readHandoffTemplate } from './handoff-templates.js'
 import { projectDirName, transcriptPathFor } from './usage.js'
-import { refreshSessionVisual, threadEmoji } from './anchor-state.js'
+import { refreshSessionVisual, emojiOf, emojiOfName } from './anchor-state.js'
 import { unwatchBySession } from '../connectors/github/pr-watch.js'
 import { loadAccess } from './access.js'
 import { emit } from './event-bus.js'
@@ -588,7 +588,7 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
       const parent = parentSessionOf(info)
       if (parent) {
         const msgs = info.messageCount ?? 0
-        const emoji = sessionEmoji(info.tmuxName)
+        const emoji = emojiOf(info)
         void gateway.send(parent.threadId, `${emoji} \`${info.tmuxName}\` died — _${reason}_ (${msgs} msgs)`).catch(err => {
           process.stderr.write(`daemon: failed to notify parent of child death: ${err}\n`)
         })
@@ -600,7 +600,7 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
       const elapsed = Math.round((Date.now() - info.createdAt) / 60_000)
       const spawnLine = formatSpawnLine({
         roleLabel: undefined,
-        emoji: sessionEmoji(info.tmuxName),
+        emoji: emojiOf(info),
         name: info.tmuxName,
         model: info.sessionMetadata?.model ?? 'unknown',
         trigger: info.originType ?? 'spawn',
@@ -814,7 +814,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   // it here would instead leak the name on any throw before registry.set (no try/finally on
   // this large function), which is worse than the self-healing collision it would prevent.
   const cleanTopic = topic.replace(/\*\*/g, '').replace(/\*/g, '').replace(/[\[\]<>]/g, '').replace(/\s+/g, ' ').trim()
-  const threadName = `${threadEmoji({ tmuxName }, opts?.specialist)} ${cleanTopic || tmuxName} · ${tmuxName}`.slice(0, 100)
+  const threadName = `${emojiOf({ tmuxName }, opts?.specialist)} ${cleanTopic || tmuxName} · ${tmuxName}`.slice(0, 100)
   const isFork = !!opts?.forkFrom
   const isHandoff = !!opts?.handedOffFrom
   const isResume = !!opts?.resumeFrom
@@ -1268,7 +1268,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
 
   const spawnLine = formatSpawnLine({
     roleLabel: opts?.memberLabel,
-    emoji: sessionEmoji(tmuxName),
+    emoji: emojiOfName(tmuxName),
     name: tmuxName,
     model: launched.model,
     trigger: opts?.trigger ?? originType,

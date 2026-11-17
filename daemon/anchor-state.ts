@@ -65,17 +65,30 @@ export function formatPhaseBadge(emoji: string, phase: string): string {
 // ---------------------------------------------------------------------------
 
 /**
- * The emoji a session wears in its thread name and on its anchor: the one chokepoint every thread name goes through (the first name at spawn, and every
- * refresh after it: respawn, handoff, rename, protocol badge, pause, death). Other places that show a session's emoji (announcements, `status`, the dashboard)
- * still call `sessionEmoji`. `contentEmoji` is checked first but nothing sets it today. Its specialist's `emoji` from hydra.toml, read live, else its catalog emoji.
- * The specialist is the one the session was born for (stored on its policy), else the one whose thread it sits in. Only this glyph changes: the
- * presence precedence (dead, paused, protocol) in the gateway's `formatThreadName` is untouched.
+ * The emoji a session wears, wherever hydra shows it: thread names and anchors (the first name at spawn, and every refresh after it), spawn announcements,
+ * `status`, fork and resume replies, the dashboard, protocol lines, death and recovery notices, and the quiet-send lines. The one function that answers it:
+ * nothing else reads `sessionEmoji` (the catalog glyph, which this falls back to), and a test pins that. `contentEmoji` is checked first but nothing sets it
+ * today. Then its specialist's `emoji` from hydra.toml, read live, else its catalog emoji. The specialist is the one the session was born for (stored on its
+ * policy), else the one whose thread it sits in; a caller that has no record yet (the spawn) names it. Only this glyph changes: the presence precedence
+ * (dead, paused, protocol) in the gateway's `formatThreadName` is untouched.
  */
-export function threadEmoji(
+export function emojiOf(
   info: Pick<SessionInfo, 'tmuxName'> & Partial<Pick<SessionInfo, 'threadId' | 'policy' | 'contentEmoji'>>,
   specialist: string | undefined = info.policy?.specialist ?? specialistOf(info),
 ): string {
   return info.contentEmoji || specialistEmoji(specialist) || sessionEmoji(info.tmuxName)
+}
+
+/**
+ * `emojiOf` for a caller that holds only a name (a spawn result, a parent's `originFrom`). A name can sit on two records (a dead predecessor beside its
+ * successor, or a recycled catalog name), so the newest record of that name answers; with no record at all it is the catalog glyph. A caller that has the record passes it to `emojiOf`.
+ */
+export function emojiOfName(name: string): string {
+  let newest: SessionInfo | undefined
+  for (const s of registry.values()) {
+    if (s.tmuxName === name && (!newest || s.createdAt > newest.createdAt)) newest = s
+  }
+  return emojiOf(newest ?? { tmuxName: name })
 }
 
 export function refreshSessionVisual(threadId: string, opts?: { state?: AnchorState, badge?: string }): void {
@@ -85,7 +98,7 @@ export function refreshSessionVisual(threadId: string, opts?: { state?: AnchorSt
   const info = registry.get(sessionId)
   if (!info) return
 
-  const emoji = threadEmoji(info)
+  const emoji = emojiOf(info)
   const badge = opts?.badge ?? getActiveProtocolBadge(threadId)
   const state = opts?.state ?? (occupancy(info) === 'dead' ? 'crashed' : info.respawnCount ? 'zombie' : 'live')
   const anchor = gateway.getThreadAnchor(threadId)
