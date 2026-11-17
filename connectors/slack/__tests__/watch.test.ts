@@ -1744,3 +1744,56 @@ describe("the operator's token: broad subscription is not broad delivery", () =>
     expect(byId.w.handle(ev({ channel: 'G0OTHER001', ts: '2.000001', text: 'another group DM' }))).toBe('ignored')
   })
 })
+
+describe('a bot that is not in the channel adds no reactions there', () => {
+  test('"not in channel" is said once, and no 🚫 is tried again there until the wait has passed', async () => {
+    const tries: string[] = []
+    const a: SlackActions = { download: async () => {}, react: async (c, ts) => { tries.push(`${c}:${ts}`); throw new Error('channel_not_found') } }
+    const s = setup()
+    s.w.setSlackActions(a)
+    s.w.handle(ev({ channel: 'C0ELSE', ts: '1.000001', text: mention }))
+    await Bun.sleep(1)
+    s.w.handle(ev({ channel: 'C0ELSE', ts: '2.000001', text: mention }))
+    await Bun.sleep(1)
+    expect(tries).toEqual(['C0ELSE:1.000001'])
+    expect(s.logs.filter(l => l.includes('is not in C0ELSE, so it adds no reactions there'))).toHaveLength(1)
+    s.tick(11 * 60_000)
+    s.w.handle(ev({ channel: 'C0ELSE', ts: '3.000001', text: mention }))
+    await Bun.sleep(1)
+    expect(tries).toEqual(['C0ELSE:1.000001', 'C0ELSE:3.000001'])
+  })
+
+  test('another failure is logged each time and does not stop the next reaction', async () => {
+    const tries: string[] = []
+    const a: SlackActions = { download: async () => {}, react: async (c, ts) => { tries.push(`${c}:${ts}`); throw new Error('ratelimited') } }
+    const s = setup()
+    s.w.setSlackActions(a)
+    s.w.handle(ev({ channel: 'C0ELSE', ts: '1.000001', text: mention }))
+    await Bun.sleep(1)
+    s.w.handle(ev({ channel: 'C0ELSE', ts: '2.000001', text: mention }))
+    await Bun.sleep(1)
+    expect(tries).toHaveLength(2)
+    expect(s.logs.filter(l => l.includes('failed: ratelimited'))).toHaveLength(2)
+  })
+})
+
+describe('a bot that was not in a channel is tried again once it joins', () => {
+  test('a join clears what was learnt, and the memory is bounded', async () => {
+    const tries: string[] = []
+    const a: SlackActions = { download: async () => {}, react: async (c, ts) => { tries.push(`${c}:${ts}`); throw new Error('channel_not_found') } }
+    const s = setup()
+    s.w.setSlackActions(a)
+    s.w.handle(ev({ channel: 'C0ELSE', ts: '1.000001', text: mention }))
+    await Bun.sleep(1)
+    s.w.handle(ev({ channel: 'C0ELSE', ts: '2.000001', text: mention }))
+    await Bun.sleep(1)
+    expect(tries).toEqual(['C0ELSE:1.000001'])
+    s.w.reactionsMayWork('C0ELSE')
+    s.w.handle(ev({ channel: 'C0ELSE', ts: '3.000001', text: mention }))
+    await Bun.sleep(1)
+    expect(tries).toEqual(['C0ELSE:1.000001', 'C0ELSE:3.000001'])
+    // a flood of channels: each tried once, the memory does not grow past its cap
+    for (let i = 0; i < 700; i++) { s.w.handle(ev({ channel: `C1X${i}`, ts: `${10 + i}.000001`, text: mention })); await Bun.sleep(0) }
+    expect((s.w as unknown as { cannotReact: Map<string, number> }).cannotReact.size).toBeLessThanOrEqual(500)
+  })
+})

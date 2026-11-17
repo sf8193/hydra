@@ -27,6 +27,9 @@ export const JOIN_GRACE_MS = 30_000
 /** Whether an app's bot is in a channel. Throws when Slack won't say (a missing scope, a rate limit). */
 export type MemberProbe = (channel: string) => Promise<boolean>
 
+/** What a failed read says about the channel: Slack names the scope it needed (`groups:read` for a private channel, `channels:read` for a public one). With no scope named, no kind is claimed. */
+const kindOfError = (why: string): string => /groups:read/.test(why) ? 'private channel: ' : /channels:read/.test(why) ? 'public channel: ' : ''
+
 type Fact = {
   /** The last answer Slack gave: kept through failed reads. */
   good?: { member: boolean; at: number }
@@ -52,8 +55,8 @@ export class ConnectedApps {
   private readonly facts = new Map<string, Fact>()   // `<app>\0<channel>`
   private readonly flights = new Map<string, Promise<void>>()
   private readonly said = new Set<string>()
-  /** Why the app's last membership read failed (cleared by the next that works): what health shows as its `probeError`. */
-  private readonly probeErrors = new Map<string, string>()
+  /** Why an app's last membership read of a channel failed, until a read of that channel works: what health shows as its `probeError`. */
+  private readonly probeErrors = new Map<string, string>()   // `<app>\0<channel>`
   private readonly owners = new Map<string, { app: string; at: number }>()   // `<channel>\0<ts>`
   /** Apps that have reported a channel join or leave: they are subscribed to those events. */
   private readonly reporting = new Set<string>()
@@ -81,9 +84,11 @@ export class ConnectedApps {
   /** An app's first connection failed. It may still join later; until then it is in no channel. */
   failedToJoin(app: string): void { this.joining.delete(app); this.settleJoined() }
 
-  /** Why the app's last read of whether it is in a channel failed; undefined when it has not, or the last read worked. */
-  probeError(app: string): string | undefined { return this.probeErrors.get(app) }
-
+  /** Why the app's reads of whether it is in a channel fail, each distinct reason once, with the kind of channel when Slack names the scope it needed; undefined when none has failed. */
+  probeError(app: string): string | undefined {
+    const why = [...new Set([...this.probeErrors].filter(([k]) => k.startsWith(`${app}\0`)).map(([, v]) => v))]
+    return why.length ? why.join('; ') : undefined
+  }
   /** Whether some app is started and has not yet joined or failed to. */
   isJoining(): boolean { return this.joining.size > 0 }
 
@@ -112,7 +117,7 @@ export class ConnectedApps {
     this.ids.delete(app)
     this.probes.delete(app)
     this.reporting.delete(app)
-    this.probeErrors.delete(app)
+    for (const k of [...this.probeErrors.keys()]) if (k.startsWith(`${app}\0`)) this.probeErrors.delete(k)
     this.forget(app)
     this.settleJoined()
   }
@@ -170,6 +175,12 @@ export class ConnectedApps {
     return out
   }
 
+  /** Of `apps`, the connected ones whose membership in the channel has never been read: neither known to be in it nor known not to be. */
+  unread(channel: string, apps: string[]): string[] {
+    if (!this.several()) return []
+    return apps.filter(a => this.probes.has(a) && !this.facts.get(`${a}\0${channel}`)?.good)
+  }
+
   /** Read what is not known (or no longer current) about every other connected app and this channel, and each tagged app again. */
   async ensure(channel: string, heard: string, tagged: string[] = []): Promise<void> {
     await this.allJoined()
@@ -190,12 +201,12 @@ export class ConnectedApps {
         const member = await probe(channel)
         const was = f?.good
         this.facts.set(key, { good: { member, at: this.now() }, probedAt: this.now() })
-        this.probeErrors.delete(app)
+        this.probeErrors.delete(key)
         // Invited, and nothing said so: the app is not reporting joins, so its cached "not in" went stale unseen.
         if (tagged && member && was && !was.member && !this.reporting.has(app)) this.noReports(app)
       } catch (err) {
         const why = err instanceof Error ? err.message : String(err)
-        this.probeErrors.set(app, why)
+        this.probeErrors.set(key, kindOfError(why) + why)
         // An error is not an answer: the last good one stands, and Slack is asked again later.
         this.facts.set(key, { ...(f?.good && { good: f.good }), retryAt: this.now() + PROBE_RETRY_MS, probedAt: this.now() })
         if (!f?.good) this.cantRead(app, why)

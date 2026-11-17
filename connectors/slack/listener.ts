@@ -345,6 +345,7 @@ export class SlackListener {
       hydra, app: this.id, ...this.identity,
       identities: this.apps.identities(),
       heardBy: channel => this.apps.heardBy(channel, this.id),
+      unread: (channel, apps) => this.apps.unread(channel, apps),
       connected: () => this.apps.connectedApps(),
       // With one app connected there is nothing to tell apart, and nothing to remember.
       ...(this.apps.several() && { decideOwner: (channel: string, ts: string, decide: () => string) => this.apps.decideOwner(channel, ts, decide) }),
@@ -478,7 +479,7 @@ export class SlackListener {
     const app = this.d.createApp({ app: t.app, bot: t.bot, ...(t.user && { user: t.user }) })
     app.onMessage(raw => { if (gen === this.generation) this.onMessage(raw) })
     app.onRename((id, name) => { this.directory.rename(id, name); this.d.log(`daemon: slack connector: channel ${id} is now #${name}\n`) })
-    app.onMembership?.(channel => this.apps.changed(channel, this.id))
+    app.onMembership?.(channel => { this.apps.changed(channel, this.id); this.w.reactionsMayWork(channel) })
     this.app = app
     this.sup!.attach() // before start, so the first `connected` is seen
     app.emitter()?.on('connected', () => {
