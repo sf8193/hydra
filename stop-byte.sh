@@ -2,7 +2,7 @@
 echo "DEPRECATED: use 'hydra down <platform>' instead (bun cli/hydra.ts down discord)" >&2
 set -euo pipefail
 # Stop a platform's byte session and kill orphaned claude processes.
-# Mirrors the cleanup section from start-byte.sh.
+# Mirrors the cleanup in the CLI's startByte (cli/lifecycle.ts).
 #
 # Required env:
 #   CHAT_PLATFORM — discord or slack

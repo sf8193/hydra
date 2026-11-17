@@ -385,7 +385,7 @@ test('every call that spawns codex builds its env through codexSpawnEnv', () => 
 const shellSpawners = () => walk('.', f => /\.(sh|bash|zsh)$/.test(f)).filter(f => CREATES_SESSION.test(flat(f)))
 
 test('every shell entrypoint that creates a tmux server scrubs both halves first', () => {
-  expect(shellSpawners().sort()).toEqual(['start-byte.sh', 'start-daemon.sh', 'start-transcribe.sh'])
+  expect(shellSpawners().sort()).toEqual(['start-daemon.sh', 'start-transcribe.sh'])
   for (const f of shellSpawners()) {
     // Every offset below must index this one string, or the window goes empty.
     const src = read(f).replace(/\\\n\s*/g, ' ')

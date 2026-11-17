@@ -10,6 +10,11 @@
 # Required once anything else is declared.
 operator = "op"
 
+# --- main: how the operator's harness runs. Read each time main starts (`hydra up`, a watchdog revival), so an edit applies at its next start (not `hydra restart`, which restarts only the daemon). ---
+
+[main]
+model = "claude-opus-5-5[1m]"         # the model main starts with: an alias (opus, sonnet, ...) or a full ID, read as a specialist's model is (default: HYDRA_MODEL in .env, else hydra's default)
+
 # --- gateways: how you talk to hydra. Discord is a gateway only if it has a table here. Tokens stay in .env. ---
 # (Slack's gateway reads SLACK_BOT_TOKEN and SLACK_APP_TOKEN from .env and has no table.)
 

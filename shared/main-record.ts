@@ -1,4 +1,4 @@
-// What `hydra up` launched main (the byte) with, as a spawned session's record holds it. Main has no registry
+// What main (the byte) was launched with (every start: `hydra up`, the watchdog, start-byte.sh), as a spawned session's record holds it. Main has no registry
 // record, so the CLI writes this beside the daemon's state when it builds the byte's command, and the daemon
 // reads it. Absent for a byte launched another way, or before this existed.
 

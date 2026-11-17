@@ -16,7 +16,7 @@ import { SLACK_APP_DEFAULTS } from '../connectors/slack/app.js'
 import { invalidSpecialistName } from '../shared/specialist-name.js'
 import { bareOf, readTarget, spelled } from '../shared/target-kind.js'
 import {
-  BUILTIN_ROLES, DEFAULT_SLACK_APP, SLACK_DM, SLACK_GROUP_DM, dmPerson, isDmPlace, namesAChannel, namesDmWithOthers, placesAnsweredBy, type Address, type ConfigIssue, type Connectors, type Gateways, type Guard, type HydraConfig, type LoadEnv, type LoadResult,
+  BUILTIN_ROLES, DEFAULT_SLACK_APP, SLACK_DM, SLACK_GROUP_DM, dmPerson, isDmPlace, namesAChannel, namesDmWithOthers, placesAnsweredBy, type Address, type ConfigIssue, type Connectors, type Gateways, type Guard, type HydraConfig, type LoadEnv, type LoadResult, type MainOptions,
   type McpServer, type WorkdirScan, type Person, type Place, type PlaceOptions, type Platform, type Rule, type Schedule, type SessionsMode, type SlackApp, type Specialist, type Vitals,
   WORKDIR_TOOLS,
 } from './types.js'
@@ -59,7 +59,11 @@ const MAX_ALERT_AFTER_MS = 30 * MAX_DAY_MS
 const BUILTIN: readonly string[] = BUILTIN_ROLES
 const MAIN_TARGET = 'main'
 
-const TOP_KEYS = ['operator', 'gateways', 'connectors', 'slack', 'people', 'specialists', 'defaults', 'places', 'schedules', 'rules', 'guard', 'vitals', 'mcp']
+const TOP_KEYS = ['operator', 'main', 'gateways', 'connectors', 'slack', 'people', 'specialists', 'defaults', 'places', 'schedules', 'rules', 'guard', 'vitals', 'mcp']
+/** Keys a file may set without an operator: the operator itself, and `[main]`, which says how main runs, not who reaches it. */
+const OPERATOR_FREE_KEYS = ['operator', 'main']
+/** `[main]`: the operator's harness, as `[specialists.<id>]` is a specialist. */
+const MAIN_KEYS = ['model']
 /** `listens` is the old way to say where a specialist is heard: still read, as `[[rules]]` (see `legacyRules`), and warned. */
 const SPECIALIST_KEYS = ['workdir', 'kickoff', 'kickoff_file', 'listens', 'pinned_to', 'speaks_as', 'allow', 'sessions', 'max_sessions', 'idle', 'home', 'model', 'engine', 'env_file', 'renamed_from', 'restricted', 'tools', 'mcp', 'talks_to']
 /** A specialist's keys under their old names, read as the new ones (`restricted = true` is `restricted = true`). */
@@ -458,8 +462,19 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (typeof doc.operator !== 'string') error('operator', 'must be a quoted person id')
     else if (!has(people, doc.operator)) error('operator', `"${doc.operator}" is not a person: declare [people.${doc.operator}]`)
     else operator = doc.operator
-  } else if (Object.keys(doc).some(k => k !== 'operator')) {
+  } else if (Object.keys(doc).some(k => !OPERATOR_FREE_KEYS.includes(k))) {
     error('operator', 'is required: name the person whose DMs reach main and who may reach every specialist')
+  }
+
+  // --- main: how the operator's harness runs (read by whatever starts it, not by the daemon) ---------------------------
+
+  let main: MainOptions | undefined
+  const mainTable = table(doc.main, 'main')
+  if (mainTable) {
+    unknownKeys(mainTable, MAIN_KEYS, 'main')
+    // As a specialist's `model`: kept as written; the start resolves an alias (resolveLaunchModel).
+    const model = str(mainTable, 'model', 'main')
+    if (model !== undefined) main = { model }
   }
 
   // --- specialists, with [defaults.specialist] -----------------------------------------------------------------------
@@ -1036,7 +1051,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   }
 
   if (errors.length) return { ok: false, errors, warnings }
-  return { ok: true, config: { ...(operator && { operator }), connectors, gateways, slackApps, people, specialists, places, schedules, rules, ...(Object.keys(mcpServers).length && { mcpServers }), ...(privateRoots.length && { privateRoots }), ...(guard && { guard }), ...(vitals && { vitals }) }, warnings }
+  return { ok: true, config: { ...(operator && { operator }), ...(main && { main }), connectors, gateways, slackApps, people, specialists, places, schedules, rules, ...(Object.keys(mcpServers).length && { mcpServers }), ...(privateRoots.length && { privateRoots }), ...(guard && { guard }), ...(vitals && { vitals }) }, warnings }
 }
 
 /** The program a `sh -c` command runs: past any leading VAR=value, with one level of quotes removed. */

@@ -2,7 +2,7 @@ import { test, expect, beforeAll, beforeEach, afterEach } from 'bun:test'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir, homedir } from 'node:os'
-import { resolveConfig, sourceStateDirEnv, buildDaemonEnvs, printResponse } from '../helpers.js'
+import { resolveConfig, sourceStateDirEnv, buildDaemonEnvs, printResponse, byteModel } from '../helpers.js'
 import { SCRUBBED_SPAWN_VARS } from '../../shared/spawn-env.js'
 import type { HydraConfig } from '../helpers.js'
 
@@ -19,7 +19,7 @@ function baseCfg(): HydraConfig {
     platform: 'slack', stateDir, hydraDir: '/hydra',
     daemonTmux: 'slack-daemon', byteTmux: 'slack-byte', transcribeTmux: 'hydra-transcribe',
     daemonLog: '/tmp/d.log', byteLog: '/tmp/b.log', watchdogLog: '/tmp/w.log',
-    sockPath: join(stateDir, 'daemon.sock'), byteModel: 'claude-opus-5[1m]',
+    sockPath: join(stateDir, 'daemon.sock'),
     byteAuth: 'auto', byteChannel: '', socketTimeout: 15_000,
     configDir: '/cfg', spawnCwd: '/cwd', spawnCwdBlank: false, byteCwd: '/cwd',
   }
@@ -176,10 +176,10 @@ test('resolveConfig: a set-but-empty BYTE_CWD falls back rather than producing `
   }
 })
 
-test('resolveConfig: byteModel comes from the state-dir HYDRA_MODEL', () => {
+test('without [main] model, the byte model comes from the state-dir HYDRA_MODEL', () => {
   try {
     writePlatformEnv("HYDRA_MODEL='claude-opus-5[1m]'\n")
-    expect(resolveConfig(TEST_PLATFORM).byteModel).toBe('claude-opus-5[1m]')
+    expect(byteModel(resolveConfig(TEST_PLATFORM)).model).toBe('claude-opus-5[1m]')
   } finally {
     rmSync(testChannelDir, { recursive: true, force: true })
   }
@@ -189,7 +189,7 @@ test('resolveConfig: state-dir HYDRA_MODEL wins over a stale ambient value (tmux
   try {
     process.env.HYDRA_MODEL = 'claude-sonnet-5[1m]' // simulates a frozen tmux-server env
     writePlatformEnv("HYDRA_MODEL='claude-sonnet-5-5[1m]'\n")
-    expect(resolveConfig(TEST_PLATFORM).byteModel).toBe('claude-sonnet-5-5[1m]')
+    expect(byteModel(resolveConfig(TEST_PLATFORM)).model).toBe('claude-sonnet-5-5[1m]')
   } finally {
     rmSync(testChannelDir, { recursive: true, force: true })
   }

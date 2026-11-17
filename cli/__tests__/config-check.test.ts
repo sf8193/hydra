@@ -30,6 +30,14 @@ describe('hydra config check', () => {
     expect(r.out).toContain('hydra.toml specialists.crm.listens: `listens` is now `[[rules]]`: add a `[[rules]]` table for each place, with `place = "x"` and `target = "specialist:crm"` on separate lines (places: discord:100000000000000002)')
     expect(r.out).toContain('ops answers: discord:100000000000000003\ncrm answers: discord:100000000000000002\n')
   })
+  test('shows the model main starts with when [main] model sets it', () => {
+    const base = 'operator = "op"\n[people.op]\naddresses = ["discord:100000000000000001"]\n'
+    expect(check(`${base}[main]\nmodel = "opus"\n`)).toEqual({
+      code: 0,
+      out: '$d/hydra.toml: loads clean\nmain model: claude-opus-5-5[1m] ([main] model = "opus"), applies at main\'s next start\n',
+    })
+    expect(check(`${base}[main]\nmodel = "claude-opsu"\n`).out).toContain('main model: claude-opsu ([main] model = "claude-opsu"), applies at main\'s next start; not a model hydra knows')
+  })
   test('the old [connectors.discord] key loads, and the warning shows', () => {
     const base = 'operator = "op"\n[people.op]\naddresses = ["discord:100000000000000001"]\n'
     expect(check(`${base}[connectors.discord]\nbot_token_env = "DISCORD_BOT_TOKEN"\n`)).toEqual({

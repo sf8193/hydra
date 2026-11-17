@@ -3,10 +3,12 @@ import { existsSync, readdirSync, statSync, unlinkSync, readFileSync, writeFileS
 import { join, dirname, basename } from 'path'
 import { homedir } from 'os'
 import { execSync, execFileSync } from 'child_process'
-import { spawnModel, TRANSCRIBE_TMUX, byteTmuxName, claudeConfigDir, platformStateDir } from '../shared/constants.js'
+import { resolveLaunchModel, spawnModel, TRANSCRIBE_TMUX, byteTmuxName, claudeConfigDir, platformStateDir } from '../shared/constants.js'
 import { tmuxNewSession, captureSpawnVars, withRaisedFdLimit } from '../shared/spawn-env.js'
 import { scrubTokenVarsInFile } from '../config/token-vars.js'
 import { sourceEnvFiles, parseEnvLine } from '../shared/env-parse.js'
+import { formatIssues, loadHydraConfig, systemEnv } from '../config/load.js'
+import { SESSION_NAMES } from '../shared/session-catalog.js'
 
 // ---------------------------------------------------------------------------
 // Config resolution (replaces env-setup.sh)
@@ -25,7 +27,6 @@ export type HydraConfig = {
   byteLog: string
   watchdogLog: string
   sockPath: string
-  byteModel: string
   byteAuth: 'auto' | 'keychain'
   byteCwd: string
   spawnCwdBlank: boolean
@@ -121,12 +122,37 @@ export function resolveConfig(platform?: string): HydraConfig {
     byteLog: process.env.HYDRA_BYTE_LOG ?? join(homedir(), `hydra-${platform}-byte.log`),
     watchdogLog: process.env.HYDRA_WATCHDOG_LOG ?? join(homedir(), 'hydra-watchdog.log'),
     sockPath: join(stateDir, 'daemon.sock'),
-    byteModel: spawnModel(),
     byteAuth: (process.env.HYDRA_AUTH?.trim() ?? 'auto') === 'keychain' ? 'keychain' : 'auto',
     byteCwd: process.env.BYTE_CWD || spawnCwd,
     byteChannel: process.env.BYTE_CHANNEL ?? '',
     socketTimeout: Math.max(Number(process.env.HYDRA_SOCKET_TIMEOUT) || 15_000, 1_000),
   }
+}
+
+/** The model main (the byte) starts with, where it came from, and why hydra.toml was not read when it was not. */
+export type ByteModel = { model: string; from: '[main] model in hydra.toml' | 'HYDRA_MODEL' | 'the default'; problem?: string }
+
+/**
+ * The model main starts with: hydra.toml's `[main] model`, resolved as a specialist's `model` is; without one, the spawn default
+ * (HYDRA_MODEL, else DEFAULT_MODEL), as before. Read at each start, so an edit applies at main's next start. A hydra.toml that does
+ * not load (a typo in an unrelated table, as the daemon keeps its last good config through) still gives its `[main] model`, read
+ * on its own; only an unreadable `[main]` falls back to the spawn default, and says why. A byte that will not start is worse.
+ */
+export function byteModel(cfg: Pick<HydraConfig, 'stateDir' | 'platform' | 'configDir'>): ByteModel {
+  const fallback = (problem?: string): ByteModel =>
+    ({ model: spawnModel(), from: process.env.HYDRA_MODEL?.trim() ? 'HYDRA_MODEL' : 'the default', ...(problem && { problem }) })
+  let text: string
+  try { text = readFileSync(join(cfg.stateDir, 'hydra.toml'), 'utf8') } catch { return fallback() }
+  const r = loadHydraConfig(text, systemEnv(SESSION_NAMES, cfg.stateDir, statePlatform(cfg.stateDir, undefined, cfg.platform), cfg.configDir))
+  if (!r.ok) {
+    let doc: Record<string, unknown> | undefined
+    try { doc = Bun.TOML.parse(text) as Record<string, unknown> } catch { /* not TOML at all */ }
+    const own = (doc?.main as Record<string, unknown> | undefined)?.model
+    if (typeof own === 'string' && own.trim()) return { model: resolveLaunchModel(own), from: '[main] model in hydra.toml' }
+    const saysMain = doc ? Object.hasOwn(doc, 'main') : /^\s*\[main\]/m.test(text)
+    return saysMain ? fallback(`hydra.toml does not load and its [main] model can't be read, so main starts on the spawn default:\n${formatIssues(r.errors)}`) : fallback()
+  }
+  return r.config.main ? { model: resolveLaunchModel(r.config.main.model), from: '[main] model in hydra.toml' } : fallback()
 }
 
 // ---------------------------------------------------------------------------
