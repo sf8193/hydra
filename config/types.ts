@@ -76,7 +76,7 @@ export type Specialist = {
    * Absent: unpinned. It answers messages through every app that no specialist is pinned to.
    */
   pinnedTo?: string[]
-  /** The Slack app it posts as when no message came in (its `home`, a new thread). Absent: its first pinned app, else `default`. If pinned, one of `pinned_to`. */
+  /** The Slack app it posts as when no message came in (its `home_place`, a new thread). Absent: its first pinned app, else `default`. If pinned, one of `pinned_to`. */
   speaksAs?: string
   /** Roles (never people) that may reach it: `reachable_by`. Default `["people"]`. The operator is always allowed. */
   reachableBy: string[]
@@ -86,8 +86,8 @@ export type Specialist = {
   maxSessions: number
   /** End a session after this long without activity, and resume on the next message. Absent: never. */
   idleMs?: number
-  /** Where you watch it (its threads open there), and where replies with no conversation go: a place or a channel id. Absent: the operator's channel. */
-  home?: string
+  /** The Place it posts to when nobody wrote to it first (a new thread), and where replies with no conversation go: a place or a channel id. toml key `home_place`. Absent: the operator's channel. */
+  homePlace?: string
   model?: string
   /** Shown in its sessions' thread names in place of the default session emoji: one emoji character. Absent: the default. */
   emoji?: string

@@ -155,7 +155,7 @@ const RESTRICTED_PLACE_ARG: Readonly<Record<string, string>> = {
 
 /**
  * Why a restricted session may not make this call, or undefined. The tools it keeps work only where it speaks: its own session
- * thread, or a Slack conversation bound to its specialist (not its home channel). It attaches no files of its own (the
+ * thread, or a Slack conversation bound to its specialist (not its `home_place`). It attaches no files of its own (the
  * gateway may attach pictures it drew from the session's text). `send_to_thread` also goes only to a specialist its
  * `sends_to` names (sends-to.ts). isToolAllowed has already refused the tools it does not keep.
  */

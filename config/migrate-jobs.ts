@@ -8,7 +8,7 @@
 //   needs, alert_after             → the same keys (daemon runner only, as before)
 //   to = "<specialist>" / "main"   → target = "specialist:<name>" / "main"; mode = "main" → target = "main"; mode = "none" → no target (a sensor)
 //   spawn = {…} / mode = "spawn"   → a per-conversation specialist of the same id, and the schedule sends to it: each
-//                                    run opens a new conversation (a fresh session in a new thread in its home), as before
+//                                    run opens a new conversation (a fresh session in a new thread in its home_place), as before
 //   to = "<thread id>"             → refused: a specialist is the only pointer to a thread
 // Dropped, with a note when set: revive (a specialist always revives), channel (alerts go to the operator), durable.
 
@@ -34,7 +34,7 @@ export type ScheduleTable = {
 }
 
 export type SpecialistTable = {
-  workdir: string; home: string; sessions: 'per-conversation'; idle: string; kickoff?: string; kickoff_file?: string; model?: string
+  workdir: string; home_place: string; sessions: 'per-conversation'; idle: string; kickoff?: string; kickoff_file?: string; model?: string
 }
 
 export type JobsMigration = {
@@ -106,7 +106,7 @@ export function migrateJobs(text: string, opts: JobsMigrationOpts): JobsMigratio
       const kickoff = r.kickoff !== undefined || r.kickoffFile !== undefined
       out.specialists[j.name] = {
         workdir,
-        home: r.channel,
+        home_place: r.channel,
         sessions: 'per-conversation',
         idle: r.idle ?? SPAWN_IDLE,
         ...(r.kickoff !== undefined && { kickoff: r.kickoff }),
@@ -177,7 +177,7 @@ function equivalence(stateDir: string, id: string, s: ScheduleTable, spec: Speci
   }
   const extras = [...(s.needs ? [`needs ${s.needs.join(', ')}`] : []), ...(s.alert_after ? [`alert_after ${s.alert_after}`] : [])]
   const where = !s.target ? 'a sensor (no message)'
-    : spec ? `to ${s.target}: a fresh session in a new thread in ${spec.home}`
+    : spec ? `to ${s.target}: a fresh session in a new thread in ${spec.home_place}`
     : `to ${s.target}`
   return `${id}: next ${next ? next.label : 'never'}${owed}; runner ${s.runner}${extras.length ? `, ${extras.join(', ')}` : ''}; ${where}; initiator ${jobInitiator(id)}`
 }

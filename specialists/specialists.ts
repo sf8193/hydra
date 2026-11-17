@@ -57,16 +57,16 @@ let pointers: Map<string, Pointer> = new Map()
  */
 export const declaredInToml = (): boolean => hydraConfigInUse()
 
-/** A `home` that names a channel id on this platform, or undefined (a `#name` needs a lookup that doesn't exist yet). */
-function homeChannelId(home: string): string | undefined {
-  if (/^\d+$/.test(home)) return home
-  const m = home.match(/^(discord|slack):([A-Z0-9]+|\d+)$/)
+/** A `home_place` that names a channel id on this platform, or undefined (a `#name` needs a lookup that doesn't exist yet). */
+function homePlaceChannelId(homePlace: string): string | undefined {
+  if (/^\d+$/.test(homePlace)) return homePlace
+  const m = homePlace.match(/^(discord|slack):([A-Z0-9]+|\d+)$/)
   return m && m[1] === PLATFORM ? m[2] : undefined
 }
 
-/** The channel a hydra.toml specialist opens a new thread in: its `home` when usable, else the operator's default channel. */
-function homeChannel(s: DeclaredSpecialist): string | undefined {
-  return (s.home !== undefined ? homeChannelId(s.home) : undefined) ?? (DEFAULT_SESSION_CHANNEL || undefined)
+/** The channel a hydra.toml specialist opens a new thread in: its `home_place` when usable, else the operator's default channel. */
+function homePlaceChannel(s: DeclaredSpecialist): string | undefined {
+  return (s.homePlace !== undefined ? homePlaceChannelId(s.homePlace) : undefined) ?? (DEFAULT_SESSION_CHANNEL || undefined)
 }
 
 /** Its pointer: one under an old id (`renamed_from`) not yet moved wins, since a rename means that thread; else its own. */
@@ -78,7 +78,7 @@ function pointerFor(s: DeclaredSpecialist): Pointer | undefined {
  * On each hydra.toml load, from the config that loaded: a renamed specialist's pointer moves from its `renamed_from` id to
  * its new id, so dropping `renamed_from` later keeps its thread. Nothing is deleted for being absent: a pointer for an id
  * not declared is inert, and survives a load caught mid-save or a table commented out for a while; an id declared
- * again later finds its thread. A `home` that can't be used is reported here, once per load.
+ * again later finds its thread. A `home_place` that can't be used is reported here, once per load.
  */
 function reconcilePointers(config: HydraConfig): void {
   if (!declaredInToml()) return
@@ -90,8 +90,8 @@ function reconcilePointers(config: HydraConfig): void {
       for (const o of s.renamedFrom) pointers.delete(o)
       moved = true
     }
-    if (s.home !== undefined && !homeChannelId(s.home)) {
-      process.stderr.write(`daemon: specialist "${s.id}": home ${s.home} isn't a channel id on ${PLATFORM}; its new threads open in the default channel\n`)
+    if (s.homePlace !== undefined && !homePlaceChannelId(s.homePlace)) {
+      process.stderr.write(`daemon: specialist "${s.id}": home_place ${s.homePlace} isn't a channel id on ${PLATFORM}; its new threads open in the default channel\n`)
     }
   }
   if (moved) persistPointers()
@@ -99,7 +99,7 @@ function reconcilePointers(config: HydraConfig): void {
 
 function fromToml(s: DeclaredSpecialist): Specialist {
   const p = pointerFor(s)
-  const channel = homeChannel(s)
+  const channel = homePlaceChannel(s)
   return {
     ...(p && { threadId: p.threadId }),
     ...(channel && { channel }),
@@ -304,7 +304,7 @@ export function specialistEmoji(id: string | undefined, h: HydraConfig = current
 /**
  * The specialist this session acts for: it sits in the specialist's thread, or it is one of a per-conversation
  * specialist's conversation sessions (named `<id>_…`). A conversation session answers only its own conversation
- * (replyInConversation checks that), but it may post to its specialist's home and bind and unbind for it.
+ * (replyInConversation checks that), but it may post to its specialist's home_place and bind and unbind for it.
  */
 export function specialistOf(caller: Partial<Pick<SessionInfo, 'threadId' | 'tmuxName'>> | undefined, h: HydraConfig = currentHydraConfig()): string | undefined {
   const own = conversationSpecialistOf(caller?.tmuxName)

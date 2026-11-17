@@ -23,7 +23,7 @@ const TOML = `${TWO_APPS}
 [specialists.${CRM}]
 workdir = "/w/crm"
 reachable_by = ["role:anyone"]
-home = "slack:C9"
+home_place = "slack:C9"
 [[rules]]
 place = "slack:C1"
 target = "specialist:${CRM}"
@@ -31,7 +31,7 @@ target = "specialist:${CRM}"
 workdir = "/w/deals"
 pinned_to = ["app:sales"]
 reachable_by = ["role:anyone"]
-home = "slack:C8"
+home_place = "slack:C8"
 [[rules]]
 place = "slack:C1"
 target = "specialist:${DEALS}"
@@ -109,10 +109,10 @@ describe('replies leave through the app that heard the conversation', () => {
 })
 
 describe('a post with no incoming message speaks as the specialist’s app', () => {
-  const home = (extra: string) => TOML.replace(`home = "slack:C8"`, `home = "slack:C8"\n${extra}`)
+  const home = (extra: string) => TOML.replace(`home_place = "slack:C8"`, `home_place = "slack:C8"\n${extra}`)
   test('speaks_as picks the app; absent, a pinned specialist speaks as its pinned app and an unpinned one as `default`', async () => {
-    expect(await replyInConversation('deals-session', 'slack:C8', 'hello')).toContain('posted to deals-t\'s home')
-    expect(await replyInConversation('crm-session', 'slack:C9', 'hello')).toContain('posted to crm-t\'s home')
+    expect(await replyInConversation('deals-session', 'slack:C8', 'hello')).toContain('posted to deals-t\'s home_place')
+    expect(await replyInConversation('crm-session', 'slack:C9', 'hello')).toContain('posted to crm-t\'s home_place')
     expect(posts.map(p => [p.channel, p.app])).toEqual([['C8', 'sales'], ['C9', 'default']])
     // Its thread is a conversation of the app it spoke through.
     expect(getSlackWatcher().get('C8', '77.000001', 'sales')).toMatchObject({ specialist: DEALS, mentionedBy: 'home', app: 'sales' })
@@ -120,7 +120,7 @@ describe('a post with no incoming message speaks as the specialist’s app', () 
     expect(getSlackWatcher().get('C9', '77.000001')).not.toHaveProperty('app')
   })
 
-  test('speaks_as overrides it, and the sales home can be named in the app’s own form', async () => {
+  test('speaks_as overrides it, and the sales home_place can be named in the app’s own form', async () => {
     configure(TOML.replace(`workdir = "/w/crm"\nreachable_by`, `workdir = "/w/crm"\npinned_to = ["app:default"]\nreachable_by`).replace(`place = "slack:C1"\ntarget = "specialist:${CRM}"`, `place = "slack:C2"\ntarget = "specialist:${CRM}"`).replace(`pinned_to = ["app:sales"]`, `pinned_to = ["app:sales", "app:default"]\nspeaks_as = "app:default"`))
     await replyInConversation('deals-session', 'slack:C8', 'hello')
     expect(posts.map(p => p.app)).toEqual(['default'])

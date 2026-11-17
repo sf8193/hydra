@@ -132,8 +132,8 @@ export const specialistsStep: MigrateStep = {
       }
       // A channel id is where its threads open. Digits stand alone; any other id is written as a place on this platform.
       if (s.channel) {
-        const home = /^\d+$/.test(s.channel) ? s.channel : normalizePlace(`${platform}:${s.channel}`)
-        if (home) spec.home = home
+        const homePlace = /^\d+$/.test(s.channel) ? s.channel : normalizePlace(`${platform}:${s.channel}`)
+        if (homePlace) spec.home_place = homePlace
         else notes.push(`specialist "${name}": channel ${s.channel} isn't a channel hydra.toml can name; left out, so its new threads open in the operator's channel`)
       }
       specialists[name] = spec

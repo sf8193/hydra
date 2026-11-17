@@ -37,7 +37,7 @@ export function noSuchApp(id: string, declared: string[]): string {
 }
 
 /**
- * The app a specialist posts as when no message came in (its `home`, a new thread): `speaks_as`, else the first app it is pinned
+ * The app a specialist posts as when no message came in (its `home_place`, a new thread): `speaks_as`, else the first app it is pinned
  * to, else `default`, else the one app there is. Undefined when none of those names one: `speaks_as` is then required.
  */
 export function speaksAsOf(s: Pick<Specialist, 'pinnedTo' | 'speaksAs'>, declared: string[]): string | undefined {

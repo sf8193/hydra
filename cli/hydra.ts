@@ -83,7 +83,7 @@ Deliver (whisper channel — message to session context, not thread):
     --idempotency-ttl <dur>            How long the key is remembered: 1m to 7d, e.g. 24h (default 15m)
     --queue                            Queue if bridge disconnected (default: fail)
     --conversation <key>               With --to specialist:<name> that runs per-conversation sessions: that conversation's own
-                                       session, opened for it (a fresh thread in the specialist's home) if it has none
+                                       session, opened for it (a fresh thread in the specialist's home_place) if it has none
     --revive                           With --to thread:<id> or --thread: a dead session is revived in its thread first
                                        (resume, else fork, else a fresh one that reads the thread); the message queues for it.
   Exit codes: 2 already delivered with this key · 3 gone or refused · 4 running but unreachable · 5 not now (booting,

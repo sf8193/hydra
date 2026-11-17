@@ -17,7 +17,7 @@ const { fakeAdapter } = await import('./test-harness.js')
 
 process.stderr.write = (() => true) as any
 
-const decl = (id: string, over: Record<string, unknown> = {}) => ({ id, workdir: '/srv/x', kickoff: 'k', home: '555', reachableBy: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false, ...over })
+const decl = (id: string, over: Record<string, unknown> = {}) => ({ id, workdir: '/srv/x', kickoff: 'k', homePlace: '555', reachableBy: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false, ...over })
 const ACCESS = join(STATE_DIR, 'access.json')
 writeFileSync(ACCESS, JSON.stringify({ dmPolicy: 'pairing', allowFrom: ['U1'], groups: {}, pending: {} }))
 afterAll(() => { rmSync(ACCESS, { force: true }); _setHydraConfigForTesting(undefined) })

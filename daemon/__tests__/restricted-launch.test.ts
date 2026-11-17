@@ -138,7 +138,7 @@ describe('the launch policy of a specialist', () => {
   test('its id changes with the tools, a server or its tools, and the workdir, and with nothing else', () => {
     const base = bornPolicy('ops')!.id
     expect(base).toMatch(/^workdir:[0-9a-f]{12}$/)
-    use({ ...OPS, home: 'slack:#x', reachableBy: ['people'] }); expect(bornPolicy('ops')!.id).toBe(base)
+    use({ ...OPS, homePlace: 'slack:#x', reachableBy: ['people'] }); expect(bornPolicy('ops')!.id).toBe(base)
     use({ ...OPS, tools: ['Read'] }); expect(bornPolicy('ops')!.id).not.toBe(base)
     use({ ...OPS, workdir: '/elsewhere' }); expect(bornPolicy('ops')!.id).not.toBe(base)
     _setHydraConfigForTesting({ ...configWith([OPS]), mcpServers: { datadog: { name: 'datadog', command: '/usr/local/bin/datadog-mcp', tokenEnv: ['DD_API_KEY'], tools: ['search_logs', 'get_monitor'] } } })

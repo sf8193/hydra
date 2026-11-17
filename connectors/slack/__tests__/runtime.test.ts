@@ -410,23 +410,23 @@ describe('replies: posted only into the conversation they answer', () => {
     expect(posts).toEqual([])
   })
 
-  test("a specialist posts to its own home (a schedule's reply has no conversation): a new thread there, bound to it", async () => {
+  test("a specialist posts to its own home_place (a schedule's reply has no conversation): a new thread there, bound to it", async () => {
     fakePost()
     session('r-food', FOOD_THREAD)
     session('r-ops', OPS_THREAD)
-    configure(TOML.replace(`workdir = "/w/food"`, `workdir = "/w/food"\nhome = "slack:#food-home"`), { names: { C7: 'food-home' } })
-    expect(await replyInConversation('r-food', 'slack:#food-home', 'nightly summary')).toBe(`posted to ${FOOD}'s home (slack:#food-home); replies in its thread come back to ${FOOD}`)
+    configure(TOML.replace(`workdir = "/w/food"`, `workdir = "/w/food"\nhome_place = "slack:#food-home"`), { names: { C7: 'food-home' } })
+    expect(await replyInConversation('r-food', 'slack:#food-home', 'nightly summary')).toBe(`posted to ${FOOD}'s home_place (slack:#food-home); replies in its thread come back to ${FOOD}`)
     expect(posts).toEqual(['C7|-|nightly summary'])
     expect(getSlackWatcher().get('C7', '1.000001')).toMatchObject({ specialist: FOOD })
-    expect(await replyInConversation('r-food', 'slack:C7', 'by id too')).toContain('home')
+    expect(await replyInConversation('r-food', 'slack:C7', 'by id too')).toContain('home_place')
     await expect(replyInConversation('r-ops', 'slack:#food-home', 'not mine')).rejects.toThrow('conversation must look like')
     await expect(replyInConversation('r-ops', 'slack:C7', 'not mine')).rejects.toThrow('is not an open conversation')
   })
 
-  test("a home answer in several parts keeps the rest in the first part's thread", async () => {
+  test("a home_place answer in several parts keeps the rest in the first part's thread", async () => {
     fakePost()
     session('r-food', FOOD_THREAD)
-    configure(TOML.replace(`workdir = "/w/food"`, `workdir = "/w/food"\nhome = "slack:C7"`))
+    configure(TOML.replace(`workdir = "/w/food"`, `workdir = "/w/food"\nhome_place = "slack:C7"`))
     await replyInConversation('r-food', 'slack:C7', 'para one\n\n'.repeat(800))
     expect(posts.map(p => p.split('|').slice(0, 2).join('|'))).toEqual(['C7|-', 'C7|1.000001', 'C7|1.000001'])
   })
@@ -453,9 +453,9 @@ describe('replies: posted only into the conversation they answer', () => {
     expect(await fate('A request error occurred: socket hang up')).toBe('unknown')
   })
 
-  test("a home reply's thread is bound as soon as its first part lands, even if a later part fails", async () => {
+  test("a home_place reply's thread is bound as soon as its first part lands, even if a later part fails", async () => {
     session('r-food', FOOD_THREAD)
-    configure(TOML.replace(`workdir = "/w/food"`, `workdir = "/w/food"\nhome = "slack:C7"`))
+    configure(TOML.replace(`workdir = "/w/food"`, `workdir = "/w/food"\nhome_place = "slack:C7"`))
     let n = 0
     slackRuntimeDeps.post = async () => { if (++n === 2) throw new Error('An API error occurred: ratelimited'); return '300.000001' }
     await expect(replyInConversation('r-food', 'slack:C7', 'para one\n\n'.repeat(800))).rejects.toThrow('reply failed after 1 of 3')
@@ -471,9 +471,9 @@ describe('replies: posted only into the conversation they answer', () => {
     expect(posts).toHaveLength(1)
   })
 
-  test('home threads count against what a specialist may open itself; past that the post goes, unbound, and the operator hears why', async () => {
+  test('home_place threads count against what a specialist may open itself; past that the post goes, unbound, and the operator hears why', async () => {
     session('r-food', FOOD_THREAD)
-    configure(TOML.replace(`workdir = "/w/food"`, `workdir = "/w/food"\nhome = "slack:C7"`), { maxWatches: 50 })
+    configure(TOML.replace(`workdir = "/w/food"`, `workdir = "/w/food"\nhome_place = "slack:C7"`), { maxWatches: 50 })
     let n = 0
     slackRuntimeDeps.post = async () => `${100 + ++n}.000001`
     const posted: string[] = []
@@ -483,7 +483,7 @@ describe('replies: posted only into the conversation they answer', () => {
       for (let i = 0; i < 10; i++) expect(await replyInConversation('r-food', 'slack:C7', `report ${i}`)).toContain('replies in its thread come back')
       expect(await replyInConversation('r-food', 'slack:C7', 'one too many')).toContain(`its thread is not bound to ${FOOD}: ${FOOD} already holds 10 conversations it opened itself`)
       await Bun.sleep(5)
-      expect(posted.some(p => p.includes("post to its home opened no conversation"))).toBe(true)
+      expect(posted.some(p => p.includes("post to its home_place opened no conversation"))).toBe(true)
       await expect(bindConversation(food, 'slack:C1:99.000001')).rejects.toThrow('already holds 10 conversations it opened itself')
     } finally { (gateway as any).send = realSend }
   })
@@ -555,8 +555,8 @@ describe('sessions = "per-conversation"', () => {
     expect(newer.waitingSince).toBeUndefined() // 3 places, 1 waiter ahead: it went on to its own session
   })
 
-  test('a conversation session acts for its specialist: the tools, its home, but replies only into its own conversation', async () => {
-    configure(TOML.replace(`reachable_by = ["role:anyone"]\n`, `reachable_by = ["role:anyone"]\nsessions = "per-conversation"\nhome = "slack:C7"\n`))
+  test('a conversation session acts for its specialist: the tools, its home_place, but replies only into its own conversation', async () => {
+    configure(TOML.replace(`reachable_by = ["role:anyone"]\n`, `reachable_by = ["role:anyone"]\nsessions = "per-conversation"\nhome_place = "slack:C7"\n`))
     fakePost()
     const conv = { threadId: 'conv-thread', tmuxName: `${FOOD}_c1-4-000001` }
     expect(isSpecialistOccupant(conv)).toBe(true)
@@ -564,7 +564,7 @@ describe('sessions = "per-conversation"', () => {
     registry.set('pc-own', { sessionId: 'pc-own', ...conv, sessionType: 'thread_owner', engine: 'claude', createdAt: Date.now() } as any)
     getSlackWatcher().bind('C1', '4.000001', FOOD)
     getSlackWatcher().bind('C1', '5.000001', FOOD)
-    expect(await replyInConversation('pc-own', 'slack:C7', 'scheduled report')).toContain(`posted to ${FOOD}'s home`)
+    expect(await replyInConversation('pc-own', 'slack:C7', 'scheduled report')).toContain(`posted to ${FOOD}'s home_place`)
     expect(await replyInConversation('pc-own', 'slack:C1:4.000001', 'mine')).toContain('posted 1')
     await expect(replyInConversation('pc-own', 'slack:C1:5.000001', 'a sibling\'s')).rejects.toThrow("and from a conversation's own session only to that conversation")
   })

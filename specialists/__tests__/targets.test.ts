@@ -216,8 +216,8 @@ describe('a conversation session\'s thread', () => {
     } finally { (gateway as any).fetchChannel = realFetch }
   })
 
-  test("a hydra.toml specialist's conversations take its recipe: its idle, its home channel", async () => {
-    _setHydraConfigForTesting(hydra(`operator = "op"\n[people.op]\naddresses = ["slack:UOP"]\n[specialists.hid]\nworkdir = "/w"\nkickoff = "k"\nhome = "123456"\nsessions = "per-conversation"\nidle = "90m"\n`))
+  test("a hydra.toml specialist's conversations take its recipe: its idle, its home_place channel", async () => {
+    _setHydraConfigForTesting(hydra(`operator = "op"\n[people.op]\naddresses = ["slack:UOP"]\n[specialists.hid]\nworkdir = "/w"\nkickoff = "k"\nhome_place = "123456"\nsessions = "per-conversation"\nidle = "90m"\n`))
     const r = await deliverToTarget({ perConversation: 'hid', conversation: 'slack:C0T:1.000001' }, 'x', opts)
     expect(r).toMatchObject({ ok: true, sessionName: 'hid_c0t-1-000001' })
     expect(spawns[0][1]).toBe('123456')
@@ -414,9 +414,9 @@ describe('specialists.json', () => {
 
 describe('hydra deliver --conversation: a per-conversation specialist opens that conversation (a schedule run)', () => {
   const cli = (params: Record<string, unknown>) => handleCLIRequest({ type: 'cli', command: 'deliver', id: `tg-conv-${++n}`, params } as CLIRequest)
-  const CFG = `operator = "op"\n[people.op]\naddresses = ["slack:UOP"]\n[specialists.rev]\nworkdir = "/w"\nkickoff = "Weekly review."\nhome = "777"\nsessions = "per-conversation"\nidle = "4d"\n[specialists.shared]\nworkdir = "/w"\nkickoff = "k"\n`
+  const CFG = `operator = "op"\n[people.op]\naddresses = ["slack:UOP"]\n[specialists.rev]\nworkdir = "/w"\nkickoff = "Weekly review."\nhome_place = "777"\nsessions = "per-conversation"\nidle = "4d"\n[specialists.shared]\nworkdir = "/w"\nkickoff = "k"\n`
 
-  test("its own session, a fresh thread in the specialist's home, run as the sender (jobs:<name>); the same key reaches it again", async () => {
+  test("its own session, a fresh thread in the specialist's home_place, run as the sender (jobs:<name>); the same key reaches it again", async () => {
     _setHydraConfigForTesting(hydra(CFG))
     const conversation = 'clock:jobs-rev-2026-11-13T19:00:00.000Z'
     const r = await cli({ to: 'specialist:rev', conversation, message: 'Check output:\nweek 45', initiator: 'jobs:rev' })

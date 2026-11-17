@@ -280,16 +280,16 @@ A DM, or a top-level message where `messages = "all"`, has no thread ts: `slack:
 
 The id of `default` is exactly what it was in a hydra.toml with no `[slack.apps.*]` tables and no `app` keys, so its sessions, transcripts, stored conversations and idempotency keys carry on; a conversation id written without an app is `default`'s, and `slack:default:C0ABC:…` names the same conversation. Another app's per-conversation session is named with the app in it (`deals_sales-c0abc-1793732224-093059`), and its attachments are kept under `<state>/slack-files/sales/<channel>/`. Stored conversations and catch-up cursors carry the app when it is not `default`; a conversation store written without apps loads as `default`'s and is not rewritten.
 
-**Replies leave through the app that heard the message.** `reply` into a conversation posts with that conversation's app, never another. A post that answers no message (a specialist's `home`, a new thread) has no app to follow, so it uses the specialist's `speaks_as`:
+**Replies leave through the app that heard the message.** `reply` into a conversation posts with that conversation's app, never another. A post that answers no message (a specialist's `home_place`, a new thread) has no app to follow, so it uses the specialist's `speaks_as`:
 
 ```toml
 [specialists.deals]
 pinned_to = ["app:sales"]
 speaks_as = "app:sales"        # the app it posts as when it answers no message; one of `pinned_to` if it is pinned
-home = "slack:#sales-ops"
+home_place = "slack:#sales-ops"
 ```
 
-`speaks_as` must name a declared app, and one of `pinned_to` for a pinned specialist; an unpinned specialist cannot speak as an app another specialist is pinned to. Absent: its first pinned app; if it is unpinned, `default`, else the only app declared. With several apps, none of them `default`, `speaks_as` is required of a specialist with a Slack `home`: hydra.toml refuses to load without it. A `#name` home is resolved through that app's workspace. The thread such a post opens is a conversation of that app, bound to the specialist.
+`speaks_as` must name a declared app, and one of `pinned_to` for a pinned specialist; an unpinned specialist cannot speak as an app another specialist is pinned to. Absent: its first pinned app; if it is unpinned, `default`, else the only app declared. With several apps, none of them `default`, `speaks_as` is required of a specialist with a Slack `home_place`: hydra.toml refuses to load without it. A `#name` home_place is resolved through that app's workspace. The thread such a post opens is a conversation of that app, bound to the specialist.
 
 `bind_conversation` and `hydra conversations bind` carry the app too, and refuse what routing would: a specialist can be bound only through an app it is pinned to (any app if it is unpinned).
 

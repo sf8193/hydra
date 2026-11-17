@@ -21,7 +21,7 @@ addresses = ["discord:100000000000000001"]
 
 [specialists.ledger-review]
 workdir = "~/Documents/ledger-agent-system"
-home = "1551794455227404370"
+home_place = "1551794455227404370"
 sessions = "per-conversation"
 idle = "4d"
 kickoff = "💰 Ledger Review. Read the instructions."
@@ -50,7 +50,7 @@ target = "main"
 const LEDGER = `# ledger-agent-system's hydra fragment
 [specialists.ledger-review]
 workdir = "~/Documents/ledger-agent-system"
-home = "1551794455227404370"
+home_place = "1551794455227404370"
 kickoff = "💰 Ledger Review. Read the instructions."
 sessions = "per-conversation"
 idle = "4d"
@@ -79,7 +79,7 @@ check = "~/Documents/ledger-agent-system/jobs/backup-pull.sh"
 const NEW_SPECIALIST = `
 [specialists.books]
 workdir = "~/Workstreams/Books"
-home = "1551794455227404371"
+home_place = "1551794455227404371"
 
 [schedules.nightly-books]
 cron = "0 3 * * *"

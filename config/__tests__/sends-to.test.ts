@@ -83,9 +83,9 @@ describe('sends_to', () => {
     expect(ok(text(ops(), deep())).warnings).toEqual([])
     expect(ok(text(ops(''), deep())).warnings.some(w => w.includes('nobody can reach it'))).toBe(true)
   })
-  test('a confined specialist with no home loads clean: home is only where its threads open, so no warning', () => {
+  test('a confined specialist with no home_place loads clean: home_place is only where it posts first, so no warning', () => {
     expect(ok(text(ops(''))).warnings).toEqual([])
-    expect(ok(text(ops('home = "slack:C0HOME"'))).config.specialists.ops.home).toBe('slack:C0HOME')   // `home` is still where its threads open
+    expect(ok(text(ops('home_place = "slack:C0HOME"'))).config.specialists.ops.homePlace).toBe('slack:C0HOME')   // `home_place` is still where it posts first
   })
 })
 

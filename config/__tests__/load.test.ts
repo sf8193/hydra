@@ -414,10 +414,10 @@ describe('found in the second review', () => {
       'schedules.b.env_file: "b.env" is relative, so it needs an absolute workdir',
     ])
   })
-  test('home is a place or a channel id', () => {
-    expect(ok(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\nhome = "discord:#ops"\n[[rules]]\nplace = "cli"\ntarget = "specialist:ops"\n`).config.specialists.ops.home).toBe('discord:#ops')
-    expect(ok(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\nhome = "1234567890"\n[[rules]]\nplace = "cli"\ntarget = "specialist:ops"\n`).config.specialists.ops.home).toBe('1234567890')
-    expect(errorsOf(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\nhome = "my channel"\n[[rules]]\nplace = "cli"\ntarget = "specialist:ops"\n`)).toEqual(['specialists.ops.home: "my channel" must be a place (slack:#channel, discord:#channel, …) or a channel id'])
+  test('home_place is a place or a channel id', () => {
+    expect(ok(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\nhome_place = "discord:#ops"\n[[rules]]\nplace = "cli"\ntarget = "specialist:ops"\n`).config.specialists.ops.homePlace).toBe('discord:#ops')
+    expect(ok(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\nhome_place = "1234567890"\n[[rules]]\nplace = "cli"\ntarget = "specialist:ops"\n`).config.specialists.ops.homePlace).toBe('1234567890')
+    expect(errorsOf(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\nhome_place = "my channel"\n[[rules]]\nplace = "cli"\ntarget = "specialist:ops"\n`)).toEqual(['specialists.ops.home_place: "my channel" must be a place (slack:#channel, discord:#channel, …) or a channel id'])
   })
 })
 
@@ -700,17 +700,17 @@ bot_token_env = "SUPPORT_SLACK_BOT_TOKEN"
     const pinned = `${spec('speaks_as = "app:sales"')}[specialists.y]\nworkdir = "~/agents/desk"\npinned_to = ["app:sales"]\n[[rules]]\nplace = "slack:#b"\ntarget = "specialist:y"\n`
     expect(errorsOf(pinned)).toEqual(['specialists.x.speaks_as: app:sales serves only specialists pinned to it (y), and x is not pinned: set `speaks_as` to an app x can be reached through, or pin x to app:sales'])
   })
-  test('a specialist with a Slack home must have an app to post as: with several apps and none `default`, `speaks_as` is required, and the error names the key', () => {
+  test('a specialist with a Slack home_place must have an app to post as: with several apps and none `default`, `speaks_as` is required, and the error names the key', () => {
     const none = `${BASE}\n[slack.apps.a]\nbot_token_env = "A_BOT"\n[slack.apps.b]\nbot_token_env = "B_BOT"\n`
-    const x = (extra: string) => `${none}[specialists.x]\nworkdir = "~/agents/crm"\nhome = "slack:#ops"\n${extra}\n[[rules]]\nplace = "slack:#a"\ntarget = "specialist:x"\n`
-    expect(errorsOf(x(''))).toEqual(['specialists.x.speaks_as: x has a Slack home, and 2 Slack apps are declared and none is `default`: set `speaks_as` to the app it posts as'])
+    const x = (extra: string) => `${none}[specialists.x]\nworkdir = "~/agents/crm"\nhome_place = "slack:#ops"\n${extra}\n[[rules]]\nplace = "slack:#a"\ntarget = "specialist:x"\n`
+    expect(errorsOf(x(''))).toEqual(['specialists.x.speaks_as: x has a Slack home_place, and 2 Slack apps are declared and none is `default`: set `speaks_as` to the app it posts as'])
     expect(ok(x('speaks_as = "app:b"')).config.specialists.x.speaksAs).toBe('b')
-    // No home, no post of its own: nothing to require.
+    // No home_place, no post of its own: nothing to require.
     expect(ok(`${none}[specialists.x]\nworkdir = "~/agents/crm"\n[[rules]]\nplace = "slack:#a"\ntarget = "specialist:x"\n`).config.specialists.x.speaksAs).toBeUndefined()
   })
   test('the app it would post as, derived when `speaks_as` is absent, must be able to reach it', () => {
-    // `default` is pinned by y, so an unpinned x with a home would post through an app that never delivers to it.
-    const toml = `${two}[specialists.y]\nworkdir = "~/agents/desk"\npinned_to = ["app:default"]\n[specialists.x]\nworkdir = "~/agents/crm"\nhome = "slack:#ops"\n[[rules]]\nplace = "slack:#b"\ntarget = "specialist:y"\n[[rules]]\nplace = "slack:#a"\ntarget = "specialist:x"\n`
+    // `default` is pinned by y, so an unpinned x with a home_place would post through an app that never delivers to it.
+    const toml = `${two}[specialists.y]\nworkdir = "~/agents/desk"\npinned_to = ["app:default"]\n[specialists.x]\nworkdir = "~/agents/crm"\nhome_place = "slack:#ops"\n[[rules]]\nplace = "slack:#b"\ntarget = "specialist:y"\n[[rules]]\nplace = "slack:#a"\ntarget = "specialist:x"\n`
     expect(errorsOf(toml)).toEqual(['specialists.x.speaks_as: app:default serves only specialists pinned to it (y), and x is not pinned: set `speaks_as` to an app x can be reached through, or pin x to app:default'])
   })
   test('speaks_as is a string', () => {
