@@ -47,7 +47,7 @@ describe('slackManifest', () => {
     const bot = manifestOf(BASE)
     expect(bot.oauth_config.scopes.user).toBeUndefined()
     expect(bot.settings.event_subscriptions.user_events).toBeUndefined()
-    expect(bot.settings.event_subscriptions.bot_events).toEqual(['message.channels', 'message.groups', 'message.im', 'message.mpim', 'channel_rename', 'group_rename'])
+    expect(bot.settings.event_subscriptions.bot_events).toEqual(['message.channels', 'message.groups', 'message.im', 'message.mpim', 'channel_rename', 'group_rename', 'reaction_added'])
     const user = manifestOf(withSlack('operator_token_env = "HYDRA_SLACK_USER_TOKEN"'))
     // The default description tells coworkers the app can read as its installer.
     expect(user.display_information.description).toBe(SLACK_APP_DEFAULTS.description + SLACK_APP_DEFAULTS.operatorTokenNote)
@@ -56,8 +56,8 @@ describe('slackManifest', () => {
   })
 
   test('the bot scopes are exactly the ones the startup scope check asks for, with every option on', () => {
-    // Channels by name, DMs (the operator has a slack: address), group DMs and files: every option scopesNeeded knows.
-    const h = hydra(alsoHeard(oneListener('#food', 'helper', '["role:anyone"]', '[places."slack:#food"]\nfiles = true\n'), 'helper', 'slack:group-dm'))
+    // Channels by name, DMs (the operator has a slack: address), group DMs, files and reactions: every option scopesNeeded knows.
+    const h = hydra(alsoHeard(oneListener('#food', 'helper', '["role:anyone"]', '[places."slack:#food"]\nfiles = true\nreactions = "all"\n'), 'helper', 'slack:group-dm'))
     const checked = scopesNeeded(h)
     expect(checked).toEqual(Object.values(SLACK_APP_NEEDS.botScopes))
     const manifest = Bun.YAML.parse(slackManifest(h.slackApps.default)) as Manifest

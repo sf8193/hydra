@@ -5,7 +5,7 @@ import { catchUp, toEvent, type CatchUpResult, type Page, type RawMessage, type 
 import { mkdirSync, openSync, writeSync, closeSync, renameSync, rmSync } from 'fs'
 import { dirname } from 'path'
 import { linkPreviewsOff } from '../../shared/link-previews.js'
-import { routedChannels, hearsDms, dmsDeclared, namedChannels, unresolvedPlaces, isDm, mentionedApps, NOT_A_MEMBER, OPERATOR_TOKEN_REFUSED, NO_DIRECTORY, SLACK_LIMITS, type AppWatch, type DmOtherParty, type SlackDirectory, type SlackWatchConfig, type SlackWatcher } from './watch.js'
+import { routedChannels, hearsDms, dmsDeclared, namedChannels, unresolvedPlaces, isDm, type SlackReactionEvent, mentionedApps, NOT_A_MEMBER, OPERATOR_TOKEN_REFUSED, NO_DIRECTORY, SLACK_LIMITS, type AppWatch, type DmOtherParty, type SlackDirectory, type SlackWatchConfig, type SlackWatcher } from './watch.js'
 import { DEFAULT_SLACK_APP, SLACK_DM, SLACK_GROUP_DM, placesAnsweredBy, type HydraConfig, type SlackApp } from '../../config/types.js'
 import { reachableBy } from '../../routing/route.js'
 import { SLACK_APP_NEEDS, NO_SLACK_APP, appKey, appSuffix, type Apps, type ScopeNeed } from './app.js'
@@ -106,6 +106,8 @@ export type SlackAppLike = {
   channels(): Promise<{ id: string; name: string }[]>
   /** A channel was renamed (channel_rename, or group_rename for a private one). */
   onRename(handler: (id: string, name: string) => void): void
+  /** A person (or a bot) reacted to a message (reaction_added). Subscribed only where a place's `reactions` asks for it. */
+  onReaction?(handler: (event: SlackReactionEvent) => void): void
   /** Whether the bot is a member of a channel (conversations.info). Needs channels:read or groups:read. Asked only while several apps are connected. */
   isMember?(channel: string): Promise<boolean>
   /** Someone joined or left a channel (member_joined_channel, member_left_channel): who is in it may have changed. Subscribed only with several apps. */
@@ -145,6 +147,7 @@ export function scopesNeeded(h: HydraConfig, app: string = DEFAULT_SLACK_APP): S
     ...(groupDms ? [s.groupDms] : []),
     ...(slackOpts.some(o => o.files) ? [s.files] : []),
     s.reactions,
+    ...(slackOpts.some(o => o.reactions !== 'off') ? [s.reactionsRead] : []),
     s.replies,
     ...(several && channels ? [SLACK_APP_NEEDS.membership.public, ...(places.some(p => /^slack:G/.test(p)) ? [SLACK_APP_NEEDS.membership.private] : [])] : []),
   ]
@@ -482,6 +485,7 @@ export class SlackListener {
     await stale()
     const app = this.d.createApp({ app: t.app, bot: t.bot, ...(t.user && { user: t.user }) })
     app.onMessage(raw => { if (gen === this.generation) this.onMessage(raw) })
+    app.onReaction?.(r => { if (gen === this.generation) { this.sup?.touch(); this.w.handleReaction(r) } })
     app.onRename((id, name) => { this.directory.rename(id, name); this.d.log(`daemon: slack connector: channel ${id} is now #${name}\n`) })
     app.onMembership?.(channel => { this.apps.changed(channel, this.id); this.w.reactionsMayWork(channel) })
     this.app = app
@@ -784,6 +788,11 @@ export function boltApp(tokens: { app: string; bot: string; user?: string }): Sl
   // was told "unknown" would post twice. Reading keeps the SDK's patient retries.
   const poster = new WebClient(tokens.bot, { retryConfig: { retries: 0 }, timeout: POST_TIMEOUT_MS, logLevel: LogLevel.ERROR })
   let renamed: (id: string, name: string) => void = () => {}
+  let reacted: (r: SlackReactionEvent) => void = () => {}
+  app.event('reaction_added', async ({ event }) => {
+    const e = event as { user?: string; reaction?: string; item_user?: string; event_ts?: string; item?: { type?: string; channel?: string; ts?: string } }
+    if (e.item?.type === 'message' && e.item.channel && e.item.ts && e.user && e.reaction && e.event_ts) reacted({ channel: e.item.channel, itemTs: e.item.ts, ...(e.item_user && { itemUser: e.item_user }), reaction: e.reaction, user: e.user, eventTs: e.event_ts })
+  })
   let membership: (channel: string) => void = () => {}
   for (const name of SLACK_APP_NEEDS.membership.botEvents) app.event(name, async ({ event }) => { const c = (event as { channel?: string }).channel; if (c) membership(c) })
   for (const name of SLACK_APP_NEEDS.botEvents.renames) app.event(name, async ({ event }) => { const c = (event as { channel?: { id?: string; name?: string } }).channel; if (c?.id && c.name) renamed(c.id, c.name) })
@@ -794,6 +803,7 @@ export function boltApp(tokens: { app: string; bot: string; user?: string }): Sl
   })
   return {
     onMessage: h => { handler = h },
+    onReaction: h => { reacted = h },
     onRename: h => { renamed = h },
     onMembership: h => { membership = h },
     // conversations.info says `is_member` for a channel the bot can see; a private channel it is not in is `channel_not_found`: not a member.

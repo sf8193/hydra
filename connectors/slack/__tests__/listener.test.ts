@@ -2,11 +2,11 @@ import { describe, test, expect, afterEach } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'fs'
 import { tmpdir } from 'os'
 import { join, dirname } from 'path'
-import { SlackWatcher, placesOf } from '../watch.js'
-import { alsoHeard, hydra as load, oneListener, view, BASE } from './slack-config.js'
+import { SlackWatcher, placesOf, type SlackReactionEvent } from '../watch.js'
+import { alsoHeard, hydra as load, hydra, oneListener, view, BASE } from './slack-config.js'
 import { EMPTY_CONFIG } from '../../../config/load.js'
 import type { HydraConfig } from '../../../config/types.js'
-import { SlackListener, DM_LIST_BACKOFF_MS, postPayload, DOWN_ALERT_AFTER_MS, implicitScopeOptions, type ToldScopes, CATCH_UP_STALE_AFTER_MS, explainSlackError, readReplies, type SlackAppLike, type RawEvent } from '../listener.js'
+import { SlackListener, DM_LIST_BACKOFF_MS, postPayload, DOWN_ALERT_AFTER_MS, implicitScopeOptions, scopesNeeded, type ToldScopes, CATCH_UP_STALE_AFTER_MS, explainSlackError, readReplies, type SlackAppLike, type RawEvent } from '../listener.js'
 import type { SlackApi, RawMessage } from '../catchup.js'
 import type { SocketEmitter } from '../../../shared/socket-supervisor.js'
 import { createResumeDetector, type LastSleep } from '../../../shared/resume.js'
@@ -40,7 +40,7 @@ function setup(over: { tokens?: { app?: string; bot?: string }; toml?: string | 
   const sent: string[] = []
   const logs: string[] = []
   const alerts: string[] = []
-  const apps: { handler: (e: RawEvent) => void; client: FakeClient; stopped: boolean; started: number; apiCalls: string[] }[] = []
+  const apps: { handler: (e: RawEvent) => void; react: (e: SlackReactionEvent) => void; client: FakeClient; stopped: boolean; started: number; apiCalls: string[] }[] = []
   const state = { failStart: !!over.failStart, historyError: over.historyError as string | undefined, history: over.history ?? [], threads: over.threads ?? {}, nameLookups: [] as string[], duringHistory: undefined as (() => void) | undefined, network: true, lastSleep: null as Awaited<ReturnType<LastSleep>> }
   const resumes = createResumeDetector({ now: () => now, lastSleep: async () => state.lastSleep, log: l => logs.push(l) })
   // Before it has connected, the watcher sees the same file through a stand-in view, so setup can lay down a cursor.
@@ -65,7 +65,7 @@ function setup(over: { tokens?: { app?: string; bot?: string }; toml?: string | 
     ...(over.firstRetryBaseMs !== undefined && { firstRetryBaseMs: over.firstRetryBaseMs }),
     createApp: tokens => {
       expect(tokens).toEqual(TOKENS)
-      const rec = { handler: (_: RawEvent) => {}, client: new FakeClient(), stopped: false, started: 0, apiCalls: [] as string[] }
+      const rec = { handler: (_: RawEvent) => {}, react: (_: SlackReactionEvent) => {}, client: new FakeClient(), stopped: false, started: 0, apiCalls: [] as string[] }
       apps.push(rec)
       const api: SlackApi = {
         async history(a) { rec.apiCalls.push(`history:${a.oldest}`); state.duringHistory?.(); if (state.historyError) throw new Error(state.historyError); return { messages: state.history.filter(m => parseFloat(m.ts!) > parseFloat(a.oldest)) } },
@@ -75,6 +75,7 @@ function setup(over: { tokens?: { app?: string; bot?: string }; toml?: string | 
       }
       return {
         onMessage: h => { rec.handler = h },
+        onReaction: h => { rec.react = h },
         onRename: () => {},
         channels: async () => { if (over.channelsError) throw new Error(over.channelsError); return over.channels ?? [] },
         start: async () => { rec.started++; if (state.failStart) throw new Error('invalid_auth'); over.duringStart?.(rec.handler); rec.client.emit('connected') },
@@ -102,6 +103,41 @@ function setup(over: { tokens?: { app?: string; bot?: string }; toml?: string | 
   }
 }
 const message = (over: Partial<RawEvent>): RawEvent => ({ channel: CH, ts: '1100.000001', user: 'UB', text: mention, ...over })
+
+describe('inbound reactions through the connection', () => {
+  const ON = oneListener(CH, 'helper', '["role:anyone"]', `[places."slack:${CH}"]\nreactions = "all"\n`)
+  const reaction = { channel: CH, itemTs: '1000.000001', reaction: 'white_check_mark', user: 'UB', eventTs: '1200.000001' }
+
+  test('a reaction on a message of a conversation the connection holds is delivered once, even when Slack sends it twice', async () => {
+    const t = setup({ toml: ON })
+    await t.listener.start()
+    t.apps[0].handler(message({ ts: '1000.000001' }))
+    await t.watcher.flush()
+    t.sent.length = 0
+    t.apps[0].react(reaction)
+    t.apps[0].react({ ...reaction, eventTs: '1200.000002' })
+    await t.watcher.flush()
+    expect(t.sent).toHaveLength(1)
+    expect(t.sent[0]).toContain('reacted :white_check_mark: to https://x.slack.com/archives/C0FOOD/p1000000001')
+  })
+
+  test('a reaction while the place has them off is not delivered', async () => {
+    const t = setup({ toml: TOML })
+    await t.listener.start()
+    t.apps[0].handler(message({ ts: '1000.000001' }))
+    await t.watcher.flush()
+    t.sent.length = 0
+    t.apps[0].react(reaction)
+    await t.watcher.flush()
+    expect(t.sent).toHaveLength(0)
+  })
+
+  test('the startup scope check asks for reactions:read only where a place has reactions on', () => {
+    const asked = (toml: string) => scopesNeeded(hydra(toml)).some(n => n.any.includes('reactions:read'))
+    expect(asked(ON)).toBe(true)
+    expect(asked(TOML)).toBe(false)
+  })
+})
 
 describe('diagnosing a refused token', () => {
   test('the scopes the token has are logged, and a token that can read no history is called out', async () => {

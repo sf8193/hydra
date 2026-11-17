@@ -263,7 +263,7 @@ place = "slack:group-dm"   # every group DM the operator is in
 target = "specialist:deals"
 ```
 
-`hydra route --person person:alice --place slack:dm:alice` shows what a DM with Alice would do. Only `ack` and `files` apply to `[places."slack:dm:alice"]` and `[places."slack:group-dm"]`; `link_previews`, `messages` and `bots` there are errors when hydra.toml loads. A `[places]` entry alone counts as naming a place, so untagged chatter in a channel only `[places]` names is heard.
+`hydra route --person person:alice --place slack:dm:alice` shows what a DM with Alice would do. Only `ack` and `files` apply to `[places."slack:dm:alice"]` and `[places."slack:group-dm"]`; `link_previews`, `messages`, `bots` and `reactions` there are errors when hydra.toml loads. A `[places]` entry alone counts as naming a place, so untagged chatter in a channel only `[places]` names is heard.
 
 **How a DM gets its place.** Two lists answer two questions. The bot's own DMs (`users.conversations`, types `im`, with the bot token) say which DM is `slack:dm`. For any other DM, the operator's DMs (the same call with the user token, scope `im:read`) say who is on the other end: a person in `[people]` is `slack:dm:<person>`. Each list is read at connect and for a DM it has not seen, once at a time; the user list is capped at 25 pages of 200 DMs, so a DM beyond the first 5,000 is not named and is dropped; a DM on neither list goes by no name and is dropped, and a failed read is not tried again for a minute. A group DM's id looks like a channel's, so it is told by the event's `channel_type` (`mpim`). Read-only calls against a real install showed each DM from `users.conversations` carries its other party in `user`, on both tokens (one page, no cursor, for 138 DMs; the pagination stays). **Not yet proven:** the `message.im` and `message.mpim` user-event shapes, and a live drop of a real DM (the go-live check). DMs with people and group DMs are heard live only: catch-up does not rescan them, and the bot answers only where it is a member.
 
@@ -423,6 +423,7 @@ target = "specialist:ops"
 [places."slack:#ops"]
 messages = "all"                          # hears every top-level post, not only tags; it answers in a thread on the post
 link_previews = false                     # no link previews on anything hydra posts here
+reactions = "bot-messages"                 # a person's ✅ on a message the bot posted here reaches the session (default "off")
 ```
 
 **Before you paste.** The checks below run on your machine, so have these ready:
@@ -498,6 +499,20 @@ Whatever any session sends into a restricted session is rendered this way, a res
 ### `link_previews`
 
 A preview can show readers content they could not open themselves, and fetches the link with whatever the text put in it. `link_previews = false` on a place turns Slack's `unfurl_links` and `unfurl_media` off, and sets Discord's suppress-embeds flag, on the messages hydra posts to that place through each gateway's one sending point: replies, a new thread's first message and its anchor, DMs, buttons and alerts. Covered the same way: Discord edits and Discord button-click updates and replies. **Not covered:** Slack edits (`chat.update` has no unfurl argument), and a Discord channel given by name (hydra reads Discord channels by id, so `link_previews = false` on `discord:#name` is refused; use `discord:<channel id>`). Discord ignores a caller's own `unfurl: false`, as before. The default is on, so a place that does not set it behaves as it did. hydra.toml warns when a restricted specialist that `anyone` can talk to answers in a place with previews on.
+
+### `reactions`
+
+*Slack connector (`connectors/slack/`), not the gateway.* A team often answers a bot post with ✅ or 👍. By default hydra never hears it. `reactions = "bot-messages"` on a Slack place delivers a person's reaction to a message the bot posted there; `"all"` delivers a reaction to any message of a conversation hydra holds there; `"off"` (the default) delivers none. It applies to channels and to the bot's own DM, and is an error on a DM with a person, a group DM or a non-Slack place.
+
+A reaction is delivered to the session that owns the conversation it lands in, as one line in the same envelope a message has, with the person's roles and name: `reacted :white_check_mark: to <permalink>`. It is a message from that person, so the same rules decide whether it is heard: the place's rules, the conversation's binding, `reachable_by`, the guard, and which app owns the thread. A person the rules do not admit is dropped silently: no 🚫 and nothing counted. Never heard: a reaction by the bot itself (its `ack`), by any of hydra's own apps, or on a message no conversation holds. A reaction never opens a conversation.
+
+**Once, at most.** The key is the message, the emoji and the person (a skin tone is part of the emoji: `:+1:` and `:+1::skin-tone-3:` are two reactions, delivered as `:+1:` and `:+1: (skin tone 3)`). Slack sending an event again after a reconnect, or the person adding the same emoji twice, delivers once, and the key is kept with the conversation (`reacted`, the last 300). A reaction whose delivery failed, or that the guard held or dropped, is forgotten, so the same one delivers when it comes again. The store is written on a short delay: a crash between marking a reaction and writing it loses the mark, so a reaction can be lost, or delivered twice if Slack sends it again after the restart. Reactions never enter the conversation's delivered or owed lists, which catch-up's cursor follows. Slack's event does not name a message's thread, so the connector notes the bot's own messages in a conversation (the last 300, only where the place hears reactions) and finds the conversation from them: a ✅ on the bot's reply in a thread, or on its post in its own DM (once the DM is a conversation), is heard.
+
+**A flood is capped.** One person may land `maxReactionsPer10Min` (30) reactions in ten minutes, as one person's tags are capped; past that they are counted (`reaction-cap` in the drop counts of `hydra health` → `slack`) and logged, and not delivered.
+
+**Setup.** The app needs the bot scope `reactions:read` and the bot event `reaction_added`: `hydra slack manifest <app>` includes both. An app that already exists needs both added under OAuth & Permissions and Event Subscriptions, then a reinstall. The startup scope check asks for `reactions:read` only where a place has reactions on, and the bot must be a member of the channel.
+
+**Limits.** Slack does not replay a reaction made while hydra was disconnected, and catch-up reads messages, so that one is lost. A conversation that hydra reads with the operator's token (the bot is not in the channel) never hears reactions: Slack sends the app none there. A bot's DM post made before anyone wrote in the DM, and a bot message from before `reactions` was turned on, are not noted, so a reaction on them is not found. A reaction by another app's bot that is not one of hydra's is not told from a person's; where `reachable_by` admits anyone, it is heard.
 
 ### Every new start is checked, and a changed file is not applied silently
 
