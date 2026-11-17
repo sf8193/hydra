@@ -65,14 +65,14 @@ describe('a full specialist config in the old names', () => {
     expect(r.warnings.filter(w => !renameWarnings([w]).length && !isListensWarning(w))).toEqual(asBefore)
     // crm, ops, deals and plain still say where they are heard with `listens`.
     expect(r.warnings.filter(isListensWarning).length).toBe(4)
-    // 2 in [defaults.specialist] (prompt, max); crm: access, prompt_file, max, was; ops: access; deals: apps, prompt.
-    expect(renameWarnings(r.warnings).length).toBe(9)
+    // 2 in [defaults.specialist] (prompt, max); crm: access, prompt_file, max, was, talks_to; ops: access; deals: apps, prompt.
+    expect(renameWarnings(r.warnings).length).toBe(10)
   })
 
   test('the same file in the new names loads to the identical config, with no rename warning', () => {
     const renamed = text('old-specialist-names.toml')
       .replace(/^access = "workdir"/gm, 'restricted = true').replace(/^access = "operator"/gm, 'restricted = false')
-      .replace(/^prompt_file = /gm, 'kickoff_file = ').replace(/^prompt = /gm, 'kickoff = ')
+      .replace(/^talks_to = /gm, 'sends_to = ').replace(/^prompt_file = /gm, 'kickoff_file = ').replace(/^prompt = /gm, 'kickoff = ')
       .replace(/^max = /gm, 'max_sessions = ').replace(/^was = /gm, 'renamed_from = ').replace(/^apps = /gm, 'pinned_to = ')
     const [a, b] = [ok(text('old-specialist-names.toml')), ok(renamed)]
     expect(b.config).toEqual(a.config)

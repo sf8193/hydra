@@ -74,8 +74,8 @@ describe('a full config in the old names', () => {
     expect(r.config).toEqual(listensAsRules(inNewNames(before.config)) as HydraConfig)
     // Every warning the file gave before is still given, unchanged; the rest are the renames, and the bare targets (the fixture predates target kinds).
     expect(r.warnings.filter(w => !renameWarnings([w]).length && !kindWarnings([w]).length && !isListensWarning(w))).toEqual(before.warnings.map(line).map(w => w.replace('set access = "workdir"', 'set restricted = true')))
-    // One per old key written: 2 places, 1 schedule, and 3 `at`, 3 `from`, 4 `to` across four rules.
-    expect(renameWarnings(r.warnings).length).toBe(13)
+    // One per old key written: 2 places, 1 schedule, 1 `allow`, and 3 `at`, 3 `from`, 4 `to` across four rules.
+    expect(renameWarnings(r.warnings).length).toBe(14)
     // Two specialists (crm, ops) still say where they are heard with `listens`.
     expect(r.warnings.filter(isListensWarning).length).toBe(2)
     // The schedule's target and three rules' (ops, deals, crm) are bare specialist names; `main` is not.
@@ -84,7 +84,7 @@ describe('a full config in the old names', () => {
 
   test('the same file in the new names loads to the identical config, with no rename warning', () => {
     const renamed = text('old-names.toml')
-      .replace(/^at = /gm, 'place = ').replace(/^from = /gm, 'person = ').replace(/^to = /gm, 'target = ')
+      .replace(/^allow = /gm, 'reachable_by = ').replace(/^at = /gm, 'place = ').replace(/^from = /gm, 'person = ').replace(/^to = /gm, 'target = ')
       .replace('listen = "all"', 'messages = "all"').replace('listen = "mentions"', 'messages = "addressed"')
     const [a, b] = [ok(text('old-names.toml')), ok(renamed)]
     expect(b.config).toEqual(a.config)

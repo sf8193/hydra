@@ -71,6 +71,7 @@ describe('a full config in the old people, schedule and Slack app names', () => 
       'slack.apps.sales.user_token_env: rename `user_token_env` to `operator_token_env`; `user_token_env` still loads and will be removed',
       'people.op.ids: rename `ids` to `addresses`; `ids` still loads and will be removed',
       'people.alice.ids: rename `ids` to `addresses`; `ids` still loads and will be removed',
+      'specialists.ops.allow: rename `allow` to `reachable_by`; `allow` still loads and will be removed',
       'schedules.nightly.prompt: rename `prompt` to `message`; `prompt` still loads and will be removed',
       'schedules.disk.prompt: rename `prompt` to `message`; `prompt` still loads and will be removed',
       'schedules.disk.cwd: rename `cwd` to `workdir`; `cwd` still loads and will be removed',
@@ -83,7 +84,7 @@ describe('a full config in the old people, schedule and Slack app names', () => 
       .replace(/^\[connectors\.slack\]/m, '[slack.apps.default]')
       .replace(/^app_token_env = /gm, 'socket_token_env = ').replace(/^user_token_env = /gm, 'operator_token_env = ')
       .replace(/^app_name = /gm, 'display_name = ').replace(/^app_description = /gm, 'description = ')
-      .replace(/^ids = /gm, 'addresses = ').replace(/^prompt = /gm, 'message = ').replace(/^cwd = /gm, 'workdir = ')
+      .replace(/^allow = /gm, 'reachable_by = ').replace(/^ids = /gm, 'addresses = ').replace(/^prompt = /gm, 'message = ').replace(/^cwd = /gm, 'workdir = ')
     const [a, b] = [ok(text('old-platform-names.toml')), ok(renamed)]
     expect(b.config).toEqual(a.config)
     expect(b.warnings).toEqual(a.warnings.filter(w => !renameWarnings([w]).length))

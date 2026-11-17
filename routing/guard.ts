@@ -4,9 +4,9 @@ import { SPECIALIST_NAME_RE, isSessionThread } from '../shared/specialist-name.j
 import { bareOf, readTarget } from '../shared/target-kind.js'
 
 /**
- * `[guard]`: the operator's own command, run for each message after routing and the allow check, for anyone but the operator.
+ * `[guard]`: the operator's own command, run for each message after routing and the `reachable_by` check, for anyone but the operator.
  * It judges; it never produces the content. Its exit code decides the message's fate:
- *   0   deliver (stdout `{"to": "<specialist>"}` redirects it, and that specialist's `allow` is checked again)
+ *   0   deliver (stdout `{"target": "<specialist>"}` redirects it, and that specialist's `reachable_by` is checked again)
  *   10  drop it: logged, counted, never delivered
  *   75  not now: it stays owed, for at most `owed_max`, and the next catch-up pass offers it again
  *   anything else, a timeout, too much output, or a command that will not start: deliver anyway,
@@ -24,12 +24,15 @@ export type GuardInput = {
   place: string
   /** The conversation's id, as docs/slack.md writes it: `slack:C0ABC:<thread ts>`, and `slack:<app>:C0ABC:<thread ts>` for a conversation of an app other than `default`. */
   conversation: string
+  /** Where routing sent it: `main`, a specialist, or a session's thread. */
+  target: string
+  /** The old name of `target`, still sent so a guard written for it keeps working. Remove once no guard reads it. */
   to: string
   text?: string
 }
 
 export type GuardVerdict =
-  | { fate: 'deliver'; to?: string }
+  | { fate: 'deliver'; target?: string; /** Set when the guard printed the old key `to`: the watcher logs it so the operator renames it. */ viaOldKey?: true }
   | { fate: 'drop' }
   | { fate: 'later' }
   | { fate: 'open'; why: string }
@@ -102,11 +105,14 @@ function judge(code: number | null, out: string): GuardVerdict {
   let parsed: unknown
   try { parsed = JSON.parse(text) } catch { return { fate: 'open', why: 'exited 0 but printed something other than JSON' } }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return { fate: 'open', why: 'exited 0 but printed JSON that is not an object' }
-  const to = (parsed as { to?: unknown }).to
+  // `target` is the key; `to` is its old name, still read. Both with different values is no one's redirect: fail open and say so.
+  const { target: now, to: old } = parsed as { target?: unknown; to?: unknown }
+  if (now !== undefined && old !== undefined && now !== old) return { fate: 'open', why: 'printed both "target" and "to" with different values: print only "target"' }
+  const to = now ?? old
   if (to === undefined) return { fate: 'deliver' }
   // A redirect names `main` or a specialist (`specialist:<name>`; a bare name still reads, silently: the guard has no way to warn). Whether the
   // specialist is declared is the delivery's to say, as before. A thread is no redirect: the guard cannot move a message into a session's thread.
   const read = typeof to === 'string' && to === to.trim() ? readTarget(to, id => SPECIALIST_NAME_RE.test(id) && !isSessionThread(id)) : undefined
-  if (!read || !read.ok || read.ref.kind === 'thread') return { fate: 'open', why: `printed an unusable "to": ${JSON.stringify(to).slice(0, 80)}` }
-  return { fate: 'deliver', to: bareOf(read.ref) }
+  if (!read || !read.ok || read.ref.kind === 'thread') return { fate: 'open', why: `printed an unusable "${now !== undefined ? 'target' : 'to'}": ${JSON.stringify(to).slice(0, 80)}` }
+  return { fate: 'deliver', target: bareOf(read.ref), ...(now === undefined && { viaOldKey: true as const }) }
 }

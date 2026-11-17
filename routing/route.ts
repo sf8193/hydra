@@ -9,7 +9,7 @@
 // A specialist answers where a rule sends a place to it: nothing else says where.
 // Every candidate above must be served by the app the message came through (`notServedBy`, config/pins.ts): a specialist pinned to apps
 // takes only messages through them, and an app that any specialist is pinned to delivers only to those. `main` is exempt: it hears only the operator.
-// Then `allow`: the operator is always allowed, `anyone` admits strangers, `people` admits the roster, a role admits who holds it.
+// Then `reachable_by`: the operator is always allowed, `anyone` admits strangers, `people` admits the roster, a role admits who holds it.
 
 import { whyNotServed } from '../config/pins.js'
 import { DEFAULT_SLACK_APP, isDmPlace, type Address, type HydraConfig, type Person, type Place, type Rule, type Specialist } from '../config/types.js'
@@ -57,7 +57,7 @@ type Heard = { app?: string; owner?: string }
 export type Decision = Heard & (
   /** Delivered to `to`; `bind` is set when this message opens the conversation. */
   | { fate: 'deliver'; to: string; via: Via; bind: boolean; sender: Sender; trace: Step[] }
-  /** Routed, but `allow` does not admit the sender. Nothing is bound or owed. */
+  /** Routed, but `reachable_by` does not admit the sender. Nothing is bound or owed. */
   | { fate: 'refused'; to: string; via: Via; sender: Sender; trace: Step[]; why: string }
   /** Addressed, but no specialist hears this place. */
   | { fate: 'unrouted'; sender: Sender; trace: Step[] }
@@ -80,7 +80,7 @@ export function identify(cfg: HydraConfig, from: Address | undefined): Sender {
 
 /**
  * Why this sender may not reach this specialist, or undefined when they may. Given `opts`, the app the message came through must
- * be able to deliver to it too (pins), whoever the sender is; without, only `allow` is judged. `allow` admits the operator always
+ * be able to deliver to it too (pins), whoever the sender is; without, only `reachable_by` is judged. `reachable_by` admits the operator always
  * and `main` only the operator.
  */
 export function refusal(cfg: HydraConfig, to: string, sender: Sender, opts?: { app?: string }): string | undefined {
@@ -92,9 +92,9 @@ export function refusal(cfg: HydraConfig, to: string, sender: Sender, opts?: { a
   if (isSessionThread(to)) return undefined
   const s = cfg.specialists[to]
   if (!s) return `no specialist "${to}"`
-  if (s.allow.some(r => sender.roles.includes(r))) return undefined
+  if (s.reachableBy.some(r => sender.roles.includes(r))) return undefined
   const who = sender.person ? sender.person.id : `a stranger${sender.address ? ` (${sender.address})` : ''}`
-  return s.allow.length ? `${to} allows ${s.allow.join(', ')}; ${who} holds ${sender.roles.join(', ')}` : `${to} allows only the operator`
+  return s.reachableBy.length ? `${to} is reachable by the roles ${s.reachableBy.join(', ')}; ${who} holds ${sender.roles.join(', ')}` : `${to} has reachable_by = [], so only the operator reaches it`
 }
 
 /** Whether a binding still has somewhere to go: main, a specialist hydra.toml declares (after `renamed_from` renames), or a session's own thread. */

@@ -5,7 +5,7 @@ import { BASE_TOOLS as TYPED_BASE_TOOLS, ALL_CAPABILITY_TOOLS as TYPED_ALL_CAPAB
 import type { SessionType, Capability, DerivedCapability } from '../shared/constants.js'
 import type { SessionInfo } from './sessions.js'
 import { resolveEngine } from './engines/instances.js'
-import { specialistOf, boundAs, talksToOf } from '../specialists/specialists.js'
+import { specialistOf, boundAs, sendsToOf } from '../specialists/specialists.js'
 import { currentHydraConfig } from './hydra-config.js'
 import { slackConfigured } from '../config/types.js'
 
@@ -63,7 +63,7 @@ export function getToolsForSession(sessionId: string): SessionTool[] {
   if (isRestrictedSession(sessionId)) {
     const tools = computeToolsForSession('scoped', new Set(), { descriptions: info?.toolDescriptions, inputSchemas: info?.toolInputSchemas })
     // send_to_thread is advertised only to a specialist with someone to send to; the call is held to the list at the gate either way.
-    return talksToOf(info).length ? tools : tools.filter(t => t.name !== 'send_to_thread')
+    return sendsToOf(info).length ? tools : tools.filter(t => t.name !== 'send_to_thread')
   }
   if (!info) {
     process.stderr.write(`daemon: getToolsForSession: no registry entry for ${sessionId}, using thread_owner defaults\n`)
@@ -97,9 +97,9 @@ export function isToolAllowed(sessionId: string, toolName: string): boolean {
 
 /** What a refused tool call says: a restricted session is told what it has, anyone else the plain refusal. */
 export function refusalText(sessionId: string, name: string): string {
-  const hasTalks = talksToOf(registry.get(sessionId)).length > 0
+  const hasSendsTo = sendsToOf(registry.get(sessionId)).length > 0
   return isRestrictedSession(sessionId)
-    ? `${name} is not available to a restricted session: it has set_description (on itself) and, each only in its own conversation, ${[...BASE_TOOLS.scoped].filter(t => t !== 'set_description' && (hasTalks || t !== 'send_to_thread')).join(', ')}`
+    ? `${name} is not available to a restricted session: it has set_description (on itself) and, each only in its own conversation, ${[...BASE_TOOLS.scoped].filter(t => t !== 'set_description' && (hasSendsTo || t !== 'send_to_thread')).join(', ')}`
     : `${name} is not available to this session`
 }
 

@@ -187,8 +187,8 @@ describe('merging steps', () => {
   })
 
   test('specialists merge key by key; the same key with different values conflicts', () => {
-    expect(mergeDocs([{ specialists: { ops: { workdir: '/w', prompt: 'p' } } }, { specialists: { ops: { listens: ['slack:#a'], allow: ['staff'] } } }]).doc.specialists)
-      .toEqual({ ops: { workdir: '/w', prompt: 'p', listens: ['slack:#a'], allow: ['staff'] } })
+    expect(mergeDocs([{ specialists: { ops: { workdir: '/w', prompt: 'p' } } }, { specialists: { ops: { listens: ['slack:#a'], reachable_by: ['staff'] } } }]).doc.specialists)
+      .toEqual({ ops: { workdir: '/w', prompt: 'p', listens: ['slack:#a'], reachable_by: ['staff'] } })
     expect(mergeDocs([{ specialists: { ops: { workdir: '/w' } } }, { specialists: { ops: { workdir: '/x' } } }]).conflicts).toEqual(['specialists.ops.workdir: "/w" vs "/x"'])
   })
 

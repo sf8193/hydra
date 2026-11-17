@@ -40,14 +40,14 @@ socket_token_env = "SALES_SLACK_APP_TOKEN"
 export const sharedChannel = (channel: string, place = '') => `${TWO_APPS}
 [specialists.crm]
 workdir = "/w/crm"
-allow = ["anyone"]
+reachable_by = ["anyone"]
 [[rules]]
 place = "slack:${channel}"
 target = "specialist:crm"
 [specialists.deals]
 workdir = "/w/deals"
 pinned_to = ["sales"]
-allow = ["anyone"]
+reachable_by = ["anyone"]
 ${place}
 [[rules]]
 place = "slack:${channel}"
@@ -58,11 +58,11 @@ target = "specialist:deals"
 export const alsoHeard = (toml: string, to: string, ...places: string[]) => `${toml.replace(/\n*$/, '\n')}${places.map(p => `[[rules]]\nplace = "${p}"\ntarget = "specialist:${to}"\n`).join('')}`
 
 /** One specialist sent one channel, open to `allow`. */
-export const oneListener = (channel: string, to = 'helper', allow = '["anyone"]', extra = '') => {
+export const oneListener = (channel: string, to = 'helper', reachableBy = '["anyone"]', extra = '') => {
   // A rule written in `extra` is the file's own: it goes before the rule that sends the channel to `to`, so that a rule for a person is reached.
   const own = extra.match(/\[\[rules\]\]\n(?:[^\[\n][^\n]*\n)*/g) ?? []
   const rest = own.reduce((e, r) => e.replace(r, ''), extra)
-  return `${BASE}\n${own.join('')}[specialists.${to}]\nworkdir = "/w/${to}"\nallow = ${allow}\n${rest}\n[[rules]]\nplace = "slack:${channel}"\ntarget = "specialist:${to}"\n`
+  return `${BASE}\n${own.join('')}[specialists.${to}]\nworkdir = "/w/${to}"\nreachable_by = ${reachableBy}\n${rest}\n[[rules]]\nplace = "slack:${channel}"\ntarget = "specialist:${to}"\n`
 }
 
 /** The same file with rules written first: the rules for a person or an app, which must come before the rule for everyone at a place. */

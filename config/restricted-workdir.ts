@@ -7,7 +7,7 @@ import type { LoadEnv } from './types.js'
 /**
  * Places under the home folder that never belong to a restricted specialist: credential folders and files, and Claude's own account
  * state. A floor, not a complete inventory: what is known to hold secrets. Any other place (another browser, an app's data) is for the
- * operator to add to `[defaults] private_roots`.
+ * operator to add to `[restricted] off_limits`.
  */
 const PRIVATE_HOME_DIRS = ['.claude', '.claude.json', '.ssh', '.config', '.aws', '.kube', '.gnupg', 'Library/Keychains', '.netrc', '.npmrc', '.docker', '.git-credentials', '.pgpass', '.zsh_history', '.bash_history', 'Library/Cookies', 'Library/Safari', 'Library/Application Support/Google', 'Library/Application Support/Firefox']
 
@@ -16,7 +16,7 @@ export type PrivateRoot = { label: string; path: string }
 
 /**
  * The one list of places a restricted specialist must not know: home credentials, Claude's config folder, the state folder and the
- * files in it that hold secrets, and the operator's own `[defaults] private_roots`. The workdir check refuses a folder in or
+ * files in it that hold secrets, and the operator's own `[restricted] off_limits`. The workdir check refuses a folder in or
  * around any of them, and the sandbox a listed server runs under (server-sandbox.ts) denies the same paths.
  */
 export function offLimitRoots(env: Pick<LoadEnv, 'home' | 'stateDir' | 'claudeConfigDir'>, operatorRoots: readonly string[]): PrivateRoot[] {
@@ -26,7 +26,7 @@ export function offLimitRoots(env: Pick<LoadEnv, 'home' | 'stateDir' | 'claudeCo
     { label: `the state folder ${env.stateDir}`, path: env.stateDir },
     { label: join(env.stateDir, 'hydra.toml'), path: join(env.stateDir, 'hydra.toml') },
     { label: `${join(env.stateDir, '.env')} (its token file)`, path: join(env.stateDir, '.env') },
-    ...operatorRoots.map((r): PrivateRoot => ({ label: `${r} (a private root in [defaults])`, path: r })),
+    ...operatorRoots.map((r): PrivateRoot => ({ label: `${r} (listed in [restricted] off_limits)`, path: r })),
   ]
 }
 
@@ -34,7 +34,7 @@ const within = (child: string, parent: string) => child === parent || child.star
 
 /**
  * Why `workdir` can't be a restricted specialist's folder: one sentence each, without the path of the key it came from.
- * Empty: it can. `operatorRoots` are the operator's own (`[defaults] private_roots`).
+ * Empty: it can. `operatorRoots` are the operator's own (`[restricted] off_limits`).
  */
 export function workdirRestrictionIssues(env: LoadEnv, workdir: string, operatorRoots: readonly string[]): string[] {
   const real = (p: string) => env.realpath(p)
@@ -46,9 +46,9 @@ export function workdirRestrictionIssues(env: LoadEnv, workdir: string, operator
     if (within(r, dir)) return [`${workdir} contains ${label}, which holds what a restricted specialist must not know`]
   }
   const issues: string[] = []
-  if (env.isGitWorkTree(dir)) issues.push(`${workdir} is a git work tree: its history and every branch are in reach of anyone who can talk to it; give the specialist a folder of its own, outside any repository`)
+  if (env.isGitWorkTree(dir)) issues.push(`${workdir} is a git work tree: its history and every branch are in reach of anyone who can reach it; give the specialist a folder of its own, outside any repository`)
   const scan = env.scanWorkdir(dir)
-  if (scan.nestedGit.length) issues.push(`${workdir} holds a git repository (${scan.nestedGit[0]}${scan.nestedGit.length > 1 ? ` and ${scan.nestedGit.length - 1} more` : ''}): its history is in reach of anyone who can talk to this specialist; remove it, or give the specialist a folder with no repository in it`)
+  if (scan.nestedGit.length) issues.push(`${workdir} holds a git repository (${scan.nestedGit[0]}${scan.nestedGit.length > 1 ? ` and ${scan.nestedGit.length - 1} more` : ''}): its history is in reach of anyone who can reach this specialist; remove it, or give the specialist a folder with no repository in it`)
   if (env.exists(join(dir, '.mcp.json'))) issues.push(`${workdir} holds a .mcp.json, which would declare servers the specialist did not list: remove it, or declare the server in [mcp.*] and list it`)
   // Claude Code reads a .mcp.json from the folders above the one it starts in; --restricted ignores them today, which is a flag's behaviour, not a promise.
   for (let up = dirname(dir); ; up = dirname(up)) {

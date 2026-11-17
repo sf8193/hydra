@@ -221,7 +221,7 @@ export type { ToolName }
  * "restricted specialist"): it sits in session records and in HYDRA_SESSION_TYPE, so renaming it needs a read alias first.
  * It speaks only in its own conversation, so it has none of the tools
  * that reach another thread, watch or the operator's account (spawn, kill, peek, list, handoff, bind, watch, ask_predecessor),
- * and no capability grants it any. `send_to_thread` it keeps only toward the specialists its `talks_to` names (daemon/talks-to.ts).
+ * and no capability grants it any. `send_to_thread` it keeps only toward the specialists its `sends_to` names (daemon/sends-to.ts).
  */
 export type SessionType = 'master_orchestrator' | 'thread_owner' | 'thread_guest' | 'scoped'
 
@@ -250,7 +250,7 @@ export const BASE_TOOLS: Readonly<Record<SessionType, ReadonlySet<ToolName>>> = 
   scoped: new Set([
     'reply', 'react', 'edit_message', 'delete_message', 'fetch_messages',
     'download_attachment', 'set_description',
-    // Its one way to speak to another session: only the specialists in its talks_to, quoted, capped and labelled (daemon/talks-to.ts).
+    // Its one way to speak to another session: only the specialists in its sends_to, quoted, capped and labelled (daemon/sends-to.ts).
     'send_to_thread',
   ]),
 }

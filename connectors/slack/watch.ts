@@ -23,7 +23,7 @@ import { spelledBare } from '../../shared/target-kind.js'
  * A conversation is a Slack thread, or a DM's top level. It opens when the bot is tagged (or posts the thread's
  * first message, or someone DMs it), and is bound then to the specialist routing picks; from then on every reply is
  * delivered to that specialist, tagged or not, until it goes idle. A config change re-routes only new conversations;
- * `allow` is checked again at delivery. Where `messages = "all"`, an untagged top-level message opens a conversation too:
+ * `reachable_by` is checked again at delivery. Where `messages = "all"`, an untagged top-level message opens a conversation too:
  * its own thread, bound to wherever that one message routed.
  *
  * This file is the matcher and the store. It never talks to Slack: events come in
@@ -169,11 +169,11 @@ export type SlackWatchDeps = {
   alert?: (text: string, to?: string, app?: string) => void
 }
 
-/** `refused`: `allow` does not admit the sender. `unrouted`: a mention or DM no specialist hears. */
+/** `refused`: `reachable_by` does not admit the sender. `unrouted`: a mention or DM no specialist hears. */
 export type HandleOutcome = 'mention' | 'follow-up' | 'dm' | 'subscribed' | 'refused' | 'unrouted' | 'ignored'
 
 /** Why an accepted (or would-be accepted) message will never be delivered. */
-/** `refused` / `unrouted`: accepted and owed, then `allow` or the config changed so it can no longer go anywhere. `unbound`: owed when its conversation was let go. */
+/** `refused` / `unrouted`: accepted and owed, then `reachable_by` or the config changed so it can no longer go anywhere. `unbound`: owed when its conversation was let go. */
 export type DropKind = 'expired' | 'owed-full' | 'too-large' | 'tag-cap' | 'table-full' | 'guard' | 'catch-up-gap' | 'refused' | 'unrouted' | 'unbound'
 
 export type SlackWatchStats = { refused: number; refusedBy: Record<string, number>; unrouted: number; dropped: Partial<Record<DropKind, number>> }
@@ -460,6 +460,8 @@ export function packItems(items: Item[], maxBytes: number = BATCH_MAX_BYTES): It
 type Store = { entries: SlackWatchEntry[]; channelCursors: Record<string, string> }
 
 export class SlackWatcher {
+  /** The guard has printed the old key `to`: said once per daemon, not once per message. */
+  private warnedGuardOldKey = false
   private readonly entries = new Map<string, SlackWatchEntry>()
   private channelCursors: Record<string, string> = {}
   private readonly pending = new Map<string, { items: Item[]; timer: ReturnType<typeof setTimeout> }>()
@@ -831,7 +833,7 @@ export class SlackWatcher {
     if (owner !== app) return 'ignored'
     const d = route(cfg.hydra, { from: addressOf(ev.user), at, addressed, app, ...(existing?.specialist && { bound: existing.specialist }) })
     if (d.fate === 'ignored') return 'ignored'
-    // Refused or unrouted before anything is counted, watched or owed: a sender `allow` does not admit costs nothing.
+    // Refused or unrouted before anything is counted, watched or owed: a sender `reachable_by` does not admit costs nothing.
     // Only a mention or a DM gets the 🚫: chatter in a bound thread by someone not allowed is passed over quietly.
     if (d.fate === 'unrouted' || d.fate === 'refused') {
       const why = d.fate === 'refused' ? d.why : 'no specialist hears this place'
@@ -1079,7 +1081,7 @@ export class SlackWatcher {
     items = items.filter(i => {
       const why = refusal(h, homes.get(i.ts)!, senders.get(i.ts)!, { app })
       if (!why) return true
-      // Accepted, then `allow` changed while it waited: a drop, settled and surfaced.
+      // Accepted, then `reachable_by` changed while it waited: a drop, settled and surfaced.
       this.drop('refused', entry, [i.ts], `it was accepted, but now ${why}`)
       this.settle(key, entry, [i.ts])
       return false
@@ -1124,7 +1126,11 @@ export class SlackWatcher {
         return
       }
       if (v.fate === 'open') this.deps.log(`daemon: slack connector: the guard ${v.why} for ${key} ts ${item.ts}; delivering anyway\n`)
-      let to = v.fate === 'deliver' && v.to ? currentId(h, v.to) : home
+      if (v.fate === 'deliver' && v.viaOldKey && !this.warnedGuardOldKey) {
+        this.warnedGuardOldKey = true
+        this.deps.log('daemon: slack connector: the guard printed {"to": ...}: print {"target": ...} instead; "to" still works and will be removed\n')
+      }
+      let to = v.fate === 'deliver' && v.target ? currentId(h, v.target) : home
       if (to !== home && isSessionThread(to)) {
         // A session's thread is held only by that session's own bind: a guard can't send a conversation's message there.
         this.deps.log(`daemon: slack connector: the guard redirected ${key} ts ${item.ts} to the session thread ${to}, which only that session's bind may hold; delivering to ${home}\n`)
@@ -1132,7 +1138,7 @@ export class SlackWatcher {
         to = home
       }
       if (to !== home) {
-        // A redirect does not get around `allow`: the specialist it names must admit the sender too.
+        // A redirect does not get around `reachable_by`: the specialist it names must admit the sender too.
         // The app that heard the conversation is the one this message came through.
         const why = refusal(h, to, senders.get(item.ts)!, { app })
         if (why) {
@@ -1201,7 +1207,7 @@ export class SlackWatcher {
   /** One message's verdict from the guard. A guard that throws fails open, like one that crashes. */
   private async judge(g: Guard, entry: SlackWatchEntry, place: Place, to: string, i: Item): Promise<GuardVerdict> {
     const input: GuardInput = {
-      person: i.person ?? null, roles: i.roles ?? ['anyone'], place, conversation: conversationId(entry), to,
+      person: i.person ?? null, roles: i.roles ?? ['anyone'], place, conversation: conversationId(entry), target: to, to,
       ...(g.includeText && { text: i.text }),
     }
     try { return await (this.deps.guard ?? runGuard)(g, input) } catch (err) {

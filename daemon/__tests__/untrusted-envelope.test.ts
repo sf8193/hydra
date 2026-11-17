@@ -5,7 +5,7 @@
 // header and shares only the primitives.
 import { describe, expect, test } from 'bun:test'
 import { renderItem, formatDelivery, type Item } from '../../connectors/slack/watch.js'
-import { renderTalk } from '../talks-to.js'
+import { renderTalk } from '../sends-to.js'
 import { attr, quoteBody } from '../../shared/untrusted-text.js'
 
 process.stderr.write = (() => true) as any

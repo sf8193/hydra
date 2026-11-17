@@ -76,7 +76,7 @@ export function planAddFragment(stateDir: string, env: LoadEnv, fragmentText: st
   const fragmentRules = [...((fragment.rules ?? []) as Doc[]).map(ruleNamed), ...listened].filter((r, i, all) => all.findIndex(x => sameRule(x, r)) === i)
   // What a session may reach is the operator's to set by hand: a fragment comes from another repo, and a table it names can't widen or narrow that.
   const restricted = flat.flatMap(e => e.sec === 'specialists' ? [...RESTRICTION_KEYS, ...RESTRICTION_OLD_KEYS].filter(k => k in e.t).map(k => `[specialists.${e.id}] ${k}`) : [])
-  if (restricted.length) return { ok: false, error: `${source} sets ${restricted.join(', ')}: restricted, tools, mcp and talks_to say what a specialist's session may reach, and only a hand edit of hydra.toml sets them (and the [mcp.*] servers they name)` }
+  if (restricted.length) return { ok: false, error: `${source} sets ${restricted.join(', ')}: restricted, tools, mcp_servers and sends_to say what a specialist's session may reach, and only a hand edit of hydra.toml sets them (and the [mcp.*] servers they name)` }
   if (!flat.length && !fragmentRules.length) return { ok: false, error: `${source} has no [specialists.<id>] or [schedules.<id>] table, or [[rules]] entry, to add` }
 
   const existingText = readFileSync(path, 'utf8')

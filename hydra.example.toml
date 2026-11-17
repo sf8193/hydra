@@ -6,7 +6,7 @@
 # add it with `hydra config add <fragment.toml>` (README › Configuration).
 # Every key below is optional unless it says required. Unknown keys are errors, so a typo never passes silently.
 
-# The one person whose DMs reach main and who passes every admin check and every specialist's `allow`.
+# The one person whose DMs reach main and who passes every admin check and every specialist's `reachable_by`.
 # Required once anything else is declared.
 operator = "op"
 
@@ -52,7 +52,7 @@ name = "Op"                           # shown to specialists (default: the id)
 
 [people.alice]
 addresses = ["slack:U0ALICE"]
-roles = ["staff"]                     # labels for `allow` and a rule's `person`. Built in: `people` (everyone here), `anyone`
+roles = ["staff"]                     # labels for `reachable_by` and a rule's `person`. Built in: `people` (everyone here), `anyone`
 
 [people.bob]
 addresses = ["slack:U0BOB", "github:bob"]
@@ -77,7 +77,7 @@ renamed_from = ["operations"]         # old ids, so a rename keeps its thread, s
 [specialists.crm]
 workdir = "~/agents/crm"
 kickoff_file = "kickoff.md"           # instead of kickoff; relative to workdir, read at each fresh start
-allow = ["staff"]                     # roles that may reach it (default ["people"]; [] = only the operator)
+reachable_by = ["staff"]               # roles (never people) that may reach it (default ["people"]; [] = only the operator)
 sessions = "per-conversation"         # "shared" (default): one session for everything; "per-conversation": one per thread
 max_sessions = 5                      # per-conversation cap (default 20); a conversation past it waits, its messages owed, for at most 3 days, then they are dropped and alerted
 idle = "2h"                           # end a quiet session and resume it on the next message (without it, per-conversation slots never free)
@@ -92,24 +92,24 @@ speaks_as = "sales"                   # the app it posts as when it answers no m
 
 # A specialist other people talk to, restricted: it knows only its workdir, uses only the tools and servers it lists, and answers only its own
 # conversation. `restricted = false` (the default) is the operator's account, with every tool and server they have. A workdir must be a folder
-# of its own (not $HOME, not a git work tree, no symlinks out). `restricted`, `tools`, `mcp` and `talks_to` are refused in [defaults.specialist] and in `hydra
+# of its own (not $HOME, not a git work tree, no symlinks out). `restricted`, `tools`, `mcp_servers` and `sends_to` are refused in [defaults.specialist] and in `hydra
 # config add` fragments. Each new start is checked against this, from Claude Code's own debug file (docs/slack.md, "A specialist other people talk to",
 # which shows the same kind of specialist as a file of its own, named `ops`). Its `.env` variables are read when the daemon starts.
 [specialists.helpdesk]
 workdir = "~/agents/helpdesk"
 pinned_to = ["sales"]                 # pinned, because the `sales` app is pinned by deals: an unpinned specialist would lose it (hydra.toml warns)
-allow = ["staff"]
+reachable_by = ["staff"]
 restricted = true
 tools = ["Read", "Grep", "Glob"]      # built-in tools; these three are the default and all it may list
-mcp = ["datadog"]                     # names from [mcp.*] below
-talks_to = ["triage"]                # the specialists it may send to with send_to_thread (shared-session specialists, never main); refused unless restricted = true
+mcp_servers = ["datadog"]             # names from [mcp.*] below
+sends_to = ["triage"]                  # the specialists it may send to with send_to_thread (shared-session specialists, never main); refused unless restricted = true
 
-# What helpdesk hands a question to: restricted too, with a folder of its own. No rule sends a place to it; only helpdesk's talks_to reaches it.
+# What helpdesk hands a question to: restricted too, with a folder of its own. No rule sends a place to it; only helpdesk's sends_to reaches it.
 [specialists.triage]
 workdir = "~/agents/triage"
-allow = []
+reachable_by = []
 restricted = true
-talks_to = ["helpdesk"]              # the way back: its answer is a send_to_thread(type = "result") to helpdesk
+sends_to = ["helpdesk"]                # the way back: its answer is a send_to_thread(type = "result") to helpdesk
 
 # PR reviews on one repo.
 [specialists.reviewer]
@@ -117,7 +117,12 @@ workdir = "~/code/widget"
 engine = "claude"                     # claude | codex | omp
 env_file = ".env.reviewer"            # extra environment for its sessions; relative to workdir
 
-# --- mcp: servers a restricted specialist may list in `mcp`. Per-operator: only hydra.toml declares one ---
+# --- restricted: folders no restricted specialist's workdir may be, hold or sit inside, beyond the built-in ones ---
+
+[restricted]
+off_limits = ["~/notes"]               # absolute paths, or starting with ~
+
+# --- mcp: servers a restricted specialist may list in `mcp_servers`. Per-operator: only hydra.toml declares one ---
 
 [mcp.datadog]
 command = "/usr/local/bin/datadog-mcp"   # required: a pinned binary or versioned package, not `npx -y` latest
@@ -206,10 +211,10 @@ target = "specialist:helpdesk"
 place = "github:acme/widget"
 target = "specialist:reviewer"
 
-# --- guard: the operator's hook, run after routing and the allow check for anyone but the operator ---
+# --- guard: the operator's hook, run after routing and the `reachable_by` check for anyone but the operator ---
 
 [guard]
-command = "~/bin/hydra-guard"         # required: stdin {person, roles, place, conversation, to}; exit 0 delivers, 10 drops, 75 "not now"
+command = "~/bin/hydra-guard"         # required: stdin {person, roles, place, conversation, target}; exit 0 delivers (print {"target": "specialist:x"} to redirect), 10 drops, 75 "not now"
 timeout = "5s"                        # past this, the message is delivered and the timeout logged (at most 30s)
 include_text = false
 owed_max = "1h"                       # how long "not now" may keep a message owed before it fails visibly

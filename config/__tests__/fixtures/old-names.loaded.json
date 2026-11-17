@@ -45,7 +45,7 @@
         "listens": [
           "slack:#help"
         ],
-        "allow": [
+        "reachableBy": [
           "staff"
         ],
         "sessions": "shared",
@@ -59,7 +59,7 @@
         "listens": [
           "slack:dm"
         ],
-        "allow": [
+        "reachableBy": [
           "people"
         ],
         "sessions": "shared",
@@ -71,7 +71,7 @@
         "id": "deals",
         "workdir": "/home/op/agents/deals",
         "listens": [],
-        "allow": [
+        "reachableBy": [
           "people"
         ],
         "apps": [
@@ -154,11 +154,11 @@
     },
     {
       "path": "specialists.ops",
-      "message": "alice (allow = [\"people\"]) can reach the operator's account through it; set access = \"workdir\""
+      "message": "alice (reachable_by = [\"people\"]) can reach the operator's account through it; set access = \"workdir\""
     },
     {
       "path": "specialists.ops",
-      "message": "one shared session hears everyone's DMs (allow = [\"people\"]), so one person's DM is remembered in another's; use sessions = \"per-conversation\" or allow = []"
+      "message": "one shared session hears everyone's DMs (reachable_by = [\"people\"]), so one person's DM is remembered in another's; use sessions = \"per-conversation\" or reachable_by = []"
     },
     {
       "path": "specialists.ops",
@@ -166,7 +166,7 @@
     },
     {
       "path": "specialists.deals",
-      "message": "alice (allow = [\"people\"]) can reach the operator's account through it; set access = \"workdir\""
+      "message": "alice (reachable_by = [\"people\"]) can reach the operator's account through it; set access = \"workdir\""
     }
   ]
 }

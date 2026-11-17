@@ -1,8 +1,8 @@
-// `talks_to`: how a restricted session speaks to another session, and how any session's words are shown to a restricted one.
+// `sends_to`: how a restricted session speaks to another session, and how any session's words are shown to a restricted one.
 //
-// A confined specialist answers only the conversation it was asked in. Where hydra.toml gives it `talks_to = ["ops-deep"]`, it
+// A confined specialist answers only the conversation it was asked in. Where hydra.toml gives it `sends_to = ["ops-deep"]`, it
 // also keeps send_to_thread, to those specialists and no one else (never `main`, byte or a session by name). The gate is
-// `talksToRefusal`, called from bridge-dispatch `restrictedRefusal`: the one place a restricted call is judged, before any handler runs.
+// `sendsToRefusal`, called from bridge-dispatch `restrictedRefusal`: the one place a restricted call is judged, before any handler runs.
 //
 // What the receiver reads is rendered here, never by the sender. Every line of the sender's text is quoted and cut (shared/
 // untrusted-text.ts, the same primitives the Slack delivery uses); who sent it and where that conversation is
@@ -15,7 +15,7 @@ import { noteLine, type SendType } from './quiet-send.js'
 import { currentHydraConfig } from './hydra-config.js'
 import { gateway } from './config.js'
 import { occupancy } from './session-reachability.js'
-import { specialistOf, talksToOf } from '../specialists/specialists.js'
+import { specialistOf, sendsToOf } from '../specialists/specialists.js'
 import { ensureSpecialist } from '../specialists/specialist-deliver.js'
 import { deliverToSession } from '../specialists/targets.js'
 import { slackConversationLink } from '../connectors/slack/runtime.js'
@@ -39,10 +39,10 @@ export const talkDeps = {
   },
   /** Lands the envelope on the specialist's session, filling it first if nobody is home; says which thread it sits in. Throws when it cannot. */
   land: async (from: string, target: string, envelope: string): Promise<{ threadId?: string } | void> => {
-    const { info, spawned } = await ensureSpecialist(target, `talks_to:${from}`)
+    const { info, spawned } = await ensureSpecialist(target, `sends_to:${from}`)
     if (!spawned && occupancy(info) === 'orphaned') throw new Error(`${info.tmuxName} is orphaned (running, bridge not connected)`)
     // chat_id: the receiver's own thread, which is what its tools hold a call to when it answers.
-    const r = await deliverToSession(info, envelope, { initiator: `talks_to:${from}`, queue: true, source: 'talks_to', meta: { chat_id: info.threadId, specialist: target } })
+    const r = await deliverToSession(info, envelope, { initiator: `sends_to:${from}`, queue: true, source: 'sends_to', meta: { chat_id: info.threadId, specialist: target } })
     if (!r.ok) throw new Error(r.reason)
     return { threadId: info.threadId }
   },
@@ -93,11 +93,11 @@ const listed = (names: readonly string[]): string => names.join(', ')
  * result, text, no files, and the public route (a restricted session has no parent to send privately to). The conversation it is about is
  * held to its own by the caller's place check.
  */
-export function talksToRefusal(callerSessionId: string, args: Record<string, unknown>): string | undefined {
-  const allowed = talksToOf(registry.get(callerSessionId))
-  if (!allowed.length) return 'send_to_thread: your specialist has no talks_to, so you cannot send to another session; answer in your own conversation with reply'
+export function sendsToRefusal(callerSessionId: string, args: Record<string, unknown>): string | undefined {
+  const allowed = sendsToOf(registry.get(callerSessionId))
+  if (!allowed.length) return 'send_to_thread: your specialist has no sends_to, so you cannot send to another session; answer in your own conversation with reply'
   const target = typeof args.target === 'string' ? args.target.trim() : ''
-  if (!allowed.includes(target)) return `send_to_thread: ${target ? `${target} is not` : 'no target given, and it must be'} a specialist you may talk to (${listed(allowed)})`
+  if (!allowed.includes(target)) return `send_to_thread: ${target ? `${target} is not` : 'no target given, and it must be'} a specialist in your sends_to (${listed(allowed)})`
   const type = typeof args.type === 'string' ? args.type.trim() : ''
   if (!(TALK_TYPES as readonly string[]).includes(type)) return `send_to_thread: type must be one of ${TALK_TYPES.join(', ')}`
   if (typeof args.text !== 'string' || !args.text.trim()) return 'send_to_thread: the text is empty: say what you need (question) or your answer (result)'
@@ -116,7 +116,7 @@ function canonicalConversation(raw: string): string {
 export function _resetTalks(): void { asked.clear() }
 
 /**
- * Sends a restricted caller's question or result. The gate has run (`talksToRefusal`, and the place check for `chat_id`); this holds the
+ * Sends a restricted caller's question or result. The gate has run (`sendsToRefusal`, and the place check for `chat_id`); this holds the
  * rest: a question takes a slot in its conversation's budget (checked and taken in one synchronous step, before the first await, so
  * concurrent calls cannot all see room; the slot is never given back), then the envelope is rendered and landed. Errors are written for
  * the model that reads them; what the operator needs goes to the log.
@@ -128,7 +128,7 @@ export async function sendTalk(callerSessionId: string, args: Record<string, unk
   const type = String(args.type).trim()
   const text = String(args.text)
   const conversation = String(args.chat_id).trim()
-  const log = (why: string) => process.stderr.write(`daemon: talks_to: ${me ?? '?'} → ${target} (${type}, session ${callerSessionId}): ${why}\n`)
+  const log = (why: string) => process.stderr.write(`daemon: sends_to: ${me ?? '?'} → ${target} (${type}, session ${callerSessionId}): ${why}\n`)
   if (!me) { log('acts for no declared specialist'); throw new Error('send_to_thread failed: this session acts for no specialist. Tell the person you cannot reach another specialist from here.') }
 
   // One conversation, however spelled (`slack:C0:ts`, `slack:default:C0:ts`, padded): the limit is on what parseConversation says it is.

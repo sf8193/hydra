@@ -49,15 +49,15 @@ describe('slack-watch.json → hydra.toml', () => {
     maxWatches: 80,
   }
 
-  test('routes become rules and allow, and route the same senders the same way', () => {
+  test('routes become rules and reachable_by, and route the same senders the same way', () => {
     const m = migrateSlackWatch(OLD)
     const h = load(toToml(m))
-    expect(h.specialists.books).toMatchObject({ allow: ['owner', 'floor-manager'] })
+    expect(h.specialists.books).toMatchObject({ reachableBy: ['owner', 'floor-manager'] })
     expect(placesAnsweredBy(h, 'books')).toEqual(['slack:C0FINANCE'])
     expect(m.specialists.books).not.toHaveProperty('listens')
-    expect(h.specialists.ops).toMatchObject({ allow: ['people'] })
+    expect(h.specialists.ops).toMatchObject({ reachableBy: ['people'] })
     expect(placesAnsweredBy(h, 'ops')).toEqual(['slack:C0OPS', 'slack:C0OPS2'])
-    expect(h.specialists.assistant).toMatchObject({ allow: ['owner', 'assistant-allowed'] })
+    expect(h.specialists.assistant).toMatchObject({ reachableBy: ['owner', 'assistant-reach'] })
     expect(placesAnsweredBy(h, 'assistant')).toEqual(['slack:dm'])
     // Every place a route names is one rule, aimed at the specialist by its kind.
     expect(m.rules).toContainEqual({ place: 'slack:dm', target: 'specialist:assistant' })
@@ -79,20 +79,20 @@ describe('slack-watch.json → hydra.toml', () => {
     const { notes } = migrateSlackWatch(OLD)
     expect(notes).toEqual([
       'people.U0MAX0000: role "Floor Manager" is now the label "floor-manager"',
-      'routes[3].from: U0GUEST00 is a user id, so they now hold the role "assistant-allowed"',
+      'routes[3].from: U0GUEST00 is a user id, so they now hold the role "assistant-reach"',
       expect.stringContaining("routes[3]: the operator's own DMs reach assistant too"),
       expect.stringContaining('beforeDeliver is now [guard]'),
       'maxWatches = 80 has no hydra.toml key; the default (50) applies',
     ])
     const split = migrateSlackWatch({ botUserId: 'U', people: { U0A: { role: 'a' } }, routes: [{ channels: ['C1'], to: 's', from: ['a'] }, { channels: ['C2'], to: 's', from: 'anyone', beforeDeliver: false }] })
-    expect(split.specialists.s.allow).toEqual(['a', 'anyone'])
-    expect(split.notes).toContain('routes[1]: s is reached from several routes with different "from"; its allow is now their union, since one specialist has one allow')
+    expect(split.specialists.s.reachable_by).toEqual(['a', 'anyone'])
+    expect(split.notes).toContain('routes[1]: s is reached from several routes with different "from"; its reachable_by is now their union, since one specialist has one reachable_by')
     expect(split.notes).toContain('routes[1].beforeDeliver: a guard per route has no hydra.toml form; [guard] applies to every specialist')
   })
 
   test("the legacy one-route form, with no roster, stays open to anyone", () => {
     const h = load(toToml(migrateSlackWatch({ botUserId: 'U', channels: ['C1'], specialist: 'helper' })))
-    expect(h.specialists.helper).toMatchObject({ allow: ['anyone'] })
+    expect(h.specialists.helper).toMatchObject({ reachableBy: ['anyone'] })
     expect(placesAnsweredBy(h, 'helper')).toEqual(['slack:C1'])
   })
 })
@@ -113,7 +113,7 @@ test('hydra migrate runs it with the other steps: one hydra.toml that loads and 
     const h = load(plan.text)
     expect(h.slackApps.default).toEqual({ id: 'default', botTokenEnv: 'SLOPBOT_SLACK_BOT_TOKEN', socketTokenEnv: 'SLOPBOT_SLACK_APP_TOKEN', displayName: 'hydra', description: SLACK_APP_DEFAULTS.description })
     expect(Object.values(h.people).find(p => p.addresses.includes('slack:U0OPERATOR'))!.roles).toEqual(['owner']) // one person, merged by address
-    expect(h.specialists.books).toMatchObject({ workdir: '/w', allow: ['owner', 'staff'] })
+    expect(h.specialists.books).toMatchObject({ workdir: '/w', reachableBy: ['owner', 'staff'] })
     expect(placesAnsweredBy(h, 'books')).toEqual(['slack:C0FINANCE'])
     expect(fate(h, 'U0MAX0000', 'slack:C0FINANCE')).toBe('deliver:books')
     expect(fate(h, 'U0STRANGE', 'slack:C0FINANCE')).toBe('refused:books')

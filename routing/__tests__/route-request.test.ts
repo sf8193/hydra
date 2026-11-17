@@ -97,13 +97,13 @@ ids = ["slack:U0OP"]
 ids = ["slack:U0ALICE"]
 [specialists.assistant]
 workdir = "/a/asst"
-allow = ["anyone"]
+reachable_by = ["anyone"]
 [[rules]]
 place = "slack:dm"
 target = "specialist:assistant"
 [specialists.alices]
 workdir = "/a/alices"
-allow = ["anyone"]
+reachable_by = ["anyone"]
 [[rules]]
 place = "slack:dm:alice"
 target = "specialist:alices"

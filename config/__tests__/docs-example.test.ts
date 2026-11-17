@@ -31,8 +31,8 @@ describe('docs/slack.md: the ops specialist example', () => {
   test('is the confined specialist, its server, its place, and the specialist it hands off to', () => {
     const r = loadHydraConfig(text, env)
     if (!r.ok) throw new Error(formatIssues(r.errors))
-    expect(r.config.specialists.ops).toMatchObject({ restricted: true, tools: ['Read', 'Grep', 'Glob'], mcp: ['datadog'], allow: ['staff'], talksTo: ['ops-deep'], workdir: '/home/op/specialists/ops' })
-    expect(r.config.specialists['ops-deep']).toMatchObject({ restricted: true, allow: [], talksTo: ['ops'], workdir: '/home/op/specialists/ops-deep' })
+    expect(r.config.specialists.ops).toMatchObject({ restricted: true, tools: ['Read', 'Grep', 'Glob'], mcpServers: ['datadog'], reachableBy: ['staff'], sendsTo: ['ops-deep'], workdir: '/home/op/specialists/ops' })
+    expect(r.config.specialists['ops-deep']).toMatchObject({ restricted: true, reachableBy: [], sendsTo: ['ops'], workdir: '/home/op/specialists/ops-deep' })
     expect(placesAnsweredBy(r.config, 'ops')).toEqual(['slack:#ops'])
     expect(placesAnsweredBy(r.config, 'ops-deep')).toEqual([])
     expect(r.config.mcpServers?.datadog).toEqual({ name: 'datadog', command: '/usr/local/bin/datadog-mcp', tokenEnv: ['DD_API_KEY'], tools: ['search_logs', 'get_monitor'] })
@@ -50,10 +50,10 @@ describe('docs/slack.md: the ops specialist example', () => {
   test('widening it is refused: Bash in tools, a hand-off to a specialist that is not declared, to main, or to a per-conversation one', () => {
     expect(loadHydraConfig(text.replace('tools = ["Read", "Grep", "Glob"]', 'tools = ["Read", "Bash"]'), env).ok).toBe(false)
     for (const target of ['ghost', 'main']) {
-      const r = loadHydraConfig(text.replace('talks_to = ["ops-deep"]', `talks_to = ["${target}"]`), env)
+      const r = loadHydraConfig(text.replace('sends_to = ["ops-deep"]', `sends_to = ["${target}"]`), env)
       expect(r.ok).toBe(false)
-      if (!r.ok) expect(formatIssues(r.errors)).toContain('specialists.ops.talks_to[0]')
+      if (!r.ok) expect(formatIssues(r.errors)).toContain('specialists.ops.sends_to[0]')
     }
-    expect(loadHydraConfig(text.replace('allow = []\nrestricted = true', 'allow = []\nrestricted = true\nsessions = "per-conversation"'), env).ok).toBe(false)
+    expect(loadHydraConfig(text.replace('reachable_by = []\nrestricted = true', 'reachable_by = []\nrestricted = true\nsessions = "per-conversation"'), env).ok).toBe(false)
   })
 })

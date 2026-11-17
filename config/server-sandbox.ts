@@ -46,7 +46,7 @@ const RESOLVER_SOCKET = '/private/var/run/mDNSResponder'
  */
 export function sandboxIssues(isCommand: (command: string) => boolean, roots: readonly { path: string }[]): string | undefined {
   if (!isCommand(SANDBOX_EXEC)) {
-    return `a listed [mcp.*] server runs under ${SANDBOX_EXEC} (macOS only), which blocks its connects to the daemon's socket and its reads of the listed credential folders. This machine does not have it. Remove the servers from the specialist's mcp, set restricted = false, or run hydra on a Mac`
+    return `a listed [mcp.*] server runs under ${SANDBOX_EXEC} (macOS only), which blocks its connects to the daemon's socket and its reads of the listed credential folders. This machine does not have it. Remove the servers from the specialist's mcp_servers, set restricted = false, or run hydra on a Mac`
   }
   return roots.map(r => unquotablePath(r.path)).find(Boolean)
 }

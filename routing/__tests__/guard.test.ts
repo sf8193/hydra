@@ -7,13 +7,26 @@ import { runGuard, guardEnv, type GuardInput } from '../guard.js'
 const dir = mkdtempSync(join(tmpdir(), 'slack-guard-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
 const script = (name: string, body: string) => { const p = join(dir, name); writeFileSync(p, `#!/bin/sh\n${body}\n`); chmodSync(p, 0o755); return p }
-const input: GuardInput = { person: 'alice', roles: ['ops', 'people', 'anyone'], place: 'slack:#ops', conversation: 'slack:C1:1.000001', to: 'ops' }
+const input: GuardInput = { person: 'alice', roles: ['ops', 'people', 'anyone'], place: 'slack:#ops', conversation: 'slack:C1:1.000001', target: 'ops', to: 'ops' }
 const run = (command: string, timeoutMs = 2000) => runGuard({ command, timeoutMs }, input)
 
 describe('the guard: the exit code is the verdict', () => {
-  test('0 delivers; printed {"to"} redirects', async () => {
+  test('0 delivers; printed {"target"} redirects', async () => {
     expect(await run(script('ok.sh', 'exit 0'))).toEqual({ fate: 'deliver' })
-    expect(await run(script('redir.sh', 'echo \'{"to": "billing"}\''))).toEqual({ fate: 'deliver', to: 'billing' })
+    expect(await run(script('redir.sh', 'echo \'{"target": "billing"}\''))).toEqual({ fate: 'deliver', target: 'billing' })
+  })
+
+  test('the old key `to` still redirects, and says it was the old key; both keys with one value read as the new one', async () => {
+    expect(await run(script('old.sh', 'echo \'{"to": "billing"}\''))).toEqual({ fate: 'deliver', target: 'billing', viaOldKey: true })
+    expect(await run(script('both.sh', 'echo \'{"target": "billing", "to": "billing"}\''))).toEqual({ fate: 'deliver', target: 'billing' })
+    expect(await run(script('differ.sh', 'echo \'{"target": "billing", "to": "main"}\''))).toEqual({ fate: 'open', why: 'printed both "target" and "to" with different values: print only "target"' })
+    expect(await run(script('badold.sh', 'echo \'{"to": "../x"}\''))).toMatchObject({ fate: 'open', why: expect.stringContaining('unusable "to"') })
+  })
+
+  test('stdin carries `target`, and `to` (its old name) with the same value', async () => {
+    const out = join(dir, 'stdin.json')
+    await run(script('cat.sh', `cat > ${out}`))
+    expect(JSON.parse(readFileSync(out, 'utf8'))).toMatchObject({ target: 'ops', to: 'ops' })
   })
 
   test('10 drops, 75 is not now', async () => {
@@ -21,20 +34,20 @@ describe('the guard: the exit code is the verdict', () => {
     expect(await run(script('later.sh', 'exit 75'))).toEqual({ fate: 'later' })
   })
 
-  test('anything else fails open, with why: another exit, a missing command, junk or a bad "to" on stdout', async () => {
+  test('anything else fails open, with why: another exit, a missing command, junk or a bad "target" on stdout', async () => {
     expect(await run(script('two.sh', 'exit 2'))).toEqual({ fate: 'open', why: 'exited 2' })
     expect(await run(join(dir, 'no-such-guard.sh'))).toMatchObject({ fate: 'open', why: 'exited 127' })
     expect(await run(script('junk.sh', 'echo hello'))).toMatchObject({ fate: 'open', why: expect.stringContaining('other than JSON') })
-    expect(await run(script('badto.sh', 'echo \'{"to": "../x"}\''))).toMatchObject({ fate: 'open', why: expect.stringContaining('unusable') })
-    expect(await run(script('caps.sh', 'echo \'{"to": "Ops_Team"}\''))).toMatchObject({ fate: 'open', why: expect.stringContaining('unusable') })
+    expect(await run(script('badto.sh', 'echo \'{"target": "../x"}\''))).toMatchObject({ fate: 'open', why: expect.stringContaining('unusable') })
+    expect(await run(script('caps.sh', 'echo \'{"target": "Ops_Team"}\''))).toMatchObject({ fate: 'open', why: expect.stringContaining('unusable') })
   })
 
   test('a redirect says its kind: specialist:<name> and main redirect, a bare name still does, a thread or unknown prefix is unusable', async () => {
-    expect(await run(script('kind1.sh', 'echo \'{"to": "specialist:billing"}\''))).toEqual({ fate: 'deliver', to: 'billing' })
-    expect(await run(script('kind2.sh', 'echo \'{"to": "main"}\''))).toEqual({ fate: 'deliver', to: 'main' })
-    expect(await run(script('kind3.sh', 'echo \'{"to": "billing"}\''))).toEqual({ fate: 'deliver', to: 'billing' })
+    expect(await run(script('kind1.sh', 'echo \'{"target": "specialist:billing"}\''))).toEqual({ fate: 'deliver', target: 'billing' })
+    expect(await run(script('kind2.sh', 'echo \'{"target": "main"}\''))).toEqual({ fate: 'deliver', target: 'main' })
+    expect(await run(script('kind3.sh', 'echo \'{"target": "billing"}\''))).toEqual({ fate: 'deliver', target: 'billing' })
     for (const bad of ['thread:123', '123', 'specialist:main', 'specialist:123', 'team:ops', 'specialist:Ops', ' billing']) {
-      expect(await run(script('kindbad.sh', `echo '{"to": "${bad}"}'`))).toMatchObject({ fate: 'open', why: expect.stringContaining('unusable') })
+      expect(await run(script('kindbad.sh', `echo '{"target": "${bad}"}'`))).toMatchObject({ fate: 'open', why: expect.stringContaining('unusable') })
     }
     expect(await run(script('str.sh', 'echo \'"ops"\''))).toMatchObject({ fate: 'open', why: expect.stringContaining('not an object') })
   })
@@ -48,7 +61,7 @@ describe('the guard: the exit code is the verdict', () => {
 
   test('a child left holding stdout does not hold the verdict, nor hide the redirect printed before it', async () => {
     const t0 = Date.now()
-    expect(await run(script('bg.sh', 'echo \'{"to": "billing"}\'\nsleep 5 &\nexit 0'), 3000)).toEqual({ fate: 'deliver', to: 'billing' })
+    expect(await run(script('bg.sh', 'echo \'{"target": "billing"}\'\nsleep 5 &\nexit 0'), 3000)).toEqual({ fate: 'deliver', target: 'billing' })
     expect(Date.now() - t0).toBeLessThan(1500)
   })
 

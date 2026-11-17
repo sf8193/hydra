@@ -160,7 +160,7 @@ describe('hydra config add', () => {
   test('a fragment may not set restricted, nor its old name access', () => {
     for (const key of ['restricted = true', 'access = "workdir"']) {
       const r = planAddFragment(at(LIVE), env, `[specialists.books]\nworkdir = "~/Workstreams/Books"\n${key}\n`, '/repo/f.toml')
-      expect(r).toMatchObject({ ok: false, error: expect.stringContaining(`[specialists.books] ${key.split(' ')[0]}: restricted, tools, mcp and talks_to say`) })
+      expect(r).toMatchObject({ ok: false, error: expect.stringContaining(`[specialists.books] ${key.split(' ')[0]}: restricted, tools, mcp_servers and sends_to say`) })
     }
   })
 
