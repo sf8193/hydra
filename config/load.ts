@@ -1041,7 +1041,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     unknownKeys(vt, ['overload_load_per_core', 'overload_idle_pct', 'swap_used_pct', 'ticks', 'resume_settle', 'memory_cooldown'], 'vitals')
     const d = VITALS_DEFAULTS
     vitals = {
-      overloadLoadPerCore: positiveUpTo100(vt, 'overload_load_per_core', 'vitals') ?? d.overloadLoadPerCore,
+      overloadLoadPerCore: positiveFinite(vt, 'overload_load_per_core', 'vitals') ?? d.overloadLoadPerCore,
       overloadIdlePct: positiveUpTo100(vt, 'overload_idle_pct', 'vitals') ?? d.overloadIdlePct,
       swapUsedPct: positiveUpTo100(vt, 'swap_used_pct', 'vitals') ?? d.swapUsedPct,
       ticks: positiveInt(vt, 'ticks', 'vitals') ?? d.ticks,
@@ -1049,12 +1049,21 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       memoryCooldownMs: duration(vt, 'memory_cooldown', 'vitals', 7 * MAX_DAY_MS) ?? d.memoryCooldownMs,
     }
   }
-  // A percentage, or a load per core (past 100 is no threshold at all).
+  // A percentage (past 100 is no threshold at all).
   function positiveUpTo100(t: Table, k: string, path: string): number | undefined {
     const v = t[k]
     if (v === undefined) return undefined
     if (typeof v === 'number' && v > 0 && v <= 100) return v
     error(join2(path, k), 'must be a number above 0, at most 100')
+    return undefined
+  }
+
+  // A ratio, like the load per core: no ceiling, only 0 and the values that are no number (`inf`, `nan`) mean nothing.
+  function positiveFinite(t: Table, k: string, path: string): number | undefined {
+    const v = t[k]
+    if (v === undefined) return undefined
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) return v
+    error(join2(path, k), 'must be a finite number above 0')
     return undefined
   }
 

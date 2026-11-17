@@ -301,7 +301,7 @@ owed_max = "1h"                       # how long deferred may keep a message acc
 # --- vitals: when the once-a-minute vitals tick tells the operator the host is in trouble (every key optional) ---
 
 [vitals]
-overload_load_per_core = 1.5          # overload: 15-minute load at least this × cores...
+overload_load_per_core = 1.5          # overload: 15-minute load at least this × cores (a ratio, no upper limit)...
 overload_idle_pct = 15                # ...while CPU idle is under this % (macOS load counts waiting threads, not busy cores)
 swap_used_pct = 85                    # memory off macOS (Linux): swap used at least this % of swap total, for `ticks` in a row.
                                       # Not used on macOS: its swap total grows by whole swap files on demand, so used/total moves with
