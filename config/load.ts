@@ -11,7 +11,7 @@ import { ENV_NAME_RE, tokenVarRefusal } from '../shared/spawn-env.js'
 import { offLimitRoots, workdirRestrictionIssues } from './restricted-workdir.js'
 import { ALLOW_UNPROVEN_MACOS, macosGateIssue, sandboxIssues, unquotablePath } from './server-sandbox.js'
 import { engineConfinesAccess } from '../shared/engine-capabilities.js'
-import { CAN_ONLY_WRITE_TO_VALUES, KNOWN_BUILTIN_TOOLS, confinementWarning, hasPlaceholder, operatorMcpNameClashes, readDenyRoots, unknownPlaceholders, unreadableWorkdir } from './write-confinement.js'
+import { CAN_ONLY_WRITE_TO_VALUES, KNOWN_BUILTIN_TOOLS, browserDownloadDir, browserProfileDir, browserProfileProblem, browserProfilesOverlap, canonicalFolder, confinementWarning, hasPlaceholder, operatorMcpNameClashes, readDenyRoots, unknownPlaceholders, unreadableWorkdir } from './write-confinement.js'
 import { noSuchApp, pinnersOf, speaksAsOf, whyNotServed } from './pins.js'
 import { SLACK_APP_DEFAULTS } from '../connectors/slack/app.js'
 import { emojiProblem, reactionNameProblem } from '../shared/emoji.js'
@@ -61,11 +61,11 @@ const TOP_KEYS = ['operator', 'main', 'gateways', 'connectors', 'slack', 'people
 const OPERATOR_FREE_KEYS = ['operator', 'main']
 /** `[main]`: the operator's harness, as `[specialists.<id>]` is a specialist. */
 const MAIN_KEYS = ['model']
-const SPECIALIST_KEYS = ['workdir', 'kickoff', 'kickoff_file', 'pinned_to', 'speaks_as', 'reachable_by', 'sessions', 'max_sessions', 'idle', 'home_place', 'model', 'emoji', 'engine', 'env_file', 'renamed_from', 'restricted', 'can_only_write_to', 'cannot_read', 'deny_commands', 'tools', 'mcp_servers', 'sends_to']
+const SPECIALIST_KEYS = ['workdir', 'kickoff', 'kickoff_file', 'pinned_to', 'speaks_as', 'reachable_by', 'sessions', 'max_sessions', 'idle', 'home_place', 'model', 'emoji', 'engine', 'env_file', 'renamed_from', 'restricted', 'can_only_write_to', 'cannot_read', 'deny_commands', 'browser_profile', 'tools', 'mcp_servers', 'sends_to']
 /** A Slack app's keys, as `[slack.apps.<id>]` spells them. */
 const SLACK_APP_KEYS = ['bot_token_env', 'socket_token_env', 'operator_token_env', 'display_name', 'description']
 /** Keys only a hand edit of one specialist's own table sets: a default would reach every specialist, a fragment's table is someone else's. */
-export const RESTRICTION_KEYS = ['restricted', 'can_only_write_to', 'cannot_read', 'deny_commands', 'tools', 'mcp_servers', 'sends_to'] as const
+export const RESTRICTION_KEYS = ['restricted', 'can_only_write_to', 'cannot_read', 'deny_commands', 'browser_profile', 'tools', 'mcp_servers', 'sends_to'] as const
 
 type Table = Record<string, unknown>
 /** Own keys only: a name like `constructor` must not resolve through the prototype. */
@@ -657,9 +657,9 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     const keyed = t.can_only_write_to !== undefined
     if (restricted && keyed) error(`${path}.can_only_write_to`, 'restricted = true already confines writes and reads (and more); set restricted, or can_only_write_to, not both')
     const confinesWrites = keyed && !restricted
-    for (const k of ['cannot_read', 'deny_commands'] as const) {
+    for (const k of ['cannot_read', 'deny_commands', 'browser_profile'] as const) {
       if (t[k] === undefined || confinesWrites) continue
-      error(`${path}.${k}`, restricted ? 'restricted = true already confines reads and commands (and more); remove it, or set restricted = false and can_only_write_to' : `has no effect without can_only_write_to = "workdir"; it ${k === 'cannot_read' ? 'adds to the places that layer denies reading' : 'adds to the commands that layer denies'}`)
+      error(`${path}.${k}`, restricted ? 'restricted = true already confines reads and commands (and more); remove it, or set restricted = false and can_only_write_to' : `has no effect without can_only_write_to = "workdir"; it ${k === 'cannot_read' ? 'adds to the places that layer denies reading' : k === 'browser_profile' ? 'names the folder that layer gives its listed servers as their browser profile' : 'adds to the commands that layer denies'}`)
     }
     const cannotRead: string[] = []
     if (confinesWrites) for (const [i, raw] of (cannotReadRaw ?? []).entries()) {
@@ -667,6 +667,15 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       if (!isAbsolute(root)) error(`${path}.cannot_read[${i}]`, `"${raw}" must be an absolute path or start with ~`)
       else if (unquotablePath(root)) error(`${path}.cannot_read[${i}]`, unquotablePath(root)!)
       else if (!cannotRead.includes(root)) cannotRead.push(root)
+    }
+    // `browser_profile`: the folder its listed servers get as {profile_dir}, named by the operator, inside the workdir, one per specialist (checked after every specialist is read).
+    const browserProfileRaw = confinesWrites ? str(t, 'browser_profile', path) : undefined   // an empty string is an error, as for any other key
+    let browserProfile: string | undefined
+    if (browserProfileRaw !== undefined) {
+      const resolved = underWorkdir(browserProfileRaw)
+      const why = unquotablePath(resolved) ?? browserProfileProblem(workdir, resolved, env.realpath, readDenyRoots(env, workdir, [], cannotRead))
+      if (why) error(`${path}.browser_profile`, why)
+      else browserProfile = resolved
     }
     const denyCommands: string[] = []
     if (confinesWrites) for (const [i, c] of (denyCommandsRaw ?? []).entries()) {
@@ -758,6 +767,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       restricted,
       ...(confinesWrites && { canOnlyWriteTo: 'workdir' as const, cannotRead }),
       ...(confinesWrites && denyCommands.length && { denyCommands }),
+      ...(browserProfile !== undefined && { browserProfile }),
       ...(tools && { tools }),
       ...(mcpServerNames && { mcpServerNames }),
       ...(sendsToRaw && restricted && { sendsTo: [...new Set(sendsToRaw)] }),
@@ -1093,6 +1103,23 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       if (specialists[target].sessions !== 'shared') { error(at, `${target} has sessions = "per-conversation": a hand-off needs one session to land in; send to a shared specialist`); continue }
       if (!specialists[target].restricted) warn(at, `${target} runs under the operator's account (restricted = false): whatever ${id} is talked into sending reaches that account, quoted and labelled but read by a session that can act as the operator; make ${target} restricted = true, with the broader folder it needs`)
     }
+  }
+
+  // One browser profile folder per specialist. Only a specialist given a server that declares a profile has one (it is what `{profile_dir}` fills). Folders are compared resolved and case-folded,
+  // and a profile folder is compared with every other's profile AND downloads folder (`<folder>-downloads` could be another's profile); two that are, hold or sit in one another would share what a
+  // browser locks, and each other's logins. A profile may not lie inside another specialist's workdir either.
+  const declaresProfile = (x: Specialist) => (x.mcpServerNames ?? []).some(n => { const sv = mcpServers[n]; return sv && (sv.profileArgs?.length || Object.keys(sv.profileEnv ?? {}).length) })
+  const profiled = Object.values(specialists).filter(x => x.canOnlyWriteTo && declaresProfile(x))
+  const folders = (x: Specialist) => [{ kind: 'profile', dir: browserProfileDir(x.workdir, x.browserProfile) }, { kind: 'downloads', dir: browserDownloadDir(x.workdir, x.browserProfile) }]
+  for (const [i, a] of profiled.entries()) for (const b of profiled.slice(i + 1)) {
+    const hit = folders(a).flatMap(fa => folders(b).map(fb => ({ fa, fb }))).find(({ fa, fb }) => browserProfilesOverlap(fa.dir, fb.dir, env.realpath))
+    if (hit) error(`specialists.${b.id}.${b.browserProfile !== undefined ? 'browser_profile' : 'workdir'}`, `its browser ${hit.fb.kind} folder ${hit.fb.dir} overlaps the ${hit.fa.kind} folder ${hit.fa.dir} of specialists.${a.id}: two specialists would share a browser profile and each other's logins; give each its own browser_profile`)
+  }
+  for (const x of Object.values(specialists)) if (x.canOnlyWriteTo && x.browserProfile !== undefined && !declaresProfile(x)) warn(`specialists.${x.id}.browser_profile`, 'no server it lists declares profile_args or profile_env, so nothing is given this folder: declare how a listed server takes its profile, or remove browser_profile')
+  for (const a of profiled) for (const o of Object.values(specialists)) {
+    if (o.id === a.id || o.workdir === a.workdir) continue
+    const profile = browserProfileDir(a.workdir, a.browserProfile)
+    if (browserProfilesOverlap(profile, o.workdir, env.realpath) && canonicalFolder(profile, env.realpath).startsWith(canonicalFolder(o.workdir, env.realpath) + '/')) error(`specialists.${a.id}.${a.browserProfile !== undefined ? 'browser_profile' : 'workdir'}`, `its browser profile folder ${profile} is inside the workdir ${o.workdir} of specialists.${o.id}: that specialist's own tools could read its logins`)
   }
 
   const ruleOrSendsToTargets = new Set([...rules.map(r => r.target), ...Object.values(specialists).flatMap(s => s.sendsTo ?? [])])

@@ -157,6 +157,131 @@ describe('the same-name hole and the tool warnings', () => {
   })
 })
 
+describe('browser_profile (the folder named for a specialist\'s browser)', () => {
+  const withProfile = (v: string, extra = '') => spec(`can_only_write_to = "workdir"\nmcp_servers = ["browser"]\nbrowser_profile = "${v}"${extra}`)
+  test('a path under the workdir (relative, or absolute) is kept resolved, and the default stays absent', () => {
+    expect(ok(withProfile('chrome')).config.specialists.ops.browserProfile).toBe('/home/op/agents/ops/chrome')
+    expect(ok(withProfile('~/agents/ops/deep/chrome')).config.specialists.ops.browserProfile).toBe('/home/op/agents/ops/deep/chrome')
+    expect(ok(spec('can_only_write_to = "workdir"\nmcp_servers = ["browser"]')).config.specialists.ops.browserProfile).toBeUndefined()
+  })
+  test('outside the workdir is an error: the logins would live outside its own folder', () => {
+    expect(errorsOf(withProfile('/srv/elsewhere'))).toEqual(['specialists.ops.browser_profile: /srv/elsewhere is not inside the workdir ~/agents/ops: a profile outside it would keep the specialist\'s logins outside its own folder'.replace('~/agents/ops', '/home/op/agents/ops')])
+    expect(errorsOf(withProfile('../sibling'))[0]).toContain('is not inside the workdir')
+  })
+  test('the workdir itself, the default .browser folder, and a place the layer denies reading are errors', () => {
+    expect(errorsOf(withProfile('~/agents/ops'))[0]).toContain('is the workdir itself')
+    expect(errorsOf(withProfile('.browser/other'))[0]).toContain('the folder of the default profile and downloads')
+    expect(errorsOf(withProfile('.', ''))[0]).toContain('is the workdir itself')
+    const r = errorsOf(spec('can_only_write_to = "workdir"\nmcp_servers = ["browser"]\ncannot_read = ["~/agents/ops/secret"]\nbrowser_profile = "secret/p"'))
+    expect(r[0]).toContain('which the layer denies reading')
+  })
+  test('compared as resolved: a link out of the workdir is refused', () => {
+    const linked = testLoadEnv({ ...env, realpath: p => (p === '/home/op/agents/ops/chrome' ? '/srv/real/chrome' : p) })
+    const r = loadHydraConfig(withProfile('chrome'), linked)
+    expect(r.ok).toBe(false)
+    expect((r as any).errors[0].message).toContain('is not inside the workdir')
+  })
+  test('only with can_only_write_to (it names what that layer gives its servers)', () => {
+    expect(errorsOf(spec('browser_profile = "chrome"'))).toEqual(['specialists.ops.browser_profile: has no effect without can_only_write_to = "workdir"; it names the folder that layer gives its listed servers as their browser profile'])
+  })
+  test('two specialists whose profile folders are, hold or sit in one another are an error naming both; distinct ones load', () => {
+    const two = (aProfile: string, bProfile: string, bWorkdir = '~/agents/ops') => `${BASE}
+[specialists.ops]
+workdir = "~/agents/ops"
+reachable_by = []
+can_only_write_to = "workdir"
+mcp_servers = ["browser"]
+${aProfile}
+[specialists.ops2]
+workdir = "${bWorkdir}"
+reachable_by = []
+can_only_write_to = "workdir"
+mcp_servers = ["browser"]
+${bProfile}
+[[rules]]
+place = "slack:#y"
+target = "specialist:ops"
+[[rules]]
+place = "slack:#x"
+target = "specialist:ops2"
+`
+    const same = errorsOf(two('browser_profile = "a"', 'browser_profile = "a"'))
+    expect(same).toEqual([expect.stringContaining('specialists.ops2.browser_profile: its browser profile folder /home/op/agents/ops/a overlaps the profile folder /home/op/agents/ops/a of specialists.ops')])
+    expect(errorsOf(two('browser_profile = "a"', 'browser_profile = "a/b"'))[0]).toContain('overlaps')
+    expect(errorsOf(two('', ''))[0]).toContain('specialists.ops2.workdir: its browser profile folder /home/op/agents/ops/.browser/profile overlaps')   // one workdir, two default profiles
+    const fine = loadHydraConfig(two('browser_profile = "a"', 'browser_profile = "b"'), env)
+    expect(fine.ok).toBe(true)
+  })
+})
+
+
+describe('browser_profile uniqueness and neighbours (resolved, case-folded, downloads included)', () => {
+  const two = (a: string, b: string, o: { bWorkdir?: string; aServers?: string; bServers?: string; real?: (p: string) => string } = {}) => {
+    const text = `${BASE}
+[specialists.ops]
+workdir = "~/agents/ops"
+reachable_by = []
+can_only_write_to = "workdir"
+mcp_servers = [${o.aServers ?? '"browser"'}]
+${a}
+[specialists.ops2]
+workdir = "${o.bWorkdir ?? '~/agents/ops'}"
+reachable_by = []
+can_only_write_to = "workdir"
+mcp_servers = [${o.bServers ?? '"browser"'}]
+${b}
+[[rules]]
+place = "slack:#y"
+target = "specialist:ops"
+[[rules]]
+place = "slack:#x"
+target = "specialist:ops2"
+`
+    return loadHydraConfig(text, testLoadEnv({ ...env, ...(o.real && { realpath: o.real }) }))
+  }
+  const errsOf = (r: ReturnType<typeof loadHydraConfig>) => (r.ok ? [] : r.errors.map(i => `${i.path}: ${i.message}`))
+  test('a symlink and its target are one folder (compared resolved)', () => {
+    const r = two('browser_profile = "a"', 'browser_profile = "link"', { real: p => (p === '/home/op/agents/ops/link' ? '/home/op/agents/ops/a' : p) })
+    expect(errsOf(r)[0]).toContain('overlaps')
+  })
+  test('Chrome and chrome are one folder (a case-insensitive filesystem)', () => {
+    expect(errsOf(two('browser_profile = "Chrome"', 'browser_profile = "chrome"'))[0]).toContain('overlaps')
+  })
+  test('.BROWSER/x is still the default folder (case-folded)', () => {
+    expect(errsOf(two('browser_profile = ".BROWSER/x"', ''))[0]).toContain('the folder of the default profile and downloads')
+  })
+  test('one specialist\'s profile x and another\'s x-downloads collide: profile and downloads folders are compared against each other', () => {
+    // ops names "x"; ops2 names "x-downloads", whose own downloads are "x-downloads-downloads"; ops2's profile IS ops's downloads folder
+    expect(errsOf(two('browser_profile = "x"', 'browser_profile = "x-downloads"'))[0]).toContain('overlaps')
+    expect(errsOf(two('browser_profile = "x-downloads"', 'browser_profile = "x"'))[0]).toContain('overlaps')   // and the other way round
+  })
+  test('only a specialist given a server that declares a profile counts: two sharing a workdir with non-browser servers load as they did', () => {
+    expect(errsOf(two('', '', { aServers: '"plain"', bServers: '"plain"' }))).toEqual([])
+    expect(errsOf(two('', '', { aServers: '"plain"' }))).toEqual([])
+    expect(errsOf(two('', ''))[0]).toContain('overlaps')   // both with the browser: the shared default
+  })
+  test('a profile inside ANOTHER specialist\'s workdir (nested workdirs) is an error naming it', () => {
+    const r = two('browser_profile = "sub/chrome"', '', { bWorkdir: '~/agents/ops/sub' })
+    expect(errsOf(r).join('\n')).toContain('specialists.ops.browser_profile: its browser profile folder /home/op/agents/ops/sub/chrome is inside the workdir /home/op/agents/ops/sub of specialists.ops2')
+  })
+})
+
+describe('browser_profile values and the substitution', () => {
+  const withProfile = (v: string, servers = '"browser"') => spec(`can_only_write_to = "workdir"\nmcp_servers = [${servers}]\nbrowser_profile = "${v}"`)
+  test('an empty browser_profile is a load error, like any empty value', () => {
+    expect(errorsOf(withProfile(''))).toEqual(['specialists.ops.browser_profile: must be a non-empty string'])
+  })
+  test('a valid browser_profile with no listed server that declares profile_args or profile_env is a named warning', () => {
+    const { warnings } = ok(withProfile('chrome', '"plain"'))
+    expect(warnings.filter(w => w.includes('browser_profile'))).toEqual(['specialists.ops.browser_profile: no server it lists declares profile_args or profile_env, so nothing is given this folder: declare how a listed server takes its profile, or remove browser_profile'])
+    expect(ok(withProfile('chrome')).warnings.filter(w => w.includes('browser_profile'))).toEqual([])
+  })
+  test('{profile_dir} and {download_dir} are filled in one pass: a folder whose name holds a placeholder is not substituted again', async () => {
+    const { fillProfile } = await import('../write-confinement.js')
+    expect(fillProfile('--a={profile_dir} --b={download_dir}', '/w', '/w/x{download_dir}y')).toBe('--a=/w/x{download_dir}y --b=/w/x{download_dir}y-downloads')
+  })
+})
+
 describe('cannot_read', () => {
   test('is valid only with can_only_write_to: alone it is an error naming the path (and says what it extends)', () => {
     expect(errorsOf(spec('cannot_read = ["~/notes"]'))).toEqual(['specialists.ops.cannot_read: has no effect without can_only_write_to = "workdir"; it adds to the places that layer denies reading'])
@@ -262,7 +387,7 @@ describe('config check warning', () => {
     expect(mine).toHaveLength(1)
     expect(mine[0]).toMatch(/^specialists\.ops: .+ can reach the operator's account: /)
     expect(mine[0].endsWith(confinementWarning('/home/op/agents/ops').replace(/^can reach/, 'can reach'))).toBe(true)
-    expect(confinementWarning('/w')).toBe("can reach the operator's account: Bash and Edit/Write writes are confined to /w, and Claude Code's tools and shell cannot read the credential folders (~/.ssh, ~/.aws and the like), hydra's state folder or other specialists' workdirs; ~/Library/Keychains is one of those folders, so `security` and git's keychain helper fail in its shell (shown with a throwaway keychain; login keychain: not proven live; the git helper cannot be told apart on the real one without writing an item; a store the keychain service holds without a file is not separately blocked); the browser and MCP servers can read them; the daemon attaches, for it, only a file in its folder or temp folder that is in none of those places, and it holds no tool that reaches another session (spawn, list, peek, kill, send_to_thread, handoff, watch, bind) and uses its reading and reply tools only in its own conversation; and other reads, network, MCP servers' own writes and credentials are not confined; it sees only the MCP servers it lists (hydra's bridge aside), and a listed server that declares a profile folder uses its own profile in /w while one that declares none keeps its default; attachments sent to it are unreadable (the shared inbox is denied). Credential separation (run_as) is planned, not built.")
+    expect(confinementWarning('/w')).toBe("can reach the operator's account: Bash and Edit/Write writes are confined to /w, and Claude Code's tools and shell cannot read the credential folders (~/.ssh, ~/.aws and the like), hydra's state folder or other specialists' workdirs; ~/Library/Keychains is one of those folders, so `security` and git's keychain helper fail in its shell (shown with a throwaway keychain; login keychain: not proven live; the git helper cannot be told apart on the real one without writing an item; a store the keychain service holds without a file is not separately blocked); the browser and MCP servers can read them; the daemon attaches, for it, only a file in its folder or temp folder that is in none of those places, and it holds no tool that reaches another session (spawn, list, peek, kill, send_to_thread, handoff, watch, bind) and uses its reading and reply tools only in its own conversation; and other reads, network, MCP servers' own writes and credentials are not confined; it sees only the MCP servers it lists (hydra's bridge aside), and a listed server that declares a profile folder uses its own profile in the folder browser_profile names, else /w/.browser/profile, while one that declares none keeps its default; attachments sent to it are unreadable (the shared inbox is denied). Credential separation (run_as) is planned, not built.")
     expect(confinementWarning('/w')).not.toMatch(/safe/i)
   })
 

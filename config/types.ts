@@ -231,6 +231,8 @@ export type Specialist = {
   canOnlyWriteTo?: 'workdir'
   /** `can_only_write_to` or `cannot_read` set: paths Claude Code's tools and shell may not read, added to the built-in credential places (those, and the other specialists' workdirs, are worked out at launch). */
   cannotRead?: string[]
+  /** `can_only_write_to` only: the folder (inside `workdir`, `~` expanded, relative to `workdir`) given to its listed servers as `{profile_dir}`; its downloads go beside it as `<folder>-downloads`. Absent: `<workdir>/.browser/profile` and `.../downloads`. Names the folder; does not confine the browser process. */
+  browserProfile?: string
   /** The layer's: Bash command patterns it may not run, on top of the confinement. */
   denyCommands?: string[]
   /** `restricted` only: the built-in tools it may use (default Read, Grep, Glob). */

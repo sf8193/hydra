@@ -198,6 +198,16 @@ describe('a start of a write-confined specialist', () => {
     expect(told.join('\n')).toMatch(/is not valid JSON \(Unexpected end\), so hydra cannot tell whether it declares an MCP server named like a listed one/)
   })
 
+  test('a named browser profile that now resolves outside the workdir (a link added after the load) refuses the start', async () => {
+    const named = join(workdir, 'chrome')
+    use(spec('gem', { ...GEM, browserProfile: named }), spec('desk'))
+    _setLoadEnvForTesting(macLike({ realpath: p => (p === named ? '/srv/real/chrome' : p) }))
+    seedDead()
+    await expect(start()).rejects.toThrow(PolicyRefusal)
+    expect(launches).toHaveLength(0)
+    expect(told.join('\n')).toMatch(/is not inside the workdir .*so no session starts/)
+  })
+
   test.each(['codex', 'omp'] as const)('%s: refused in the thread, naming the engine hydra actually chose (not "undefined")', async engine => {
     seedDead({ engine: engine as any })
     await expect(start({ engine })).rejects.toThrow(new RegExp(`which the ${engine} engine cannot give`))

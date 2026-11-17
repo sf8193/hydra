@@ -133,7 +133,8 @@ can_only_write_to = "workdir"                  # the place its writes are confin
 cannot_read = ["~/notes"]              # optional, only with can_only_write_to: paths ADDED to the built-in credential places Claude Code's tools and shell may not read
 deny_commands = ["rm -rf *"]           # optional: Bash patterns it may not run, on top of the confinement (each becomes a Bash(...) deny rule)
 tools = ["Bash", "Edit", "Write", "Read", "Grep", "Glob"]   # optional: its built-in tools (--tools); absent: all. Its MCP servers are only those in mcp_servers, and claude.ai connectors are always off
-mcp_servers = ["browser"]              # servers started for it with its OWN browser profile and download folders, <workdir>/.browser/{profile,downloads}
+browser_profile = "chrome-profile"      # optional: the folder (inside the workdir, relative or absolute; one per specialist) its listed servers get as {profile_dir}; downloads beside it as chrome-profile-downloads. Names the folder, does not confine the browser. Absent: <workdir>/.browser/profile
+mcp_servers = ["browser"]              # servers started for it with its OWN browser profile and download folders, by default <workdir>/.browser/{profile,downloads}
 
 # PR reviews on one repo.
 [specialists.reviewer]
