@@ -58,6 +58,41 @@ export function unreadableWorkdir(workdir: string, roots: readonly string[], rea
   return roots.find(r => within(dir, trim(realpath(r))) || within(trim(realpath(r)), dir))
 }
 
+/** Where a managed (organization-delivered) MCP config lives, per platform. Absent is the usual case. */
+export const MANAGED_MCP_FILES = ['/Library/Application Support/ClaudeCode/managed-mcp.json', '/etc/claude-code/managed-mcp.json']
+
+/**
+ * The files an operator's own MCP servers are declared in, which Claude Code reads for the session: its user config (`~/.claude.json` and the one in
+ * CLAUDE_CONFIG_DIR, each with the entries for the workdir's project), a `.mcp.json` in the workdir or in any folder above it (Claude Code walks up from
+ * its working directory), and the managed file. Plugins' servers carry a `plugin:` key and cannot share a plain name.
+ */
+export function operatorMcpFiles(env: { home: string; claudeConfigDir: string; realpath?: (p: string) => string }, workdir: string): { file: string; projects: string[] }[] {
+  const real = env.realpath ?? ((p: string) => p)
+  const dirs = [...new Set([trim(workdir), trim(real(trim(workdir)))])]
+  const files: { file: string; projects: string[] }[] = [`${trim(env.home)}/.claude.json`, `${trim(env.claudeConfigDir)}/.claude.json`].map(file => ({ file, projects: dirs }))
+  const up = new Set<string>()
+  for (const d of dirs) for (let p = d; ; p = p.slice(0, p.lastIndexOf('/')) || '/') { up.add(`${p === '/' ? '' : p}/.mcp.json`); if (p === '/') break }
+  return [...files, ...[...up].map(file => ({ file, projects: [] as string[] })), ...MANAGED_MCP_FILES.map(file => ({ file, projects: [] as string[] }))]
+}
+
+/**
+ * The listed servers whose name an operator's own MCP config also declares, with the file, and the files that could not be read. Claude Code's allowlist
+ * matches by name and its log shows names only, so such a server of the operator's would be admitted too, and could take the place of the one hydra
+ * starts with its own profile. A file that exists and cannot be read or parsed is reported, never treated as empty.
+ */
+export function operatorMcpNameClashes(env: { home: string; claudeConfigDir: string; realpath?: (p: string) => string; mcpNamesIn(path: string, projects?: readonly string[]): string[] }, workdir: string, listed: readonly string[]): { clashes: { name: string; file: string }[]; unreadable: { file: string; why: string }[] } {
+  const clashes: { name: string; file: string }[] = [], unreadable: { file: string; why: string }[] = []
+  for (const { file, projects } of operatorMcpFiles(env, workdir)) {
+    let here: string[]
+    try { here = env.mcpNamesIn(file, projects) } catch (err) { unreadable.push({ file, why: err instanceof Error ? err.message : String(err) }); continue }
+    for (const name of listed) if (here.includes(name)) clashes.push({ name, file })
+  }
+  return { clashes, unreadable }
+}
+
+/** The built-in tools Claude Code has that a `tools` list may name (checked by `hydra config check`: a name outside this list is warned about, because a typo would leave the session without the tool it meant). */
+export const KNOWN_BUILTIN_TOOLS = ['Agent', 'Artifact', 'ArtifactComments', 'ArtifactData', 'AskUserQuestion', 'Bash', 'CronCreate', 'CronDelete', 'CronList', 'DesignSync', 'Edit', 'EndConversation', 'EnterPlanMode', 'EnterWorktree', 'ExitPlanMode', 'ExitWorktree', 'Glob', 'Grep', 'ListAgents', 'ListMcpResourcesTool', 'LSP', 'Monitor', 'NotebookEdit', 'PowerShell', 'PublishPlugin', 'PushNotification', 'Read', 'ReadMcpResourceDirTool', 'ReadMcpResourceTool', 'RemoteTrigger', 'ReportFindings', 'ScheduleWakeup', 'SendFeedback', 'SendMessage', 'ShareOnboardingGuide', 'Skill', 'TaskCreate', 'TaskGet', 'TaskList', 'TaskStop', 'TaskUpdate', 'TodoWrite', 'ToolSearch', 'WebFetch', 'WebSearch', 'Workflow', 'Write'] as const
+
 /** Claude Code's rule for reading a path: `Read(//abs/path/**)`. */
 export const readDenyRule = (root: string): string => `Read(/${root}/**)`
 
@@ -67,4 +102,4 @@ export const readDenyRule = (root: string): string => `Read(/${root}/**)`
  * write-confined specialist someone else can reach.
  */
 export const confinementWarning = (workdir: string): string =>
-  `can reach the operator's account: Bash and Edit/Write writes are confined to ${workdir}, and Claude Code's tools and shell cannot read the credential folders (~/.ssh, ~/.aws and the like), hydra's state folder or other specialists' workdirs; ~/Library/Keychains is one of those folders, so \`security\` and git's keychain helper fail in its shell (shown with a throwaway keychain; login keychain: not proven live; the git helper cannot be told apart on the real one without writing an item; a store the keychain service holds without a file is not separately blocked); the browser and MCP servers can read them, and other reads, network, MCP servers' own writes and credentials are not confined; only a listed server that declares a profile folder uses its own profile in ${workdir}, and servers from the operator's ~/.claude.json or plugins still load and keep theirs; attachments sent to it are unreadable (the shared inbox is denied). Credential separation (run_as) is planned, not built.`
+  `can reach the operator's account: Bash and Edit/Write writes are confined to ${workdir}, and Claude Code's tools and shell cannot read the credential folders (~/.ssh, ~/.aws and the like), hydra's state folder or other specialists' workdirs; ~/Library/Keychains is one of those folders, so \`security\` and git's keychain helper fail in its shell (shown with a throwaway keychain; login keychain: not proven live; the git helper cannot be told apart on the real one without writing an item; a store the keychain service holds without a file is not separately blocked); the browser and MCP servers can read them, and other reads, network, MCP servers' own writes and credentials are not confined; it sees only the MCP servers it lists (hydra's bridge aside), and a listed server that declares a profile folder uses its own profile in ${workdir} while one that declares none keeps its default; attachments sent to it are unreadable (the shared inbox is denied). Credential separation (run_as) is planned, not built.`

@@ -19,6 +19,7 @@ export function testLoadEnv(over: Partial<LoadEnv> = {}): LoadEnv {
     isCommand: () => true,
     realpath: p => p,
     exists: () => false,
+    mcpNamesIn: () => [],
     envFileHas: () => true,
     isGitWorkTree: () => false,
     scanWorkdir: () => ({ escapingSymlinks: [], nestedGit: [], truncated: false }),

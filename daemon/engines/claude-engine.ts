@@ -37,7 +37,7 @@ import { makeServerTmpDirs, removeRestrictedFiles, serverTmpDir, serverTmpRoot, 
 import { sandboxedServer, sandboxIssues } from '../../config/server-sandbox.js'
 import type { PrivateRoot } from '../../config/restricted-workdir.js'
 import type { LoadEnv } from '../../config/types.js'
-import { claudeVersionRefusal, confinementRules, makeBrowserDirs, confinementLogLine, confinementMcp, confinementSettings } from '../write-confinement.js'
+import { claudeVersionRefusal, confinementRules, confinementServers, makeBrowserDirs, confinementLogLine, confinementMcp, confinementSettings } from '../write-confinement.js'
 import { clearNeedsAuthEntry, describeSetAt, NEEDS_AUTH_CLEARED_NOTE } from './claude-needs-auth.js'
 
 // What the pane-and-transcript methods read. The byte (main) has no SessionInfo, so these take only this.
@@ -148,7 +148,7 @@ function buildSpawnEnv(input: LaunchInput): string[] {
     `export CHAT_PLATFORM=${shq(PLATFORM)}`,
     modsExport(STATE_DIR, confined(input.policy, input.tmuxName) ? RESTRICTED_MODS : undefined),
     // Enabling the bridge plugin by settings would also bring back the account's claude.ai connectors: this keeps them off.
-    ...(confined(input.policy, input.tmuxName) ? [`export ENABLE_CLAUDEAI_MCP_SERVERS=false`] : []),
+    ...(confined(input.policy, input.tmuxName) || input.policy?.canOnlyWriteTo ? [`export ENABLE_CLAUDEAI_MCP_SERVERS=false`] : []),
     `unset HYDRA_ROLE`,
   ]
 }
@@ -325,7 +325,7 @@ export class ClaudeEngine implements EngineAdapter {
   /** What a write-confined launch applied, from its own debug file, against its policy (claude-verify.ts `verifyConfinement`). */
   verifyConfinement(policy: LaunchPolicy, launched: LaunchResult): Promise<Verdict> {
     const w = policy.canOnlyWriteTo
-    return w ? verifyConfinementLoaded(confinementRules(w), launched.debugLogPath) : Promise.resolve({ ok: false, why: 'the policy confines nothing to check' })
+    return w ? verifyConfinementLoaded({ ...confinementRules(w), servers: confinementServers(w) }, launched.debugLogPath) : Promise.resolve({ ok: false, why: 'the policy confines nothing to check' })
   }
 
   async launch(input: LaunchInput): Promise<LaunchResult> {
@@ -372,7 +372,10 @@ export class ClaudeEngine implements EngineAdapter {
     let claudeArgs: string
     let assignedClaudeSessionId: string | undefined
     const disallowed = input.disallowedTools?.length ? ` --disallowedTools ${shq(input.disallowedTools.join(','))}` : ''
-    const toolsFlag = input.tools?.length ? ` --tools ${shq(input.tools.join(','))}` : ''
+    // A write-confined session's built-in tools are its policy's `tools`, narrowed (never widened) by a caller's own list; absent from the policy, the caller's list rules as it always has.
+    const effectiveTools = writes?.tools ? (input.tools?.length ? writes.tools.filter(t => input.tools!.includes(t)) : writes.tools) : input.tools
+    if (writes?.tools && effectiveTools!.length === 0) throw new PolicyRefusal(`specialist ${input.policy!.specialist}: the tools asked for (${input.tools!.join(', ')}) leave none of the tools its policy lists (${writes.tools.join(', ')}), so no session starts. ${remedy(tmuxName)}`)
+    const toolsFlag = effectiveTools?.length ? ` --tools ${shq(effectiveTools.join(','))}` : ''
     // After the prompt and the other flags, as `disallowed` is: the settings that confine writes, and the servers that get their own browser folders.
     let confinementFlags = ''
     if (writes) {
@@ -417,7 +420,7 @@ export class ClaudeEngine implements EngineAdapter {
     }
     if (disallowed) process.stderr.write(`daemon: disallowedTools flag: ${disallowed}\n`)
     if (restricted) process.stderr.write(`daemon: restricted launch ${tmuxName}: specialist ${restricted.specialist}, tools ${restricted.tools.join(',')}, servers ${restricted.servers.map(x => x.name).join(',') || 'none'}\n`)
-    if (toolsFlag && !restricted) process.stderr.write(`daemon: tools whitelist active (${input.tools!.length} tools, Edit/Write blocked)\n`)
+    if (toolsFlag && !restricted) process.stderr.write(`daemon: tools whitelist active (${effectiveTools!.length} tools${writes ? '' : ', Edit/Write blocked'})\n`)
 
     const stderrLog = join(SPAWN_LOGS_DIR, `stderr-${tmuxName}-${sessionId}.log`)
     const debugLog = join(SPAWN_LOGS_DIR, `debug-${tmuxName}-${sessionId}.log`)

@@ -5,7 +5,7 @@ import { join } from 'path'
 import { loadHydraConfig } from '../load.js'
 import type { HydraConfig, LoadEnv } from '../types.js'
 import { testLoadEnv } from './load-env.js'
-import { confinementWarning, readDenyRoots, unreadableWorkdir } from '../write-confinement.js'
+import { KNOWN_BUILTIN_TOOLS, confinementWarning, readDenyRoots, unreadableWorkdir } from '../write-confinement.js'
 
 const HOME = '/home/op'
 const env: LoadEnv = testLoadEnv({ home: HOME, stateDir: `${HOME}/.claude/channels/discord`, claudeConfigDir: `${HOME}/.claude`, isCommand: c => c === '/usr/local/bin/browser-mcp' || c === '/usr/local/bin/datadog-mcp' })
@@ -54,9 +54,8 @@ describe('can_only_write_to', () => {
     expect(errorsOf(spec('restricted = true\ncan_only_write_to = "workdir"'))).toEqual(['specialists.ops.can_only_write_to: restricted = true already confines writes and reads (and more); set restricted, or can_only_write_to, not both'])
   })
 
-  test('tools and sends_to still belong to restricted = true alone', () => {
-    expect(errorsOf(spec('can_only_write_to = "workdir"\ntools = ["Read"]\nsends_to = ["x"]'))).toEqual([
-      'specialists.ops.tools: has no effect while restricted = false: it already has every tool and server the operator does; set restricted = true to choose them',
+  test('sends_to still belongs to restricted = true alone', () => {
+    expect(errorsOf(spec('can_only_write_to = "workdir"\nsends_to = ["x"]'))).toEqual([
       'specialists.ops.sends_to: has no effect while restricted = false: it already has every tool and server the operator does, and send_to_thread to any session; set restricted = true to choose them',
     ])
   })
@@ -88,6 +87,73 @@ describe('mcp_servers with can_only_write_to', () => {
     expect(errs('profile_args = ["--dir={nope}"]')[0]).toBe('mcp_servers.browser.profile_args[0]: "--dir={nope}" names {nope}; a placeholder is {profile_dir} or {download_dir}')
     expect(errs('profile_args = ["--headless"]')).toEqual(['mcp_servers.browser: profile_args and profile_env hold no {profile_dir} or {download_dir}, so the server would never be given its own profile'])
     expect(errs('profile_env = { A = "{x}" }')[0]).toBe('mcp_servers.browser.profile_env.A: "{x}" names {x}; a placeholder is {profile_dir} or {download_dir}')
+  })
+})
+
+describe('tools and mcp_servers are the write-confined specialist\'s allowlist', () => {
+  test('tools (built-in tool names) load; absent means all', () => {
+    expect(ok(spec('can_only_write_to = "workdir"\ntools = ["Bash", "Edit", "Write", "Read"]')).config.specialists.ops.tools).toEqual(['Bash', 'Edit', 'Write', 'Read'])
+    expect(ok(spec('can_only_write_to = "workdir"')).config.specialists.ops.tools).toBeUndefined()
+  })
+  test('a name that is not a tool name, and an empty list, are errors naming the path', () => {
+    expect(errorsOf(spec('can_only_write_to = "workdir"\ntools = ["bash", "Bash(rm *)"]'))).toEqual([
+      'specialists.ops.tools[0]: "bash" must be the name of a built-in tool, like Bash, Edit or Read',
+      'specialists.ops.tools[1]: "Bash(rm *)" must be the name of a built-in tool, like Bash, Edit or Read',
+    ])
+    expect(errorsOf(spec('can_only_write_to = "workdir"\ntools = []'))).toEqual(['specialists.ops.tools: is empty: a session with no built-in tool cannot do anything; list the tools it may use, or leave tools out for all of them'])
+  })
+  test('without can_only_write_to, tools is still refused where it has no effect', () => {
+    expect(errorsOf(spec('tools = ["Read"]'))[0]).toContain('has no effect while restricted = false')
+  })
+})
+
+describe('the same-name hole and the tool warnings', () => {
+  test('a listed server whose name the operator\'s own Claude config or the workdir\'s .mcp.json also declares is an error naming the file', () => {
+    const clash = testLoadEnv({ ...env, mcpNamesIn: f => (f === '/home/op/.claude.json' ? ['browser'] : []) })
+    const r = loadHydraConfig(spec('can_only_write_to = "workdir"\nmcp_servers = ["browser"]'), clash)
+    expect(r.ok).toBe(false)
+    expect((r as any).errors.map((i: any) => `${i.path}: ${i.message}`)).toEqual(['specialists.ops.mcp_servers[0]: /home/op/.claude.json already declares an MCP server named browser; Claude Code\'s allowlist matches by name, so that one would be admitted too and could take the place of [mcp_servers.browser]: rename [mcp_servers.browser]'])
+    const proj = testLoadEnv({ ...env, mcpNamesIn: f => (f === '/home/op/agents/ops/.mcp.json' ? ['browser'] : []) })
+    expect(loadHydraConfig(spec('can_only_write_to = "workdir"\nmcp_servers = ["browser"]'), proj).ok).toBe(false)
+  })
+  const withNames = (over: Record<string, string[] | Error>, extra: object = {}) => testLoadEnv({ ...env, ...extra, mcpNamesIn: (f: string) => { const v = over[f]; if (v instanceof Error) throw v; return v ?? [] } })
+  const clashErrors = (e: LoadEnv) => { const r = loadHydraConfig(spec('can_only_write_to = "workdir"\nmcp_servers = ["browser"]'), e); return r.ok ? [] : r.errors.map(i => i.message) }
+  test('a .mcp.json in any folder ABOVE the workdir counts (Claude Code walks up from its working directory)', () => {
+    expect(clashErrors(withNames({ '/home/op/.mcp.json': ['browser'] }))[0]).toContain('/home/op/.mcp.json already declares an MCP server named browser')
+    expect(clashErrors(withNames({ '/.mcp.json': ['browser'] }))[0]).toContain('/.mcp.json already declares')
+    expect(clashErrors(withNames({ '/home/op/agents/.mcp.json': ['other'] }))).toEqual([])
+  })
+  test('a file that exists and cannot be read or parsed is an error naming it, never "no clash"', () => {
+    const errs = clashErrors(withNames({ '/home/op/.claude.json': new Error('/home/op/.claude.json is not valid JSON (Unexpected end)') }))
+    expect(errs).toEqual(['/home/op/.claude.json is not valid JSON (Unexpected end), so hydra cannot tell whether it declares an MCP server named browser (Claude Code\'s allowlist matches by name): fix or remove the file'])
+    expect(clashErrors(withNames({ '/home/op/agents/.mcp.json': new Error('/home/op/agents/.mcp.json cannot be read (EACCES)') }))[0]).toContain('cannot be read (EACCES)')
+  })
+  test('the managed file counts, with the same rules', () => {
+    expect(clashErrors(withNames({ '/Library/Application Support/ClaudeCode/managed-mcp.json': ['browser'] }))[0]).toContain('managed-mcp.json already declares an MCP server named browser')
+    expect(clashErrors(withNames({ '/etc/claude-code/managed-mcp.json': new Error('/etc/claude-code/managed-mcp.json cannot be read (EACCES)') }))[0]).toContain('managed-mcp.json cannot be read')
+  })
+  test('a symlinked workdir is looked up under both its written and its resolved path (the project keys of ~/.claude.json, and the .mcp.json files above each)', () => {
+    const seen: string[][] = []
+    const e = testLoadEnv({ ...env, realpath: p => (p === '/home/op/agents/ops' ? '/srv/real/ops' : p), mcpNamesIn: (f: string, projects?: readonly string[]) => { if (f === '/home/op/.claude.json') seen.push([...(projects ?? [])]); return f === '/srv/real/.mcp.json' ? ['browser'] : [] } })
+    expect(clashErrors(e)[0]).toContain('/srv/real/.mcp.json already declares')
+    expect(seen[0]).toEqual(['/home/op/agents/ops', '/srv/real/ops'])
+  })
+  test('a name only another file declares, or no clash at all, loads', () => {
+    expect(ok(spec('can_only_write_to = "workdir"\nmcp_servers = ["browser"]')).config.specialists.ops.mcpServerNames).toEqual(['browser'])
+  })
+  test('a tool name Claude Code does not have is warned about with the known list (a typo would drop the tool)', () => {
+    const { warnings } = ok(spec('can_only_write_to = "workdir"\ntools = ["Bash", "Raed"]'))
+    expect(warnings.filter(w => w.includes('Raed'))).toEqual([expect.stringMatching(/^specialists\.ops\.tools\[1\]: Raed is not a built-in tool hydra knows \(Agent, .*Write\): a typo leaves the session without the tool it meant$/)])
+    expect(warnings.filter(w => w.includes('Bash is not'))).toEqual([])
+  })
+  test('every built-in tool of Claude Code 2.1.326 that a session is offered is a known name (valid tools never warn); names that version no longer has are not', () => {
+    for (const t of ['PowerShell', 'ToolSearch', 'TaskCreate', 'TaskGet', 'TaskList', 'TaskUpdate', 'TaskStop', 'EnterWorktree', 'ExitWorktree', 'CronCreate', 'CronDelete', 'CronList', 'SendMessage', 'Workflow', 'ScheduleWakeup', 'PushNotification', 'Bash', 'Edit', 'Write', 'Read', 'Grep', 'Glob']) expect(KNOWN_BUILTIN_TOOLS as readonly string[]).toContain(t)
+    for (const t of ['BashOutput', 'SlashCommand', 'Task', 'TaskOutput', 'KillShell']) expect(KNOWN_BUILTIN_TOOLS as readonly string[]).not.toContain(t)
+    expect(ok(spec('can_only_write_to = "workdir"\ntools = ["PowerShell", "TaskCreate", "Workflow", "Bash"]')).warnings.filter(w => w.includes('built-in tool hydra knows'))).toEqual([])
+  })
+  test('a listed server that lists tools is warned: it limits nothing at this level', () => {
+    const withTools = spec('can_only_write_to = "workdir"\nmcp_servers = ["browser"]').replace('profile_env =', 'tools = ["open"]\nprofile_env =')
+    expect(ok(withTools).warnings).toContain('specialists.ops.mcp_servers[0]: [mcp_servers.browser] lists tools, which limit nothing at this level: every tool of the server is callable here (only a restricted specialist is held to the list)')
   })
 })
 
@@ -196,7 +262,7 @@ describe('config check warning', () => {
     expect(mine).toHaveLength(1)
     expect(mine[0]).toMatch(/^specialists\.ops: .+ can reach the operator's account: /)
     expect(mine[0].endsWith(confinementWarning('/home/op/agents/ops').replace(/^can reach/, 'can reach'))).toBe(true)
-    expect(confinementWarning('/w')).toBe("can reach the operator's account: Bash and Edit/Write writes are confined to /w, and Claude Code's tools and shell cannot read the credential folders (~/.ssh, ~/.aws and the like), hydra's state folder or other specialists' workdirs; ~/Library/Keychains is one of those folders, so `security` and git's keychain helper fail in its shell (shown with a throwaway keychain; login keychain: not proven live; the git helper cannot be told apart on the real one without writing an item; a store the keychain service holds without a file is not separately blocked); the browser and MCP servers can read them, and other reads, network, MCP servers' own writes and credentials are not confined; only a listed server that declares a profile folder uses its own profile in /w, and servers from the operator's ~/.claude.json or plugins still load and keep theirs; attachments sent to it are unreadable (the shared inbox is denied). Credential separation (run_as) is planned, not built.")
+    expect(confinementWarning('/w')).toBe("can reach the operator's account: Bash and Edit/Write writes are confined to /w, and Claude Code's tools and shell cannot read the credential folders (~/.ssh, ~/.aws and the like), hydra's state folder or other specialists' workdirs; ~/Library/Keychains is one of those folders, so `security` and git's keychain helper fail in its shell (shown with a throwaway keychain; login keychain: not proven live; the git helper cannot be told apart on the real one without writing an item; a store the keychain service holds without a file is not separately blocked); the browser and MCP servers can read them, and other reads, network, MCP servers' own writes and credentials are not confined; it sees only the MCP servers it lists (hydra's bridge aside), and a listed server that declares a profile folder uses its own profile in /w while one that declares none keeps its default; attachments sent to it are unreadable (the shared inbox is denied). Credential separation (run_as) is planned, not built.")
     expect(confinementWarning('/w')).not.toMatch(/safe/i)
   })
 

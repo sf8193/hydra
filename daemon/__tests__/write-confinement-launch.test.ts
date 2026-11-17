@@ -1,5 +1,6 @@
 // `can_only_write_to = "workdir"`: what every start of such a specialist's session launches with, and how its stored policy is read and compared.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { createHash } from 'crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -7,7 +8,7 @@ import { ClaudeEngine } from '../engines/claude-engine.js'
 import { STATE_DIR } from '../config.js'
 import { PolicyRefusal, bornPolicy, describePolicy, policyDrifted, policyProblem, confinementIdFor, type LaunchPolicy } from '../restricted.js'
 import { removeRestrictedFiles, restrictedDir } from '../restricted-files.js'
-import { confinementShortfall, readLoaded, verifyConfinement, verifyDeps } from '../engines/claude-verify.js'
+import { confinementShortfall, confinementSurplus, readLoaded, verifyConfinement, verifyDeps } from '../engines/claude-verify.js'
 import { MIN_CLAUDE_VERSION, claudeVersion, claudeVersionRefusal, confinementSettings } from '../write-confinement.js'
 import { EMPTY_CONFIG } from '../../config/load.js'
 import { readDenyRoots } from '../../config/write-confinement.js'
@@ -72,10 +73,27 @@ describe('every way a session starts gets the settings', () => {
     expect(existsSync(settingsFile())).toBe(true)
   })
 
-  test('the operator\'s mods and claude.ai connectors stay on: this is the operator\'s account', async () => {
+  test('the operator\'s mods stay on, claude.ai connectors are off (as for restricted), and the MCP set is the allowlist\'s, not --strict-mcp-config\'s', async () => {
     const cmd = await launch()
     expect(cmd).toContain('personal')
-    expect(cmd).not.toContain('ENABLE_CLAUDEAI_MCP_SERVERS')
+    expect(cmd).toContain('export ENABLE_CLAUDEAI_MCP_SERVERS=false')
+    expect(cmd).not.toContain('--strict-mcp-config')   // it would drop the bridge, which is a plugin's MCP server
+    expect(await launch({}, null)).not.toContain('ENABLE_CLAUDEAI_MCP_SERVERS')   // an operator specialist keeps its connectors
+  })
+
+  test('`tools` is the session\'s built-in tool list from the policy; a caller\'s own list can only narrow it, never widen it; absent, no --tools at all', async () => {
+    expect(await launch({}, policyOf({ tools: ['Read', 'Grep'] }))).toContain(" --tools 'Read,Grep' --settings ")
+    const narrowed = await launch({ tools: ['Bash', 'Read'] }, policyOf({ tools: ['Read', 'Grep'] }))
+    expect(narrowed).toContain(" --tools 'Read' --settings ")
+    expect((narrowed.match(/--tools /g) ?? []).length).toBe(1)
+    for (const extra of [{ resumeFrom: 'C-old' }, { forkFrom: { claudeSessionId: 'C-parent' } }]) expect(await launch(extra, policyOf({ tools: ['Read'] }))).toContain(" --tools 'Read' --settings ")
+    expect(await launch({}, policyOf())).not.toContain('--tools')
+  })
+
+  test('a caller\'s list that leaves none of the policy\'s tools refuses the start, and nothing starts', async () => {
+    const before = fake.calls().length
+    await expect(launch({ tools: ['Bash', 'Edit'] }, policyOf({ tools: ['Read', 'Grep'] }))).rejects.toThrow(/leave none of the tools its policy lists/)
+    expect(fake.calls().slice(before).some(c => c.startsWith('new-session'))).toBe(false)
   })
 
   test('no servers listed: no --mcp-config', async () => {
@@ -100,6 +118,8 @@ describe('the settings', () => {
   test('pinned exactly: the sandbox on, no unsandboxed retry, no unsandboxed commands, the write block, the deny list', async () => {
     await launch()
     expect(readJson(settingsFile())).toEqual({
+      allowedMcpServers: [{ serverName: 'plugin:discord:discord' }, { serverName: 'browser' }],
+      disableClaudeAiConnectors: true,
       sandbox: { enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, excludedCommands: [], filesystem: { disabled: false, denyRead: ['/home/op/.ssh', '/home/op/other'] }, enableWeakerNestedSandbox: false, autoAllowBashIfSandboxed: true },
       permissions: { blockWritesOutsideWorkingDirectories: true, allow: ['WebFetch(domain:*)'], deny: ['Read(//home/op/.ssh/**)', 'Read(//home/op/other/**)', 'Bash(rm -rf *)'] },
     })
@@ -115,6 +135,17 @@ describe('the settings', () => {
     ['Edit, Write and NotebookEdit refuse paths outside the workdir in every permission mode', (s: any) => s.permissions.blockWritesOutsideWorkingDirectories, true],
   ])('%s', (_what, pick, want) => {
     expect(pick(confinementSettings({ denyCommands: [], cannotRead: [] }))).toEqual(want)
+  })
+
+  test.each([
+    ['the allowlist is the bridge plus the listed servers, and nothing else', (s: any) => s.allowedMcpServers.map((e: any) => e.serverName), ['plugin:discord:discord', 'browser']],
+    ['claude.ai connectors are off in the settings too', (s: any) => s.disableClaudeAiConnectors, true],
+  ])('%s', (_what, pick, want) => {
+    expect(pick(confinementSettings({ denyCommands: [], cannotRead: [], servers: [server] }))).toEqual(want)
+  })
+
+  test('with no servers listed the allowlist is the bridge alone: a server of the operator\'s is not admitted', () => {
+    expect((confinementSettings({ denyCommands: [], cannotRead: [] }) as any).allowedMcpServers).toEqual([{ serverName: 'plugin:discord:discord' }])
   })
 
   test('no extra writable folders are granted: no allowWrite and no additionalDirectories, and the only allow rule is the one for the network', () => {
@@ -221,12 +252,22 @@ describe('the stored policy', () => {
   test('the id changes with the folder, a deny pattern, a server\'s command, token variable or profile declaration, and with nothing else', () => {
     const a = policyOf().canOnlyWriteTo!
     const ids = new Set([
-      confinementIdFor(a), confinementIdFor({ ...a, workdir: '/other' }), confinementIdFor({ ...a, denyCommands: [] }), confinementIdFor({ ...a, cannotRead: [] }),
+      confinementIdFor(a), confinementIdFor({ ...a, workdir: '/other' }), confinementIdFor({ ...a, denyCommands: [] }), confinementIdFor({ ...a, cannotRead: [] }), confinementIdFor({ ...a, tools: ['Read'] }), confinementIdFor({ ...a, tools: ['Read', 'Bash'] }),
       confinementIdFor({ ...a, servers: [{ ...server, command: '/other' }] }), confinementIdFor({ ...a, servers: [{ ...server, tokenEnv: [] }] }),
       confinementIdFor({ ...a, servers: [{ ...server, profileArgs: ['{profile_dir}'] }] }), confinementIdFor({ ...a, servers: [{ ...server, profileEnv: {} }] }),
     ])
-    expect(ids.size).toBe(8)
+    expect(ids.size).toBe(10)
+    expect(confinementIdFor({ ...a, tools: ['Bash', 'Read'] })).toBe(confinementIdFor({ ...a, tools: ['Read', 'Bash'] }))
     expect(confinementIdFor({ ...a, denyCommands: ['rm -rf *'].reverse() })).toBe(confinementIdFor(a))
+  })
+
+  test('an id from before `tools` existed still validates and still matches: the key is added only when tools is set', () => {
+    const a = policyOf().canOnlyWriteTo!
+    // the identity as it was written before `tools` was a field (same keys, same order)
+    const old = `writes:${createHash('sha256').update(JSON.stringify({ workdir: a.workdir, deny: [...a.denyCommands].sort(), noRead: [...a.cannotRead].sort(), servers: a.servers.map(s => ({ name: s.name, command: s.command, tokenEnv: [...s.tokenEnv].sort(), args: s.profileArgs, env: Object.entries(s.profileEnv).sort(([x], [y]) => x.localeCompare(y)) })) })).digest('hex').slice(0, 12)}`
+    expect(confinementIdFor(a)).toBe(old)
+    expect(policyProblem({ specialist: 'gem', access: 'operator', canOnlyWriteTo: a, id: old })).toBeUndefined()
+    expect(confinementIdFor({ ...a, tools: ['Read'] })).not.toBe(old)
   })
 
   test('a change of can_only_write_to is noticed: set, removed, a new folder, deny list or server', () => {
@@ -237,6 +278,9 @@ describe('the stored policy', () => {
     expect(policyDrifted(w, w)).toEqual([])
     expect(policyDrifted(w, policyOf({ workdir: '/else' }))).toEqual([`can_only_write_to folder: ${work} -> /else`])
     expect(policyDrifted(w, policyOf({ denyCommands: [] }))).toEqual(['deny_commands: rm -rf * -> '])
+    expect(policyDrifted(w, policyOf({ tools: ['Read'] }))).toEqual(['tools: all -> Read'])
+    expect(policyDrifted(policyOf({ tools: ['Read'] }), w)).toEqual(['tools: Read -> all'])
+    expect(policyDrifted(policyOf({ tools: ['Read', 'Bash'] }), policyOf({ tools: ['Bash', 'Read'] }))).toEqual([])
     expect(policyDrifted(w, policyOf({ cannotRead: ['/home/op/.ssh'] }))).toEqual(['cannot_read: /home/op/.ssh | /home/op/other -> /home/op/.ssh'])
     expect(policyDrifted(w, policyOf({ servers: [] }))).toEqual(['mcp browser: listed -> not listed'])
     expect(policyDrifted(w, policyOf({ servers: [{ ...server, profileArgs: ['{profile_dir}'] }] }))).toEqual(['mcp browser: command, token_env or profile declaration changed'])
@@ -248,7 +292,7 @@ describe('the stored policy', () => {
   })
 
   test('described in words for a log line and the thread', () => {
-    expect(describePolicy(policyOf())).toBe(`restricted = false, can_only_write_to = "workdir" (folder ${work}; cannot_read 2 places; mcp_servers browser; deny_commands rm -rf *)`)
+    expect(describePolicy(policyOf())).toBe(`restricted = false, can_only_write_to = "workdir" (folder ${work}; tools all; cannot_read 2 places; mcp_servers browser; deny_commands rm -rf *)`)
     expect(describePolicy({ specialist: 'gem', access: 'operator', id: 'operator' })).toBe('restricted = false')
   })
 })
@@ -256,22 +300,70 @@ describe('the stored policy', () => {
 describe('the start check reads the rules Claude Code applied (claude-verify.ts)', () => {
   const T = '2026-11-13T04:34:18.000Z [DEBUG] '
   const log = (lines: string[]) => lines.map(l => T + l).join('\n') + '\n'
-  const rules = { allow: ['WebFetch(domain:*)'], deny: ['Read(//home/op/.ssh/**)', 'Bash(rm -rf *)'] }
+  const rules = { allow: ['WebFetch(domain:*)'], deny: ['Read(//home/op/.ssh/**)', 'Bash(rm -rf *)'], servers: ['plugin:discord:discord', 'browser'] }
+  const ok = [`MCP server "plugin:discord:discord": Successfully connected (transport: stdio) in 9ms`, `MCP server "browser": Successfully connected (transport: stdio) in 9ms`, '[claudeai-mcp] Disabled via env var']
   test('both lists, under flagSettings, as Adding and as Replacing all', () => {
     const got = readLoaded(log([
       `Applying permission update: Adding 1 allow rule(s) to destination 'flagSettings': ${JSON.stringify(rules.allow)}`,
       `Applying permission update: Replacing all deny rules for destination 'flagSettings' with 2 rule(s): ${JSON.stringify(rules.deny)}`,
+      ...ok,
     ]))
     expect(got.allow).toEqual(rules.allow)
     expect(got.deny).toEqual(rules.deny)
     expect(confinementShortfall(rules, got)).toEqual([])
   })
   test('a deny rule from another destination does not count as the launch\'s', () => {
-    const got = readLoaded(log([`Applying permission update: Adding 2 deny rule(s) to destination 'userSettings': ${JSON.stringify(rules.deny)}`, `Adding 1 allow rule(s) to destination 'flagSettings': ${JSON.stringify(rules.allow)}`]))
+    const got = readLoaded(log([`Applying permission update: Adding 2 deny rule(s) to destination 'userSettings': ${JSON.stringify(rules.deny)}`, `Adding 1 allow rule(s) to destination 'flagSettings': ${JSON.stringify(rules.allow)}`, ...ok]))
     expect(confinementShortfall(rules, got)[0]).toMatch(/did not apply these deny rules: .*Read\(\/\/home\/op\/\.ssh\/\*\*\)/)
   })
   test('a missing rule is named; nothing applied names every one', () => {
-    expect(confinementShortfall(rules, readLoaded(''))).toHaveLength(2)
+    expect(confinementShortfall(rules, readLoaded(''))).toHaveLength(4)
+  })
+  const base = [`Adding 1 allow rule(s) to destination 'flagSettings': ${JSON.stringify(rules.allow)}`, `Adding 2 deny rule(s) to destination 'flagSettings': ${JSON.stringify(rules.deny)}`]
+  test('a server beyond the bridge and the listed ones is refused as soon as it starts (an operator\'s, a plugin\'s, a connector)', () => {
+    const got = readLoaded(log([...base, ...ok, 'MCP server "plugin:slack:slack": Starting connection with timeout of 30000ms']))
+    expect(confinementSurplus(rules, got)).toEqual(['it started MCP servers the policy does not give it: `plugin:slack:slack`'])
+    expect(confinementSurplus(rules, readLoaded(log([...base, ...ok])))).toEqual([])
+  })
+  test('claude.ai connector activity is refused; the "Disabled via env var" line is required', () => {
+    expect(confinementSurplus(rules, readLoaded(log([...base, ...ok, '[claudeai-mcp] Fetching connectors']))).join()).toMatch(/connectors were not off/)
+    expect(confinementShortfall(rules, readLoaded(log([...base, ...ok.slice(0, 2)])))).toEqual([expect.stringMatching(/nothing says claude\.ai connectors were off/)])
+  })
+  test('the bridge not connecting names the allowlist as the likely cause', () => {
+    const got = readLoaded(log([...base, 'MCP server "browser": Successfully connected (transport: stdio) in 9ms', '[claudeai-mcp] Disabled via env var']))
+    expect(confinementShortfall(rules, got)[0]).toMatch(/did not connect: `plugin:discord:discord`.*allowlist may have refused/)
+  })
+  test('a server that starts after the expected ones connected is caught by the settle read, not passed on the first look', async () => {
+    const first = log([...base, ...ok]), second = log([...base, ...ok, 'MCP server "plugin:slack:slack": Starting connection with timeout of 30000ms'])
+    let reads = 0
+    const v = await verifyConfinement(rules, '/f', { ...verifyDeps, read: () => (++reads === 1 ? first : second), sleep: async () => {}, settleMs: 1 })
+    expect(v).toMatchObject({ ok: false })
+    expect((v as any).why).toMatch(/started MCP servers the policy does not give it: `plugin:slack:slack`/)
+    expect(reads).toBe(2)
+  })
+  test('a late connector line is caught the same way', async () => {
+    let reads = 0
+    const v = await verifyConfinement(rules, '/f', { ...verifyDeps, read: () => (++reads === 1 ? log([...base, ...ok]) : log([...base, ...ok, '[claudeai-mcp] Fetching connectors'])), sleep: async () => {}, settleMs: 1 })
+    expect((v as any).why).toMatch(/connectors were not off/)
+  })
+  test('a clean file passes after the settle read', async () => {
+    expect(await verifyConfinement(rules, '/f', { ...verifyDeps, read: () => log([...base, ...ok]), sleep: async () => {}, settleMs: 1 })).toEqual({ ok: true })
+  })
+  test('the bridge not connecting is refused a set time after its settings loaded (the rules and the connectors line), not at the deadline, and the elapsed time is from then', async () => {
+    let t = 0
+    const noBridge = log([...base, 'MCP server "browser": Successfully connected (transport: stdio) in 9ms', '[claudeai-mcp] Disabled via env var'])
+    const v = await verifyConfinement(rules, '/f', { ...verifyDeps, read: () => noBridge, now: () => (t += 4_000), sleep: async () => {}, deadlineMs: 45_000 })
+    expect((v as any).why).toMatch(/did not connect: `plugin:discord:discord`.*allowlist may have refused it by name.*its settings were loaded 2\d+s ago and the bridge still has not connected/)
+    expect(t).toBeLessThan(40_000)
+  })
+  test('a cold start whose settings load late is not refused for the time before they loaded', async () => {
+    let t = 0, reads = 0
+    const slow = log(['Starting up'])
+    const loaded = log([...base, ...ok.slice(1, 2).map(() => 'MCP server "browser": Successfully connected (transport: stdio) in 9ms'), '[claudeai-mcp] Disabled via env var'])
+    const connected = log([...base, ...ok])
+    // 40 s of nothing, then the settings load, then the bridge connects 8 s later: a timer from the start would have refused at 20 s
+    const v = await verifyConfinement(rules, '/f', { ...verifyDeps, read: () => (t < 40_000 ? slow : t < 48_000 ? loaded : connected), now: () => t, sleep: async (ms: number) => { t += ms; reads++ }, settleMs: 1, deadlineMs: 120_000, pollMs: 4_000 })
+    expect(v).toEqual({ ok: true })
   })
   test('a file that cannot be read refuses at the deadline, with the cause', async () => {
     let t = 0

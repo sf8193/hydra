@@ -449,6 +449,8 @@ export type LoadEnv = {
   /** The path with symlinks resolved, or the path itself when it does not exist. */
   realpath(path: string): string
   exists(path: string): boolean
+  /** The MCP server names a Claude Code config file declares (`mcpServers`, and under `projects[<key>]` for each project key given). [] only when the file does not exist; a file that cannot be read or parsed throws, naming it. */
+  mcpNamesIn(path: string, projects?: readonly string[]): string[]
   /** Whether the state dir's `.env` sets this variable (to something non-blank). */
   envFileHas(name: string): boolean
   /** Whether the path is, or sits inside, a git work tree. */

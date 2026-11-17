@@ -132,6 +132,7 @@ pinned_to = ["app:sales"]             # (pinned, for the same reason as helpdesk
 can_only_write_to = "workdir"                  # the place its writes are confined to (a string or a list); today the one value is "workdir". This turns the whole layer on
 cannot_read = ["~/notes"]              # optional, only with can_only_write_to: paths ADDED to the built-in credential places Claude Code's tools and shell may not read
 deny_commands = ["rm -rf *"]           # optional: Bash patterns it may not run, on top of the confinement (each becomes a Bash(...) deny rule)
+tools = ["Bash", "Edit", "Write", "Read", "Grep", "Glob"]   # optional: its built-in tools (--tools); absent: all. Its MCP servers are only those in mcp_servers, and claude.ai connectors are always off
 mcp_servers = ["browser"]              # servers started for it with its OWN browser profile and download folders, <workdir>/.browser/{profile,downloads}
 
 # PR reviews on one repo.
