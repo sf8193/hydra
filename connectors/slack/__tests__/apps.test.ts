@@ -31,7 +31,7 @@ type Sent = { to: string; conversation?: string; key: string; msg: string }
 type Fake = { client?: FakeClient; historyError?: string; scopes?: string[]; handler: (e: RawEvent) => void; stopped: boolean; calls: string[]; history: RawMessage[]; threads: Record<string, RawMessage[]>; members: Set<string>; probes: string[]; probeError?: string }
 
 /** Two real listeners (the app `default` and `sales`) on one watcher, with fake Slack behind each. */
-function setup(toml: string, over: { members?: Record<string, string[]>; probeError?: Record<string, string>; cursors?: Record<string, string>; guard?: (to: string) => { fate: 'deliver'; target: string }; seed?: Record<string, { botUserId: string }>; failStart?: Record<string, number>; firstRetryBaseMs?: number; authGate?: Promise<void>; probeGate?: (channel: string) => Promise<void>; membershipWaitMs?: number; expectJoin?: boolean; scopes?: Record<string, string[]>; historyError?: Record<string, string> } = {}) {
+function setup(toml: string, over: { members?: Record<string, string[]>; probeError?: Record<string, string>; cursors?: Record<string, string>; entries?: object[]; guard?: (to: string) => { fate: 'deliver'; target: string }; seed?: Record<string, { botUserId: string }>; failStart?: Record<string, number>; firstRetryBaseMs?: number; authGate?: Promise<void>; probeGate?: (channel: string) => Promise<void>; membershipWaitMs?: number; expectJoin?: boolean; scopes?: Record<string, string[]>; historyError?: Record<string, string> } = {}) {
   const h = load(toml)
   const dir = mkdtempSync(join(tmpdir(), 'slack-apps-'))
   dirs.push(dir)
@@ -39,6 +39,7 @@ function setup(toml: string, over: { members?: Record<string, string[]>; probeEr
   const sent: Sent[] = []
   const logs: string[] = []
   const alerts: string[] = []
+  const alertTo: (string | undefined)[] = []
   const alertApps: (string | undefined)[] = []
   const fakes: Record<string, Fake> = {}
   const fails: Record<string, number> = { default: 0, [SALES]: 0 }
@@ -46,10 +47,10 @@ function setup(toml: string, over: { members?: Record<string, string[]>; probeEr
   const byId: Record<string, SlackListener> = {}
   const file = join(dir, 'w.json')
   // Cursors laid down before the daemon starts: what each pass reads from.
-  if (over.cursors) writeFileSync(file, JSON.stringify({ entries: [], channelCursors: over.cursors }))
+  if (over.cursors || over.entries) writeFileSync(file, JSON.stringify({ entries: over.entries ?? [], channelCursors: over.cursors ?? {} }))
   const watcher = new SlackWatcher({
     now: () => now, file, filesDir: join(dir, 'files'), log: l => logs.push(l), config: app => byId[app ?? 'default']?.view() ?? null,
-    alert: t => alerts.push(t),
+    alert: (t, to) => { alerts.push(t); alertTo.push(to) },
     ...(over.guard && { guard: async (_g, input) => over.guard!(input.to) }),
     deliver: async (t, msg, key) => { sent.push({ to: t.to, ...(t.conversation && { conversation: t.conversation }), key, msg }); return { ok: true } },
   })
@@ -91,7 +92,7 @@ function setup(toml: string, over: { members?: Record<string, string[]>; probeEr
     listeners.push(l)
   }
   return {
-    h, watcher, sent, logs, alerts, alertApps, fakes, listeners: byId, shared, file, dir, tick: (ms: number) => { now += ms },
+    h, watcher, sent, logs, alerts, alertTo, alertApps, fakes, listeners: byId, shared, file, dir, tick: (ms: number) => { now += ms },
     start: async () => { for (const l of Object.values(byId)) await l.start() },
     /** The same Slack message, delivered to every app whose bot is in its channel, as Slack does. */
     say: (ev: Partial<RawEvent> & { ts: string }, to: string[] = ['default', SALES]) => { for (const id of to) fakes[id].handler({ channel: CH, user: 'UB', text: 'hello', ...ev }) },
@@ -101,6 +102,113 @@ function setup(toml: string, over: { members?: Record<string, string[]>; probeEr
 
 const LISTEN_ALL = `[places."slack:${CH}"]\nmessages = "all"\n`
 const BOTH = { default: [CH, OTHER], [SALES]: [CH] }
+
+describe("a session's binding in a thread that another app's specialist takes", () => {
+  const SESSION = '1552619225032425525'
+  const T = '1400.000001'
+  const tagSales = (ts: string) => ({ ts, thread_ts: T, text: `<@${SALES_BOT}> a quote` })
+  const told = (t: ReturnType<typeof setup>) => t.alerts.filter((_, i) => t.alertTo[i] === SESSION)
+
+  test('the session is told once, naming the specialist and the app; later messages are not told again', async () => {
+    const t = setup(sharedChannel(CH), { members: BOTH })
+    await t.start()
+    t.watcher.bind(CH, T, SESSION, 'tool', 'default')
+    t.say(tagSales('1401.000001'))
+    await t.settle()
+    expect(t.sent.map(s => s.to)).toEqual(['deals'])
+    expect(told(t)).toHaveLength(1)
+    expect(told(t)[0]).toContain('deals')
+    expect(told(t)[0]).toContain(`slack:${CH}:${T}`)         // the binding it held
+    expect(told(t)[0]).toContain(`slack:${SALES}:${CH}:${T}`) // where it went
+    t.tick(1000)                                              // the specialist's conversation is now the thread's most recent
+    t.say(tagSales('1402.000001'))
+    t.say({ ts: '1403.000001', thread_ts: T })                 // untagged: follows the specialist
+    await t.settle()
+    expect(told(t)).toHaveLength(1)
+    expect(t.sent.map(s => s.to)).toEqual(['deals', 'deals'])   // the last two coalesced
+  })
+
+  test('a binding in another thread is not told and stays bound; a binding no session is in is told all the same', async () => {
+    const t = setup(sharedChannel(CH), { members: BOTH })
+    await t.start()
+    t.watcher.bind(CH, '1500.000001', SESSION, 'tool', 'default')   // another thread: untouched
+    t.watcher.bind(CH, T, SESSION, 'tool', 'default')               // no bridge is registered in this test: the notice goes to the thread
+    t.say(tagSales('1401.000001'))
+    await t.settle()
+    expect(told(t)).toHaveLength(1)
+    expect(told(t)[0]).toContain(T)
+    expect(told(t)[0]).not.toContain('1500.000001')
+    expect(t.watcher.get(CH, '1500.000001')).toMatchObject({ specialist: SESSION })
+  })
+
+  test("only a session's binding is told: a thread another specialist holds is not, and a session binding the thread through another app takes nothing", async () => {
+    const t = setup(sharedChannel(CH), { members: BOTH })
+    await t.start()
+    t.watcher.bind(CH, T, 'crm', 'tool', 'default')
+    t.say(tagSales('1401.000001'))
+    await t.settle()
+    expect(t.alerts.filter(a => a.includes('now answers this thread'))).toEqual([])
+    t.watcher.bind(CH, '1600.000001', SESSION, 'tool', 'default')
+    t.watcher.bind(CH, '1600.000001', '1552619225032425999', 'tool', SALES)
+    expect(t.alerts.filter(a => a.includes('now answers this thread'))).toEqual([])
+  })
+
+  test("a session bound in another channel, under the same thread ts, is not told", async () => {
+    const t = setup(sharedChannel(CH), { members: BOTH })
+    await t.start()
+    t.watcher.bind(OTHER, T, SESSION, 'tool', 'default')
+    t.say(tagSales('1401.000001'))
+    await t.settle()
+    expect(told(t)).toEqual([])
+  })
+
+  describe('a takeover that opens no conversation is told as well, once', () => {
+    const asked = (t: ReturnType<typeof setup>) => told(t).filter(a => a.includes('now answers this thread'))
+    const bound = (t: ReturnType<typeof setup>) => t.watcher.bind(CH, T, SESSION, 'tool', 'default')
+    const row = { app: SALES, channel: CH, threadTs: T, createdAt: 1, lastEventAt: 1 }
+
+    test('a conversation moved to a specialist by `bind`', async () => {
+      const t = setup(sharedChannel(CH), { members: BOTH })
+      await t.start()
+      t.watcher.bind(CH, T, 'crm', 'tool', SALES)
+      bound(t)
+      expect(asked(t)).toEqual([])
+      t.watcher.bind(CH, T, 'deals', 'tool', SALES)
+      expect(asked(t)).toHaveLength(1)
+      t.watcher.bind(CH, T, 'deals', 'tool', SALES)   // bound as it is: nothing moves, nothing said
+      expect(asked(t)).toHaveLength(1)
+    })
+
+    test('a conversation from an older store with no binding, bound by its first message', async () => {
+      const t = setup(sharedChannel(CH), { members: BOTH, entries: [row] })
+      await t.start()
+      bound(t)
+      t.watcher.watch(CH, T, 'deals', 'UB', SALES)
+      expect(asked(t)).toHaveLength(1)
+      t.watcher.watch(CH, T, 'deals', 'UB', SALES)
+      expect(asked(t)).toHaveLength(1)
+    })
+
+    test('a conversation whose specialist is gone, routed anew to the one that answers', async () => {
+      const t = setup(sharedChannel(CH), { members: BOTH })
+      await t.start()
+      t.watcher.bind(CH, T, 'ghost', 'tool', SALES)
+      bound(t)
+      t.say(tagSales('1401.000001'))
+      await t.settle()
+      expect(t.watcher.get(CH, T, SALES)).toMatchObject({ specialist: 'deals' })
+      expect(asked(t)).toHaveLength(1)
+    })
+  })
+
+  test('a specialist taking a thread no session listens to tells no one', async () => {
+    const t = setup(sharedChannel(CH), { members: BOTH })
+    await t.start()
+    t.say(tagSales('1401.000001'))
+    await t.settle()
+    expect(told(t)).toEqual([])
+  })
+})
 
 describe('two apps in one channel: exactly one answers', () => {
   test('an untagged top-level message goes to the app `default`, once, however many copies Slack sent', async () => {

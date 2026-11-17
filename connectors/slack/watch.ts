@@ -559,7 +559,7 @@ export class SlackWatcher {
     const existing = this.get(channel, threadTs, app)
     if (existing) {
       existing.lastEventAt = now
-      existing.specialist ??= specialist // a store written before bindings: its first message since binds it
+      if (!existing.specialist) this.setBinding(existing, specialist) // a store written before bindings: its first message since binds it
       this.persist()
       return existing
     }
@@ -568,7 +568,31 @@ export class SlackWatcher {
     const entry: SlackWatchEntry = { ...(appOfEntry({ app }) !== DEFAULT_SLACK_APP && { app }), channel, threadTs, specialist, ...(mentionedBy && { mentionedBy }), createdAt: now, lastEventAt: now }
     this.entries.set(keyOf(entry), entry)
     this.persist()
+    this.tellSessionsTaken(entry)
     return entry
+  }
+
+  /**
+   * The one place a conversation's binding changes to a specialist (it opens bound, is first bound, or is moved): a session listening to
+   * the same thread through another app is told then.
+   */
+  private setBinding(entry: SlackWatchEntry, to: string): void {
+    entry.specialist = to
+    this.tellSessionsTaken(entry)
+  }
+
+  /**
+   * The conversation id names the app, so a session listening to the same thread through another app holds a different conversation,
+   * now quiet. Told when a specialist takes the thread, once per takeover.
+   */
+  private tellSessionsTaken(taken: SlackWatchEntry): void {
+    if (!taken.specialist || isSessionThread(taken.specialist)) return
+    for (const held of this.list()) {
+      if (held.channel !== taken.channel || held.threadTs !== taken.threadTs) continue
+      if (!held.specialist || !isSessionThread(held.specialist)) continue
+      this.deps.log(`daemon: slack connector: ${taken.specialist} took the thread that ${conversationId(held)} listens to, through the app named ${appOfEntry(taken)}; the session listening there was told\n`)
+      this.deps.alert?.(`ℹ️ ${taken.specialist} now answers this thread through the app named ${appOfEntry(taken)} (${conversationId(taken)}), so this session no longer hears ${conversationId(held)}. Bind it again with \`bind_conversation\` to listen (then untagged messages in the thread come to this session, not the specialist), or \`unbind_conversation\` to let it go.`, held.specialist, appOfEntry(held))
+    }
   }
 
   /**
@@ -584,7 +608,7 @@ export class SlackWatcher {
     if (seenParent && threadTs !== TOP_LEVEL) { entry.delivered = insertTs(entry.delivered, threadTs, DELIVERED_KEEP); this.persist() }
     if (entry.specialist !== specialist) {
       this.deps.log(`daemon: slack connector: ${conversationId(entry)} moved from ${entry.specialist} to ${specialist}\n`)
-      entry.specialist = specialist
+      this.setBinding(entry, specialist)
       this.persist()
     }
     return entry
@@ -893,7 +917,7 @@ export class SlackWatcher {
     }
     if (ambient) { entry.ambient = true; this.persist() }
     // A new conversation, one whose specialist is gone (routed anew), or a rename through `renamed_from`: the binding takes the current id.
-    if ((d.bind || d.via === 'binding') && entry.specialist !== d.to) { entry.specialist = d.to; this.persist() }
+    if ((d.bind || d.via === 'binding') && entry.specialist !== d.to) { this.setBinding(entry, d.to); this.persist() }
     entry.lastEventAt = this.deps.now()
     const kind = dm ? 'dm' : tagged ? 'mention' : 'follow-up'
     this.enqueue(entry, { ts: ev.ts, user: ev.user, kind, text: ev.text ?? '', ...(ev.files?.length && { files: ev.files }) }, cfg)
