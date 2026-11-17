@@ -13,7 +13,8 @@ import { declaredInToml, getSpecialist, listSpecialists, removeSpecialist, setSp
 import { slackWatchHealth, refreshSlackSpecialistSurface, formatConversations, operatorBind, operatorUnbind, placeAliases } from '../connectors/slack/runtime.js'
 import { currentHydraConfig } from './hydra-config.js'
 import { routeFor, type RouteParams } from '../routing/route-request.js'
-import { deliverToTarget, deliverVia, sessionByName, toSession, toThread, type DeliverOutcome } from '../specialists/targets.js'
+import { deliverToTarget, deliverVia, resolveTo, sessionByName, toSession, toThread, type DeliverOutcome } from '../specialists/targets.js'
+import { spelled } from '../shared/target-kind.js'
 import { gateway } from './config.js'
 import { loadAccess, operatorIds } from './access.js'
 import { on } from './event-bus.js'
@@ -311,10 +312,13 @@ async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
   if (to && addresses > 1) return respond(req, false, '--to is the whole address: drop --thread/--session/--specialist')
   if (specialist && (thread || session)) return respond(req, false, '--specialist is its own address: drop --thread/--session')
   if (revive && !(to || (thread && !session))) return respond(req, false, '--revive takes --to or --thread (a specialist always revives)')
+  // `--to` says its kind (`ops` and `specialist:ops` are one target); a conversation goes to a specialist, so it needs the name.
+  const named = to ? resolveTo(to) : undefined
+  const toName = named?.kind === 'specialist' ? named.name : to
   // A conversation of a per-conversation specialist: its own session, opened for it if it has none (targets.ts).
   if (conversation !== undefined) {
-    if (!to || !conversation) return respond(req, false, '--conversation <key> goes with --to <specialist>')
-    if (currentHydraConfig().specialists[to]?.sessions !== 'per-conversation') return respond(req, false, `${to} isn't a per-conversation specialist in hydra.toml, so it has no conversations to open`)
+    if (!to || !conversation) return respond(req, false, '--conversation <key> goes with --to specialist:<name>')
+    if (!toName || currentHydraConfig().specialists[toName]?.sessions !== 'per-conversation') return respond(req, false, `${to} isn't a per-conversation specialist in hydra.toml, so it has no conversations to open`)
   }
 
   if (idempotencyKey) {
@@ -331,7 +335,7 @@ async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
 
   const opts = { initiator: initiator ?? 'unknown', ...(idempotencyKey && { idempotencyKey }), ...(idempotencyTtlMs && { idempotencyTtlMs }), ...(queue && { queue }) }
   let r: DeliverOutcome
-  if (to && conversation) r = await deliverToTarget({ perConversation: to, conversation }, message, opts)
+  if (to && conversation) r = await deliverToTarget({ perConversation: toName!, conversation }, message, opts)
   else if (to) r = await deliverToTarget({ to, ...(revive && { revive }) }, message, opts)
   else if (specialist) r = await deliverToTarget({ to: specialist }, message, opts)
   else if (session === 'main') r = await deliverToTarget({ to: 'main' }, message, opts)
@@ -347,6 +351,7 @@ async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
   if (!r.ok) return respond(req, false, r.reason, r.permanent ? { permanent: true } : undefined, r.exit)
   return respond(req, true, {
     status: r.status, proof: r.proof, sessionId: r.sessionId, sessionName: r.sessionName, threadId: r.threadId,
+    ...(named && named.kind !== 'unknown' && { target: spelled(named) }),
     ...(r.specialist && { specialist: r.specialist, spawned: r.revived }),
     ...(revive && { revived: r.revived }),
   })

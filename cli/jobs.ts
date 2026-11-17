@@ -17,7 +17,7 @@ import { resolveConfig, sendRequest } from './helpers.js'
 import { isUnder } from '../shared/path-containment.js'
 import { cliSchedules, schedulesAreSource } from '../shared/schedules.js'
 import { latestSlot, nextSlot } from '../shared/cron-local.js'
-import { isSessionThread } from '../shared/specialist-name.js'
+import { readTarget } from '../shared/target-kind.js'
 import {
   ACTION_TIMEOUT_MS, ATTEMPT_DEADLINE_MS, runWaitMs, CHECK_TIMEOUT_MS, STALE_TICK_MS, backoffUntil, jobInitiator, jobsDir, jobsToml, lstartOf, owedSlot, parseJobsConfig,
   attemptEnv, awakeTimeout, isSpawn, jobFromWire, targetLabel, parseEnvFile, tccFolder, externalFile, externalResults, logFile, runnerLabel, readDaemonState, readJobState, resultFile, resultsDir, writeAtomic, EX_TEMPFAIL, type AttemptArgs, type AttemptResult,
@@ -620,8 +620,8 @@ export async function syncLaunchd(platform: string, stateDir: string, jobs: Job[
 }
 
 /**
- * What jobs.toml can't rule out on its own: things that may stop the job when it runs. A `to` resolves as deliver
- * --to does: main, then a declared specialist, then an all-digit thread id; anything else is no such specialist.
+ * What jobs.toml can't rule out on its own: things that may stop the job when it runs. A `to` is read as deliver
+ * --to reads it: main, specialist:<name>, thread:<id>, or bare (a declared specialist, then an all-digit thread id); anything else is no such specialist.
  */
 export function jobWarnings(j: Job, specialists: ReadonlySet<string> = new Set()): string[] {
   const keys = [['cwd', j.cwd], ['env_file', j.envFile]] as const
@@ -630,7 +630,10 @@ export function jobWarnings(j: Job, specialists: ReadonlySet<string> = new Set()
     return folder ? [`${k} is under ${folder}: macOS lets the check in only if ${TCC_ACCESS[j.runner]} (docs/macos-permissions.md)`] : []
   })
   const to = j.target && 'to' in j.target ? j.target.to : undefined
-  if (to && to !== 'main' && !specialists.has(to) && !isSessionThread(to)) out.push(`no such specialist "${to}" (hydra specialist list)`)
+  if (to) {
+    const r = readTarget(to, id => specialists.has(id))
+    if (!r.ok) out.push(r.error ?? `no such specialist "${r.undeclared}" (hydra specialist list)`)
+  }
   return out
 }
 

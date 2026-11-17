@@ -221,7 +221,7 @@ describe('an alert about one app goes to the specialists that app can reach', ()
     // A lone `default` serves every specialist, as the alert always did.
     expect(slackSpecialistsOf(lone, 'default')).toEqual([CRM, DEALS])
     // A rule for one app pages that app’s target, not the other app’s.
-    const ruled = hydra(`${TWO_APPS}\n[specialists.${CRM}]\nworkdir = "/w"\nlistens = ["slack:C1"]\nallow = ["anyone"]\n[specialists.${DEALS}]\nworkdir = "/w"\npinned_to = ["sales"]\nallow = ["anyone"]\n[[rules]]\napp = "sales"\ntarget = "${DEALS}"\n`)
+    const ruled = hydra(`${TWO_APPS}\n[specialists.${CRM}]\nworkdir = "/w"\nlistens = ["slack:C1"]\nallow = ["anyone"]\n[specialists.${DEALS}]\nworkdir = "/w"\npinned_to = ["sales"]\nallow = ["anyone"]\n[[rules]]\napp = "sales"\ntarget = "specialist:${DEALS}"\n`)
     expect(slackSpecialistsOf(ruled, 'sales')).toEqual([DEALS])
     expect(slackSpecialistsOf(ruled, 'default')).toEqual([CRM])
   })

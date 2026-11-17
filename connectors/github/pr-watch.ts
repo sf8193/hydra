@@ -9,6 +9,7 @@ import { specialistForThread } from '../../specialists/specialists.js'
 import { DELIVER_MAX_MESSAGE_BYTES } from '../../shared/constants.js'
 import type { DeliverOpts, DeliverOutcome } from '../../specialists/targets.js'
 import { timed } from '../../shared/loop-watch.js'
+import { spelledBare } from '../../shared/target-kind.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -576,12 +577,12 @@ async function pollPr(entry: WatchEntry): Promise<void> {
   if (!r.ok) {
     Object.assign(entry, held)
     if (r.exit === 8) {
-      process.stderr.write(`daemon: pr-watch: ${entry.prUrl} → ${entry.to}: ${r.reason} — unwatching\n`)
+      process.stderr.write(`daemon: pr-watch: ${entry.prUrl} → ${spelledBare(entry.to)}: ${r.reason} — unwatching\n`)
       dropWatch(entry)
       void safeSend(entry.threadId, `⚠️ Stopped watching [#${entry.prNumber}](${entry.prUrl}): ${r.reason}`, { unfurl: false })
       return
     }
-    process.stderr.write(`daemon: pr-watch: ${entry.prUrl} → ${entry.to} not delivered (exit ${r.exit}: ${r.reason}) — owed, retried next poll\n`)
+    process.stderr.write(`daemon: pr-watch: ${entry.prUrl} → ${spelledBare(entry.to)} not delivered (exit ${r.exit}: ${r.reason}) — owed, retried next poll\n`)
     return
   }
   if (watches.get(entry.prUrl) === entry) persist()
@@ -756,7 +757,7 @@ export async function watchPr(prUrl: string, sessionId: string, threadId: string
   watches.set(prUrl, entry)
   persist()
   void pinWatch(entry)
-  process.stderr.write(`daemon: pr-watch: watching ${prUrl} → ${entry.to}, thread ${threadId}${entry.notifyGreen ? ' (notify-green)' : ''}\n`)
+  process.stderr.write(`daemon: pr-watch: watching ${prUrl} → ${spelledBare(entry.to)}, thread ${threadId}${entry.notifyGreen ? ' (notify-green)' : ''}\n`)
   return `watching ${prUrl} — will poll every ${POLL_INTERVAL_MS / 60000} minutes${entry.notifyGreen ? ' and post when CI goes green' : ''}`
 }
 

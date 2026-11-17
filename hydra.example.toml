@@ -148,13 +148,13 @@ link_previews = false
 
 [schedules.nightly-review]
 cron = "0 3 * * *"                    # required: 5 fields, local time
-target = "ops"                        # a specialist, or "main" (required unless it's a sensor, below)
+target = "specialist:ops"            # "main", or "specialist:<name>" for a declared specialist (required unless it's a sensor, below)
 message = "Nightly run: look over yesterday's work."
 
 # A check first: empty output sends nothing; anything it prints is appended to the message.
 [schedules.disk-watch]
 cron = "*/30 * * * *"
-target = "ops"
+target = "specialist:ops"
 message = "The disk check found something:"
 check = "./scripts/disk-check.sh"
 workdir = "~/agents/ops"              # the check's working dir (absolute or ~/); a relative env_file is under it
@@ -173,13 +173,13 @@ alert_after = "2d"                    # daemon runner only: how long a failure r
 [[rules]]
 place = "slack:#help"
 person = "finance"                    # a person or a role (absent: anyone there)
-target = "ops"
+target = "specialist:ops"            # "main", or "specialist:<name>"
 
 [[rules]]
 place = "slack:#help"
 app = "sales"                         # an app alone matches every message that comes through it (which would include a restricted specialist's home: hydra.toml refuses that); with `place`, that place through that app only
 person = "finance"
-target = "deals"                      # must be a specialist the app can reach: pinned to sales, or any specialist while no one pins sales
+target = "specialist:deals"          # must be a specialist the app can reach: pinned to sales, or any specialist while no one pins sales
 
 # --- guard: the operator's hook, run after routing and the allow check for anyone but the operator ---
 

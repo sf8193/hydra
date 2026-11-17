@@ -25,10 +25,10 @@ pinned_to = ["sales"]
 allow = ["anyone"]
 [[rules]]
 place = "slack:G0PRIV"
-target = "crm"
+target = "specialist:crm"
 [[rules]]
 app = "sales"
-target = "ops"
+target = "specialist:ops"
 `
 const NO_OPERATOR_ADDRESS = TOML.replace('slack:UOP', 'github:op')
 
@@ -80,7 +80,7 @@ describe('what an app is asked for, by what it reaches', () => {
   const NO_ADDRESS = (t: string) => t.replace('slack:UOP', 'github:op')
 
   test('an app-only rule reaches every place and asks for channel history, with no named place', () => {
-    const t = NO_ADDRESS(`${TWO_APPS}\n[specialists.x]\nworkdir = "/w/x"\npinned_to = ["sales"]\nallow = ["anyone"]\n[[rules]]\napp = "sales"\ntarget = "x"\n`)
+    const t = NO_ADDRESS(`${TWO_APPS}\n[specialists.x]\nworkdir = "/w/x"\npinned_to = ["sales"]\nallow = ["anyone"]\n[[rules]]\napp = "sales"\ntarget = "specialist:x"\n`)
     expect(needs(t, 'sales')).toContain(SLACK_APP_NEEDS.botScopes.channels)
     // …and not DMs: nothing names slack:dm, and the operator has no Slack address.
     expect(needs(t, 'sales')).not.toContain(SLACK_APP_NEEDS.botScopes.dms)

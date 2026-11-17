@@ -30,7 +30,7 @@ cron = "0 11 * * FRI"
 check = "~/Documents/ledger-agent-system/jobs/review-check.sh"
 runner = "daemon"
 needs = ["internet"]
-target = "ledger-review"
+target = "specialist:ledger-review"
 
 [schedules.ledger-review-nudge]
 cron = "0 11,19 * * 0-4,6"
@@ -56,7 +56,7 @@ idle = "4d"
 
 [schedules.ledger-review]
 cron = "0 11 * * FRI"   # owed until done
-target = "ledger-review"
+target = "specialist:ledger-review"
 runner = "daemon"
 needs = ["internet"]
 check = "~/Documents/ledger-agent-system/jobs/review-check.sh"
@@ -82,7 +82,7 @@ home = "1551794455227404371"
 
 [schedules.nightly-books]
 cron = "0 3 * * *"
-target = "books"
+target = "specialist:books"
 message = "Nightly run."
 `
 
@@ -169,7 +169,7 @@ describe('hydra config add', () => {
     expect(planAddFragment(at(LIVE), env, 'operator = "x"\n[people.x]\naddresses = ["discord:3"]\n', '/f')).toMatchObject({ ok: false, error: expect.stringContaining('sets operator, people') })
     expect(planAddFragment(at(LIVE), env, 'schedules = 3\n', '/f')).toMatchObject({ ok: false, error: expect.stringContaining('must be [schedules.<id>] tables') })
     expect(planAddFragment(at(LIVE), env, '# nothing\n', '/f')).toMatchObject({ ok: false, error: expect.stringContaining('no [specialists.<id>]') })
-    expect(planAddFragment(at(LIVE), env, '[schedules.x]\ncron = "0 3 * * *"\ntarget = "nobody"\nmessage = "p"\n', '/f')).toMatchObject({ ok: false, error: expect.stringContaining('wouldn\'t load with [schedules.x]') })
+    expect(planAddFragment(at(LIVE), env, '[schedules.x]\ncron = "0 3 * * *"\ntarget = "specialist:nobody"\nmessage = "p"\n', '/f')).toMatchObject({ ok: false, error: expect.stringContaining('wouldn\'t load with [schedules.x]') })
     expect(file()).toBe(LIVE)
   })
 

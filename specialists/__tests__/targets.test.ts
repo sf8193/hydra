@@ -430,9 +430,38 @@ describe('hydra deliver --conversation: a per-conversation specialist opens that
 
   test('refused without --to, for a shared specialist, or with no key', async () => {
     _setHydraConfigForTesting(hydra(CFG))
-    expect(await cli({ thread: '1', conversation: 'clock:x', message: 'm' })).toMatchObject({ ok: false, error: '--conversation <key> goes with --to <specialist>' })
-    expect(await cli({ to: 'rev', conversation: '', message: 'm' })).toMatchObject({ ok: false, error: '--conversation <key> goes with --to <specialist>' })
+    expect(await cli({ thread: '1', conversation: 'clock:x', message: 'm' })).toMatchObject({ ok: false, error: '--conversation <key> goes with --to specialist:<name>' })
+    expect(await cli({ to: 'rev', conversation: '', message: 'm' })).toMatchObject({ ok: false, error: '--conversation <key> goes with --to specialist:<name>' })
     expect(await cli({ to: 'shared', conversation: 'clock:x', message: 'm' })).toMatchObject({ ok: false, error: "shared isn't a per-conversation specialist in hydra.toml, so it has no conversations to open" })
+    expect(spawns).toHaveLength(0)
+  })
+})
+
+describe('a target says its kind: main, specialist:<name>, thread:<id>', () => {
+  const cli = (command: string, params: Record<string, unknown>) => handleCLIRequest({ type: 'cli', command, id: `tg-${++n}`, params } as CLIRequest)
+  test('each kind lands where the bare value always did; the CLI says which kind it delivered to', async () => {
+    const name = specialist('tg-kind')
+    const home = occupy('tg-kind')
+    expect(await deliverToTarget({ to: `specialist:${name}` }, 'm', opts)).toMatchObject({ ok: true, sessionId: home.sessionId, specialist: name })
+    expect(await deliverToTarget({ to: `specialist:${name}` }, 'm', opts)).toMatchObject({ ok: true, sessionId: (await deliverToTarget({ to: name }, 'm', opts) as any).sessionId })
+    const live = occupy('424242')
+    expect(await deliverToTarget({ to: 'thread:424242' }, 'm', opts)).toMatchObject({ ok: true, sessionId: live.sessionId, threadId: "424242" })
+    expect(await deliverToTarget({ to: 'main' }, 'm', { ...opts, queue: true })).toMatchObject({ ok: true, sessionName: 'main' })
+    expect(await cli('deliver', { to: `specialist:${name}`, message: 'm', initiator: 't' })).toMatchObject({ ok: true, data: { specialist: name, target: `specialist:${name}` } })
+    expect(await cli('deliver', { to: name, message: 'm', initiator: 't' })).toMatchObject({ ok: true, data: { target: `specialist:${name}` } })
+    expect(await cli('deliver', { to: 'thread:424242', message: 'm', initiator: 't' })).toMatchObject({ ok: true, data: { target: 'thread:424242' } })
+  })
+
+  test('a value that does not fit its kind is exit 8 and says what is wrong', async () => {
+    const name = specialist('tg-bad')
+    const bad = async (to: string) => (await deliverToTarget({ to }, 'm', opts)) as { ok: false; exit: number; reason: string }
+    expect(await bad('specialist:main')).toMatchObject({ exit: 8, reason: expect.stringContaining('main is the operator\'s own session; write "main"') })
+    expect(await bad('specialist:123')).toMatchObject({ exit: 8, reason: expect.stringContaining('write "thread:123" for the thread') })
+    expect(await bad('thread:abc')).toMatchObject({ exit: 8, reason: expect.stringContaining('a thread id is all digits') })
+    expect(await bad('thread:')).toMatchObject({ exit: 8, reason: expect.stringContaining('a thread id is all digits') })
+    expect(await bad('session:x')).toMatchObject({ exit: 8, reason: expect.stringContaining('a target is main, specialist:<name> or thread:<id>') })
+    expect(await bad('specialist:ghost')).toEqual({ ok: false, exit: 8, reason: 'no such specialist: ghost' })
+    expect(await bad(`thread:${name}`)).toMatchObject({ exit: 8 })
     expect(spawns).toHaveLength(0)
   })
 })

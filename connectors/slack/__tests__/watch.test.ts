@@ -133,7 +133,7 @@ allow = ["people"]
 [[rules]]
 place = "slack:${CH}"
 person = "olive"
-target = "finance"
+target = "specialist:finance"
 `
     const { w, sent } = setup({ toml })
     w.handle(ev({ ts: '1.000001', user: 'UOLIVE', text: 'books question' }))
@@ -908,7 +908,7 @@ allow = ["owner"]
 [[rules]]
 place = "slack:${CH2}"
 person = "olive"
-target = "${to}"
+target = "specialist:${to}"
 `
     const s = setup({ toml: toml('integrator') }, to => to === 'books' ? { ok: true } : { ok: false, error: 'busy' })
     const T = `${Math.floor(s.now() / 1000)}.000001`
@@ -980,7 +980,7 @@ allow = ["anyone"]
   })
 
   test('a rule at the place outranks the listener, for the person or role it names', async () => {
-    const s = setup({ toml: TWO(CH2, `[[rules]]\nplace = "slack:${CH2}"\nperson = "olive"\ntarget = "integrator"\n`) })
+    const s = setup({ toml: TWO(CH2, `[[rules]]\nplace = "slack:${CH2}"\nperson = "olive"\ntarget = "specialist:integrator"\n`) })
     s.w.handle(ev({ channel: CH2, ts: '1.000001', user: 'UOWNER', text: mention }))
     s.w.handle(ev({ channel: CH2, ts: '2.000001', user: 'UOP', text: mention }))
     await s.w.flush()

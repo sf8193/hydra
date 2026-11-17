@@ -68,8 +68,9 @@ Session management:
   hydra check-key <key>                Check if an idempotency key exists
 
 Deliver (whisper channel — message to session context, not thread):
-  hydra deliver --to <specialist|main|thread id> --message "..." [--revive]
-                                       resolves in order: main, a declared specialist, an all-digit thread id;
+  hydra deliver --to <main|specialist:name|thread:id> --message "..." [--revive]
+                                       the target says its kind: main, specialist:<name> (declared), thread:<all-digit id>.
+                                       A bare name or id still works (a declared specialist, then a thread id);
                                        anything else is exit 8 (no such specialist). A specialist always revives.
   hydra deliver --session <name> --message "..."
   hydra deliver --thread <id> --message "..."
@@ -82,9 +83,9 @@ Deliver (whisper channel — message to session context, not thread):
     --idempotency-key <key>            Prevent duplicate delivery (optional; remembered 15m)
     --idempotency-ttl <dur>            How long the key is remembered: 1m to 7d, e.g. 24h (default 15m)
     --queue                            Queue if bridge disconnected (default: fail)
-    --conversation <key>               With --to <specialist> that runs per-conversation sessions: that conversation's own
+    --conversation <key>               With --to specialist:<name> that runs per-conversation sessions: that conversation's own
                                        session, opened for it (a fresh thread in the specialist's home) if it has none
-    --revive                           With --to <thread id> or --thread: a dead session is revived in its thread first
+    --revive                           With --to thread:<id> or --thread: a dead session is revived in its thread first
                                        (resume, else fork, else a fresh one that reads the thread); the message queues for it.
   Exit codes: 2 already delivered with this key · 3 gone or refused · 4 running but unreachable · 5 not now (booting,
   busy, or stuck on a dialog) · 6 starting failed or backing off · 7 a delivery with this key is in flight · 8 no such specialist
@@ -120,8 +121,8 @@ Routing (hydra.toml):
                                        named "default"). --heard-by adds the other apps in the channel. --mentioned lists the
                                        apps the text tags, first tag first. --bound-app is the app the bound conversation is bound through.
   hydra conversations [list]           Conversations (one per app, channel and thread), the specialist each is bound to, and health
-  hydra conversations bind <conversation> <specialist>
-                                       Bind or move a conversation, named as list prints it
+  hydra conversations bind <conversation> <target>
+                                       Bind or move a conversation to main, specialist:<name> or thread:<id>, named as list prints it
                                        (slack:<channel id>:<thread ts>; slack:<app>:… through an app other than default)
   hydra conversations unbind <conversation>
 
@@ -577,7 +578,7 @@ async function main(): Promise<void> {
     case 'conversations': {
       const [action = 'list', conversation, to] = [filtered[1], filtered[2], filtered[3]]
       if (!['list', 'bind', 'unbind'].includes(action) || (action === 'bind' && (!conversation || !to)) || (action === 'unbind' && !conversation)) {
-        console.error('error: usage: hydra conversations [list] | bind <conversation> <specialist> | unbind <conversation>')
+        console.error('error: usage: hydra conversations [list] | bind <conversation> <target> | unbind <conversation>')
         process.exit(1)
       }
       const response = await sendRequest(socketPath(), {

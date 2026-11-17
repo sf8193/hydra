@@ -23,6 +23,7 @@ const ok = (toml: string) => {
   return r
 }
 /** Only the warnings about a renamed key. */
+const kindWarnings = (w: string[]) => w.filter(x => x.includes('a target says its kind'))
 const renameWarnings = (w: string[]) => w.filter(x => x.includes('still loads and will be removed'))
 
 // A config to hang one key on: an operator, two specialists, two Slack apps.
@@ -70,10 +71,12 @@ describe('a full config in the old names', () => {
   test('loads to the same config, under the new internal names, and the old names warn once each', () => {
     const r = ok(text('old-names.toml'))
     expect(r.config).toEqual(inNewNames(before.config) as HydraConfig)
-    // Every warning the file gave before is still given, unchanged; the rest are the renames.
-    expect(r.warnings.filter(w => !renameWarnings([w]).length)).toEqual(before.warnings.map(line).map(w => w.replace('set access = "workdir"', 'set restricted = true')))
+    // Every warning the file gave before is still given, unchanged; the rest are the renames, and the bare targets (the fixture predates target kinds).
+    expect(r.warnings.filter(w => !renameWarnings([w]).length && !kindWarnings([w]).length)).toEqual(before.warnings.map(line).map(w => w.replace('set access = "workdir"', 'set restricted = true')))
     // One per old key written: 2 places, 1 schedule, and 3 `at`, 3 `from`, 4 `to` across four rules.
     expect(renameWarnings(r.warnings).length).toBe(13)
+    // The schedule's target and three rules' (ops, deals, crm) are bare specialist names; `main` is not.
+    expect(kindWarnings(r.warnings).length).toBe(4)
   })
 
   test('the same file in the new names loads to the identical config, with no rename warning', () => {
@@ -87,7 +90,7 @@ describe('a full config in the old names', () => {
 })
 
 describe('rule `at` is now `place`', () => {
-  const rule = (body: string) => `${BASE}[[rules]]\n${body}\ntarget = "ops"\n`
+  const rule = (body: string) => `${BASE}[[rules]]\n${body}\ntarget = "specialist:ops"\n`
   test('the new name works', () => {
     const r = ok(rule('place = "slack:#help"'))
     expect(r.config.rules).toEqual([{ place: 'slack:#help', target: 'ops' }])
@@ -107,7 +110,7 @@ describe('rule `at` is now `place`', () => {
 })
 
 describe('rule `from` is now `person`', () => {
-  const rule = (body: string) => `${BASE}[[rules]]\nplace = "slack:#help"\n${body}\ntarget = "ops"\n`
+  const rule = (body: string) => `${BASE}[[rules]]\nplace = "slack:#help"\n${body}\ntarget = "specialist:ops"\n`
   test('the new name works', () => {
     const r = ok(rule('person = "alice"'))
     expect(r.config.rules).toEqual([{ place: 'slack:#help', person: 'alice', target: 'ops' }])
@@ -129,40 +132,40 @@ describe('rule `from` is now `person`', () => {
 describe('rule `to` is now `target`', () => {
   const rule = (body: string) => `${BASE}[[rules]]\nplace = "slack:#help"\n${body}\n`
   test('the new name works', () => {
-    const r = ok(rule('target = "crm"'))
+    const r = ok(rule('target = "specialist:crm"'))
     expect(r.config.rules).toEqual([{ place: 'slack:#help', target: 'crm' }])
     expect(r.warnings).toEqual([])
   })
   test('the old name works, and the warning names the new one', () => {
-    const r = ok(rule('to = "crm"'))
+    const r = ok(rule('to = "specialist:crm"'))
     expect(r.config.rules).toEqual([{ place: 'slack:#help', target: 'crm' }])
     expect(renameWarnings(r.warnings)).toEqual(['rules[0].to: rename `to` to `target`; `to` still loads and will be removed'])
   })
   test('both names is an error', () => {
-    expect(load(rule('to = "crm"\ntarget = "crm"')).errors).toEqual(['rules[0].to: is the old name of `target`, which is also set: keep `target` and delete `to`'])
+    expect(load(rule('to = "specialist:crm"\ntarget = "specialist:crm"')).errors).toEqual(['rules[0].to: is the old name of `target`, which is also set: keep `target` and delete `to`'])
   })
   test('a rule with no target says so under the new name', () => {
-    expect(load(rule('')).errors).toEqual(['rules[0].target: is required: a specialist, or main'])
+    expect(load(rule('')).errors).toEqual(['rules[0].target: is required: specialist:<name>, or main'])
   })
 })
 
 describe('schedule `to` is now `target`', () => {
   const sched = (body: string) => `${BASE}[schedules.nightly]\ncron = "0 3 * * *"\n${body}\n`
   test('the new name works', () => {
-    const r = ok(sched('target = "ops"\nmessage = "go"'))
+    const r = ok(sched('target = "specialist:ops"\nmessage = "go"'))
     expect(r.config.schedules.nightly).toEqual({ id: 'nightly', cron: '0 3 * * *', message: 'go', runner: 'launchd', target: 'ops' })
     expect(r.warnings).toEqual([])
   })
   test('the old name works, and the warning names the new one', () => {
-    const r = ok(sched('to = "ops"\nmessage = "go"'))
+    const r = ok(sched('to = "specialist:ops"\nmessage = "go"'))
     expect(r.config.schedules.nightly).toEqual({ id: 'nightly', cron: '0 3 * * *', message: 'go', runner: 'launchd', target: 'ops' })
     expect(renameWarnings(r.warnings)).toEqual(['schedules.nightly.to: rename `to` to `target`; `to` still loads and will be removed'])
   })
   test('both names is an error', () => {
-    expect(load(sched('to = "ops"\ntarget = "ops"\nmessage = "go"')).errors).toEqual(['schedules.nightly.to: is the old name of `target`, which is also set: keep `target` and delete `to`'])
+    expect(load(sched('to = "specialist:ops"\ntarget = "specialist:ops"\nmessage = "go"')).errors).toEqual(['schedules.nightly.to: is the old name of `target`, which is also set: keep `target` and delete `to`'])
   })
   test('a schedule with neither is a sensor only with a check', () => {
-    expect(load(sched('')).errors).toEqual(['schedules.nightly.target: is required unless there is a check (a sensor): a specialist, or main'])
+    expect(load(sched('')).errors).toEqual(['schedules.nightly.target: is required unless there is a check (a sensor): specialist:<name>, or main'])
     expect(ok(sched('check = "true"')).config.schedules.nightly.target).toBeUndefined()
   })
 })
@@ -200,7 +203,7 @@ describe('place `listen` is now `messages`, and its value `mentions` is now `add
 describe('an invalid value that came in under an old name is reported under that name', () => {
   test('place listen, rule at and schedule to point at the key that is in the file', () => {
     expect(load(`${BASE}[places."slack:#help"]\nlisten = "everything"\n`).errors).toEqual(['places."slack:#help".listen: must be one of "addressed", "all"'])
-    expect(load(`${BASE}[[rules]]\nat = ""\ntarget = "ops"\n`).errors).toEqual(['rules[0].at: must be a non-empty string'])
-    expect(load(`${BASE}[schedules.s]\ncron = "@daily"\nto = "nobody"\n`).errors).toEqual(['schedules.s.to: no specialist "nobody"'])
+    expect(load(`${BASE}[[rules]]\nat = ""\ntarget = "specialist:ops"\n`).errors).toEqual(['rules[0].at: must be a non-empty string'])
+    expect(load(`${BASE}[schedules.s]\ncron = "@daily"\nto = "specialist:nobody"\n`).errors).toEqual(['schedules.s.to: no specialist "nobody": declare [specialists.nobody], or use main'])
   })
 })

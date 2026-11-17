@@ -9,6 +9,8 @@ import { withHydraTomlLock, writeIfUnchanged } from './append.js'
 import { formatIssues, loadHydraConfig, RESTRICTION_KEYS, RESTRICTION_OLD_KEYS, SCHEDULE_RENAMES, SPECIALIST_RENAMES } from './load.js'
 import { appendOnly, appendText, HYDRA_TOML, hydraTomlInUse, toToml } from './migrate.js'
 import type { LoadEnv } from './types.js'
+import { isSessionThread } from '../shared/specialist-name.js'
+import { readTarget, spelled } from '../shared/target-kind.js'
 
 type Doc = Record<string, unknown>
 const SECTIONS = ['specialists', 'schedules'] as const
@@ -20,6 +22,12 @@ const scheduleNamed = (t: Doc): Doc => Object.fromEntries(Object.entries(t).map(
   const r = SCHEDULE_RENAMES.find(x => x.from === k && !(x.to in t))
   return [r ? r.to : k, v]
 }))
+
+/** A bare specialist name in a schedule's `target` is added as `specialist:<name>`, so hydra.toml gets only the new spelling (the loader would warn on the bare one). `main`, a thread id and a prefixed value stay as written. */
+const targetSpelled = (t: Doc): Doc => {
+  const read = typeof t.target === 'string' ? readTarget(t.target, id => !isSessionThread(id)) : undefined
+  return read?.ok && read.bare && read.ref.kind === 'specialist' ? { ...t, target: spelled(read.ref) } : t
+}
 
 /**
  * A fragment still written with a specialist's old key names is added under the new ones, so hydra.toml gets only the new names (the loader would
@@ -43,7 +51,7 @@ export function planAddFragment(stateDir: string, env: LoadEnv, fragmentText: st
   if (others.length) return { ok: false, error: `${source} sets ${others.join(', ')}; hydra config add takes only [specialists.<id>] and [schedules.<id>] tables (a person: hydra people add; anything else, including an [mcp.*] server, is a hand edit)` }
   const flat = SECTIONS.flatMap(sec => {
     const v = fragment[sec]
-    return v === undefined ? [] : isTable(v) && Object.values(v).every(isTable) ? Object.entries(v).map(([id, t]) => ({ sec, id, t: sec === 'schedules' ? scheduleNamed(t as Doc) : specialistNamed(t as Doc) })) : [{ sec, id: '', t: {} }]
+    return v === undefined ? [] : isTable(v) && Object.values(v).every(isTable) ? Object.entries(v).map(([id, t]) => ({ sec, id, t: sec === 'schedules' ? targetSpelled(scheduleNamed(t as Doc)) : specialistNamed(t as Doc) })) : [{ sec, id: '', t: {} }]
   })
   const loose = flat.find(e => e.id === '')
   if (loose) return { ok: false, error: `${source}: ${loose.sec} must be [${loose.sec}.<id>] tables` }
