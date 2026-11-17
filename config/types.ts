@@ -14,7 +14,7 @@ export type Address = `${Platform}:${string}`
 /**
  * An address hydra can hear: `slack:#help`, `slack:dm`, `slack:dm:<person>`, `slack:group-dm`, `discord:#feed`, `discord:dm`, `github:owner/repo` (lowercased), `cli`.
  * A Slack or Discord channel may also be named by its platform id: `slack:C0TEST`, `discord:1234567890`.
- * A place is data hydra keeps, not something declared: specialists name the ones they listen on.
+ * A place is data hydra keeps, not something declared: a `[[rules]]` entry names the ones a specialist hears.
  */
 export type Place = string
 
@@ -71,8 +71,6 @@ export type Specialist = {
   kickoff?: string
   /** `~` expanded; a relative path is under `workdir`. Read when it's needed, so it's not checked on load. */
   kickoffFile?: string
-  /** Places it answers. Two specialists share a place only when no app reaches both: their `pinned_to` apps are disjoint, or one is pinned and one is not. */
-  listens: Place[]
   /**
    * Pins it to Slack apps (ids). It answers only messages that come through those apps. Those apps deliver only to specialists pinned to them.
    * Absent: unpinned. It answers messages through every app that no specialist is pinned to.
@@ -194,8 +192,9 @@ export type Schedule = {
 }
 
 /**
- * An override for when the place isn't enough. Checked when hydra.toml loads, applied by `route()`. First match in file order.
+ * Who answers what: the one home of "which target answers a place". Checked when hydra.toml loads, applied by `route()`. First match in file order.
  * A rule names a place, an app, or both; identity (`person`) only refines them. A rule with `person` alone is an error.
+ * Two rules that take every message at one place through one app are an error: the later could never match.
  */
 export type Rule = {
   /** A place. Absent: every place. At least one of `place` and `app` is set: identity can refine them, never take them over. */
@@ -207,6 +206,13 @@ export type Rule = {
   /** A specialist or `main`. */
   target: string
 }
+
+/**
+ * The places where specialist `id` answers every message: the `place` of its `[[rules]]` that name no `person` (or `anyone`), in file order.
+ * A rule with a `person` takes only those people's messages, so it does not make the place the specialist's to answer.
+ */
+export const placesAnsweredBy = (cfg: Pick<HydraConfig, 'rules'>, id: string): Place[] =>
+  [...new Set(cfg.rules.flatMap(r => r.target === id && r.place !== undefined && (r.person === undefined || r.person === 'anyone') ? [r.place] : []))]
 
 /** The operator's hook, run after routing and the allow check. Checked when hydra.toml loads, run by the Slack watcher after routing. */
 export type Guard = {
@@ -262,7 +268,7 @@ export type HydraConfig = {
   vitals?: Vitals
 }
 
-/** One finding, located by its path in the file (`specialists.zoho.listens[1]`). */
+/** One finding, located by its path in the file (`rules[1].target`). */
 export type ConfigIssue = { path: string; message: string }
 
 export type LoadResult =

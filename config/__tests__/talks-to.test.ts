@@ -16,7 +16,7 @@ addresses = ["slack:U0OP"]
 [slack.apps.default]
 bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"
 `
-const ops = (body = 'talks_to = ["deep"]') => `[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:C0OPS"]\nallow = ["staff"]\nrestricted = true\n${body}\n`
+const ops = (body = 'talks_to = ["deep"]') => `[specialists.ops]\nworkdir = "~/agents/ops"\nallow = ["staff"]\nrestricted = true\n${body}\n[[rules]]\nplace = "slack:C0OPS"\ntarget = "specialist:ops"\n`
 const deep = (body = '') => `[specialists.deep]\nworkdir = "~/agents/deep"\nallow = []\nrestricted = true\n${body}\n`
 const people = `[people.alice]\naddresses = ["slack:U0A"]\nroles = ["staff"]\n`
 const text = (...parts: string[]) => [BASE, people, ...parts].join('\n')
@@ -43,7 +43,7 @@ describe('talks_to', () => {
     expect(ok(text(ops(), deep())).warnings).toEqual([])
   })
   test('on a restricted = false specialist it is refused: that session already has send_to_thread to any session', () => {
-    const t = text(`[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:C0OPS"]\nallow = ["staff"]\ntalks_to = ["deep"]\n`, deep())
+    const t = text(`[specialists.ops]\nworkdir = "~/agents/ops"\nallow = ["staff"]\ntalks_to = ["deep"]\n[[rules]]\nplace = "slack:C0OPS"\ntarget = "specialist:ops"\n`, deep())
     expect(errorsOf(t)).toEqual(['specialists.ops.talks_to: has no effect while restricted = false: it already has every tool and server the operator does, and send_to_thread to any session; set restricted = true to choose them'])
   })
   test('it is refused in [defaults.specialist]: a default would reach every specialist', () => {
@@ -74,7 +74,7 @@ describe('talks_to', () => {
     expect(errorsOf(text(ops('talks_to = "deep"'), deep())).length).toBeGreaterThan(0)
   })
   test('a target that runs under the operator\'s account loads, with a warning that names who is reached and how', () => {
-    const t = text(ops(), `[specialists.deep]\nworkdir = "~/agents/deep"\nlistens = ["slack:C0DEEP"]\nallow = []\n`)
+    const t = text(ops(), `[specialists.deep]\nworkdir = "~/agents/deep"\nallow = []\n[[rules]]\nplace = "slack:C0DEEP"\ntarget = "specialist:deep"\n`)
     const { config, warnings } = ok(t)
     expect(config.specialists.ops.talksTo).toEqual(['deep'])
     expect(warnings).toEqual(["specialists.ops.talks_to[0]: deep runs under the operator's account (restricted = false): whatever ops is talked into sending reaches that account, quoted and labelled but read by a session that can act as the operator; make deep restricted = true, with the broader folder it needs"])
@@ -100,7 +100,7 @@ describe('a workdir inside a workstream loads, through the real loader on a real
   const disk = { ...systemEnv(['spark'], stateDir, 'discord', join(home, '.claude')), home }
   const t = (privateRoots = '') => text(
     privateRoots,
-    `[specialists.ops]\nworkdir = "~/specialists/ops"\nlistens = ["slack:C0OPS"]\nallow = ["staff"]\nrestricted = true\ntalks_to = ["ops-deep"]\n`,
+    `[specialists.ops]\nworkdir = "~/specialists/ops"\nallow = ["staff"]\nrestricted = true\ntalks_to = ["ops-deep"]\n[[rules]]\nplace = "slack:C0OPS"\ntarget = "specialist:ops"\n`,
     `[specialists.ops-deep]\nworkdir = "~/Workstreams/ops/runbooks"\nallow = []\nrestricted = true\n`,
   )
   mkdirSync(join(home, 'specialists', 'ops'), { recursive: true })

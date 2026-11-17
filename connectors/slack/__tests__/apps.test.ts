@@ -286,9 +286,10 @@ describe('catching up, one pass per app', () => {
   })
 
   test('an app is asked to read only the channels it can deliver to', async () => {
-    // deals (pinned to sales) listens on C0OTHER alone: the app `default` has nothing to do there.
-    const toml = sharedChannel(CH).replace(`pinned_to = ["sales"]\nlistens = ["slack:${CH}"]`, `pinned_to = ["sales"]\nlistens = ["slack:${OTHER}"]`)
-    expect(toml).toContain(`listens = ["slack:${OTHER}"]`)
+    // deals (pinned to sales) is sent C0OTHER alone: the app `default` has nothing to do there.
+    const shared = sharedChannel(CH)
+    const toml = shared.replace(/(place = "slack:[^"]*"\ntarget = "specialist:deals")/, `place = "slack:${OTHER}"\ntarget = "specialist:deals"`)
+    expect(toml).not.toBe(shared)
     const t = setup(toml, { members: BOTH, cursors: { [CH]: '1000.000001', [`${SALES}:${OTHER}`]: '1000.000001', [`${SALES}:${CH}`]: '1000.000001' } })
     await t.start()
     expect(t.fakes.default.calls.filter(c => c.startsWith('history:')).map(c => c.slice(8))).toEqual([CH])
@@ -599,7 +600,7 @@ describe('health is per app: scopes', () => {
   })
 
   test('a lone `default` says no app, and names the manifest command without one', async () => {
-    const t = setup(`${TWO_APPS}`.split('[slack.apps.sales]')[0] + '[specialists.crm]\nworkdir = "/w/crm"\nlistens = ["slack:C0FOOD"]\nallow = ["anyone"]\n', { scopes: { default: ['channels:history'] } })
+    const t = setup(`${TWO_APPS}`.split('[slack.apps.sales]')[0] + '[specialists.crm]\nworkdir = "/w/crm"\nallow = ["anyone"]\n[[rules]]\nplace = "slack:C0FOOD"\ntarget = "specialist:crm"\n', { scopes: { default: ['channels:history'] } })
     await t.listeners.default.start()
     const said = t.alerts.filter(a => a.includes('bot token'))
     expect(said).toHaveLength(1)
@@ -620,13 +621,20 @@ socket_token_env = "S_APP"
 addresses = ["github:op"]
 [specialists.crm]
 workdir = "/w/crm"
-listens = ["slack:G0PRIV"]
 allow = ["anyone"]
+[[rules]]
+place = "slack:G0PRIV"
+target = "specialist:crm"
 [specialists.deals]
 workdir = "/w/deals"
 pinned_to = ["sales"]
-listens = ["slack:dm", "slack:${CH}"]
 allow = ["anyone"]
+[[rules]]
+place = "slack:dm"
+target = "specialist:deals"
+[[rules]]
+place = "slack:${CH}"
+target = "specialist:deals"
 `)
     const def = scopesNeeded(h, 'default')
     const sales = scopesNeeded(h, SALES)
@@ -733,7 +741,7 @@ describe('a two-app config routes, replies and catches up per app', () => {
 
 describe('a pinned specialist cannot be reached through any other app', () => {
   test('where only a specialist pinned to sales listens, a tag of the app `default` reaches no one, and a tag of sales reaches it', async () => {
-    const toml = `${TWO_APPS}\n[specialists.deals]\nworkdir = "/w/deals"\npinned_to = ["sales"]\nlistens = ["slack:${CH}"]\nallow = ["anyone"]\n`
+    const toml = `${TWO_APPS}\n[specialists.deals]\nworkdir = "/w/deals"\npinned_to = ["sales"]\nallow = ["anyone"]\n[[rules]]\nplace = "slack:${CH}"\ntarget = "specialist:deals"\n`
     const t = setup(toml, { members: BOTH })
     await t.start()
     t.say({ ts: '1100.000001', text: `<@${BOT}> hello?` })

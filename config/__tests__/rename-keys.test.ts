@@ -6,6 +6,7 @@ import { join } from 'path'
 import { loadHydraConfig } from '../load.js'
 import type { ConfigIssue, HydraConfig } from '../types.js'
 import { testLoadEnv } from './load-env.js'
+import { listensAsRules, isListensWarning } from './legacy-listens.js'
 
 const env = testLoadEnv({ home: '/home/op', isDir: p => p.startsWith('/home/op') })
 const text = (f: string) => readFileSync(join(import.meta.dir, 'fixtures', f), 'utf8')
@@ -70,11 +71,13 @@ describe('a full config in the old names', () => {
 
   test('loads to the same config, under the new internal names, and the old names warn once each', () => {
     const r = ok(text('old-names.toml'))
-    expect(r.config).toEqual(inNewNames(before.config) as HydraConfig)
+    expect(r.config).toEqual(listensAsRules(inNewNames(before.config)) as HydraConfig)
     // Every warning the file gave before is still given, unchanged; the rest are the renames, and the bare targets (the fixture predates target kinds).
-    expect(r.warnings.filter(w => !renameWarnings([w]).length && !kindWarnings([w]).length)).toEqual(before.warnings.map(line).map(w => w.replace('set access = "workdir"', 'set restricted = true')))
+    expect(r.warnings.filter(w => !renameWarnings([w]).length && !kindWarnings([w]).length && !isListensWarning(w))).toEqual(before.warnings.map(line).map(w => w.replace('set access = "workdir"', 'set restricted = true')))
     // One per old key written: 2 places, 1 schedule, and 3 `at`, 3 `from`, 4 `to` across four rules.
     expect(renameWarnings(r.warnings).length).toBe(13)
+    // Two specialists (crm, ops) still say where they are heard with `listens`.
+    expect(r.warnings.filter(isListensWarning).length).toBe(2)
     // The schedule's target and three rules' (ops, deals, crm) are bare specialist names; `main` is not.
     expect(kindWarnings(r.warnings).length).toBe(4)
   })

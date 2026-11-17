@@ -15,11 +15,15 @@ bot_token_env = "SALES_BOT"
 addresses = ["slack:U0OP"]
 [specialists.crm]
 workdir = "/a/crm"
-listens = ["slack:#help"]
 [specialists.deals]
 workdir = "/a/deals"
 pinned_to = ["sales"]
-listens = ["slack:#help"]
+[[rules]]
+place = "slack:#help"
+target = "specialist:crm"
+[[rules]]
+place = "slack:#help"
+target = "specialist:deals"
 `, env)
 if (!r.ok) throw new Error(JSON.stringify(r.errors))
 const CFG = r.config
@@ -93,12 +97,16 @@ ids = ["slack:U0OP"]
 ids = ["slack:U0ALICE"]
 [specialists.assistant]
 workdir = "/a/asst"
-listens = ["slack:dm"]
 allow = ["anyone"]
+[[rules]]
+place = "slack:dm"
+target = "specialist:assistant"
 [specialists.alices]
 workdir = "/a/alices"
-listens = ["slack:dm:alice"]
 allow = ["anyone"]
+[[rules]]
+place = "slack:dm:alice"
+target = "specialist:alices"
 `, env)
   if (!o.ok) throw new Error(JSON.stringify(o.errors))
   const ask = (place: string) => routeFor(o.config, { person: 'alice', place }, p => [p])

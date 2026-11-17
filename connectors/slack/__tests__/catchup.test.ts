@@ -287,12 +287,16 @@ describe('catch-up across routes', () => {
     const routed: SlackWatchConfig = view(`${BASE}
 [specialists.food]
 workdir = "/w/food"
-listens = ["slack:${CH}"]
 allow = ["anyone"]
+[[rules]]
+place = "slack:${CH}"
+target = "specialist:food"
 [specialists.ops]
 workdir = "/w/ops"
-listens = ["slack:C0OPS"]
 allow = ["anyone"]
+[[rules]]
+place = "slack:C0OPS"
+target = "specialist:ops"
 `)
     const dir = mkdtempSync(join(tmpdir(), 'slack-catchup-'))
     dirs.push(dir)
@@ -344,7 +348,7 @@ test('a message the guard put off (exit 75) is refetched by catch-up and judged 
 
 describe('catch-up for DMs and files', () => {
   const DM = 'D0ALICE01'
-  const DMS = (allow: string) => oneListener(CH) + `[people.a]\naddresses = ["slack:UA"]\nroles = ["owner"]\n[specialists.assistant]\nworkdir = "/w/assistant"\nlistens = ["slack:dm"]\nallow = ${allow}\n`
+  const DMS = (allow: string) => oneListener(CH) + `[people.a]\naddresses = ["slack:UA"]\nroles = ["owner"]\n[specialists.assistant]\nworkdir = "/w/assistant"\nallow = ${allow}\n[[rules]]\nplace = "slack:dm"\ntarget = "specialist:assistant"\n`
   const dmCfg: SlackWatchConfig = view(DMS('["owner"]'))
   const mk = (deliver: () => DeliverResult = () => ({ ok: true })) => {
     const dir = mkdtempSync(join(tmpdir(), 'slack-catchup-'))

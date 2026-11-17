@@ -33,7 +33,7 @@ const workdir = mkdtempSync(join(tmpdir(), 'restricted-launch-'))
 afterAll(() => rmSync(workdir, { recursive: true, force: true }))
 
 const spec = (id: string, over: Partial<Specialist> = {}): Specialist => ({
-  id, workdir, listens: [], allow: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false, ...over,
+  id, workdir, allow: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false, ...over,
 })
 const configWith = (specialists: Specialist[]): HydraConfig => ({
   operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
@@ -135,7 +135,7 @@ describe('the launch policy of a specialist', () => {
   test('its id changes with the tools, a server or its tools, and the workdir, and with nothing else', () => {
     const base = bornPolicy('ops')!.id
     expect(base).toMatch(/^workdir:[0-9a-f]{12}$/)
-    use({ ...OPS, listens: ['slack:#x'], allow: ['people'] }); expect(bornPolicy('ops')!.id).toBe(base)
+    use({ ...OPS, home: 'slack:#x', allow: ['people'] }); expect(bornPolicy('ops')!.id).toBe(base)
     use({ ...OPS, tools: ['Read'] }); expect(bornPolicy('ops')!.id).not.toBe(base)
     use({ ...OPS, workdir: '/elsewhere' }); expect(bornPolicy('ops')!.id).not.toBe(base)
     _setHydraConfigForTesting({ ...configWith([OPS]), mcpServers: { datadog: { name: 'datadog', command: '/usr/local/bin/datadog-mcp', tokenEnv: ['DD_API_KEY'], tools: ['search_logs', 'get_monitor'] } } })

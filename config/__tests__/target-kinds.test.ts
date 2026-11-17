@@ -8,6 +8,7 @@ import { planAddFragment } from '../add.js'
 import { migrateJobs } from '../migrate-jobs.js'
 import type { ConfigIssue } from '../types.js'
 import { testLoadEnv } from './load-env.js'
+import { listensAsRules, isListensWarning } from './legacy-listens.js'
 
 const env = testLoadEnv({ home: '/home/op', isDir: p => p.startsWith('/home/op') })
 const text = (f: string) => readFileSync(join(import.meta.dir, 'fixtures', f), 'utf8')
@@ -20,7 +21,6 @@ operator = "op"
 addresses = ["slack:U0OP"]
 [specialists.ops]
 workdir = "/home/op/ops"
-listens = ["slack:#ops"]
 `
 const load = (toml: string) => {
   const r = loadHydraConfig(toml, env)
@@ -37,8 +37,11 @@ describe('a full config of bare targets', () => {
 
   test('loads to the same config, with only the bare-name warnings added', () => {
     const r = ok(text('bare-targets.toml'))
-    expect(r.config).toEqual(before.config as any)
-    expect(r.warnings.filter(w => !kindWarning(w))).toEqual(before.warnings.map(line))
+    expect(r.config).toEqual(listensAsRules(before.config as any) as any)
+    // An explicit rule now counts as where a specialist is heard, so crm (unpinned; `sales` is pinned by deals) is told it lost `sales` at its rule's place: the one added warning.
+    const lost = 'specialists.crm: crm is unpinned, and app sales is pinned by deals, so crm no longer hears sales on slack:#sales-help'
+    expect(r.warnings.filter(w => !kindWarning(w) && !isListensWarning(w) && w !== lost)).toEqual(before.warnings.map(line))
+    expect(r.warnings).toContain(lost)
     // Two rules and one schedule name a specialist bare; `main` (twice) is never bare.
     expect(r.warnings.filter(kindWarning).sort()).toEqual([
       'rules[0].target: write "specialist:crm" instead of "crm": a target says its kind; the bare name still works and will be removed',

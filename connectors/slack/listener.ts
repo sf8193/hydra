@@ -6,7 +6,7 @@ import { mkdirSync, openSync, writeSync, closeSync, renameSync, rmSync } from 'f
 import { dirname } from 'path'
 import { linkPreviewsOff } from '../../shared/link-previews.js'
 import { routedChannels, hearsDms, dmsDeclared, namedChannels, unresolvedPlaces, isDm, mentionedApps, NOT_A_MEMBER, OPERATOR_TOKEN_REFUSED, NO_DIRECTORY, SLACK_LIMITS, type AppWatch, type DmOtherParty, type SlackDirectory, type SlackWatchConfig, type SlackWatcher } from './watch.js'
-import { DEFAULT_SLACK_APP, SLACK_DM, SLACK_GROUP_DM, type HydraConfig, type SlackApp } from '../../config/types.js'
+import { DEFAULT_SLACK_APP, SLACK_DM, SLACK_GROUP_DM, placesAnsweredBy, type HydraConfig, type SlackApp } from '../../config/types.js'
 import { reachableBy } from '../../routing/route.js'
 import { SLACK_APP_NEEDS, NO_SLACK_APP, appKey, appSuffix, type ScopeNeed } from './app.js'
 import { ConnectedApps } from './apps.js'
@@ -122,7 +122,7 @@ export type SlackAppLike = {
 /**
  * The scopes the options of one app need (from `SLACK_APP_NEEDS`), so a missing one is a read at startup rather than a guess later.
  * Each app is asked only for what it does (`reachableBy`): channel history when it reads a named channel, serves a rule for any
- * place, or serves a specialist that has no `listens` (it answers only threads bound to it); DMs when something it serves names
+ * place, or serves a specialist that hears no place (it answers only threads bound to it); DMs when something it serves names
  * `slack:dm`, or the operator has a Slack address; files when a place it reaches has them; the private-channel read only when one of
  * its places is private. One app's missing scope is never another's.
  */
@@ -132,8 +132,8 @@ export function scopesNeeded(h: HydraConfig, app: string = DEFAULT_SLACK_APP): S
   const places = namedChannels(h, app)
   const dms = hearsDms({ hydra: h, app })
   const everyPlace = r.rules.some(x => x.place === undefined)
-  const channels = places.length > 0 || everyPlace || r.specialists.some(sp => sp.listens.length === 0)
-  const groupDms = r.specialists.some(sp => sp.listens.includes(SLACK_GROUP_DM)) || r.rules.some(x => x.place === SLACK_GROUP_DM)
+  const channels = places.length > 0 || everyPlace || r.specialists.some(sp => placesAnsweredBy(h, sp.id).length === 0)
+  const groupDms = r.rules.some(x => x.place === SLACK_GROUP_DM)
   const slackOpts = Object.entries(h.places).filter(([p]) => p.startsWith('slack:') && (everyPlace || places.includes(p) || (p === SLACK_DM && dms) || (p === SLACK_GROUP_DM && groupDms))).map(([, o]) => o)
   const s = SLACK_APP_NEEDS.botScopes
   return [

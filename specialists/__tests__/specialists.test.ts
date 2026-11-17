@@ -102,7 +102,7 @@ describe('specialists', () => {
     const configure = (name: string, over: Record<string, unknown> = {}) => _setHydraConfigForTesting({
       operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [], mcpServers: MCP,
       people: { op: { id: 'op', addresses: ['discord:100000000000000001'], roles: [], name: 'op' } },
-      specialists: { [name]: { id: name, workdir: '/srv/x', kickoff: 'k', home: '555', listens: [], allow: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false, ...over } as any },
+      specialists: { [name]: { id: name, workdir: '/srv/x', kickoff: 'k', home: '555', allow: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false, ...over } as any },
     })
     afterEach(() => _setHydraConfigForTesting(undefined))
     /** The real Claude adapter (its `deliver` is where every delivery is gated), reported alive: the session is running, with no bridge. */
@@ -452,7 +452,7 @@ describe('specialists', () => {
     _setHydraConfigForTesting({
       operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
       people: { op: { id: 'op', addresses: ['discord:100000000000000001'], roles: [], name: 'op' } },
-      specialists: { [name]: { id: name, workdir: '/srv/x', kickoff: 'be the helper', home: '555', listens: [], allow: ['people'], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false } },
+      specialists: { [name]: { id: name, workdir: '/srv/x', kickoff: 'be the helper', home: '555', allow: ['people'], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false } },
     })
     try {
       expect((await deliver(name)).ok).toBe(true)
@@ -475,7 +475,7 @@ describe('specialists', () => {
 
   test('specialist list shows each hydra.toml specialist\'s sessions mode, and max when it is per-conversation', async () => {
     const [a, b] = [`t-specialist-${++n}`, `t-specialist-${++n}`]
-    const base = { workdir: '/srv/x', kickoff: 'k', home: '555', listens: [], allow: ['people'], renamedFrom: [], restricted: false }
+    const base = { workdir: '/srv/x', kickoff: 'k', home: '555', allow: ['people'], renamedFrom: [], restricted: false }
     _setHydraConfigForTesting({
       operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
       people: { op: { id: 'op', addresses: ['discord:100000000000000001'], roles: [], name: 'op' } },
@@ -498,7 +498,7 @@ describe('specialists', () => {
 
   test('specialist show and list print each hydra.toml specialist\'s effective access, with its tools and servers when it is workdir', async () => {
     const [a, b] = [`t-specialist-${++n}`, `t-specialist-${++n}`]
-    const base = { workdir: '/srv/x', kickoff: 'k', home: '555', listens: [], allow: ['people'], renamedFrom: [], sessions: 'shared' as const, maxSessions: 20 }
+    const base = { workdir: '/srv/x', kickoff: 'k', home: '555', allow: ['people'], renamedFrom: [], sessions: 'shared' as const, maxSessions: 20 }
     _setHydraConfigForTesting({
       operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
       people: { op: { id: 'op', addresses: ['discord:100000000000000001'], roles: [], name: 'op' } },
@@ -522,7 +522,7 @@ describe('specialists', () => {
     _setHydraConfigForTesting({
       operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
       people: { op: { id: 'op', addresses: ['discord:100000000000000001'], roles: [], name: 'op' } },
-      specialists: { [name]: { id: name, workdir: '/srv/x', kickoff: 'k', home: '555', listens: [], allow: ['people'], renamedFrom: [], sessions: 'per-conversation', maxSessions: 3, restricted: true, tools: ['Read'], mcp: [] } },
+      specialists: { [name]: { id: name, workdir: '/srv/x', kickoff: 'k', home: '555', allow: ['people'], renamedFrom: [], sessions: 'per-conversation', maxSessions: 3, restricted: true, tools: ['Read'], mcp: [] } },
     })
     try {
       const pick = (d: any) => ({ restricted: d.restricted, maxSessions: d.maxSessions, sessions: d.sessions, tools: d.tools, mcp: d.mcp, access: d.access, max: d.max })
@@ -540,7 +540,7 @@ describe('specialists', () => {
     _setHydraConfigForTesting({
       operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
       people: { op: { id: 'op', addresses: ['discord:100000000000000001'], roles: [], name: 'op' } },
-      specialists: { [name]: { id: name, workdir: '/srv/ops', kickoff: 'be the helper', home: '555', listens: [], allow: ['people'], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false } },
+      specialists: { [name]: { id: name, workdir: '/srv/ops', kickoff: 'be the helper', home: '555', allow: ['people'], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false } },
     })
     try {
       expect((await deliver(name)).ok).toBe(true)

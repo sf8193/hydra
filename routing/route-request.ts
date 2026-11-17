@@ -2,7 +2,7 @@
 import { bothNames, normalizeAddress } from '../config/load.js'
 import { noSuchApp } from '../config/pins.js'
 import { DEFAULT_SLACK_APP, type Address, type HydraConfig } from '../config/types.js'
-import { explain, route } from './route.js'
+import { explain, answersLines, route } from './route.js'
 
 export const ROUTE_USAGE = 'usage: hydra route --person <person|address|stranger> --place <place> [--app <app>] [--heard-by <app,app>] [--mentioned <app,app>] [--bound <specialist> [--bound-app <app>]]'
 
@@ -59,5 +59,5 @@ export function routeFor(h: HydraConfig, p: RouteParams, aliases: (place: string
   }
   const d = route(h, { ...(from && { from }), at, addressed: true, ...(p.bound && { bound: p.bound }), ...(slack && { app, ...(heardBy && { heardBy }), ...(mentioned && { mentioned }), ...(p.boundApp && { boundApp: p.boundApp }) }) })
   const note = p.app && !slack ? `(\`--app\` ignored: ${p.place} is not a Slack place)\n` : ''
-  return { ok: true, fate: d.fate, ...('to' in d && { to: d.to }), report: note + explain(d, h.guard?.command) }
+  return { ok: true, fate: d.fate, ...('to' in d && { to: d.to }), report: note + explain(d, h.guard?.command) + (Object.keys(h.specialists).length ? `\n${answersLines(h).join('\n')}` : '') }
 }

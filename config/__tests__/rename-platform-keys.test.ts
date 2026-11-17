@@ -8,6 +8,7 @@ import { join } from 'path'
 import { loadHydraConfig } from '../load.js'
 import type { ConfigIssue, HydraConfig } from '../types.js'
 import { testLoadEnv } from './load-env.js'
+import { listensAsRules, isListensWarning } from './legacy-listens.js'
 
 const env = testLoadEnv({ home: '/home/op', isDir: p => p.startsWith('/home/op') })
 const text = (f: string) => readFileSync(join(import.meta.dir, 'fixtures', f), 'utf8')
@@ -55,9 +56,10 @@ describe('a full config in the old people, schedule and Slack app names', () => 
 
   test('loads to the same config, under the new internal names, and each old key warns once', () => {
     const r = ok(text('old-platform-names.toml'))
-    expect(r.config).toEqual(inNewNames(before.config) as HydraConfig)
+    expect(r.config).toEqual(listensAsRules(inNewNames(before.config)) as HydraConfig)
     // The fixture predates target kinds: its two schedules name `ops` bare.
-    expect(r.warnings.filter(w => !renameWarnings([w]).length && !w.includes('a target says its kind'))).toEqual(before.warnings.map(line))
+    expect(r.warnings.filter(w => !renameWarnings([w]).length && !w.includes('a target says its kind') && !isListensWarning(w))).toEqual(before.warnings.map(line))
+    expect(r.warnings.filter(isListensWarning).length).toBe(1)
     expect(r.warnings.filter(w => w.includes('a target says its kind')).length).toBe(2)
     expect(renameWarnings(r.warnings)).toEqual([
       'connectors.slack: rename the table [connectors.slack] to [slack.apps.default]; it still loads and will be removed',

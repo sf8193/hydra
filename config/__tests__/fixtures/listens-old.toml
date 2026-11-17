@@ -1,0 +1,29 @@
+# A file as it was written before rules were the one home: where each specialist is heard is its `listens`.
+operator = "op"
+[people.op]
+addresses = ["slack:U0OP"]
+[people.alice]
+addresses = ["slack:U0ALICE"]
+roles = ["staff"]
+[slack.apps.default]
+bot_token_env = "DEFAULT_BOT"
+[slack.apps.sales]
+bot_token_env = "SALES_BOT"
+
+[specialists.ops]
+workdir = "/home/op/ops"
+listens = ["slack:#help"]
+[specialists.crm]
+workdir = "/home/op/crm"
+listens = ["slack:C0HELP", "slack:#crm"]
+[specialists.deals]
+workdir = "/home/op/deals"
+pinned_to = ["sales"]
+listens = ["slack:#help", "slack:dm"]
+[specialists.kitchen]
+workdir = "/home/op/kitchen"
+listens = ["slack:dm", "github:acme/w"]
+[[rules]]
+place = "slack:#ops"
+person = "alice"
+target = "main"

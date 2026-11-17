@@ -34,28 +34,39 @@ socket_token_env = "SALES_SLACK_APP_TOKEN"
 `
 
 /**
- * Two apps in one channel: `crm` (unpinned, so it answers the app `default`) and `deals` (pinned to `sales`) both listen
- * on it, which is allowed because no app reaches both.
+ * Two apps in one channel: `crm` (unpinned, so it answers the app `default`) and `deals` (pinned to `sales`) are both
+ * sent it, which is allowed because no app reaches both.
  */
 export const sharedChannel = (channel: string, place = '') => `${TWO_APPS}
 [specialists.crm]
 workdir = "/w/crm"
-listens = ["slack:${channel}"]
 allow = ["anyone"]
+[[rules]]
+place = "slack:${channel}"
+target = "specialist:crm"
 [specialists.deals]
 workdir = "/w/deals"
 pinned_to = ["sales"]
-listens = ["slack:${channel}"]
 allow = ["anyone"]
-${place}`
+${place}
+[[rules]]
+place = "slack:${channel}"
+target = "specialist:deals"
+`
 
-/** One specialist listening on one channel, open to `allow`. */
-export const oneListener = (channel: string, to = 'helper', allow = '["anyone"]', extra = '') => `${BASE}
-[specialists.${to}]
-workdir = "/w/${to}"
-listens = ["slack:${channel}"]
-allow = ${allow}
-${extra}`
+/** The same file, with more rules: each place sent to `to`, after the rules already there. */
+export const alsoHeard = (toml: string, to: string, ...places: string[]) => `${toml.replace(/\n*$/, '\n')}${places.map(p => `[[rules]]\nplace = "${p}"\ntarget = "specialist:${to}"\n`).join('')}`
+
+/** One specialist sent one channel, open to `allow`. */
+export const oneListener = (channel: string, to = 'helper', allow = '["anyone"]', extra = '') => {
+  // A rule written in `extra` is the file's own: it goes before the rule that sends the channel to `to`, so that a rule for a person is reached.
+  const own = extra.match(/\[\[rules\]\]\n(?:[^\[\n][^\n]*\n)*/g) ?? []
+  const rest = own.reduce((e, r) => e.replace(r, ''), extra)
+  return `${BASE}\n${own.join('')}[specialists.${to}]\nworkdir = "/w/${to}"\nallow = ${allow}\n${rest}\n[[rules]]\nplace = "slack:${channel}"\ntarget = "specialist:${to}"\n`
+}
+
+/** The same file with rules written first: the rules for a person or an app, which must come before the rule for everyone at a place. */
+export const firstRules = (toml: string, rules: string) => { const i = toml.indexOf('[specialists.'); return i < 0 ? `${toml}${rules}` : `${toml.slice(0, i)}${rules}${toml.slice(i)}` }
 
 /** `dms`: who each DM channel is with (a Slack user id, or 'bot'); given, the directory knows DMs, as an app with the operator's user token does. `groupDms`: channels that are group DMs. */
 export function directory(names: Record<string, string> = {}, dms?: Record<string, string>, groupDms: string[] = []): SlackDirectory {

@@ -7,6 +7,7 @@ import { join } from 'path'
 import { loadHydraConfig } from '../load.js'
 import type { ConfigIssue, HydraConfig } from '../types.js'
 import { testLoadEnv } from './load-env.js'
+import { listensAsRules, isListensWarning } from './legacy-listens.js'
 
 const env = testLoadEnv({ home: '/home/op', isDir: p => p.startsWith('/home/op') })
 const text = (f: string) => readFileSync(join(import.meta.dir, 'fixtures', f), 'utf8')
@@ -34,7 +35,7 @@ bot_token_env = "SALES_SLACK_BOT_TOKEN"
 [people.op]
 addresses = ["slack:U0OP"]
 `
-const spec = (body: string, id = 'ops') => `${BASE}[specialists.${id}]\nworkdir = "/home/op/${id}"\nlistens = ["slack:#help"]\n${body}\n`
+const spec = (body: string, id = 'ops') => `${BASE}[specialists.${id}]\nworkdir = "/home/op/${id}"\n${body}\n[[rules]]\nplace = "slack:#help"\ntarget = "specialist:${id}"\n`
 
 describe('a full specialist config in the old names', () => {
   // old-specialist-names.loaded.json is what the loader gave for old-specialist-names.toml before the rename, in the internal names of that day.
@@ -58,10 +59,12 @@ describe('a full specialist config in the old names', () => {
 
   test('loads to the same config under the new internal names, and each old key warns once', () => {
     const r = ok(text('old-specialist-names.toml'))
-    expect(r.config).toEqual(inNewNames(before.config) as HydraConfig)
+    expect(r.config).toEqual(listensAsRules(inNewNames(before.config)) as HydraConfig)
     // Every other warning is as before; only the one that quoted `access` now says `restricted`.
     const asBefore = before.warnings.map(line).map(w => w.replace('(access = "operator")', '(restricted = false)').replace('give ops access = "workdir" with the broader folder it needs', 'make ops restricted = true, with the broader folder it needs'))
-    expect(r.warnings.filter(w => !renameWarnings([w]).length)).toEqual(asBefore)
+    expect(r.warnings.filter(w => !renameWarnings([w]).length && !isListensWarning(w))).toEqual(asBefore)
+    // crm, ops, deals and plain still say where they are heard with `listens`.
+    expect(r.warnings.filter(isListensWarning).length).toBe(4)
     // 2 in [defaults.specialist] (prompt, max); crm: access, prompt_file, max, was; ops: access; deals: apps, prompt.
     expect(renameWarnings(r.warnings).length).toBe(9)
   })
@@ -135,7 +138,7 @@ describe('`prompt` and `prompt_file` are now `kickoff` and `kickoff_file`', () =
     expect(load(spec('kickoff = 3')).errors).toEqual(['specialists.ops.kickoff: must be a non-empty string'])
   })
   test('a default under the old name is read, warned once, and a specialist\'s own kickoff replaces it', () => {
-    const r = ok(`${BASE}[defaults.specialist]\nprompt = "d"\n[specialists.a]\nworkdir = "/home/op/a"\nlistens = ["slack:#a"]\n[specialists.b]\nworkdir = "/home/op/b"\nlistens = ["slack:#b"]\nkickoff = "own"\n`)
+    const r = ok(`${BASE}[defaults.specialist]\nprompt = "d"\n[specialists.a]\nworkdir = "/home/op/a"\n[specialists.b]\nworkdir = "/home/op/b"\nkickoff = "own"\n[[rules]]\nplace = "slack:#b"\ntarget = "specialist:b"\n[[rules]]\nplace = "slack:#a"\ntarget = "specialist:a"\n`)
     expect(r.config.specialists.a.kickoff).toBe('d')
     expect(r.config.specialists.b.kickoff).toBe('own')
     expect(renameWarnings(r.warnings)).toEqual(['defaults.specialist.prompt: rename `prompt` to `kickoff`; `prompt` still loads and will be removed'])
@@ -210,7 +213,7 @@ describe('`apps` is now `pinned_to`', () => {
       .toEqual(['specialists.ops.apps (from defaults.specialist)[0]: no app "nope": declare [slack.apps.nope]; hydra.toml declares default, sales'])
   })
   test('the old name is not read on a rule or a place: `app` is not renamed', () => {
-    expect(load(`${spec('')}[[rules]]\napps = "sales"\ntarget = "specialist:ops"\n`).errors).toEqual(['rules[0].apps: unknown key "apps"', 'rules[0]: a rule needs `place`, `app` or both; `person` only narrows who it applies to'])
+    expect(load(`${spec('')}[[rules]]\napps = "sales"\ntarget = "specialist:ops"\n`).errors).toEqual(['rules[1].apps: unknown key "apps"', 'rules[1]: a rule needs `place`, `app` or both; `person` only narrows who it applies to'])
   })
   test('a rule pointing at a pinned specialist names pinned_to in its fix', () => {
     expect(load(`${spec('pinned_to = ["sales"]')}[[rules]]\napp = "default"\ntarget = "specialist:ops"\n`).errors[0]).toContain("add default to ops's `pinned_to`")

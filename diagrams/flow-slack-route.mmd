@@ -1,6 +1,6 @@
 %% A Slack message's path from event to delivery, derived from the code, with every refusal and drop.
 %% REFUSED / UNROUTED: logged once, counted (by sender / in all), removed from owed, never alerted; a mention, or a refused DM, gets 🚫; an unrouted DM gets none.
-%% Routing itself (binding → rules → listens → the operator's DM to main, then allow) is routing/route.ts: see flow-route.mmd.
+%% Routing itself (binding → rules → the operator's DM to main, then allow) is routing/route.ts: see flow-route.mmd.
 %% DROP: logged, counted by kind, alerted once per episode (an hour from its start), per app, kind and target. Guard drops are not alerted.
 %% One connection per Slack app (connectors/slack/connections.ts): each has its own listener, catch-up, cursors and alert episodes; a message and its reply go through the same app.
 flowchart TD
@@ -31,11 +31,11 @@ flowchart TD
     h0{"connected?<br/>(view = hydra.toml + what Slack taught)"}
     h1{"valid ts, plain subtype, not in flight,<br/>not another bot (unless place bots = true)?"}
     cown{"bot's own?"}
-    csub["own top-level: opens, bound to the listener there,<br/>ts marked delivered"]
+    csub["own top-level: opens, bound to the specialist a rule sends there,<br/>ts marked delivered"]
     cseen{"already delivered?"}
     ow{"several apps heard it?<br/>one owns it: a tag outranks the bound app,<br/>then the opener, default_app, default, first<br/>the others stand down"}
     pl{"place names (listener.ts: the bot's DM list says slack:dm, the operator's DM list names the other party):<br/>channel: slack:C…, slack:#name; bot DM: slack:dm;<br/>DM with a person: slack:dm:person; group DM: slack:G…, slack:group-dm<br/>a DM with no one in [people], or unknown: no place"}
-    og{"early gate: does a rule, listens, [places] entry<br/>or open conversation name the place?<br/>(the bot DM needs none; with the operator's token, a channel tag still passes)"}
+    og{"early gate: does a rule, [places] entry<br/>or open conversation name the place?<br/>(the bot DM needs none; with the operator's token, a channel tag still passes)"}
     rt{"route(): at = the place names<br/>addressed = DM, tag, or open conversation<br/>bound = the conversation's specialist"}
     react["🚫 reaction, if a mention or a refused DM"]
     cap{"new conversation, not a DM: tag cap"}

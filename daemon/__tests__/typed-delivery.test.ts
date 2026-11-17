@@ -249,7 +249,7 @@ describe('a confined session is not typed into until its start is verified', () 
     _setHydraConfigForTesting({
       operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
       people: { op: { id: 'op', addresses: ['discord:1'], roles: [], name: 'op' } },
-      specialists: { ops: { id: 'ops', workdir: '/srv/ops', listens: [], allow: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: true, tools: ['Read'], mcp: [] } },
+      specialists: { ops: { id: 'ops', workdir: '/srv/ops', allow: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: true, tools: ['Read'], mcp: [] } },
     } as any)
     return session({ sessionType: 'scoped', policy: bornPolicy('ops'), threadId: 'th', ...over })
   }

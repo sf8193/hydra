@@ -4,9 +4,9 @@
 //   0. When several Slack apps are in the channel, one app owns the message (`owningApp`); the others ignore it, so exactly one answers.
 //   1. A bound conversation follows its binding, unless hydra.toml no longer declares that specialist, or this app cannot be served by it
 //      (it is pinned elsewhere, or this app serves only specialists pinned to it): then the message is routed anew, and counts as unbound for "is it addressed" (a gone specialist's thread stays addressed).
-//   2. Otherwise the first matching [[rules]] entry: its place, app and sender all match (an absent `place` or `app` matches every one).
-//   3. Otherwise the specialist that `listens` there.
-//   4. Otherwise, the operator's DM goes to `main`; anything else is unrouted.
+//   2. Otherwise the first matching [[rules]] entry: its place, app and sender all match (an absent `place` or `app` matches every one). An old `listens` was read as rules at load, after the explicit ones.
+//   3. Otherwise, the operator's DM goes to `main`; anything else is unrouted.
+// A specialist answers where a rule sends a place to it: nothing else says where.
 // Every candidate above must be served by the app the message came through (`notServedBy`, config/pins.ts): a specialist pinned to apps
 // takes only messages through them, and an app that any specialist is pinned to delivers only to those. `main` is exempt: it hears only the operator.
 // Then `allow`: the operator is always allowed, `anyone` admits strangers, `people` admits the roster, a role admits who holds it.
@@ -48,8 +48,8 @@ export type Inbound = {
 
 /** One candidate considered, in order, and what became of it. What `hydra route` prints. */
 export type Step = { via: Via; to: string; matched: boolean; why: string }
-/** `owner` is the one step whose `to` is an app id, not a specialist: the app that owns the message. */
-export type Via = 'owner' | 'binding' | 'rule' | 'listens' | 'operator-dm'
+/** `owner` is the one step whose `to` is an app id, not a specialist: the app that owns the message. `trigger` is the step where nothing makes the message count: not addressed, and no place here lets everything in. */
+export type Via = 'owner' | 'binding' | 'trigger' | 'rule' | 'operator-dm'
 
 /** On every decision: the app that heard the message, and (when it was not alone in the channel) the app that owns it. */
 type Heard = { app?: string; owner?: string }
@@ -109,8 +109,8 @@ export function currentId(cfg: HydraConfig, id: string): string {
   return Object.values(cfg.specialists).find(s => s.renamedFrom.includes(id))?.id ?? id
 }
 
-/** Whether an unaddressed message at this place may open a conversation (`[places]` `messages = "all"`). */
-export function listensToAll(cfg: HydraConfig, at: Place[]): boolean {
+/** Whether an unaddressed message at this place may open a conversation: a place with `messages = "all"`. */
+export function messagesAll(cfg: HydraConfig, at: Place[]): boolean {
   return at.some(p => cfg.places[p]?.messages === 'all')
 }
 
@@ -152,20 +152,18 @@ export function reachableBy(cfg: HydraConfig, app?: string): { specialists: Spec
   }
 }
 
-/** The specialists (and `main`, as a rule's target) that hear Slack through `app`: they listen on a Slack place, or a Slack rule for the app sends to them. Whom an alert about the app concerns. */
+/** The specialists (and `main`, as a rule's target) that hear Slack through `app`: a Slack rule for the app sends to them. Whom an alert about the app concerns. */
 export function slackSpecialistsOf(cfg: HydraConfig, app?: string): string[] {
   const r = reachableBy(cfg, app)
-  return [...new Set([
-    ...r.specialists.filter(s => s.listens.some(isSlackPlace)).map(s => s.id),
-    ...r.rules.filter(x => x.place === undefined || isSlackPlace(x.place)).map(x => x.target),   // a rule with only an app is a Slack rule
-  ])]
+  // a rule with only an app is a Slack rule
+  return [...new Set(r.rules.filter(x => x.place === undefined || isSlackPlace(x.place)).map(x => x.target))]
 }
 
-/** Whether a message at this place, through `app`, would be delivered to anyone: a rule's target or a listener that `app` serves, or `main` in a DM. */
+/** Whether a message at this place, through `app`, would be delivered to anyone: a rule's target that `app` serves, or `main` in a DM. */
 export function reachesAnyone(cfg: HydraConfig, app: string, at: Place[]): boolean {
   if (at.some(isDmPlace)) return true
   const r = reachableBy(cfg, app)
-  return r.rules.some(x => x.place === undefined || at.includes(x.place)) || r.specialists.some(sp => sp.listens.some(p => at.includes(p)))
+  return r.rules.some(x => x.place === undefined || at.includes(x.place))
 }
 
 /**
@@ -233,8 +231,8 @@ export function route(cfg: HydraConfig, msg: Inbound): Decision {
     if (gone) addressed = true
   }
 
-  if (!addressed && !listensToAll(cfg, msg.at)) {
-    trace.push({ via: 'listens', to: '', matched: false, why: 'not a DM or a mention, and no place here has messages = "all"' })
+  if (!addressed && !messagesAll(cfg, msg.at)) {
+    trace.push({ via: 'trigger', to: '', matched: false, why: 'not a DM or a mention, and no place here has messages = "all"' })
     return { ...heard, fate: 'ignored', sender, trace }
   }
 
@@ -250,21 +248,24 @@ export function route(cfg: HydraConfig, msg: Inbound): Decision {
     if (matched) winner = { to: r.target, via: 'rule' }
   }
 
-  // Most specific name first: a specialist listening on the channel's id outranks one listening on its name.
-  for (const [p, s] of msg.at.flatMap(p => Object.values(cfg.specialists).filter(s => s.listens.includes(p)).map(s => [p, s] as const))) {
-    const apart = notServedBy(cfg, s.id, app)
-    const matched = !winner && !apart
-    trace.push({ via: 'listens', to: s.id, matched, why: apart ? `listens on ${p}, but ${apart}` : matched ? `listens on ${p}` : `listens on ${p}, but ${winner!.via === 'rule' ? 'a rule' : 'a more specific place'} won` })
-    if (matched) winner = { to: s.id, via: 'listens' }
-  }
-
   if (!winner && sender.operator && msg.at.some(isDmPlace)) {
-    trace.push({ via: 'operator-dm', to: MAIN, matched: true, why: 'the operator\'s DM, and no specialist listens here' })
+    trace.push({ via: 'operator-dm', to: MAIN, matched: true, why: 'the operator\'s DM, and no rule sends it elsewhere' })
     winner = { to: MAIN, via: 'operator-dm' }
   }
 
   if (!winner) return { ...heard, fate: 'unrouted', sender, trace }
   return decide(winner.to, winner.via, true)
+}
+
+/**
+ * Where each declared specialist answers, one line each (`hydra config check`, `hydra route`): read off the `[[rules]]` that name it as
+ * their target, in file order. A rule that narrows to a person or an app says so; a specialist no rule names is heard only in a conversation bound to it.
+ */
+export function answersLines(cfg: HydraConfig): string[] {
+  return Object.keys(cfg.specialists).map(id => {
+    const heard = cfg.rules.filter(r => r.target === id).map(r => `${r.place ?? 'every place'}${r.app ? ` via app ${r.app}` : ''}${r.person ? ` for ${r.person}` : ''}`)
+    return `${id} answers: ${heard.length ? heard.join(', ') : 'no place (only a conversation bound to it)'}`
+  })
 }
 
 /** `hydra route`'s report: every candidate, the winner, and the allow check. */
@@ -278,7 +279,7 @@ export function explain(d: Decision, guardCommand?: string): string {
     lines.push(`delivers to ${spelledBare(d.to)} (by ${d.via})${d.bind ? ', and binds the conversation to it' : ''}`)
     if (guardCommand && !d.sender.operator) lines.push(`then the guard judges it: ${guardCommand}`)
   } else if (d.fate === 'refused') lines.push(`refused (🚫): ${d.why}`)
-  else if (d.fate === 'unrouted') lines.push('unrouted: no rule or specialist hears this place (a mention gets a 🚫; a DM gets no reply)')
+  else if (d.fate === 'unrouted') lines.push('unrouted: no rule sends this place to anyone (a mention gets a 🚫; a DM gets no reply)')
   else lines.push(d.owner && d.owner !== d.app ? `ignored: ${d.owner} owns this message, so ${d.app} does not answer` : 'ignored: not addressed to hydra')
   return lines.join('\n')
 }

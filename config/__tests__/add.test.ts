@@ -4,6 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { addFragment, planAddFragment } from '../add.js'
 import { loadHydraConfig } from '../load.js'
+import { placesAnsweredBy } from '../types.js'
 import type { LoadEnv } from '../types.js'
 import { testLoadEnv } from './load-env.js'
 
@@ -109,11 +110,46 @@ describe('hydra config add', () => {
     expect(loaded().schedules['nightly-books']).toMatchObject({ target: 'main', message: 'p', workdir: '/srv/books' })
   })
 
+  test('a fragment\'s [[rules]] are appended after the file\'s own, a rule already there is not added twice, and a rule that clashes is refused', () => {
+    const d = at(LIVE)
+    const frag = '[[rules]]\nplace = "slack:#help"\ntarget = "specialist:ledger-review"\n[[rules]]\nat = "slack:dm"\nto = "ledger-review"\n'
+    const first = addFragment(d, env, frag, '/repo/f.toml')
+    expect(first).toMatchObject({ ok: true, added: ['[[rules]] place = "slack:#help", target = "specialist:ledger-review"', '[[rules]] place = "slack:dm", target = "specialist:ledger-review"'] })
+    expect(file().slice(file().indexOf('[[rules]]'))).toBe('[[rules]]\nplace = "slack:#help"\ntarget = "specialist:ledger-review"\n\n[[rules]]\nplace = "slack:dm"\ntarget = "specialist:ledger-review"\n')
+    expect(loaded().rules).toEqual([{ place: 'slack:#help', target: 'ledger-review' }, { place: 'slack:dm', target: 'ledger-review' }])
+    // The same fragment again: nothing to add, the file as it was.
+    const before = file()
+    expect(addFragment(d, env, frag, '/repo/f.toml')).toMatchObject({ ok: true, added: [], already: expect.any(Array) })
+    expect(file()).toBe(before)
+    // A different rule for everyone at a place the file already sends somewhere: the load refuses it, and nothing is written.
+    const clash = addFragment(d, env, '[[rules]]\nplace = "slack:#help"\ntarget = "main"\n', '/repo/g.toml')
+    expect(clash.ok).toBe(false)
+    expect(!clash.ok && clash.error).toContain('sends every message at slack:#help through any app to main, but rules[0] already sends them to specialist:ledger-review')
+    expect(file()).toBe(before)
+  })
+
+  test('a rule that would take a place from an old `listens` is refused, not added: nothing is written', () => {
+    const live = `${LIVE}[slack.apps.default]\nbot_token_env = "B"\n[specialists.crm]\nworkdir = "~/crm"\nlistens = ["slack:#help"]\n`
+    const d = at(live)
+    const before = file()
+    const r = addFragment(d, env, '[[rules]]\nplace = "slack:#help"\ntarget = "main"\n', '/repo/h.toml')
+    expect(r.ok).toBe(false)
+    expect(!r.ok && r.error).toContain('would take a place from what hydra.toml already says')
+    expect(!r.ok && r.error).toContain('specialists.crm.listens[0]: never matches: rules[0] already takes every message at slack:#help')
+    expect(file()).toBe(before)
+    // a rule narrowed to a person does not take it
+    expect(addFragment(d, env, '[[rules]]\nplace = "slack:#help"\nperson = "operator"\ntarget = "main"\n', '/repo/h.toml')).toMatchObject({ ok: true })
+  })
+
   test('a fragment still written with a specialist\'s old keys is added under the new ones', () => {
     const d = at(LIVE)
     const r = addFragment(d, env, '[specialists.books]\nworkdir = "~/Workstreams/Books"\nprompt = "Keep the books."\nsessions = "per-conversation"\nmax = 3\nwas = ["ledger"]\nlistens = ["slack:dm"]\n', '/repo/f.toml')
-    expect(r).toMatchObject({ ok: true, added: ['[specialists.books]'] })
+    // The old `listens` is added as the rule it means: hydra.toml never gets `listens`.
+    expect(r).toMatchObject({ ok: true, added: ['[specialists.books]', '[[rules]] place = "slack:dm", target = "specialist:books"'] })
     const text = file()
+    expect(text).not.toContain('listens')
+    expect(text.slice(text.indexOf('[[rules]]'))).toBe('[[rules]]\nplace = "slack:dm"\ntarget = "specialist:books"\n')
+    expect(placesAnsweredBy(loaded(), 'books')).toEqual(['slack:dm'])
     expect(text).toContain('kickoff = "Keep the books."')
     expect(text).toContain('max_sessions = 3')
     expect(text).toContain('renamed_from = ["ledger"]')

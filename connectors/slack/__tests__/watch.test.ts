@@ -8,7 +8,7 @@ import {
   type SlackWatchConfig, type SlackMessageEvent, type DeliverResult, type Item, type SlackWatchDeps, type SlackActions, type SlackFile,
 } from '../watch.js'
 import type { GuardInput, GuardVerdict } from '../../../routing/guard.js'
-import { BASE, BOT, oneListener, view, directory, TWO_APPS, type ViewOver } from './slack-config.js'
+import { BASE, BOT, firstRules, oneListener, view, directory, TWO_APPS, type ViewOver } from './slack-config.js'
 
 const CH = 'C0FOOD'
 const cfg = (over: ViewOver = {}): SlackWatchConfig => view(oneListener(CH), over)
@@ -124,17 +124,8 @@ describe('what opens and continues a conversation', () => {
   })
 
   test('messages = "all": each chatter message is its own conversation, bound by its sender: no one captures the place, and a reply under it follows its binding', async () => {
-    const toml = oneListener(CH, 'food', '["anyone"]', `[places."slack:${CH}"]\nmessages = "all"\n`) + `
-[people.olive]
-addresses = ["slack:UOLIVE"]
-[specialists.finance]
-workdir = "/w/finance"
-allow = ["people"]
-[[rules]]
-place = "slack:${CH}"
-person = "olive"
-target = "specialist:finance"
-`
+    const toml = firstRules(oneListener(CH, 'food', '["anyone"]', `[places."slack:${CH}"]\nmessages = "all"\n`) + `
+[people.olive]\naddresses = ["slack:UOLIVE"]\n[specialists.finance]\nworkdir = "/w/finance"\nallow = ["people"]\n`, `[[rules]]\nplace = "slack:${CH}"\nperson = "olive"\ntarget = "specialist:finance"\n`)
     const { w, sent } = setup({ toml })
     w.handle(ev({ ts: '1.000001', user: 'UOLIVE', text: 'books question' }))
     await w.flush()
@@ -788,12 +779,16 @@ describe('no silent drops', () => {
     const toml = `${BASE}
 [specialists.food]
 workdir = "/w/food"
-listens = ["slack:${CH}"]
 allow = ["anyone"]
+[[rules]]
+place = "slack:${CH}"
+target = "specialist:food"
 [specialists.ops]
 workdir = "/w/ops"
-listens = ["slack:C0OPS"]
 allow = ["anyone"]
+[[rules]]
+place = "slack:C0OPS"
+target = "specialist:ops"
 `
     const s = setup({ toml, maxWatches: 1 })
     s.w.handle(ev({ ts: '1.000001', text: mention }))
@@ -826,17 +821,24 @@ addresses = ["slack:UOWNER"]
 roles = ["owner"]
 [specialists.food]
 workdir = "/w/food"
-listens = ["slack:${CH}"]
 allow = ["anyone"]
+[[rules]]
+place = "slack:${CH}"
+target = "specialist:food"
 [specialists.ops]
 workdir = "/w/ops"
-listens = ["slack:${opsListens}"]
 allow = ["owner"]
+[[rules]]
+place = "slack:${opsListens}"
+target = "specialist:ops"
 [specialists.integrator]
 workdir = "/w/integrator"
-listens = ["slack:C0INT"]
 allow = ["owner"]
-${extra}`
+${extra}
+[[rules]]
+place = "slack:C0INT"
+target = "specialist:integrator"
+`
 
   test("each channel's messages go to its listener, gated by that specialist's allow", async () => {
     const s = setup({ toml: TWO() })
@@ -856,7 +858,7 @@ ${extra}`
     await s.w.flush()
     expect(s.w.owedHints()).toHaveLength(1)
     // CH2 moves to integrator: the conversation already open stays with ops
-    s.setConfig(cfg({ toml: TWO('C0NEWOPS', '').replace('listens = ["slack:C0INT"]', `listens = ["slack:${CH2}"]`) }))
+    s.setConfig(cfg({ toml: TWO('C0NEWOPS', '').replace('place = "slack:C0INT"', `place = "slack:${CH2}"`) }))
     up = true
     s.w.handle(ev({ channel: CH2, ts: '10.000001', user: 'UOWNER', text: mention })) // the catch-up replay of what is owed
     s.w.handle(ev({ channel: CH2, ts: '20.000001', user: 'UOWNER', text: mention })) // a new conversation
@@ -869,7 +871,7 @@ ${extra}`
     const s = setup({ toml: TWO() }, () => ({ ok: false, error: 'down' }))
     s.w.handle(ev({ channel: CH2, ts: '10.000001', user: 'UOWNER', text: mention }))
     await s.w.flush()
-    const noOps = TWO().replace(/\[specialists\.ops\][^]*?(?=\[specialists\.integrator\])/, '').replace('listens = ["slack:C0INT"]', `listens = ["slack:${CH2}"]`)
+    const noOps = TWO().replace(/\[specialists\.ops\][^]*?(?=\[specialists\.integrator\])/, '').replace('place = "slack:C0INT"', `place = "slack:${CH2}"`)
     s.setConfig(cfg({ toml: noOps }))
     s.w.handle(ev({ channel: CH2, ts: '11.000001', threadTs: '10.000001', user: 'UOWNER', text: 'still there?' }))
     expect(s.w.get(CH2, '10.000001')!.specialist).toBe('integrator')
@@ -901,15 +903,7 @@ ${extra}`
   })
 
   test("routed anew as its sender: a person's rule moved elsewhere takes the owed message there on replay, not a drop", async () => {
-    const toml = (to: string) => `${TWO()}
-[specialists.books]
-workdir = "/w/books"
-allow = ["owner"]
-[[rules]]
-place = "slack:${CH2}"
-person = "olive"
-target = "specialist:${to}"
-`
+    const toml = (to: string) => firstRules(`${TWO()}\n[specialists.books]\nworkdir = "/w/books"\nallow = ["owner"]\n`, `[[rules]]\nplace = "slack:${CH2}"\nperson = "olive"\ntarget = "specialist:${to}"\n`)
     const s = setup({ toml: toml('integrator') }, to => to === 'books' ? { ok: true } : { ok: false, error: 'busy' })
     const T = `${Math.floor(s.now() / 1000)}.000001`
     s.w.handle(ev({ channel: CH2, ts: T, user: 'UOWNER', text: mention }))
@@ -928,8 +922,10 @@ target = "specialist:${to}"
     const DMS = `${BASE}
 [specialists.assistant]
 workdir = "/w/a"
-listens = ["slack:dm"]
 allow = []
+[[rules]]
+place = "slack:dm"
+target = "specialist:assistant"
 `
     const s = setup({ toml: DMS, coalesceMs: 60_000 })
     s.w.handle(ev({ channel: 'D0OP', ts: `${Math.floor(s.now() / 1000)}.000001`, user: 'UOP', text: 'hi' }))
@@ -947,8 +943,10 @@ allow = []
     const DMS = `${BASE.replace('addresses = ["slack:UOP"]', 'addresses = ["discord:1"]')}
 [specialists.assistant]
 workdir = "/w/a"
-listens = ["slack:dm"]
 allow = ["anyone"]
+[[rules]]
+place = "slack:dm"
+target = "specialist:assistant"
 `
     const s = setup({ toml: DMS }, () => ({ ok: false, error: 'busy' }))
     s.w.handle(ev({ channel: 'D0ALICE', ts: `${Math.floor(s.now() / 1000)}.000001`, text: 'hi' }))
@@ -960,11 +958,13 @@ allow = ["anyone"]
     expect(s.w.stats().dropped).toEqual({ unrouted: 1 })
   })
 
+  // ops is renamed desk: its rule follows it, and `renamed_from` keeps its conversations.
+  const renamedOps = () => TWO().replace('[specialists.ops]', '[specialists.desk]\nrenamed_from = ["ops"]').replace('target = "specialist:ops"', 'target = "specialist:desk"')
   test('a rename through `renamed_from` rewrites the binding to the current id', async () => {
     const s = setup({ toml: TWO() })
     s.w.handle(ev({ channel: CH2, ts: '10.000001', user: 'UOWNER', text: mention }))
     await s.w.flush()
-    s.setConfig(cfg({ toml: TWO().replace('[specialists.ops]', '[specialists.desk]\nrenamed_from = ["ops"]') }))
+    s.setConfig(cfg({ toml: renamedOps() }))
     s.w.handle(ev({ channel: CH2, ts: '11.000001', threadTs: '10.000001', user: 'UOWNER', text: 'again' }))
     expect(s.w.get(CH2, '10.000001')!.specialist).toBe('desk')
   })
@@ -973,14 +973,14 @@ allow = ["anyone"]
     const s = setup({ toml: TWO() })
     s.w.handle(ev({ channel: CH2, ts: '10.000001', user: 'UOWNER', text: mention }))
     await s.w.flush()
-    s.setConfig(cfg({ toml: TWO().replace('[specialists.ops]', '[specialists.desk]\nrenamed_from = ["ops"]') }))
+    s.setConfig(cfg({ toml: renamedOps() }))
     s.w.handle(ev({ channel: CH2, ts: '11.000001', threadTs: '10.000001', user: 'UOWNER', text: 'again' }))
     await s.w.flush()
     expect(s.sent.map(x => x.specialist)).toEqual(['ops', 'desk'])
   })
 
-  test('a rule at the place outranks the listener, for the person or role it names', async () => {
-    const s = setup({ toml: TWO(CH2, `[[rules]]\nplace = "slack:${CH2}"\nperson = "olive"\ntarget = "specialist:integrator"\n`) })
+  test('a rule for a person at the place outranks the rule for everyone there, for the person or role it names', async () => {
+    const s = setup({ toml: firstRules(TWO(), `[[rules]]\nplace = "slack:${CH2}"\nperson = "olive"\ntarget = "specialist:integrator"\n`) })
     s.w.handle(ev({ channel: CH2, ts: '1.000001', user: 'UOWNER', text: mention }))
     s.w.handle(ev({ channel: CH2, ts: '2.000001', user: 'UOP', text: mention }))
     await s.w.flush()
@@ -1003,7 +1003,7 @@ allow = ["anyone"]
     s.w.handle(ev({ ts: '1000.000001', text: mention }))
     for (let i = 0; i < 8; i++) s.w.handle(ev({ ts: `${1001 + i}.000001`, threadTs: '1000.000001', text: 'z'.repeat(ITEM_TEXT_MAX_CHARS) }))
     const orig = s.sent.push.bind(s.sent)
-    s.sent.push = (...xs) => { s.setConfig(cfg({ toml: TWO().replace(`listens = ["slack:${CH}"]`, 'listens = ["slack:C0X"]') })); return orig(...xs) }
+    s.sent.push = (...xs) => { s.setConfig(cfg({ toml: TWO().replace(`place = "slack:${CH}"`, 'place = "slack:C0X"') })); return orig(...xs) }
     await s.w.flush()
     expect(s.sent.length).toBeGreaterThan(1)
     expect(new Set(s.sent.map(x => x.specialist))).toEqual(new Set(['food']))
@@ -1063,12 +1063,16 @@ describe('the guard', () => {
   const GUARDED = (extra = '', allow = '["anyone"]') => oneListener(CH, 'ops', allow, `[guard]\ncommand = "guard"\n${extra}`) + `
 [specialists.billing]
 workdir = "/w/billing"
-listens = ["slack:C0BILLING"]
 allow = ["anyone"]
+[[rules]]
+place = "slack:C0BILLING"
+target = "specialist:billing"
 [specialists.finance]
 workdir = "/w/finance"
-listens = ["slack:C0FIN"]
 allow = ["finance"]
+[[rules]]
+place = "slack:C0FIN"
+target = "specialist:finance"
 [people.alice]
 addresses = ["slack:UALICE"]
 name = "Alice"
@@ -1323,13 +1327,17 @@ name = "Alice"
 roles = ["owner"]
 [specialists.food]
 workdir = "/w/food"
-listens = ["slack:${CH}"]
 allow = ["anyone"]
+[[rules]]
+place = "slack:${CH}"
+target = "specialist:food"
 [specialists.assistant]
 workdir = "/w/assistant"
-listens = ["slack:dm"]
 allow = ["owner"]
 ${dmExtra}
+[[rules]]
+place = "slack:dm"
+target = "specialist:assistant"
 [places."slack:${CH}"]
 ${place}
 `
@@ -1565,7 +1573,7 @@ ${place}
 
 describe('alert episodes are per app', () => {
   // Two apps and one unpinned specialist both can deliver to: the same recipient, the same kind of trouble, through each app.
-  const toml = `${TWO_APPS}\n[specialists.crm]\nworkdir = "/w/crm"\nlistens = ["slack:${CH}"]\nallow = ["anyone"]\n`
+  const toml = `${TWO_APPS}\n[specialists.crm]\nworkdir = "/w/crm"\nallow = ["anyone"]\n[[rules]]\nplace = "slack:${CH}"\ntarget = "specialist:crm"\n`
   test('a catch-up gap through one app does not silence the same gap through the other, and each is said once; the app rides with the alert', () => {
     const s = setup({ toml })
     const apps: (string | undefined)[] = []
@@ -1595,7 +1603,7 @@ describe('alert episodes are per app', () => {
 
 describe('what an app hears of DMs and channels is its own', () => {
   test('hearsDms for an app counts only a specialist or rule that app can deliver to; the operator’s DM counts for every app', () => {
-    const toml = `operator = "op"\n[slack.apps.default]\nbot_token_env = "A_BOT"\n[slack.apps.sales]\nbot_token_env = "S_BOT"\n[people.op]\naddresses = ["github:op"]\n[specialists.deals]\nworkdir = "/w/d"\npinned_to = ["sales"]\nlistens = ["slack:dm"]\nallow = ["anyone"]\n`
+    const toml = `operator = "op"\n[slack.apps.default]\nbot_token_env = "A_BOT"\n[slack.apps.sales]\nbot_token_env = "S_BOT"\n[people.op]\naddresses = ["github:op"]\n[specialists.deals]\nworkdir = "/w/d"\npinned_to = ["sales"]\nallow = ["anyone"]\n[[rules]]\nplace = "slack:dm"\ntarget = "specialist:deals"\n`
     expect(hearsDms(view(toml, { app: 'sales' }))).toBe(true)
     expect(hearsDms(view(toml, { app: 'default' }))).toBe(false)
     expect(hearsDms(view(toml.replace('addresses = ["github:op"]', 'addresses = ["slack:UOP"]'), { app: 'default' }))).toBe(true)
@@ -1608,10 +1616,10 @@ describe("the operator's token: broad subscription is not broad delivery", () =>
   const USER_TOKEN = (toml: string) => toml.replace('socket_token_env = "SLOPBOT_SLACK_APP_TOKEN"', 'socket_token_env = "SLOPBOT_SLACK_APP_TOKEN"\noperator_token_env = "HYDRA_SLACK_USER_TOKEN"')
   const PEOPLE = '[people.alice]\naddresses = ["slack:UALICE"]\nname = "Alice"\n[people.bob]\naddresses = ["slack:UBOB"]\nname = "Bob"\n'
   const DESK = '[specialists.desk]\nworkdir = "/w/desk"\nallow = ["anyone"]\n'
-  const ASSISTANT = '[specialists.assistant]\nworkdir = "/w/a"\nlistens = ["slack:dm"]\nallow = ["anyone"]\n'
+  const ASSISTANT = '[specialists.assistant]\nworkdir = "/w/a"\nallow = ["anyone"]\n[[rules]]\nplace = "slack:dm"\ntarget = "specialist:assistant"\n'
   const ALICE_DM = 'D0ALICE01', BOB_DM = 'D0BOB0001', BOT_DM = 'D0BOT0001', STRANGER_DM = 'D0STRNG01', GROUP = 'G0GROUP01'
   const DMS = { [ALICE_DM]: 'UALICE', [BOB_DM]: 'UBOB', [BOT_DM]: 'bot', [STRANGER_DM]: 'UNOBODY' }
-  const conf = (extra: string) => ({ toml: USER_TOKEN(oneListener(CH, 'helper', '["anyone"]', `${PEOPLE}${DESK}${ASSISTANT}${extra}`)), dms: DMS, groupDms: [GROUP] })
+  const conf = (extra: string) => ({ toml: USER_TOKEN(oneListener(CH, 'helper', '["anyone"]', `${PEOPLE}${DESK}${extra}${ASSISTANT}`)), dms: DMS, groupDms: [GROUP] })
   const dm = (over: Partial<SlackMessageEvent>) => ev({ channel: ALICE_DM, ...over })
   const group = (over: Partial<SlackMessageEvent>) => ev({ channel: GROUP, ...over })
 
@@ -1688,7 +1696,7 @@ describe("the operator's token: broad subscription is not broad delivery", () =>
   })
 
   test('a specialist listening on slack:dm hears the bot\'s DMs, not a DM with alice; slack:dm:alice hears hers, and only hers', async () => {
-    const s = setup(conf('[specialists.alices]\nworkdir = "/w/alices"\nlistens = ["slack:dm:alice"]\nallow = ["anyone"]\n'))
+    const s = setup(conf('[specialists.alices]\nworkdir = "/w/alices"\nallow = ["anyone"]\n[[rules]]\nplace = "slack:dm:alice"\ntarget = "specialist:alices"\n'))
     expect(s.w.handle(dm({ ts: '1.000001', text: 'alice in her DM with the operator' }))).toBe('dm')
     expect(s.w.handle(ev({ channel: BOB_DM, ts: '2.000001', user: 'UBOB', text: 'bob in his DM with the operator' }))).toBe('ignored')
     expect(s.w.handle(ev({ channel: BOT_DM, ts: '3.000001', user: 'UBOB', text: 'bob DMs the bot' }))).toBe('dm')

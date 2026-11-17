@@ -1,4 +1,4 @@
-// `hydra config add <fragment.toml> [--dry-run]`: add an outside repo's [specialists.*] and [schedules.*] to hydra.toml (config/add.ts).
+// `hydra config add <fragment.toml> [--dry-run]`: add an outside repo's [specialists.*], [schedules.*] and [[rules]] to hydra.toml (config/add.ts).
 
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
@@ -11,7 +11,7 @@ export function configAddCommand(args: string[], stateDirOpt: string | undefined
   const files = args.filter(a => a !== '--dry-run')
   if (files.length !== 1 || files[0].startsWith('-')) {
     console.error('usage: hydra [--state-dir <dir>] config add <fragment.toml> [--dry-run]')
-    console.error('  the fragment holds [specialists.<id>] and [schedules.<id>] tables, as in hydra.example.toml')
+    console.error('  the fragment holds [specialists.<id>] and [schedules.<id>] tables and [[rules]] entries, as in hydra.example.toml')
     return 1
   }
   const file = resolve(files[0])
