@@ -1,0 +1,37 @@
+2026-11-16T03:53:27.100Z [DEBUG] --mcp-config provenance: undeclared
+2026-11-16T03:53:27.200Z [DEBUG] Applying permission update: Adding 2 allow rule(s) to destination 'flagSettings': ["mcp__plugin_discord_discord__*","mcp__stub__search_logs"]
+2026-11-16T03:53:27.201Z [DEBUG] [claudeai-mcp] Disabled via env var
+2026-11-16T03:53:27.300Z [DEBUG] Loaded inline plugin from path: hydra
+2026-11-16T03:53:27.391Z [DEBUG] Found 9 plugins (8 enabled, 1 disabled)
+2026-11-16T03:53:27.487Z [DEBUG] Checking plugin cc-plugin-sec-default: skillsPath=none, skillsPaths=0 paths
+2026-11-16T03:53:27.487Z [DEBUG] Checking plugin cc-plugin-agents-md: skillsPath=none, skillsPaths=0 paths
+2026-11-16T03:53:27.487Z [DEBUG] Checking plugin cc-plugin-telemetry: skillsPath=none, skillsPaths=0 paths
+2026-11-16T03:53:27.498Z [DEBUG] Checking plugin cc-plugin-privacy: skillsPath=none, skillsPaths=0 paths
+2026-11-16T03:53:27.498Z [DEBUG] Checking plugin cc-plugin-plugin-authoring: skillsPath=none, skillsPaths=0 paths
+2026-11-16T03:53:27.498Z [DEBUG] Checking plugin cc-plugin-diff: skillsPath=none, skillsPaths=0 paths
+2026-11-16T03:53:28.482Z [DEBUG] plugin.register: cc-plugin-sec-default (prepend, cc-plugin-sec-default@builtin), judged by core alone: admitted
+2026-11-16T03:53:28.482Z [DEBUG] plugin.register: cc-plugin-agents-md (builtin, cc-plugin-agents-md@builtin), judged by core alone: admitted
+2026-11-16T03:53:28.482Z [DEBUG] plugin.register: cc-plugin-telemetry (builtin, cc-plugin-telemetry@builtin), judged by core alone: admitted
+2026-11-16T03:53:28.483Z [DEBUG] plugin.register: cc-plugin-plugin-authoring (builtin, cc-plugin-plugin-authoring@builtin), judged by core alone: admitted
+2026-11-16T03:53:28.483Z [DEBUG] plugin.register: cc-plugin-diff (builtin, cc-plugin-diff@builtin), judged by core alone: admitted
+2026-11-16T03:53:28.483Z [DEBUG] plugin.register: cc-plugin-privacy (builtin, cc-plugin-privacy@builtin), judged by core alone: admitted
+2026-11-16T03:53:28.484Z [DEBUG] plugin.register: hydra (user, hydra@inline), judged by cc-plugin-sec-default: admitted
+2026-11-16T03:53:29.741Z [DEBUG] plugin.register: discord (user, discord@claude-plugins-official), judged by cc-plugin-sec-default: admitted
+2026-11-16T03:53:30.142Z [DEBUG] Checking plugin hydra: skillsPath=exists, skillsPaths=0 paths
+2026-11-16T03:53:30.142Z [DEBUG] Checking plugin discord: skillsPath=exists, skillsPaths=0 paths
+2026-11-16T03:53:30.143Z [DEBUG] Checking plugin cc-plugin-sec-default: skillsPath=none, skillsPaths=0 paths
+2026-11-16T03:53:30.143Z [DEBUG] Checking plugin cc-plugin-agents-md: skillsPath=none, skillsPaths=0 paths
+2026-11-16T03:53:30.143Z [DEBUG] Checking plugin cc-plugin-telemetry: skillsPath=none, skillsPaths=0 paths
+2026-11-16T03:53:30.143Z [DEBUG] Checking plugin cc-plugin-privacy: skillsPath=none, skillsPaths=0 paths
+2026-11-16T03:53:30.143Z [DEBUG] Checking plugin cc-plugin-plugin-authoring: skillsPath=none, skillsPaths=0 paths
+2026-11-16T03:53:30.143Z [DEBUG] Checking plugin cc-plugin-diff: skillsPath=none, skillsPaths=0 paths
+2026-11-16T03:53:30.200Z [DEBUG] MCP server "stub": Starting connection with timeout of 30000ms
+2026-11-16T03:53:30.210Z [DEBUG] MCP server "plugin:discord:discord": Starting connection with timeout of 30000ms
+2026-11-16T03:53:30.300Z [DEBUG] Replacing all allow rules for destination 'userSettings' with 0 rule(s): []
+2026-11-16T03:53:30.300Z [DEBUG] Replacing all allow rules for destination 'projectSettings' with 0 rule(s): []
+2026-11-16T03:53:30.300Z [DEBUG] Replacing all allow rules for destination 'localSettings' with 0 rule(s): []
+2026-11-16T03:53:30.300Z [DEBUG] Replacing all allow rules for destination 'flagSettings' with 0 rule(s): []
+2026-11-16T03:53:30.300Z [DEBUG] Replacing all allow rules for destination 'policySettings' with 0 rule(s): []
+2026-11-16T03:53:30.300Z [DEBUG] Replacing all allow rules for destination 'flagSettings' with 2 rule(s): ["mcp__plugin_discord_discord__*","mcp__stub__search_logs"]
+2026-11-16T03:53:31.600Z [DEBUG] MCP server "stub": Successfully connected (transport: stdio) in 456ms
+2026-11-16T03:53:32.089Z [DEBUG] MCP server "plugin:discord:discord": Successfully connected (transport: stdio) in 421ms
