@@ -1,4 +1,5 @@
 import { describe, test, expect, afterEach } from 'bun:test'
+import { placeKey } from '../../../config/types.js'
 import { mkdtempSync, rmSync, writeFileSync, utimesSync, readFileSync, mkdirSync, statSync, existsSync, chmodSync } from 'fs'
 import { tmpdir } from 'os'
 import { join, dirname } from 'path'
@@ -404,18 +405,18 @@ describe('what opens and continues a conversation', () => {
 })
 
 describe('places', () => {
-  test('a channel goes by its id, then its name; every DM is slack:dm', () => {
+  test('a channel goes by its id, then its name; a DM with the bot is slack:app-dm:<app>', () => {
     const c = cfg({ names: { C0FOOD: 'food' } })
-    expect(placesOf(c, 'C0FOOD')).toEqual(['slack:C0FOOD', 'slack:#food'])
-    expect(placesOf(c, 'C0ELSE')).toEqual(['slack:C0ELSE'])
-    expect(placesOf(c, 'D0ABC')).toEqual(['slack:dm'])
+    expect(placesOf(c, 'C0FOOD').map(placeKey)).toEqual(['slack:C0FOOD', 'slack:#food'])
+    expect(placesOf(c, 'C0ELSE').map(placeKey)).toEqual(['slack:C0ELSE'])
+    expect(placesOf(c, 'D0ABC').map(placeKey)).toEqual(['slack:app-dm:default'])
   })
 
   test('a listener named by #name hears the channel once names are read; until then it is unresolved', async () => {
     const toml = oneListener('#food')
     const before = cfg({ toml })
     expect(routedChannels(before)).toEqual([])
-    expect(unresolvedPlaces(before)).toEqual(['slack:#food'])
+    expect(unresolvedPlaces(before).map(placeKey)).toEqual(['slack:#food'])
     const s = setup({ toml, names: { C0FOOD: 'food' } })
     expect(routedChannels(cfg({ toml, names: { C0FOOD: 'food' } }))).toEqual(['C0FOOD'])
     expect(s.w.handle(ev({ ts: '1.000001', text: mention }))).toBe('mention')
@@ -423,7 +424,7 @@ describe('places', () => {
     expect(s.sent[0].msg).toContain('place="slack:#food"')
   })
 
-  test('DMs are heard when something listens on slack:dm, or the operator has a Slack address', () => {
+  test('DMs are heard when something listens on slack:app-dm:*, or the operator has a Slack address', () => {
     expect(hearsDms(cfg())).toBe(true) // the operator, slack:UOP
     expect(hearsDms(cfg({ toml: oneListener(CH).replace('addresses = ["slack:UOP"]', 'addresses = ["discord:1"]') }))).toBe(false)
   })
@@ -1162,7 +1163,7 @@ target = "specialist:integrator"
 workdir = "/w/a"
 reachable_by = []
 [[rules]]
-place = "slack:dm"
+place = "slack:app-dm:*"
 target = "specialist:assistant"
 `
     const s = setup({ toml: DMS, coalesceMs: 60_000 })
@@ -1183,7 +1184,7 @@ target = "specialist:assistant"
 workdir = "/w/a"
 reachable_by = ["role:anyone"]
 [[rules]]
-place = "slack:dm"
+place = "slack:app-dm:*"
 target = "specialist:assistant"
 `
     const s = setup({ toml: DMS }, () => ({ ok: false, error: 'busy' }))
@@ -1574,7 +1575,7 @@ workdir = "/w/assistant"
 reachable_by = ["role:owner"]
 ${dmExtra}
 [[rules]]
-place = "slack:dm"
+place = "slack:app-dm:*"
 target = "specialist:assistant"
 [places."slack:${CH}"]
 ${place}
@@ -1589,7 +1590,7 @@ ${place}
   }
   const file = (over: Partial<SlackFile> = {}) => ({ id: 'F01', name: 'invoice.pdf', size: 2048, url: 'https://files.slack.com/F01/invoice.pdf', ...over })
 
-  test("a DM reaches the slack:dm listener with no tag; top-level DMs are one conversation, a thread in a DM its own; strangers are refused with 🚫; the bot's own DMs are not echoed", async () => {
+  test("a DM reaches the slack:app-dm:* listener with no tag; top-level DMs are one conversation, a thread in a DM its own; strangers are refused with 🚫; the bot's own DMs are not echoed", async () => {
     const { a, reactions } = actions()
     const s = setup({ toml: PLACES() })
     s.w.setSlackActions(a)
@@ -1600,13 +1601,13 @@ ${place}
     await s.w.flush()
     expect(s.w.list().map(e => `${e.channel}:${e.threadTs}`).sort()).toEqual([`${DM}:0.000000`, `${DM}:1.000001`])
     expect(s.sent.map(x => x.specialist)).toEqual(['assistant', 'assistant'])
-    expect(s.sent[0].msg).toContain(`place="slack:dm" conversation="slack:${DM}" link="https://x.slack.com/archives/${DM}"`)
+    expect(s.sent[0].msg).toContain(`place="slack:app-dm:default" conversation="slack:${DM}" link="https://x.slack.com/archives/${DM}"`)
     expect(s.sent[0].msg).toContain('[dm ts="1.000001" person="alice" roles="owner,people,anyone" operator=false address="slack:UALICE" name="Alice"]')
     expect(s.sent[1].msg).toContain(`conversation="slack:${DM}:1.000001"`)
     expect(reactions).toEqual([`D0BOB0001:3.000001:${REFUSED_REACTION}`])
   })
 
-  test("the operator's DM goes to main when nothing listens on slack:dm; anyone else's is unrouted", async () => {
+  test("the operator's DM goes to main when nothing listens on slack:app-dm:*; anyone else's is unrouted", async () => {
     const s = setup()
     expect(s.w.handle(ev({ channel: 'D0OP', ts: '1.000001', user: 'UOP', text: 'hi' }))).toBe('dm')
     expect(s.w.handle(ev({ channel: DM, ts: '2.000001', user: 'UALICE', text: 'hi' }))).toBe('unrouted')
@@ -1626,7 +1627,7 @@ ${place}
 
   test("an unrouted DM is logged and counted, with no 🚫 and no reply; a refused DM keeps its 🚫; the operator's DM with the bot goes to main", async () => {
     const { a, reactions } = actions()
-    const none = setup()   // nothing listens on slack:dm
+    const none = setup()   // nothing listens on slack:app-dm:*
     none.w.setSlackActions(a)
     expect(none.w.handle(ev({ channel: 'D0STRNG01', ts: '1.000001', user: 'USTRANGER', text: 'hello?' }))).toBe('unrouted')
     expect(none.w.handle(ev({ channel: 'D0OP0001', ts: '2.000001', user: 'UOP', text: 'hi' }))).toBe('dm')
@@ -1636,7 +1637,7 @@ ${place}
     expect(none.sent.map(x => x.specialist)).toEqual(['main'])
     expect(none.w.stats()).toMatchObject({ unrouted: 1, refused: 0 })
     expect(none.logs.join()).toContain('unrouted USTRANGER')
-    const routed = setup({ toml: PLACES() })   // assistant listens on slack:dm, reachable_by = ["role:owner"]
+    const routed = setup({ toml: PLACES() })   // assistant listens on slack:app-dm:*, reachable_by = ["role:owner"]
     routed.w.setSlackActions(a)
     expect(routed.w.handle(ev({ channel: 'D0STRNG01', ts: '3.000001', user: 'USTRANGER', text: 'hello?' }))).toBe('refused')
     await Bun.sleep(1)
@@ -1662,12 +1663,12 @@ ${place}
     expect(s.w.dmChannels()).toEqual([])
   })
 
-  test('guard stdin for a DM: the DM conversation and slack:dm', async () => {
+  test('guard stdin for a DM: the DM conversation and slack:app-dm:*', async () => {
     const inputs: GuardInput[] = []
     const s = setup({ toml: PLACES('', '[guard]\ncommand = "g"\n') }, undefined, undefined, async (_g, i) => { inputs.push(i); return { verdict: 'deliver' } })
     s.w.handle(ev({ channel: DM, ts: '1.000001', text: 'hi' }))
     await s.w.flush()
-    expect(inputs[0]).toMatchObject({ place: 'slack:dm', conversation: `slack:${DM}`, target: 'specialist:assistant' })
+    expect(inputs[0]).toMatchObject({ place: 'slack:app-dm:default', conversation: `slack:${DM}`, target: 'specialist:assistant' })
   })
 
   test('a file Slack gives no download link for is still listed, with why', async () => {
@@ -1841,7 +1842,7 @@ describe('alert episodes are per app', () => {
 
 describe('what an app hears of DMs and channels is its own', () => {
   test('hearsDms for an app counts only a specialist or rule that app can deliver to; the operator’s DM counts for every app', () => {
-    const toml = `operator = "op"\n[slack.apps.default]\nbot_token_env = "A_BOT"\n[slack.apps.sales]\nbot_token_env = "S_BOT"\n[people.op]\naddresses = ["github:op"]\n[specialists.deals]\nworkdir = "/w/d"\npinned_to = ["app:sales"]\nreachable_by = ["role:anyone"]\n[[rules]]\nplace = "slack:dm"\ntarget = "specialist:deals"\n`
+    const toml = `operator = "op"\n[slack.apps.default]\nbot_token_env = "A_BOT"\n[slack.apps.sales]\nbot_token_env = "S_BOT"\n[people.op]\naddresses = ["github:op"]\n[specialists.deals]\nworkdir = "/w/d"\npinned_to = ["app:sales"]\nreachable_by = ["role:anyone"]\n[[rules]]\nplace = "slack:app-dm:*"\ntarget = "specialist:deals"\n`
     expect(hearsDms(view(toml, { app: 'sales' }))).toBe(true)
     expect(hearsDms(view(toml, { app: 'default' }))).toBe(false)
     expect(hearsDms(view(toml.replace('addresses = ["github:op"]', 'addresses = ["slack:UOP"]'), { app: 'default' }))).toBe(true)
@@ -1854,7 +1855,7 @@ describe("the operator's token: broad subscription is not broad delivery", () =>
   const USER_TOKEN = (toml: string) => toml.replace('socket_token_env = "SLOPBOT_SLACK_APP_TOKEN"', 'socket_token_env = "SLOPBOT_SLACK_APP_TOKEN"\noperator_token_env = "HYDRA_SLACK_USER_TOKEN"')
   const PEOPLE = '[people.alice]\naddresses = ["slack:UALICE"]\nname = "Alice"\n[people.bob]\naddresses = ["slack:UBOB"]\nname = "Bob"\n'
   const DESK = '[specialists.desk]\nworkdir = "/w/desk"\nreachable_by = ["role:anyone"]\n'
-  const ASSISTANT = '[specialists.assistant]\nworkdir = "/w/a"\nreachable_by = ["role:anyone"]\n[[rules]]\nplace = "slack:dm"\ntarget = "specialist:assistant"\n'
+  const ASSISTANT = '[specialists.assistant]\nworkdir = "/w/a"\nreachable_by = ["role:anyone"]\n[[rules]]\nplace = "slack:app-dm:*"\ntarget = "specialist:assistant"\n'
   const ALICE_DM = 'D0ALICE01', BOB_DM = 'D0BOB0001', BOT_DM = 'D0BOT0001', STRANGER_DM = 'D0STRNG01', GROUP = 'G0GROUP01'
   const DMS = { [ALICE_DM]: 'UALICE', [BOB_DM]: 'UBOB', [BOT_DM]: 'bot', [STRANGER_DM]: 'UNOBODY' }
   const conf = (extra: string) => ({ toml: USER_TOKEN(oneListener(CH, 'helper', '["role:anyone"]', `${PEOPLE}${DESK}${extra}${ASSISTANT}`)), dms: DMS, groupDms: [GROUP] })
@@ -1863,7 +1864,7 @@ describe("the operator's token: broad subscription is not broad delivery", () =>
 
   test('an unsubscribed DM with a person, group DM and channel message each leave no entry, reaction, count, alert or file', async () => {
     const { a, reactions } = actions()
-    // Something listens on slack:dm and a channel; nothing names alice's DM, bob's, the group DM or C0ELSE.
+    // Something listens on slack:app-dm:* and a channel; nothing names alice's DM, bob's, the group DM or C0ELSE.
     const s = setup(conf(''))
     s.w.setSlackActions(a)
     expect(s.w.handle(dm({ ts: '1.000001', text: 'lunch?' }))).toBe('ignored')
@@ -1885,7 +1886,7 @@ describe("the operator's token: broad subscription is not broad delivery", () =>
 
   test('a DM with a person, or a group DM, that a place names but no rule is for is logged and counted, with no 🚫; an unnamed one is dropped first', async () => {
     const { a, reactions } = actions()
-    const s = setup(conf('[[rules]]\nplace = "slack:dm:alice"\nperson = "person:bob"\ntarget = "specialist:desk"\n'))   // a rule for the place, for someone else
+    const s = setup(conf('[[rules]]\nplace = "slack:person-dm:alice"\nperson = "person:bob"\ntarget = "specialist:desk"\n'))   // a rule for the place, for someone else
     s.w.setSlackActions(a)
     expect(s.w.handle(dm({ ts: '2.000001', text: 'alice, whom no rule is for' }))).toBe('unrouted')
     expect(s.w.handle(group({ ts: '3.000001', text: 'group, named nowhere' }))).toBe('ignored')   // an unnamed place is dropped before anything is counted
@@ -1896,7 +1897,7 @@ describe("the operator's token: broad subscription is not broad delivery", () =>
     expect(s.logs.join()).toContain('unrouted UALICE')
     expect(s.logs.join()).not.toContain('whom no rule')
     // Refused: a rule routes the place, and `allow` does not admit alice.
-    const strict = setup(conf('[specialists.strict]\nworkdir = "/w/strict"\nreachable_by = []\n[[rules]]\nplace = "slack:dm:alice"\ntarget = "specialist:strict"\n'))
+    const strict = setup(conf('[specialists.strict]\nworkdir = "/w/strict"\nreachable_by = []\n[[rules]]\nplace = "slack:person-dm:alice"\ntarget = "specialist:strict"\n'))
     strict.w.setSlackActions(a)
     expect(strict.w.handle(dm({ ts: '4.000001', text: 'alice, refused' }))).toBe('refused')
     await Bun.sleep(1)
@@ -1929,24 +1930,24 @@ describe("the operator's token: broad subscription is not broad delivery", () =>
     expect(s.w.handle(dm({ ts: '2.000001', user: 'UOP', text: 'hi alice' }))).toBe('ignored')
     expect(s.w.handle(group({ ts: '3.000001', user: 'UOP', text: 'hi all' }))).toBe('ignored')
     await s.w.flush()
-    expect(s.sent.map(x => `${x.specialist}:${x.msg.includes('place="slack:dm"')}`)).toEqual(['main:true'])
+    expect(s.sent.map(x => `${x.specialist}:${x.msg.includes('place="slack:app-dm:default"')}`)).toEqual(['main:true'])
     expect(s.w.list().map(e => e.channel)).toEqual([BOT_DM])
   })
 
-  test('a specialist listening on slack:dm hears the bot\'s DMs, not a DM with alice; slack:dm:alice hears hers, and only hers', async () => {
-    const s = setup(conf('[specialists.alices]\nworkdir = "/w/alices"\nreachable_by = ["role:anyone"]\n[[rules]]\nplace = "slack:dm:alice"\ntarget = "specialist:alices"\n'))
+  test('a specialist listening on slack:app-dm:* hears the bot\'s DMs, not a DM with alice; slack:person-dm:alice hears hers, and only hers', async () => {
+    const s = setup(conf('[specialists.alices]\nworkdir = "/w/alices"\nreachable_by = ["role:anyone"]\n[[rules]]\nplace = "slack:person-dm:alice"\ntarget = "specialist:alices"\n'))
     expect(s.w.handle(dm({ ts: '1.000001', text: 'alice in her DM with the operator' }))).toBe('dm')
     expect(s.w.handle(ev({ channel: BOB_DM, ts: '2.000001', user: 'UBOB', text: 'bob in his DM with the operator' }))).toBe('ignored')
     expect(s.w.handle(ev({ channel: BOT_DM, ts: '3.000001', user: 'UBOB', text: 'bob DMs the bot' }))).toBe('dm')
     await s.w.flush()
     expect(s.sent.map(x => `${x.specialist}:${x.msg.includes('alice in her DM') ? 'alice' : x.msg.includes('bob DMs the bot') ? 'bot-dm' : '?'}`)).toEqual(['alices:alice', 'assistant:bot-dm'])
-    expect(s.sent[0].msg).toContain(`place="slack:dm:alice" conversation="slack:${ALICE_DM}"`)
+    expect(s.sent[0].msg).toContain(`place="slack:person-dm:alice" conversation="slack:${ALICE_DM}"`)
     // Catch-up, which reads as the bot, never scans a DM the bot is not in.
     expect(s.w.dmChannels()).toEqual([BOT_DM])
   })
 
-  test('a rule with place = "slack:dm:alice" delivers only alice\'s messages there; a rule needs no person to name the place', async () => {
-    const s = setup(conf('[[rules]]\nplace = "slack:dm:alice"\nperson = "person:alice"\ntarget = "specialist:desk"\n'))
+  test('a rule with place = "slack:person-dm:alice" delivers only alice\'s messages there; a rule needs no person to name the place', async () => {
+    const s = setup(conf('[[rules]]\nplace = "slack:person-dm:alice"\nperson = "person:alice"\ntarget = "specialist:desk"\n'))
     // The place is named, but the rule is for alice: the operator's own message there is nobody's, until alice's opens the conversation.
     expect(s.w.handle(dm({ ts: '1.000001', user: 'UOP', text: 'the operator writes first' }))).toBe('unrouted')   // counted, never reacted to: the bot is not in that DM
     expect(s.w.handle(dm({ ts: '2.000001', text: 'alice writes' }))).toBe('dm')
@@ -1957,23 +1958,23 @@ describe("the operator's token: broad subscription is not broad delivery", () =>
   })
 
   test('a DM with a person who is not in [people], or whose other party is not known yet, names no place and is dropped', async () => {
-    const s = setup({ ...conf('[[rules]]\nplace = "slack:dm:alice"\ntarget = "specialist:desk"\n'), dms: { [ALICE_DM]: 'UALICE' } })
+    const s = setup({ ...conf('[[rules]]\nplace = "slack:person-dm:alice"\ntarget = "specialist:desk"\n'), dms: { [ALICE_DM]: 'UALICE' } })
     expect(s.w.handle(ev({ channel: STRANGER_DM, ts: '1.000001', user: 'UNOBODY', text: 'who?' }))).toBe('ignored')   // not on the list at all
     expect(s.w.handle(dm({ ts: '2.000001', text: 'alice' }))).toBe('dm')
     await s.w.flush()
     expect(s.sent.map(x => x.specialist)).toEqual(['desk'])
   })
 
-  test('a rule naming slack:group-dm, or one group DM by its id, delivers it, and the place options apply', async () => {
-    const toml = (rules: string) => ({ ...conf(`${rules}[places."slack:group-dm"]\nack = "eyes"\n`) })
+  test('a rule naming slack:group-dm:*, or one group DM by its id, delivers it, and the place options apply', async () => {
+    const toml = (rules: string) => ({ ...conf(`${rules}[places."slack:group-dm:*"]\nack = "eyes"\n`) })
     const { a, reactions } = actions()
-    const s = setup(toml('[[rules]]\nplace = "slack:group-dm"\ntarget = "specialist:desk"\n'))
+    const s = setup(toml('[[rules]]\nplace = "slack:group-dm:*"\ntarget = "specialist:desk"\n'))
     s.w.setSlackActions(a)
     expect(s.w.handle(group({ ts: '1.000001', text: 'standup notes' }))).toBe('dm')
     await s.w.flush()
     await Bun.sleep(1)
     expect(s.sent.map(x => x.specialist)).toEqual(['desk'])
-    expect(s.sent[0].msg).toContain(`place="slack:group-dm" conversation="slack:${GROUP}"`)
+    expect(s.sent[0].msg).toContain(`place="slack:group-dm:${GROUP}" conversation="slack:${GROUP}"`)
     expect(reactions).toEqual([`${GROUP}:1.000001:eyes`])
     expect(s.w.dmChannels()).toEqual([])
     // One group DM by its id.

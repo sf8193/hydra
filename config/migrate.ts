@@ -8,7 +8,8 @@ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileS
 import { dirname, isAbsolute, join, resolve } from 'path'
 import { parseIdleTtl } from '../shared/constants.js'
 import { invalidSpecialistName } from '../shared/specialist-name.js'
-import { loadHydraConfig, normalizeAddress, normalizePlace, formatIssues } from './load.js'
+import { loadHydraConfig, normalizeAddress, formatIssues } from './load.js'
+import { parsePlace, placeKey } from './types.js'
 import type { ChatPlatform, ConfigIssue, LoadEnv } from './types.js'
 import { slackWatchStep } from './migrate-slack-watch.js'
 import { jobsStep } from './migrate-jobs.js'
@@ -132,7 +133,8 @@ export const specialistsStep: MigrateStep = {
       }
       // A channel id is where its threads open. Digits stand alone; any other id is written as a place on this platform.
       if (s.channel) {
-        const homePlace = /^\d+$/.test(s.channel) ? s.channel : normalizePlace(`${platform}:${s.channel}`)
+        const parsed = /^\d+$/.test(s.channel) ? undefined : parsePlace(`${platform}:${s.channel}`)
+        const homePlace = parsed === undefined ? s.channel : parsed.ok ? placeKey(parsed.place) : undefined
         if (homePlace) spec.home_place = homePlace
         else notes.push(`specialist "${name}": channel ${s.channel} isn't a channel hydra.toml can name; left out, so its new threads open in the operator's channel`)
       }

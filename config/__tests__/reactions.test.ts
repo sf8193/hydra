@@ -28,7 +28,7 @@ describe('[places] reactions', () => {
   test('defaults to off, and takes bot-messages, all and off', () => {
     expect(ok('[places."slack:#ops"]\nack = "eyes"\n').places['slack:#ops'].reactions).toBe('off')
     for (const v of ['off', 'bot-messages', 'all'] as const) expect(ok(`[places."slack:#ops"]\nreactions = "${v}"\n`).places['slack:#ops'].reactions).toBe(v)
-    expect(ok('[places."slack:dm"]\nreactions = "bot-messages"\n').places['slack:dm'].reactions).toBe('bot-messages')
+    expect(ok('[places."slack:app-dm:*"]\nreactions = "bot-messages"\n').places['slack:app-dm:*'].reactions).toBe('bot-messages')
   })
 
   test('any other value is an error naming the choices', () => {
@@ -38,6 +38,6 @@ describe('[places] reactions', () => {
 
   test('it applies to Slack only, and not to a DM with a person or a group DM', () => {
     expect(errors('[places."discord:1234"]\nreactions = "all"\n')).toEqual(['places."discord:1234".reactions: discord:1234 is not a Slack place: `reactions` is heard only from Slack'])
-    expect(errors('[places."slack:group-dm"]\nreactions = "all"\n')).toEqual(['places."slack:group-dm".reactions: reactions does not apply to slack:group-dm: only ack and files do. Remove it.'])
+    expect(errors('[places."slack:group-dm:*"]\nreactions = "all"\n')).toEqual(['places."slack:group-dm:*".reactions: reactions does not apply to slack:group-dm:*: only ack and files do. Remove it.'])
   })
 })

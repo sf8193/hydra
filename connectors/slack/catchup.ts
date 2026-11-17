@@ -1,5 +1,5 @@
 import { route } from '../../routing/route.js'
-import { DEFAULT_SLACK_APP, SLACK_DM } from '../../config/types.js'
+import { DEFAULT_SLACK_APP, placeOf } from '../../config/types.js'
 import { cmpTs, routedChannels, hearsDms, addressOf, TOP_LEVEL, OPERATOR_TOKEN_REFUSED, NOT_A_MEMBER, type SlackFile, type SlackMessageEvent, type SlackWatchConfig, type CatchUpWatch } from './watch.js'
 
 /** Slack's clock and ours differ a little: a thread is read from this long before its bind, so a reply just after it is not passed over. */
@@ -172,7 +172,7 @@ export async function catchUp(watcher: CatchUpWatch, api: SlackApi, cfg: SlackWa
         return []
       })
       for (const d of listed) {
-        if (known.has(d.channel) || route(cfg.hydra, { from: addressOf(d.user), at: [SLACK_DM], addressed: true, app: cfg.app ?? DEFAULT_SLACK_APP }).fate !== 'deliver') continue
+        if (known.has(d.channel) || route(cfg.hydra, { from: addressOf(d.user), at: [placeOf('slack', 'app-dm', cfg.app ?? DEFAULT_SLACK_APP)], addressed: true, app: cfg.app ?? DEFAULT_SLACK_APP }).fate !== 'deliver') continue
         // A new conversation has no cursor: read it back a day, the furthest an owed message is chased.
         scanned.push(d.channel)
         watcher.beginCatchUp([d.channel])

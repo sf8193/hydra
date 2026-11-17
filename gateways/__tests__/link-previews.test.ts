@@ -4,7 +4,8 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { MessageFlags } from 'discord.js'
 import { DiscordGateway } from '../discord'
 import { SlackGateway } from '../slack'
-import { linkPreviewsOff, placeKeysOf, registerPreviewConfig, registerSlackChannelNames } from '../../shared/link-previews'
+import { placeKey } from '../../config/types'
+import { linkPreviewsOff, placesFor, registerPreviewConfig, registerSlackChannelNames } from '../../shared/link-previews'
 
 const places = (p: Record<string, boolean>) => ({ places: Object.fromEntries(Object.entries(p).map(([k, linkPreviews]) => [k, { files: false, messages: 'addressed', bots: false, linkPreviews }])) }) as any
 afterEach(() => { registerPreviewConfig(() => undefined); registerSlackChannelNames(() => undefined) })
@@ -20,13 +21,23 @@ describe('which places turn previews off', () => {
     expect(linkPreviewsOff('slack', ['C0OPS'])).toBe(false)
     expect(linkPreviewsOff('discord', ['1'])).toBe(false)
   })
-  test('a Slack place named by #name matches through the names the apps read; a DM matches slack:dm', () => {
-    registerPreviewConfig(() => places({ 'slack:#ops': false, 'slack:dm': false }))
+  test('a Slack place named by #name matches through the names the apps read; a DM matches slack:app-dm:*', () => {
+    registerPreviewConfig(() => places({ 'slack:#ops': false, 'slack:app-dm:*': false }))
     registerSlackChannelNames(c => (c === 'C0OPS' ? 'ops' : undefined))
     expect(linkPreviewsOff('slack', ['C0OPS'])).toBe(true)
     expect(linkPreviewsOff('slack', ['C0OTHER'])).toBe(false)
     expect(linkPreviewsOff('slack', ['D0DM'])).toBe(true)
-    expect(placeKeysOf('slack', ['C0OPS'])).toEqual(['slack:C0OPS', 'slack:#ops'])
+    expect(placesFor('slack', ['C0OPS']).map(placeKey)).toEqual(['slack:C0OPS', 'slack:#ops'])
+    expect(placesFor('slack', ['D0DM'], undefined, 'sales').map(placeKey)).toEqual(['slack:app-dm:sales'])
+    expect(placesFor('discord', ['dm']).map(placeKey)).toEqual(['discord:app-dm:*'])
+  })
+  test('a DM with one app\'s bot: its own entry decides before slack:app-dm:*, and an entry for another app does not apply', () => {
+    registerPreviewConfig(() => places({ 'slack:app-dm:*': false, 'slack:app-dm:sales': true }))
+    expect(linkPreviewsOff('slack', ['D0DM'], { app: 'sales' })).toBe(false)
+    expect(linkPreviewsOff('slack', ['D0DM'], { app: 'support' })).toBe(true)
+    registerPreviewConfig(() => places({ 'slack:app-dm:sales': false }))
+    expect(linkPreviewsOff('slack', ['D0DM'], { app: 'support' })).toBe(false)
+    expect(linkPreviewsOff('slack', ['D0DM'], { app: 'sales' })).toBe(true)
   })
   test('the platform is part of the key: a Slack place does not switch off a Discord channel of the same id', () => {
     registerPreviewConfig(() => places({ 'slack:123': false }))
@@ -121,7 +132,7 @@ describe('Discord', () => {
 
 describe('every way a gateway posts goes through its one seam', () => {
   test('Slack: a new thread\'s anchor and first reply, and a DM, carry the unfurl flags for a place that turns previews off', async () => {
-    registerPreviewConfig(() => places({ 'slack:C0OPS': false, 'slack:dm': false }))
+    registerPreviewConfig(() => places({ 'slack:C0OPS': false, 'slack:app-dm:*': false }))
     const calls: any[] = []
     const gw = Object.create(SlackGateway.prototype) as SlackGateway
     ;(gw as any).app = { client: { chat: { postMessage: async (a: any) => { calls.push(a); return { ts: '1.1' } } }, conversations: { open: async () => ({ channel: { id: 'D0DM' } }) } } }
@@ -141,7 +152,7 @@ describe('every way a gateway posts goes through its one seam', () => {
     expect(calls.map(c => Object.keys(c))).toEqual([['channel', 'text'], ['channel', 'text', 'thread_ts']])
   })
   test('Discord: a new thread\'s first message and a DM carry the suppress-embeds flag for a place that turns previews off', async () => {
-    registerPreviewConfig(() => places({ 'discord:100': false, 'discord:dm': false }))
+    registerPreviewConfig(() => places({ 'discord:100': false, 'discord:app-dm:*': false }))
     const sent: any[] = []
     const thread = { id: '555', guildId: 'g', send: async (p: any) => { sent.push(p); return { id: 'm1' } } }
     const ch = { id: '100', isTextBased: () => true, isThread: () => false, threads: { create: async () => thread } }

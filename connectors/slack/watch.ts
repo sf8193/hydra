@@ -3,7 +3,7 @@ import { join, basename } from 'path'
 import { randomBytes } from 'crypto'
 import { STATE_DIR } from '../../daemon/config.js'
 import { atomicWriteFileSync } from '../../daemon/util.js'
-import { DEFAULT_SLACK_APP, SLACK_DM, SLACK_GROUP_DM, dmWith, namesAChannel, type Address, type HydraConfig, type Place, type PlaceOptions, type SlackApp } from '../../config/types.js'
+import { DEFAULT_SLACK_APP, isChannelName, isDmPlace, optionsAt, optionsOf, placeCovers, placeKey, placeOf, type Address, type HydraConfig, type Place, type PlaceOptions, type SlackApp } from '../../config/types.js'
 import { appKey, appName, type Apps } from './app.js'
 import { attr, fence, oneLine, quoteBody, UNTRUSTED_TEXT_MAX_CHARS } from '../../shared/untrusted-text.js'
 import { conversationId, appOfEntry, appPrefix, scopeKey, unscopeKey, TOP_LEVEL } from './conversation.js'
@@ -227,25 +227,26 @@ export const isDm = (channel: string): boolean => /^D[A-Z0-9]+$/.test(channel)
 /**
  * Every name a Slack channel goes by, most specific first, and the one place that turns a channel into places:
  *  - a channel: `slack:C0ABC`, then `slack:#help` once its name is known;
- *  - a DM with the bot: `slack:dm`;
- *  - a DM with a person in `[people]`: `slack:dm:<person>`;
- *  - a group DM: `slack:G0ABC`, then `slack:group-dm`.
+ *  - a DM with this app's bot: `slack:app-dm:<app>`;
+ *  - a DM with a person in `[people]`: `slack:person-dm:<person>`;
+ *  - a group DM: `slack:C0ABC` (and its name), then `slack:group-dm:<id>`.
+ * A rule or `[places]` entry written with `*` (`slack:app-dm:*`, `slack:group-dm:*`) names every place of its kind, so it matches these (`placeCovers`).
  * A DM with someone not in `[people]`, or one whose other party is not known yet, goes by no name: nothing can name it, so it is dropped.
  */
-export function placesOf(cfg: Pick<SlackWatchConfig, 'hydra' | 'directory'>, channel: string): Place[] {
+export function placesOf(cfg: Pick<SlackWatchConfig, 'hydra' | 'directory' | 'app'>, channel: string): Place[] {
   const d = cfg.directory
   if (isDm(channel)) {
     const other: DmOtherParty | undefined = d.otherPartyOf ? d.otherPartyOf(channel) : 'bot'
-    if (other === 'bot') return [SLACK_DM]
+    if (other === 'bot') return [placeOf('slack', 'app-dm', cfg.app ?? DEFAULT_SLACK_APP)]
     const who = other && Object.values(cfg.hydra.people).find(p => p.addresses.includes(`slack:${other.user}`))
-    return who ? [dmWith(who.id)] : []
+    return who ? [placeOf('slack', 'person-dm', who.id)] : []
   }
   const name = d.nameOf(channel)
-  return [`slack:${channel}`, ...(name ? [`slack:#${name}`] : []), ...(d.isGroupDm?.(channel) ? [SLACK_GROUP_DM] : [])]
+  return [placeOf('slack', 'channel', channel), ...(name ? [placeOf('slack', 'channel', `#${name}`)] : []), ...(d.isGroupDm?.(channel) ? [placeOf('slack', 'group-dm', channel)] : [])]
 }
 
-/** How a place reads to a person: by name when known. */
-export const placeName = (cfg: Pick<SlackWatchConfig, 'hydra' | 'directory'>, channel: string): Place => placesOf(cfg, channel).at(-1) ?? `slack:${channel}`
+/** How a place reads to a person (the string hydra.toml writes it as): by name when known. */
+export const placeName = (cfg: Pick<SlackWatchConfig, 'hydra' | 'directory' | 'app'>, channel: string): string => placeKey(placesOf(cfg, channel).at(-1) ?? placeOf('slack', 'channel', channel))
 
 /**
  * The Slack channels hydra.toml names in `[[rules]]` (those with a `place`), as written: channels only, to be read by id
@@ -254,13 +255,11 @@ export const placeName = (cfg: Pick<SlackWatchConfig, 'hydra' | 'directory'>, ch
  */
 export function namedChannels(h: HydraConfig, app?: string): Place[] {
   const r = reachableBy(h, app)
-  return [...new Set(r.rules.map(x => x.place).filter((p): p is Place => !!p && p.startsWith('slack:') && namesAChannel(p)))]
+  return [...new Map(r.rules.flatMap(x => x.place && x.place.platform === 'slack' && x.place.kind === 'channel' ? [[placeKey(x.place), x.place] as const] : [])).values()]
 }
 
-const channelIdOf = (cfg: Pick<SlackWatchConfig, 'directory'>, place: Place): string | undefined => {
-  const rest = place.slice('slack:'.length)
-  return rest.startsWith('#') ? cfg.directory.idOf(rest.slice(1)) : rest
-}
+const channelIdOf = (cfg: Pick<SlackWatchConfig, 'directory'>, place: Place): string | undefined =>
+  isChannelName(place) ? cfg.directory.idOf(place.ref.slice(1)) : place.ref
 
 /** The channels hydra.toml names that this config's app can reach, by id: what catch-up scans and the listener holds. A `#name` not yet resolved is left out. */
 export function routedChannels(cfg: Pick<SlackWatchConfig, 'hydra' | 'directory' | 'app'> | null | undefined): string[] {
@@ -273,10 +272,11 @@ export function unresolvedPlaces(cfg: Pick<SlackWatchConfig, 'hydra' | 'director
   return namedChannels(cfg.hydra, cfg.app).filter(p => !channelIdOf(cfg, p))
 }
 
-/** Whether a rule that app (none: any) serves names `slack:dm`, the DM with the bot: DMs someone declared they want, as opposed to the operator's own. */
+/** Whether a rule that app (none: the app named `default`) serves names a DM with its bot (`slack:app-dm:<app>` or `slack:app-dm:*`): DMs someone declared they want, as opposed to the operator's own. */
 export function dmsDeclared(cfg: Pick<SlackWatchConfig, 'hydra' | 'app'>): boolean {
   const r = reachableBy(cfg.hydra, cfg.app)
-  return r.rules.some(x => x.place === SLACK_DM)
+  const mine = placeOf('slack', 'app-dm', cfg.app ?? DEFAULT_SLACK_APP)
+  return r.rules.some(x => x.place !== undefined && placeCovers(x.place, mine))
 }
 
 /**
@@ -285,11 +285,11 @@ export function dmsDeclared(cfg: Pick<SlackWatchConfig, 'hydra' | 'app'>): boole
  */
 export function namedPlace(cfg: Pick<SlackWatchConfig, 'hydra' | 'app'>, at: Place[], app?: string): boolean {
   const r = reachableBy(cfg.hydra, app ?? cfg.app)
-  return at.some(p => Object.hasOwn(cfg.hydra.places, p) || r.rules.some(x => x.place === p))
+  return at.some(p => optionsOf(cfg.hydra.places, p) !== undefined || r.rules.some(x => x.place !== undefined && placeCovers(x.place, p)))
 }
 
 /**
- * Whether DMs are heard: some specialist or rule names `slack:dm` (`dmsDeclared`), or the operator has a Slack address (their DMs
+ * Whether DMs are heard: some specialist or rule names a DM with the bot (`dmsDeclared`), or the operator has a Slack address (their DMs
  * reach `main` through any app: pins don't bind `main`).
  */
 export function hearsDms(cfg: Pick<SlackWatchConfig, 'hydra' | 'app'> | null | undefined): boolean {
@@ -301,10 +301,9 @@ export function hearsDms(cfg: Pick<SlackWatchConfig, 'hydra' | 'app'> | null | u
 /** A Slack user, as hydra.toml addresses them. */
 export const addressOf = (user: string | undefined): Address | undefined => user ? `slack:${user}` : undefined
 
-/** The `[places]` options that apply to a channel: the most specific name that has any. */
-export function placeOptions(cfg: Pick<SlackWatchConfig, 'hydra' | 'directory'>, channel: string): PlaceOptions | undefined {
-  for (const p of placesOf(cfg, channel)) if (cfg.hydra.places[p]) return cfg.hydra.places[p]
-  return undefined
+/** The `[places]` options that apply to a channel: a specific entry before one with `*`, then the most specific name that has any. */
+export function placeOptions(cfg: Pick<SlackWatchConfig, 'hydra' | 'directory' | 'app'>, channel: string): PlaceOptions | undefined {
+  return optionsAt(cfg.hydra.places, placesOf(cfg, channel))
 }
 
 /** Slack's answer when the bot is not in a channel: the operator's token may still read it. */
@@ -496,7 +495,7 @@ const formatBytes = (n: number): string => n < 1024 ? `${n} B` : n < 1024 * 1024
 export function formatDelivery(
   entry: Pick<SlackWatchEntry, 'channel' | 'threadTs'>,
   items: Item[],
-  where: { place: Place; workspaceUrl?: string },
+  where: { place: string; workspaceUrl?: string },
   nonce: string = randomBytes(6).toString('hex'),
 ): string {
   const dm = isDm(entry.channel)
@@ -922,7 +921,7 @@ export class SlackWatcher {
     // admitted has written in them. A stranger's refused DM must not cost a history read on every pass.
     // A tag of this app in a channel no rule names keeps one too (`taggedChannels`): a tag missed there while the app was down is then caught up.
     const tagHeard = outcome !== 'ignored' && !isDm(ev.channel) && !cfg.directory.isGroupDm?.(ev.channel) && ev.user !== cfg.botUserId && !!ev.text && tagRe(cfg.botUserId).test(ev.text)
-    const scanned = isDm(ev.channel) ? outcome === 'dm' && placesOf(cfg, ev.channel).includes(SLACK_DM) : tagHeard || routedChannels(cfg).includes(ev.channel)
+    const scanned = isDm(ev.channel) ? outcome === 'dm' && placesOf(cfg, ev.channel).some(isDmPlace) : tagHeard || routedChannels(cfg).includes(ev.channel)
     if (tagHeard) {
       const key = scoped(ev.app, ev.channel)
       const last = this.taggedIn.get(key)
@@ -1064,7 +1063,7 @@ export class SlackWatcher {
     const unheard = dm || own ? [] : mentioned.filter(m => m !== app && !heardBy.includes(m) && !unread.includes(m))
     const at = placesOf(cfg, ev.channel)
     // A DM with a person, or a group DM: the bot is not (or only) a member, and nothing has said it should answer there.
-    const inNoBotDm = dm && !at.includes(SLACK_DM)
+    const inNoBotDm = dm && !at.some(isDmPlace)
     // A DM's top-level messages are one conversation. Anywhere else, a top-level message is its thread's first: the
     // conversation is that thread, bound when this message arrives. A thread inside a DM is a thread like any other.
     const threadTs = dm && !isReply ? TOP_LEVEL : ev.threadTs ?? ev.ts
@@ -1077,7 +1076,7 @@ export class SlackWatcher {
     // rule, `[places]` entry or open conversation names is nobody's, passed over before it opens, counts, reacts to or owes
     // anything. The bot's own DM is the one place that needs no name (the operator's goes to `main`). A tag in a channel still gets its
     // answer, as it would without the token; a DM with a person or a group DM never does, since nothing there asked the bot.
-    if (!existing && !at.includes(SLACK_DM) && !namedPlace(cfg, at, app) && (inNoBotDm || (!tagged && cfg.hydra.slackApps[app]?.operatorTokenEnv))) return 'ignored'
+    if (!existing && !at.some(isDmPlace) && !namedPlace(cfg, at, app) && (inNoBotDm || (!tagged && cfg.hydra.slackApps[app]?.operatorTokenEnv))) return 'ignored'
 
     if (own) {
       // The bot's own top-level post opens a conversation, bound to whoever hears there. Its replies are not echoed back.
@@ -1574,7 +1573,7 @@ export class SlackWatcher {
   }
 
   /** One message's verdict from the guard. A guard that throws fails open, like one that crashes. */
-  private async judge(g: Guard, entry: SlackWatchEntry, place: Place, to: string, i: Item): Promise<GuardVerdict> {
+  private async judge(g: Guard, entry: SlackWatchEntry, place: string, to: string, i: Item): Promise<GuardVerdict> {
     const input: GuardInput = {
       person: i.person ?? null, roles: i.roles ?? ['anyone'], place, conversation: conversationId(entry), target: spelledBare(to),
       ...(g.includeText && { text: i.text }),

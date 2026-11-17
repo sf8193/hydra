@@ -19,7 +19,7 @@ import { invalidSpecialistName } from '../shared/specialist-name.js'
 import { bareOf, readTarget, spelled } from '../shared/target-kind.js'
 import { readValue, spelledApp, spelledPerson, spelledRole, whoSpelled } from '../shared/value-kind.js'
 import {
-  BUILTIN_ROLES, DEFAULT_SLACK_APP, SLACK_DM, SLACK_GROUP_DM, dmPerson, isDmPlace, namesAChannel, namesDmWithOthers, placesAnsweredBy, type Address, type ConfigIssue, type Connectors, type Gateways, type Guard, type HydraConfig, type LoadEnv, type LoadResult, type MainOptions,
+  BUILTIN_ROLES, DEFAULT_SLACK_APP, SLACK_APP_ID_RE, homePlaceOf, isChannelName, isDmPlace, isEvery, namesDmWithOthers, optionsOf, parsePlace, placeKey, placeShadows, placesAnsweredBy, samePlace, type Address, type ConfigIssue, type Connectors, type Gateways, type Guard, type HydraConfig, type LoadEnv, type LoadResult, type MainOptions,
   type McpServer, type WorkdirScan, type Person, type Place, type PlaceOptions, type Platform, type Rule, type Schedule, type SlackApp, type Specialist, type Vitals,
   NEEDS, RUNNERS, SESSIONS_MODES, WORKDIR_TOOLS, type Need,
 } from './types.js'
@@ -32,16 +32,11 @@ export const EMPTY_CONFIG: HydraConfig = Object.freeze({ connectors: {}, gateway
 
 /** People, roles and schedules: lowercase letters, digits and dashes. Specialists add their own rule (shared/specialist-name.ts). */
 const ID_RE = /^[a-z0-9][a-z0-9-]*$/
-/** A Slack app's id: lowercase, so it can never be taken for a channel id (`C0TEST`); at most 35, since it can become the app's display name. */
-const SLACK_APP_ID_RE = /^[a-z][a-z0-9_-]{0,34}$/
 const ADDRESS_RE: Record<Platform, RegExp> = {
   discord: /^discord:\d+$/,
   slack: /^slack:[UW][A-Z0-9]+$/,
   github: /^github:[a-z0-9](?:[a-z0-9-]{0,38})$/,
 }
-const REPO_RE = /^[a-z0-9][a-z0-9-]*\/[a-z0-9._-]+$/
-// A channel by name or by the platform's own id (an app without the scopes to list channels only knows ids).
-const CHANNEL_PLACE_RE = /^(slack|discord):(dm|#[a-z0-9][a-z0-9_-]*)$|^slack:group-dm$|^slack:dm:[a-z0-9][a-z0-9-]*$|^slack:[CG][A-Z0-9]+$|^discord:\d+$/
 const ENGINES = ['claude', 'codex', 'omp'] as const
 /** Why a built-in tool is not on a restricted specialist's list. Any other name gets the generic refusal. */
 const TOOL_REFUSALS: Readonly<Record<string, string>> = {
@@ -235,18 +230,26 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     return undefined
   }
   const expand = (p: string) => p === '~' ? env.home : p.startsWith('~/') ? join(env.home, p.slice(2)) : p
+  // A place's string, read by `parsePlace`, and its refs checked against what this file declares.
   const place = (raw: string, path: string): Place | undefined => {
-    const p = normalizePlace(raw)
-    const who = p === undefined ? undefined : dmPerson(p)
-    if (p && who !== undefined) {
-      // A DM with a person is found by their Slack address, so the person must be declared and have one.
-      if (!has(people, who)) error(path, `"${raw}": ${who} is not a person: declare [people.${who}]`)
-      else if (!people[who].addresses.some(a => a.startsWith('slack:'))) error(path, `"${raw}": ${who} has no slack: address; add one to people.${who}.addresses`)
-      return p
+    const r = parsePlace(raw)
+    if (!r.ok) {
+      // A bare `slack:dm` named no app: with several declared, say which.
+      const apps = Object.keys(slackApps)
+      error(path, raw === 'slack:dm' && apps.length > 1 ? `${r.error} (this file declares ${apps.join(', ')}: slack:app-dm:<one of them>)` : r.error)
+      return undefined
     }
-    if (p) return p
-    error(path, `"${raw}" is not a place: use slack:#channel, slack:<channel id>, slack:dm, slack:dm:<person>, slack:group-dm, discord:#channel, discord:<channel id>, discord:dm, github:owner/repo or cli`)
-    return undefined
+    const p = r.place
+    if (p.platform === 'slack' && p.kind === 'person-dm' && !isEvery(p)) {
+      // A DM with a person is found by their Slack address, so the person must be declared and have one.
+      if (!has(people, p.ref)) { error(path, `"${raw}": ${p.ref} is not a person: declare [people.${p.ref}]`); return undefined }
+      if (!people[p.ref].addresses.some(a => a.startsWith('slack:'))) { error(path, `"${raw}": ${p.ref} has no slack: address; add one to people.${p.ref}.addresses`); return undefined }
+    }
+    if (p.platform === 'slack' && p.kind === 'app-dm' && !isEvery(p) && !Object.hasOwn(slackApps, p.ref)) {
+      error(path, `"${raw}": ${noSuchApp(p.ref, Object.keys(slackApps))}`)
+      return undefined
+    }
+    return p
   }
 
   unknownKeys(doc, TOP_KEYS, '')
@@ -288,7 +291,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     const repos = strList(t, 'repos', path)
     if (repos === undefined && t.repos === undefined) error(`${path}.repos`, 'is required: the repos to watch, as "owner/repo"')
     const good = (repos ?? []).flatMap((r, i) => {
-      if (REPO_RE.test(r.toLowerCase())) return [r.toLowerCase()]
+      const repo = parsePlace(`github:${r}`)
+      if (repo.ok) return [repo.place.ref]
       error(`${path}.repos[${i}]`, `"${r}" must be owner/repo`)
       return []
     })
@@ -604,7 +608,9 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     const envFile = str(t, 'env_file', path)
     const homePlace = str(t, 'home_place', path)
     // A place, or a channel by its platform id: where it posts when nobody wrote to it first (a new thread).
-    if (homePlace !== undefined && !normalizePlace(homePlace) && !/^\d+$/.test(homePlace)) error(at('home_place'), `"${homePlace}" must be a place (slack:#channel, discord:#channel, …) or a channel id`)
+    const homeParsed = homePlace === undefined ? undefined : parsePlace(homePlace)
+    if (homeParsed && !homeParsed.ok && !/^\d+$/.test(homePlace!)) error(at('home_place'), `${homeParsed.error}; \`home_place\` may also be a bare channel id`)
+    else if (homeParsed?.ok && homeParsed.place.kind !== 'channel') error(at('home_place'), `"${homePlace}" is ${homeParsed.place.kind === 'repository' || homeParsed.place.kind === 'cli' ? 'not a channel' : 'a DM, not a channel'}: a new thread opens in a channel (slack:#name, slack:C…, discord:#name, discord:<id>), or a bare channel id`)
     const model = str(t, 'model', path)
     // One emoji character, for its threads' names (shared/emoji.ts). Read raw, so an empty or spaced value gets what to write, not the generic string message.
     const emojiWhy = t.emoji === undefined ? undefined : emojiProblem(t.emoji)
@@ -716,7 +722,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       ...(kickoff !== undefined && { kickoff }),
       ...(kickoffFile !== undefined && { kickoffFile }),
       ...(idleMs !== undefined && { idleMs }),
-      ...(homePlace !== undefined && { homePlace: normalizePlace(homePlace) ?? homePlace }),
+      ...(homePlace !== undefined && { homePlace: homeParsed?.ok ? placeKey(homeParsed.place) : homePlace }),
       ...(model !== undefined && { model }),
       ...(t.emoji !== undefined && !emojiWhy && { emoji: t.emoji as string }),
       ...(engine !== undefined && { engine }),
@@ -740,13 +746,13 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
 
   // --- places --------------------------------------------------------------------------------------------------------
 
-  const places: Record<Place, PlaceOptions> = {}
+  const places: Record<string, PlaceOptions> = {}
   for (const [rawPlace, raw] of Object.entries(table(doc.places, 'places') ?? {})) {
     const path = `places."${rawPlace}"`
     const p = place(rawPlace, path)
     const t = table(raw, path)
     if (!p || !t) continue
-    if (has(places, p)) { error(path, `${p} is already set: places compare without case on GitHub`); continue }
+    if (has(places, placeKey(p))) { error(path, `${placeKey(p)} is already set: places compare without case on GitHub`); continue }
     unknownKeys(t, ['ack', 'files', 'messages', 'bots', 'reactions', 'default_app', 'link_previews'], path)
     const ack = str(t, 'ack', path)
     const ackWhy = ack === undefined ? undefined : reactionNameProblem(ack)
@@ -755,14 +761,14 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     const defaultAppRaw = str(t, 'default_app', path)
     let defaultApp: string | undefined
     if (defaultAppRaw !== undefined) {
-      if (!p.startsWith('slack:') || !namesAChannel(p)) error(`${path}.default_app`, `${p} is not a Slack channel: \`default_app\` picks among the apps in a channel`)
+      if (p.platform !== 'slack' || p.kind !== 'channel') error(`${path}.default_app`, `${placeKey(p)} is not a Slack channel: \`default_app\` picks among the apps in a channel`)
       else defaultApp = appValue(defaultAppRaw, `${path}.default_app`)
     }
-    if (Object.hasOwn(t, 'reactions') && !p.startsWith('slack:')) error(`${path}.reactions`, `${p} is not a Slack place: \`reactions\` is heard only from Slack`)
+    if (Object.hasOwn(t, 'reactions') && p.platform !== 'slack') error(`${path}.reactions`, `${placeKey(p)} is not a Slack place: \`reactions\` is heard only from Slack`)
     // Hydra reads a Discord channel by id: a place named `discord:#name` can never be matched to a channel, so previews could not be switched off there.
-    if (namesDmWithOthers(p)) for (const key of ['link_previews', 'messages', 'bots', 'reactions']) if (Object.hasOwn(t, key)) error(`${path}.${key}`, `${key} does not apply to ${p}: only ack and files do. Remove it.`)
-    if (p.startsWith('discord:#') && t.link_previews === false) error(`${path}.link_previews`, 'cannot be set on a Discord channel by name: hydra reads a Discord channel by id, so name it discord:<channel id>')
-    places[p] = {
+    if (namesDmWithOthers(p)) for (const key of ['link_previews', 'messages', 'bots', 'reactions']) if (Object.hasOwn(t, key)) error(`${path}.${key}`, `${key} does not apply to ${placeKey(p)}: only ack and files do. Remove it.`)
+    if (p.platform === 'discord' && p.kind === 'channel' && p.ref.startsWith('#') && t.link_previews === false) error(`${path}.link_previews`, 'cannot be set on a Discord channel by name: hydra reads a Discord channel by id, so name it discord:<channel id>')
+    places[placeKey(p)] = {
       ...(ack !== undefined && !ackWhy && { ack }),
       ...(defaultApp !== undefined && { defaultApp }),
       files: bool(t, 'files', path) ?? false,
@@ -840,7 +846,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     let app: string | undefined
     if (appRaw !== undefined) {
       app = appValue(appRaw, at('app'))
-      if (rulePlace && !rulePlace.startsWith('slack:')) error(at('app'), `an app is a Slack app, but ${rulePlace} is not a Slack place: set \`place\` to a \`slack:\` place, remove \`place\`, or remove \`app\``)
+      if (rulePlace && rulePlace.platform !== 'slack') error(at('app'), `an app is a Slack app, but ${placeKey(rulePlace)} is not a Slack place: set \`place\` to a \`slack:\` place, remove \`place\`, or remove \`app\``)
     }
     const personRaw = str(t, 'person', path)
     const person = personRaw === undefined ? undefined : whoValue(personRaw, at('person'))
@@ -853,7 +859,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       const pin = !app ? '' : `add ${spelledApp(app)} to ${ruleTarget}'s \`pinned_to\`, or change the rule's \`app\``
       if (app && specialist.pinnedTo && !specialist.pinnedTo.includes(app)) error(at('target'), `${ruleTarget} is pinned to ${appList(specialist.pinnedTo)}, so ${spelledApp(app)} can never deliver to it: ${pin}`)
       else if (app && !specialist.pinnedTo && pinnersOf(specialists, app).length) error(at('target'), `${spelledApp(app)} serves only specialists pinned to it (${pinnersOf(specialists, app).join(', ')}), and ${ruleTarget} is not pinned to it: ${pin}`)
-      else if (specialist.pinnedTo && !app && rulePlace && !rulePlace.startsWith('slack:')) error(at('target'), `${ruleTarget} is pinned to Slack apps, so it can never take a message at ${rulePlace}: remove \`pinned_to\` from ${ruleTarget}, or send it a \`slack:\` place instead`)
+      else if (specialist.pinnedTo && !app && rulePlace && rulePlace.platform !== 'slack') error(at('target'), `${ruleTarget} is pinned to Slack apps, so it can never take a message at ${placeKey(rulePlace)}: remove \`pinned_to\` from ${ruleTarget}, or send it a \`slack:\` place instead`)
     }
     if ((rulePlace || app) && ruleTarget) {
       ruleAt.push(path)
@@ -864,6 +870,25 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   else for (const [i, t0] of ((doc.rules ?? []) as Table[]).entries()) {
     const path = `rules[${i}]`
     readRule(t0, path, k => join2(path, k))
+  }
+  // A DM with one app's bot is heard through that app only, so a rule at `slack:app-dm:sales` is a rule for `sales` whether or not it says `app`.
+  const impliedApp = (r: Rule): string | undefined => r.place?.platform === 'slack' && r.place.kind === 'app-dm' && !isEvery(r.place) ? r.place.ref : undefined
+  // A rule at `slack:app-dm:<app>` that names another app can never match: a DM with that app's bot comes through that app.
+  for (const [j, r] of rules.entries()) {
+    const implied = impliedApp(r)
+    if (implied && r.app && r.app !== implied) warn(ruleAt[j], `never matches: a DM with ${spelledApp(implied)}'s bot is heard through ${spelledApp(implied)}, and this rule says ${spelledApp(r.app)}`)
+  }
+  // One group DM can be written two ways, and a message in it matches both: say so, with which `[places]` entry wins.
+  {
+    const forms = new Map<string, { channel?: string; group?: string }>()
+    const note = (p: Place, where: string) => {
+      if (p.platform !== 'slack') return
+      if (p.kind === 'channel' && !isChannelName(p)) { const f = forms.get(p.ref) ?? {}; f.channel ??= where; forms.set(p.ref, f) }
+      if (p.kind === 'group-dm' && !isEvery(p)) { const f = forms.get(p.ref) ?? {}; f.group ??= where; forms.set(p.ref, f) }
+    }
+    for (const [j, r] of rules.entries()) if (r.place) note(r.place, ruleAt[j])
+    for (const key of Object.keys(places)) { const r = parsePlace(key); if (r.ok) note(r.place, `places."${key}"`) }
+    for (const [id, f] of forms) if (f.channel && f.group) warn(f.group, `slack:${id} and slack:group-dm:${id} name the same group DM (the loader cannot tell a group DM's id from a channel's), so a message there matches both; for [places] settings the entry for slack:${id} is read first, and slack:group-dm:${id}'s only when that has none. Write one`)
   }
   // A rule never matches when an earlier one takes everything it would: its place and app are the same or wider, and who `later`
   // names is a subset of who `earlier` names. Absent and `anyone` include strangers; `people` is the roster; a role, its holders.
@@ -879,11 +904,13 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (l === 'everyone') return false
     return [...l].every(id => e.has(id))
   }
-  const where = (r: Rule) => r.place && r.app ? `at ${r.place} through ${spelledApp(r.app)}` : r.place ? `at ${r.place}` : `through ${spelledApp(r.app!)}`
+  const where = (r: Rule) => r.place && r.app ? `at ${placeKey(r.place)} through ${spelledApp(r.app)}` : r.place ? `at ${placeKey(r.place)}` : `through ${spelledApp(r.app!)}`
   // The apps a rule applies to: its own `app`; else, to a pinned specialist, that specialist's apps; else, to anyone else, every app
   // that no specialist is pinned to (an app that has pinned specialists skips a rule to anyone else). 'any' when pins play no part.
   const appsOf = (r: Rule): string[] | 'any' => {
     if (r.app) return [r.app]
+    const implied = impliedApp(r)
+    if (implied) return [implied]
     const target = specialists[r.target]
     if (target?.pinnedTo) return target.pinnedTo
     if (!target || !Object.values(specialists).some(x => x.pinnedTo)) return 'any'
@@ -908,18 +935,18 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (later.place === undefined || !takesEveryone(later)) continue
     for (const [i, earlier] of rules.slice(0, j).entries()) {
       // The same target twice is a redundant rule, not a shadowed one: it keeps its `never matches` warning.
-      if (earlier.place !== later.place || !takesEveryone(earlier) || earlier.target === later.target) continue
+      if (earlier.place === undefined || !placeShadows(earlier.place, later.place) || !takesEveryone(earlier) || earlier.target === later.target) continue
       const via = clashApps(earlier, later)
       if (via === undefined) continue
       const named = (r: Rule) => r.target === MAIN_TARGET ? 'main' : `specialist:${r.target}`
-      error(ruleAt[j], `sends every message at ${later.place} through ${via} to ${named(later)}, but ${ruleAt[i]} already sends them to ${named(earlier)}: give ${ruleAt[j]} a \`person\`, or remove it`)
+      error(ruleAt[j], `sends every message at ${placeKey(later.place)} through ${via} to ${named(later)}, but ${ruleAt[i]} already sends them to ${named(earlier)}: give ${ruleAt[j]} a \`person\`, or remove it`)
       clashed.add(j)
       break
     }
   }
   for (const [j, later] of rules.entries()) {
     if (clashed.has(j)) continue
-    const i = rules.findIndex((earlier, k) => k < j && (earlier.place === undefined || earlier.place === later.place) && appsCover(earlier, later) && covers(earlier.person, later.person))
+    const i = rules.findIndex((earlier, k) => k < j && (earlier.place === undefined || (later.place !== undefined && placeShadows(earlier.place, later.place))) && appsCover(earlier, later) && covers(earlier.person, later.person))
     if (i >= 0) warn(ruleAt[j], `never matches: ${ruleAt[i]} already takes ${later.person ? `${whoSpelled(people, later.person)}'s messages` : 'every message'} ${where(later)}`)
   }
   /** Where a specialist answers every message (see `placesAnsweredBy`). */
@@ -984,7 +1011,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   // the thread it opens must be one that app can deliver back to the specialist: checked for every specialist with a Slack home_place.
   const declaredApps = Object.keys(slackApps)
   for (const s of Object.values(specialists)) {
-    const slackHomePlace = !!s.homePlace?.startsWith('slack:') && namesAChannel(s.homePlace)
+    const home = homePlaceOf(s)
+    const slackHomePlace = home?.platform === 'slack' && home.kind === 'channel'
     if (!slackHomePlace && !s.speaksAs) continue
     const app = speaksAsOf(s, declaredApps)
     const path = `specialists.${s.id}.speaks_as`
@@ -1000,11 +1028,11 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
    * Reading its replies is not talking to it: a place others only read adds nothing here.
    */
   function reachedBy(s: Specialist): string[] {
-    const shared = answered(s.id).filter(p => p !== 'cli' && !isDmPlace(p) && dmPerson(p) === undefined)
+    const shared = answered(s.id).filter(p => p.kind !== 'cli' && !isDmPlace(p) && p.kind !== 'person-dm')
     const others = (people_: Person[]) => people_.filter(p => p.id !== operator).map(p => spelledPerson(p.id))
     const who: string[] = []
     if (s.reachableBy.includes('anyone')) {
-      const where = shared.map(p => p.startsWith('github:') ? `who can comment on ${p}` : `in ${p}`)
+      const where = shared.map(p => p.kind === 'repository' ? `who can comment on ${placeKey(p)}` : `in ${placeKey(p)}`)
       // "anyone in A and B", "anyone who can comment on R"; one phrase per kind of place.
       const inPlaces = where.filter(w => w.startsWith('in '))
       const onRepos = where.filter(w => w.startsWith('who '))
@@ -1019,7 +1047,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
         who.push(role === 'people' ? `${listJoin(fresh)} (reachable_by = ${JSON.stringify(s.reachableBy.map(spelledRole))})` : `${listJoin(fresh)} (${spelledRole(role)})`)
       }
     }
-    for (const p of answered(s.id)) if (p !== 'cli' && places[p]?.bots) who.push(`any other bot in ${p}`)
+    for (const p of answered(s.id)) if (p.kind !== 'cli' && optionsOf(places, p)?.bots) who.push(`any other bot in ${placeKey(p)}`)
     return who
   }
   const listJoin = (items: string[]) => items.length <= 2 ? items.join(' and ') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
@@ -1053,19 +1081,20 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     // A restricted specialist's answer can carry a link; where previews are on, the preview shows readers content they could not open themselves.
     // Previews can be switched off in a Slack channel (by id or name) and a Discord channel by id; a Discord channel given by name is not one hydra can match.
     if (s.restricted && s.reachableBy.includes('anyone')) {
-      const chat = answeredAt.filter(p => (p.startsWith('slack:') || p.startsWith('discord:')) && places[p]?.linkPreviews !== false)
-      const open = chat.filter(p => !p.startsWith('discord:#') && !namesDmWithOthers(p))
-      const named = chat.filter(p => p.startsWith('discord:#'))
+      const chat = answeredAt.filter(p => (p.platform === 'slack' || p.platform === 'discord') && optionsOf(places, p)?.linkPreviews !== false)
+      const byDiscordName = (p: Place) => p.platform === 'discord' && isChannelName(p)
+      const open = chat.filter(p => !byDiscordName(p) && !namesDmWithOthers(p))
+      const named = chat.filter(byDiscordName)
       const lead = `anyone can reach it in`
       const why = 'where a link in its answer unfurls a preview that can show readers content they could not open themselves'
-      if (open.length) warn(path, `${lead} ${listJoin(open)}, ${why}; set link_previews = false in ${open.map(p => `[places.${JSON.stringify(p)}]`).join(' and ')}`)
+      if (open.length) warn(path, `${lead} ${listJoin(open.map(placeKey))}, ${why}; set link_previews = false in ${open.map(p => `[places.${JSON.stringify(placeKey(p))}]`).join(' and ')}`)
       const noSwitch = chat.filter(namesDmWithOthers)
-      if (noSwitch.length) warn(path, `${lead} ${listJoin(noSwitch)}, ${why}; previews cannot be switched off there, so let it hear another place, or narrow \`reachable_by\``)
-      if (named.length) warn(path, `${lead} ${listJoin(named)}, ${why}; hydra can switch previews off in a Discord channel only by id, so list it as discord:<channel id> and set link_previews = false there`)
+      if (noSwitch.length) warn(path, `${lead} ${listJoin(noSwitch.map(placeKey))}, ${why}; previews cannot be switched off there, so let it hear another place, or narrow \`reachable_by\``)
+      if (named.length) warn(path, `${lead} ${listJoin(named.map(placeKey))}, ${why}; hydra can switch previews off in a Discord channel only by id, so list it as discord:<channel id> and set link_previews = false there`)
     }
     if (s.sessions === 'shared') {
-      if (answeredAt.length >= 2) warn(path, `one shared session hears ${answeredAt.join(', ')}, so what's said in one place is remembered in the others; use sessions = "per-conversation" or one specialist per place`)
-      else if (answeredAt.includes(SLACK_GROUP_DM) && s.reachableBy.length > 0) warn(path, `one shared session hears every group DM (reachable_by = ${JSON.stringify(s.reachableBy.map(spelledRole))}), so what one group says is remembered in another; use sessions = "per-conversation" or reachable_by = []`)
+      if (answeredAt.length >= 2) warn(path, `one shared session hears ${answeredAt.map(placeKey).join(', ')}, so what's said in one place is remembered in the others; use sessions = "per-conversation" or one specialist per place`)
+      else if (answeredAt.some(p => p.kind === 'group-dm' && isEvery(p)) && s.reachableBy.length > 0) warn(path, `one shared session hears every group DM (reachable_by = ${JSON.stringify(s.reachableBy.map(spelledRole))}), so what one group says is remembered in another; use sessions = "per-conversation" or reachable_by = []`)
       else if (answeredAt.some(isDmPlace) && s.reachableBy.length > 0) warn(path, `one shared session hears everyone's DMs (reachable_by = ${JSON.stringify(s.reachableBy.map(spelledRole))}), so one person's DM is remembered in another's; use sessions = "per-conversation" or reachable_by = []`)
     }
     // Without idle, a per-conversation session never ends on its own, so its slot under max_sessions never frees.
@@ -1075,14 +1104,14 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     const answeredViaEveryApp = (id: string) => placesAnsweredBy({ rules: rules.filter(r => r.app === undefined) }, id)
     if (!s.pinnedTo) for (const app of Object.keys(slackApps)) {
       const by = pinnersOf(specialists, app)
-      const lost = answeredViaEveryApp(s.id).find(p => p.startsWith('slack:') && !by.some(y => answeredViaEveryApp(y).includes(p)))
-      if (by.length && lost) warn(path, `${s.id} is unpinned, and ${spelledApp(app)} is pinned by ${by.join(', ')}, so ${s.id} no longer hears ${spelledApp(app)} on ${lost}`)
+      const lost = answeredViaEveryApp(s.id).find(p => p.platform === 'slack' && !by.some(y => answeredViaEveryApp(y).some(q => samePlace(q, p))))
+      if (by.length && lost) warn(path, `${s.id} is unpinned, and ${spelledApp(app)} is pinned by ${by.join(', ')}, so ${s.id} no longer hears ${spelledApp(app)} on ${placeKey(lost)}`)
     }
     for (const p of answeredAt) {
-      const platform = p.split(':')[0] as Platform | 'cli'
+      const platform = p.platform
       if (platform === 'cli') continue
-      if (!connected(platform)) warn(path, platform === 'slack' ? `a rule sends ${p} to it, but hydra.toml declares no Slack app: add [slack.apps.<id>], or it won't hear it` : `a rule sends ${p} to it, but [${platform === 'discord' ? 'gateways' : 'connectors'}.${platform}] isn't set, so it won't hear it`)
-      else if (platform === 'github' && !connectors.github!.repos.includes(p.slice('github:'.length))) warn(path, `a rule sends ${p} to it, but connectors.github.repos doesn't include it`)
+      if (!connected(platform)) warn(path, platform === 'slack' ? `a rule sends ${placeKey(p)} to it, but hydra.toml declares no Slack app: add [slack.apps.<id>], or it won't hear it` : `a rule sends ${placeKey(p)} to it, but [${platform === 'discord' ? 'gateways' : 'connectors'}.${platform}] isn't set, so it won't hear it`)
+      else if (p.kind === 'repository' && !connectors.github!.repos.includes(p.ref)) warn(path, `a rule sends ${placeKey(p)} to it, but connectors.github.repos doesn't include it`)
     }
   }
 
@@ -1105,13 +1134,6 @@ export function normalizeAddress(raw: string): Address | undefined {
   if (!Object.hasOwn(ADDRESS_RE, platform)) return undefined
   const a = platform === 'github' ? raw.toLowerCase() : raw
   return ADDRESS_RE[platform].test(a) ? a as Address : undefined
-}
-
-/** A place in canonical form (GitHub repos lowercased), or undefined. */
-export function normalizePlace(raw: string): Place | undefined {
-  if (raw === 'cli' || CHANNEL_PLACE_RE.test(raw)) return raw
-  if (raw.startsWith('github:') && REPO_RE.test(raw.slice(7).toLowerCase())) return raw.toLowerCase()
-  return undefined
 }
 
 function fillId(v: unknown, id: string): unknown {

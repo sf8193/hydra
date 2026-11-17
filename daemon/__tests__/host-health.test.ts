@@ -11,6 +11,7 @@ const DAY = 24 * 60 * MIN
 /** A judge with a fake alert and clock-free resume signal; `resumedAt` is when the machine last woke, if ever. */
 function harness(limits: Vitals = VITALS_DEFAULTS) {
   const alerts: string[] = []
+  const logs: string[] = []
   // 'later': the send stays out until the test settles it from `pending`.
   const state = { resumedAt: undefined as number | undefined, delivered: true as boolean | 'throw' | 'later' }
   const pending: Array<(sent: boolean) => void> = []
@@ -21,11 +22,11 @@ function harness(limits: Vitals = VITALS_DEFAULTS) {
       if (state.delivered === 'later') return new Promise<boolean>(r => pending.push(r))
       return state.delivered
     },
-    log: () => {},
+    log: l => { logs.push(l) },
     limits: () => limits,
     resumedWithin: (ms, now) => state.resumedAt !== undefined && now - state.resumedAt < ms,
   })
-  return { alerts, state, pending, tick: (r: HostReading, now: number) => host.tick(r, now) }
+  return { alerts, logs, state, pending, tick: (r: HostReading, now: number) => host.tick(r, now) }
 }
 
 // 16 cores: overload is 15-minute load 24 or more with idle under 15%.
@@ -189,6 +190,21 @@ describe('memory', () => {
     h.state.delivered = true
     h.tick(full, 17 * MIN)
     expect(h.alerts).toHaveLength(2)
+  })
+
+  test('the kind memory-low reads "host memory low" in the log and in the two delivery lines', async () => {
+    const refused = harness()
+    refused.state.delivered = false
+    for (let i = 0; i < 3; i++) refused.tick(full, i * MIN)
+    await settle()
+    expect(refused.logs.some(l => l.startsWith('daemon: host memory low ('))).toBe(true)
+    expect(refused.logs.some(l => l.startsWith('daemon: host memory low alert not delivered'))).toBe(true)
+    const failed = harness()
+    failed.state.delivered = 'throw'
+    for (let i = 0; i < 3; i++) failed.tick(full, i * MIN)
+    await settle()
+    expect(failed.logs.some(l => l.startsWith('daemon: host memory low alert failed: '))).toBe(true)
+    expect([...refused.logs, ...failed.logs].filter(l => l.includes('memory memory'))).toEqual([])
   })
 
   // macOS: swap grows on demand, so the OS's own pressure level is judged, never swap %.

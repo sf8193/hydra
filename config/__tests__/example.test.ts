@@ -2,8 +2,8 @@ import { describe, test, expect } from 'bun:test'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { loadHydraConfig, formatIssues } from '../load.js'
-import { placesAnsweredBy } from '../types.js'
-import { testLoadEnv } from './load-env.js'
+import { testLoadEnv, answeredKeys, ruleKeys } from './load-env.js'
+import { mustParsePlace } from '../types.js'
 import { route } from '../../routing/route.js'
 import type { Inbound } from '../../routing/route.js'
 
@@ -28,8 +28,8 @@ describe('hydra.example.toml', () => {
     // The confined specialist, its server and its place.
     expect(r.config.specialists.helpdesk).toMatchObject({ restricted: true, tools: ['Read', 'Grep', 'Glob'], mcpServerNames: ['datadog'], sendsTo: ['triage'] })
     expect(r.config.specialists.triage).toMatchObject({ restricted: true, sendsTo: ['helpdesk'] })
-    expect(placesAnsweredBy(r.config, 'triage')).toEqual([])
-    expect(placesAnsweredBy(r.config, 'crm')).toEqual(['slack:#help'])
+    expect(answeredKeys(r.config, 'triage')).toEqual([])
+    expect(answeredKeys(r.config, 'crm')).toEqual(['slack:#help'])
     expect(r.config.mcpServers?.datadog.tools).toEqual(['search_logs', 'get_monitor'])
     expect(r.config.places['slack:#ops']).toMatchObject({ messages: 'all', linkPreviews: false })
     expect(r.config.places['slack:#help'].linkPreviews).toBe(true)
@@ -45,12 +45,12 @@ describe('hydra.example.toml', () => {
     // The operator's DMs arrive through the app that holds the operator token, and `route` never reads the token: pin where it sits.
     expect(r.config.slackApps.default.operatorTokenEnv).toBeDefined()
     expect(r.config.slackApps.sales.operatorTokenEnv).toBeUndefined()
-    const to = (m: Partial<Inbound>) => { const d = route(r.config, { addressed: true, at: ['slack:#help'], ...m }); return d.fate === 'deliver' ? d.to : d.fate }
+    const to = (m: Partial<Inbound>) => { const d = route(r.config, { addressed: true, at: ['slack:#help'].map(mustParsePlace), ...m }); return d.fate === 'deliver' ? d.to : d.fate }
     expect(to({ from: 'slack:U0BOB', app: 'default' })).toBe('ops')            // finance via default: the first rule
     expect(to({ from: 'slack:U0BOB', app: 'sales' })).toBe('deals')            // via sales the first rule is skipped; the sales rule decides
     expect(to({ from: 'slack:U0ALICE', app: 'default' })).toBe('crm')
     expect(to({ from: 'slack:U0ALICE', app: 'sales' })).toBe('deals')
-    expect(to({ from: 'slack:U0OP', at: ['slack:dm:alice'], app: 'default' })).toBe('ops') // the operator-token app hears that DM
-    expect(to({ from: 'slack:U0BOB', at: ['slack:#ops'], app: 'sales' })).toBe('helpdesk')
+    expect(to({ from: 'slack:U0OP', at: ['slack:person-dm:alice'].map(mustParsePlace), app: 'default' })).toBe('ops') // the operator-token app hears that DM
+    expect(to({ from: 'slack:U0BOB', at: ['slack:#ops'].map(mustParsePlace), app: 'sales' })).toBe('helpdesk')
   })
 })

@@ -4,7 +4,7 @@
 // the same way with its own view, so what a place says is decided by this one function. A leaf module: the gateways cannot import hydra.toml's loader (config.ts builds the
 // gateway), so the daemon registers where the config and Slack's channel names come from.
 
-import type { ChatPlatform, HydraConfig } from '../config/types.js'
+import { EVERY, optionsOf, placeOf, type ChatPlatform, type HydraConfig, type Place } from '../config/types.js'
 
 type Source = {
   config: () => Pick<HydraConfig, 'places'> | undefined
@@ -21,25 +21,24 @@ export const registerPreviewConfig = (config: Source['config']): void => { sourc
 export const registerSlackChannelNames = (slackName: Source['slackName']): void => { source.slackName = slackName }
 
 /** Where a caller that has its own view of hydra.toml and of Slack's channel names (a connected app) asks from, instead of the registered ones. */
-export type PreviewSources = { config?: Pick<HydraConfig, 'places'>; slackName?: (channel: string) => string | undefined }
+export type PreviewSources = { config?: Pick<HydraConfig, 'places'>; slackName?: (channel: string) => string | undefined; /** The declared Slack app that sends: a DM with its bot is `slack:app-dm:<app>`. Absent (a sender that is no `[slack.apps]` app, like the Slack gateway's own bot): only `slack:app-dm:*` applies to its DMs. */ app?: string }
 
-/** The `[places]` keys a channel goes by: its id (a Discord thread and its parent channel both count), and a Slack channel's `#name`. A Discord DM is the id `dm`. */
-export function placeKeysOf(platform: ChatPlatform, ids: readonly string[], slackName: (channel: string) => string | undefined = source.slackName): string[] {
-  const keys: string[] = []
+/** The places a channel goes by: its id (a Discord thread and its parent channel both count), and a Slack channel's `#name`. A DM is the one DM place of the app that sends: a Discord DM is the id `dm`, a Slack DM an id starting with `D`. */
+export function placesFor(platform: ChatPlatform, ids: readonly string[], slackName: (channel: string) => string | undefined = source.slackName, app?: string): Place[] {
+  const at: Place[] = []
   for (const id of ids) {
-    keys.push(`${platform}:${id}`)
-    if (platform === 'slack') {
-      if (id.startsWith('D')) keys.push('slack:dm')
-      const name = slackName(id)
-      if (name) keys.push(`slack:#${name}`)
-    }
+    if (platform === 'discord' && id === 'dm') { at.push(placeOf('discord', 'app-dm', EVERY)); continue }
+    if (platform === 'slack' && id.startsWith('D')) { at.push(placeOf('slack', 'app-dm', app ?? EVERY)); continue }
+    at.push(placeOf(platform, 'channel', id))
+    const name = platform === 'slack' ? slackName(id) : undefined
+    if (name) at.push(placeOf('slack', 'channel', `#${name}`))
   }
-  return keys
+  return at
 }
 
 /** True when a place any of these channels goes by sets `link_previews = false`. Anything not declared keeps previews on. */
 export function linkPreviewsOff(platform: ChatPlatform, ids: readonly string[], from: PreviewSources = {}): boolean {
   const places = (from.config ?? source.config())?.places
   if (!places) return false
-  return placeKeysOf(platform, ids, from.slackName ?? source.slackName).some(k => Object.hasOwn(places, k) && places[k].linkPreviews === false)
+  return placesFor(platform, ids, from.slackName ?? source.slackName, from.app).some(p => optionsOf(places, p)?.linkPreviews === false)
 }

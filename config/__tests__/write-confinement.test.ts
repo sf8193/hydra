@@ -23,7 +23,7 @@ profile_env = { BROWSER_HOME = "{profile_dir}" }
 [mcp_servers.plain]
 command = "/usr/local/bin/datadog-mcp"
 `
-const spec = (body: string, reachableBy = '[]', workdir = '~/agents/ops') => `${BASE}\n[specialists.ops]\nworkdir = "${workdir}"\nreachable_by = ${reachableBy}\n${body}\n[[rules]]\nplace = "slack:dm"\ntarget = "specialist:ops"\n`
+const spec = (body: string, reachableBy = '[]', workdir = '~/agents/ops') => `${BASE}\n[specialists.ops]\nworkdir = "${workdir}"\nreachable_by = ${reachableBy}\n${body}\n[[rules]]\nplace = "slack:app-dm:*"\ntarget = "specialist:ops"\n`
 const errorsOf = (text: string): string[] => {
   const r = loadHydraConfig(text, env)
   if (r.ok) throw new Error('expected the load to fail')

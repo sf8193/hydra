@@ -4,8 +4,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { formatIssues, loadHydraConfig } from '../load.js'
-import { placesAnsweredBy } from '../types.js'
-import { testLoadEnv } from './load-env.js'
+import { testLoadEnv, answeredKeys, ruleKeys } from './load-env.js'
 
 const DOC = readFileSync(join(import.meta.dir, '..', '..', 'docs', 'slack.md'), 'utf8')
 
@@ -33,8 +32,8 @@ describe('docs/slack.md: the ops specialist example', () => {
     if (!r.ok) throw new Error(formatIssues(r.errors))
     expect(r.config.specialists.ops).toMatchObject({ restricted: true, tools: ['Read', 'Grep', 'Glob'], mcpServerNames: ['datadog'], reachableBy: ['staff'], sendsTo: ['ops-deep'], workdir: '/home/op/specialists/ops' })
     expect(r.config.specialists['ops-deep']).toMatchObject({ restricted: true, reachableBy: [], sendsTo: ['ops'], workdir: '/home/op/specialists/ops-deep' })
-    expect(placesAnsweredBy(r.config, 'ops')).toEqual(['slack:#ops'])
-    expect(placesAnsweredBy(r.config, 'ops-deep')).toEqual([])
+    expect(answeredKeys(r.config, 'ops')).toEqual(['slack:#ops'])
+    expect(answeredKeys(r.config, 'ops-deep')).toEqual([])
     expect(r.config.mcpServers?.datadog).toEqual({ name: 'datadog', command: '/usr/local/bin/datadog-mcp', tokenEnv: ['DD_API_KEY'], tools: ['search_logs', 'get_monitor'] })
     expect(r.config.places['slack:#ops']).toMatchObject({ messages: 'all', linkPreviews: false })
   })

@@ -90,7 +90,7 @@ describe('a kept tool works only in the session\'s own conversation', () => {
   const own = (id: string) => registry.get(id)!.threadId
   test.each([['reply', 'chat_id'], ['react', 'chat_id'], ['edit_message', 'chat_id'], ['delete_message', 'chat_id'], ['download_attachment', 'chat_id'], ['fetch_messages', 'channel']])('%s outside its own conversation is refused', async (tool, key) => {
     const id = restricted()
-    for (const other of ['th-someone-else', '123456789', 'slack:C0OTHER:1.0', 'slack:dm', '']) {
+    for (const other of ['th-someone-else', '123456789', 'slack:C0OTHER:1.0', 'slack:app-dm:*', '']) {
       expect(restrictedRefusal(id, tool, { [key]: other, text: 'x', message_id: 'm', emoji: 'x' })).toBe(other ? `${tool}: ${key} ${other} is not this session's own conversation; a restricted session acts only in its own thread or in a Slack conversation bound to its specialist` : `${tool}: ${key} is required: pass the ${key} of ${key === 'chat_id' ? 'the message you are answering' : 'the conversation you are reading'}`)
     }
     expect(restrictedRefusal(id, tool, { text: 'x' })).toBe(key === 'chat_id' ? `${tool}: chat_id is required: pass the chat_id of the message you are answering` : `${tool}: channel is required: pass the channel of the conversation you are reading`)   // no place named at all

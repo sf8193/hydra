@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test'
 import { loadHydraConfig } from '../../config/load.js'
-import type { LoadEnv } from '../../config/types.js'
+import { placeKey, placeOf, type LoadEnv, type Place } from '../../config/types.js'
 import { routeFor, routeFlags, ROUTE_USAGE } from '../route-request.js'
 import { testLoadEnv } from '../../config/__tests__/load-env.js'
 
@@ -27,7 +27,7 @@ target = "specialist:deals"
 `, env)
 if (!r.ok) throw new Error(JSON.stringify(r.errors))
 const CFG = r.config
-const aliases = (p: string) => p === 'slack:#help' ? ['slack:C0HELP', p] : [p]
+const aliases = (p: Place): Place[] => placeKey(p) === 'slack:#help' ? [placeOf('slack', 'channel', 'C0HELP'), p] : [p]
 const run = (p: Parameters<typeof routeFor>[1]) => routeFor(CFG, { person: 'person:op', place: 'slack:#help', ...p }, aliases)
 
 describe('hydra route --app', () => {
@@ -88,7 +88,7 @@ describe('hydra route --app', () => {
   })
 })
 
-describe('hydra route --place slack:dm:<person>', () => {
+describe('hydra route --place slack:person-dm:<person>', () => {
   const o = loadHydraConfig(`
 operator = "op"
 [slack.apps.default]
@@ -101,19 +101,24 @@ addresses = ["slack:U0ALICE"]
 workdir = "/a/asst"
 reachable_by = ["role:anyone"]
 [[rules]]
-place = "slack:dm"
+place = "slack:app-dm:*"
 target = "specialist:assistant"
 [specialists.alices]
 workdir = "/a/alices"
 reachable_by = ["role:anyone"]
 [[rules]]
-place = "slack:dm:alice"
+place = "slack:person-dm:alice"
 target = "specialist:alices"
 `, env)
   if (!o.ok) throw new Error(JSON.stringify(o.errors))
   const ask = (place: string) => routeFor(o.config, { person: 'person:alice', place }, p => [p])
   test('simulates a DM with Alice with no new flag: the place says whose DM it is', () => {
-    expect(ask('slack:dm:alice')).toMatchObject({ ok: true, fate: 'deliver', to: 'alices' })
-    expect(ask('slack:dm')).toMatchObject({ ok: true, fate: 'deliver', to: 'assistant' })
+    expect(ask('slack:person-dm:alice')).toMatchObject({ ok: true, fate: 'deliver', to: 'alices' })
+    expect(ask('slack:app-dm:default')).toMatchObject({ ok: true, fate: 'deliver', to: 'assistant' })
+  })
+  test('a place names one place: * is refused, an old form names the new one, a DM with an app is heard through that app', () => {
+    expect(ask('slack:app-dm:*')).toMatchObject({ ok: false, error: expect.stringContaining('names every place of a kind') })
+    expect(ask('slack:dm')).toMatchObject({ ok: false, error: expect.stringContaining('slack:app-dm:<app>') })
+    expect(routeFor(o.config, { person: 'person:alice', place: 'slack:app-dm:default', app: 'app:other' }, p => [p])).toMatchObject({ ok: false })
   })
 })

@@ -328,7 +328,7 @@ describe('bind_conversation / unbind_conversation', () => {
   })
 
   test("a DM or a place's top level is never bound by hand: the operator's DM stays main's", async () => {
-    configure(alsoHeard(TOML, FOOD, 'slack:dm'))
+    configure(alsoHeard(TOML, FOOD, 'slack:app-dm:*'))
     getSlackWatcher().bind('D0OP', '0.000000', 'main')
     await expect(bindConversation(food, 'slack:D0OP')).rejects.toThrow('only a thread can be bound by hand')
     await expect(bindConversation(food, 'slack:C1')).rejects.toThrow('only a thread can be bound by hand')

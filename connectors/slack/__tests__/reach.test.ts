@@ -1,4 +1,5 @@
 import { describe, test, expect } from 'bun:test'
+import { mustParsePlace as P, placeKey } from '../../../config/types.js'
 import { hydra, TWO_APPS } from './slack-config.js'
 import { reachableBy, slackSpecialistsOf, reachesAnyone } from '../../../routing/route.js'
 import { namedChannels, hearsDms, dmsDeclared } from '../watch.js'
@@ -7,7 +8,7 @@ import { SLACK_APP_NEEDS } from '../app.js'
 
 // One fixture, every consumer of "what can this app reach": the same answer, read four ways.
 //   default (unpinned crm): crm listens #help; a rule for every app sends G0PRIV to crm.
-//   sales (pinned deals): deals listens C0DEALS and slack:dm; a rule for sales alone, with no place, sends to ops (pinned to sales, no listens).
+//   sales (pinned deals): deals listens C0DEALS and slack:app-dm:*; a rule for sales alone, with no place, sends to ops (pinned to sales, no listens).
 //   a rule to a specialist that is no longer declared (the loader refuses one; a reload can leave one) is ignored everywhere.
 const TOML = `${TWO_APPS}
 [specialists.crm]
@@ -24,7 +25,7 @@ reachable_by = ["role:anyone"]
 place = "slack:C0DEALS"
 target = "specialist:deals"
 [[rules]]
-place = "slack:dm"
+place = "slack:app-dm:*"
 target = "specialist:deals"
 [specialists.ops]
 workdir = "/w/ops"
@@ -43,33 +44,33 @@ describe('what an app can reach: one answer, four readers', () => {
   const h = hydra(NO_OPERATOR_ADDRESS)
   const table: { app: string; specialists: string[]; channels: string[]; declaredDms: boolean; alertTo: string[]; hearsAt: [string[], boolean][] }[] = [
     { app: 'default', specialists: ['crm'], channels: ['slack:#help', 'slack:G0PRIV'], declaredDms: false, alertTo: ['crm'],
-      hearsAt: [[['slack:#help'], true], [['slack:C0DEALS'], false], [['slack:dm'], true]] },
+      hearsAt: [[['slack:#help'], true], [['slack:C0DEALS'], false], [['slack:app-dm:*'], true]] },
     { app: 'sales', specialists: ['deals', 'ops'], channels: ['slack:C0DEALS'], declaredDms: true, alertTo: ['deals', 'ops'],
-      hearsAt: [[['slack:C0DEALS'], true], [['slack:#help'], true], [['slack:dm'], true]] },
+      hearsAt: [[['slack:C0DEALS'], true], [['slack:#help'], true], [['slack:app-dm:*'], true]] },
   ]
   for (const row of table) {
     test(`the app ${row.app}`, () => {
       expect(reachableBy(h, row.app).specialists.map(s => s.id).sort()).toEqual(row.specialists)
-      expect(namedChannels(h, row.app).sort()).toEqual([...row.channels].sort())
+      expect(namedChannels(h, row.app).map(placeKey).sort()).toEqual([...row.channels].sort())
       expect(dmsDeclared({ hydra: h, app: row.app })).toBe(row.declaredDms)
       expect(slackSpecialistsOf(h, row.app).sort()).toEqual(row.alertTo)
-      for (const [at, expected] of row.hearsAt) expect(reachesAnyone(h, row.app, at), `${row.app} at ${at}`).toBe(expected)
+      for (const [at, expected] of row.hearsAt) expect(reachesAnyone(h, row.app, at.map(a => P(a === 'slack:app-dm:*' ? `slack:app-dm:${row.app}` : a))), `${row.app} at ${at}`).toBe(expected)
     })
   }
 
   test('a rule to a specialist that is not declared reaches no one, anywhere', () => {
-    const ghost = { ...h, rules: [...h.rules, { place: 'slack:C0GHOST', target: 'nobody' }] }
+    const ghost = { ...h, rules: [...h.rules, { place: P('slack:C0GHOST'), target: 'nobody' }] }
     for (const app of ['default', 'sales']) {
       expect(reachableBy(ghost, app).rules.map(r => r.target)).not.toContain('nobody')
-      expect(namedChannels(ghost, app)).not.toContain('slack:C0GHOST')
+      expect(namedChannels(ghost, app).map(placeKey)).not.toContain('slack:C0GHOST')
     }
-    expect(reachesAnyone(ghost, 'default', ['slack:C0GHOST'])).toBe(false)
+    expect(reachesAnyone(ghost, 'default', [P('slack:C0GHOST')])).toBe(false)
     expect(reachableBy(ghost).rules.map(r => r.target)).not.toContain('nobody')
   })
 
   test('a rule with no place reaches every place through its app: counted for alerts and scopes, not for named channels', () => {
     expect(slackSpecialistsOf(h, 'sales')).toContain('ops')
-    expect(namedChannels(h, 'sales')).toEqual(['slack:C0DEALS'])
+    expect(namedChannels(h, 'sales').map(placeKey)).toEqual(['slack:C0DEALS'])
     expect(scopesNeeded(h, 'sales')).toContain(SLACK_APP_NEEDS.botScopes.channels)
   })
 
@@ -89,7 +90,7 @@ describe('what an app is asked for, by what it reaches', () => {
   test('an app-only rule reaches every place and asks for channel history, with no named place', () => {
     const t = NO_ADDRESS(`${TWO_APPS}\n[specialists.x]\nworkdir = "/w/x"\npinned_to = ["app:sales"]\nreachable_by = ["role:anyone"]\n[[rules]]\napp = "app:sales"\ntarget = "specialist:x"\n`)
     expect(needs(t, 'sales')).toContain(SLACK_APP_NEEDS.botScopes.channels)
-    // …and not DMs: nothing names slack:dm, and the operator has no Slack address.
+    // …and not DMs: nothing names slack:app-dm:*, and the operator has no Slack address.
     expect(needs(t, 'sales')).not.toContain(SLACK_APP_NEEDS.botScopes.dms)
     expect(needs(t, 'default')).not.toContain(SLACK_APP_NEEDS.botScopes.channels)
   })
@@ -110,7 +111,7 @@ describe('what an app is asked for, by what it reaches', () => {
 
   test('the membership read is asked only of an app that reads channels, and only with several apps', () => {
     // sales is pinned to a specialist that hears only DMs, so it reads no channel.
-    const t = NO_ADDRESS(`${TWO_APPS}\n[specialists.crm]\nworkdir = "/w/c"\nreachable_by = ["role:anyone"]\n[[rules]]\nplace = "slack:C0A"\ntarget = "specialist:crm"\n[specialists.dm]\nworkdir = "/w/d"\npinned_to = ["app:sales"]\nreachable_by = ["role:anyone"]\n[[rules]]\nplace = "slack:dm"\ntarget = "specialist:dm"\n`)
+    const t = NO_ADDRESS(`${TWO_APPS}\n[specialists.crm]\nworkdir = "/w/c"\nreachable_by = ["role:anyone"]\n[[rules]]\nplace = "slack:C0A"\ntarget = "specialist:crm"\n[specialists.dm]\nworkdir = "/w/d"\npinned_to = ["app:sales"]\nreachable_by = ["role:anyone"]\n[[rules]]\nplace = "slack:app-dm:*"\ntarget = "specialist:dm"\n`)
     expect(needs(t, 'default')).toContain(SLACK_APP_NEEDS.membership.public)
     expect(needs(t, 'sales')).not.toContain(SLACK_APP_NEEDS.membership.public)
   })

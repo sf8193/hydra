@@ -17,7 +17,7 @@ export const SLACK_APP_NEEDS = {
     senderNames: { option: 'sender names', any: ['users:read'] },
     dms: { option: 'dms', any: ['im:history'] },
     dmCatchUp: { option: 'catching up DMs opened while disconnected', any: ['im:read'] },
-    groupDms: { option: 'group dms (slack:group-dm)', any: ['mpim:history'] },
+    groupDms: { option: 'group dms (slack:group-dm:…)', any: ['mpim:history'] },
     files: { option: 'files', any: ['files:read'] },
     reactions: { option: 'ack and 🚫 reactions', any: ['reactions:write'] },
     reactionsRead: { option: 'reactions (a place with reactions on)', any: ['reactions:read'] },

@@ -8,17 +8,17 @@ Checked against code at 42721c5. Bold names are README's core abstractions or th
 | 1. the app connected, and the ts valid? | `connectors/slack/watch.ts:735-737` | `config(app)` is null until that app has connected; a bad `ts` or `threadTs` → `ignored` |
 | its Cursor moves, whatever follows | `connectors/slack/watch.ts:738-742` | after `classify`, whatever it returned |
 | in a channel a rule names, now | `connectors/slack/watch.ts:741`, `:232-235` | `routedChannels(cfg).includes(channel)` |
-| in the bot's DM, once owed | `connectors/slack/watch.ts:741`, `:868-870` | `outcome === 'dm'` (returned only after `enqueue`) and the place is `slack:dm` |
+| in the bot's DM, once owed | `connectors/slack/watch.ts:741`, `:868-870` | `outcome === 'dm'` (returned only after `enqueue`) and the place is `slack:app-dm:<app>` |
 | never while catch-up holds it | `connectors/slack/watch.ts:742`, `:698` | `!this.held.has(…)` |
 | 2. a message to take up? / an edit, a delete, a join | `connectors/slack/watch.ts:393`, `:757` | only no subtype, `thread_broadcast`, `file_share`, `bot_message` |
 | a hydra app's own bot, elsewhere | `connectors/slack/watch.ts:764-766` | another hydra app's bot (`sibling`) is ignored, `bots = true` or not |
 | another bot, unless the place has bots = true | `connectors/slack/watch.ts:767-768` | `otherBot && !placeOptions(…)?.bots` |
 | one already in flight | `connectors/slack/watch.ts:788` | its ts is in `inflight` for the conversation |
 | its Place names | `connectors/slack/watch.ts:201-211`, `:782` | `placesOf` |
-| a channel: slack:id, slack:#name; the bot's DM: slack:dm; a DM with a person: slack:dm:person; a group DM: slack:id, slack:group-dm | `connectors/slack/watch.ts:193-199`, `:204-210` | a DM with someone not in `[people]`, or not yet known: `[]` |
-| 3. the place named, or the Conversation open? | `connectors/slack/watch.ts:796` | `!existing && !slack:dm && !namedPlace && (inNoBotDm \|\| (!tagged && operatorTokenEnv))` → `ignored` |
-| named: slack:dm, a [places] entry, or a rule's place for a target this app serves | `connectors/slack/watch.ts:252-255`; `routing/route.ts:146-152` | `namedPlace`, over `reachableBy(app)` rules |
-| no, and a DM with a person or a group DM | `connectors/slack/watch.ts:770`, `:784` | `dm` includes group DMs; `inNoBotDm = dm && !at.includes(slack:dm)` |
+| a channel: slack:id, slack:#name; an app's bot DM: slack:app-dm:app; a DM with a person: slack:person-dm:person; a group DM: slack:id, slack:group-dm:id | `connectors/slack/watch.ts:193-199`, `:204-210` | a DM with someone not in `[people]`, or not yet known: `[]` |
+| 3. the place named, or the Conversation open? | `connectors/slack/watch.ts:796` | `!existing && !at.some(isDmPlace) && !namedPlace && (inNoBotDm \|\| (!tagged && operatorTokenEnv))` → `ignored` |
+| named: slack:app-dm:app, a [places] entry, or a rule's place for a target this app serves | `connectors/slack/watch.ts:252-255`; `routing/route.ts:146-152` | `namedPlace`, over `reachableBy(app)` rules |
+| no, and a DM with a person or a group DM | `connectors/slack/watch.ts:770`, `:784` | `dm` includes group DMs; `inNoBotDm = dm && !at.some(isDmPlace)` |
 | or untagged, and the app has the operator's token | `connectors/slack/watch.ts:796` | `!tagged && cfg.hydra.slackApps[app]?.operatorTokenEnv` |
 | 4. the bot's own? | `connectors/slack/watch.ts:761`, `:798` | `own` = the bot's user id or bot id |
 | yes: a top-level post → opens a Conversation for whoever a rule sends this place to; nothing owed | `connectors/slack/watch.ts:803-812`, `:301-305` | `listenerOf` routes as the operator, addressed; `watch(…)`; its ts put in `delivered`; `subscribed` |

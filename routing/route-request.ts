@@ -1,7 +1,7 @@
 // `hydra route`'s request, answered from a loaded config: pure, so the daemon and the tests ask it the same way.
 import { normalizeAddress } from '../config/load.js'
 import { noSuchApp } from '../config/pins.js'
-import { DEFAULT_SLACK_APP, type Address, type HydraConfig } from '../config/types.js'
+import { DEFAULT_SLACK_APP, isEvery, parsePlace, type Address, type HydraConfig, type Place } from '../config/types.js'
 import { readValue, spelledApp } from '../shared/value-kind.js'
 import { explain, answersLines, route } from './route.js'
 
@@ -23,7 +23,7 @@ export function routeFlags(args: string[]): { ok: true; params: RouteParams } {
  * `default`); `--heard-by` adds the other apps in the channel, and `--mentioned` lists the apps the text tags, first tag first, so
  * ownership shows too. It reads the config and binds nothing.
  */
-export function routeFor(h: HydraConfig, p: RouteParams, aliases: (place: string, app?: string) => string[]): { ok: true; fate: string; to?: string; report: string } | { ok: false; error: string } {
+export function routeFor(h: HydraConfig, p: RouteParams, aliases: (place: Place, app?: string) => Place[]): { ok: true; fate: string; to?: string; report: string } | { ok: false; error: string } {
   if (!p.person || !p.place) return { ok: false, error: ROUTE_USAGE }
   // An app is `app:<id>`. A person is `person:<id>`, an address (`slack:U0ABC`) or `stranger`.
   const appName = (flag: string, v: string): string | Error => { const r = readValue(v, ['app']); return r.ok ? r.name : new Error(`${flag}: ${r.error}`) }
@@ -40,7 +40,15 @@ export function routeFor(h: HydraConfig, p: RouteParams, aliases: (place: string
   if (mentioned instanceof Error) return { ok: false, error: mentioned.message }
   const bare = (v: string | undefined) => v === undefined ? undefined : (appName('', v) as string)
   const [person, place] = [p.person, p.place]
+  const parsed = parsePlace(place)
+  if (!parsed.ok) return { ok: false, error: parsed.error }
+  if (isEvery(parsed.place)) return { ok: false, error: `"${place}" names every place of a kind; a message happens at one, so name it (for example slack:app-dm:<app>)` }
   p = { ...p, ...(p.app && { app: bare(p.app) }), ...(p.boundApp && { boundApp: bare(p.boundApp) }) }
+  // A DM with an app's bot is heard through that app.
+  if (parsed.place.platform === 'slack' && parsed.place.kind === 'app-dm') {
+    if (p.app && p.app !== parsed.place.ref) return { ok: false, error: `--app ${spelledApp(p.app)} contradicts --place ${place}: a DM with an app's bot is heard through that app` }
+    p = { ...p, app: parsed.place.ref }
+  }
   if (p.boundApp && !p.bound) return { ok: false, error: '--bound-app goes with --bound: it names the app the conversation bound to that specialist is bound through' }
   let from: Address | undefined
   if (person !== 'stranger') {
@@ -48,9 +56,9 @@ export function routeFor(h: HydraConfig, p: RouteParams, aliases: (place: string
     from = known ? known.addresses[0] : normalizeAddress(person)
     if (!from) return { ok: false, error: `"${person}" is neither a person in hydra.toml (person:<id>) nor an address like slack:U0ABC` }
   }
-  const at = aliases(place, p.app)   // channel names are read per app: each reads its own workspace's
+  const at = aliases(parsed.place, p.app)   // channel names are read per app: each reads its own workspace's
   // An app only means something on a Slack place; elsewhere the message came through no app.
-  const slack = at.some(x => x.startsWith('slack:'))
+  const slack = at.some(x => x.platform === 'slack')
   const app = p.app || DEFAULT_SLACK_APP
   const named: [string, string][] = [
     ...(slack ? [[p.app ? '`--app`' : `\`--app\` (default \`${spelledApp(DEFAULT_SLACK_APP)}\`)`, app] as [string, string]] : []),

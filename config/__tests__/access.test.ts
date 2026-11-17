@@ -38,7 +38,7 @@ tools = ["search_logs", "get_monitor"]
 [mcp_servers.empty]
 command = "bun"
 `
-const spec = (body: string, workdir = '~/agents/ops') => `${BASE}\n[specialists.ops]\nworkdir = "${workdir}"\nreachable_by = []\n${body}\n[[rules]]\nplace = "slack:dm"\ntarget = "specialist:ops"\n`
+const spec = (body: string, workdir = '~/agents/ops') => `${BASE}\n[specialists.ops]\nworkdir = "${workdir}"\nreachable_by = []\n${body}\n[[rules]]\nplace = "slack:app-dm:*"\ntarget = "specialist:ops"\n`
 
 const load = (text: string, e: LoadEnv = env) => loadHydraConfig(text, e)
 const errorsOf = (text: string, e: LoadEnv = env): string[] => {
@@ -291,7 +291,7 @@ describe('engine', () => {
 describe('[defaults.specialist]', () => {
   test.each(['restricted = true', 'tools = ["Read"]', 'mcp_servers = ["datadog"]', 'sends_to = ["y"]'])('%s is refused as a default', line => {
     const key = line.split(' ')[0]
-    const text = `${BASE}\n[defaults.specialist]\nworkdir = "~/agents/ops"\n${line}\n[specialists.ops]\nreachable_by = []\n[[rules]]\nplace = "slack:dm"\ntarget = "specialist:ops"\n`
+    const text = `${BASE}\n[defaults.specialist]\nworkdir = "~/agents/ops"\n${line}\n[specialists.ops]\nreachable_by = []\n[[rules]]\nplace = "slack:app-dm:*"\ntarget = "specialist:ops"\n`
     expect(errorsOf(text)).toEqual([`defaults.specialist.${key}: can't be a default: ${key} says what one specialist's session may reach. Set it under [specialists.<id>] by editing hydra.toml`])
   })
 })
@@ -306,21 +306,21 @@ describe('the warning for an operator-access specialist someone else can talk to
 
   describe('who can talk to it', () => {
     test('reachable_by = []: only the operator, whatever place it is in', () => {
-      expect(warnings('' + heard("slack:dm"), 'reachable_by = []')).toEqual([])
+      expect(warnings('' + heard("slack:app-dm:*"), 'reachable_by = []')).toEqual([])
       expect(warnings('' + heard("slack:C0CF123"), 'reachable_by = []')).toEqual([])
     })
     test('the default reachable_by = ["role:people"] with a roster of only the operator: no one else, no warning', () => {
-      expect(warnings('' + heard("slack:dm"), '')).toEqual([])
+      expect(warnings('' + heard("slack:app-dm:*"), '')).toEqual([])
       expect(warnings('' + heard("slack:C0CF123"), '')).toEqual([])
     })
     test('reachable_by = ["role:people"] with others on the roster names them', () => {
-      expect(warnings('' + heard("slack:dm"), 'reachable_by = ["role:people"]', WITH_ALICE)).toEqual(WARN('person:alice and person:bob (reachable_by = ["role:people"])'))
+      expect(warnings('' + heard("slack:app-dm:*"), 'reachable_by = ["role:people"]', WITH_ALICE)).toEqual(WARN('person:alice and person:bob (reachable_by = ["role:people"])'))
     })
     test('a role names its holders other than the operator', () => {
-      expect(warnings('' + heard("slack:dm"), 'reachable_by = ["role:staff"]', WITH_ALICE)).toEqual(WARN('person:alice (role:staff)'))
+      expect(warnings('' + heard("slack:app-dm:*"), 'reachable_by = ["role:staff"]', WITH_ALICE)).toEqual(WARN('person:alice (role:staff)'))
     })
     test('reachable_by = ["role:anyone"]', () => {
-      expect(warnings('' + heard("slack:dm"), 'reachable_by = ["role:anyone"]')).toEqual(WARN('anyone'))
+      expect(warnings('' + heard("slack:app-dm:*"), 'reachable_by = ["role:anyone"]')).toEqual(WARN('anyone'))
     })
     test('anyone in a shared or public place says which', () => {
       expect(warnings('' + heard("slack:C0CF123"), 'reachable_by = ["role:anyone"]')).toEqual(WARN('anyone in slack:C0CF123'))
@@ -335,7 +335,7 @@ describe('the warning for an operator-access specialist someone else can talk to
       expect(ok(alone).warnings.filter(w => w.includes("the operator's account"))).toEqual([])
     })
     test('a bots = true place: other bots talk to it whatever reachable_by says', () => {
-      expect(warnings('[places."slack:dm"]\nbots = true\n' + heard("slack:dm"), 'reachable_by = []')).toEqual(WARN('any other bot in slack:dm'))
+      expect(warnings('[places."slack:app-dm:*"]\nbots = true\n' + heard("slack:app-dm:*"), 'reachable_by = []')).toEqual(WARN('any other bot in slack:app-dm:*'))
     })
   })
 

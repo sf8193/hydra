@@ -32,9 +32,9 @@ function holder(c: Case) {
   const dir = mkdtempSync(join(tmpdir(), 'slack-fuzz-'))
   dirs.push(dir)
   const dm = c.shape === 'dm'
-  const place = `[places."${dm ? 'slack:dm' : `slack:${CH}`}"]\nreactions = "${c.mode}"\n`
+  const place = `[places."${dm ? 'slack:app-dm:*' : `slack:${CH}`}"]\nreactions = "${c.mode}"\n`
   const extra = `${PEOPLE}${c.guard ? '[guard]\ncommand = "guard"\n' : ''}${place}`
-  const toml = dm ? alsoHeard(oneListener(CH, 'helper', c.reach, extra), 'helper', 'slack:dm')
+  const toml = dm ? alsoHeard(oneListener(CH, 'helper', c.reach, extra), 'helper', 'slack:app-dm:*')
     : c.shape === 'two' ? sharedChannel(CH, extra).replaceAll('["role:anyone"]', c.reach)
     : oneListener(CH, 'helper', c.reach, extra)
   const identities = { default: { botUserId: BOT }, sales: { botUserId: SALES_BOT } }

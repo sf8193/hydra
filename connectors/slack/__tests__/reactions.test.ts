@@ -176,7 +176,7 @@ describe('inbound reactions', () => {
 
   test('a reaction on the bot\'s post in its own DM is heard, once the conversation is open; a place with reactions off notes nothing', async () => {
     const DM = 'D0BOT1'
-    const toml = (mode: string) => alsoHeard(oneListener(CH, 'helper', '["role:anyone"]', `[places."slack:dm"]\nreactions = "${mode}"\n`), 'helper', 'slack:dm')
+    const toml = (mode: string) => alsoHeard(oneListener(CH, 'helper', '["role:anyone"]', `[places."slack:app-dm:*"]\nreactions = "${mode}"\n`), 'helper', 'slack:app-dm:*')
     const on = setup(view(toml('bot-messages'), { workspaceUrl: 'https://acme.slack.com' }))
     on.w.handle({ channel: DM, ts: '5000.000001', user: 'UOP', text: 'hello' })
     on.w.handle({ channel: DM, ts: '5000.000002', user: BOT, text: 'hi, how can I help' })

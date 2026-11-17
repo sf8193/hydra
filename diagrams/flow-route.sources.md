@@ -15,7 +15,7 @@ Checked against code at 42721c5. Bold names are README's core abstractions or th
 | no → ignored | `routing/route.ts:235-236` | fate `ignored` |
 | 3. the first Rule that matches? | `routing/route.ts:240-249` | `[[rules]]` in file order; first match wins |
 | a rule matches when each key it sets fits (place, app, person, serves) | `routing/route.ts:241-245`; `config/pins.ts:16` | `atOk`, `appOk`, `fromOk` (a role counts), then `notServedBy`; `main` is always served (`route.ts:125`) |
-| 4. the Operator, in the bot's DM? | `routing/route.ts:251`; `config/types.ts:30` | `sender.operator && at.some(isDmPlace)`; `isDmPlace` is `slack:dm` or `discord:dm` only |
+| 4. the Operator, in the bot's DM? | `routing/route.ts:251`; `config/types.ts:30` | `sender.operator && at.some(isDmPlace)`; `isDmPlace` is kind `app-dm` only (`slack:app-dm:<app>`, `discord:app-dm:*`) |
 | yes → main | `routing/route.ts:253` | `winner = main` |
 | no → unrouted | `routing/route.ts:256` | fate `unrouted` |
 | 5. Reach | `routing/route.ts:86-98` `refusal` | judged on every winner (`decide`, `:206-208`) |
