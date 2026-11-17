@@ -1,6 +1,6 @@
 import { route } from '../../routing/route.js'
 import { DEFAULT_SLACK_APP, SLACK_DM } from '../../config/types.js'
-import { cmpTs, routedChannels, hearsDms, addressOf, TOP_LEVEL, OPERATOR_TOKEN_REFUSED, type SlackFile, type SlackMessageEvent, type SlackWatchConfig, type CatchUpWatch } from './watch.js'
+import { cmpTs, routedChannels, hearsDms, addressOf, TOP_LEVEL, OPERATOR_TOKEN_REFUSED, NOT_A_MEMBER, type SlackFile, type SlackMessageEvent, type SlackWatchConfig, type CatchUpWatch } from './watch.js'
 
 /** Slack's clock and ours differ a little: a thread is read from this long before its bind, so a reply just after it is not passed over. */
 const BIND_SKEW_S = 10
@@ -100,7 +100,11 @@ function justBefore(ts: string): string {
 
 let dmListFailLoggedAt = -Infinity
 /** For tests: forget when the DM-listing failure was last logged. */
-export function _resetCatchUpLogs(): void { dmListFailLoggedAt = -Infinity }
+export function _resetCatchUpLogs(): void { dmListFailLoggedAt = -Infinity; unreadableLogged.clear() }
+/** Channels said once per daemon to be unreadable, so a channel that never becomes readable is not logged every pass. */
+const unreadableLogged = new Set<string>()
+/** Slack's answers that are about the pass, not one channel: a rate limit, a refused or missing token, a missing scope, the network. */
+const PASS_WIDE = new RegExp(`rate_?limited|missing_scope|invalid_auth|not_authed|token_|account_inactive|ratelimited|fetch failed|network|timeout|ECONN|ENOTFOUND|${OPERATOR_TOKEN_REFUSED}`, "i")
 
 const nowTs = (now: number) => `${Math.floor(now / 1000)}.000000`
 
@@ -146,9 +150,12 @@ export async function catchUp(watcher: CatchUpWatch, api: SlackApi, cfg: SlackWa
   }
 
   const dms = hearsDms(cfg)
-  const scanned = [...routedChannels(cfg), ...(dms ? watcher.dmChannels() : [])]
+  // Past the channels hydra.toml names: those where this app was tagged (bounded), read with what the budget leaves, like DMs.
+  const tagged = new Set(watcher.taggedChannels())
+  const scanned = [...routedChannels(cfg), ...tagged, ...(dms ? watcher.dmChannels() : [])]
   watcher.beginCatchUp(scanned)
   const skipped = new Set<string>()
+  const unreadable = new Set<string>()
   const readTs: string[] = []
   try {
     // 0. DM conversations this daemon has not seen yet (one opened while it was down), with someone whose DMs are heard.
@@ -212,6 +219,7 @@ export async function catchUp(watcher: CatchUpWatch, api: SlackApi, cfg: SlackWa
     })
     for (const channel of order) {
       // Each wanted thread needs a call; a few more cover threads the channel scans turn up.
+      // Channels no rule names (DMs, tagged ones) wait behind the named ones: a short budget skips them, so it starves only them.
       if (!routed.has(channel) && calls >= maxCalls - threads.size - THREAD_SLACK) { skipped.add(channel); continue }
       const held = watcher.channelCursor(channel) ?? newDm.get(channel)
       const owedFrom = dmFrom.get(channel)
@@ -223,8 +231,20 @@ export async function catchUp(watcher: CatchUpWatch, api: SlackApi, cfg: SlackWa
         // A refusal that names no channel is given one: the operator must know which to invite the bot to.
         const res = await api.history({ channel, oldest: cursor, ...(page && { cursor: page }) }).catch((err: unknown) => {
           const why = err instanceof Error ? err.message : String(err)
+          // A channel read only because a tag was heard there: one that cannot be read (the bot is not in it, it is archived,
+          // access is denied) costs a log line, not the pass, which would hold every cursor for a channel no rule asked for.
+          // What is pass-wide (a rate limit, a refused token, a missing scope, the network) still fails it.
+          if (tagged.has(channel) && !PASS_WIDE.test(why)) return null
           throw /not_in_channel|channel_not_found/.test(why) ? new Error(`${why} (reading ${channel})`) : err
         })
+        if (!res) {
+          unreadable.add(channel)
+          if (!unreadableLogged.has(channel)) {
+            unreadableLogged.add(channel)
+            opts.log(`daemon: slack connector: catch-up: ${channel} can't be read, so a tag of this app missed there is not replayed (invite the bot to ${channel}); its cursor stays put\n`)
+          }
+          break
+        }
         for (const m of res.messages) if (m.ts) { note(channel, m.ts); readTs.push(m.ts) }
         // A DM read in full and found empty moves its cursor to now, even if this pass is cut short later: there is
         // nothing in it to replay. Without that, a new one would be read back a day on every pass, and a quiet known
@@ -249,7 +269,7 @@ export async function catchUp(watcher: CatchUpWatch, api: SlackApi, cfg: SlackWa
       readTs.length = 0
     }
 
-    if (skipped.size) opts.log(`daemon: slack connector: catch-up: ${skipped.size} DM conversation(s) left for the next pass (call budget); their cursors stay held until one reads them\n`)
+    if (skipped.size) opts.log(`daemon: slack connector: catch-up: ${skipped.size} conversation(s) no rule names left for the next pass (call budget); their cursors stay held until one reads them\n`)
 
     // 4. Read the threads (owed, deep, and those the scans found).
     for (const t of threads.values()) {
@@ -291,6 +311,6 @@ export async function catchUp(watcher: CatchUpWatch, api: SlackApi, cfg: SlackWa
   }
 
   // A skipped DM stays held: a live event must not move its cursor past the gap no pass has read yet.
-  for (const channel of scanned) if (!skipped.has(channel)) watcher.endCatchUp(channel, newest.get(channel))
+  for (const channel of scanned) if (!skipped.has(channel)) watcher.endCatchUp(channel, unreadable.has(channel) ? undefined : newest.get(channel))
   return { complete: true, calls, handled, accepted }
 }

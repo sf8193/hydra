@@ -325,6 +325,10 @@ export const cmpTs = (a: string, b: string): number => { const d = tsValue(a) - 
 
 const DELIVERED_KEEP = 300
 const AMBIENT_IDLE_MS = 86_400_000
+/** The time of a tag in a store that kept none: older than any. */
+const UNKNOWN_TS = '0.000000'
+/** How many channels no rule names catch-up reads for an app, the ones it was tagged in most recently: the bound on the extra history reads. */
+export const TAGGED_CHANNELS_MAX = 20
 /** The longest a conversation waits for a session of its own before its messages are dropped, alerted. */
 const WAIT_MAX_MS = 3 * 86_400_000
 /**
@@ -465,13 +469,16 @@ export function packItems(items: Item[], maxBytes: number = BATCH_MAX_BYTES): It
 // The watcher
 // ---------------------------------------------------------------------------
 
-type Store = { entries: SlackWatchEntry[]; channelCursors: Record<string, string> }
+/** `taggedIn`: the scoped keys (as `channelCursors`) of channels where an app was tagged, each with the ts of the last tag. An older store wrote the keys alone, as an array: their time is unknown. */
+type Store = { entries: SlackWatchEntry[]; channelCursors: Record<string, string>; taggedIn?: Record<string, string> | string[] }
 
 export class SlackWatcher {
   /** The guard has printed the old key `to`: said once per daemon, not once per message. */
   private warnedGuardOldKey = false
   private readonly entries = new Map<string, SlackWatchEntry>()
   private channelCursors: Record<string, string> = {}
+  /** Scoped channel key to the ts of the last tag of the app there. Not the channel cursor, which means "last read": a quiet channel read in full moves it to now. */
+  private taggedIn = new Map<string, string>()
   private readonly pending = new Map<string, { items: Item[]; timer: ReturnType<typeof setTimeout> }>()
   // Handed to the delivery chain but not yet settled. A replay of one of these (a catch-up pass fires on every reconnect, and a refill can take a while) would otherwise open a second batch and deliver it twice.
   private readonly inflight = new Map<string, Set<string>>()
@@ -515,6 +522,10 @@ export class SlackWatcher {
       // An entry with no `app` is the app named `default`'s: every store written before apps existed loads as it is, and is not rewritten.
       for (const e of raw.entries ?? []) this.entries.set(keyOf(e), e)
       this.channelCursors = raw.channelCursors ?? {}
+      // A store from before the times were kept holds keys alone; a damaged one holds neither shape: what cannot be read is left out, the rest loads.
+      const t: unknown = raw.taggedIn
+      if (Array.isArray(t)) for (const k of t) { if (typeof k === "string") this.taggedIn.set(k, UNKNOWN_TS) }
+      else if (t && typeof t === "object") for (const [k, v] of Object.entries(t)) if (typeof v === "string" && TS_RE.test(v)) this.taggedIn.set(k, v)
     } catch (err) {
       this.deps.log(`daemon: slack connector: load failed: ${err}\n`)
     }
@@ -533,7 +544,7 @@ export class SlackWatcher {
     if (!this.dirty) return
     this.dirty = false
     try {
-      const store: Store = { entries: [...this.entries.values()], channelCursors: this.channelCursors }
+      const store: Store = { entries: [...this.entries.values()], channelCursors: this.channelCursors, taggedIn: Object.fromEntries(this.taggedIn) }
       atomicWriteFileSync(this.deps.file, JSON.stringify(store, null, 2) + '\n')
     } catch (err) {
       this.dirty = true
@@ -700,6 +711,7 @@ export class SlackWatcher {
     for (const k of [...this.failing.keys()]) if (!this.entries.get(k)?.owed?.length) this.failing.delete(k)
     if (n) this.persist()
     this.pruneDmCursors(now, idleExpiryMs)
+    this.pruneTaggedCursors()
     this.sweepFiles(now)
     return n
   }
@@ -806,7 +818,14 @@ export class SlackWatcher {
     const outcome = this.classify(ev, cfg)
     // A cursor is kept only where catch-up scans: the channels hydra.toml names, and DM conversations once someone
     // admitted has written in them. A stranger's refused DM must not cost a history read on every pass.
-    const scanned = isDm(ev.channel) ? outcome === 'dm' && placesOf(cfg, ev.channel).includes(SLACK_DM) : routedChannels(cfg).includes(ev.channel)
+    // A tag of this app in a channel no rule names keeps one too (`taggedChannels`): a tag missed there while the app was down is then caught up.
+    const tagHeard = outcome !== 'ignored' && !isDm(ev.channel) && !cfg.directory.isGroupDm?.(ev.channel) && ev.user !== cfg.botUserId && !!ev.text && tagRe(cfg.botUserId).test(ev.text)
+    const scanned = isDm(ev.channel) ? outcome === 'dm' && placesOf(cfg, ev.channel).includes(SLACK_DM) : tagHeard || routedChannels(cfg).includes(ev.channel)
+    if (tagHeard) {
+      const key = scoped(ev.app, ev.channel)
+      const last = this.taggedIn.get(key)
+      if (!last || cmpTs(ev.ts, last) > 0) { this.taggedIn.set(key, ev.ts); this.persist() }
+    }
     if (scanned && !this.held.has(scoped(ev.app, ev.channel))) this.advance(ev.channel, ev.ts, ev.app)
     return outcome
   }
@@ -962,6 +981,18 @@ export class SlackWatcher {
     return [...new Set([...this.list().filter(e => appOfEntry(e) === id).map(e => e.channel), ...cursors].filter(c => isDm(c) && bots(c)))]
   }
 
+  /**
+   * The channels no rule names where this app was tagged, the most recent `TAGGED_CHANNELS_MAX`: catch-up reads them too, so a tag of
+   * the app missed while it was down gets the fate a live one would. A channel is known only by a tag heard in it: one never heard live is not read.
+   */
+  taggedChannels(app?: string): string[] {
+    const id = appOfEntry({ app })
+    const routed = new Set(routedChannels(this.deps.config(app)))
+    return [...this.taggedIn]
+      .flatMap(([k, ts]) => { const u = unscopeKey(k); return appOfEntry(u) === id && !routed.has(u.rest) ? [{ channel: u.rest, ts }] : [] })
+      .sort((a, b) => cmpTs(b.ts, a.ts)).slice(0, TAGGED_CHANNELS_MAX).map(x => x.channel)
+  }
+
   /** Downloaded attachments are kept a week: long enough for the session to read them, not forever. Walks `<dir>/<channel>` and each other app's `<dir>/<app>/<channel>`. */
   private sweepFiles(now: number): void {
     const dir = this.deps.filesDir
@@ -984,6 +1015,18 @@ export class SlackWatcher {
     for (const [key, ts] of Object.entries(this.channelCursors)) {
       const { app, rest: ch } = unscopeKey(key)
       if (isDm(ch) && cmpTs(ts, floor) < 0 && !this.list().some(e => e.channel === ch && appOfEntry(e) === appOfEntry({ app }))) { delete this.channelCursors[key]; this.persist() }
+    }
+  }
+
+  /** Forget the channels no rule names beyond the newest `TAGGED_CHANNELS_MAX` per app, and their cursors, so the store stays bounded. An app not connected is left alone: its routed channels cannot be told apart now. */
+  private pruneTaggedCursors(): void {
+    for (const key of [...this.taggedIn.keys()]) {
+      const { app, rest: ch } = unscopeKey(key)
+      const cfg = this.deps.config(app)
+      if (!cfg || routedChannels(cfg).includes(ch) || this.taggedChannels(app).includes(ch)) continue
+      this.taggedIn.delete(key)
+      delete this.channelCursors[key]
+      this.persist()
     }
   }
 
@@ -1418,6 +1461,7 @@ export class AppWatch {
   channelCursor(channel: string): string | undefined { return this.w.channelCursor(channel, this.app) }
   owedHints(): { channel: string; threadTs: string; fromTs: string }[] { return this.w.owedHints(this.app) }
   dmChannels(): string[] { return this.w.dmChannels(this.app) }
+  taggedChannels(): string[] { return this.w.taggedChannels(this.app) }
   beginCatchUp(channels: string[]): void { this.w.beginCatchUp(channels, this.app) }
   endCatchUp(channel: string, newestTs?: string): void { this.w.endCatchUp(channel, newestTs, this.app) }
   markRead(channel: string, ts: string): void { this.w.markRead(channel, ts, this.app) }
@@ -1432,4 +1476,4 @@ export class AppWatch {
 }
 
 /** What a catch-up pass needs of the watcher: the whole watcher (the app `default`), or one app's side of it. */
-export type CatchUpWatch = Pick<SlackWatcher, 'handle' | 'list' | 'channelCursor' | 'owedHints' | 'dmChannels' | 'beginCatchUp' | 'endCatchUp' | 'markRead' | 'catchUpGap' | 'setVia' | 'threadGone' | 'operatorTokenRefused'>
+export type CatchUpWatch = Pick<SlackWatcher, 'handle' | 'list' | 'channelCursor' | 'owedHints' | 'dmChannels' | 'taggedChannels' | 'beginCatchUp' | 'endCatchUp' | 'markRead' | 'catchUpGap' | 'setVia' | 'threadGone' | 'operatorTokenRefused'>
