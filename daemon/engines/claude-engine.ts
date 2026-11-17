@@ -32,6 +32,7 @@ import { BRIDGE_CHANNEL_FLAG, BRIDGE_MCP_SERVER_KEY, BRIDGE_PLUGIN_ID, BRIDGE_TO
 import { confined, deliveryRefusal, missingTokenRefusal, PolicyRefusal, remedy, RESTRICTED_MODS, RESTRICTED_PREAMBLE, sandboxInputs, serverToolRule, type ConfinedPolicy } from '../restricted.js'
 import { verifyLaunch as verifyLoaded, type Verdict } from './claude-verify.js'
 import { ENGINE_CAPABILITIES } from '../../shared/engine-capabilities.js'
+import { removeSpawnPrompt, writeSpawnPrompt } from '../launch-files.js'
 import { makeServerTmpDirs, removeRestrictedFiles, serverTmpDir, serverTmpRoot, writeRestrictedFiles } from '../restricted-files.js'
 import { sandboxedServer, sandboxIssues } from '../../config/server-sandbox.js'
 import type { PrivateRoot } from '../../config/restricted-workdir.js'
@@ -311,6 +312,7 @@ export class ClaudeEngine implements EngineAdapter {
     } catch (err) {
       // A confined launch writes a file holding token values before it starts anything; one that fails then has no session record
       // whose kill or death would remove it, so it is removed here.
+      removeSpawnPrompt(input)
       if (input.policy?.access === 'workdir') removeRestrictedFiles({ tmuxName: input.tmuxName, sessionId: input.sessionId })
       throw err
     }
@@ -339,6 +341,8 @@ export class ClaudeEngine implements EngineAdapter {
     const worktreeAppend = buildWorktreePromptAppend(isFork, worktreePath)
     if (worktreeAppend) prompt += worktreeAppend
 
+    // The prompt is handed to the pane by file (launch-files.ts), so no part of it is on a command line. A resume takes none.
+    const promptFile = isResume ? null : writeSpawnPrompt(tmuxName, sessionId, prompt)
     const channelFlag = BRIDGE_CHANNEL_FLAG
     let claudeArgs: string
     let assignedClaudeSessionId: string | undefined
@@ -350,12 +354,12 @@ export class ClaudeEngine implements EngineAdapter {
       const files = writeRestrictedConfig(restricted, tmuxName, sessionId)
       const confinement = ` --restricted --tools ${shq(restricted.tools.join(','))} --settings ${shq(files.settings)} --mcp-config ${shq(files.mcp)} --permission-mode dontAsk`
       if (isFork) {
-        claudeArgs = `claude --resume ${shq(input.forkFrom!.claudeSessionId!)} --fork-session --model ${shq(model)} ${shq(prompt)} --channels ${shq(channelFlag)}${confinement}${disallowed}`
+        claudeArgs = `claude --resume ${shq(input.forkFrom!.claudeSessionId!)} --fork-session --model ${shq(model)} ${promptFile!.ref} --channels ${shq(channelFlag)}${confinement}${disallowed}`
       } else if (isResume) {
         claudeArgs = `claude --resume ${shq(input.resumeFrom!)} --model ${shq(model)} --channels ${shq(channelFlag)}${confinement}${disallowed}`
       } else {
         assignedClaudeSessionId = randomUUID()
-        claudeArgs = `claude --session-id ${shq(assignedClaudeSessionId)} --model ${shq(model)} ${shq(prompt)} --channels ${shq(channelFlag)}${confinement}${disallowed}`
+        claudeArgs = `claude --session-id ${shq(assignedClaudeSessionId)} --model ${shq(model)} ${promptFile!.ref} --channels ${shq(channelFlag)}${confinement}${disallowed}`
       }
     } else if (isFork) {
       claudeArgs = [
@@ -365,7 +369,7 @@ export class ClaudeEngine implements EngineAdapter {
         `--model ${shq(model)}`,
         `--channels ${shq(channelFlag)}`,
         `--dangerously-skip-permissions`,
-        shq(prompt),
+        promptFile!.ref,
       ].join(' ') + disallowed + toolsFlag
     } else if (isResume) {
       claudeArgs = [
@@ -377,7 +381,7 @@ export class ClaudeEngine implements EngineAdapter {
       ].join(' ') + disallowed + toolsFlag
     } else {
       assignedClaudeSessionId = randomUUID()
-      claudeArgs = `claude --session-id ${shq(assignedClaudeSessionId)} --model ${shq(model)} --channels ${shq(channelFlag)} --dangerously-skip-permissions ${shq(prompt)}${disallowed}${toolsFlag}`
+      claudeArgs = `claude --session-id ${shq(assignedClaudeSessionId)} --model ${shq(model)} --channels ${shq(channelFlag)} --dangerously-skip-permissions ${promptFile!.ref}${disallowed}${toolsFlag}`
     }
     if (disallowed) process.stderr.write(`daemon: disallowedTools flag: ${disallowed}\n`)
     if (restricted) process.stderr.write(`daemon: restricted launch ${tmuxName}: specialist ${restricted.specialist}, tools ${restricted.tools.join(',')}, servers ${restricted.servers.map(x => x.name).join(',') || 'none'}\n`)
@@ -406,6 +410,7 @@ export class ClaudeEngine implements EngineAdapter {
       `_hydra_write_exit() { ${writeExitMarker}; }; trap _hydra_write_exit EXIT`,
       `cd ${shq(spawnCd)}`,
       ...buildSpawnEnv(input),
+      ...(promptFile ? [promptFile.load] : []),
       `${claudeArgs} 2>>${shq(stderrLog)}`,
     ].join(' && ')
 

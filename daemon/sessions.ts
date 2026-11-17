@@ -4,7 +4,7 @@ import { occupancy, occupied } from './session-reachability.js'
 import { join } from 'path'
 import { STATE_DIR, STATE_WRITABLE } from './config.js'
 import { emit } from './event-bus.js'
-import { removeRestrictedFiles } from './restricted-files.js'
+import { removeLaunchFiles } from './launch-files.js'
 import type { LaunchPolicy } from './restricted.js'
 import { atomicWriteFileSync, baseNameFromBranch } from './util.js'
 import { tmuxSessionState, tmuxSync } from './tmux.js'
@@ -771,8 +771,9 @@ export const threadRegistry = new ThreadRegistry()
 export function markDead(info: SessionInfo, at = Date.now()): void {
   const fresh = info.deadAt === undefined
   info.deadAt ??= at
-  // A restricted session's generated config holds token values: gone with the session (a resume writes its own).
-  removeRestrictedFiles(info)
+  // What a launch wrote for the session goes with it: a restricted session's generated config (it holds token values) and the
+  // prompt file (it holds the operator's text). A resume writes its own config; a Claude resume takes no prompt.
+  removeLaunchFiles(info)
   registry.persist()
   threadRegistry.closeHistoryEntry(info.threadId, info)
   if (fresh) emit('session:marked-dead', { sessionId: info.sessionId, tmuxName: info.tmuxName })

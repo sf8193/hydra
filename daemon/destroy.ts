@@ -14,6 +14,7 @@ import { debouncedRefreshListDisplay } from './commands/status.js'
 import { isThreadOccupied } from './protocol-registry.js'
 import { unwatchBySession } from '../connectors/github/pr-watch.js'
 import { occupancy } from './session-reachability.js'
+import { removeLaunchFiles } from './launch-files.js'
 
 export type DestroyOutcome =
   | { ok: true }
@@ -81,6 +82,7 @@ export async function destroyThread(threadId: string, by: string, onProceed?: ()
     registry.deleteThread(threadId)
     registry.persist()
     unwatchBySession(info)
+    removeLaunchFiles(info)
     emitSessionDeath(info, true)
   }
   threadRegistry.delete(threadId)

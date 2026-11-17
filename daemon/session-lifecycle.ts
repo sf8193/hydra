@@ -13,7 +13,7 @@ import { endVerifying, startVerifying, verifyBackoff, verifyRefusal, confined, d
 import { threadNotices } from './notice-limit.js'
 import { hydraLoadEnv, currentHydraConfig } from './hydra-config.js'
 import { workdirRestrictionIssues } from '../config/restricted-workdir.js'
-import { removeRestrictedFiles } from './restricted-files.js'
+import { removeLaunchFiles } from './launch-files.js'
 import { capturedSpawnVars } from '../shared/spawn-env.js'
 import { authorityId, markDead, parentSessionOf, registry, repointChildren, sessionEmoji, threadRegistry } from './sessions.js'
 import type { Predecessor, SessionInfo, SessionMetadata, SpawnOpts, SpawnResult } from './sessions.js'
@@ -674,7 +674,7 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
       registry.removeMember(info.threadId, info.sessionId)
     }
 
-    removeRestrictedFiles(info)
+    removeLaunchFiles(info)
     emitSessionDeath(info, deliberate)
     runKillHook(info, reason)
 

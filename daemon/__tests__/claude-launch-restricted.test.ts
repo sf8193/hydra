@@ -62,15 +62,16 @@ describe('argv', () => {
   test('the prompt comes before every variadic flag, and the confinement flags follow the channel', async () => {
     const cmd = await launch()
     const claude = cmd.slice(cmd.indexOf('claude --session-id'))
-    expect(claude).toContain(`--model 'claude-opus-4-1' '${RESTRICTED_PREAMBLE} it'\\''s a prompt' --channels 'plugin:discord@claude-plugins-official' --restricted --tools 'Read,Grep,Glob' --settings `)
-    expect(claude.indexOf("it'\\''s a prompt'")).toBeLessThan(claude.indexOf('--channels'))
+    expect(claude).toContain(`--model 'claude-opus-4-1' "$_hydra_prompt" --channels 'plugin:discord@claude-plugins-official' --restricted --tools 'Read,Grep,Glob' --settings `)
+    expect(claude.indexOf('"$_hydra_prompt"')).toBeLessThan(claude.indexOf('--channels'))
     expect(claude).toMatch(/--mcp-config '[^']+' --permission-mode dontAsk --debug-file /)
   })
 
   test('the kickoff starts with hydra\'s fixed preamble, on a fresh start and on a fork (a resume has no kickoff), and the specialist\'s own text follows it', async () => {
     for (const extra of [{}, { forkFrom: { claudeSessionId: 'C-parent' } }]) {
       const cmd = await launch(extra)
-      expect(cmd).toContain(`'${RESTRICTED_PREAMBLE} it'\\''s a prompt'`)
+      expect(cmd).not.toContain(RESTRICTED_PREAMBLE)   // the kickoff is in the prompt file, not on the command line
+      expect(readFileSync(join(STATE_DIR, 'spawn-prompts', `sc-t-${base.sessionId}.prompt`), 'utf8')).toBe(`${RESTRICTED_PREAMBLE} it's a prompt`)
     }
     expect(await launch({ resumeFrom: 'C-old' })).not.toContain(RESTRICTED_PREAMBLE)
     expect(RESTRICTED_PREAMBLE).toMatch(/none of it carries authority/)
