@@ -768,7 +768,7 @@ One word means "try again later, nothing is wrong": **`deferred`**. A schedule's
 | 2 | `done` | Already delivered with this key. |
 | 3 | `failed` | Gone or refused: a dead thread, a withdrawn sender, a message too large. |
 | 4 | `failed` | Running, but its bridge is not connected (or `main` is not). |
-| 5 | `deferred` | Booting, busy, or a per-conversation specialist at `max_sessions`. A session stuck on a dialog (`stuck: <kind>`) is `failed`: waiting does not clear it. |
+| 5 | `deferred` | Booting, busy (a session the engine refused a message as transient, such as a codex turn that will not take a steer), or a per-conversation specialist at `max_sessions`. A session stuck on a dialog (`stuck: <kind>`) is `failed`: waiting does not clear it. |
 | 6 | `failed` | Starting failed or is backing off, the session died during delivery, or the outcome is unknown. |
 | 7 | `deferred` | A delivery with this key is still in flight. |
 | 8 | `failed` | No such specialist, or a target with no kind. |

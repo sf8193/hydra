@@ -20,6 +20,16 @@ class CodexRpcError extends Error {
   constructor(message: string, readonly code: number) { super(`${message} (code ${code})`) }
 }
 
+/**
+ * A steer the server refused because the turn it named is no longer the active one (it ended or was replaced between our read of
+ * `currentTurnId` and the request): the next attempt reads the new state, so it may succeed. The server answers every such refusal with the
+ * generic invalid-request code, so only its message tells this from a permanent refusal (bad params, an unknown method), which must stay
+ * `failed`: `hydra deliver` turns a retryable one into `deferred`, which the schedule clock keeps owed with no cap and no alert.
+ */
+export function turnMovedOn(err: CodexRpcError): boolean {
+  return /expected turn|no active turn/i.test(err.message)
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -284,7 +294,7 @@ export class CodexEngine extends EventEmitter {
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)
       return err instanceof CodexRpcError
-        ? { status: 'rejected', retryable: true, reason }
+        ? { status: 'rejected', retryable: turnMovedOn(err), reason }
         : { status: 'unknown', reason }
     }
   }
