@@ -1,0 +1,49 @@
+%%{init: {"theme":"base","themeVariables":{"background":"#ffffff","primaryColor":"#ffffff","primaryBorderColor":"#6b7280","primaryTextColor":"#1f2937","lineColor":"#374151","clusterBkg":"#ffffff","clusterBorder":"#d1d5db"},"flowchart":{"wrappingWidth":420,"useMaxWidth":false}}}%%
+%% What does the Slack connector do with each Fate routing returns?
+%% SlackWatcher.classify after route(), connectors/slack/watch.ts:834-871; refuse, :954; enqueue, :920.
+%% Before: flow-route. Next: flow-slack-deliver. Every box's source: diagrams/flow-slack-fate.sources.md.
+flowchart TD
+  in(["the <b>Fate</b> routing returns<br/>flow-route"])
+  g1{"1. which Fate?"}
+  ign(["ignored"])
+  g2{"2. <b>Owed</b> from before?"}
+  rdrop(["dropped: refused or unrouted<br/>settled, alerted"])
+  g3{"3. a 🚫 for it?"}
+  n3["🚫: a refused DM with the bot,<br/>a tag in a channel, refused or unrouted<br/>no 🚫: an unrouted DM, untagged chatter,<br/>a DM with a person, a group DM,<br/>a sender past 10 in 10 min,<br/>the app's Slack actions not connected<br/>a replay already refused: nothing at all"]
+  react(["🚫, logged, counted"])
+  quiet(["logged, counted"])
+  g4{"4. a tag opening a conversation:<br/>its sender under 10 in 10 min?"}
+  tdrop(["dropped: tag-cap"])
+  g5{"5. room in the<br/>conversation table?"}
+  n5["at most 50, shared by every app<br/>at most 25 opened by untagged chatter<br/>an open one, or one-off chatter: no slot needed"]
+  fdrop(["dropped: table-full"])
+  owe["<b>Binding</b> set, if new, renamed or gone;<br/>the message <b>Owed</b>, saved"]
+  cut(["an older owed message cut:<br/>dropped: owed-full"])
+  q(["queued; flushed after 4 s:<br/>flow-slack-deliver"])
+
+  in --> g1
+  g1 -->|ignored| ign
+  g1 -->|"refused or unrouted"| g2
+  g1 -->|deliver| g4
+  g2 -->|yes| rdrop
+  g2 -->|no| g3
+  g3 -.- n3
+  g3 -->|yes| react
+  g3 -->|no| quiet
+  g4 -->|over| tdrop
+  g4 -->|"under, or no new tag"| g5
+  g5 -.- n5
+  g5 -->|no| fdrop
+  g5 -->|yes| owe
+  owe --> q
+  owe -->|"over 200 owed here"| cut
+
+  classDef gate fill:#fff7ed,stroke:#f97316,color:#1f2937
+  classDef stop fill:#fef2f2,stroke:#ef4444,color:#1f2937
+  classDef wait fill:#f3f4f6,stroke:#9ca3af,color:#1f2937
+  classDef done fill:#ecfdf5,stroke:#10b981,color:#1f2937
+  classDef note fill:#f9fafb,stroke:#d1d5db,color:#4b5563
+  class g1,g2,g3,g4,g5 gate
+  class rdrop,react,quiet,tdrop,fdrop,cut stop
+  class q wait
+  class n3,n5 note

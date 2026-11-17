@@ -1,0 +1,46 @@
+%%{init: {"theme":"base","themeVariables":{"background":"#ffffff","primaryColor":"#ffffff","primaryBorderColor":"#6b7280","primaryTextColor":"#1f2937","lineColor":"#374151","clusterBkg":"#ffffff","clusterBorder":"#d1d5db"},"flowchart":{"wrappingWidth":420,"useMaxWidth":false}}}%%
+%% What does a catch-up pass read, and when does it hold or give up?
+%% SlackListener.runCatchUp, connectors/slack/listener.ts:669; catchUp, connectors/slack/catchup.ts:114.
+%% Next: flow-slack-accept. Every box's source: diagrams/flow-slack-catchup.sources.md.
+flowchart TD
+  trig(["a <b>Catch-up</b> trigger"])
+  ntrig["deep: boot, reconnect, resume,<br/>every 10 min, a retry after 60 s<br/>not deep: all apps joined, a place freed"]
+  g1{"1. the app declared,<br/>and connected once?"}
+  none(["nothing"])
+  g2{"2. a pass<br/>already running?"}
+  again(["runs once more when it ends"])
+  pass["one pass, in order:<br/>0. new bot DMs<br/>1. threads with <b>Owed</b> messages<br/>2. every watched thread, if deep<br/>3. channel and DM history<br/>4. thread replies"]
+  npass["0: read back 24 h, if routing would deliver<br/>1: from the first owed message;<br/>a DM's owed are read in 3<br/>3: named channels, then DMs, least read first;<br/>no cursor yet: from now, no backfill<br/>4: the threads 1 to 3 found; never moves a cursor"]
+  nbud["budget: 2 calls per watch, 1 per known DM,<br/>1 per new DM, plus 20; at least 60, at most 400<br/>a page read as the operator: 1 more<br/>pages: at most 5 per channel or thread<br/>a DM that starts near the budget's end: skipped"]
+  hand(["each message it finds:<br/>flow-slack-accept"])
+  skipt["a thread Slack says is gone,<br/>or refused to the operator's token:<br/>skipped; the pass goes on"]
+  gap(["a channel past 5 pages: catch-up-gap<br/>the older rest is dropped, alerted"])
+  g3{"3. how did<br/>the pass end?"}
+  ok(["complete: each <b>Cursor</b> moves<br/>to the newest message read;<br/>a DM skipped for budget stays held"])
+  inc(["incomplete: cursors held,<br/>except a DM read empty: now;<br/>a retry in 60 s, unless one is pending"])
+
+  trig -.- ntrig
+  trig --> g1
+  g1 -->|no| none
+  g1 -->|yes| g2
+  g2 -->|yes| again
+  g2 -->|no| pass
+  pass -.- npass
+  pass -.- nbud
+  pass --> hand
+  pass --> skipt
+  pass --> gap
+  pass --> g3
+  g3 -->|"all read"| ok
+  g3 -->|"budget spent,<br/>a thread past 5 pages,<br/>a DM out of budget<br/>while being read,<br/>another Slack error,<br/>or a crash"| inc
+
+  classDef gate fill:#fff7ed,stroke:#f97316,color:#1f2937
+  classDef stop fill:#fef2f2,stroke:#ef4444,color:#1f2937
+  classDef wait fill:#f3f4f6,stroke:#9ca3af,color:#1f2937
+  classDef done fill:#ecfdf5,stroke:#10b981,color:#1f2937
+  classDef note fill:#f9fafb,stroke:#d1d5db,color:#4b5563
+  class g1,g2,g3 gate
+  class gap stop
+  class again,inc wait
+  class ok,hand done
+  class ntrig,npass,nbud note

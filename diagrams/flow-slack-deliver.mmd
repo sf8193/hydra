@@ -1,0 +1,57 @@
+%%{init: {"theme":"base","themeVariables":{"background":"#ffffff","primaryColor":"#ffffff","primaryBorderColor":"#6b7280","primaryTextColor":"#1f2937","lineColor":"#374151","clusterBkg":"#ffffff","clusterBorder":"#d1d5db"},"flowchart":{"wrappingWidth":420,"useMaxWidth":false}}}%%
+%% How does an owed Slack message reach its target?
+%% deliverBatches, connectors/slack/watch.ts:1057; deliverGroup, :1231; runGuard, routing/guard.ts:57.
+%% Before: flow-slack-fate. How long a message may stay owed: flow-slack-owed. Every box's source: diagrams/flow-slack-deliver.sources.md.
+flowchart TD
+  in(["a batch of <b>Owed</b> messages,<br/>one conversation, after 4 s"])
+  g1{"1. its <b>Binding</b>'s<br/>target still declared?"}
+  anew(["stays owed; routed anew<br/>when catch-up replays it"])
+  d1(["dropped: unrouted"])
+  who["<b>Person, roles</b>, from hydra.toml now"]
+  g2{"2. <b>Reach</b>, judged again"}
+  d2(["dropped: refused"])
+  g3{"3. the <b>Guard</b>"}
+  n3["4 messages at a time<br/>timeout: 5 s by default, at most 30 s<br/>output: at most 4096 characters"]
+  d3(["dropped: guard, not alerted"])
+  later(["stays owed until owed_max:<br/>flow-slack-owed"])
+  g4{"4. may the sender<br/>reach the redirect?"}
+  send["grouped by <b>Target</b>, in order;<br/>files saved; packed into 8000-byte batches;<br/>sent one batch at a time"]
+  nsend["files: only where the place sets files<br/>2 messages at a time, 20 MB each<br/>a file not saved is listed, with why"]
+  g5{"5. the answer?"}
+  ok(["delivered: settled,<br/>the place's ack reaction if set;<br/>replies go out through the same <b>App</b>"])
+  big(["dropped: too-large"])
+  waits(["waits for a session of its own;<br/>stays owed, alerted"])
+  owed(["stays owed: catch-up replays it"])
+
+  in --> g1
+  g1 -->|yes| who --> g2
+  g1 -->|"no, but a rule takes it now"| anew
+  g1 -->|"no, and nothing does"| d1
+  g2 -->|no| d2
+  g2 -->|yes| g3
+  g3 -.- n3
+  g3 -->|"the operator, no guard,<br/>or exit 0"| send
+  g3 -->|"another exit, a timeout,<br/>unusable output: sent anyway"| send
+  g3 -->|"exit 0 with a target"| g4
+  g3 -->|"exit 10"| d3
+  g3 -->|"exit 75"| later
+  g4 -->|"yes: to the redirect"| send
+  g4 -->|"no: to the binding"| send
+  send -.- nsend
+  send --> g5
+  g5 -->|"ok, or already delivered"| ok
+  g5 -->|"over 10000 bytes"| big
+  g5 -->|"at max_sessions,<br/>or older waiters ahead"| waits
+  g5 -->|"exit 8 after a redirect:<br/>sent to the binding, alerted"| send
+  g5 -->|"exit 8, alerted;<br/>or another error"| owed
+
+  classDef gate fill:#fff7ed,stroke:#f97316,color:#1f2937
+  classDef stop fill:#fef2f2,stroke:#ef4444,color:#1f2937
+  classDef wait fill:#f3f4f6,stroke:#9ca3af,color:#1f2937
+  classDef done fill:#ecfdf5,stroke:#10b981,color:#1f2937
+  classDef note fill:#f9fafb,stroke:#d1d5db,color:#4b5563
+  class g1,g2,g3,g4,g5 gate
+  class d1,d2,d3,big stop
+  class anew,later,waits,owed wait
+  class ok done
+  class n3,nsend note

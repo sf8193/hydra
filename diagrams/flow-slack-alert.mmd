@@ -1,0 +1,59 @@
+%%{init: {"theme":"base","themeVariables":{"background":"#ffffff","primaryColor":"#ffffff","primaryBorderColor":"#6b7280","primaryTextColor":"#1f2937","lineColor":"#374151","clusterBkg":"#ffffff","clusterBorder":"#d1d5db"},"flowchart":{"wrappingWidth":420,"useMaxWidth":false}}}%%
+%% When the Slack connector drops a message or a connection goes wrong, who is told, where, and how often?
+%% Drops: SlackWatcher.drop, connectors/slack/watch.ts:979; alertOnce, :995. Health: SlackListener.checkAlerts, connectors/slack/listener.ts:747.
+%% Where it posts: alert, connectors/slack/runtime.ts:85. Every box's source: diagrams/flow-slack-alert.sources.md.
+flowchart TD
+  drop(["a <b>Drop</b>"])
+  g1{"1. this message<br/>dropped before?"}
+  nothing(["nothing more"])
+  log["logged, counted by kind"]
+  g2{"2. an alerted kind?"}
+  n2["alerted: expired, owed-full, too-large,<br/>tag-cap, table-full, catch-up-gap,<br/>unbound, refused, unrouted<br/>not alerted: guard (exit 10);<br/>a held thread gone: its holder is told instead"]
+  quiet(["logged and counted only"])
+  g3{"3. same app, kind and target<br/>alerted in this episode?"}
+  n3["an episode: 60 min from its first alert<br/>it also paces: guard redirects, exit 8,<br/>a specialist at max_sessions,<br/>the operator's token refused, a thread gone"]
+  inep(["logged only"])
+
+  health["an <b>App</b>'s connection trouble"]
+  nh["checked every 60 s:<br/>down 5 min: once; back up: once<br/>no complete catch-up for 25 min: once"]
+  ne["as it happens:<br/>a catch-up read refused for good: once each<br/>live events missed: at most hourly<br/>scopes missing: once per set, across restarts<br/>names or membership unreadable: once<br/>tokens missing: once per reason<br/>an old slack-watch.json with no app: each load"]
+
+  alert["an <b>Alert</b>: the text,<br/>the specialist it concerns, the app"]
+  g4{"4. that specialist<br/>has a thread?"}
+  g5{"5. specialists that hear Slack<br/>through the app have threads?"}
+  g6{"6. main has a channel?"}
+  thread(["posted in that thread"])
+  each(["posted in each of their threads"])
+  mainch(["posted in main's channel"])
+  stderr(["the daemon log"])
+  nfail["a post that fails is not retried"]
+
+  drop --> g1
+  g1 -->|yes| nothing
+  g1 -->|no| log --> g2
+  g2 -.- n2
+  g2 -->|no| quiet
+  g2 -->|yes| g3
+  g3 -.- n3
+  g3 -->|yes| inep
+  g3 -->|"no: a new episode"| alert
+  health -.- nh
+  health -.- ne
+  health --> alert
+  alert --> g4
+  g4 -->|yes| thread
+  g4 -->|"no, or none named"| g5
+  g5 -->|yes| each
+  g5 -->|no| g6
+  g6 -->|yes| mainch
+  g6 -->|no| stderr
+  alert -.- nfail
+
+  classDef gate fill:#fff7ed,stroke:#f97316,color:#1f2937
+  classDef stop fill:#fef2f2,stroke:#ef4444,color:#1f2937
+  classDef wait fill:#f3f4f6,stroke:#9ca3af,color:#1f2937
+  classDef done fill:#ecfdf5,stroke:#10b981,color:#1f2937
+  classDef note fill:#f9fafb,stroke:#d1d5db,color:#4b5563
+  class g1,g2,g3,g4,g5,g6 gate
+  class thread,each,mainch done
+  class n2,n3,nh,ne,nfail note

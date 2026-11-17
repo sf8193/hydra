@@ -1,0 +1,44 @@
+%%{init: {"theme":"base","themeVariables":{"background":"#ffffff","primaryColor":"#ffffff","primaryBorderColor":"#6b7280","primaryTextColor":"#1f2937","lineColor":"#374151","clusterBkg":"#ffffff","clusterBorder":"#d1d5db"},"flowchart":{"wrappingWidth":420,"useMaxWidth":false}}}%%
+%% How long may a Slack message stay owed, and what ends it?
+%% enqueue, connectors/slack/watch.ts:920; the guard's exit 75, :1114; deliverGroup, :1231; sweep, :592.
+%% Every box's source: diagrams/flow-slack-owed.sources.md.
+flowchart TD
+  owed(["<b>Owed</b>: saved to disk,<br/>replayed by each <b>Catch-up</b> pass"])
+  done(["delivered: flow-slack-deliver"])
+  g1{"1. more than 200<br/>owed in its conversation?"}
+  cut(["the oldest cut:<br/>dropped: owed-full"])
+  g2{"2. the guard said exit 75<br/>for longer than owed_max?"}
+  n2["owed_max: 1 h by default, at most 7 days"]
+  d2(["dropped: expired"])
+  g3{"3. the hourly sweep:<br/>which applies?"}
+  d3a(["dropped: expired"])
+  d3b(["dropped: expired"])
+  d3c(["dropped: unrouted"])
+  keep1(["stays owed"])
+  keep2(["stays owed"])
+  keep3(["stays owed"])
+
+  owed -->|"flushed or replayed"| done
+  owed --> g1
+  g1 -->|yes| cut
+  g1 -->|no| keep1
+  owed --> g2
+  g2 -.- n2
+  g2 -->|yes| d2
+  g2 -->|no| keep2
+  owed --> g3
+  g3 -->|"sent over 24 h ago,<br/>and not waiting for a session"| d3a
+  g3 -->|"waiting for a session<br/>over 3 days"| d3b
+  g3 -->|"its target gone,<br/>and catch-up no longer<br/>reads its place"| d3c
+  g3 -->|"none"| keep3
+
+  classDef gate fill:#fff7ed,stroke:#f97316,color:#1f2937
+  classDef stop fill:#fef2f2,stroke:#ef4444,color:#1f2937
+  classDef wait fill:#f3f4f6,stroke:#9ca3af,color:#1f2937
+  classDef done fill:#ecfdf5,stroke:#10b981,color:#1f2937
+  classDef note fill:#f9fafb,stroke:#d1d5db,color:#4b5563
+  class g1,g2,g3 gate
+  class cut,d2,d3a,d3b,d3c stop
+  class keep1,keep2,keep3 wait
+  class done done
+  class n2 note

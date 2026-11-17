@@ -24,6 +24,8 @@ Each diagram has a `.mmd` source and a rendered `.png`.
 - Bug fixes that don't change the message path
 - Config or env changes
 
+**One question per picture.** A picture that needs paragraphs inside its shapes is two pictures. Labels are a few words; a list a reader needs goes in a side note (a grey box on a dotted line), not inside a gate. The routing and Slack pictures are sourced: each name means one thing across the set, a `<name>.sources.md` puts a `path:line` behind every box, and a reviewer who did not draw it checks the raw `.mmd` against the code before it is rendered. Their legend: orange diamond = a numbered gate, red = refused, unrouted or dropped, grey = held or still owed, green = delivered or done, plain = any other outcome. Their first line is an `%%{init}%%` that sets a white theme and a wider wrap, so any render command draws them the same.
+
 **Quality discipline:** Diagrams are authored with intent — what to emphasize, what level of abstraction serves the reader. Use adversarial review (`/review`) to verify diagram claims against code. Reference actual source file names, not abstractions.
 
 ## Rendering
@@ -55,13 +57,43 @@ for f in diagrams/*.mmd; do [ -f "${f%.mmd}.png" ] || { echo "unrendered: $f"; e
 | `flow-respawn` | Respawn: thread command → read thread history → doSpawnSession with resurrectFrom |
 | `flow-recovery-cascade` | Resume/respawn tiers: --resume → fork-transcript → respawn + death detection |
 | `flow-revive` | **Who is home, putting a session back, and where a message goes**: `occupancy()`'s decision; every revive under one lock per target through `reviveThread()`; `deliver --revive`; and every target (`to`, `spawn`, `perThread`) resolving to a session that lands through `deliverToSession` (stuck → exit 5) |
-| `flow-route` | **Which specialist hears a message** (`routing/route.ts`): when several apps share a channel, the owner app (others → ignored); then binding, then `[[rules]]` (place, app, person: the one home of where a specialist is heard), then the operator's DM to main, each only to a specialist the app can deliver to; then `allow`. Refused or unrouted → 🚫 |
-| `flow-slack-route` | A Slack message from event to delivery, one connection per app: catch-up, the hold, the owner app (a tag outranks the bound app), classify through routing, coalescing, the guard, the reply through the same app, every refusal and drop, and per-app alerts |
 | `flow-destroy` | Destroy: delete thread + anchor message (Discord only, dead/orphan threads), plus the `kill +d` composite that kills first |
 | `flow-reply` | **A post's text on its way out**: a session's reply or send_to_thread, and the daemon's own safeSend/safeEdit, all through `withOutbound` → the gateway's `shapeOutbound` (Discord: tables drawn as PNGs by sips, else code blocks; box art fenced) → chunks, files on the first → `gateways/discord.ts`; the drawn files removed once the send settles |
 | `flow-deliver` | **Whisper channel**: CLI deliver → reachability → sendToBridge (default) or sendOrQueue (`--queue`). Codex sessions route through adapter. Delivery proof in response. |
 | `flow-dialog-dismiss` | Stuck dialog: pane-probe → re-read screen → Esc (or alert only on "No, exit" screens) → thread alert → notification to the session |
 | `flow-jobs-dispatch` | Jobs: the clock's tick or `jobs run` → synchronous reserve → detached attempt → result file → apply on a later tick (or "ended without a result", or the guarded kill) |
+
+### Routing and the Slack connector
+One question per picture, read in this order. Each has a `<name>.sources.md` beside it: every box's `path:line`.
+
+| Diagram | The question it answers |
+|---------|--------------|
+| `flow-route-owner` | Which app answers a message that several Slack apps heard? |
+| `flow-route` | Which target hears a message, and may its sender reach it? (`routing/route.ts`: binding, `messages = "all"`, `[[rules]]`, the operator's DM to main, then `reachable_by`) |
+| `flow-slack-hear` | How does each Slack app connect, and how does a live message reach the connector? |
+| `flow-slack-catchup` | What does a catch-up pass read, and when does it hold or give up? |
+| `flow-slack-accept` | Which Slack messages does an app take up and hand to routing? |
+| `flow-slack-fate` | What does the Slack connector do with each fate routing returns (🚫, caps, owed)? |
+| `flow-slack-deliver` | How does an owed Slack message reach its target (the guard, redirects, the answer)? |
+| `flow-slack-owed` | How long may a Slack message stay owed, and what ends it? |
+| `flow-slack-alert` | When a message is dropped or a connection goes wrong, who is told, where, and how often? |
+
+A bold name in these pictures is one of README's [core abstractions](../README.md#core-abstractions), or one of these:
+
+| Name | Question | Sentence |
+|---|---|---|
+| Owner | Which app answers, when several heard it? | The one app that answers a message several apps heard; the others ignore it. |
+| Serves | Can this app deliver to that target? | An app serves a specialist pinned to it, or an unpinned one when no specialist is pinned to that app; it always serves main and a session's own thread. |
+| Binding | Which target does this conversation already have? | The target a conversation was bound to when it opened; it holds while hydra.toml declares that target and this app serves it. |
+| Operator | Whose hydra is it? | The person `operator` names: always reaches every target, and is the only one who reaches main. |
+| Reach | May this sender reach that target? | Only through an app that serves the target; then the operator reaches every target; anyone reaches a session's own thread; anyone else reaches a specialist only through a role in its `reachable_by`. |
+| Fate | What does routing decide? | deliver, refused, unrouted or ignored: a decision the connector then acts on. |
+| Guard | May this sender's message go through? | The optional command that judges a message from anyone but the operator before it is sent. |
+| Catch-up | What did the live stream miss? | A pass, per app, that rereads Slack from each cursor and hands what it finds on as if it came live. |
+| Cursor | Where has hydra read up to? | Per app and channel (or a thread a session listens in), the newest message read; held while a catch-up pass is incomplete. |
+| Owed | What does hydra still owe a session? | A message accepted and not yet delivered or dropped, saved so catch-up replays it. |
+| Drop | Why will an accepted message never arrive? | A message given up for one named kind: logged, counted, and alerted unless its kind is exempt. |
+| Alert | Who is told that something went wrong? | A plain post, not a session turn, to the specialist it concerns, else the app's Slack specialists, else main, else the daemon log. |
 
 ### Protocol Flows
 | Diagram | What it shows |
