@@ -24,8 +24,7 @@
         "ids": [
           "slack:U0OP"
         ],
-        "roles": [],
-        "name": "op"
+        "roles": []
       },
       "alice": {
         "id": "alice",
@@ -34,8 +33,7 @@
         ],
         "roles": [
           "staff"
-        ],
-        "name": "alice"
+        ]
       }
     },
     "specialists": {

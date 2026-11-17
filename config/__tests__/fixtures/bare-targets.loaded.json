@@ -23,8 +23,7 @@
         "addresses": [
           "slack:U0OP"
         ],
-        "roles": [],
-        "name": "op"
+        "roles": []
       }
     },
     "specialists": {

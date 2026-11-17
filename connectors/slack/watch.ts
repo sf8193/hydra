@@ -341,6 +341,13 @@ const OWED_MAX_AGE_S = 24 * 3600
 const MENTION_WINDOW_MS = 10 * 60_000
 const NAME_TTL_MS = 24 * 3600_000
 const NAME_MISS_TTL_MS = 5 * 60_000
+const NAMES_PRUNE_AT = 5000
+
+/** Whether a Slack-derived name reads as `operator` or as a rostered person's id. */
+const isDisguise = (h: HydraConfig, name: string): boolean => {
+  const n = name.replace(/\s+/g, ' ').trim().toLowerCase()
+  return n === 'operator' || Object.keys(h.people).some(id => id.toLowerCase() === n)
+}
 const NAME_TIMEOUT_MS = 3000
 const PERSIST_DEBOUNCE_MS = 200
 /** Alerts of one kind closer together than this are one episode: alerted once. */
@@ -1169,7 +1176,13 @@ export class SlackWatcher {
       flight = Promise.race([
         resolve(userId).catch(() => undefined),
         new Promise<undefined>(res => { const t = setTimeout(() => res(undefined), NAME_TIMEOUT_MS); (t as { unref?: () => void }).unref?.() }),
-      ]).then(name => { this.names.set(id, { name, at: this.deps.now() }); return name })
+      ]).then(name => {
+        const at = this.deps.now()
+        this.names.set(id, { name, at })
+        // Entries are only checked on a hit: when the map grows past a bound, drop the expired ones.
+        if (this.names.size > NAMES_PRUNE_AT) for (const [k, v] of this.names) if (at - v.at >= (v.name ? NAME_TTL_MS : NAME_MISS_TTL_MS)) this.names.delete(k)
+        return name
+      })
         .finally(() => this.nameFlights.delete(id))
       this.nameFlights.set(id, flight)
     }
@@ -1239,14 +1252,16 @@ export class SlackWatcher {
       return false
     })
     if (!items.length) return
-    // The roster names its people; Slack's display name fills in for strangers.
-    const users = [...new Set(items.filter(i => !senders.get(i.ts)!.person).map(i => i.user).filter((u): u is string => !!u))]
+    // The one place a sender gets a name: the roster's `name` wins; else Slack's display name (a stranger, or a person declared without a `name`); else the person's id.
+    const users = [...new Set(items.filter(i => !senders.get(i.ts)!.person?.name).map(i => i.user).filter((u): u is string => !!u))]
     const resolved = new Map(await Promise.all(users.map(async u => [u, await this.nameOf(u, app)] as const)))
     const named = items.map(i => {
       const who = senders.get(i.ts)!
       // A Slack display name is the sender's own free text: no mentions or special links (<@U…>, <!here>), so it cannot pose as another sender.
-      const slackName = i.user ? resolved.get(i.user)?.replace(/<[@!#][^>]*>/g, '') : undefined
-      return { ...i, name: who.person?.name ?? slackName, ...(who.person && { person: who.person.id }), roles: who.roles, operator: who.operator }
+      const cleaned = i.user ? resolved.get(i.user)?.replace(/<[@!#][^>]*>/g, '') : undefined
+      // A display name that reads as a rostered person or as `operator` is a disguise next to person="carol" operator=false: the sender's own id stands instead.
+      const slackName = cleaned && isDisguise(h, cleaned) ? who.person?.id ?? i.user : cleaned
+      return { ...i, name: who.person?.name ?? slackName ?? who.person?.id, ...(who.person && { person: who.person.id }), roles: who.roles, operator: who.operator }
     })
     const place = placeName(cfg, entry.channel)
     // The guard judges each message from anyone but the operator, and may send it somewhere else. Groups keep the burst's order.
