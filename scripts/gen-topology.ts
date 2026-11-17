@@ -176,8 +176,11 @@ writeFileSync(join(OUT, 'topology.mmd'), mmd)
 // The template is always read from docs/; only the write target follows --out.
 const html = readFileSync(join(ROOT, 'docs', 'topology.html'), 'utf8')
 const dataScript = `const DATA = ${JSON.stringify(data)};`
-const INJECTION_POINT = /\/\* __TOPOLOGY_DATA__ \*\/|const DATA = .+;/
-if (!INJECTION_POINT.test(html)) throw new Error('topology.html has no injection point — the data would ship stale')
+const INJECTION_POINT = /\/\* __TOPOLOGY_DATA__ \*\/|const DATA = .+;/g
+// Exactly one: with none the data would ship stale; with several (a bad merge left copies), only the first would be replaced.
+const points = html.match(INJECTION_POINT)?.length ?? 0
+if (points !== 1) throw new Error(`topology.html has ${points} injection points, needs exactly 1: the data would ship stale`)
+if (/^(<{7}|={7}|>{7})( |$)/m.test(html)) throw new Error('topology.html has merge-conflict markers: resolve them, then rerun')
 const injected = html.replace(INJECTION_POINT, dataScript)
 writeFileSync(join(OUT, 'topology.html'), injected)
 
