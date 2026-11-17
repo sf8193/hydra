@@ -15,6 +15,7 @@ import type {
 import type { BlockingState } from '../pane-probe.js'
 import type { ClaudeEngine } from './claude-engine.js'
 import { SOCK_PATH, PLATFORM, STATE_DIR } from '../config.js'
+import { removeSpawnPrompt, writeSpawnPrompt } from '../launch-files.js'
 import { tmuxCreateSession, tmuxWindowActivity } from '../tmux.js'
 import { ompContextTokens, ompSessionDir, ompTurn, ompUsageTotals, type OmpUsageCursor } from './omp-session.js'
 import { contextWindowOf, ompProvider } from '../../shared/constants.js'
@@ -52,17 +53,19 @@ export class OmpEngine implements EngineAdapter {
       for (const n of files) copyFileSync(join(from, n), join(ompSessionDir(sessionId), n))
     }
     const args = [omp, `--model ${shq(`${ompProvider(ompModel)}/${ompModel}`)}`, `-e ${shq(EXTENSION)}`, `--config ${shq(OMP_CONFIG)}`, '--approval-mode yolo', `--session-dir ${shq(ompSessionDir(sessionId))}`, ...(input.resumeOmp ? ['-c'] : [])]
+    // The prompt is handed to the pane by file (launch-files.ts), so no part of it is on a command line.
+    const promptFile = input.prompt ? writeSpawnPrompt(tmuxName, sessionId, input.prompt) : null
     const inner = [
       `cd ${shq(input.cwd)}`,
       `export HYDRA_SESSION_ID=${shq(sessionId)}`, `export HYDRA_SESSION_NAME=${shq(tmuxName)}`,
       `export HYDRA_THREAD_ID=${shq(input.threadId ?? '')}`, `export HYDRA_SESSION_TYPE=${shq(input.sessionType ?? '')}`,
       `export DAEMON_SOCK=${shq(SOCK_PATH)}`, `export CHAT_PLATFORM=${shq(PLATFORM)}`,
-      ...(input.prompt ? [`export HYDRA_SPAWN_PROMPT=${shq(input.prompt)}`] : []),
+      ...(promptFile ? [promptFile.load, `export HYDRA_SPAWN_PROMPT=${promptFile.ref}`] : []),
       `unset HYDRA_ROLE CLAUDE_CONFIG_DIR`,
       `${args.join(' ')} 2>>${shq(stderrLog)}`,
     ].join(' && ')
     mkdirSync(SPAWN_LOGS_DIR, { recursive: true, mode: 0o700 })
-    tmuxCreateSession(tmuxName, [withRaisedFdLimit(inner)])
+    try { tmuxCreateSession(tmuxName, [withRaisedFdLimit(inner)]) } catch (err) { removeSpawnPrompt({ tmuxName, sessionId }); throw err }
     return { provider: 'omp', model, identity: {}, stderrLogPath: stderrLog }
   }
 

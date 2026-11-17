@@ -35,8 +35,10 @@ test('launch names the model without [1m], loads only hydra\'s extension config,
   expect(cmd).toContain('unset HYDRA_ROLE CLAUDE_CONFIG_DIR')
 })
 
-test('the spawn prompt goes in the environment, and only when there is one', async () => {
-  expect(await launchCommand('say hi')).toContain("export HYDRA_SPAWN_PROMPT='say hi'")
+test('the spawn prompt goes in the environment, read from its file, and only when there is one', async () => {
+  const cmd = await launchCommand('say hi')
+  expect(cmd).toContain('export HYDRA_SPAWN_PROMPT="$_hydra_prompt"')
+  expect(cmd).not.toContain('say hi')
   expect(await launchCommand('')).not.toContain('HYDRA_SPAWN_PROMPT')
 })
 
