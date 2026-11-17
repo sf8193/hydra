@@ -169,7 +169,7 @@ describe('diagnosing a refused token', () => {
     await t.listener.start()
     expect(t.alerts).toHaveLength(1)
     expect(t.alerts[0]).toContain('missing_scope: the token needs groups:history and has chat:write')
-    expect(t.alerts[0]).toContain('`bot_token_env` of the app named `default` (`[slack.apps.default]`)')
+    expect(t.alerts[0]).toContain('`bot_token_env` of hydra (`[slack.apps.default]`)')
     await t.listener.runCatchUp(true, 'retry')
     expect(t.alerts).toHaveLength(1) // not again for the same cause
     t.state.historyError = undefined

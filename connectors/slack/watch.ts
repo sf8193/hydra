@@ -4,7 +4,7 @@ import { randomBytes } from 'crypto'
 import { STATE_DIR } from '../../daemon/config.js'
 import { atomicWriteFileSync } from '../../daemon/util.js'
 import { DEFAULT_SLACK_APP, SLACK_DM, SLACK_GROUP_DM, dmWith, namesAChannel, type Address, type HydraConfig, type Place, type PlaceOptions, type SlackApp } from '../../config/types.js'
-import { appKey } from './app.js'
+import { appKey, appName, type Apps } from './app.js'
 import { attr, fence, oneLine, quoteBody, UNTRUSTED_TEXT_MAX_CHARS } from '../../shared/untrusted-text.js'
 import { conversationId, appOfEntry, appPrefix, scopeKey, unscopeKey, TOP_LEVEL } from './conversation.js'
 import { reachableBy, route, owningApp, refusal, notServedBy, identify, currentId, isLive, isSessionThread, MAIN } from '../../routing/route.js'
@@ -161,6 +161,8 @@ export type SlackWatchDeps = {
   deliver: (target: RouteTarget, message: string, idempotencyKey: string) => Promise<DeliverResult>
   /** One app's view, read per event so edits apply without a restart. Null: that app isn't connected, nothing is heard through it. Absent `app`: `default`. */
   config: (app?: string) => SlackWatchConfig | null
+  /** Every app hydra.toml declares now, to name one in a message. Absent: each is named by its id. */
+  apps?: () => Apps
   file: string
   log: (line: string) => void
   /** Slack user id to display name (users.info). Optional; deliveries carry the id either way. */
@@ -286,15 +288,15 @@ export const NOT_A_MEMBER = /not_in_channel|channel_not_found/
  * Why a thread can't be heard, and what to do: one sentence, so the bind's refusal and the later alert say the same.
  * Only the operator can act on it; a session can only pass it on.
  */
-export function cantRead(app: SlackApp | undefined, place: string, why: string, botUserId?: string, then: 'bind' | 'tag' = 'bind'): string {
-  const appId = app?.id ?? DEFAULT_SLACK_APP
+export function cantRead(apps: Readonly<Record<string, SlackApp>>, appId: string, place: string, why: string, botUserId?: string, then: 'bind' | 'tag' = 'bind'): string {
+  const app = Object.hasOwn(apps, appId) ? apps[appId] : undefined
   if (!NOT_A_MEMBER.test(why)) return `it can't be read (${why})`
   const bot = botUserId ? `the bot (<@${botUserId}>)` : 'the bot'
   // A session binds again; a specialist's conversation opens again on a tag.
   const after = then === 'bind' ? 'then bind again' : 'then a tag in the thread opens it again'
   return app?.operatorTokenEnv
     ? `neither ${bot} nor the operator is in ${place} (${why}). Ask the operator to invite the bot or join ${place}, ${after}`
-    : `${bot} isn't in ${place} (${why}). Ask the operator to invite it, or to set the ${appKey(appId, 'operator_token_env')}, ${after}`
+    : `${bot} isn't in ${place} (${why}). Ask the operator to invite it, or to set the ${appKey(apps, appId, 'operator_token_env')}, ${after}`
 }
 
 /** How a refused operator token is said, so catch-up can tell it from a thread that is gone. */
@@ -589,7 +591,7 @@ export class SlackWatcher {
         const ageMs = now - parseFloat(oldest) * 1000
         if (ageMs < olderThanMs) continue
         const h = this.deps.config(e.app)?.hydra
-        const cause = !h ? `its app (${appOfEntry(e)}) has no live connection, so nothing goes through it: see its line`
+        const cause = !h ? `its app (${this.appName(e.app)}) has no live connection, so nothing goes through it: see its line`
           : e.waitingSince !== undefined ? `waiting for a session: its specialist is at max_sessions; end one, or raise max_sessions`
           : e.heldSince && Object.keys(e.heldSince).length ? 'the guard keeps saying not now (exit 75): check the guard'
           : e.specialist && !isLive(h, e.specialist) ? `its specialist ${e.specialist} is not declared in hydra.toml: declare it, or bind the conversation elsewhere`
@@ -601,6 +603,9 @@ export class SlackWatcher {
     return out.sort((a, b) => b.oldestAgeMin - a.oldestAgeMin)
   }
   get(channel: string, threadTs: string, app?: string): SlackWatchEntry | undefined { return this.entries.get(watchKey(app, channel, threadTs)) }
+
+  /** What a message calls an app. */
+  private appName(app: string | undefined): string { return appName(this.deps.apps?.() ?? {}, appOfEntry({ app })) }
 
   setBotId(id: string | undefined, app?: string): void { if (id) this.botIds.set(appOfEntry({ app }), id); else this.botIds.delete(appOfEntry({ app })) }
   /** Supplied once an app's listener has a Slack client: display names for the senders in its deliveries. */
@@ -651,8 +656,8 @@ export class SlackWatcher {
     for (const held of this.list()) {
       if (held.channel !== taken.channel || held.threadTs !== taken.threadTs) continue
       if (!held.specialist || !isSessionThread(held.specialist)) continue
-      this.deps.log(`daemon: slack connector: ${taken.specialist} took the thread that ${conversationId(held)} listens to, through the app named ${appOfEntry(taken)}; the session listening there was told\n`)
-      this.deps.alert?.(`ℹ️ ${taken.specialist} now answers this thread through the app named ${appOfEntry(taken)} (${conversationId(taken)}), so this session no longer hears ${conversationId(held)}. Bind it again with \`bind_conversation\` to listen (then untagged messages in the thread come to this session, not the specialist), or \`unbind_conversation\` to let it go.`, held.specialist, appOfEntry(held))
+      this.deps.log(`daemon: slack connector: ${taken.specialist} took the thread that ${conversationId(held)} listens to, through ${this.appName(taken.app)}; the session listening there was told\n`)
+      this.deps.alert?.(`ℹ️ ${taken.specialist} now answers this thread through ${this.appName(taken.app)} (${conversationId(taken)}), so this session no longer hears ${conversationId(held)}. Bind it again with \`bind_conversation\` to listen (then untagged messages in the thread come to this session, not the specialist), or \`unbind_conversation\` to let it go.`, held.specialist, appOfEntry(held))
     }
   }
 
@@ -828,7 +833,7 @@ export class SlackWatcher {
     const place = cfg ? placeName(cfg, channel) : channel
     const others = !session && channelWide ? ` and any other conversations of yours in ${place}` : ''
     const lostText = lost ? `; ${lost} undelivered message${lost === 1 ? ' is' : 's are'} lost` : ''
-    const text = `⚠️ Let go of ${conversationId(e)}${others}${lostText}: ${cantRead(cfg ? cfg.hydra.slackApps[appOfEntry({ app })] : undefined, place, why, cfg?.botUserId, session ? 'bind' : 'tag')}.`
+    const text = `⚠️ Let go of ${conversationId(e)}${others}${lostText}: ${cantRead(cfg?.hydra.slackApps ?? {}, appOfEntry({ app }), place, why, cfg?.botUserId, session ? 'bind' : 'tag')}.`
     if (session) this.deps.alert?.(text, e.specialist, appOfEntry({ app }))
     else this.alertOnce(`thread-gone:${e.specialist}:${channel}:${channelWide ? 'channel' : 'thread'}`, e.specialist, text, appOfEntry({ app }))
   }
@@ -836,7 +841,7 @@ export class SlackWatcher {
   /** The operator's token was refused: the threads read with it are kept, unread until it is replaced. Said once an hour. */
   operatorTokenRefused(why: string, app?: string): void {
     const id = appOfEntry({ app })
-    this.alertOnce('operator-token', undefined, `⚠️ ${why[0].toUpperCase()}${why.slice(1)}: threads read as the operator are not being read. Put a valid operator token in the variable the ${appKey(id, 'operator_token_env')} names (in \`.env\`), and restart the daemon.`, id)
+    this.alertOnce('operator-token', undefined, `⚠️ ${why[0].toUpperCase()}${why.slice(1)}: threads read as the operator are not being read. Put a valid operator token in the variable the ${appKey(this.deps.apps?.() ?? {}, id, 'operator_token_env')} names (in \`.env\`), and restart the daemon.`, id)
   }
 
   /** While catching up, live events must not move the cursor past the gap being filled. */
@@ -993,12 +998,12 @@ export class SlackWatcher {
     const decide = () => owningApp(cfg.hydra, { app, heardBy, mentioned, ...(boundApp && { boundApp }), at })?.app ?? app
     const owner = dm ? app : cfg.decideOwner ? cfg.decideOwner(ev.channel, ev.ts, decide) : decide()
     // Standing down for a tagged app that was only guessed to hear it: if its bot is not in the channel, nobody answers. Said once per app and channel.
-    if (owner !== app && guessed.includes(owner) && this.firstTime(this.noted.guessed, `${scoped(owner, ev.channel)}`)) this.deps.log(`daemon: slack connector: a tag of the app named ${owner} in ${ev.channel} is left to it, but whether its bot is in the channel could not be read; if it is not, nobody answers. Add channels:read and groups:read to that app and reinstall it\n`)
+    if (owner !== app && guessed.includes(owner) && this.firstTime(this.noted.guessed, `${scoped(owner, ev.channel)}`)) this.deps.log(`daemon: slack connector: a tag of ${this.appName(owner)} in ${ev.channel} is left to it, but whether its bot is in the channel could not be read; if it is not, nobody answers. Add channels:read and groups:read to that app and reinstall it\n`)
     if (owner !== app) return 'ignored'
     const d = route(cfg.hydra, { from: addressOf(ev.user), at, addressed, app, ...(existing?.specialist && { bound: existing.specialist }) })
     if (d.fate === 'ignored') {
       // A tag of an app that can't hear it, with nothing here to answer it instead: counted, logged and reacted to, never silent.
-      if (unheard.length) this.refuse({ ...ev, app }, threadTs, `it tags the app named ${unheard.join(', ')}, whose bot is not in this channel and which has no operator token, so no app can take it: invite that bot to the channel`, 'unrouted', true)
+      if (unheard.length) this.refuse({ ...ev, app }, threadTs, `it tags ${unheard.map(a => this.appName(a)).join(', ')}, whose bot is not in this channel and which has no operator token, so no app can take it: invite that bot to the channel`, 'unrouted', true)
       return 'ignored'
     }
     // Refused or unrouted before anything is counted, watched or owed: a sender `reachable_by` does not admit costs nothing.
@@ -1183,7 +1188,7 @@ export class SlackWatcher {
         this.cannotReact.delete(where)   // re-added last: the map is kept in the order of telling, so the oldest go first
         this.cannotReact.set(where, this.deps.now() + NO_REACTION_RETRY_MS)
         if (this.cannotReact.size > NO_REACTION_KEEP) this.cannotReact.delete(this.cannotReact.keys().next().value!)
-        this.deps.log(`daemon: slack connector: the bot of the app named ${app ?? DEFAULT_SLACK_APP} is not in ${channel}, so it adds no reactions there (invite it to the channel to have them)\n`)
+        this.deps.log(`daemon: slack connector: the bot of ${this.appName(app)} is not in ${channel}, so it adds no reactions there (invite it to the channel to have them)\n`)
         return
       }
       this.deps.log(`daemon: slack connector: ${name} on ${channel} ts ${ts} failed: ${why}\n`)

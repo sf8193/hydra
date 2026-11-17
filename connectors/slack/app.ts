@@ -46,7 +46,7 @@ export const SLACK_APP_NEEDS = {
 /**
  * What the app is called and says it does when `display_name` or `description` is unset. With an operator token the
  * description says so: the app then reads threads as its installer.
- * An app other than `default` is called by its id.
+ * An app other than `default` is called by its id. Every message names an app by this name too (`appName`).
  */
 export const SLACK_APP_DEFAULTS = {
   name: 'hydra',
@@ -96,14 +96,23 @@ export function slackManifest(app?: SlackApp, opts: { several?: boolean } = {}):
   ].join('\n')
 }
 
-/** Names a key of one app, for an operator to find. */
-export const appKey = (app: string, key: string): string => `\`${key}\` of the app named \`${app}\` (\`[slack.apps.${app}]\`)`
+/** The apps hydra.toml declares, by id: what a message needs to name one. */
+export type Apps = Readonly<Record<string, Pick<SlackApp, 'displayName'>>>
 
-/** ` for the app named `x``: said where an app would otherwise go unnamed, only once there is more than one app to tell apart (a lone `default` is just "Slack"). */
-export const appSuffix = (app: string, declared: number): string => app === 'default' && declared <= 1 ? '' : ` for the app named \`${app}\``
+/**
+ * What a message calls an app: its `display_name`, which hydra.toml loading already fills in when unset (`SLACK_APP_DEFAULTS.name`
+ * for `default`, else the id), so it is the name the app has in Slack. An id no longer declared (a conversation an edit left behind) has only its id.
+ */
+export const appName = (apps: Apps, id: string): string => Object.hasOwn(apps, id) ? apps[id].displayName : id
+
+/** Names a key of one app, for an operator to find: the one place a message gives the id, as the table to edit. */
+export const appKey = (apps: Apps, id: string, key: string): string => `\`${key}\` of ${appName(apps, id)} (\`[slack.apps.${id}]\`)`
+
+/** ` for Sales desk`: said where an app would otherwise go unnamed, only once there is more than one app to tell apart (a lone `default` is just "Slack"). */
+export const appSuffix = (apps: Apps, id: string): string => id === 'default' && Object.keys(apps).length <= 1 ? '' : ` for ${appName(apps, id)}`
 
 /** What a Slack call says when the app it would go through has no connection. */
-export const notConnected = (app: string, declared: number): string => `Slack is not connected${appSuffix(app, declared)} (hydra.toml does not declare it, or its tokens are not set)`
+export const notConnected = (apps: Apps, id: string): string => `Slack is not connected${appSuffix(apps, id)} (hydra.toml does not declare it, or its tokens are not set)`
 
 /** What an operator is told when hydra.toml declares no Slack app. */
 export const NO_SLACK_APP = 'hydra.toml declares no Slack app: add `[slack.apps.<id>]`'

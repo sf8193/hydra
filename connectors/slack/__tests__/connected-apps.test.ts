@@ -43,7 +43,7 @@ describe('what a failed read leaves of what is known', () => {
     t.answers.b.C2 = new Error('missing_scope: the token needs groups:read')
     expect(t.apps.heardBy('C1', 'a')).toEqual(['a'])
     expect(t.alerts).toHaveLength(1)
-    expect(t.alerts[0]).toContain('`b`')
+    expect(t.alerts[0]).toContain('which channels b is in')
     expect(t.alerts[0]).toContain('channels:read (public channels) and groups:read (private ones)')
   })
 
@@ -101,7 +101,7 @@ describe('a tag reads the tagged app again', () => {
     expect(t.probes.b).toHaveLength(2)
     expect(t.alerts).toHaveLength(1)
     expect(t.alerts[0]).toContain('member_joined_channel')
-    expect(t.alerts[0]).toContain('`b`')
+    expect(t.alerts[0]).toContain('b was invited')
     t.apps.changed('C1', 'b')   // it does report joins now
     t.tick(NOT_MEMBER_TTL_MS + 1)
     await t.apps.ensure('C1', 'a', ['b'])

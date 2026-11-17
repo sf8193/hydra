@@ -53,9 +53,17 @@ describe('the set of Slack connections', () => {
     const r = t.c.record('sales')
     expect(r).toMatchObject({ declared: true, connection: 'down' })
     expect(r.tokens).toMatchObject({ ok: false })
-    expect((r.tokens as { why: string }).why).toContain('`bot_token_env` of the app named `sales`')
+    expect((r.tokens as { why: string }).why).toContain('`bot_token_env` of sales (`[slack.apps.sales]`)')
     expect(t.told.filter(([, app]) => app === 'sales')).toHaveLength(1)
     expect(t.c.record('default')).toMatchObject({ tokens: { ok: true }, connection: 'up' })
+  })
+
+  test('golden: an app with no tokens is alerted, and shown in health, by its display_name; the key is the table to edit', async () => {
+    const toml = TWO_APPS.replace('socket_token_env = "SALES_SLACK_APP_TOKEN"', 'socket_token_env = "SALES_SLACK_APP_TOKEN"\ndisplay_name = "Sales desk"')
+    const t = setup(toml, { default: { bot: 'b', app: 'a' } })
+    await t.c.start()
+    expect(t.told).toEqual([["⚠️ Sales desk is not connected: `bot_token_env` of Sales desk (`[slack.apps.sales]`) names SALES_SLACK_BOT_TOKEN, which has no value in the daemon's environment. Put the token in that variable (in `.env`) and restart the daemon.", 'sales']])
+    expect(Object.fromEntries(Object.entries(t.c.health()).map(([id, h]) => [id, h.name]))).toEqual({ default: 'hydra', sales: 'Sales desk' })
   })
 
   test('a first connection that fails is let go and recorded as given up; the other app stays up; the next pass tries again', async () => {
@@ -142,8 +150,8 @@ describe('the set of Slack connections', () => {
 describe('missing tokens', () => {
   test('names the key to fix, in the app’s own words', () => {
     const app = hydra(TWO_APPS).slackApps.sales
-    expect(missingTokens(app, { bot: 'x', app: 'y' })).toBeUndefined()
-    expect(missingTokens(app, { app: 'y' })).toContain('names SALES_SLACK_BOT_TOKEN')
-    expect(missingTokens(app, { bot: 'x' })).toContain('names SALES_SLACK_APP_TOKEN')
+    expect(missingTokens({ sales: app }, app, { bot: 'x', app: 'y' })).toBeUndefined()
+    expect(missingTokens({ sales: app }, app, { app: 'y' })).toContain('names SALES_SLACK_BOT_TOKEN')
+    expect(missingTokens({ sales: app }, app, { bot: 'x' })).toContain('names SALES_SLACK_APP_TOKEN')
   })
 })

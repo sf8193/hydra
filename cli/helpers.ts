@@ -620,12 +620,12 @@ export function pinnedBun(hydraDir: string, io: BunIO = bunIO()): { path: string
   }
 }
 
-type AppHealthView = { state: string; downMin: number | null; lastActivityAgeMin: number | null; catchUp: { ok: boolean; ageMin: number; reason?: string } | null; missingScopes?: { option: string; any: string[] }[] | null; tokens?: { ok: boolean; why?: string }; probeError?: string }
+type AppHealthView = { name?: string; state: string; downMin: number | null; lastActivityAgeMin: number | null; catchUp: { ok: boolean; ageMin: number; reason?: string } | null; missingScopes?: { option: string; any: string[] }[] | null; tokens?: { ok: boolean; why?: string }; probeError?: string }
 type SlackHealthView = { listener?: AppHealthView; apps?: Record<string, AppHealthView>; conversations: number; readAsOperator: number; owed: number; oldestOwedAgeMin: number | null; owedLate?: { conversation: string; to?: string; count: number; oldestAgeMin: number; cause: string }[]; owedLateAfterMin?: number }
 
 /**
  * `hydra health`'s Slack lines: one for the whole, as it always was, when the only app is `default`; with several (or one that
- * is not `default`), a header and a line for each app, with its id: connection, last event, catch-up and scope status.
+ * is not `default`), a header and a line for each app, with its name: connection, last event, catch-up and scope status.
  */
 export function slackHealthLines(s: SlackHealthView): string[] {
   const catchUpOf = (l: AppHealthView | undefined) => l?.catchUp ? ` · catch-up ${l.catchUp.ok ? 'ok' : `failing (${l.catchUp.reason ?? 'see log'})`} ${l.catchUp.ageMin} min ago` : ''
@@ -640,7 +640,7 @@ export function slackHealthLines(s: SlackHealthView): string[] {
   if (ids.length <= 1 && (ids.length === 0 || ids[0] === 'default')) {
     const l = s.listener
     const lacks = l?.missingScopes?.length ? ` · missing ${l.missingScopes.map(m => `${m.any.join(' or ')} (${m.option})`).join('; ')}` : ''
-    return [`slack connector: ${stateOf(l)}${catchUpOf(l)} · ${conversations}${lacks}`, ...(l ? unreadable(l, 'default').map(x => `  default: ${x}`) : []), ...late]
+    return [`slack connector: ${stateOf(l)}${catchUpOf(l)} · ${conversations}${lacks}`, ...(l ? unreadable(l, 'default').map(x => `  ${l.name ?? 'default'}: ${x}`) : []), ...late]
   }
   const lines = [`slack connector: ${ids.length} app${ids.length === 1 ? '' : 's'} · ${conversations}`]
   for (const id of ids) {
@@ -652,7 +652,7 @@ export function slackHealthLines(s: SlackHealthView): string[] {
       a.missingScopes === null || a.missingScopes === undefined ? 'scopes unchecked' : a.missingScopes.length ? `missing ${a.missingScopes.map(m => `${m.any.join(' or ')} (${m.option})`).join('; ')}` : 'scopes ok',
       ...unreadable(a, id),
     ]
-    lines.push(`  ${id}: ${parts.join(' · ')}`)
+    lines.push(`  ${a.name ?? id}: ${parts.join(' · ')}`)
   }
   return [...lines, ...late]
 }

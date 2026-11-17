@@ -15,22 +15,22 @@ describe('hydra health, Slack lines', () => {
     const lines = slackHealthLines({
       listener: up,
       apps: {
-        default: up,
-        sales: { ...up, state: 'down', downMin: 12, lastActivityAgeMin: 14, catchUp: { ok: false, ageMin: 40, reason: 'ratelimited' }, missingScopes: [{ option: 'replies', any: ['chat:write'] }], probeError: 'missing_scope' },
-        ops: { state: 'off', downMin: null, lastActivityAgeMin: null, catchUp: null, tokens: { ok: false, why: '`bot_token_env` of the app named `ops` (`[slack.apps.ops]`) names OPS_BOT, which has no value in the daemon\'s environment' } },
+        default: { ...up, name: 'Acme helper' },
+        sales: { ...up, name: 'Sales desk', state: 'down', downMin: 12, lastActivityAgeMin: 14, catchUp: { ok: false, ageMin: 40, reason: 'ratelimited' }, missingScopes: [{ option: 'replies', any: ['chat:write'] }], probeError: 'missing_scope' },
+        ops: { name: 'Ops helper', state: 'off', downMin: null, lastActivityAgeMin: null, catchUp: null, tokens: { ok: false, why: '`bot_token_env` of Ops helper (`[slack.apps.ops]`) names OPS_BOT, which has no value in the daemon\'s environment' } },
       },
       ...totals,
     })
     expect(lines).toEqual([
       'slack connector: 3 apps · 14 conversations · 0 owed',
-      '  default: up · last event 1 min ago · catch-up ok 3 min ago · scopes ok',
-      '  sales: down 12 min · last event 14 min ago · catch-up failing (ratelimited) 40 min ago · missing chat:write (replies) · membership unreadable (missing_scope) · fix: add the scope Slack names (hydra slack manifest sales), reinstall',
-      '  ops: off · `bot_token_env` of the app named `ops` (`[slack.apps.ops]`) names OPS_BOT, which has no value in the daemon\'s environment',
+      '  Acme helper: up · last event 1 min ago · catch-up ok 3 min ago · scopes ok',
+      '  Sales desk: down 12 min · last event 14 min ago · catch-up failing (ratelimited) 40 min ago · missing chat:write (replies) · membership unreadable (missing_scope) · fix: add the scope Slack names (hydra slack manifest sales), reinstall',
+      '  Ops helper: off · `bot_token_env` of Ops helper (`[slack.apps.ops]`) names OPS_BOT, which has no value in the daemon\'s environment',
     ])
   })
 
   test('a lone app that is not `default` is still named', () => {
-    expect(slackHealthLines({ apps: { sales: up }, ...totals })).toEqual(['slack connector: 1 app · 14 conversations · 0 owed', '  sales: up · last event 1 min ago · catch-up ok 3 min ago · scopes ok'])
+    expect(slackHealthLines({ apps: { sales: { ...up, name: 'Sales desk' } }, ...totals })).toEqual(['slack connector: 1 app · 14 conversations · 0 owed', '  Sales desk: up · last event 1 min ago · catch-up ok 3 min ago · scopes ok'])
   })
 
   test('a lone `default` app shows an unreadable membership too, with what to do (#669)', () => {

@@ -2072,6 +2072,8 @@ describe('what hydra health says about owed messages and deliveries (#669)', () 
     await off.w.flush()
     const down = new SlackWatcher({ now: off.now, file: off.file, log: () => {}, config: () => null, alert: () => {}, deliver: async () => ({ ok: true }) })
     expect(down.lateOwed(20 * MIN)[0].cause).toContain('has no live connection')
+    const named = new SlackWatcher({ now: off.now, file: off.file, log: () => {}, config: () => null, apps: () => ({ default: { displayName: 'Acme helper' } }), alert: () => {}, deliver: async () => ({ ok: true }) })
+    expect(named.lateOwed(20 * MIN)[0].cause).toBe('its app (Acme helper) has no live connection, so nothing goes through it: see its line')
   })
 
   test('when two causes hold, the first in the list wins; a failure is one capped line', async () => {
