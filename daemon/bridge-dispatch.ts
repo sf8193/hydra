@@ -3,6 +3,7 @@ import { isAbsolute, join, resolve as resolvePath } from 'path'
 import { gateway, INBOX_DIR, STATE_DIR } from './config.js'
 import { isParentOf, parentSessionOf, registry, resolveSendTarget, sessionEmoji, threadRegistry, type Predecessor, type SessionInfo, type ThreadSessionEntry } from './sessions.js'
 import { transport } from './bridge-transport.js'
+import { callerRefusal, destroyDeclinedText, killThenDestroy } from './destroy.js'
 import { loadAccess, operatorIds, maxChunkLimit, channelPolicy, MAX_ATTACHMENT_BYTES } from './access.js'
 import { quietSend, shouldQuiet } from './quiet-send.js'
 import { beginMainHandoff } from './main-handoff.js'
@@ -566,25 +567,25 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         }
 
         const info = registry.get(targetId)!
+        const destroy = args.destroy === true
 
-        // Non-main sessions can only kill sessions they spawned
+        // Non-main sessions can only kill (and destroy) sessions they spawned
         let reason = 'session ended'
         if (callerSessionId && callerSessionId !== 'main') {
           const caller = registry.get(callerSessionId)
           // Distinct from a human's 'session ended' so the on-kill hook can tell them apart
           reason = `session ended by ${caller?.tmuxName ?? 'agent'}`
-          if (!caller || !isParentOf(caller, info)) {
-            throw new Error(`cannot kill ${info.tmuxName} — you can only kill sessions you spawned`)
-          }
-          // A protocol-managed participant (e.g. the review Critic) belongs to the
-          // protocol, not to whoever happened to spawn it.
-          if (isProtocolParticipant(targetId)) {
-            throw new Error(`cannot kill ${info.tmuxName} — it is a protocol participant`)
-          }
+          const refusal = callerRefusal(caller, info, destroy ? 'destroy' : 'kill')
+          if (refusal) throw new Error(refusal)
         }
 
-        await killSession(info, reason)
-        return { content: [{ type: 'text', text: `killed session ${targetId}` }] }
+        if (!destroy) {
+          await killSession(info, reason)
+          return { content: [{ type: 'text', text: `killed session ${targetId}` }] }
+        }
+        const res = await killThenDestroy(info, reason, callerSessionId && callerSessionId !== 'main' ? (registry.get(callerSessionId)?.tmuxName ?? 'agent') : 'main')
+        if (!res.out.ok) return { content: [{ type: 'text', text: destroyDeclinedText(info.tmuxName, res) }], ...(res.killed ? {} : { isError: true }) }
+        return { content: [{ type: 'text', text: `killed session ${targetId} and deleted its thread ${info.threadId}` }] }
       }
 
       case 'watch_pr': {

@@ -732,6 +732,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   if (opts?.cwd && !existsSync(opts.cwd)) throw new Error(`working directory ${opts.cwd} does not exist`)
   let threadId: string | undefined
   let anchorMessageId: string | undefined
+  let hydraMadeThread = false
   let anchorChannelId: string | undefined
 
   // Lossless respawn: deliverables/description re-applied after the new record is
@@ -871,6 +872,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
           ? `${threadName} — ${originType} from **${originFrom}**`
           : threadName
         const anchor = await gateway.send(targetChannelId!, anchorText)
+        hydraMadeThread = true
         anchorMessageId = anchor.id
         anchorChannelId = targetChannelId!
         const thread = await gateway.createThread(targetChannelId!, threadName, {
@@ -1227,6 +1229,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       label: sessionLabel,
       claudeSessionId: launched.identity.claudeSessionId,
       ...(policy && { policy }),
+      ...(hydraMadeThread && { hydraMade: true }),
     })
   }
 

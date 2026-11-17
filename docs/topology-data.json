@@ -1222,14 +1222,6 @@
     ],
     [
       "daemon_commands_thread",
-      "daemon_protocol-registry"
-    ],
-    [
-      "daemon_commands_thread",
-      "connectors_github_pr-watch"
-    ],
-    [
-      "daemon_commands_thread",
       "daemon_templates"
     ],
     [

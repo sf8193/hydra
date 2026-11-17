@@ -1,6 +1,7 @@
 import { registry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { doSpawnSession, killSession } from './session-lifecycle.js'
+import { callerRefusal, destroyDeclinedText, killThenDestroy } from './destroy.js'
 import { fallbackDescription, formatDuration } from './util.js'
 import { tmuxServerState, tmuxSessionState } from './tmux.js'
 import { parseIdempotencyTtl, parseIdleTtl } from '../shared/constants.js'
@@ -201,7 +202,7 @@ function handleStatus(req: CLIRequest): CLIResponse {
 }
 
 async function handleKill(req: CLIRequest): Promise<CLIResponse> {
-  const { name } = req.params as { name?: string }
+  const { name, destroy, callerSessionId } = req.params as { name?: string; destroy?: boolean; callerSessionId?: string }
   if (!name) return respond(req, false, 'name is required')
 
   const info = sessionByName(name)
@@ -211,14 +212,23 @@ async function handleKill(req: CLIRequest): Promise<CLIResponse> {
   // and the death handler will set it to completed during killSession
   const idemKey = getBySessionId(info.sessionId)?.key
 
-  await killSession(info, 'killed via CLI')
+  // The operator's shell has no session id and may destroy any session, as it may kill any. Run from
+  // inside a session (HYDRA_SESSION_ID) a destroy answers to the same rules as the kill_session tool.
+  if (destroy === true && callerSessionId && callerSessionId !== 'main') {
+    const refusal = callerRefusal(registry.get(callerSessionId), info, 'destroy')
+    if (refusal) return respond(req, false, refusal)
+  }
+  let res: Awaited<ReturnType<typeof killThenDestroy>> | undefined
+  if (destroy === true) res = await killThenDestroy(info, 'killed via CLI', 'CLI')
+  else await killSession(info, 'killed via CLI')
 
   // Overwrite to failed AFTER death handler set completed — unblocks retry
   if (idemKey) {
     updateIdempotency(idemKey, { status: 'failed' })
   }
 
-  return respond(req, true, { killed: info.tmuxName })
+  if (res && !res.out.ok) return respond(req, false, destroyDeclinedText(info.tmuxName, res))
+  return respond(req, true, { killed: info.tmuxName, ...(res && { destroyed: info.threadId }) })
 }
 
 function handleHealth(req: CLIRequest): CLIResponse {
