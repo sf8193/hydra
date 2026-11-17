@@ -1,0 +1,9 @@
+──────────────────────────────────────────────────────────────────
+SettingsWarning
+<state>/scoped/<session>.settings.json
+└ allowedMcpServers[0]: Invalid entry was ignored: Server name can only contain letters, numbers, hyphens, and underscores
+The values listed above were skipped; the rest of the file is in effect.
+❯ 1. Continue
+  2. Fix with Claude
+  3. Exit and fix manually
+Enter to confirm · Esc to cancel

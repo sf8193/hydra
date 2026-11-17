@@ -19,6 +19,8 @@ import { UNIVERSAL_TOOLS } from '../shared/tool-definitions.js'
 import { STATE_DIR } from './config.js'
 import { MAX_ATTACHMENT_BYTES } from './access.js'
 import { expectedServerNames } from './engines/claude-verify.js'
+import { bridgeCommand } from './plugin-manifest.js'
+import { readdirSync, readFileSync } from 'fs'
 import { PolicyRefusal, missingTokenRefusal, remedy, type ConfinementPolicy, type LaunchPolicy } from './restricted.js'
 
 /** The first Claude Code with `permissions.blockWritesOutsideWorkingDirectories`: an older one ignores the key, which would leave Edit/Write unconfined. */
@@ -31,10 +33,11 @@ export const NETWORK_ALLOW_RULE = 'WebFetch(domain:*)'
 /** The MCP servers the session may see: hydra's bridge (its one way to the thread) and the servers its policy lists. Nothing else: not the operator's own, a plugin's, a project's or a claude.ai connector. */
 export const confinementServers = (policy: Pick<ConfinementPolicy, 'servers'>): string[] => expectedServerNames(policy.servers)
 
-export function confinementSettings(policy: Pick<ConfinementPolicy, 'denyCommands' | 'cannotRead'> & Partial<Pick<ConfinementPolicy, 'servers'>>): object {
+export function confinementSettings(policy: Pick<ConfinementPolicy, 'denyCommands' | 'cannotRead'> & Partial<Pick<ConfinementPolicy, 'servers'>> & { bridgeCommands?: readonly string[][] }): object {
   return {
-    // Claude Code's own allowlist, which governs user/project/local config, --mcp-config, plugins and claude.ai connectors alike (not --strict-mcp-config: that drops plugin servers, and the bridge is one).
-    allowedMcpServers: confinementServers({ servers: policy.servers ?? [] }).map(serverName => ({ serverName })),
+    // Claude Code's own allowlist, which governs user/project/local config, --mcp-config, plugins and claude.ai connectors alike (not --strict-mcp-config: shown against the real Claude Code to drop a plugin's server, and the bridge is one; write-confinement-mcp.live.test.ts).
+    // The listed servers by name (a `serverName` is letters, digits, hyphens and underscores only: a plugin's key, with its colons, is refused by Claude Code with a dialog that stops the start), the bridge by the exact command it runs.
+    allowedMcpServers: [...(policy.servers ?? []).map(s => ({ serverName: s.name })), ...(policy.bridgeCommands ?? []).map(serverCommand => ({ serverCommand: [...serverCommand] }))],
     // Honored from any settings source; the environment variable at launch says the same, and the start check wants its debug line.
     disableClaudeAiConnectors: true,
     sandbox: {
@@ -192,4 +195,55 @@ export function snapshotConfinedFiles(w: NonNullable<LaunchPolicy['canOnlyWriteT
     } catch { return refuse(f) } finally { if (fd !== undefined) closeSync(fd) }
   }
   return { files: out, cleanup }
+}
+
+/** The plugin id and marketplace of the bridge (daemon/plugin-manifest.ts BRIDGE_PLUGIN_ID). */
+const BRIDGE_MARKETPLACE_DIR = 'claude-plugins-official'
+const BRIDGE_PLUGIN_NAME = 'discord'
+
+export type BridgeDirDeps = { read: (path: string) => string; list: (dir: string) => string[]; exists: (path: string) => boolean; real: (path: string) => string }
+const realBridgeDirDeps: BridgeDirDeps = {
+  read: p => readFileSync(p, 'utf8'),
+  list: d => readdirSync(d, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => e.name),
+  exists: p => { try { statSync(p); return true } catch { return false } },
+  real: p => { try { return realpathSync(p) } catch { return p } },
+}
+
+/**
+ * Where Claude Code may run the bridge from, which is what `${CLAUDE_PLUGIN_ROOT}` becomes in its command: the install path `installed_plugins.json` records for the plugin (the one
+ * rule; when the file names none, every version folder of the plugin cache, which the daemon syncs at boot), and the plugin's source folder in its marketplace (a plugin whose
+ * cache folder Claude Code did not make is run from there: seen in the real Claude Code with a hand-made cache). Each as written and as resolved.
+ */
+export function bridgePluginDirs(claudeConfigDir: string, deps: BridgeDirDeps = realBridgeDirDeps): string[] {
+  const cfg = claudeConfigDir.replace(/\/+$/, '')
+  const cache = `${cfg}/plugins/cache/${BRIDGE_MARKETPLACE_DIR}/${BRIDGE_PLUGIN_NAME}`
+  let dirs: string[] = []
+  try {
+    const installed = JSON.parse(deps.read(`${cfg}/plugins/installed_plugins.json`))?.plugins?.[`${BRIDGE_PLUGIN_NAME}@${BRIDGE_MARKETPLACE_DIR}`]
+    if (Array.isArray(installed)) dirs = installed.map((e: { installPath?: unknown }) => e?.installPath).filter((p): p is string => typeof p === 'string' && p.startsWith('/') && deps.exists(p))
+  } catch { /* no record: the folders below */ }
+  if (dirs.length === 0) { try { dirs = deps.list(cache).sort().map(n => `${cache}/${n}`) } catch { dirs = [] } }
+  const market = `${cfg}/plugins/marketplaces/${BRIDGE_MARKETPLACE_DIR}`
+  let source = './external_plugins/discord'
+  try { const e = JSON.parse(deps.read(`${market}/.claude-plugin/marketplace.json`))?.plugins?.find((x: { name?: string }) => x?.name === BRIDGE_PLUGIN_NAME)?.source; if (typeof e === 'string') source = e } catch { /* the default */ }
+  const sourceDir = `${market}/${source.replace(/^\.\//, '')}`.replace(/\/+$/, '')
+  if (deps.exists(sourceDir)) dirs.push(sourceDir)
+  return [...new Set(dirs.flatMap(d => [d, deps.real(d)]))]
+}
+
+/** The commands the bridge runs from each of those folders: the manifest's own command string (`bun`, never a resolved path: Claude Code's match is exact, shown against the real one), arguments filled in. */
+export const bridgeServerCommands = (claudeConfigDir: string, deps: BridgeDirDeps = realBridgeDirDeps): string[][] => bridgePluginDirs(claudeConfigDir, deps).map(bridgeCommand)
+
+/** What Claude Code rejects in an `allowedMcpServers` entry (from its own schema): such an entry makes it stop at an interactive "Settings Warning" and never start the session. */
+export function claudeSettingsProblems(settings: { allowedMcpServers?: unknown }): string[] {
+  const out: string[] = []
+  const list = settings.allowedMcpServers
+  if (list === undefined) return out
+  if (!Array.isArray(list)) return ['allowedMcpServers is not a list']
+  list.forEach((e: any, i) => {
+    if (e?.serverName !== undefined && !(typeof e.serverName === 'string' && /^[a-zA-Z0-9_-]+$/.test(e.serverName))) out.push(`allowedMcpServers[${i}]: server name ${JSON.stringify(e.serverName)} can only contain letters, numbers, hyphens and underscores`)
+    if (e?.serverCommand !== undefined && !(Array.isArray(e.serverCommand) && e.serverCommand.length >= 1 && e.serverCommand.every((x: unknown) => typeof x === 'string'))) out.push(`allowedMcpServers[${i}]: serverCommand must be a non-empty list of strings`)
+    if (e?.serverName === undefined && e?.serverCommand === undefined && e?.serverUrl === undefined) out.push(`allowedMcpServers[${i}]: names no server`)
+  })
+  return out
 }

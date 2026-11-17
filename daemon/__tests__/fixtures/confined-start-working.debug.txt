@@ -1,0 +1,4 @@
+2026-11-17T17:36:16.746Z [DEBUG] [STARTUP] MCP configs resolved in 138ms (awaited at +178ms)
+2026-11-17T17:36:17.922Z [DEBUG] MCP server "plugin:discord:discord": Starting connection with timeout of 30000ms
+2026-11-17T17:36:18.832Z [DEBUG] MCP server "plugin:discord:discord": Successfully connected (transport: stdio) in 989ms
+2026-11-17T17:36:18.874Z [DEBUG] MCP server "plugin:discord:discord": Channel notifications registered

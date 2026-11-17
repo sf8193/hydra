@@ -32,6 +32,9 @@ export type Loaded = {
   plugins: string[]
   /** The permission rules it applied under `--settings`. Undefined when it applied none. */
   allow: string[] | undefined
+  /** `[STARTUP] Loading MCP configs...` was logged, and `[STARTUP] MCP configs resolved in` after it: without the second, Claude Code is stuck before MCP init (typically a dialog on its screen). */
+  mcpConfigsLoading: boolean
+  mcpConfigsResolved: boolean
   /** The deny rules it applied under `--settings`. Undefined when it applied none. */
   deny: string[] | undefined
   /** Allow rules applied anywhere else (user, project, local or managed settings, the command line): destination to rules. */
@@ -67,6 +70,7 @@ export function readLoaded(log: string): Loaded {
   let deny: Set<string> | undefined
   const otherAllow: Record<string, Set<string>> = {}
   let connectorsOff = false
+  let mcpConfigsLoading = false, mcpConfigsResolved = false
   let connectorActivity = false
   const rules = (dest: string, list: string[], replace: boolean) => {
     if (dest === 'flagSettings') { allow = replace ? new Set(list) : new Set([...(allow ?? []), ...list]); return }
@@ -100,6 +104,8 @@ export function readLoaded(log: string): Loaded {
     else if ((m = line.match(/^(?:Applying permission update: )?(Adding|Replacing all) (?:\d+ )?allow rule(?:\(s\)|s) (?:to|for) destination '([^']+)'(?: with \d+ rule\(s\))?: (\[.*\])\s*$/))) {
       try { rules(m[2], flatten(JSON.parse(m[3])), m[1] !== 'Adding') } catch { /* an unreadable list is not a rule we can name */ }
     }
+    else if (line.startsWith('[STARTUP] Loading MCP configs')) mcpConfigsLoading = true
+    else if (line.startsWith('[STARTUP] MCP configs resolved')) mcpConfigsResolved = true
     else if (line.startsWith('[claudeai-mcp]')) {
       if (/^\[claudeai-mcp\] Disabled via env var\s*$/.test(line)) connectorsOff = true
       else connectorActivity = true
@@ -108,7 +114,7 @@ export function readLoaded(log: string): Loaded {
   return {
     servers: [...servers], connected: [...connected], plugins: [...plugins], allow: allow ? [...allow] : undefined, deny: deny ? [...deny] : undefined,
     otherAllow: Object.fromEntries(Object.entries(otherAllow).filter(([, v]) => v.size).map(([k, v]) => [k, [...v]])),
-    connectorsOff, connectorActivity, builtinPlugins: [...builtin], registeredPlugins: [...registered], registrations,
+    mcpConfigsLoading, mcpConfigsResolved, connectorsOff, connectorActivity, builtinPlugins: [...builtin], registeredPlugins: [...registered], registrations,
   }
 }
 
@@ -279,6 +285,7 @@ export function confinementShortfall(want: ConfinementWant, got: Loaded): string
   const missingAllow = want.allow.filter(r => !(got.allow ?? []).includes(r))
   if (missingDeny.length) out.push(`it did not apply these deny rules: ${list(missingDeny)}`)
   if (missingAllow.length) out.push(`it did not apply these allow rules: ${list(missingAllow)}`)
+  if (got.mcpConfigsLoading && !got.mcpConfigsResolved) out.push('Claude Code never finished loading its MCP configs (no `[STARTUP] MCP configs resolved` line): it is stuck before MCP starts, typically at a dialog on its screen (a Settings Warning about the launch settings): attach to the session and read it')
   const unconnected = unconnectedServers(want.servers, got)
   if (unconnected.length) out.push(`these MCP servers did not connect: ${list(unconnected)}${unconnected.includes(BRIDGE_MCP_SERVER_KEY) ? ' (the bridge is one: Claude Code\'s server allowlist may have refused it by name)' : ''}`)
   const notOff = connectorsNotOff(got)

@@ -45,6 +45,9 @@ const BRIDGE_SERVER = {
   args: ['run', '--cwd', '${CLAUDE_PLUGIN_ROOT}', '--shell=bun', '--silent', 'start'],
 }
 
+/** The bridge's launch command with `${CLAUDE_PLUGIN_ROOT}` replaced by a plugin directory: what Claude Code runs, and what a server allowlist's `serverCommand` entry must match exactly. */
+export const bridgeCommand = (pluginDir: string): string[] => [BRIDGE_SERVER.command, ...BRIDGE_SERVER.args.map(a => a.replaceAll('${CLAUDE_PLUGIN_ROOT}', pluginDir))]
+
 /**
  * The bridge is declared in the manifest, not only in `.mcp.json`.
  *

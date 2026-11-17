@@ -1,0 +1,6 @@
+2026-11-17T19:10:00.000Z [DEBUG] [claudeai-mcp] Disabled via env var
+2026-11-17T19:10:00.000Z [DEBUG] [STARTUP] Loading MCP configs...
+2026-11-17T19:10:00.000Z [DEBUG] [STARTUP] Loading commands and agents...
+2026-11-17T19:10:00.000Z [DEBUG] [STARTUP] MCP configs resolved in 1ms (awaited at +33ms)
+2026-11-17T19:10:00.000Z [DEBUG] MCP server "alpha": Starting connection with timeout of 30000ms
+2026-11-17T19:10:00.000Z [DEBUG] MCP server "alpha": Successfully connected (transport: stdio) in 70ms

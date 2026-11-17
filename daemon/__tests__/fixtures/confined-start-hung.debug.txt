@@ -1,0 +1,9 @@
+2026-11-17T18:56:39.382Z [DEBUG] Applying permission update: Adding 1 allow rule(s) to destination 'flagSettings': ["WebFetch(domain:*)"]
+2026-11-17T18:56:39.383Z [DEBUG] Applying permission update: Adding 22 deny rule(s) to destination 'flagSettings': ["Read(//home/op/.ssh/**)","Read(//home/op/.aws/**)"]
+2026-11-17T18:56:39.393Z [DEBUG] [STARTUP] Loading MCP configs...
+2026-11-17T18:56:39.394Z [DEBUG] [STARTUP] Running setup()...
+2026-11-17T18:56:39.499Z [DEBUG] [STARTUP] setup() completed in 105ms
+2026-11-17T18:56:39.531Z [DEBUG] [STARTUP] Running showSetupScreens()...
+2026-11-17T18:56:39.533Z [DEBUG] [STARTUP] showSetupScreens() completed in 2ms
+2026-11-17T18:56:39.712Z [DEBUG] settings.read: the engine's merge was raised (the settings changed) in 3.6 ms; 0 keys answered otherwise than the files.
+2026-11-17T18:57:25.758Z [DEBUG] nonBlockingStdout: uninstalling (Error: EIO: i/o error, write)
