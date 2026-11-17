@@ -95,6 +95,8 @@ export type SessionInfo = {
    * from it; birth re-checks the folder; delivery compares it with hydra.toml. Absent: no specialist fills it.
    */
   policy?: LaunchPolicy
+  /** The hash of the specialist's kickoff this conversation was born under (specialists.ts `kickoffHash`). Absent: born before it was stored, or not from a kickoff. */
+  kickoffHash?: string
   /** A confined session's start was checked against its policy (engines/claude-verify.ts) and passed. Persisted. Without it a confined session takes no message (restricted.ts `unverified`). */
   verified?: true
   label?: SessionLabel
@@ -216,6 +218,8 @@ export type ThreadSessionEntry = {
   label?: SessionLabel
   /** The launch policy the session was born with: the only evidence left once a kill deletes the record (read by resolvePolicy through a revive). */
   policy?: LaunchPolicy
+  /** The kickoff the conversation was born under: the evidence left once a kill deletes the record (read by reviveThread). */
+  kickoffHash?: string
 }
 
 export type ThreadMetadata = {
@@ -277,12 +281,13 @@ export type SpawnOpts = {
   cwd?: string                // a fresh launch's working dir (a specialist's workdir) in place of SPAWN_CWD; a fork, resume or worktree wins
   tools?: string[]            // Claude --tools whitelist (must include MCP tools with prefix)
   sessionType?: SessionType  // declared at spawn — determines base tool set (a specialist with restricted = true is always `scoped`)
+  kickoffHash?: string        // a fresh start's prompt is the specialist's kickoff: the hash stored with the conversation it begins (a resume or fork keeps its own, through carryOver)
   specialist?: string        // the specialist a caller names as the one this session acts for (a fill, a conversation's own session); its launch policy is decided from hydra.toml at birth (restricted.ts)
   worktree?: string           // git repo subdirectory to create a worktree from (structural alternative to topic prefix)
   worktreeBranchSuffix?: string // appended to `wt/<name>` to avoid branch collisions between same-named builders
   preserveWorktree?: boolean  // recovery: reuse the dead session's on-disk worktree instead of destroying+recreating it (keeps unpushed work + lets --resume find the transcript)
   reuseWorktree?: { repo: string; path: string; branch: string }  // recovery: explicit worktree to adopt in place — survives even after the dead record it came from is deleted (resume-fail fallback tiers)
-  carryOver?: { artifacts?: string[]; contextLinks?: string[]; description?: string; predecessor?: Predecessor; launchCwd?: string; disallowedTools?: string[]; parentId?: string | null; initiator?: string; policy?: LaunchPolicy; sessionName?: string }  // recovery: deliverables/description (and a handoff successor's predecessor, a fork's launch dir and blocked tools) to re-apply — carried explicitly so fallback tiers keep them after the dead record is gone
+  carryOver?: { artifacts?: string[]; contextLinks?: string[]; description?: string; predecessor?: Predecessor; launchCwd?: string; disallowedTools?: string[]; parentId?: string | null; initiator?: string; policy?: LaunchPolicy; kickoffHash?: string; sessionName?: string }  // recovery: deliverables/description (and a handoff successor's predecessor, a fork's launch dir and blocked tools) to re-apply — carried explicitly so fallback tiers keep them after the dead record is gone
 }
 
 // ---------------------------------------------------------------------------
@@ -620,7 +625,7 @@ export class ThreadRegistry {
     respawnCount: number, sessionId: string, tmuxName: string,
     originType: 'spawn' | 'fork' | 'handoff' | 'resurrect', originFrom?: string,
     model?: string, parentChannelId?: string, claudeSessionId?: string,
-    label: SessionLabel | undefined, policy?: LaunchPolicy, hydraMade?: boolean,
+    label: SessionLabel | undefined, policy?: LaunchPolicy, kickoffHash?: string, hydraMade?: boolean,
   }): void {
     const now = Date.now()
     let thread = this.threads.get(threadId)
@@ -657,6 +662,7 @@ export class ThreadRegistry {
       claudeSessionId: opts.claudeSessionId,
       label: opts.label,
       ...(opts.policy !== undefined && { policy: opts.policy }),
+      ...(opts.kickoffHash !== undefined && { kickoffHash: opts.kickoffHash }),
     })
     this.persist()
   }

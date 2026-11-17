@@ -1,3 +1,4 @@
+import { createHash } from 'crypto'
 import { readFileSync, existsSync } from 'fs'
 import { join } from 'path'
 import { STATE_DIR, PLATFORM, DEFAULT_SESSION_CHANNEL } from '../daemon/config.js'
@@ -206,6 +207,30 @@ export function removeSpecialist(name: string): boolean {
 export function readKickoff(specialist: Specialist): string | undefined {
   if (specialist.kickoffFile) return readFileSync(specialist.kickoffFile, 'utf8').trim() || undefined
   return specialist.kickoff
+}
+
+/**
+ * What names a kickoff text: a conversation stores this when it is born, and a later start compares it with the kickoff then.
+ * The text is normalised first (trimmed, CRLF read as LF) so an edit that changes no word cannot reset a conversation; whitespace
+ * inside the text is left alone, because a change there can change the meaning (a list, a code block).
+ */
+export const kickoffHash = (text: string): string => createHash('sha256').update(text.replaceAll('\r\n', '\n').trim()).digest('hex').slice(0, 16)
+
+/**
+ * The kickoff a specialist's next conversation would be born under, with its hash. The specialist is found by its id or one it was
+ * renamed from (a record keeps the id it was born under). Undefined when it has no kickoff, is not declared, or the kickoff cannot
+ * be read: a start then goes on as if the kickoff were unchanged, and the one that needs the text reports the read failure.
+ */
+export function currentKickoff(id: string | undefined, h: HydraConfig = currentHydraConfig()): { text: string; hash: string } | undefined {
+  if (id === undefined) return undefined
+  const current = Object.hasOwn(h.specialists, id) ? id : Object.values(h.specialists).find(s => s.renamedFrom.includes(id))?.id ?? id
+  try {
+    const specialist = getSpecialist(current)
+    const text = specialist && readKickoff(specialist)
+    return text ? { text, hash: kickoffHash(text) } : undefined
+  } catch {
+    return undefined
+  }
 }
 
 /** The specialist whose thread this is, if any. */

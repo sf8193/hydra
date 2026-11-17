@@ -384,7 +384,7 @@ async function respawnThread(msg: InboundMessage, topic?: string, templateName?:
   // the session's origin still reads as the template in the spawn announce + `list sessions`; its label wins.
   const outcome = await reviveThread({
     thread: thread ?? threadStub(threadId, resolvedTopic),
-    respawnOnly: true, respawnTopic: resolvedTopic, orphan, ...byHand(threadId),
+    respawnOnly: true, ...(topic && { respawnTopic: topic }), orphan, ...byHand(threadId),
     ...(selection && { engine: selection.engine, model: selection.model }),
     ...(template && { respawnOpts: buildTemplateSpawnOpts(templateName!, template) }),
   })

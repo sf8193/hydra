@@ -10,7 +10,7 @@ import { gateway } from './config.js'
 import { markDead, registry, repointChildren, sessionEmoji, threadRegistry } from './sessions.js'
 import type { ThreadMetadata, ThreadSessionEntry, SessionInfo, SpawnOpts, SpawnResult } from './sessions.js'
 import { carryOver, doSpawnSession, killSession, tryResume, tryRespawn, RECOVERY_REVERIFY_GUARD } from './session-lifecycle.js'
-import { baseNameFromBranch } from './util.js'
+import { baseNameFromBranch, safeSend } from './util.js'
 import { tmuxSessionState, TMUX_HOLD_MS } from './tmux.js'
 import { occupancy, occupied } from './session-reachability.js'
 import { parsePrUrl, retargetWatches, unwatchBySession } from '../connectors/github/pr-watch.js'
@@ -21,7 +21,7 @@ import { recoveryEngine } from './engines/history.js'
 import { resolveEngine } from './engines/instances.js'
 import type { ProviderId } from './engines/engine-adapter.js'
 import { activeBackoff, clearBackoff, recordFailure, type Backoff } from './recovery-backoff.js'
-import { targetKeyForThread, withThreadLock } from '../specialists/specialists.js'
+import { currentKickoff, kickoffHash, specialistForThread, targetKeyForThread, withThreadLock } from '../specialists/specialists.js'
 import { PolicyRefusal } from './restricted.js'
 import type { InboundMessage } from '../gateways/gateway.js'
 
@@ -51,7 +51,8 @@ export type ReviveRequest = {
   respawnOnly?: boolean
   /** The thread is gone: open a new one in this channel. Respawn tier only; the history is not there to read. */
   newThreadIn?: string
-  /** The respawn tier's prompt, read only if that tier runs (a broken kickoff must not stop a resume). Default: the thread's topic. */
+  /** The respawn tier's prompt. A string is the caller's own words. A function is a specialist's kickoff, read only if that tier runs
+   *  (a broken kickoff must not stop a resume). Default: the kickoff of the specialist whose thread this is, else the thread's topic. */
   respawnTopic?: string | (() => string)
   /** A specialist's name, claimed on every tier. */
   name?: string
@@ -118,7 +119,15 @@ export async function reviveThread(req: ReviveRequest): Promise<ReviveOutcome> {
   // What the launch policy is read from when no record is left (a kill deleted it): the history entry's. Carried even by `respawn`,
   // which carries no restrictions: a confined thread whose specialist can no longer be resolved refuses, whichever way it is revived.
   const carriedPolicy = dead?.policy ?? entry?.policy
-  const carriedOut = carried || carriedPolicy ? { ...carried, ...(carriedPolicy && { policy: carriedPolicy }), sessionName: lastTmuxName } : undefined
+  // The kickoff the conversation was born under, from its record or (a kill deleted that) its history entry. Carried by a resume or fork.
+  const bornKickoff = dead?.kickoffHash ?? entry?.kickoffHash
+  const carriedOut = carried || carriedPolicy || bornKickoff ? { ...carried, ...(carriedPolicy && { policy: carriedPolicy }), ...(bornKickoff && { kickoffHash: bornKickoff }), sessionName: lastTmuxName } : undefined
+  // A specialist's kickoff is its definition: a conversation born under another kickoff is not continued under this one. This is the one
+  // place that decides it, for every way a specialist's conversation is continued (a fill, resume, respawn, recover, vacant hold). A
+  // conversation with no stored hash (born before it was kept) is taken as unchanged.
+  const specialistId = req.specialist ?? specialistForThread(thread.threadId) ?? carriedPolicy?.specialist
+  const kickoff = currentKickoff(specialistId)
+  const kickoffChanged = !req.respawnOnly && bornKickoff !== undefined && kickoff !== undefined && bornKickoff !== kickoff.hash
   // A worktree still on disk is kept on every tier and into a new thread; boot recovery reattaches a missing one first.
   const worktree = dead?.worktreeRepo && dead.worktreePath && existsSync(dead.worktreePath)
     ? { repo: dead.worktreeRepo, path: dead.worktreePath, branch: dead.worktreeBranch ?? `wt/${dead.tmuxName}` }
@@ -150,6 +159,7 @@ export async function reviveThread(req: ReviveRequest): Promise<ReviveOutcome> {
   }
 
   if (revived) {
+    if (kickoffChanged && !req.newThreadIn && revived.method === 'respawned') await safeSend(revived.result.threadId, kickoffRestartNotice(specialistId!)).catch(() => {})
     if (dead) repointChildren(dead, revived.result.sessionId)
     if (req.backoffKey) clearBackoff(req.backoffKey)
     return revived
@@ -186,7 +196,8 @@ export async function reviveThread(req: ReviveRequest): Promise<ReviveOutcome> {
     const common = { model, ...shared }
 
     // The gate reads both ids (PINNED R9: a mixed-ID record logs both tier failures, then respawns).
-    if (!req.respawnOnly && (claudeSessionId || entry?.codexThreadId || dead?.codexThreadId || plan.resume)) {
+    if (kickoffChanged) process.stderr.write(`daemon: revive ${lastTmuxName}: the kickoff of ${specialistId} changed since this conversation began, so it is not resumed or forked\n`)
+    if (!req.respawnOnly && !kickoffChanged && (claudeSessionId || entry?.codexThreadId || dead?.codexThreadId || plan.resume)) {
       let result: (SpawnResult & { bridgeOrphan?: boolean }) | null = null
       const r = plan.resume
       if (r?.kind === 'await-bridge') {
@@ -242,8 +253,9 @@ export async function reviveThread(req: ReviveRequest): Promise<ReviveOutcome> {
     }
 
     try {
-      const result = await recoveryDeps.tryRespawn(thread.threadId, respawnTopic(), entry?.tmuxName ?? dead?.tmuxName, model, {
-        ...shared, ...req.respawnOpts, ...(req.promptPrefix && { promptPrefix: req.promptPrefix }), ...(req.cwd && { cwd: req.cwd }),
+      const { prompt, kickoffHash: bornUnder } = respawnPrompt()
+      const result = await recoveryDeps.tryRespawn(thread.threadId, prompt, entry?.tmuxName ?? dead?.tmuxName, model, {
+        ...shared, ...(bornUnder && { kickoffHash: bornUnder }), ...req.respawnOpts, ...(req.promptPrefix && { promptPrefix: req.promptPrefix }), ...(req.cwd && { cwd: req.cwd }),
       })
       if (result) return ok(result, 'respawned')
     } catch (err) {
@@ -255,11 +267,12 @@ export async function reviveThread(req: ReviveRequest): Promise<ReviveOutcome> {
 
   async function respawnInNewThread(channel: string): Promise<Extract<ReviveOutcome, { ok: true }> | undefined> {
     try {
+      const { prompt: topic, kickoffHash: bornUnder } = respawnPrompt()
       const prompt = thread.threadId
-        ? `[system] Your previous thread (${thread.threadId}) is gone, so this is a new one; its history cannot be read here.\n\n${respawnTopic()}`
-        : respawnTopic()
+        ? `[system] Your previous thread (${thread.threadId}) is gone, so this is a new one; its history cannot be read here.\n\n${topic}`
+        : topic
       return ok(await recoveryDeps.doSpawnSession(prompt, channel, undefined, {
-        model, engine, label, carryOver: carriedOut, ...keep, ...named, ...acting, ...origin, ...(req.cwd && { cwd: req.cwd }),
+        model, engine, label, carryOver: carriedOut, ...(bornUnder && { kickoffHash: bornUnder }), ...keep, ...named, ...acting, ...origin, ...(req.cwd && { cwd: req.cwd }),
       }), 'respawned')
     } catch (err) {
       lastError = errorText(err); lastRefused = err instanceof PolicyRefusal
@@ -268,10 +281,17 @@ export async function reviveThread(req: ReviveRequest): Promise<ReviveOutcome> {
     }
   }
 
-  function respawnTopic(): string {
-    return typeof req.respawnTopic === 'function' ? req.respawnTopic() : req.respawnTopic ?? thread.topic
+  /** What a fresh start is told, and the kickoff hash to store with it when the prompt is a specialist's kickoff. */
+  function respawnPrompt(): { prompt: string; kickoffHash?: string } {
+    if (typeof req.respawnTopic === 'string') return { prompt: req.respawnTopic }
+    if (typeof req.respawnTopic === 'function') { const prompt = req.respawnTopic(); return { prompt, kickoffHash: kickoffHash(prompt) } }
+    return kickoff ? { prompt: kickoff.text, kickoffHash: kickoff.hash } : { prompt: thread.topic }
   }
 }
+
+/** Said once in the thread when a specialist starts fresh because its kickoff changed: what happened, and what to do. */
+const kickoffRestartNotice = (specialist: string): string =>
+  `🔄 Specialist ${specialist} restarted fresh: its kickoff changed since this conversation began, so the old conversation is not continued. It starts from the new kickoff and reads this thread's history. If the kickoff is not what you meant, fix it and run \`hydra kill ${specialist}\`; the next message starts it again.`
 
 /** The refusal a target backing off gets, or undefined. Checked before anything reaches the platform. */
 export function backoffRefusal(key: string): { reason: string; backoff: Backoff } | undefined {

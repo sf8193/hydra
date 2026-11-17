@@ -293,6 +293,7 @@ export function carryOver(dead: SessionInfo): NonNullable<SpawnOpts['carryOver']
     parentId: authorityId(dead), initiator: dead.initiator,
     // The dead session's launch policy: a replacement continues it, or (resume, fork) is refused where it differs from hydra.toml now.
     policy: dead.policy,
+    kickoffHash: dead.kickoffHash,
   }
 }
 
@@ -778,7 +779,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   let carriedInitiator: string | undefined = opts?.initiator ?? opts?.carryOver?.initiator
   // The launch policy of the conversation this start continues or replaces (resume, fork): see restricted.ts.
   // The records it continues or replaces, for resolvePolicy: what a recovery carries, then the record in the thread.
-  const actingRecords: Array<Pick<SessionInfo, 'policy'> | undefined> = [opts?.carryOver]
+  const actingRecords: Array<Pick<SessionInfo, 'policy' | 'kickoffHash'> | undefined> = [opts?.carryOver]
   let replacedName: string | undefined = opts?.carryOver?.sessionName   // the record's own session name, for the remedy a refusal ends with
   // Recovery: reuse the dead session's on-disk worktree rather than recreate one.
   // An explicit descriptor (opts.reuseWorktree) wins so fallback tiers can adopt it
@@ -1010,6 +1011,9 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     throw err
   }
   const confinedPolicy = confined(policy, sessionName)
+  // The kickoff the conversation was born under: a fresh start names its own; a resume or fork keeps the one it continues, and a
+  // handoff successor keeps its predecessor's (it learns its role from the predecessor's letter, which is the old definition).
+  const kickoffHash = continuing || isHandoff ? actingRecords.find(r => r?.kickoffHash !== undefined)?.kickoffHash : opts?.kickoffHash
 
   const spawnCwd = process.env.SPAWN_CWD
   if (!spawnCwd) throw new Error('SPAWN_CWD env var is required -- set it to the working directory for spawned sessions')
@@ -1101,7 +1105,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   } else if (isFork) {
     prompt = buildForkPrompt({ ...promptParams, originFrom: originFrom! })
   } else if (isResurrect) {
-    prompt = buildResurrectPrompt(promptParams)
+    prompt = buildResurrectPrompt({ ...promptParams, topicIsKickoff: opts?.kickoffHash !== undefined })
   } else {
     prompt = buildSpawnPrompt(promptParams)
     // Only a new thread's spawn is a user request; recovery and respawn reuse a thread (and a stale anchor).
@@ -1159,6 +1163,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     tmuxName, listening: resolveListenState(threadId!, chatId), originType, originFrom, sessionMetadata,
     sessionType: spawnType,
     ...(policy && { policy }),
+    ...(kickoffHash !== undefined && { kickoffHash }),
     ...labelFields,
     threadUrl: url || undefined,
     engine,
@@ -1256,6 +1261,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       label: sessionLabel,
       claudeSessionId: launched.identity.claudeSessionId,
       ...(policy && { policy }),
+      ...(kickoffHash !== undefined && { kickoffHash }),
       ...(hydraMadeThread && { hydraMade: true }),
     })
   }

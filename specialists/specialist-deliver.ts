@@ -49,7 +49,8 @@ export async function spawnSpecialist(name: string, initiator: string): Promise<
 /**
  * Fill a vacant specialist by the rule (reviveThread): in its thread while the platform still has it, so the
  * session resumes the conversation or reads the history; in a new thread in its channel when it is gone.
- * The kickoff is the respawn tier's prompt only. Runs under the specialist's lock, which `set` and `rm` take too,
+ * The kickoff is the respawn tier's prompt only, and a conversation born under another kickoff skips the resume and fork tiers
+ * (reviveThread). Runs under the specialist's lock, which `set` and `rm` take too,
  * so the record read here is the one the new thread is written to. An unstored specialist (a conversation's own session)
  * is never written.
  */
