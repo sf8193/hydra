@@ -119,8 +119,8 @@ queueMicrotask(logSubscriptions)
 import { initPhaseBudgets } from './daemon/phase-budget.js'
 import { initIdleLimits } from './daemon/idle-limit.js'
 import { killSession, backfillAnchorChannelIds } from './daemon/session-lifecycle.js'
-initPhaseBudgets(killSession)
-initIdleLimits(killSession)
+initPhaseBudgets((info, reason) => killSession(info, reason, { ended: 'killed by hydra' }))
+initIdleLimits((info, reason, opts) => killSession(info, reason, { ...opts, ended: 'killed by hydra' }))
 
 backfillAnchorChannelIds().catch(err => {
   process.stderr.write(`daemon: anchorChannelId backfill failed: ${err}\n`)

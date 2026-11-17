@@ -349,7 +349,7 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
     })
     const old = { createdAt: Date.now() - 2e6 }
     const errText = (r: any) => r.content[0].text as string
-    const deathNotices = () => sent.filter(m => m.text.includes('died')).map(m => m.channel)
+    const deathNotices = () => sent.filter(m => / (died|killed)[ ,]/.test(m.text)).map(m => m.channel)
     const parentAndKids = (pred: SessionInfo) => {
       mk('au-parent', 'auparent', { ...old, adapter: fakeClaude } as any)
       const child = mk('au-child', 'auchild', { parentId: pred.sessionId, adapter: fakeClaude } as any)
@@ -802,7 +802,7 @@ describe('spawn_session fork_from and read_only', () => {
     })
     afterEach(() => { (gateway as any).send = savedSend; (transport as any).sendOrQueue = savedSendOrQueue })
 
-    const deathNotices = () => sent.filter(m => m.text.includes('died')).map(m => m.channel)
+    const deathNotices = () => sent.filter(m => / (died|killed)[ ,]/.test(m.text)).map(m => m.channel)
     const errText = (r: { content: { text: string }[] }) => r.content[0].text
     // Authorized peeks get past the check and fail later: these sessions have no tmux.
     const PEEK_ALLOWED = 'tmux not running'

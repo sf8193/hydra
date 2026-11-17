@@ -356,7 +356,7 @@ gateway.onThreadDelete(threadId => {
   const info = registry.get(sessionId)
   if (!info) return
   process.stderr.write(`daemon: thread ${threadId} deleted, killing session ${info.tmuxName}\n`)
-  void killSession(info, 'thread deleted')
+  void killSession(info, 'thread deleted', { ended: 'killed & destroyed' })
 })
 
 gateway.onMessageDelete((messageId, threadId) => {
@@ -367,7 +367,7 @@ gateway.onMessageDelete((messageId, threadId) => {
   if (!info) return
   if (info.anchorMessageId && messageId === info.anchorMessageId) {
     process.stderr.write(`daemon: anchor message deleted, killing session ${info.tmuxName}\n`)
-    void killSession(info, 'anchor message deleted')
+    void killSession(info, 'anchor message deleted', { ended: 'killed' })
   } else {
     if (info.lastReplyId === messageId) {
       info.lastReplyId = undefined

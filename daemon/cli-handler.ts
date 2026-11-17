@@ -221,7 +221,7 @@ async function handleKill(req: CLIRequest): Promise<CLIResponse> {
   }
   let res: Awaited<ReturnType<typeof killThenDestroy>> | undefined
   if (destroy === true) res = await killThenDestroy(info, 'killed via CLI', 'CLI')
-  else await killSession(info, 'killed via CLI')
+  else await killSession(info, 'killed via CLI', { ended: 'killed' })
 
   // Overwrite to failed AFTER death handler set completed — unblocks retry
   if (idemKey) {

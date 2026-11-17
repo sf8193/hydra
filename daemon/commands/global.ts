@@ -168,7 +168,7 @@ export async function handleKillIntercept(msg: InboundMessage, name: string): Pr
     try { await gateway.send(msg.channelId, `No session found matching "${name}"`, { replyTo: msg.id }) } catch {}
     return
   }
-  await killSession(target, 'session ended')
+  await killSession(target, 'session ended', { ended: 'killed' })
   try { await gateway.send(msg.channelId, `Killed session **${target.tmuxName}**`, { replyTo: msg.id }) } catch {}
   debouncedRefreshListDisplay()
 }

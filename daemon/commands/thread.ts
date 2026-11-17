@@ -54,7 +54,7 @@ export async function handleThreadKillIntercept(
   }
   void gateway.react(msg.channelId, msg.id, cascade ? '🧨' : '☠️').catch(() => {})
 
-  await killSession(info, cascade ? 'session ended (cascade)' : 'session ended')
+  await killSession(info, cascade ? 'session ended (cascade)' : 'session ended', { ended: destroy ? 'killed & destroyed' : 'killed' })
   debouncedRefreshListDisplay()
 
   // Sequential, not atomic: destroy re-applies its own guards (Discord-only, no

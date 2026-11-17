@@ -367,7 +367,7 @@ function retireProtocolChildren(run: ProtocolRun, phase?: string): void {
     run.protocolChildren.delete(sessionId)
     const info = registry.get(sessionId)
     if (info && !killsInProgress.has(sessionId)) {
-      void killSession(info, 'protocol phase ended')
+      void killSession(info, 'protocol phase ended', { ended: 'killed by hydra' })
         .catch(err => process.stderr.write(`daemon: protocol child cleanup failed: ${err}\n`))
         .finally(() => releasePrivateChildWhenGone(sessionId))
     } else if (info) {
@@ -742,7 +742,7 @@ async function enterFallbackPhase(run: ProtocolRun, deadRole: string, cause: Fal
   if (deadSessionId) {
     const info = registry.get(deadSessionId)
     if (info && !killsInProgress.has(deadSessionId)) {
-      await killSession(info, `fallback after ${deadRole} died`).catch(() => {})
+      await killSession(info, `fallback after ${deadRole} died`, { ended: 'killed by hydra' }).catch(() => {})
     }
   }
 
@@ -829,7 +829,7 @@ async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: 
   )
   if (isTerminal(run)) {
     const spawnedInfo = registry.get(result.sessionId)
-    if (spawnedInfo) await killSession(spawnedInfo, 'run cancelled during resume').catch(() => {})
+    if (spawnedInfo) await killSession(spawnedInfo, 'run cancelled during resume', { ended: 'killed by hydra' }).catch(() => {})
     return
   }
 
@@ -867,7 +867,7 @@ async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: 
     sessionToRun.delete(result.sessionId)
     run.sessionToRole.delete(result.sessionId)
     const newInfo = registry.get(result.sessionId)
-    if (newInfo) await killSession(newInfo, 'auto-resume health check failed').catch(() => {})
+    if (newInfo) await killSession(newInfo, 'auto-resume health check failed', { ended: 'killed by hydra' }).catch(() => {})
     throw new Error('resumed session did not connect')
   }
   if (isTerminal(run)) {
@@ -876,7 +876,7 @@ async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: 
     sessionToRun.delete(result.sessionId)
     run.sessionToRole.delete(result.sessionId)
     const spawnedInfo = registry.get(result.sessionId)
-    if (spawnedInfo) await killSession(spawnedInfo, 'run cancelled during resume').catch(() => {})
+    if (spawnedInfo) await killSession(spawnedInfo, 'run cancelled during resume', { ended: 'killed by hydra' }).catch(() => {})
     return
   }
 
@@ -945,7 +945,7 @@ export async function cancelRun(run: ProtocolRun, reason: string): Promise<void>
       if (sid === run.ownerSessionId) continue
       const info = registry.get(sid)
       if (info && !killsInProgress.has(sid)) {
-        try { await killSession(info, reason) } catch (err) { process.stderr.write(`daemon: kill on cancel failed: ${err}\n`) }
+        try { await killSession(info, reason, { ended: 'killed by hydra' }) } catch (err) { process.stderr.write(`daemon: kill on cancel failed: ${err}\n`) }
       }
     }
 
@@ -1117,7 +1117,7 @@ const BEHAVIORS: Record<string, BehaviorHandler> = {
       sessionToRun.delete(sid)
       const info = registry.get(sid)
       if (info && !killsInProgress.has(sid)) {
-        void killSession(info, 'protocol closing').catch(() => {})
+        void killSession(info, 'protocol closing', { ended: 'killed by hydra' }).catch(() => {})
       }
     }
     return false
@@ -1628,7 +1628,7 @@ async function completeRun(run: ProtocolRun): Promise<void> {
     sessionToRun.delete(sid)
     const info = registry.get(sid)
     if (info && !killsInProgress.has(sid)) {
-      void killSession(info, 'protocol complete').catch(err => process.stderr.write(`daemon: kill on complete failed: ${err}\n`))
+      void killSession(info, 'protocol complete', { ended: 'killed by hydra' }).catch(err => process.stderr.write(`daemon: kill on complete failed: ${err}\n`))
     }
   }
   cleanupRun(run)

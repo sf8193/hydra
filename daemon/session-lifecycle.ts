@@ -346,7 +346,7 @@ export function handoffArrival(opts: SpawnOpts, vars: { from: string; session: s
 }
 
 // Injectable for tests (like recoveryDeps): the real ones kill tmux and spawn sessions.
-export const handoffIO = { killSession: (i: SessionInfo, r: string, o: { skipWorktreeDestroy: boolean; keepWatches: boolean }) => killSession(i, r, o), doSpawnSession: (t: string, c?: string, m?: string, o?: SpawnOpts) => doSpawnSession(t, c, m, o) }
+export const handoffIO = { killSession: (i: SessionInfo, r: string, o: { skipWorktreeDestroy: boolean; keepWatches: boolean; ended: SessionEnd }) => killSession(i, r, o), doSpawnSession: (t: string, c?: string, m?: string, o?: SpawnOpts) => doSpawnSession(t, c, m, o) }
 
 /**
  * Replace a live session with a fresh one in the same thread, seeded from a
@@ -359,7 +359,7 @@ export async function handOff(info: SessionInfo, artifact: string): Promise<Spaw
     // A second handoff of the same session waited behind the first, which has since replaced it.
     if (registry.get(info.sessionId) !== info) throw new Error(`${info.tmuxName} is already handing off (or gone)`)
     const opts = handoffSpawnOpts(info, artifact)
-    await handoffIO.killSession(info, 'handed off', { skipWorktreeDestroy: true, keepWatches: true })
+    await handoffIO.killSession(info, 'handed off', { skipWorktreeDestroy: true, keepWatches: true, ended: 'handed off' })
     const r = await handoffIO.doSpawnSession(info.topic, undefined, undefined, opts)
     repointChildren(info, r.sessionId)  // its children now answer to the successor
     return r
@@ -550,14 +550,20 @@ export function splitOwnFromHistory(allIds: readonly string[], ownId: string | u
   return { own, history }
 }
 
+/** The verb in the parent's notice: who ended the session, and how. `died` alone is what an end nobody classified yet says. */
+export type SessionEnd = 'killed' | 'killed & destroyed' | 'killed by hydra' | 'died from crash' | 'finished' | 'handed off'
+
 // skipWorktreeDestroy: the conversation continues elsewhere (handoff, reattach) — keep the
 // Hydra worktree and scratchpads. keepScratch: only the scratchpads (a resume or fork of
 // this conversation still names their paths, and a resume reuses the scratchpad itself).
 // keepRecord: end it the way a crash leaves it, so `resume` in the thread continues it in full:
 // the record stays, stamped dead, with its worktree, scratchpads, PR watches and launch
-// settings, and is left out of automatic boot recovery. keepWatches: the thread goes on (a handoff,
+// settings, and is left out of automatic boot recovery. ended: the notice to the parent says how it ended: a
+// person or agent's kill ('killed', 'killed & destroyed' when the thread goes too), hydra's own doing on purpose
+// (a budget, a replaced spawn, a protocol closing: 'killed by hydra', the reason is its cause), a crash; 'finished' for a session that ended itself; 'handed off' when a successor took its thread (the reason would only repeat it);
+// left out, no one has classified the end and the notice says 'died'. keepWatches: the thread goes on (a handoff,
 // a replacement, a revive's teardown), so its PR watches do too; any other kill ends them.
-export async function killSession(info: SessionInfo, reason: string, opts?: { skipWorktreeDestroy?: boolean; keepScratch?: boolean; keepRecord?: boolean; keepWatches?: boolean }): Promise<void> {
+export async function killSession(info: SessionInfo, reason: string, opts?: { skipWorktreeDestroy?: boolean; keepScratch?: boolean; keepRecord?: boolean; keepWatches?: boolean; ended?: SessionEnd }): Promise<void> {
   if (killsInProgress.has(info.sessionId)) return
   killsInProgress.add(info.sessionId)
 
@@ -590,7 +596,7 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
       if (parent) {
         const msgs = info.messageCount ?? 0
         const emoji = emojiOf(info)
-        void gateway.send(parent.threadId, `${emoji} \`${info.tmuxName}\` died — _${reason}_ (${msgs} msgs)`).catch(err => {
+        void gateway.send(parent.threadId, `${emoji} \`${info.tmuxName}\` ${opts?.ended ?? 'died'}${opts?.ended === 'handed off' ? '' : ` — _${reason}_`} (${msgs} msgs)`).catch(err => {
           process.stderr.write(`daemon: failed to notify parent of child death: ${err}\n`)
         })
       }
@@ -868,7 +874,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
             carriedArtifacts ??= existing.artifacts
             carriedContextLinks ??= existing.contextLinks
             carriedDescription ??= existing.description
-            await killSession(existing, 'replaced by new spawn', { keepScratch: isResume || !!opts?.forkFrom, keepWatches: true })
+            await killSession(existing, 'replaced by new spawn', { ended: 'killed by hydra', keepScratch: isResume || !!opts?.forkFrom, keepWatches: true })
           }
         }
       }
@@ -1247,7 +1253,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       keepRefusal(verifyKey(confinedPolicy.specialist, threadId, sessionName), verifyBackoff.now(), verdict.why)
       process.stderr.write(`daemon: spawn ${tmuxName}: launch verification refused: ${verdict.why}\n`)
       const created = registry.get(sessionId)
-      if (created && created.sessionId === sessionId) await killSession(created, 'stopped: it did not load what its launch policy allows', { keepWatches: true }).catch((err: unknown) => process.stderr.write(`daemon: spawn ${tmuxName}: could not stop the unverified session ${sessionId}: ${err}\n`))
+      if (created && created.sessionId === sessionId) await killSession(created, 'stopped: it did not load what its launch policy allows', { ended: 'killed by hydra', keepWatches: true }).catch((err: unknown) => process.stderr.write(`daemon: spawn ${tmuxName}: could not stop the unverified session ${sessionId}: ${err}\n`))
       await refuseStart(threadId, verifyRefusal(confinedPolicy.specialist, sessionName, verdict.why))
     }
     // The marker the delivery gate reads: persisted, so a restart keeps a verified session reachable and leaves an unfinished one not.
@@ -1436,7 +1442,7 @@ export async function tryResume(dead: {
         // fallback tiers can still adopt it (they pass the same descriptor
         // explicitly, since this kill deletes the record). Watches unwatch normally —
         // keeping them here would only orphan them on the now-deleted record.
-        await killSession(info, 'resume health check failed', { skipWorktreeDestroy: true, keepWatches: true }).catch(() => {})
+        await killSession(info, 'resume health check failed', { ended: 'killed by hydra', skipWorktreeDestroy: true, keepWatches: true }).catch(() => {})
         return null
       }
 
