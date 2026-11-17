@@ -93,3 +93,34 @@ describe('buildNotificationPayload attachment lookup', () => {
     expect(lookups).toEqual([])
   })
 })
+
+describe('buildNotificationPayload reply context', () => {
+  let realReply: typeof gateway.getReplyContext
+  beforeEach(() => { realReply = gateway.getReplyContext })
+  afterEach(() => { gateway.getReplyContext = realReply })
+
+  test('a reply carries who and what it answers', async () => {
+    gateway.getReplyContext = async () => ({ id: 'm1', author: 'agent', content: 'Option A or B?', byUs: true })
+    const { meta } = await buildNotificationPayload(inbound({ attachments: [], referenceMessageId: 'm1' }), CHANNEL)
+    expect(meta).toMatchObject({ in_reply_to_id: 'm1', in_reply_to_user: 'agent', in_reply_to_content: 'Option A or B?', in_reply_to_by_us: 'true' })
+  })
+
+  test('a failed lookup still carries the id', async () => {
+    gateway.getReplyContext = async () => { throw new Error('unknown message') }
+    const { meta } = await buildNotificationPayload(inbound({ attachments: [], referenceMessageId: 'm1' }), CHANNEL)
+    expect(meta.in_reply_to_id).toBe('m1')
+    expect(meta.in_reply_to_content).toBeUndefined()
+  })
+
+  test('a message that is not a reply has no reply keys', async () => {
+    gateway.getReplyContext = async () => ({ id: 'x', author: 'x', content: 'x', byUs: false })
+    const { meta } = await buildNotificationPayload(inbound({ attachments: [] }), CHANNEL)
+    expect(Object.keys(meta).filter(k => k.startsWith('in_reply_to'))).toEqual([])
+  })
+
+  test('a gateway without the capability adds nothing for a thread reference', async () => {
+    gateway.getReplyContext = undefined
+    const { meta } = await buildNotificationPayload(inbound({ attachments: [], referenceMessageId: THREAD_TS }), CHANNEL)
+    expect(Object.keys(meta).filter(k => k.startsWith('in_reply_to'))).toEqual([])
+  })
+})

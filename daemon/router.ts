@@ -31,6 +31,7 @@ import { touchIdleLimit } from './idle-limit.js'
 import { pendingPermissions } from './permission.js'
 import { notePendingReply } from './reply-guard.js'
 import { deliverUserMessage } from './typed-delivery.js'
+import { replyContextMeta, resolveReplyContext } from './reply-context.js'
 import { emit } from './event-bus.js'
 import { getThreadIntercept } from './pane-probe.js'
 import { reportError } from './util.js'
@@ -162,6 +163,8 @@ export async function buildNotificationPayload(
   msg: InboundMessage,
   chatId: string,
 ): Promise<{ content: string; meta: Record<string, string> }> {
+  // Started first: the lookup overlaps the downloads and transcription instead of adding to them.
+  const replyLookup = resolveReplyContext(gateway, msg)
   let downloadedFiles: DownloadedFile[] = []
   if (msg.attachments.length > 0) {
     try {
@@ -204,6 +207,8 @@ export async function buildNotificationPayload(
     }
   }
 
+  const replyContext = await replyLookup
+
   const meta: Record<string, string> = {
     chat_id: chatId,
     message_id: msg.id,
@@ -213,6 +218,7 @@ export async function buildNotificationPayload(
     ...(atts.length > 0 ? { attachment_count: String(atts.length), attachments: atts.join('; ') } : {}),
     ...(downloadedFiles.length > 0 ? { downloaded_files: downloadedFiles.map(f => f.path).join('; ') } : {}),
     ...(transcripts.length > 0 ? { voice_transcript_count: String(transcripts.length) } : {}),
+    ...replyContextMeta(replyContext),
     ...threadContext,
   }
 

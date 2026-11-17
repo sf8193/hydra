@@ -62,6 +62,14 @@ export type ThreadInfo = {
   url: string
 }
 
+/** The earlier message a reply answers. `author` and `content` are null when the platform no longer has them; `byUs`: the bot sent it. */
+export type ReplyContext = {
+  id: string
+  author: string | null
+  content: string | null
+  byUs: boolean
+}
+
 export type DownloadedFile = {
   path: string
   name: string
@@ -222,6 +230,13 @@ export interface ChatGateway {
 
   // Mention detection
   isMentioned(msg: InboundMessage, extraPatterns?: string[]): Promise<boolean>
+
+  /**
+   * Optional: the message `msg` replies to, when the platform has a reply that points at one message
+   * (Discord's Reply). A gateway whose `referenceMessageId` is not such a pointer (Slack: the thread
+   * root) leaves it out. May reject; the caller then keeps the id alone.
+   */
+  getReplyContext?(msg: InboundMessage): Promise<ReplyContext | null>
 
   // Sent message tracking (for mention-by-reply detection)
   noteSent(id: string): void
