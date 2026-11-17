@@ -40,6 +40,47 @@ export const SANDBOX_EXEC = '/usr/bin/sandbox-exec'
 const RESOLVER_SOCKET = '/private/var/run/mDNSResponder'
 
 /**
+ * The macOS major versions on which the profile above is PROVEN: the one list, and nothing else decides it. A version belongs here
+ * only once the whole of config/__tests__/server-sandbox.test.ts (the tests that run without an opt-in environment variable) was run
+ * on a Mac of that version, by hand, and passed. CI runs `ubuntu-latest`, where the real-sandbox tests are skipped, so no CI run
+ * proves any macOS version. Add a major by running that suite on it; never by reasoning that it ought to be the same.
+ *
+ * Compared by major version: Seatbelt and LaunchServices change between major releases (the way out through `open` is what the
+ * suite probes), while a minor or patch release (15.0 to 15.7.9) is a security update within one. Only a major's first Mac to pass
+ * is run by hand; its later releases are taken as the same sandbox.
+ *
+ * Proven: 15 (15.7.9: 62 passed, 0 failed, 3 skipped for opt-in environment variables).
+ */
+export const PROVEN_MACOS_MAJORS: readonly number[] = [15]
+
+/**
+ * Whether this is macOS on a version outside PROVEN_MACOS_MAJORS. A version that cannot be read (the empty string) counts as outside:
+ * never proven by default. False when it is proven, or when this is not macOS (`macosVersion` undefined: a missing sandbox-exec is its
+ * own refusal).
+ */
+export function unprovenMacos(macosVersion: string | undefined): boolean {
+  if (macosVersion === undefined) return false
+  return !PROVEN_MACOS_MAJORS.includes(Number(/^(\d+)(\.|$)/.exec(macosVersion)?.[1]))
+}
+
+/** The config key that lets a restricted specialist's servers run on a macOS version outside the list: `[restricted] allow_unproven_macos = true`. */
+export const ALLOW_UNPROVEN_MACOS = 'allow_unproven_macos'
+
+/**
+ * Why a restricted specialist that lists servers is refused (or, with the opt-in, only warned about) on this macOS version, with the
+ * ways out; undefined when the version is proven or this is not macOS. The one text: the load warning, `hydra config check`, the
+ * daemon's log and the launch refusal in the thread all say it.
+ */
+export function macosGateIssue(macosVersion: string | undefined, allowed: boolean): string | undefined {
+  if (!unprovenMacos(macosVersion)) return undefined
+  const proven = PROVEN_MACOS_MAJORS.map(m => `macOS ${m}`).join(', ')
+  const where = `this Mac runs ${macosVersion ? `macOS ${macosVersion}` : 'a macOS version hydra could not read'}, and the sandbox a listed [mcp_servers.*] server runs under (the way out through LaunchServices, \`open\`, above all) was proven only on ${proven}`
+  return allowed
+    ? `${where}; ${ALLOW_UNPROVEN_MACOS} = true under [restricted] lets it run anyway, so a server may be able to leave its sandbox. Remove the opt-in to refuse such launches`
+    : `${where}, so a session that lists servers is refused at launch. Set ${ALLOW_UNPROVEN_MACOS} = true under [restricted] to run it anyway, set restricted = false, or run hydra on ${proven}`
+}
+
+/**
  * Why a listed server cannot be run here, with the three ways out; undefined when it can: `sandbox-exec` is missing (`isCommand` is the
  * machine's probe, LoadEnv), or a place the profile must name has a character it cannot hold. One predicate, asked at load and again
  * where the profile is built. Both run in the daemon; the only other machine is `hydra config check`.

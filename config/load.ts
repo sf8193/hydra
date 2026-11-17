@@ -9,7 +9,7 @@ import { parseCron } from '../shared/cron-local.js'
 import { parseIdleTtl, SLACK_GATEWAY_TOKEN_ENVS } from '../shared/constants.js'
 import { ENV_NAME_RE, tokenVarRefusal } from '../shared/spawn-env.js'
 import { offLimitRoots, workdirRestrictionIssues } from './restricted-workdir.js'
-import { sandboxIssues, unquotablePath } from './server-sandbox.js'
+import { ALLOW_UNPROVEN_MACOS, macosGateIssue, sandboxIssues, unquotablePath } from './server-sandbox.js'
 import { engineConfinesAccess } from '../shared/engine-capabilities.js'
 import { noSuchApp, pinnersOf, speaksAsOf, whyNotServed } from './pins.js'
 import { SLACK_APP_DEFAULTS } from '../connectors/slack/app.js'
@@ -80,11 +80,24 @@ const isTable = (v: unknown): v is Table => typeof v === 'object' && v !== null 
 /** Claude's config folder as sessions get it: CLAUDE_CONFIG_DIR, else `~/.claude`. */
 export const defaultClaudeConfigDir = (): string => process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude')
 
+let macosVersionOnce: { value: string | undefined } | undefined
+/** `sw_vers -productVersion` on macOS, read once (the OS does not change under a running daemon); undefined when this is not macOS; the empty string when `sw_vers` cannot be read (which unprovenMacos counts as unproven). */
+function macosVersion(): string | undefined {
+  if (process.platform !== 'darwin') return undefined
+  if (!macosVersionOnce) {
+    let v = ''
+    try { v = new TextDecoder().decode(Bun.spawnSync(['/usr/bin/sw_vers', '-productVersion']).stdout).trim() } catch { /* unreadable: the empty string */ }
+    macosVersionOnce = { value: v }
+  }
+  return macosVersionOnce.value
+}
+
 /** The machine as it is: `~` is this user's home, folders and commands are looked up for real. */
 export function systemEnv(sessionNames: readonly string[], stateDir: string, platform: LoadEnv['platform'], claudeConfigDir: string = defaultClaudeConfigDir()): LoadEnv {
   return {
     home: homedir(),
     platform,
+    macosVersion: macosVersion(),
     sessionNames,
     stateDir,
     claudeConfigDir,
@@ -449,7 +462,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   const defaultsTable = table(doc.defaults, 'defaults') ?? {}
   unknownKeys(defaultsTable, ['specialist'], 'defaults')
   const restrictedTable = table(doc.restricted, 'restricted') ?? {}
-  unknownKeys(restrictedTable, ['off_limits'], 'restricted')
+  unknownKeys(restrictedTable, ['off_limits', ALLOW_UNPROVEN_MACOS], 'restricted')
+  const allowUnprovenMacos = bool(restrictedTable, ALLOW_UNPROVEN_MACOS, 'restricted') ?? false
   // Folders no restricted specialist may use, beyond the built-in ones: per-operator, so they live here and never in code.
   const offLimits: string[] = []
   for (const [i, raw] of (strList(restrictedTable, 'off_limits', 'restricted') ?? []).entries()) {
@@ -606,6 +620,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       if (mcpServerNames.length) {
         const why = sandboxIssues(env.isCommand, offLimitRoots(env, offLimits))
         if (why) error(`${path}.mcp_servers`, why)
+        const unproven = macosGateIssue(env.macosVersion, allowUnprovenMacos)
+        if (unproven) warn(`${path}.mcp_servers`, unproven)
       }
       // The engine actually used comes from thread history and `handoff <model>` can switch it, so launch checks it again.
       if (engine !== undefined && !engineConfinesAccess(engine)) error(`${path}.engine`, `${engine} can't run a restricted specialist: that engine cannot confine its tools; set engine = "claude", or set restricted = false`)
@@ -978,7 +994,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   }
 
   if (errors.length) return { ok: false, errors, warnings }
-  return { ok: true, config: { ...(operator && { operator }), ...(main && { main }), connectors, gateways, slackApps, people, specialists, places, schedules, rules, ...(Object.keys(mcpServers).length && { mcpServers }), ...(offLimits.length && { offLimits }), ...(guard && { guard }), ...(vitals && { vitals }) }, warnings }
+  return { ok: true, config: { ...(operator && { operator }), ...(main && { main }), connectors, gateways, slackApps, people, specialists, places, schedules, rules, ...(Object.keys(mcpServers).length && { mcpServers }), ...(offLimits.length && { offLimits }), ...(allowUnprovenMacos && { allowUnprovenMacos }), ...(guard && { guard }), ...(vitals && { vitals }) }, warnings }
 }
 
 /** The program a `sh -c` command runs: past any leading VAR=value, with one level of quotes removed. */

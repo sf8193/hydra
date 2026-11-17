@@ -130,6 +130,8 @@ env_file = ".env.reviewer"            # extra environment for its sessions; rela
 
 [restricted]
 off_limits = ["~/notes"]               # absolute paths, or starting with ~
+# allow_unproven_macos = true          # a restricted specialist that lists servers runs under a sandbox proven only on some macOS versions
+#                                      # (docs/slack.md names them); on any other it is refused at launch unless you set this. Default: off
 
 # --- mcp_servers: servers a restricted specialist may list in `mcp_servers`. Per-operator: only hydra.toml declares one ---
 

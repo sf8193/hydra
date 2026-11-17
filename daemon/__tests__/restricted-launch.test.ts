@@ -796,6 +796,77 @@ describe('the engine is checked at launch', () => {
   })
 })
 
+describe('a restricted specialist that lists servers is refused on a macOS version the sandbox is not proven on', () => {
+  const told: string[] = []
+  const onMacos = (version: string | undefined) => _setLoadEnvForTesting(macLike({ macosVersion: version }))
+  const optIn = (...s: Specialist[]) => _setHydraConfigForTesting({ ...configWith(s), allowUnprovenMacos: true })
+  beforeEach(() => {
+    told.length = 0
+    ;(gateway as any).send = async (c: string, text: string) => { told.push(text); return { id: 'm', channelId: c } }
+  })
+  const refused = /macOS 14\.6.*proven only on macOS 15.*allow_unproven_macos = true/
+  test('a fresh start: nothing launches, the thread is told the cause and the way out', async () => {
+    onMacos('14.6.1')
+    seedDead()
+    await expect(doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, specialist: 'ops' })).rejects.toThrow(refused)
+    expect(launches).toHaveLength(0)
+    expect(told.join('\n')).toMatch(refused)
+    expect(told.join('\n')).toContain('hydra kill')
+  })
+  test('a resume, a fork and a revive that falls back to a respawn: none launches', async () => {
+    onMacos('14.6')
+    seedDead({ policy: opsPolicy() })
+    const r = await revive()
+    expect(r.ok).toBe(false)
+    await expect(doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, specialist: 'ops', resumeSessionId: 'C-1' } as any)).rejects.toThrow(PolicyRefusal)
+    expect(launches).toHaveLength(0)
+  })
+  test('a handoff successor is a start too', async () => {
+    onMacos('14.6')
+    const pred = seedDead({ policy: opsPolicy() })
+    await expect(doSpawnSession('t', undefined, undefined, { ...handoffSpawnOpts(pred, 'letter'), existingThreadId: THREAD, specialist: 'ops' } as any)).rejects.toThrow(PolicyRefusal)
+    expect(launches).toHaveLength(0)
+  })
+  test('a proven version launches', async () => {
+    onMacos('15.7.9')
+    seedDead()
+    await doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, specialist: 'ops' })
+    expect(launches).toHaveLength(1)
+  })
+  test('not macOS is not this gate', async () => {
+    onMacos(undefined)
+    seedDead()
+    await doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, specialist: 'ops' })
+    expect(launches).toHaveLength(1)
+  })
+  test('with [restricted] allow_unproven_macos = true it launches', async () => {
+    onMacos('14.6')
+    optIn(OPS)
+    seedDead()
+    await doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, specialist: 'ops' })
+    expect(launches).toHaveLength(1)
+  })
+  test.each(['crm', 'desk'])('%s (restricted with no servers, and operator) has no sandbox to prove: it launches', async id => {
+    onMacos('14.6')
+    seedDead()
+    await doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, specialist: id })
+    expect(launches).toHaveLength(1)
+  })
+  test('hydra health names the specialists refused, or running on the opt-in; nothing on a proven version', async () => {
+    const health = async () => ((await handleCLIRequest({ type: 'cli', command: 'health', id: 'h', params: {} })).data as { macosGate?: unknown }).macosGate
+    onMacos('14.6')
+    expect(await health()).toEqual({ version: '14.6', allowed: false, specialists: ['ops'] })
+    optIn(OPS, DESK, CRM)
+    expect(await health()).toEqual({ version: '14.6', allowed: true, specialists: ['ops'] })
+    onMacos('')   // sw_vers could not be read: unproven, never proven
+    expect(await health()).toEqual({ version: '', allowed: true, specialists: ['ops'] })
+    onMacos('15.7.9')
+    expect(await health()).toBeUndefined()
+    onMacos(undefined)
+    expect(await health()).toBeUndefined()
+  })
+})
+
 describe('every start is verified from its own debug file (hydra#608)', () => {
   const told: string[] = []
   const real = { read: verifyDeps.read, deadlineMs: verifyDeps.deadlineMs, pollMs: verifyDeps.pollMs, sleep: verifyDeps.sleep, now: verifyDeps.now, settleMs: verifyDeps.settleMs }

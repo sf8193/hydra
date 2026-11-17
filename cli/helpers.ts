@@ -9,6 +9,7 @@ import { scrubTokenVarsInFile } from '../config/token-vars.js'
 import { sourceEnvFiles, parseEnvLine } from '../shared/env-parse.js'
 import { formatIssues, loadHydraConfig, systemEnv } from '../config/load.js'
 import { SESSION_NAMES } from '../shared/session-catalog.js'
+import { macosGateIssue } from '../config/server-sandbox.js'
 
 // ---------------------------------------------------------------------------
 // Config resolution (replaces env-setup.sh)
@@ -507,6 +508,7 @@ export function printResponse(response: Record<string, unknown>, json: boolean):
       }
       if (data.raindrop) console.log(`raindrop: ${data.raindrop}`)
       for (const r of data.refusedLaunches ?? []) console.log(`restricted specialist ${r.specialist}: launch REFUSED ${r.ageMin} min ago (${r.why}) · fix: send it another message to start a fresh session; if it repeats, the cause is in the engine's launch record (Claude Code: its debug file), not hydra.toml`)
+      if (data.macosGate) console.log(`${data.macosGate.allowed ? 'WARNING' : 'REFUSED'}: restricted specialist${data.macosGate.specialists.length > 1 ? 's' : ''} ${data.macosGate.specialists.join(', ')}: ${macosGateIssue(data.macosGate.version, data.macosGate.allowed)}`)
       if (data.slack) for (const line of slackHealthLines(data.slack)) console.log(line)
       return
     case 'status':

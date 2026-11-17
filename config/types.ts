@@ -270,6 +270,8 @@ export type HydraConfig = {
   mcpServers?: Record<string, McpServer>
   /** Folders (`~` expanded) no `restricted = true` specialist's workdir may be, hold or sit inside, beyond the built-in ones. Absent: none. */
   offLimits?: string[]
+  /** `[restricted] allow_unproven_macos = true`: restricted specialists that list servers may launch on a macOS version the sandbox is not proven on. Absent: they are refused there. */
+  allowUnprovenMacos?: boolean
   guard?: Guard
   /** Absent: `VITALS_DEFAULTS`. */
   vitals?: Vitals
@@ -306,6 +308,8 @@ export type LoadEnv = {
   isGitWorkTree(path: string): boolean
   /** What lies under the folder that a restricted session must not be able to reach. */
   scanWorkdir(dir: string): WorkdirScan
+  /** `sw_vers -productVersion` on macOS (`15.7.9`); undefined when this is not macOS. */
+  macosVersion: string | undefined
   /** The chat platform this daemon runs. On `slack` the gateway holds `SLACK_GATEWAY_TOKEN_ENVS`, so no connector app may name them. */
   platform: 'discord' | 'slack'
 }
