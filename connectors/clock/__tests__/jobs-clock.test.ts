@@ -35,6 +35,8 @@ type World = {
   probe: boolean | 'throw'
   probes: number
   probeGate?: Promise<void>
+  /** A recorded sleep [from, to] in ms: what the resume detector would hold. */
+  sleep: [number, number]
 }
 
 let w: World
@@ -70,6 +72,8 @@ function deps(over: Partial<ClockDeps> = {}): ClockDeps {
     explicitTZ: false,
     getTZ: () => w.tz,
     setTZ: z => { w.tz = z },
+    suspendedSince: () => null,
+    awakeSince: (t, now) => now - t,
     log: m => { w.logs.push(m) },
     ...over,
   }
@@ -125,7 +129,7 @@ beforeEach(() => {
     dir: mkdtempSync(join(tmpdir(), 'jobs-clock-')), t: new Date('2026-11-04T10:00:30-08:00'),
     procs: new Map(), spawns: [], kills: [], main: [], direct: [], logs: [],
     mainOk: true, mainStuck: null, directOk: true, directCalls: 0, nextPid: 1000, spawnMode: 'ok', zone: null, tz: undefined,
-    events: [], gateway: true, probe: true, probes: 0,
+    events: [], gateway: true, probe: true, probes: 0, sleep: [0, 0],
   }
 })
 afterEach(() => {
@@ -1634,6 +1638,163 @@ describe('launchd-runner jobs: launchd triggers, the daemon delivers', () => {
     expect(argOf(w.spawns[1].args, '--slot-at')).toBe(new Date(SLOT).toISOString())
   })
 
+})
+
+describe('launchd-runner jobs: a slot that never reports is a failure', () => {
+  // The daemon applies results but never saw one come: a broken checkout, an unloaded plist or a moved bun is silence.
+  const HOURLY_LD = `runner = "launchd"\n[sync]\nschedule = "0 * * * *"\ncheck = "sync.sh"\nmode = "none"\n`
+  const slotAt = (hhmm: string) => `2026-11-04T${hhmm}:00-08:00`
+  const leave = (slot: string, label: string, res: object = { result: 'done' }) =>
+    writeAtomic(externalFile(w.dir, 'sync', new Date(slot).toISOString()), JSON.stringify({ slot: label, slotAt: new Date(slot).toISOString(), at: new Date(new Date(slot).getTime() + 20_000).toISOString(), ...res }))
+  // One tick a minute up to the time, as the daemon runs: a longer gap is a break in the watch (tested on its own below).
+  const tickAt = async (c: JobsClock, hhmm: string) => {
+    const target = new Date(`2026-11-04T${hhmm}:30-08:00`)
+    if (target <= w.t) { w.t = target; await c.tick(); return }
+    while (w.t < target) { w.t = new Date(Math.min(w.t.getTime() + 60_000, target.getTime())); await c.tick() }
+  }
+
+  test('one `no report` failure per missed slot once the grace has passed, then one alert', async () => {
+    toml(HOURLY_LD)
+    const c = clock()
+    await tickAt(c, '09:50')                                                        // first sight: nothing before it is owed
+    await tickAt(c, '10:34')
+    expect(state('sync').failures ?? 0).toBe(0)                                     // 10:00 is still inside its grace
+    await tickAt(c, '10:40')
+    expect(state('sync')).toMatchObject({ failures: 1, last: { result: 'failed', note: 'no report: no result from launchd for 2026-11-04 10:00 within 35m' } })
+    expect(w.main).toHaveLength(1)                                                  // launchd has no retries: alerted at once
+    expect(w.main[0]).toContain('no report: no result from launchd for 2026-11-04 10:00 within 35m')
+    await tickAt(c, '10:50')
+    expect(state('sync').failures).toBe(1)                                          // the same slot is not counted twice
+    await tickAt(c, '11:40'); await tickAt(c, '12:40')
+    expect(state('sync').failures).toBe(3)
+    expect(w.main).toHaveLength(1)                                                  // one alert per failure run
+  })
+
+  test('slots that reported, or whose result waits for delivery, are not missed', async () => {
+    toml(HOURLY_LD)
+    const c = clock()
+    await tickAt(c, '09:50')
+    leave(slotAt('11:00'), '2026-11-04 11:00')
+    leave(slotAt('12:00'), '2026-11-04 12:00')
+    await tickAt(c, '13:30')                                                        // 11:00 and 12:00 reported, 13:00 is in grace
+    expect(state('sync').failures ?? 0).toBe(0)
+    expect(w.main).toEqual([])
+  })
+
+  test('a result still being delivered to its target is not a missed report', async () => {
+    toml(`runner = "launchd"\nchannel = "top"\n[sync]\nschedule = "0 * * * *"\ncheck = "sync.sh"\nmode = "spawn"\nprompt = "Triage."\n`)
+    const c = clock()
+    await tickAt(c, '09:50'); await tickAt(c, '10:04')
+    leave(slotAt('10:00'), '2026-11-04 10:00', { result: 'done', output: 'CVE-1' })
+    await tickAt(c, '10:05')
+    expect(w.spawns).toHaveLength(1)                                                // the delivery attempt is live; its file waits
+    await tickAt(c, '10:37')                                                        // past the grace, before the attempt's deadline
+    expect(state('sync').failures ?? 0).toBe(0)
+    expect(w.main).toEqual([])
+  })
+
+  test('a slot that falls during a recorded sleep is not counted', async () => {
+    toml(HOURLY_LD)
+    const c = clock({ suspendedSince: (t, now) => (t < w.sleep[1] && now > w.sleep[0] ? { ms: 1, cause: 'asleep' } : null) })
+    w.sleep = [new Date(slotAt('09:55')).getTime(), new Date(slotAt('12:10')).getTime()]
+    await tickAt(c, '09:50')
+    await tickAt(c, '12:50')                                                        // 11:00 and 12:00 fell in the sleep; nothing else is due
+    expect(state('sync').failures ?? 0).toBe(0)
+    await tickAt(c, '13:50')                                                        // 13:00 did not
+    expect(state('sync').failures).toBe(1)
+  })
+
+  test('the grace counts awake time: a sleep inside it extends it', async () => {
+    toml(HOURLY_LD)
+    w.sleep = [new Date(slotAt('10:10')).getTime(), new Date(slotAt('10:50')).getTime()]
+    const c = clock({ awakeSince: (t, now) => now - t - Math.max(0, Math.min(now, w.sleep[1]) - Math.max(t, w.sleep[0])) })
+    await tickAt(c, '09:50')
+    await tickAt(c, '11:00')                                                        // 60 minutes on the wall, 20 awake
+    expect(state('sync').failures ?? 0).toBe(0)
+    await tickAt(c, '11:30')
+    expect(state('sync').failures).toBe(1)
+  })
+
+  test('a late result clears the failure and is applied once', async () => {
+    toml(HOURLY_LD)
+    const c = clock()
+    await tickAt(c, '09:50')
+    await tickAt(c, '10:40')
+    expect(state('sync').failures).toBe(1)
+    leave(slotAt('10:00'), '2026-11-04 10:00', { result: 'done', output: 'ok' })
+    await tickAt(c, '10:50')
+    expect(state('sync')).toMatchObject({ failures: 0, last: { result: 'done' }, appliedExternal: new Date(slotAt('10:00')).toISOString() })
+    expect(state('sync').failingSince).toBeUndefined()
+    await tickAt(c, '11:50')
+    expect(state('sync').failures).toBe(1)                                          // 11:00 never reported: a new run
+    expect(w.main).toHaveLength(2)                                                  // the cleared run was alerted, so is the new one
+  })
+
+  test('a cron edit restarts the watch: a weekly job made hourly does not owe the slots between', async () => {
+    toml(HOURLY_LD)
+    at('2026-11-04T10:40:30-08:00')
+    // watched a moment ago, from Monday's 09:00 slot, under the weekly cron
+    setState('sync', { expectedThrough: new Date('2026-11-02T09:00:00-08:00').toISOString(), expectedCron: '0 9 * * MON', watchedAt: new Date('2026-11-04T10:39:30-08:00').toISOString() })
+    const c = clock(); await c.tick()                                               // 49 hourly slots lie after Monday
+    expect(state('sync').failures ?? 0).toBe(0)
+    expect(state('sync').expectedCron).toBe('0 * * * *')
+    await tickAt(c, '11:40')
+    expect(state('sync').failures).toBe(1)                                          // 11:00, the first of the new cron, is owed
+  })
+
+  test('a job taken out of the config and put back with the same cron does not owe the slots it was away', async () => {
+    toml(HOURLY_LD)
+    const c = clock()
+    await tickAt(c, '09:50'); await tickAt(c, '10:10')
+    toml(`runner = "launchd"\n[other]\nschedule = "0 * * * *"\ncheck = "o.sh"\nmode = "none"\n`)
+    await tickAt(c, '10:11')                                                        // gone: its state file stays, nothing watches it
+    at('2026-11-04T14:00:30-08:00'); await c.tick()
+    toml(HOURLY_LD)
+    at('2026-11-04T14:01:30-08:00'); await c.tick()                                 // back, same cron, a four-hour-old watch
+    expect(state('sync').failures ?? 0).toBe(0)
+    expect(w.main).toEqual([])
+    await tickAt(c, '15:40')
+    expect(state('sync').failures).toBe(1)                                          // from here on it is watched
+  })
+
+  test('a restart after the machine or daemon was down does not count the slots nobody was watching', async () => {
+    toml(HOURLY_LD)
+    const a = clock()
+    await tickAt(a, '09:50')
+    a.stop()
+    at('2026-11-04T14:00:30-08:00')                                                 // back after four hours
+    const b = clock()
+    await b.tick()
+    await tickAt(b, '14:40')
+    expect(state('sync').failures ?? 0).toBe(0)
+    expect(w.main).toEqual([])
+    await tickAt(b, '15:40')
+    expect(state('sync').failures).toBe(1)                                          // a slot it was awake for is still owed
+  })
+
+  test('a late result for an older slot does not clear the slots missed after it', async () => {
+    toml(HOURLY_LD)
+    const c = clock()
+    await tickAt(c, '09:50')
+    for (const t of ['10:40', '11:40', '12:40']) await tickAt(c, t)
+    expect(state('sync').failures).toBe(3)
+    leave(slotAt('10:00'), '2026-11-04 10:00', { result: 'done' })
+    await tickAt(c, '12:50')
+    expect(state('sync')).toMatchObject({ failures: 2, appliedExternal: new Date(slotAt('10:00')).toISOString() })
+    expect(state('sync').failingSince).toBeDefined()                                // 11:00 and 12:00 are still unanswered
+    leave(slotAt('12:00'), '2026-11-04 12:00', { result: 'done' })
+    await tickAt(c, '12:55')
+    expect(state('sync').failures).toBe(0)                                          // a result for the newest miss ends the run
+    expect(state('sync').failingSince).toBeUndefined()
+    expect(state('sync').unreported).toBeUndefined()
+  })
+
+  test('a daemon job and a job the daemon never saw run are untouched', async () => {
+    toml(`[sync]\nschedule = "0 * * * *"\ncheck = "sync.sh"\nmode = "none"\n`)      // runner = daemon: the clock dispatches it
+    const c = clock()
+    await tickAt(c, '09:50'); await tickAt(c, '10:40')
+    expect(state('sync').last?.note ?? '').not.toContain('no report')
+  })
 })
 
 describe("hydra.toml [schedules]: run once migrate has moved jobs.toml; until then, jobs.toml exactly as today", () => {
