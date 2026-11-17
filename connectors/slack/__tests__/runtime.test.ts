@@ -152,7 +152,7 @@ describe('any session listens to a Slack thread: bound to its own thread', () =>
 
   test('the operator can bind a thread to a session; hydra conversations shows the session by name', () => {
     session('sw-named', MINE)
-    expect(operatorBind('slack:C9:8.000001', MINE)).toBe(`slack:C9:8.000001 → ${MINE}`)
+    expect(operatorBind('slack:C9:8.000001', `thread:${MINE}`)).toBe(`slack:C9:8.000001 → ${MINE}`)
     expect(formatConversations().find(l => l.startsWith('slack:C9:8.000001'))).toContain(`→ sw-named (listening, thread ${MINE})`)
   })
 
@@ -601,13 +601,13 @@ describe('sessions = "per-conversation"', () => {
 describe('the operator: hydra conversations and hydra route', () => {
   test('conversations bind, list, unbind; bind moves one from any specialist to any other', async () => {
     getSlackWatcher().watch('C1', '9.000001', FOOD)
-    expect(await handleCLIRequest(req('conversations', { action: 'bind', conversation: 'slack:C1:9.000001', to: OPS }))).toMatchObject({ ok: true, data: { bound: `slack:C1:9.000001 → ${OPS}` } })
+    expect(await handleCLIRequest(req('conversations', { action: 'bind', conversation: 'slack:C1:9.000001', to: `specialist:${OPS}` }))).toMatchObject({ ok: true, data: { bound: `slack:C1:9.000001 → ${OPS}` } })
     expect(getSlackWatcher().get('C1', '9.000001')!.specialist).toBe(OPS)
     const listed = await handleCLIRequest(req('conversations', { action: 'list' }))
     expect((listed.data as any).conversations).toEqual([expect.stringContaining(`slack:C1:9.000001 (slack:C1) → ${OPS} · idle 0h`)])
     expect((listed.data as any).health).toMatchObject({ places: [{ place: 'slack:C1', to: FOOD }, { place: 'slack:C2', to: OPS }], conversations: 1, owed: 0, oldestOwedAgeMin: null })
-    expect(await handleCLIRequest(req('conversations', { action: 'bind', conversation: 'slack:C1:9.000001', to: 'nobody' }))).toMatchObject({ ok: false, error: 'no specialist "nobody" in hydra.toml (or a session\'s thread id)' })
-    expect(await handleCLIRequest(req('conversations', { action: 'bind', conversation: 'slack:C1', to: OPS }))).toMatchObject({ ok: false, error: expect.stringContaining('names a channel, not a conversation') })
+    expect(await handleCLIRequest(req('conversations', { action: 'bind', conversation: 'slack:C1:9.000001', to: 'specialist:nobody' }))).toMatchObject({ ok: false, error: 'no specialist "nobody" in hydra.toml (or a session\'s thread id)' })
+    expect(await handleCLIRequest(req('conversations', { action: 'bind', conversation: 'slack:C1', to: `specialist:${OPS}` }))).toMatchObject({ ok: false, error: expect.stringContaining('names a channel, not a conversation') })
     expect(await handleCLIRequest(req('conversations', { action: 'unbind', conversation: 'slack:C1:9.000001' }))).toMatchObject({ ok: true })
     expect(await handleCLIRequest(req('conversations', { action: 'unbind', conversation: 'slack:C1:9.000001' }))).toMatchObject({ ok: true, data: { unbound: expect.stringContaining('was not bound') } })
     const health = await handleCLIRequest(req('health', {}))
@@ -616,7 +616,7 @@ describe('the operator: hydra conversations and hydra route', () => {
 
   test('hydra route prints every candidate and why the winner won, and binds nothing', async () => {
     configure(TOML.replace(`[specialists.${FOOD}]`, `[[rules]]\nplace = "slack:C2"\nperson = "role:owner"\ntarget = "specialist:${FOOD}"\n[specialists.${FOOD}]`))
-    const r = await handleCLIRequest(req('route', { person: 'olive', place: 'slack:C2' }))
+    const r = await handleCLIRequest(req('route', { person: 'person:olive', place: 'slack:C2' }))
     expect(r).toMatchObject({ ok: true, data: { fate: 'deliver', to: FOOD } })
     expect((r.data as any).report).toContain(`→ rule specialist:${FOOD}: rules[0]: first rule that matches`)
     expect((r.data as any).report).toContain(`rule specialist:${OPS}: rules[2] matches, but an earlier rule won`)
@@ -788,7 +788,7 @@ describe('a live session is told, as input, what the connector says about its ow
   test("a specialist's alert stays post-only: the connector's trouble is the operator's, not a binding the session holds", async () => {
     // a specialist no earlier test used: the watcher is the daemon's one, and an alert episode lasts an hour
     const LONE = 'lone-t', LONE_THREAD = 'lone-thread-1'
-    configure(`${TOML}[specialists.${LONE}]\nworkdir = "/w/lone"\nreachable_by = ["owner"]\n[[rules]]\nplace = "slack:C3"\ntarget = "specialist:${LONE}"\n`, { maxWatches: 1 })
+    configure(`${TOML}[specialists.${LONE}]\nworkdir = "/w/lone"\nreachable_by = ["role:owner"]\n[[rules]]\nplace = "slack:C3"\ntarget = "specialist:${LONE}"\n`, { maxWatches: 1 })
     setSpecialistThread(LONE, LONE_THREAD)
     listening('told-f', LONE_THREAD)
     const w = getSlackWatcher()

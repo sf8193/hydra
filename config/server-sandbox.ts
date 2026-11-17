@@ -1,4 +1,4 @@
-// The sandbox a listed `[mcp.*]` server of a restricted specialist runs under. A macOS implementation (Seatbelt, through
+// The sandbox a listed `[mcp_servers.*]` server of a restricted specialist runs under. A macOS implementation (Seatbelt, through
 // `/usr/bin/sandbox-exec`); where it is missing, a specialist that lists servers is refused, never run without it.
 //
 // BEST-EFFORT HYGIENE, NOT CONTAINMENT. A listed server is code the operator trusts with their own privileges (SERVER_TRUST_SENTENCE in
@@ -46,7 +46,7 @@ const RESOLVER_SOCKET = '/private/var/run/mDNSResponder'
  */
 export function sandboxIssues(isCommand: (command: string) => boolean, roots: readonly { path: string }[]): string | undefined {
   if (!isCommand(SANDBOX_EXEC)) {
-    return `a listed [mcp.*] server runs under ${SANDBOX_EXEC} (macOS only), which blocks its connects to the daemon's socket and its reads of the listed credential folders. This machine does not have it. Remove the servers from the specialist's mcp_servers, set restricted = false, or run hydra on a Mac`
+    return `a listed [mcp_servers.*] server runs under ${SANDBOX_EXEC} (macOS only), which blocks its connects to the daemon's socket and its reads of the listed credential folders. This machine does not have it. Remove the servers from the specialist's mcp_servers, set restricted = false, or run hydra on a Mac`
   }
   return roots.map(r => unquotablePath(r.path)).find(Boolean)
 }

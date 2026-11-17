@@ -336,7 +336,7 @@ describe('names on every verb', () => {
   test('the CLI passes `permanent` through, so a sender can drop rather than retry', async () => {
     const name = specialist('tg-perm')
     occupy('tg-perm')
-    expect(await cli('deliver', { to: name, message: 'x'.repeat(200_000), initiator: 't' })).toMatchObject({ ok: false, exitCode: 3, data: { permanent: true } })
+    expect(await cli('deliver', { to: `specialist:${name}`, message: 'x'.repeat(200_000), initiator: 't' })).toMatchObject({ ok: false, exitCode: 3, data: { permanent: true } })
   })
 
   test('specialist show reads the stored entry, flagged, as rm does', async () => {
@@ -361,7 +361,7 @@ describe('names on every verb', () => {
   test('deliver --to on the CLI: a specialist, or exit 8', async () => {
     const name = specialist('tg-cli')
     occupy('tg-cli')
-    expect(await cli('deliver', { to: name, message: 'm', initiator: 't' })).toMatchObject({ ok: true, data: { specialist: name } })
+    expect(await cli('deliver', { to: `specialist:${name}`, message: 'm', initiator: 't' })).toMatchObject({ ok: true, data: { specialist: name } })
     expect(await cli('deliver', { to: 'nobody-here', message: 'm', initiator: 't' })).toMatchObject({ ok: false, exitCode: 8 })
   })
 })
@@ -419,27 +419,27 @@ describe('hydra deliver --conversation: a per-conversation specialist opens that
   test("its own session, a fresh thread in the specialist's home, run as the sender (jobs:<name>); the same key reaches it again", async () => {
     _setHydraConfigForTesting(hydra(CFG))
     const conversation = 'clock:jobs-rev-2026-11-13T19:00:00.000Z'
-    const r = await cli({ to: 'rev', conversation, message: 'Check output:\nweek 45', initiator: 'jobs:rev' })
+    const r = await cli({ to: 'specialist:rev', conversation, message: 'Check output:\nweek 45', initiator: 'jobs:rev' })
     expect(r).toMatchObject({ ok: true, data: { sessionName: 'rev_clock-jobs-rev-2026-11-13t19-00-00-000z' } })
     expect(spawns[0][0]).toBe('Weekly review.')                                   // the prompt first; the check output follows
     expect(spawns[0][1]).toBe('777')
     expect(spawns[0][3]).toMatchObject({ initiator: 'jobs:rev' })
-    expect(await cli({ to: 'rev', conversation, message: 'again', initiator: 'jobs:rev' })).toMatchObject({ ok: true })
+    expect(await cli({ to: 'specialist:rev', conversation, message: 'again', initiator: 'jobs:rev' })).toMatchObject({ ok: true })
     expect(spawns).toHaveLength(1)
   })
 
   test('refused without --to, for a shared specialist, or with no key', async () => {
     _setHydraConfigForTesting(hydra(CFG))
     expect(await cli({ thread: '1', conversation: 'clock:x', message: 'm' })).toMatchObject({ ok: false, error: '--conversation <key> goes with --to specialist:<name>' })
-    expect(await cli({ to: 'rev', conversation: '', message: 'm' })).toMatchObject({ ok: false, error: '--conversation <key> goes with --to specialist:<name>' })
-    expect(await cli({ to: 'shared', conversation: 'clock:x', message: 'm' })).toMatchObject({ ok: false, error: "shared isn't a per-conversation specialist in hydra.toml, so it has no conversations to open" })
+    expect(await cli({ to: 'specialist:rev', conversation: '', message: 'm' })).toMatchObject({ ok: false, error: '--conversation <key> goes with --to specialist:<name>' })
+    expect(await cli({ to: 'specialist:shared', conversation: 'clock:x', message: 'm' })).toMatchObject({ ok: false, error: "shared isn't a per-conversation specialist in hydra.toml, so it has no conversations to open" })
     expect(spawns).toHaveLength(0)
   })
 })
 
 describe('a target says its kind: main, specialist:<name>, thread:<id>', () => {
   const cli = (command: string, params: Record<string, unknown>) => handleCLIRequest({ type: 'cli', command, id: `tg-${++n}`, params } as CLIRequest)
-  test('each kind lands where the bare value always did; the CLI says which kind it delivered to', async () => {
+  test('each kind lands where its name says; the CLI says which kind it delivered to, and wants the kind', async () => {
     const name = specialist('tg-kind')
     const home = occupy('tg-kind')
     expect(await deliverToTarget({ to: `specialist:${name}` }, 'm', opts)).toMatchObject({ ok: true, sessionId: home.sessionId, specialist: name })
@@ -448,7 +448,8 @@ describe('a target says its kind: main, specialist:<name>, thread:<id>', () => {
     expect(await deliverToTarget({ to: 'thread:424242' }, 'm', opts)).toMatchObject({ ok: true, sessionId: live.sessionId, threadId: "424242" })
     expect(await deliverToTarget({ to: 'main' }, 'm', { ...opts, queue: true })).toMatchObject({ ok: true, sessionName: 'main' })
     expect(await cli('deliver', { to: `specialist:${name}`, message: 'm', initiator: 't' })).toMatchObject({ ok: true, data: { specialist: name, target: `specialist:${name}` } })
-    expect(await cli('deliver', { to: name, message: 'm', initiator: 't' })).toMatchObject({ ok: true, data: { target: `specialist:${name}` } })
+    // `--to` says its kind: a bare name is exit 8 (hydra's own callers hold the stored form, which deliverToTarget above takes).
+    expect(await cli('deliver', { to: name, message: 'm', initiator: 't' })).toMatchObject({ ok: false, exitCode: 8, error: expect.stringContaining('does not say its kind') })
     expect(await cli('deliver', { to: 'thread:424242', message: 'm', initiator: 't' })).toMatchObject({ ok: true, data: { target: 'thread:424242' } })
   })
 

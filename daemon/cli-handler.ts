@@ -14,8 +14,8 @@ import { declaredInToml, getSpecialist, listSpecialists, removeSpecialist, setSp
 import { slackWatchHealth, refreshSlackSpecialistSurface, formatConversations, operatorBind, operatorUnbind, placeAliases } from '../connectors/slack/runtime.js'
 import { currentHydraConfig } from './hydra-config.js'
 import { routeFor, type RouteParams } from '../routing/route-request.js'
-import { deliverToTarget, deliverVia, resolveTo, sessionByName, toSession, toThread, type DeliverOutcome } from '../specialists/targets.js'
-import { spelled } from '../shared/target-kind.js'
+import { deliverToTarget, deliverVia, sessionByName, toSession, toThread, type DeliverOutcome } from '../specialists/targets.js'
+import { readTarget, spelled } from '../shared/target-kind.js'
 import { gateway } from './config.js'
 import { loadAccess, operatorIds } from './access.js'
 import { on } from './event-bus.js'
@@ -325,13 +325,15 @@ async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
   if (to && addresses > 1) return respond(req, false, '--to is the whole address: drop --thread/--session/--specialist')
   if (specialist && (thread || session)) return respond(req, false, '--specialist is its own address: drop --thread/--session')
   if (revive && !(to || (thread && !session))) return respond(req, false, '--revive takes --to or --thread (a specialist always revives)')
-  // `--to` says its kind (`ops` and `specialist:ops` are one target); a conversation goes to a specialist, so it needs the name.
-  const named = to ? resolveTo(to) : undefined
+  // `--to` says its kind (`specialist:ops`, not `ops`); a conversation goes to a specialist, so it needs the name.
+  const typed = to ? readTarget(to, name => !!getSpecialist(name)) : undefined
+  if (typed && !typed.ok && typed.error) return respond(req, false, typed.error, undefined, 8)
+  const named = typed?.ok ? typed.ref : undefined
   const toName = named?.kind === 'specialist' ? named.name : to
   // A conversation of a per-conversation specialist: its own session, opened for it if it has none (targets.ts).
   if (conversation !== undefined) {
     if (!to || !conversation) return respond(req, false, '--conversation <key> goes with --to specialist:<name>')
-    if (!toName || currentHydraConfig().specialists[toName]?.sessions !== 'per-conversation') return respond(req, false, `${to} isn't a per-conversation specialist in hydra.toml, so it has no conversations to open`)
+    if (!toName || currentHydraConfig().specialists[toName]?.sessions !== 'per-conversation') return respond(req, false, `${toName} isn't a per-conversation specialist in hydra.toml, so it has no conversations to open`)
   }
 
   if (idempotencyKey) {
@@ -364,7 +366,7 @@ async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
   if (!r.ok) return respond(req, false, r.reason, r.permanent ? { permanent: true } : undefined, r.exit)
   return respond(req, true, {
     status: r.status, proof: r.proof, sessionId: r.sessionId, sessionName: r.sessionName, threadId: r.threadId,
-    ...(named && named.kind !== 'unknown' && { target: spelled(named) }),
+    ...(named && { target: spelled(named) }),
     ...(r.specialist && { specialist: r.specialist, spawned: r.revived }),
     ...(revive && { revived: r.revived }),
   })
@@ -379,7 +381,7 @@ async function handleSpecialist(req: CLIRequest): Promise<CLIResponse> {
   // hydra.toml's restricted (with the tools and servers a restricted specialist may use) and sessions mode, and maxSessions only where it applies (per-conversation).
   const mode = (name: string) => {
     const d = Object.hasOwn(currentHydraConfig().specialists, name) ? currentHydraConfig().specialists[name] : undefined
-    return d && { ...(d.emoji && { emoji: d.emoji }), restricted: d.restricted, ...(d.restricted && { tools: d.tools, mcpServers: d.mcpServers }), sessions: d.sessions, ...(d.sessions === 'per-conversation' && { maxSessions: d.maxSessions }) }
+    return d && { ...(d.emoji && { emoji: d.emoji }), restricted: d.restricted, ...(d.restricted && { tools: d.tools, mcpServerNames: d.mcpServerNames }), sessions: d.sessions, ...(d.sessions === 'per-conversation' && { maxSessions: d.maxSessions }) }
   }
   const view = (name: string, s: Specialist & { invalid?: string }) => ({ name, ...s, ...mode(name), ...specialistStatus(name) })
   switch (p.action) {

@@ -26,13 +26,11 @@ export type GuardInput = {
   conversation: string
   /** Where routing sent it: `main`, a specialist, or a session's thread. */
   target: string
-  /** The old name of `target`, still sent so a guard written for it keeps working. Remove once no guard reads it. */
-  to: string
   text?: string
 }
 
 export type GuardVerdict =
-  | { fate: 'deliver'; target?: string; /** Set when the guard printed the old key `to`: the watcher logs it so the operator renames it. */ viaOldKey?: true }
+  | { fate: 'deliver'; target?: string }
   | { fate: 'drop' }
   | { fate: 'later' }
   | { fate: 'open'; why: string }
@@ -105,14 +103,11 @@ function judge(code: number | null, out: string): GuardVerdict {
   let parsed: unknown
   try { parsed = JSON.parse(text) } catch { return { fate: 'open', why: 'exited 0 but printed something other than JSON' } }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return { fate: 'open', why: 'exited 0 but printed JSON that is not an object' }
-  // `target` is the key; `to` is its old name, still read. Both with different values is no one's redirect: fail open and say so.
-  const { target: now, to: old } = parsed as { target?: unknown; to?: unknown }
-  if (now !== undefined && old !== undefined && now !== old) return { fate: 'open', why: 'printed both "target" and "to" with different values: print only "target"' }
-  const to = now ?? old
-  if (to === undefined) return { fate: 'deliver' }
-  // A redirect names `main` or a specialist (`specialist:<name>`; a bare name still reads, silently: the guard has no way to warn). Whether the
-  // specialist is declared is the delivery's to say, as before. A thread is no redirect: the guard cannot move a message into a session's thread.
-  const read = typeof to === 'string' && to === to.trim() ? readTarget(to, id => SPECIALIST_NAME_RE.test(id) && !isSessionThread(id)) : undefined
-  if (!read || !read.ok || read.ref.kind === 'thread') return { fate: 'open', why: `printed an unusable "${now !== undefined ? 'target' : 'to'}": ${JSON.stringify(to).slice(0, 80)}` }
-  return { fate: 'deliver', target: bareOf(read.ref), ...(now === undefined && { viaOldKey: true as const }) }
+  const { target, to } = parsed as { target?: unknown; to?: unknown }
+  if (target === undefined && to !== undefined) return { fate: 'open', why: 'printed `to`, which is not read: print `target`, as `{"target": "specialist:<name>"}` or `{"target": "main"}`' }
+  if (target === undefined) return { fate: 'deliver' }
+  // A redirect names `main` or `specialist:<name>`. Whether the specialist is declared is the delivery's to say, as before. A thread is no redirect: the guard cannot move a message into a session's thread.
+  const read = typeof target === 'string' && target === target.trim() ? readTarget(target, id => SPECIALIST_NAME_RE.test(id) && !isSessionThread(id)) : undefined
+  if (!read || !read.ok || read.ref.kind === 'thread') return { fate: 'open', why: `printed an unusable "target": ${JSON.stringify(target).slice(0, 80)}; write \`specialist:<name>\` or \`main\` (the guard's stdin \`target\` is already in that form)` }
+  return { fate: 'deliver', target: bareOf(read.ref) }
 }

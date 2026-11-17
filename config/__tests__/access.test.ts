@@ -1,4 +1,4 @@
-// `access`, specialist `tools` and `mcp`, `[mcp.*]`, `[restricted] off_limits`: every refusal and warning, one test per row.
+// `restricted`, specialist `tools` and `mcp_servers`, `[mcp_servers.*]`, `[restricted] off_limits`: every refusal and warning, one test per row.
 import { describe, test, expect } from 'bun:test'
 import { loadHydraConfig } from '../load.js'
 import type { HydraConfig, LoadEnv } from '../types.js'
@@ -31,11 +31,11 @@ operator = "op"
 addresses = ["slack:U0OP"]
 [slack.apps.default]
 bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"
-[mcp.datadog]
+[mcp_servers.datadog]
 command = "/usr/local/bin/datadog-mcp"
 token_env = ["DD_API_KEY"]
 tools = ["search_logs", "get_monitor"]
-[mcp.empty]
+[mcp_servers.empty]
 command = "bun"
 `
 const spec = (body: string, workdir = '~/agents/ops') => `${BASE}\n[specialists.ops]\nworkdir = "${workdir}"\nreachable_by = []\n${body}\n[[rules]]\nplace = "slack:dm"\ntarget = "specialist:ops"\n`
@@ -57,12 +57,12 @@ describe('access', () => {
     const { config } = ok(spec(''))
     expect(config.specialists.ops.restricted).toBe(false)
     expect(config.specialists.ops.tools).toBeUndefined()
-    expect(config.specialists.ops.mcpServers).toBeUndefined()
+    expect(config.specialists.ops.mcpServerNames).toBeUndefined()
   })
 
   test('workdir gets the default tools Read, Grep, Glob and no servers', () => {
     const { config } = ok(spec('restricted = true'))
-    expect(config.specialists.ops).toMatchObject({ restricted: true, tools: ['Read', 'Grep', 'Glob'], mcpServers: [] })
+    expect(config.specialists.ops).toMatchObject({ restricted: true, tools: ['Read', 'Grep', 'Glob'], mcpServerNames: [] })
   })
 
   test('a value other than true or false is an error', () => {
@@ -185,13 +185,13 @@ describe('LoadEnv: nothing is optional', () => {
 
 describe('mcp (restricted = true)', () => {
   test('a declared server with tools loads, in file order', () => {
-    expect(ok(spec('restricted = true\nmcp_servers = ["datadog"]')).config.specialists.ops.mcpServers).toEqual(['datadog'])
+    expect(ok(spec('restricted = true\nmcp_servers = ["datadog"]')).config.specialists.ops.mcpServerNames).toEqual(['datadog'])
   })
-  test('a name with no [mcp.<name>] is refused', () => {
-    expect(errorsOf(spec('restricted = true\nmcp_servers = ["datadog", "nope"]'))).toEqual(['specialists.ops.mcp_servers[1]: no [mcp.nope]: declare the server in hydra.toml first'])
+  test('a name with no [mcp_servers.<name>] is refused', () => {
+    expect(errorsOf(spec('restricted = true\nmcp_servers = ["datadog", "nope"]'))).toEqual(['specialists.ops.mcp_servers[1]: no [mcp_servers.nope]: declare the server in hydra.toml first'])
   })
   test('a server with no tools is refused', () => {
-    expect(errorsOf(spec('restricted = true\nmcp_servers = ["empty"]'))).toEqual(['specialists.ops.mcp_servers[0]: [mcp.empty] lists no tools, so a specialist could call none of them: set its `tools`'])
+    expect(errorsOf(spec('restricted = true\nmcp_servers = ["empty"]'))).toEqual(['specialists.ops.mcp_servers[0]: [mcp_servers.empty] lists no tools, so a specialist could call none of them: set its `tools`'])
   })
 })
 
@@ -200,7 +200,7 @@ describe('a machine without sandbox-exec (a listed server runs under it)', () =>
   test('a workdir specialist listing a server is refused, naming the cause and both fixes', () => {
     const e = errorsOf(spec('restricted = true\nmcp_servers = ["datadog"]'), noSandbox)
     expect(e).toHaveLength(1)
-    expect(e[0]).toMatch(/^specialists\.ops\.mcp_servers: a listed \[mcp\.\*\] server runs under \/usr\/bin\/sandbox-exec \(macOS only\), which blocks its connects to the daemon's socket and its reads of the listed credential folders\. This machine does not have it\. Remove the servers from the specialist's mcp_servers, set restricted = false, or run hydra on a Mac$/)
+    expect(e[0]).toMatch(/^specialists\.ops\.mcp_servers: a listed \[mcp_servers\.\*\] server runs under \/usr\/bin\/sandbox-exec \(macOS only\), which blocks its connects to the daemon's socket and its reads of the listed credential folders\. This machine does not have it\. Remove the servers from the specialist's mcp_servers, set restricted = false, or run hydra on a Mac$/)
   })
   test('a workdir specialist listing none loads as before', () => {
     expect(ok(spec('restricted = true'), noSandbox).config.specialists.ops.restricted).toBe(true)
@@ -239,10 +239,10 @@ describe('a listed server whose token variable the state .env does not set (a wa
   const noDdKey = testLoadEnv({ ...env, envFileHas: n => n !== 'DD_API_KEY' })
   test('a workdir specialist listing it warns, naming the variable, the file and the restart', () => {
     const r = ok(spec('restricted = true\nmcp_servers = ["datadog"]'), noDdKey)
-    expect(r.warnings).toEqual([`specialists.ops.mcp_servers[0]: [mcp.datadog] needs DD_API_KEY, and ${STATE}/.env does not set it, so no session of this specialist can start until it does: add DD_API_KEY=<value> there and restart the daemon`])
+    expect(r.warnings).toEqual([`specialists.ops.mcp_servers[0]: [mcp_servers.datadog] needs DD_API_KEY, and ${STATE}/.env does not set it, so no session of this specialist can start until it does: add DD_API_KEY=<value> there and restart the daemon`])
   })
   test('it loads (a warning, not an error)', () => {
-    expect(ok(spec('restricted = true\nmcp_servers = ["datadog"]'), noDdKey).config.specialists.ops.mcpServers).toEqual(['datadog'])
+    expect(ok(spec('restricted = true\nmcp_servers = ["datadog"]'), noDdKey).config.specialists.ops.mcpServerNames).toEqual(['datadog'])
   })
   test('with the variable set, no warning; a server nobody lists, or a server with no token variable, warns about nothing', () => {
     expect(ok(spec('restricted = true\nmcp_servers = ["datadog"]')).warnings).toEqual([])
@@ -253,24 +253,24 @@ describe('a listed server whose token variable the state .env does not set (a wa
   })
 })
 
-describe('[mcp.*]', () => {
+describe('[mcp_servers.*]', () => {
   test('is parsed into the config: command, token_env names, tools', () => {
     expect(ok(spec('')).config.mcpServers!.datadog).toEqual({ name: 'datadog', command: '/usr/local/bin/datadog-mcp', tokenEnv: ['DD_API_KEY'], tools: ['search_logs', 'get_monitor'] })
   })
   test('the command must exist', () => {
-    expect(errorsOf(`${BASE}\n[mcp.x]\ncommand = "/nope/x"\n`)).toEqual(['mcp.x.command: /nope/x is not an executable file or a command on PATH'])
+    expect(errorsOf(`${BASE}\n[mcp_servers.x]\ncommand = "/nope/x"\n`)).toEqual(['mcp_servers.x.command: /nope/x is not an executable file or a command on PATH'])
   })
   test('the command is required', () => {
-    expect(errorsOf(`${BASE}\n[mcp.x]\ntools = ["a"]\n`)[0]).toContain('mcp.x.command: is required')
+    expect(errorsOf(`${BASE}\n[mcp_servers.x]\ntools = ["a"]\n`)[0]).toContain('mcp_servers.x.command: is required')
   })
   test('hydra\'s own token variables are never a server\'s', () => {
-    expect(errorsOf(`${BASE}\n[mcp.x]\ncommand = "bun"\ntoken_env = ["CONNECTOR_SLACK_BOT_TOKEN"]\n`)).toEqual(['mcp.x.token_env[0]: "CONNECTOR_SLACK_BOT_TOKEN" is the token variable of slack.apps.default.bot_token_env: a server never gets hydra\'s own tokens'])
+    expect(errorsOf(`${BASE}\n[mcp_servers.x]\ncommand = "bun"\ntoken_env = ["CONNECTOR_SLACK_BOT_TOKEN"]\n`)).toEqual(['mcp_servers.x.token_env[0]: "CONNECTOR_SLACK_BOT_TOKEN" is the token variable of slack.apps.default.bot_token_env: a server never gets hydra\'s own tokens'])
   })
   test('a tool name is a name, not a pattern', () => {
-    expect(errorsOf(`${BASE}\n[mcp.x]\ncommand = "bun"\ntools = ["search_*"]\n`)[0]).toContain('mcp.x.tools[0]')
+    expect(errorsOf(`${BASE}\n[mcp_servers.x]\ncommand = "bun"\ntools = ["search_*"]\n`)[0]).toContain('mcp_servers.x.tools[0]')
   })
   test('an unknown key is an error', () => {
-    expect(errorsOf(`${BASE}\n[mcp.x]\ncommand = "bun"\nargs = ["-y"]\n`)).toEqual(['mcp.x.args: unknown key "args"'])
+    expect(errorsOf(`${BASE}\n[mcp_servers.x]\ncommand = "bun"\nargs = ["-y"]\n`)).toEqual(['mcp_servers.x.args: unknown key "args"'])
   })
 })
 
@@ -292,34 +292,36 @@ describe('[defaults.specialist]', () => {
 })
 
 describe('the warning for an operator-access specialist someone else can talk to', () => {
-  const WITH_ALICE = BASE.replace('[mcp.datadog]', '[people.alice]\naddresses = ["slack:U0ALICE"]\nroles = ["staff"]\n[people.bob]\naddresses = ["slack:U0BOB"]\n[mcp.datadog]')
+  const WITH_ALICE = BASE.replace('[mcp_servers.datadog]', '[people.alice]\naddresses = ["slack:U0ALICE"]\nroles = ["staff"]\n[people.bob]\naddresses = ["slack:U0BOB"]\n[mcp_servers.datadog]')
   const text = (base: string, extra: string, body: string) => `${base}\n[specialists.ops]\nworkdir = "~/agents/ops"\n${body}\n${extra}`
   const warnings = (extra: string, body = '', base = BASE): string[] => ok(text(base, extra, body)).warnings.filter(w => w.includes("the operator's account"))
+  /** `[[rules]]` sending each place to ops: where it is heard. */
+  const heard = (...places: string[]) => places.map(p => `[[rules]]\nplace = "${p}"\ntarget = "specialist:ops"\n`).join('')
   const WARN = (who: string) => [`specialists.ops: ${who} can reach the operator's account through it; set restricted = true`]
 
   describe('who can talk to it', () => {
     test('reachable_by = []: only the operator, whatever place it is in', () => {
-      expect(warnings('', 'listens = ["slack:dm"]\nreachable_by = []')).toEqual([])
-      expect(warnings('', 'listens = ["slack:C0CF123"]\nreachable_by = []')).toEqual([])
+      expect(warnings('' + heard("slack:dm"), 'reachable_by = []')).toEqual([])
+      expect(warnings('' + heard("slack:C0CF123"), 'reachable_by = []')).toEqual([])
     })
     test('the default reachable_by = ["role:people"] with a roster of only the operator: no one else, no warning', () => {
-      expect(warnings('', 'listens = ["slack:dm"]')).toEqual([])
-      expect(warnings('', 'listens = ["slack:C0CF123"]')).toEqual([])
+      expect(warnings('' + heard("slack:dm"), '')).toEqual([])
+      expect(warnings('' + heard("slack:C0CF123"), '')).toEqual([])
     })
     test('reachable_by = ["role:people"] with others on the roster names them', () => {
-      expect(warnings('', 'listens = ["slack:dm"]\nreachable_by = ["role:people"]', WITH_ALICE)).toEqual(WARN('person:alice and person:bob (reachable_by = ["role:people"])'))
+      expect(warnings('' + heard("slack:dm"), 'reachable_by = ["role:people"]', WITH_ALICE)).toEqual(WARN('person:alice and person:bob (reachable_by = ["role:people"])'))
     })
     test('a role names its holders other than the operator', () => {
-      expect(warnings('', 'listens = ["slack:dm"]\nreachable_by = ["role:staff"]', WITH_ALICE)).toEqual(WARN('person:alice (role:staff)'))
+      expect(warnings('' + heard("slack:dm"), 'reachable_by = ["role:staff"]', WITH_ALICE)).toEqual(WARN('person:alice (role:staff)'))
     })
     test('reachable_by = ["role:anyone"]', () => {
-      expect(warnings('', 'listens = ["slack:dm"]\nreachable_by = ["role:anyone"]')).toEqual(WARN('anyone'))
+      expect(warnings('' + heard("slack:dm"), 'reachable_by = ["role:anyone"]')).toEqual(WARN('anyone'))
     })
     test('anyone in a shared or public place says which', () => {
-      expect(warnings('', 'listens = ["slack:C0CF123"]\nreachable_by = ["role:anyone"]')).toEqual(WARN('anyone in slack:C0CF123'))
+      expect(warnings('' + heard("slack:C0CF123"), 'reachable_by = ["role:anyone"]')).toEqual(WARN('anyone in slack:C0CF123'))
     })
     test('anyone, named once, however many roles and places say it', () => {
-      expect(warnings('', 'listens = ["slack:C0CF123", "slack:C0CF456"]\nreachable_by = ["role:anyone", "role:people", "role:staff"]\nsessions = "per-conversation"\nidle = "1h"', WITH_ALICE)).toEqual(WARN('anyone in slack:C0CF123 and slack:C0CF456'))
+      expect(warnings('' + heard("slack:C0CF123", "slack:C0CF456"), 'reachable_by = ["role:anyone", "role:people", "role:staff"]\nsessions = "per-conversation"\nidle = "1h"', WITH_ALICE)).toEqual(WARN('anyone in slack:C0CF123 and slack:C0CF456'))
     })
     test('a github: place, for anyone', () => {
       const t = `${BASE}\n[connectors.github]\nrepos = ["acme/widget"]\n[specialists.ops]\nworkdir = "~/agents/ops"\nreachable_by = ["role:anyone"]\n[[rules]]\nplace = "github:acme/widget"\ntarget = "specialist:ops"\n`
@@ -327,19 +329,19 @@ describe('the warning for an operator-access specialist someone else can talk to
       const alone = t.replace('reachable_by = ["role:anyone"]', 'reachable_by = []')
       expect(ok(alone).warnings.filter(w => w.includes("the operator's account"))).toEqual([])
     })
-    test('a bots = true place: other bots talk to it whatever allow says', () => {
-      expect(warnings('[places."slack:dm"]\nbots = true', 'listens = ["slack:dm"]\nreachable_by = []')).toEqual(WARN('any other bot in slack:dm'))
+    test('a bots = true place: other bots talk to it whatever reachable_by says', () => {
+      expect(warnings('[places."slack:dm"]\nbots = true\n' + heard("slack:dm"), 'reachable_by = []')).toEqual(WARN('any other bot in slack:dm'))
     })
   })
 
   describe('who can only read its replies', () => {
     test('is not enough to warn: only the operator can talk to it', () => {
-      expect(warnings('', 'listens = ["slack:C0CF123", "github:acme/widget"]\nreachable_by = []\nsessions = "per-conversation"\nidle = "1h"').length).toBe(0)
+      expect(warnings('' + heard("slack:C0CF123", "github:acme/widget"), 'reachable_by = []\nsessions = "per-conversation"\nidle = "1h"').length).toBe(0)
     })
   })
 
   test('restricted = true has nothing to warn about', () => {
-    expect(warnings('', 'restricted = true\nlistens = ["slack:C0CF123"]\nreachable_by = ["role:anyone"]')).toEqual([])
+    expect(warnings('' + heard("slack:C0CF123"), 'restricted = true\nreachable_by = ["role:anyone"]')).toEqual([])
   })
 })
 
@@ -350,7 +352,7 @@ import { join } from 'path'
 import { addFragment } from '../add.js'
 
 describe('hydra config add refuses what only a hand edit sets', () => {
-  const LIVE = `operator = "op"\n[people.op]\naddresses = ["slack:U0OP"]\n[mcp.datadog]\ncommand = "bun"\ntools = ["a"]\n`
+  const LIVE = `operator = "op"\n[people.op]\naddresses = ["slack:U0OP"]\n[mcp_servers.datadog]\ncommand = "bun"\ntools = ["a"]\n`
   const run = (fragment: string) => {
     const dir = mkdtempSync(join(tmpdir(), 'access-add-'))
     try {
@@ -365,8 +367,8 @@ describe('hydra config add refuses what only a hand edit sets', () => {
     expect(!r.ok && r.error).toContain(`[specialists.x] ${line.split(' ')[0]}`)
     expect(after).toBe(LIVE)
   })
-  test('an [mcp.*] table is refused: a fragment cannot declare a server or list one', () => {
-    const { r, after } = run(`[mcp.evil]\ncommand = "bun"\ntools = ["a"]\n[specialists.x]\nworkdir = "~/x"\n`)
+  test('an [mcp_servers.*] table is refused: a fragment cannot declare a server or list one', () => {
+    const { r, after } = run(`[mcp_servers.evil]\ncommand = "bun"\ntools = ["a"]\n[specialists.x]\nworkdir = "~/x"\n`)
     expect(r.ok).toBe(false)
     expect(!r.ok && r.error).toContain('sets mcp')
     expect(after).toBe(LIVE)

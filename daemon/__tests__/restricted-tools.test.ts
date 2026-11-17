@@ -15,7 +15,7 @@ const ALL: string[] = UNIVERSAL_TOOLS.map(t => t.name)
 const namesOf = (id: string): string[] => getToolsForSession(id).map(t => t.name).sort()
 const KEPT = ['reply', 'react', 'edit_message', 'delete_message', 'fetch_messages', 'download_attachment', 'set_description', 'send_to_thread']
 /** Advertised to a specialist with no sends_to: send_to_thread is held back (the gate refuses it either way). */
-const NO_TALKS = KEPT.filter(n => n !== 'send_to_thread')
+const NO_SENDS = KEPT.filter(n => n !== 'send_to_thread')
 const REMOVED = ['spawn_session', 'kill_session', 'peek_session', 'list_sessions', 'handoff', 'bind_conversation', 'watch_pr', 'ask_predecessor']
 
 const mk = (id: string, extra: Record<string, unknown> = {}) => registry.set(id, {
@@ -30,7 +30,7 @@ describe('the surface of a restricted session', () => {
   test('is exactly the kept tools, advertised and enforced, over every tool the daemon defines', () => {
     const id = restricted()
     expect(ALL.filter(n => isToolAllowed(id, n)).sort()).toEqual([...KEPT].sort())
-    expect(namesOf(id)).toEqual([...NO_TALKS].sort())
+    expect(namesOf(id)).toEqual([...NO_SENDS].sort())
     expect([...BASE_TOOLS.scoped].map(String).sort()).toEqual([...KEPT].sort())
   })
   test.each(REMOVED)('%s is refused at isToolAllowed and at executeTool', async tool => {
@@ -61,7 +61,7 @@ describe('an unknown or unregistered caller is never handed thread_owner tools w
   test('a bridge that declared restricted, with no registry record, gets the restricted surface', () => {
     noteDeclaredSessionType('ghost-restricted', 'scoped')
     expect(ALL.filter(n => isToolAllowed('ghost-restricted', n)).sort()).toEqual([...KEPT].sort())
-    expect(namesOf('ghost-restricted')).toEqual([...NO_TALKS].sort())
+    expect(namesOf('ghost-restricted')).toEqual([...NO_SENDS].sort())
     for (const tool of REMOVED) expect(isToolAllowed('ghost-restricted', tool)).toBe(false)
   })
   test('a record that says restricted wins over a bridge that declares nothing', () => {

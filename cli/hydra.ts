@@ -70,7 +70,6 @@ Session management:
 Deliver (whisper channel — message to session context, not thread):
   hydra deliver --to <main|specialist:name|thread:id> --message "..." [--revive]
                                        the target says its kind: main, specialist:<name> (declared), thread:<all-digit id>.
-                                       A bare name or id still works (a declared specialist, then a thread id);
                                        anything else is exit 8 (no such specialist). A specialist always revives.
   hydra deliver --session <name> --message "..."
   hydra deliver --thread <id> --message "..."
@@ -593,8 +592,6 @@ async function main(): Promise<void> {
 
     case 'route': {
       const flags = routeFlags(filtered)
-      if (!flags.ok) { console.error(`error: ${flags.error}`); process.exit(1) }
-      for (const n of flags.notes) console.error(`note: ${n}`)
       if (!flags.params.person || !flags.params.place) {
         console.error(`error: ${ROUTE_USAGE}`)
         process.exit(1)

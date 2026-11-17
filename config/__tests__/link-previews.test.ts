@@ -24,10 +24,10 @@ const errors = (text: string) => {
   if (r.ok) throw new Error('expected a refusal')
   return r.errors.map(i => `${i.path}: ${i.message}`)
 }
-const specialist = (restricted: string, allow: string, places = '') => `
+const specialist = (restricted: string, reachableBy: string, places = '') => `
 [specialists.ops]
 workdir = "~/agents/ops"
-reachable_by = [${allow}]
+reachable_by = [${reachableBy}]
 restricted = ${restricted}
 ${places}
 [[rules]]
@@ -54,21 +54,21 @@ describe('link_previews', () => {
 describe('the load warning', () => {
   const warn = (w: string[]) => w.filter(x => x.includes('link_previews'))
   test('a confined specialist anyone can talk to, on a place with previews on, warns and names the place and the fix', () => {
-    const { warnings } = ok(specialist('true', '"anyone"'))
+    const { warnings } = ok(specialist('true', '"role:anyone"'))
     expect(warn(warnings)).toEqual(['specialists.ops: anyone can reach it in slack:#ops, where a link in its answer unfurls a preview that can show readers content they could not open themselves; set link_previews = false in [places."slack:#ops"]'])
   })
   test('the same place with previews off does not warn', () => {
-    expect(warn(ok(specialist('true', '"anyone"', '[places."slack:#ops"]\nlink_previews = false\n')).warnings)).toEqual([])
+    expect(warn(ok(specialist('true', '"role:anyone"', '[places."slack:#ops"]\nlink_previews = false\n')).warnings)).toEqual([])
   })
   test('a place declared for other options, previews still on, warns', () => {
-    expect(warn(ok(specialist('true', '"anyone"', '[places."slack:#ops"]\nmessages = "all"\n')).warnings)).toHaveLength(1)
+    expect(warn(ok(specialist('true', '"role:anyone"', '[places."slack:#ops"]\nmessages = "all"\n')).warnings)).toHaveLength(1)
   })
-  test('allow without anyone does not warn', () => {
-    expect(warn(ok(specialist('true', '"people"')).warnings)).toEqual([])
+  test('reachable_by without anyone does not warn', () => {
+    expect(warn(ok(specialist('true', '"role:people"')).warnings)).toEqual([])
     expect(warn(ok(specialist('true', '')).warnings)).toEqual([])
   })
   test('an operator-access specialist is not this warning (it has its own)', () => {
-    expect(warn(ok(specialist('false', '"anyone"')).warnings)).toEqual([])
+    expect(warn(ok(specialist('false', '"role:anyone"')).warnings)).toEqual([])
   })
   test('one warning lists each place that still has previews on', () => {
     const t = `

@@ -23,11 +23,10 @@ describe('hydra config check', () => {
       .toBe('$d/hydra.toml: loads, with 1 warning\nhydra.toml operator: op has no discord: address, so on discord nobody passes admin checks or reaches main by DM\n')
     expect(check(undefined).out).toBe('$d/hydra.toml: none (the old files still apply)\n')
   })
-  test('prints where each specialist is heard, read off the rules; an old `listens` is warned and read as rules', () => {
-    const base = 'operator = "op"\n[people.op]\naddresses = ["discord:100000000000000001"]\n[specialists.ops]\nworkdir = "/tmp"\n[specialists.crm]\nworkdir = "/tmp"\nlistens = ["discord:100000000000000002"]\n[[rules]]\nplace = "discord:100000000000000003"\ntarget = "specialist:ops"\n'
+  test('prints where each specialist is heard, read off the rules', () => {
+    const base = 'operator = "op"\n[people.op]\naddresses = ["discord:100000000000000001"]\n[specialists.ops]\nworkdir = "/tmp"\n[specialists.crm]\nworkdir = "/tmp"\n[[rules]]\nplace = "discord:100000000000000002"\ntarget = "specialist:crm"\n[[rules]]\nplace = "discord:100000000000000003"\ntarget = "specialist:ops"\n'
     const r = check(`${base}[gateways.discord]\nbot_token_env = "DISCORD_BOT_TOKEN"\n`)
     expect(r.code).toBe(0)
-    expect(r.out).toContain('hydra.toml specialists.crm.listens: `listens` is now `[[rules]]`: add a `[[rules]]` table for each place, with `place = "x"` and `target = "specialist:crm"` on separate lines (places: discord:100000000000000002)')
     expect(r.out).toContain('ops answers: discord:100000000000000003\ncrm answers: discord:100000000000000002\n')
   })
   test('shows the model main starts with when [main] model sets it', () => {
@@ -38,12 +37,11 @@ describe('hydra config check', () => {
     })
     expect(check(`${base}[main]\nmodel = "claude-opsu"\n`).out).toContain('main model: claude-opsu ([main] model = "claude-opsu"), applies at main\'s next start; not a model hydra knows')
   })
-  test('the old [connectors.discord] key loads, and the warning shows', () => {
+  test('the old [connectors.discord] key is an unknown key; [gateways.discord] loads clean', () => {
     const base = 'operator = "op"\n[people.op]\naddresses = ["discord:100000000000000001"]\n'
-    expect(check(`${base}[connectors.discord]\nbot_token_env = "DISCORD_BOT_TOKEN"\n`)).toEqual({
-      code: 0,
-      out: '$d/hydra.toml: loads, with 1 warning\nhydra.toml connectors.discord: moved to [gateways.discord]; [connectors.discord] still loads and will be removed\n',
-    })
+    const old = check(`${base}[connectors.discord]\nbot_token_env = "DISCORD_BOT_TOKEN"\n`)
+    expect(old.code).toBe(1)
+    expect(old.out).toContain('connectors.discord: unknown key "discord"')
     expect(check(`${base}[gateways.discord]\nbot_token_env = "DISCORD_BOT_TOKEN"\n`)).toEqual({ code: 0, out: '$d/hydra.toml: loads clean\n' })
   })
   test('agrees with the daemon: on slack a connector app naming the gateway\'s tokens does not load, on discord it does', () => {

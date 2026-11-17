@@ -24,7 +24,7 @@ workdir = "~/Documents/ledger-agent-system"
 home = "1551794455227404370"
 sessions = "per-conversation"
 idle = "4d"
-prompt = "💰 Ledger Review. Read the instructions."
+kickoff = "💰 Ledger Review. Read the instructions."
 
 [schedules.ledger-review]
 cron = "0 11 * * FRI"
@@ -51,7 +51,7 @@ const LEDGER = `# ledger-agent-system's hydra fragment
 [specialists.ledger-review]
 workdir = "~/Documents/ledger-agent-system"
 home = "1551794455227404370"
-prompt = "💰 Ledger Review. Read the instructions."
+kickoff = "💰 Ledger Review. Read the instructions."
 sessions = "per-conversation"
 idle = "4d"
 
@@ -98,21 +98,22 @@ const file = () => readFileSync(join(dir, 'hydra.toml'), 'utf8')
 const loaded = () => { const r = loadHydraConfig(file(), env); if (!r.ok) throw new Error('hydra.toml must load'); return r.config }
 
 describe('hydra config add', () => {
-  test('a fragment still written with a schedule\'s old `to`, `prompt` and `cwd` is added as `target`, `message` and `workdir`', () => {
+  test('a fragment written with the old key names is refused by the loader: nothing is written', () => {
     const d = at(LIVE)
-    const r = addFragment(d, env, '[schedules.nightly-books]\ncron = "0 3 * * *"\nto = "main"\nprompt = "p"\ncwd = "/srv/books"\n', '/repo/f.toml')
-    expect(r).toMatchObject({ ok: true, added: ['[schedules.nightly-books]'] })
-    const text = file().slice(file().indexOf('[schedules.nightly-books]'))
-    expect(text).toContain('target = "main"')
-    expect(text).toContain('message = "p"')
-    expect(text).toContain('workdir = "/srv/books"')
-    expect(text).not.toMatch(/^(to|prompt|cwd) = /m)
-    expect(loaded().schedules['nightly-books']).toMatchObject({ target: 'main', message: 'p', workdir: '/srv/books' })
+    const before = file()
+    const old = addFragment(d, env, '[schedules.nightly-books]\ncron = "0 3 * * *"\nto = "main"\nprompt = "p"\ncwd = "/srv/books"\n', '/repo/f.toml')
+    expect(old.ok).toBe(false)
+    expect(!old.ok && old.error).toContain('schedules.nightly-books.to: unknown key "to"')
+    const specialist = addFragment(d, env, '[specialists.books]\nworkdir = "~/Workstreams/Books"\nprompt = "Keep the books."\nlistens = ["slack:dm"]\n', '/repo/f.toml')
+    expect(!specialist.ok && specialist.error).toContain('specialists.books.listens: unknown key "listens"')
+    const rule = addFragment(d, env, '[[rules]]\nat = "slack:dm"\nto = "ledger-review"\n', '/repo/f.toml')
+    expect(!rule.ok && rule.error).toContain('rules[0].at: unknown key "at"')
+    expect(file()).toBe(before)
   })
 
   test('a fragment\'s [[rules]] are appended after the file\'s own, a rule already there is not added twice, and a rule that clashes is refused', () => {
     const d = at(LIVE)
-    const frag = '[[rules]]\nplace = "slack:#help"\ntarget = "specialist:ledger-review"\n[[rules]]\nat = "slack:dm"\nto = "ledger-review"\n'
+    const frag = '[[rules]]\nplace = "slack:#help"\ntarget = "specialist:ledger-review"\n[[rules]]\nplace = "slack:dm"\ntarget = "specialist:ledger-review"\n'
     const first = addFragment(d, env, frag, '/repo/f.toml')
     expect(first).toMatchObject({ ok: true, added: ['[[rules]] place = "slack:#help", target = "specialist:ledger-review"', '[[rules]] place = "slack:dm", target = "specialist:ledger-review"'] })
     expect(file().slice(file().indexOf('[[rules]]'))).toBe('[[rules]]\nplace = "slack:#help"\ntarget = "specialist:ledger-review"\n\n[[rules]]\nplace = "slack:dm"\ntarget = "specialist:ledger-review"\n')
@@ -128,37 +129,8 @@ describe('hydra config add', () => {
     expect(file()).toBe(before)
   })
 
-  test('a rule that would take a place from an old `listens` is refused, not added: nothing is written', () => {
-    const live = `${LIVE}[slack.apps.default]\nbot_token_env = "B"\n[specialists.crm]\nworkdir = "~/crm"\nlistens = ["slack:#help"]\n`
-    const d = at(live)
-    const before = file()
-    const r = addFragment(d, env, '[[rules]]\nplace = "slack:#help"\ntarget = "main"\n', '/repo/h.toml')
-    expect(r.ok).toBe(false)
-    expect(!r.ok && r.error).toContain('would take a place from what hydra.toml already says')
-    expect(!r.ok && r.error).toContain('specialists.crm.listens[0]: never matches: rules[0] already takes every message at slack:#help')
-    expect(file()).toBe(before)
-    // a rule narrowed to a person does not take it
-    expect(addFragment(d, env, '[[rules]]\nplace = "slack:#help"\nperson = "person:operator"\ntarget = "main"\n', '/repo/h.toml')).toMatchObject({ ok: true })
-  })
-
-  test('a fragment still written with a specialist\'s old keys is added under the new ones', () => {
-    const d = at(LIVE)
-    const r = addFragment(d, env, '[specialists.books]\nworkdir = "~/Workstreams/Books"\nprompt = "Keep the books."\nsessions = "per-conversation"\nmax = 3\nwas = ["ledger"]\nlistens = ["slack:dm"]\n', '/repo/f.toml')
-    // The old `listens` is added as the rule it means: hydra.toml never gets `listens`.
-    expect(r).toMatchObject({ ok: true, added: ['[specialists.books]', '[[rules]] place = "slack:dm", target = "specialist:books"'] })
-    const text = file()
-    expect(text).not.toContain('listens')
-    expect(text.slice(text.indexOf('[[rules]]'))).toBe('[[rules]]\nplace = "slack:dm"\ntarget = "specialist:books"\n')
-    expect(placesAnsweredBy(loaded(), 'books')).toEqual(['slack:dm'])
-    expect(text).toContain('kickoff = "Keep the books."')
-    expect(text).toContain('max_sessions = 3')
-    expect(text).toContain('renamed_from = ["ledger"]')
-    expect(text.slice(text.indexOf('[specialists.books]'))).not.toMatch(/^(prompt|max|was) = /m)
-    expect(loaded().specialists.books).toMatchObject({ kickoff: 'Keep the books.', maxSessions: 3, renamedFrom: ['ledger'] })
-  })
-
-  test('a fragment may not set restricted, nor its old name access', () => {
-    for (const key of ['restricted = true', 'access = "workdir"']) {
+  test('a fragment may not set restricted', () => {
+    for (const key of ['restricted = true']) {
       const r = planAddFragment(at(LIVE), env, `[specialists.books]\nworkdir = "~/Workstreams/Books"\n${key}\n`, '/repo/f.toml')
       expect(r).toMatchObject({ ok: false, error: expect.stringContaining(`[specialists.books] ${key.split(' ')[0]}: restricted, tools, mcp_servers and sends_to say`) })
     }

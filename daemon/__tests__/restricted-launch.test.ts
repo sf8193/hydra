@@ -44,9 +44,9 @@ const configWith = (specialists: Specialist[]): HydraConfig => ({
   specialists: Object.fromEntries(specialists.map(s => [s.id, s])),
   mcpServers: { datadog: { name: 'datadog', command: '/usr/local/bin/datadog-mcp', tokenEnv: ['DD_API_KEY'], tools: ['search_logs'] } },
 })
-const OPS = spec('ops', { restricted: true, tools: ['Read', 'Grep'], mcpServers: ['datadog'] })
+const OPS = spec('ops', { restricted: true, tools: ['Read', 'Grep'], mcpServerNames: ['datadog'] })
 const DESK = spec('desk')
-const CRM = spec('crm', { restricted: true, tools: ['Read', 'Grep', 'Glob'], mcpServers: [], sessions: 'per-conversation' })
+const CRM = spec('crm', { restricted: true, tools: ['Read', 'Grep', 'Glob'], mcpServerNames: [], sessions: 'per-conversation' })
 const use = (...s: Specialist[]) => _setHydraConfigForTesting(configWith(s))
 
 let fake: FakeTmux
@@ -295,7 +295,7 @@ describe('a policy change starts fresh', () => {
   })
   test('a specialist flipped from workdir back to operator is not resumed either', async () => {
     seedDead({ policy: opsPolicy() })
-    use({ ...OPS, restricted: false, tools: undefined, mcpServers: undefined })
+    use({ ...OPS, restricted: false, tools: undefined, mcpServerNames: undefined })
     expect(await revive()).toMatchObject({ ok: true, method: 'respawned' })
     expect(launches[0].policy?.access === 'workdir').toBe(false)
   })
@@ -662,7 +662,7 @@ describe('a launch path that passes nothing for a specialist session: restricted
     try {
       await expect(bare()).rejects.toThrow(PolicyRefusal)
       expect(launches).toHaveLength(0)
-      expect(told.join('\n')).toMatch(/\[mcp\.datadog\] needs DD_API_KEY, which is not set: add DD_API_KEY=<value> to .*\.env, then restart the daemon/)
+      expect(told.join('\n')).toMatch(/\[mcp_servers\.datadog\] needs DD_API_KEY, which is not set: add DD_API_KEY=<value> to .*\.env, then restart the daemon/)
     } finally { process.env.DD_API_KEY = saved }
   })
   test('a refusal for a stored policy that differs says what differs, and the one remedy', async () => {

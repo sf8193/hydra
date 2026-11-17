@@ -155,7 +155,7 @@ describe('diagnosing a refused token', () => {
   })
 
   test('startup names the scopes each enabled option needs, and warns for each one the token lacks', async () => {
-    const t = setup({ toml: oneListener('#food', 'helper', '["anyone"]', `[places."slack:#food"]\nfiles = true\nack = "eyes"\n`), scopes: ['channels:history', 'users:read', 'im:history'] })
+    const t = setup({ toml: oneListener('#food', 'helper', '["role:anyone"]', `[places."slack:#food"]\nfiles = true\nack = "eyes"\n`), scopes: ['channels:history', 'users:read', 'im:history'] })
     await t.listener.start()
     const log = t.logs.join()
     expect(log).toContain('enabled options need: channels → channels:history or groups:history; channel names (slack:#name) → channels:read or groups:read; sender names → users:read; dms → im:history; catching up DMs opened while disconnected → im:read; files → files:read; ack and 🚫 reactions → reactions:write; replies → chat:write')
@@ -643,7 +643,7 @@ describe('the scope check alerts for what was declared, once per episode', () =>
   })
 
   test('the same DM scopes, when a specialist names slack:dm, are declared: they alert', async () => {
-    const t = setup({ scopes: without('im:history', 'im:read'), toml: alsoHeard(oneListener(CH, "helper", "[\"anyone\"]"), "helper", "slack:dm") })
+    const t = setup({ scopes: without('im:history', 'im:read'), toml: alsoHeard(oneListener(CH, "helper", "[\"role:anyone\"]"), "helper", "slack:dm") })
     await t.listener.start()
     expect(t.alerts).toHaveLength(1)
     expect(t.alerts[0]).toContain('im:history (dms)')
@@ -672,7 +672,7 @@ describe('the scope check alerts for what was declared, once per episode', () =>
 
 describe("the operator's own app hears DMs and group DMs", () => {
   const USER = (toml: string) => toml.replace('socket_token_env = "SLOPBOT_SLACK_APP_TOKEN"', 'socket_token_env = "SLOPBOT_SLACK_APP_TOKEN"\noperator_token_env = "HYDRA_SLACK_USER_TOKEN"')
-  const CONF = (rules: string) => USER(oneListener(CH, 'helper', '["anyone"]', `[people.alice]\naddresses = ["slack:UALICE"]\n[specialists.desk]\nworkdir = "/w/desk"\nreachable_by = ["role:anyone"]\n${rules}`))
+  const CONF = (rules: string) => USER(oneListener(CH, 'helper', '["role:anyone"]', `[people.alice]\naddresses = ["slack:UALICE"]\n[specialists.desk]\nworkdir = "/w/desk"\nreachable_by = ["role:anyone"]\n${rules}`))
   const BOT_LIST = [{ channel: 'D0BOT0001', user: 'UOP' }]
   const USER_LIST = [{ channel: 'D0BOT0001', user: BOT }, { channel: 'D0ALICE01', user: 'UALICE' }, { channel: 'D0NOBODY1', user: 'UNOBODY' }]
   const reads = (t: ReturnType<typeof setup>, name: string) => t.apps[0].apiCalls.filter(c => c === name).length

@@ -484,12 +484,12 @@ test('explain shows the app, who owns the message, and a non-owner standing down
 describe('DM places: one name, one meaning', () => {
   const DMS = load(`
 operator = "op"
-[connectors.slack]
+[slack.apps.default]
 bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"
 [people.op]
-ids = ["slack:U0OP"]
+addresses = ["slack:U0OP"]
 [people.alice]
-ids = ["slack:U0ALICE"]
+addresses = ["slack:U0ALICE"]
 [specialists.assistant]
 workdir = "/a/asst"
 reachable_by = ["role:anyone"]

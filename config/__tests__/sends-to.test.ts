@@ -50,7 +50,7 @@ describe('sends_to', () => {
     expect(errorsOf(text('[defaults.specialist]\nsends_to = ["deep"]\nworkdir = "~/agents/{id}"\n', deep())).some(e => e.startsWith("defaults.specialist.sends_to: can't be a default"))).toBe(true)
   })
   test('it is refused in a hydra config add fragment, and nothing is written', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'talks-add-'))
+    const dir = mkdtempSync(join(tmpdir(), 'sends-add-'))
     try {
       const live = `operator = "op"\n[people.op]\naddresses = ["slack:U0OP"]\n`
       writeFileSync(join(dir, 'hydra.toml'), live)
@@ -91,7 +91,7 @@ describe('sends_to', () => {
 
 describe('a workdir inside a workstream loads, through the real loader on a real disk', () => {
   // Generic names only: <home>/Workstreams/ops/runbooks, as a real operator might lay a workstream out.
-  const home = realpathSync(mkdtempSync(join(tmpdir(), 'talks-home-')))
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'sends-home-')))
   const stateDir = join(home, 'state')
   const runbooks = join(home, 'Workstreams', 'ops', 'runbooks')
   mkdirSync(runbooks, { recursive: true })

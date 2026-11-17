@@ -107,6 +107,6 @@ describe('bornPolicy from a config that skipped the loader', () => {
     expect(bornPolicy('ops', config({}))!.tools).toEqual(['Read', 'Grep', 'Glob'])
   })
   test('a listed server nobody declared refuses, with the remedy', () => {
-    expect(() => bornPolicy('ops', config({ mcpServers: ['nope'] }), 'ops-sess')).toThrow(/lists \[mcp\.nope\].*Run `hydra kill ops-sess`/s)
+    expect(() => bornPolicy('ops', config({ mcpServerNames: ['nope'] }), 'ops-sess')).toThrow(/lists \[mcp_servers\.nope\].*Run `hydra kill ops-sess`/s)
   })
 })

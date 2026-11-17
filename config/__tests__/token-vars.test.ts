@@ -8,11 +8,11 @@ describe('slackEnvNames', () => {
 })
 
 describe('scanSlackEnvNames', () => {
-  test('finds the token variables of [connectors.slack] (old form) and every [slack.apps.<id>], and not Discord\'s', () => {
+  test('finds the token variables of every [slack.apps.<id>], and not Discord\'s', () => {
     expect(scanSlackEnvNames(`
 [gateways.discord]
 bot_token_env = "DISCORD_BOT_TOKEN"
-[connectors.slack]
+[slack.apps.default]
 bot_token_env = "A_BOT"
 socket_token_env = "A_APP"
 [slack.apps.sales]
@@ -34,9 +34,8 @@ socket_token_env = "O_APP"
 bot_token_env = "NOT_A_TOKEN_TABLE"
 `).sort()).toEqual(['O_APP', 'S_BOT'])
   })
-  test('the old key names are scanned too, so a file not yet migrated still keeps its variables', () => {
-    expect(scanSlackEnvNames('[connectors.slack]\nbot_token_env = "A_BOT"\napp_token_env = "A_APP"\nuser_token_env = "A_USER"\n').sort()).toEqual(['A_APP', 'A_BOT', 'A_USER'])
-    expect(scanSlackEnvNames('[slack.apps.a]\nbot_token_env = "B"\napp_token_env = "C"\nbroken = = =\n').sort()).toEqual(['B', 'C'])
+  test('the old key names and [connectors.slack] are not scanned: they do not load either', () => {
+    expect(scanSlackEnvNames('[connectors.slack]\nbot_token_env = "A_BOT"\n[slack.apps.a]\nbot_token_env = "B"\napp_token_env = "C"\nuser_token_env = "D"\n')).toEqual(['B'])
   })
   test('leaves out what is not a variable name, and non-strings', () => {
     expect(scanSlackEnvNames('[slack.apps.a]\nbot_token_env = "lower"\nsocket_token_env = 5\noperator_token_env = "OK_1"\n')).toEqual(['OK_1'])

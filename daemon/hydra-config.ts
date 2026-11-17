@@ -99,7 +99,7 @@ export function startHydraConfig(opts: { alert?: Send; env?: LoadEnv; intervalMs
       const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
       process.stderr.write(`daemon: hydra.toml loaded: ${config.operator ? `operator ${config.operator}` : 'no operator'}, ${count(Object.keys(config.people).length, 'person', 'people')}, ${count(Object.keys(config.specialists).length, 'specialist', 'specialists')}, ${count(Object.keys(config.schedules).length, 'schedule', 'schedules')}\n`)
       // What each specialist's session runs under, so the operator reads it in the log without opening the file.
-      for (const s of Object.values(config.specialists)) process.stderr.write(`daemon: hydra.toml: specialist ${s.id} restricted = ${s.restricted}${s.restricted ? ` (tools ${(s.tools ?? []).join(',') || 'none'}; mcp_servers ${(s.mcpServers ?? []).join(',') || 'none'})` : ''}\n`)
+      for (const s of Object.values(config.specialists)) process.stderr.write(`daemon: hydra.toml: specialist ${s.id} restricted = ${s.restricted}${s.restricted ? ` (tools ${(s.tools ?? []).join(',') || 'none'}; mcp_servers ${(s.mcpServerNames ?? []).join(',') || 'none'})` : ''}\n`)
       if (warnings.length) process.stderr.write(`daemon: hydra.toml loaded with warnings:\n${formatIssues(warnings)}\n`)
       notify(config)
     },

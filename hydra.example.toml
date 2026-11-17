@@ -30,7 +30,6 @@ poll = "3m"                           # how often it looks (default 3m)
 # --- slack: one table per Slack app, [slack.apps.<id>]. Tokens stay in .env. `hydra slack manifest [<app>]` prints an app's manifest. ---
 # Every app declared connects, each with its own tokens; an app whose tokens are not set is skipped, and the daemon says which key. A message leaves through the app that heard it.
 # Each app is health-checked and alerted on its own (`hydra health` has a line per app): its scopes are checked against what it does, and its alerts go to the specialists it can reach (pinned to it, or unpinned where none is pinned to it), else main.
-# (The old [connectors.slack] still loads as the app named `default`, with a warning; its `app_name` and `app_description` are `display_name` and `description`.)
 # Each token needs its own variable, one the daemon alone needs (not PATH, HOME, HYDRA_*, ...).
 
 [slack.apps.default]
@@ -102,7 +101,7 @@ pinned_to = ["app:sales"]             # pinned, because the `sales` app is pinne
 reachable_by = ["role:staff"]
 restricted = true
 tools = ["Read", "Grep", "Glob"]      # built-in tools; these three are the default and all it may list
-mcp_servers = ["datadog"]             # names from [mcp.*] below
+mcp_servers = ["datadog"]             # names from [mcp_servers.*] below
 sends_to = ["triage"]                  # the specialists it may send to with send_to_thread (shared-session specialists, never main); refused unless restricted = true
 
 # What helpdesk hands a question to: restricted too, with a folder of its own. No rule sends a place to it; only helpdesk's sends_to reaches it.
@@ -123,9 +122,9 @@ env_file = ".env.reviewer"            # extra environment for its sessions; rela
 [restricted]
 off_limits = ["~/notes"]               # absolute paths, or starting with ~
 
-# --- mcp: servers a restricted specialist may list in `mcp_servers`. Per-operator: only hydra.toml declares one ---
+# --- mcp_servers: servers a restricted specialist may list in `mcp_servers`. Per-operator: only hydra.toml declares one ---
 
-[mcp.datadog]
+[mcp_servers.datadog]
 command = "/usr/local/bin/datadog-mcp"   # required: a pinned binary or versioned package, not `npx -y` latest
 token_env = ["DD_API_KEY"]               # names in the state dir's .env; only these reach the server (never GH_TOKEN or the SSH agent)
 tools = ["search_logs", "get_monitor"]   # the tools of it a specialist may call (default: none, which a specialist cannot list)

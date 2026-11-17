@@ -31,7 +31,7 @@ describe('docs/slack.md: the ops specialist example', () => {
   test('is the confined specialist, its server, its place, and the specialist it hands off to', () => {
     const r = loadHydraConfig(text, env)
     if (!r.ok) throw new Error(formatIssues(r.errors))
-    expect(r.config.specialists.ops).toMatchObject({ restricted: true, tools: ['Read', 'Grep', 'Glob'], mcpServers: ['datadog'], reachableBy: ['staff'], sendsTo: ['ops-deep'], workdir: '/home/op/specialists/ops' })
+    expect(r.config.specialists.ops).toMatchObject({ restricted: true, tools: ['Read', 'Grep', 'Glob'], mcpServerNames: ['datadog'], reachableBy: ['staff'], sendsTo: ['ops-deep'], workdir: '/home/op/specialists/ops' })
     expect(r.config.specialists['ops-deep']).toMatchObject({ restricted: true, reachableBy: [], sendsTo: ['ops'], workdir: '/home/op/specialists/ops-deep' })
     expect(placesAnsweredBy(r.config, 'ops')).toEqual(['slack:#ops'])
     expect(placesAnsweredBy(r.config, 'ops-deep')).toEqual([])

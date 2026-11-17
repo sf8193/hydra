@@ -1,20 +1,15 @@
-// A target says its kind: `main`, `specialist:<name>`, `thread:<id>`. A bare specialist name still loads, as the same target, with a warning that
-// names both spellings; the value must fit its kind; a thread is not a rule's or a schedule's target (only a delivery or a binding takes one).
-import { isValueWarning, unkinded } from './value-kinds.js'
+// A target says its kind: `main`, `specialist:<name>`, `thread:<id>`. A bare name is an error that names the forms; the value must fit its kind;
+// a thread is not a rule's or a schedule's target (only a delivery or a binding takes one).
 import { describe, test, expect } from 'bun:test'
-import { readFileSync } from 'fs'
 import { join } from 'path'
 import { loadHydraConfig } from '../load.js'
 import { planAddFragment } from '../add.js'
 import { migrateJobs } from '../migrate-jobs.js'
 import type { ConfigIssue } from '../types.js'
 import { testLoadEnv } from './load-env.js'
-import { listensAsRules, isListensWarning } from './legacy-listens.js'
 
 const env = testLoadEnv({ home: '/home/op', isDir: p => p.startsWith('/home/op') })
-const text = (f: string) => readFileSync(join(import.meta.dir, 'fixtures', f), 'utf8')
 const line = (i: ConfigIssue) => `${i.path}: ${i.message}`
-const kindWarning = (w: string) => w.includes('a target says its kind')
 
 const BASE = `
 operator = "op"
@@ -31,41 +26,9 @@ const ok = (toml: string) => { const r = load(toml); if (!r.ok) throw new Error(
 const rule = (target: string) => `${BASE}[[rules]]\nplace = "slack:#help"\ntarget = "${target}"\n`
 const sched = (target: string) => `${BASE}[schedules.s]\ncron = "@daily"\ntarget = "${target}"\nmessage = "go"\n`
 
-describe('a full config of bare targets', () => {
-  // bare-targets.loaded.json is what the loader gave for bare-targets.toml on origin/main, before targets said their kind.
-  // The change adds warnings and nothing else: the loaded config and every other warning are as they were.
-  const before = JSON.parse(text('bare-targets.loaded.json')) as { config: unknown; warnings: ConfigIssue[] }
-
-  test('loads to the same config, with only the bare-name warnings added', () => {
-    const r = ok(text('bare-targets.toml'))
-    expect(r.config).toEqual(listensAsRules(before.config as any) as any)
-    // An explicit rule now counts as where a specialist is heard, so crm (unpinned; `sales` is pinned by deals) is told it lost `sales` at its rule's place: the one added warning.
-    const lost = 'specialists.crm: crm is unpinned, and app:sales is pinned by deals, so crm no longer hears app:sales on slack:#sales-help'
-    expect(r.warnings.filter(w => !kindWarning(w) && !isValueWarning(w) && !isListensWarning(w) && w !== lost).map(unkinded)).toEqual(before.warnings.map(line).map(unkinded))
-    expect(r.warnings).toContain(lost)
-    // Two rules and one schedule name a specialist bare; `main` (twice) is never bare.
-    expect(r.warnings.filter(kindWarning).sort()).toEqual([
-      'rules[0].target: write "specialist:crm" instead of "crm": a target says its kind; the bare name still works and will be removed',
-      'rules[1].target: write "specialist:deals" instead of "deals": a target says its kind; the bare name still works and will be removed',
-      'schedules.nightly.target: write "specialist:ops" instead of "ops": a target says its kind; the bare name still works and will be removed',
-    ])
-  })
-
-  test('the same file with every target prefixed loads to the identical config with no warning added', () => {
-    const prefixed = text('bare-targets.toml').replace(/^target = "(ops|deals|crm)"/gm, 'target = "specialist:$1"')
-    const [a, b] = [ok(text('bare-targets.toml')), ok(prefixed)]
-    expect(b.config).toEqual(a.config)
-    expect(b.warnings.filter(kindWarning)).toEqual([])
-    expect(b.warnings).toEqual(a.warnings.filter(w => !kindWarning(w)))
-  })
-})
-
 describe('each kind', () => {
   test('main is one spelling and silent', () => {
-    for (const toml of [rule('main'), sched('main')]) {
-      const r = ok(toml)
-      expect(r.warnings.filter(kindWarning)).toEqual([])
-    }
+    for (const toml of [rule('main'), sched('main')]) ok(toml)
     expect(ok(rule('main')).config.rules[0].target).toBe('main')
   })
 
@@ -73,19 +36,17 @@ describe('each kind', () => {
     const [r, s] = [ok(rule('specialist:ops')), ok(sched('specialist:ops'))]
     expect(r.config.rules[0].target).toBe('ops')
     expect(s.config.schedules.s.target).toBe('ops')
-    expect([...r.warnings, ...s.warnings].filter(kindWarning)).toEqual([])
+    expect([...r.warnings, ...s.warnings].filter(w => w.includes('kind'))).toEqual([])
   })
 
-  test('a bare declared name warns, naming both spellings, and is the same target as the prefixed one', () => {
-    for (const [bare, prefixed, path] of [[rule('ops'), rule('specialist:ops'), 'rules[0].target'], [sched('ops'), sched('specialist:ops'), 'schedules.s.target']]) {
-      const [a, b] = [ok(bare), ok(prefixed)]
-      expect(a.config).toEqual(b.config)
-      expect(a.warnings.filter(kindWarning)).toEqual([`${path}: write "specialist:ops" instead of "ops": a target says its kind; the bare name still works and will be removed`])
-    }
+  test('a bare name is refused, the old spelling of the prefixed one', () => {
+    const forms = 'does not say its kind: a target is main, specialist:<name> or thread:<id>'
+    expect(load(rule('ops')).errors).toEqual([`rules[0].target: "ops" ${forms}`])
+    expect(load(sched('ops')).errors).toEqual([`schedules.s.target: "ops" ${forms}`])
   })
 
   test('a thread is not a rule\'s or a schedule\'s target: said bare or prefixed, the message says what to do', () => {
-    for (const v of ['thread:123', '123']) {
+    for (const v of ['thread:123']) {
       expect(load(rule(v)).errors).toEqual([`rules[0].target: "${v}" is a thread, and a rule's target is main or a declared specialist: declare a specialist for that thread, and write specialist:<name>`])
       expect(load(sched(v)).errors).toEqual([`schedules.s.target: "${v}" is a thread, and a schedule's target is main or a declared specialist: declare a specialist for that thread, and write specialist:<name>`])
     }
@@ -106,9 +67,8 @@ describe('a value must fit its kind', () => {
     expect(load(sched('specialist:123')).errors).toEqual(['schedules.s.target: "specialist:123": a specialist\'s name needs a letter, and an all-digit value is a thread id; write "thread:123" for the thread'])
   })
 
-  test('a specialist must be declared, prefixed or not', () => {
+  test('a specialist must be declared', () => {
     expect(load(rule('specialist:ghost')).errors).toEqual(['rules[0].target: no specialist "ghost": declare [specialists.ghost], or use main'])
-    expect(load(sched('ghost')).errors).toEqual(['schedules.s.target: no specialist "ghost": declare [specialists.ghost], or use main'])
   })
 })
 
@@ -119,16 +79,13 @@ describe('what writes hydra.toml says the kind', () => {
     expect(m.refusals).toEqual(['c: to = "123" is a thread; declare a specialist for it and send to that'])
   })
 
-  test('hydra config add writes a fragment\'s bare schedule target as specialist:<name>, and leaves main alone', () => {
+  test('hydra config add refuses a fragment whose schedule target is bare', () => {
     const dir = require('fs').mkdtempSync(join(require('os').tmpdir(), 'hydra-target-kinds-'))
     try {
       require('fs').writeFileSync(join(dir, 'hydra.toml'), `${BASE}`)
-      const plan = planAddFragment(dir, env, `[specialists.books]\nworkdir = "/home/op/books"\n[schedules.x]\ncron = "0 3 * * *"\ntarget = "books"\nmessage = "p"\n[schedules.y]\ncron = "0 4 * * *"\ntarget = "main"\nmessage = "p"\n`, '/f')
-      expect(plan).toMatchObject({ ok: true })
-      const t = (plan as any).text as string
-      expect(t).toContain('target = "specialist:books"')
-      expect(t).toContain('target = "main"')
-      expect(t).not.toContain('target = "books"')
+      const plan = planAddFragment(dir, env, `[specialists.books]\nworkdir = "/home/op/books"\n[schedules.x]\ncron = "0 3 * * *"\ntarget = "books"\nmessage = "p"\n`, '/f')
+      expect(plan).toMatchObject({ ok: false })
+      expect((plan as any).error).toContain('schedules.x.target: "books" does not say its kind')
     } finally { require('fs').rmSync(dir, { recursive: true, force: true }) }
   })
 })
