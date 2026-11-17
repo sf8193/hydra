@@ -216,7 +216,7 @@ describe('inbound reactions', () => {
 
     const guarded = cfg('bot-messages', { toml: oneListener(CH, 'helper', '["role:anyone"]', `[guard]\ncommand = "guard"\n${places('bot-messages')}`) })
     const inputs: string[] = []
-    const g = setup(guarded, undefined, async (_g, input) => { inputs.push(input.person ?? 'stranger'); return input.person === null ? { fate: 'drop' } : { fate: 'deliver' } })
+    const g = setup(guarded, undefined, async (_g, input) => { inputs.push(input.person ?? 'stranger'); return input.person === null ? { verdict: 'drop' } : { verdict: 'deliver' } })
     await g.w.flush(); g.sent.length = 0
     expect(g.w.handleReaction(react({ user: 'USTRANGER' }))).toBe('accepted')
     expect(g.w.handleReaction(react({ user: 'UOP', reaction: '+1' }))).toBe('accepted')   // the operator is never judged

@@ -13,7 +13,7 @@ import { ALLOW_UNPROVEN_MACOS, macosGateIssue, sandboxIssues, unquotablePath } f
 import { engineConfinesAccess } from '../shared/engine-capabilities.js'
 import { noSuchApp, pinnersOf, speaksAsOf, whyNotServed } from './pins.js'
 import { SLACK_APP_DEFAULTS } from '../connectors/slack/app.js'
-import { emojiProblem } from '../shared/emoji.js'
+import { emojiProblem, reactionNameProblem } from '../shared/emoji.js'
 import { invalidSpecialistName } from '../shared/specialist-name.js'
 import { bareOf, readTarget, spelled } from '../shared/target-kind.js'
 import { readValue, spelledApp, spelledPerson, spelledRole, whoSpelled } from '../shared/value-kind.js'
@@ -668,6 +668,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (has(places, p)) { error(path, `${p} is already set: places compare without case on GitHub`); continue }
     unknownKeys(t, ['ack', 'files', 'messages', 'bots', 'reactions', 'default_app', 'link_previews'], path)
     const ack = str(t, 'ack', path)
+    const ackWhy = ack === undefined ? undefined : reactionNameProblem(ack)
+    if (ackWhy) error(join2(path, 'ack'), ackWhy)
     // Which app answers an unmentioned message when several apps are in this channel.
     const defaultAppRaw = str(t, 'default_app', path)
     let defaultApp: string | undefined
@@ -680,7 +682,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (namesDmWithOthers(p)) for (const key of ['link_previews', 'messages', 'bots', 'reactions']) if (Object.hasOwn(t, key)) error(`${path}.${key}`, `${key} does not apply to ${p}: only ack and files do. Remove it.`)
     if (p.startsWith('discord:#') && t.link_previews === false) error(`${path}.link_previews`, 'cannot be set on a Discord channel by name: hydra reads a Discord channel by id, so name it discord:<channel id>')
     places[p] = {
-      ...(ack !== undefined && { ack }),
+      ...(ack !== undefined && !ackWhy && { ack }),
       ...(defaultApp !== undefined && { defaultApp }),
       files: bool(t, 'files', path) ?? false,
       messages: oneOf(t, 'messages', path, ['addressed', 'all'] as const) ?? 'addressed',

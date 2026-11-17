@@ -5,7 +5,6 @@
  * Each gateway handles its own connection lifecycle, message normalization,
  * and platform-specific API calls.
  */
-
 export type AttachmentInfo = {
   id: string
   name: string
@@ -120,8 +119,12 @@ export const COUNT_EMOJI = ['2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣
 export const SUPERSCRIPT = ['⁰','¹','²','³','⁴','⁵','⁶','⁷','⁸','⁹']
 export const SUBSCRIPT = ['₀','₁','₂','₃','₄','₅','₆','₇','₈','₉']
 
+/** What a session's thread shows about its life. `respawned_session`: the session runs and has been respawned at least once (the Discord anchor shows the count as a digit). In memory only, recomputed from `respawnCount`: nothing stores it. */
+export const ANCHOR_STATES = ['live', 'crashed', 'killed', 'respawned_session'] as const
+export type AnchorState = typeof ANCHOR_STATES[number]
+
 export type SessionVisualOpts = {
-  state: 'live' | 'killed' | 'crashed' | 'zombie'
+  state: AnchorState
   emoji: string
   sessionName: string
   description?: string

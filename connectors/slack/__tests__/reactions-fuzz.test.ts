@@ -44,7 +44,7 @@ function holder(c: Case) {
   const w = new SlackWatcher({
     now: () => now, file: join(dir, 'w.json'), log: () => {}, config: app => byApp[app ?? 'default'],
     deliver: async () => { sent++; return { ok: true } },
-    guard: async (_g, input) => input.person === null ? { fate: 'drop' } : { fate: 'deliver' },
+    guard: async (_g, input) => input.person === null ? { verdict: 'drop' } : { verdict: 'deliver' },
   })
   if (dm) {
     w.handle({ channel: DM, ts: '5000.000001', user: 'UOP', text: 'hello' })

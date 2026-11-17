@@ -1278,7 +1278,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     initiator: opts?.initiator,
   })
 
-  refreshSessionVisual(threadId!, { state: respawnCount > 0 ? 'zombie' : 'live' })
+  refreshSessionVisual(threadId!, { state: respawnCount > 0 ? 'respawned_session' : 'live' })
 
   const guestNote = isJoin ? '\n_↳ guest agent in thread_' : ''
   void safeSend(threadId!, spawnLine + guestNote).then(ids => {

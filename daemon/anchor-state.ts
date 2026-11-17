@@ -2,11 +2,9 @@ import { gateway, DEFAULT_SESSION_CHANNEL } from './config.js'
 import { registry, sessionEmoji, type SessionInfo } from './sessions.js'
 import { specialistEmoji, specialistOf } from '../specialists/specialists.js'
 import { occupancy } from './session-reachability.js'
-import { COUNT_EMOJI, SUPERSCRIPT, SUBSCRIPT } from '../gateways/gateway.js'
+import { COUNT_EMOJI, SUPERSCRIPT, SUBSCRIPT, ANCHOR_STATES, type AnchorState } from '../gateways/gateway.js'
 
-export type AnchorState = 'live' | 'crashed' | 'killed' | 'zombie'
-
-export { COUNT_EMOJI, SUPERSCRIPT }
+export { COUNT_EMOJI, SUPERSCRIPT, ANCHOR_STATES, type AnchorState }
 
 export function formatRoundBadge(protocol: string, half: 'top' | 'bottom', current: number, total: number): string {
   const inning = half === 'top' ? '▲' : '▼'
@@ -100,7 +98,7 @@ export function refreshSessionVisual(threadId: string, opts?: { state?: AnchorSt
 
   const emoji = emojiOf(info)
   const badge = opts?.badge ?? getActiveProtocolBadge(threadId)
-  const state = opts?.state ?? (occupancy(info) === 'dead' ? 'crashed' : info.respawnCount ? 'zombie' : 'live')
+  const state = opts?.state ?? (occupancy(info) === 'dead' ? 'crashed' : info.respawnCount ? 'respawned_session' : 'live')
   const anchor = gateway.getThreadAnchor(threadId)
 
   void gateway.updateSessionVisual(threadId, {

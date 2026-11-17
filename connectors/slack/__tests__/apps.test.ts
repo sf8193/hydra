@@ -31,7 +31,7 @@ type Sent = { to: string; conversation?: string; key: string; msg: string }
 type Fake = { client?: FakeClient; historyError?: string; scopes?: string[]; handler: (e: RawEvent) => void; stopped: boolean; calls: string[]; history: RawMessage[]; threads: Record<string, RawMessage[]>; members: Set<string>; probes: string[]; probeError?: string }
 
 /** Two real listeners (the app `default` and `sales`) on one watcher, with fake Slack behind each. */
-function setup(toml: string, over: { members?: Record<string, string[]>; probeError?: Record<string, string>; cursors?: Record<string, string>; entries?: object[]; guard?: (to: string) => { fate: 'deliver'; target: string }; seed?: Record<string, { botUserId: string }>; failStart?: Record<string, number>; firstRetryBaseMs?: number; authGate?: Promise<void>; probeGate?: (channel: string) => Promise<void>; membershipWaitMs?: number; expectJoin?: boolean; scopes?: Record<string, string[]>; historyError?: Record<string, string> } = {}) {
+function setup(toml: string, over: { members?: Record<string, string[]>; probeError?: Record<string, string>; cursors?: Record<string, string>; entries?: object[]; guard?: (to: string) => { verdict: 'deliver'; target: string }; seed?: Record<string, { botUserId: string }>; failStart?: Record<string, number>; firstRetryBaseMs?: number; authGate?: Promise<void>; probeGate?: (channel: string) => Promise<void>; membershipWaitMs?: number; expectJoin?: boolean; scopes?: Record<string, string[]>; historyError?: Record<string, string> } = {}) {
   const h = load(toml)
   const dir = mkdtempSync(join(tmpdir(), 'slack-apps-'))
   dirs.push(dir)
@@ -437,7 +437,7 @@ describe('membership', () => {
 describe('a pinned specialist is not reached through another app, even by the guard', () => {
   const guarded = `${sharedChannel(CH, LISTEN_ALL)}[guard]\ncommand = "/bin/true"\n`
   test('a guard that redirects an app’s message to a specialist pinned elsewhere is overruled, once, and the message goes where it was bound', async () => {
-    const t = setup(guarded, { members: BOTH, guard: () => ({ fate: 'deliver', target: 'deals' }) })
+    const t = setup(guarded, { members: BOTH, guard: () => ({ verdict: 'deliver', target: 'deals' }) })
     await t.start()
     t.say({ ts: '1100.000001' })   // untagged: the app `default` answers, to crm
     await t.settle()
@@ -447,7 +447,7 @@ describe('a pinned specialist is not reached through another app, even by the gu
   })
 
   test('through its own app the same redirect is honoured', async () => {
-    const t = setup(guarded, { members: BOTH, guard: () => ({ fate: 'deliver', target: 'deals' }) })
+    const t = setup(guarded, { members: BOTH, guard: () => ({ verdict: 'deliver', target: 'deals' }) })
     await t.start()
     t.say({ ts: '1200.000001', text: `<@${SALES_BOT}> a quote` })
     await t.settle()

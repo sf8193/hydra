@@ -73,7 +73,7 @@ describe("a thread bound to a session's own thread (any session listening)", () 
   })
 
   test("a guard can't send a conversation's message to a session thread: it goes to the binding, alerted", async () => {
-    const s = setup({ toml: oneListener(CH, 'helper', '["role:anyone"]', '[guard]\ncommand = "guard"') }, undefined, undefined, async () => ({ fate: 'deliver', target: SESSION }))
+    const s = setup({ toml: oneListener(CH, 'helper', '["role:anyone"]', '[guard]\ncommand = "guard"') }, undefined, undefined, async () => ({ verdict: 'deliver', target: SESSION }))
     s.w.handle(ev({ ts: '3000.000001', text: mention }))
     await s.w.flush()
     expect(s.sent.map(x => x.specialist)).toEqual(['helper'])
@@ -1321,7 +1321,7 @@ roles = ["finance"]
 `
   const byText = (verdicts: Record<string, GuardVerdict>) => {
     const inputs: GuardInput[] = []
-    const fn: SlackWatchDeps['guard'] = async (_g, input) => { inputs.push(input); return verdicts[input.text ?? ''] ?? verdicts[input.person ?? ''] ?? { fate: 'deliver' } }
+    const fn: SlackWatchDeps['guard'] = async (_g, input) => { inputs.push(input); return verdicts[input.text ?? ''] ?? verdicts[input.person ?? ''] ?? { verdict: 'deliver' } }
     return { fn, inputs }
   }
 
@@ -1347,7 +1347,7 @@ roles = ["finance"]
   })
 
   test('exit 0 delivers, a redirect sends that message elsewhere, and the burst keeps its order per target', async () => {
-    const { fn } = byText({ 'to billing': { fate: 'deliver', target: 'billing' } })
+    const { fn } = byText({ 'to billing': { verdict: 'deliver', target: 'billing' } })
     const s = setup({ toml: GUARDED('include_text = true\n'), coalesceMs: 20 }, undefined, undefined, fn)
     s.w.handle(ev({ ts: '1.000001', text: mention }))
     s.w.handle(ev({ ts: '2.000001', threadTs: '1.000001', text: 'to billing' }))
@@ -1363,7 +1363,7 @@ roles = ["finance"]
   })
 
   test("a redirect does not get around allow: the specialist it names must admit the sender", async () => {
-    const s = setup({ toml: GUARDED() }, undefined, undefined, async () => ({ fate: 'deliver', target: 'finance' }))
+    const s = setup({ toml: GUARDED() }, undefined, undefined, async () => ({ verdict: 'deliver', target: 'finance' }))
     s.w.handle(ev({ ts: '1.000001', text: mention }))
     await s.w.flush()
     expect(s.sent.map(x => x.specialist)).toEqual(['ops'])
@@ -1371,7 +1371,7 @@ roles = ["finance"]
   })
 
   test('exit 10 drops: logged and counted, not owed, not alerted, and a replay is not judged again', async () => {
-    const { fn, inputs } = byText({ alice: { fate: 'drop' } })
+    const { fn, inputs } = byText({ alice: { verdict: 'drop' } })
     const s = setup({ toml: GUARDED() }, undefined, undefined, fn)
     s.w.handle(ev({ ts: '1.000001', text: mention }))
     await s.w.flush()
@@ -1384,14 +1384,14 @@ roles = ["finance"]
   })
 
   test('exit 75 keeps it owed; the replay is judged again and delivered once the guard says yes', async () => {
-    let verdict: GuardVerdict = { fate: 'later' }
+    let verdict: GuardVerdict = { verdict: 'later' }
     const s = setup({ toml: GUARDED() }, undefined, undefined, async () => verdict)
     const ts = `${Math.floor(s.now() / 1000)}.000001`
     s.w.handle(ev({ ts, text: mention }))
     await s.w.flush()
     expect(s.sent).toHaveLength(0)
     expect(s.w.owedHints()).toHaveLength(1)
-    verdict = { fate: 'deliver' }
+    verdict = { verdict: 'deliver' }
     s.w.handle(ev({ ts, text: mention })) // the catch-up replay of what is owed
     await s.w.flush()
     expect(s.sent.map(x => x.specialist)).toEqual(['ops'])
@@ -1399,14 +1399,14 @@ roles = ["finance"]
   })
 
   test('owed_max counts from the first "not now", not from when the message was sent', async () => {
-    let verdict: GuardVerdict = { fate: 'later' }
+    let verdict: GuardVerdict = { verdict: 'later' }
     const s = setup({ toml: GUARDED('owed_max = "1h"\n') }, undefined, undefined, async () => verdict)
     const old = `${Math.floor(s.now() / 1000) - 3 * 3600}.000001` // sent 3h ago, found by catch-up now
     s.w.handle(ev({ ts: old, text: mention }))
     await s.w.flush()
     expect(s.w.owedHints()).toHaveLength(1)
     expect(s.w.get(CH, old)!.heldSince).toEqual({ [old]: s.now() })
-    verdict = { fate: 'deliver' }
+    verdict = { verdict: 'deliver' }
     s.w.handle(ev({ ts: old, text: mention }))
     await s.w.flush()
     expect(s.sent).toHaveLength(1)
@@ -1414,7 +1414,7 @@ roles = ["finance"]
   })
 
   test('exit 75 holds a message for at most owed_max, then it fails visibly', async () => {
-    const s = setup({ toml: GUARDED('owed_max = "1h"\n') }, undefined, undefined, async () => ({ fate: 'later' }))
+    const s = setup({ toml: GUARDED('owed_max = "1h"\n') }, undefined, undefined, async () => ({ verdict: 'later' }))
     const ts = `${Math.floor(s.now() / 1000)}.000001`
     s.w.handle(ev({ ts, text: mention }))
     await s.w.flush()
@@ -1428,7 +1428,7 @@ roles = ["finance"]
   })
 
   test('a broken guard fails open: delivered to the binding, and the reason logged; one that throws too', async () => {
-    const s = setup({ toml: GUARDED() }, undefined, undefined, async () => ({ fate: 'open', why: 'exited 2' }))
+    const s = setup({ toml: GUARDED() }, undefined, undefined, async () => ({ verdict: 'open', why: 'exited 2' }))
     s.w.handle(ev({ ts: '1.000001', text: mention }))
     await s.w.flush()
     expect(s.sent.map(x => x.specialist)).toEqual(['ops'])
@@ -1443,7 +1443,7 @@ roles = ["finance"]
   test("a slow guard holds back only its own thread's messages, not another thread's", async () => {
     let release!: () => void
     const gate = new Promise<void>(r => { release = r })
-    const s = setup({ toml: GUARDED(), coalesceMs: 5 }, undefined, undefined, async (_g, input) => { if (input.conversation.endsWith(':1.000001')) await gate; return { fate: 'deliver' } })
+    const s = setup({ toml: GUARDED(), coalesceMs: 5 }, undefined, undefined, async (_g, input) => { if (input.conversation.endsWith(':1.000001')) await gate; return { verdict: 'deliver' } })
     s.w.handle(ev({ ts: '1.000001', text: mention }))
     await Bun.sleep(20)
     s.w.handle(ev({ ts: '2.000001', text: mention }))
@@ -1457,7 +1457,7 @@ roles = ["finance"]
   test('at most four guards run at once for a burst', async () => {
     let running = 0
     let peak = 0
-    const s = setup({ toml: GUARDED(), coalesceMs: 20 }, undefined, undefined, async () => { peak = Math.max(peak, ++running); await Bun.sleep(5); running--; return { fate: 'deliver' } })
+    const s = setup({ toml: GUARDED(), coalesceMs: 20 }, undefined, undefined, async () => { peak = Math.max(peak, ++running); await Bun.sleep(5); running--; return { verdict: 'deliver' } })
     s.w.handle(ev({ ts: '1.000001', text: mention }))
     for (let i = 2; i <= 12; i++) s.w.handle(ev({ ts: `${i}.000001`, threadTs: '1.000001', text: 'x' }))
     await s.w.flush()
@@ -1466,7 +1466,7 @@ roles = ["finance"]
   })
 
   test('a redirect to a declared specialist with no session record (exit 8) goes to the binding instead, alerted once', async () => {
-    const s = setup({ toml: GUARDED() }, to => to === 'billing' ? { ok: false, error: 'no such specialist: billing', exit: 8 } : { ok: true }, undefined, async () => ({ fate: 'deliver', target: 'billing' }))
+    const s = setup({ toml: GUARDED() }, to => to === 'billing' ? { ok: false, error: 'no such specialist: billing', exit: 8 } : { ok: true }, undefined, async () => ({ verdict: 'deliver', target: 'billing' }))
     s.w.handle(ev({ ts: '1.000001', text: mention }))
     await s.w.flush()
     expect(s.sent.map(x => x.specialist)).toEqual(['billing', 'ops'])
@@ -1476,7 +1476,7 @@ roles = ["finance"]
   })
 
   test('a redirect to no such specialist goes to the binding instead, alerted once per episode: a broken guard never holds a message back', async () => {
-    const s = setup({ toml: GUARDED() }, undefined, undefined, async () => ({ fate: 'deliver', target: 'ghost' }))
+    const s = setup({ toml: GUARDED() }, undefined, undefined, async () => ({ verdict: 'deliver', target: 'ghost' }))
     s.w.handle(ev({ ts: '1.000001', text: mention }))
     await s.w.flush()
     expect(s.sent.map(x => x.specialist)).toEqual(['ops'])
@@ -1491,7 +1491,7 @@ roles = ["finance"]
 
   test('a redirect to a specialist pinned to another app goes to the binding instead, alerted once, in words that need no context', async () => {
     const toml = GUARDED() + '[slack.apps.sales]\nbot_token_env = "SALES_BOT_TOKEN"\n[specialists.deals]\nworkdir = "/w/deals"\npinned_to = ["app:sales"]\nreachable_by = ["role:anyone"]\n'
-    const s = setup({ toml }, undefined, undefined, async () => ({ fate: 'deliver', target: 'deals' }))
+    const s = setup({ toml }, undefined, undefined, async () => ({ verdict: 'deliver', target: 'deals' }))
     s.w.handle(ev({ ts: '1.000001', text: mention }))
     await s.w.flush()
     expect(s.sent.map(x => x.specialist)).toEqual(['ops'])
@@ -1502,7 +1502,7 @@ roles = ["finance"]
   })
 
   test('a "not now" for a message the full owed list already cut is a counted drop, not silence', async () => {
-    const s = setup({ toml: GUARDED(), coalesceMs: 60_000 }, undefined, undefined, async () => ({ fate: 'later' }))
+    const s = setup({ toml: GUARDED(), coalesceMs: 60_000 }, undefined, undefined, async () => ({ verdict: 'later' }))
     s.w.handle(ev({ ts: '1.000001', text: mention }))
     for (let i = 2; i <= 201; i++) s.w.handle(ev({ ts: `${i}.000001`, threadTs: '1.000001', text: 'x' }))
     await s.w.flush()
@@ -1514,7 +1514,7 @@ roles = ["finance"]
     let hold = true
     const base = Math.floor(1_000_000_000_000 / 1000)
     const T = (i: number) => `${base + i}.000001`
-    const s = setup({ toml: GUARDED('include_text = true\n'), coalesceMs: 60_000 }, undefined, undefined, async (_g, input) => ({ fate: hold && input.text === 'held' ? 'later' : 'deliver' }))
+    const s = setup({ toml: GUARDED('include_text = true\n'), coalesceMs: 60_000 }, undefined, undefined, async (_g, input) => ({ verdict: hold && input.text === 'held' ? 'later' : 'deliver' }))
     s.w.handle(ev({ ts: T(1), text: mention }))
     s.w.handle(ev({ ts: T(2), threadTs: T(1), text: 'held' }))
     await s.w.flush()
@@ -1664,7 +1664,7 @@ ${place}
 
   test('guard stdin for a DM: the DM conversation and slack:dm', async () => {
     const inputs: GuardInput[] = []
-    const s = setup({ toml: PLACES('', '[guard]\ncommand = "g"\n') }, undefined, undefined, async (_g, i) => { inputs.push(i); return { fate: 'deliver' } })
+    const s = setup({ toml: PLACES('', '[guard]\ncommand = "g"\n') }, undefined, undefined, async (_g, i) => { inputs.push(i); return { verdict: 'deliver' } })
     s.w.handle(ev({ channel: DM, ts: '1.000001', text: 'hi' }))
     await s.w.flush()
     expect(inputs[0]).toMatchObject({ place: 'slack:dm', conversation: `slack:${DM}`, target: 'specialist:assistant' })
@@ -1684,7 +1684,7 @@ ${place}
     dirs.push(dir)
     const config = cfg({ toml: PLACES('files = true', '[guard]\ncommand = "g"\n') })
     const w = new SlackWatcher({ now: () => 1e12, file: join(dir, 'w.json'), filesDir: join(dir, 'files'), log: () => {}, config: () => config,
-      guard: async () => ({ fate: 'drop' }), deliver: async () => ({ ok: true }) })
+      guard: async () => ({ verdict: 'drop' }), deliver: async () => ({ ok: true }) })
     w.setSlackActions(a)
     w.handle(ev({ ts: '1.000001', text: mention, files: [file()] }))
     await w.flush()
@@ -2056,7 +2056,7 @@ describe('what hydra health says about owed messages and deliveries (#669)', () 
     await wait.w.flush()
     expect(wait.w.lateOwed(20 * MIN)[0].cause).toContain('max_sessions')
 
-    const held = setup({ toml: oneListener(CH, 'helper', '["role:anyone"]', '[guard]\ncommand = "guard"') }, undefined, undefined, async () => ({ fate: 'later' }))
+    const held = setup({ toml: oneListener(CH, 'helper', '["role:anyone"]', '[guard]\ncommand = "guard"') }, undefined, undefined, async () => ({ verdict: 'later' }))
     held.w.handle(ev({ ts: tsAgo(held, 30), text: mention }))
     await held.w.flush()
     expect(held.w.lateOwed(20 * MIN)[0].cause).toContain('exit 75')

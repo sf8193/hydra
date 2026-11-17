@@ -60,7 +60,7 @@ describe('slackSessionTitles', () => {
 
   test('marks paused only while alive', () => {
     expect(slackSessionTitles({ ...base, paused: true })[0]).toBe('🔭 scout - Slack thread titles (paused)')
-    expect(slackSessionTitles({ ...base, state: 'zombie', paused: true })[0]).toBe('🔭 scout - Slack thread titles (paused)')
+    expect(slackSessionTitles({ ...base, state: 'respawned_session', paused: true })[0]).toBe('🔭 scout - Slack thread titles (paused)')
     expect(slackSessionTitles({ ...base, state: 'killed', paused: true })[0]).toBe('☠️ scout - Slack thread titles')
     expect(slackSessionTitles({ ...base, state: 'crashed', paused: true })[0]).toBe('💥 scout - Slack thread titles')
   })
@@ -80,7 +80,7 @@ describe('slackSessionTitles', () => {
 describe('slackSessionStatus', () => {
   test('maps lifecycle states', () => {
     expect(slackSessionStatus('live')).toBe('active')
-    expect(slackSessionStatus('zombie')).toBe('active')
+    expect(slackSessionStatus('respawned_session')).toBe('active')
     expect(slackSessionStatus('crashed')).toBe('suspended')
     expect(slackSessionStatus('killed')).toBe('closed')
   })
@@ -203,7 +203,7 @@ describe('SlackGateway session visuals', () => {
       return (gw as any).visualQueue.queue.get(thread).priority
     }
     expect(await priority('D1:1.1', base)).toBe('normal')
-    expect(await priority('D1:1.2', { ...base, state: 'zombie' })).toBe('normal')
+    expect(await priority('D1:1.2', { ...base, state: 'respawned_session' })).toBe('normal')
     expect(await priority('D1:1.3', { ...base, state: 'killed' })).toBe('high')
     expect(await priority('D1:1.4', { ...base, state: 'crashed' })).toBe('high')
     expect(await priority('D1:1.5', { ...base, paused: true })).toBe('high')

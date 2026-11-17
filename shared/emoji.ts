@@ -32,3 +32,16 @@ export function emojiProblem(raw: unknown): string | undefined {
   const text = /^\p{Extended_Pictographic}/u.test(raw)
   return text ? `${shown} shows as text on some systems, not as a picture: ${hint}, in its emoji form (copy it from an emoji picker, which adds the invisible U+FE0F)` : `${shown} is not an emoji: ${hint}`
 }
+
+/** A Slack reaction name (`eyes`, `+1`, `woman-gesturing-no`): lowercase letters, digits and `_`, `-`, `+`, `'`, then optionally a skin tone, `::skin-tone-2` to `::skin-tone-6` (`+1::skin-tone-3`). Slack documents no rule; this is the form of the names its emoji list and reaction syntax use. */
+const REACTION_NAME = /^[a-z0-9_+'-]+(::skin-tone-[2-6])?$/
+
+/** Why `raw` is not a Slack reaction name (what to write instead), or undefined when it is. A place's `ack` is a name, where a specialist's `emoji` is a character (`emojiProblem`). */
+export function reactionNameProblem(raw: string): string | undefined {
+  if (REACTION_NAME.test(raw)) return undefined
+  const shown = JSON.stringify(raw)
+  const hint = 'like ack = "eyes" (only Slack places read ack)'
+  if (raw.includes(':')) return `${shown} has a colon where only a skin tone like "+1::skin-tone-3" may, so write the name alone, ${hint}.`
+  if (/[^\x00-\x7f]/.test(raw)) return `${shown} is an emoji character, so write its Slack name, ${hint}.`
+  return `${shown} is not a Slack reaction name (lowercase letters, digits, _ - + '), so write one ${hint}.`
+}

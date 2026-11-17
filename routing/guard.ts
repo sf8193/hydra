@@ -5,7 +5,7 @@ import { bareOf, readTarget } from '../shared/target-kind.js'
 
 /**
  * `[guard]`: the operator's own command, run for each message after routing and the `reachable_by` check, for anyone but the operator.
- * It judges; it never produces the content. Its exit code decides the message's fate:
+ * It judges; it never produces the content. Its exit code decides the message's verdict:
  *   0   deliver (stdout `{"target": "<specialist>"}` redirects it, and that specialist's `reachable_by` is checked again)
  *   10  drop it: logged, counted, never delivered
  *   75  not now: it stays owed, for at most `owed_max`, and the next catch-up pass offers it again
@@ -30,10 +30,10 @@ export type GuardInput = {
 }
 
 export type GuardVerdict =
-  | { fate: 'deliver'; target?: string }
-  | { fate: 'drop' }
-  | { fate: 'later' }
-  | { fate: 'open'; why: string }
+  | { verdict: 'deliver'; target?: string }
+  | { verdict: 'drop' }
+  | { verdict: 'later' }
+  | { verdict: 'open'; why: string }
 
 export const GUARD_DROP = 10
 export const GUARD_LATER = 75
@@ -69,18 +69,18 @@ export function runGuard(g: Pick<Guard, 'command' | 'timeoutMs'>, input: GuardIn
       killGroup() // whatever it left running goes with it
       resolve(v)
     }
-    const deadline = setTimeout(() => finish({ fate: 'open', why: `timed out after ${g.timeoutMs / 1000}s` }), g.timeoutMs)
+    const deadline = setTimeout(() => finish({ verdict: 'open', why: `timed out after ${g.timeoutMs / 1000}s` }), g.timeoutMs)
     try {
       child = spawn('sh', ['-c', g.command], { stdio: ['pipe', 'pipe', 'ignore'], env: guardEnv(), detached: true })
     } catch (err) {
-      finish({ fate: 'open', why: `could not start: ${err instanceof Error ? err.message : err}` })
+      finish({ verdict: 'open', why: `could not start: ${err instanceof Error ? err.message : err}` })
       return
     }
-    child.on('error', err => finish({ fate: 'open', why: `could not start: ${err.message}` }))
+    child.on('error', err => finish({ verdict: 'open', why: `could not start: ${err.message}` }))
     child.stdout!.setEncoding('utf8')
     child.stdout!.on('data', (chunk: string) => {
       out += chunk
-      if (out.length > GUARD_STDOUT_MAX) finish({ fate: 'open', why: `printed more than ${GUARD_STDOUT_MAX} bytes` })
+      if (out.length > GUARD_STDOUT_MAX) finish({ verdict: 'open', why: `printed more than ${GUARD_STDOUT_MAX} bytes` })
     })
     const verdict = () => finish(judge(code, out))
     child.stdout!.on('close', () => { stdoutClosed = true; if (code !== null) verdict() })
@@ -95,19 +95,19 @@ export function runGuard(g: Pick<Guard, 'command' | 'timeoutMs'>, input: GuardIn
 }
 
 function judge(code: number | null, out: string): GuardVerdict {
-  if (code === GUARD_DROP) return { fate: 'drop' }
-  if (code === GUARD_LATER) return { fate: 'later' }
-  if (code !== 0) return { fate: 'open', why: `exited ${code}` }
+  if (code === GUARD_DROP) return { verdict: 'drop' }
+  if (code === GUARD_LATER) return { verdict: 'later' }
+  if (code !== 0) return { verdict: 'open', why: `exited ${code}` }
   const text = out.trim()
-  if (!text) return { fate: 'deliver' }
+  if (!text) return { verdict: 'deliver' }
   let parsed: unknown
-  try { parsed = JSON.parse(text) } catch { return { fate: 'open', why: 'exited 0 but printed something other than JSON' } }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return { fate: 'open', why: 'exited 0 but printed JSON that is not an object' }
+  try { parsed = JSON.parse(text) } catch { return { verdict: 'open', why: 'exited 0 but printed something other than JSON' } }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return { verdict: 'open', why: 'exited 0 but printed JSON that is not an object' }
   const { target, to } = parsed as { target?: unknown; to?: unknown }
-  if (target === undefined && to !== undefined) return { fate: 'open', why: 'printed `to`, which is not read: print `target`, as `{"target": "specialist:<name>"}` or `{"target": "main"}`' }
-  if (target === undefined) return { fate: 'deliver' }
+  if (target === undefined && to !== undefined) return { verdict: 'open', why: 'printed `to`, which is not read: print `target`, as `{"target": "specialist:<name>"}` or `{"target": "main"}`' }
+  if (target === undefined) return { verdict: 'deliver' }
   // A redirect names `main` or `specialist:<name>`. Whether the specialist is declared is the delivery's to say, as before. A thread is no redirect: the guard cannot move a message into a session's thread.
   const read = typeof target === 'string' && target === target.trim() ? readTarget(target, id => SPECIALIST_NAME_RE.test(id) && !isSessionThread(id)) : undefined
-  if (!read || !read.ok || read.ref.kind === 'thread') return { fate: 'open', why: `printed an unusable "target": ${JSON.stringify(target).slice(0, 80)}; write \`specialist:<name>\` or \`main\` (the guard's stdin \`target\` is already in that form)` }
-  return { fate: 'deliver', target: bareOf(read.ref) }
+  if (!read || !read.ok || read.ref.kind === 'thread') return { verdict: 'open', why: `printed an unusable "target": ${JSON.stringify(target).slice(0, 80)}; write \`specialist:<name>\` or \`main\` (the guard's stdin \`target\` is already in that form)` }
+  return { verdict: 'deliver', target: bareOf(read.ref) }
 }
