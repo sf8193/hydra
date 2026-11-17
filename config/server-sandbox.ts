@@ -115,22 +115,64 @@ const WRITABLE_DEVICES = ['/dev/null', '/dev/dtracehelper']
 export type ServerFolders = { root: string; dir: string }
 
 /**
- * The profile text for one server. `roots` (restricted-workdir.ts `offLimitRoots`) are denied for reading and writing, each by its path
- * and by its resolved path (Seatbelt matches the resolved one); `dir` is the one folder the server may write in, also by both, and
- * `root` is unreadable except for it. A later rule wins, so the allowances come after the denials they carve out.
+ * The Mach services that reach the keychain, as profile lines. The legacy file keychain (`security`, git-credential-osxkeychain and every
+ * other credential helper) is served by `com.apple.SecurityServer`, which no file rule reaches: securityd opens the keychain file for the caller.
+ * The rest are the data-protection and sync side of the same store. Only the first is proven by a test that reads a keychain (config/__tests__/bash-sandbox.test.ts);
+ * the others are denied by name and not exercised. Names a normal command needs (`com.apple.trustd.agent`, which TLS uses) are not here: HTTPS and git
+ * over https and ssh were run with every line below denied.
  */
+export const KEYCHAIN_MACH_DENIES: readonly string[] = [
+  '(deny mach-lookup (global-name "com.apple.SecurityServer"))',
+  '(deny mach-lookup (global-name-prefix "com.apple.securityd"))',
+  '(deny mach-lookup (global-name "com.apple.secd"))',
+  '(deny mach-lookup (global-name-prefix "com.apple.security.keychain"))',
+  '(deny mach-lookup (global-name "com.apple.security.kcsharing"))',
+  '(deny mach-lookup (global-name "com.apple.security.cloudkeychainproxy3"))',
+  '(deny mach-lookup (global-name "com.apple.security.octagon"))',
+  '(deny mach-lookup (global-name "com.apple.security.KeychainStasher"))',
+  '(deny mach-lookup (global-name "com.apple.keychainsharingmessagingd"))',
+  '(deny mach-lookup (global-name "com.apple.systemkeychain"))',
+]
+
+/** Claude Code's own marker for a shell's working directory: the one file outside the workdir and temp folder a command's text writes, every time. */
+export const CLAUDE_CWD_MARKER_REGEX = '(regex #"^/(private/)?tmp/claude-[0-9a-f]+-cwd$")'
+
+/** What the one profile text varies by. */
+export type ProfileSpec = {
+  /** Reading and writing refused (restricted-workdir.ts `offLimitRoots` for servers), each by its path and by its resolved path (Seatbelt matches the resolved one). */
+  roots: readonly PrivateRoot[]
+  /** The folders it may write in, also by both spellings; the two devices are always writable. */
+  writable: readonly string[]
+  /** Other files it may write, as Seatbelt regex lines. */
+  writableRegex?: readonly string[]
+  /** A parent unreadable except for `own` (the servers' shared temp folder). */
+  hidden?: { root: string; own: string }
+  /** The keychain's Mach services are unreachable (KEYCHAIN_MACH_DENIES). */
+  keychain?: boolean
+}
+
+/** The profile text for one server: its `dir` is the one place it writes, and the shared `root` it sits in is unreadable except for it. */
 export function sandboxProfile(env: Pick<LoadEnv, 'realpath'>, roots: readonly PrivateRoot[], folders: ServerFolders): string {
+  return seatbeltProfile(env, { roots, writable: [folders.dir], hidden: { root: folders.root, own: folders.dir } })
+}
+
+/**
+ * The one profile text, for a server and for a write-confined specialist's Bash (config/bash-sandbox.ts): they differ only by what `spec` names.
+ * A later rule wins, so the allowances come after the denials they carve out.
+ */
+export function seatbeltProfile(env: Pick<LoadEnv, 'realpath'>, spec: ProfileSpec): string {
+  const { roots, writable } = spec
   // An empty list would be a rule with nothing in it, which Seatbelt reads as a syntax error: never in production (offLimitRoots always has the home folders).
   if (roots.length === 0) throw new Error('the sandbox profile has no off-limits places to deny: the list of them is empty')
+  if (writable.length === 0) throw new Error('the sandbox profile has no folder to write in: the list of them is empty')
   const both = (paths: readonly string[]) => [...new Set(paths.flatMap(p => [resolve(p), env.realpath(resolve(p))]))]
   const subpaths = (paths: readonly string[]) => both(paths).map(p => `  (subpath ${literal(p)})`).join('\n')
   return [
     '(version 1)',
     '(allow default)',
     '(deny file-write*)',
-    `(allow file-write*\n${subpaths([folders.dir])}\n${WRITABLE_DEVICES.map(d => `  (literal ${literal(d)})`).join('\n')})`,
-    `(deny file-read-data\n${subpaths([folders.root])})`,
-    `(allow file-read-data\n${subpaths([folders.dir])})`,
+    `(allow file-write*\n${subpaths(writable)}\n${[...WRITABLE_DEVICES.map(d => `  (literal ${literal(d)})`), ...(spec.writableRegex ?? []).map(r => `  ${r}`)].join('\n')})`,
+    ...(spec.hidden ? [`(deny file-read-data\n${subpaths([spec.hidden.root])})`, `(allow file-read-data\n${subpaths([spec.hidden.own])})`] : []),
     '(deny network-outbound (remote unix-socket))',
     `(allow network-outbound (remote unix-socket (path-literal ${literal(RESOLVER_SOCKET)})))`,
     `(deny file-read* file-write*\n${subpaths(roots.map(r => r.path))})`,
@@ -146,6 +188,7 @@ export function sandboxProfile(env: Pick<LoadEnv, 'realpath'>, roots: readonly P
     '(deny mach-lookup (global-name "com.apple.sysmond"))',
     '(deny mach-lookup (global-name-prefix "com.apple.pasteboard."))',
     '(deny file-ioctl (regex #"^/dev/(tty|ttys[0-9]+)$"))',
+    ...(spec.keychain ? KEYCHAIN_MACH_DENIES : []),
     '',
   ].join('\n')
 }
