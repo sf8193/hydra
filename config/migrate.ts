@@ -164,9 +164,6 @@ export const specialistsStep: MigrateStep = {
 /** Every step, in merge order. */
 export const STEPS: MigrateStep[] = [accessStep, specialistsStep, slackWatchStep, jobsStep]
 
-/** Old files no step migrates yet: migrate refuses while one is here, so nothing goes quiet on upgrade. */
-export const UNHANDLED: string[] = []
-
 /**
  * Whether hydra.toml governs, by the daemon's own test: it has something in it (a comment-only file doesn't), or it
  * doesn't parse (a file that fails to load still governs, rather than handing back to the old files).
@@ -182,13 +179,13 @@ export const BOOT_REFUSED_FILE = 'boot-refused.json'
 
 /**
  * Why a daemon must not start on this state dir, or undefined. One rule: hydra.toml has content while old state
- * it replaces is still here (a step is pending, or a file no step migrates yet), named by file. Running with both
+ * it replaces is still here (a step is pending), named by file. Running with both
  * would have the daemon silently prefer one. Also while a migration's journal says it is half committed.
  */
 export function bootRefusal(stateDir: string, steps: MigrateStep[] = STEPS): string | undefined {
   if (existsSync(join(stateDir, MIGRATE_JOURNAL))) return `refusing to start: a hydra migrate in ${stateDir} was interrupted after it committed; run 'hydra migrate' to finish it.`
   if (!hydraTomlInUse(stateDir)) return undefined
-  const old = [...steps.filter(s => s.pending(stateDir)).map(s => s.name), ...UNHANDLED.filter(f => existsSync(join(stateDir, f)))]
+  const old = steps.filter(s => s.pending(stateDir)).map(s => s.name)
   if (!old.length) return undefined
   return `refusing to start: hydra.toml is in use, but old state it replaces is still in ${stateDir}: ${old.join(', ')}. `
     + `Run 'hydra migrate' (it adds that state to hydra.toml and retires it), or retire it by hand.`
@@ -327,16 +324,12 @@ export function planMigrate(input: MigrateInput, steps: MigrateStep[] = STEPS): 
   // A hydra.toml already here (an earlier migration, or written by hand) is kept: what's still pending is added to it.
   let existing: Doc | undefined
   if (hydraTomlInUse(input.stateDir)) {
-    if (!steps.some(s => s.pending(input.stateDir)) && !UNHANDLED.some(f => existsSync(join(input.stateDir, f)))) {
+    if (!steps.some(s => s.pending(input.stateDir))) {
       return { ok: false, errors: [`${toml} already has content and nothing is left to migrate: this state dir is migrated.`] }
     }
     try { existing = Bun.TOML.parse(existingText) as Doc } catch (e) {
       return { ok: false, errors: [`${toml} isn't valid TOML (${(e as Error).message}); fix it, then run hydra migrate again.`] }
     }
-  }
-  const unhandled = UNHANDLED.filter(f => existsSync(join(input.stateDir, f)))
-  if (unhandled.length) {
-    return { ok: false, errors: [`${unhandled.join(', ')} can't be migrated by this version, and its routes would go quiet; update hydra and run it again.`] }
   }
   const outputs: MigrateOutput[] = []
   const errors: string[] = []
