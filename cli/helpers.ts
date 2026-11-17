@@ -63,17 +63,22 @@ export function sourceStateDirEnv(stateDir: string): { configDir: string; spawnC
   }
 }
 
+/** CHAT_PLATFORM's value: undefined when unset or blank; throws on anything but discord or slack. */
+export function chatPlatformOf(value: string | undefined): 'discord' | 'slack' | undefined {
+  const named = value?.trim()
+  if (!named) return undefined
+  if (named !== 'discord' && named !== 'slack') throw new Error(`CHAT_PLATFORM must be discord or slack, not "${named}"`)
+  return named
+}
+
 /**
  * The platform for a command that was given none: CHAT_PLATFORM (discord or slack, as the daemon's gateway runs); else the one platform
  * state dir there is; else discord. Throws, with the words to print, on a CHAT_PLATFORM that is neither, and on several state dirs with
  * no CHAT_PLATFORM to choose. Not "explicit" to the caller: HYDRA_STATE_DIR keeps beating the platform's default dir.
  */
 export function defaultPlatform(chatPlatform: string | undefined, channelsDir: string): string {
-  const named = chatPlatform?.trim()
-  if (named) {
-    if (named !== 'discord' && named !== 'slack') throw new Error(`CHAT_PLATFORM must be discord or slack, not "${named}"`)
-    return named
-  }
+  const named = chatPlatformOf(chatPlatform)
+  if (named) return named
   let dirs: string[] = []
   try {
     dirs = readdirSync(channelsDir).filter(d => {
@@ -405,26 +410,35 @@ export function discoverSockets(): Record<string, string> {
   return found
 }
 
-export function resolveSocket(daemonName?: string): string {
-  const discovered = discoverSockets()
+/**
+ * The daemon socket a command talks to: the one `--daemon` names; else the only one; else, with several, the one CHAT_PLATFORM names
+ * (`defaultPlatform` reads the variable first; here a lone daemon is the only thing a command can reach, so it wins). Throws, with the words
+ * to print, when none is chosen. A daemon is found by its state dir's name, so CHAT_PLATFORM names only a discord or slack one.
+ */
+export function pickSocket(discovered: Record<string, string>, daemonName: string | undefined, chatPlatform: string | undefined): string {
   const keys = Object.keys(discovered)
+  const missing = (name: string) => new Error(`daemon "${name}" not found\ndiscovered: ${keys.join(', ') || '(none)'}`)
 
   if (daemonName) {
     if (discovered[daemonName]) return discovered[daemonName]
-    console.error(`error: daemon "${daemonName}" not found`)
-    console.error(`discovered: ${keys.join(', ') || '(none)'}`)
-    process.exit(1)
+    throw missing(daemonName)
   }
-
   if (keys.length === 1) return discovered[keys[0]]
-  if (keys.length === 0) {
-    console.error('error: no running daemons found')
+  if (keys.length === 0) throw new Error('no running daemons found')
+
+  const platform = chatPlatformOf(chatPlatform)
+  if (platform) {
+    if (discovered[platform]) return discovered[platform]
+    throw missing(platform)
+  }
+  throw new Error(`multiple daemons found: ${keys.join(', ')}\nset CHAT_PLATFORM, or use --daemon <name> to select one`)
+}
+
+export function resolveSocket(daemonName?: string): string {
+  try { return pickSocket(discoverSockets(), daemonName, process.env.CHAT_PLATFORM) } catch (err) {
+    console.error(`error: ${(err as Error).message}`)
     process.exit(1)
   }
-
-  console.error(`error: multiple daemons found: ${keys.join(', ')}`)
-  console.error('use --daemon <name> to select one')
-  process.exit(1)
 }
 
 /** `timeoutMs`: how long to wait for the reply; a request that spawns a session needs more than the default. */

@@ -172,7 +172,7 @@ hydra clear-key <key>          # Clear a stuck idempotency key
 ### Options
 
 ```
---daemon <name>                Target a specific daemon (when multiple running)
+--daemon <name>                Target a specific daemon (else CHAT_PLATFORM picks among several running)
 --json                         Output raw JSON
 ```
 

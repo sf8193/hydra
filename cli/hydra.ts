@@ -146,7 +146,7 @@ Model aliases:
 ${Object.entries(MODEL_ALIASES).map(([k, v]) => `  ${k.padEnd(16)} → ${v}`).join('\n')}
 
 Global options:
-  --daemon <name>                      Target a specific daemon
+  --daemon <name>                      Target a specific daemon (else CHAT_PLATFORM picks among several)
   --state-dir <dir>                    Target the daemon (and jobs state) in this state dir: a worktree or test daemon
   --json                               Output raw JSON
   -h, --help                           Show this help
