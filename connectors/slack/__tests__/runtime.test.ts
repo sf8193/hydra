@@ -249,7 +249,7 @@ describe('bind_conversation / unbind_conversation', () => {
   })
 
   test("a rule there doesn't count: it takes chosen people's messages, not the place", async () => {
-    configure(`${TOML}[[rules]]\nplace = "slack:C2"\nperson = "olive"\ntarget = "${FOOD}"\n`)
+    configure(`${TOML}[[rules]]\nplace = "slack:C2"\nperson = "olive"\ntarget = "specialist:${FOOD}"\n`)
     await expect(bindConversation(food, 'slack:C2:1.000001')).rejects.toThrow(`${FOOD} doesn't listen on slack:C2`)
   })
 
@@ -541,11 +541,11 @@ describe('the operator: hydra conversations and hydra route', () => {
   })
 
   test('hydra route prints every candidate and why the winner won, and binds nothing', async () => {
-    configure(`${TOML}[[rules]]\nplace = "slack:C2"\nperson = "owner"\ntarget = "${FOOD}"\n`)
+    configure(`${TOML}[[rules]]\nplace = "slack:C2"\nperson = "owner"\ntarget = "specialist:${FOOD}"\n`)
     const r = await handleCLIRequest(req('route', { person: 'olive', place: 'slack:C2' }))
     expect(r).toMatchObject({ ok: true, data: { fate: 'deliver', to: FOOD } })
-    expect((r.data as any).report).toContain(`→ rule ${FOOD}: rules[0]: first rule that matches`)
-    expect((r.data as any).report).toContain(`listens ${OPS}: listens on slack:C2, but a rule won`)
+    expect((r.data as any).report).toContain(`→ rule specialist:${FOOD}: rules[0]: first rule that matches`)
+    expect((r.data as any).report).toContain(`listens specialist:${OPS}: listens on slack:C2, but a rule won`)
     expect(await handleCLIRequest(req('route', { person: 'stranger', place: 'slack:C2' }))).toMatchObject({ ok: true, data: { fate: 'refused', to: OPS } })
     expect(await handleCLIRequest(req('route', { person: 'slack:UNEW', place: 'slack:C9' }))).toMatchObject({ ok: true, data: { fate: 'unrouted' } })
     expect(await handleCLIRequest(req('route', { person: 'nobody', place: 'slack:C2' }))).toMatchObject({ ok: false })

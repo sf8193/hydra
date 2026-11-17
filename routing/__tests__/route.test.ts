@@ -42,7 +42,7 @@ messages = "all"
 [[rules]]
 place = "slack:#help"
 person = "alice"
-target = "crm-finance"
+target = "specialist:crm-finance"
 `)
 
 const msg = (from: string | undefined, at: string[], extra: Partial<Inbound> = {}): Inbound =>
@@ -131,9 +131,9 @@ test('explain prints every candidate and why the winner won', () => {
   const out = explain(route(CFG, msg('slack:U0ALICE', ['slack:#help'])), '/bin/guard')
   expect(out).toBe([
     'person: alice, roles staff, people, anyone',
-    '  → rule crm-finance: rules[0]: first rule that matches',
-    '    listens crm: listens on slack:#help, but a rule won',
-    'delivers to crm-finance (by rule), and binds the conversation to it',
+    '  → rule specialist:crm-finance: rules[0]: first rule that matches',
+    '    listens specialist:crm: listens on slack:#help, but a rule won',
+    'delivers to specialist:crm-finance (by rule), and binds the conversation to it',
     'then the guard judges it: /bin/guard',
   ].join('\n'))
 })
@@ -216,24 +216,24 @@ ${rules}`)
   const to = (cfg: HydraConfig, m: Inbound) => { const d = route(cfg, m); return 'to' in d ? `${d.to} (${d.via})` : d.fate }
 
   test('a rule with only an app takes every place that app hears', () => {
-    const cfg = withRules('[[rules]]\napp = "sales"\ntarget = "sales-desk"\n')
+    const cfg = withRules('[[rules]]\napp = "sales"\ntarget = "specialist:sales-desk"\n')
     expect(to(cfg, inApp('sales'))).toBe('sales-desk (rule)')
     expect(to(cfg, msg('slack:U0ALICE', ['slack:C0ELSE', 'slack:#else'], { app: 'sales' }))).toBe('sales-desk (rule)')
     expect(to(cfg, inApp('default'))).toBe('crm (listens)')
   })
   test('a rule with only a place matches every app (and an old rule behaves as before)', () => {
-    const cfg = withRules('[[rules]]\nplace = "slack:#help"\ntarget = "ops-desk"\n')
+    const cfg = withRules('[[rules]]\nplace = "slack:#help"\ntarget = "specialist:ops-desk"\n')
     for (const a of ['default', 'sales', 'support']) expect(to(cfg, inApp(a))).toBe('ops-desk (rule)')
     expect(to(cfg, msg('slack:U0ALICE', ['slack:#help']))).toBe('ops-desk (rule)')   // no app given: default
   })
   test('a rule with both takes that place through that app only', () => {
-    const cfg = withRules('[[rules]]\nplace = "slack:#help"\napp = "sales"\ntarget = "sales-desk"\n')
+    const cfg = withRules('[[rules]]\nplace = "slack:#help"\napp = "sales"\ntarget = "specialist:sales-desk"\n')
     expect(to(cfg, inApp('sales'))).toBe('sales-desk (rule)')
     expect(to(cfg, inApp('default'))).toBe('crm (listens)')
     expect(to(cfg, msg('slack:U0ALICE', ['slack:#else'], { app: 'sales' }))).toBe('unrouted')
   })
   test('first match wins across kinds, in file order; from refines app and place', () => {
-    const cfg = withRules('[[rules]]\napp = "sales"\nperson = "alice"\ntarget = "sales-desk"\n[[rules]]\nplace = "slack:#help"\ntarget = "ops-desk"\n')
+    const cfg = withRules('[[rules]]\napp = "sales"\nperson = "alice"\ntarget = "specialist:sales-desk"\n[[rules]]\nplace = "slack:#help"\ntarget = "specialist:ops-desk"\n')
     expect(to(cfg, inApp('sales'))).toBe('sales-desk (rule)')
     expect(to(cfg, msg('slack:U0OP', HELP, { app: 'sales' }))).toBe('ops-desk (rule)')
     const d = route(cfg, inApp('support'))
@@ -264,7 +264,7 @@ listens = ["slack:#help"]
 allow = ["staff"]
 [[rules]]
 place = "slack:#help"
-target = "deals"
+target = "specialist:deals"
 `)
     expect(route(cfg, inApp('sales'))).toMatchObject({ fate: 'deliver', to: 'deals', via: 'rule' })
     const d = route(cfg, inApp('default'))

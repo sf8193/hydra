@@ -56,7 +56,9 @@ describe('a full config in the old people, schedule and Slack app names', () => 
   test('loads to the same config, under the new internal names, and each old key warns once', () => {
     const r = ok(text('old-platform-names.toml'))
     expect(r.config).toEqual(inNewNames(before.config) as HydraConfig)
-    expect(r.warnings.filter(w => !renameWarnings([w]).length)).toEqual(before.warnings.map(line))
+    // The fixture predates target kinds: its two schedules name `ops` bare.
+    expect(r.warnings.filter(w => !renameWarnings([w]).length && !w.includes('a target says its kind'))).toEqual(before.warnings.map(line))
+    expect(r.warnings.filter(w => w.includes('a target says its kind')).length).toBe(2)
     expect(renameWarnings(r.warnings)).toEqual([
       'connectors.slack: rename the table [connectors.slack] to [slack.apps.default]; it still loads and will be removed',
       'connectors.slack.app_token_env: rename `app_token_env` to `socket_token_env`; `app_token_env` still loads and will be removed',
@@ -119,12 +121,12 @@ describe('a person\'s `ids` is now `addresses`', () => {
 describe('a schedule\'s `prompt` and `cwd` are now `message` and `workdir`', () => {
   const sched = (body: string) => `${BASE}[schedules.nightly]\ncron = "0 3 * * *"\n${body}\n`
   test('the new names work', () => {
-    const r = ok(sched('target = "ops"\nmessage = "go"\ncheck = "./c.sh"\nworkdir = "~/jobs"\nenv_file = "a.env"'))
+    const r = ok(sched('target = "specialist:ops"\nmessage = "go"\ncheck = "./c.sh"\nworkdir = "~/jobs"\nenv_file = "a.env"'))
     expect(r.config.schedules.nightly).toEqual({ id: 'nightly', cron: '0 3 * * *', message: 'go', runner: 'launchd', target: 'ops', check: './c.sh', workdir: '/home/op/jobs', envFile: '/home/op/jobs/a.env' })
     expect(r.warnings).toEqual([])
   })
   test('the old names work, and each warning names the new key', () => {
-    const r = ok(sched('target = "ops"\nprompt = "go"\ncheck = "./c.sh"\ncwd = "~/jobs"\nenv_file = "a.env"'))
+    const r = ok(sched('target = "specialist:ops"\nprompt = "go"\ncheck = "./c.sh"\ncwd = "~/jobs"\nenv_file = "a.env"'))
     expect(r.config.schedules.nightly).toEqual({ id: 'nightly', cron: '0 3 * * *', message: 'go', runner: 'launchd', target: 'ops', check: './c.sh', workdir: '/home/op/jobs', envFile: '/home/op/jobs/a.env' })
     expect(renameWarnings(r.warnings)).toEqual([
       'schedules.nightly.prompt: rename `prompt` to `message`; `prompt` still loads and will be removed',
@@ -132,22 +134,22 @@ describe('a schedule\'s `prompt` and `cwd` are now `message` and `workdir`', () 
     ])
   })
   test('an empty message is still a message (and not an absent one), under either name', () => {
-    expect(ok(sched('target = "ops"\nmessage = ""\ncheck = "c.sh"')).config.schedules.nightly.message).toBe('')
-    expect(ok(sched('target = "ops"\nprompt = ""\ncheck = "c.sh"')).config.schedules.nightly.message).toBe('')
+    expect(ok(sched('target = "specialist:ops"\nmessage = ""\ncheck = "c.sh"')).config.schedules.nightly.message).toBe('')
+    expect(ok(sched('target = "specialist:ops"\nprompt = ""\ncheck = "c.sh"')).config.schedules.nightly.message).toBe('')
   })
   test('both names is an error', () => {
-    expect(errors(sched('target = "ops"\nprompt = "a"\nmessage = "b"'))).toEqual(['schedules.nightly.prompt: is the old name of `message`, which is also set: keep `message` and delete `prompt`'])
-    expect(errors(sched('target = "ops"\ncwd = "~/a"\nworkdir = "~/b"'))).toEqual(['schedules.nightly.cwd: is the old name of `workdir`, which is also set: keep `workdir` and delete `cwd`'])
+    expect(errors(sched('target = "specialist:ops"\nprompt = "a"\nmessage = "b"'))).toEqual(['schedules.nightly.prompt: is the old name of `message`, which is also set: keep `message` and delete `prompt`'])
+    expect(errors(sched('target = "specialist:ops"\ncwd = "~/a"\nworkdir = "~/b"'))).toEqual(['schedules.nightly.cwd: is the old name of `workdir`, which is also set: keep `workdir` and delete `cwd`'])
   })
   test('a bad value points at the key the file has', () => {
-    expect(errors(sched('target = "ops"\ncwd = "jobs"'))).toEqual(['schedules.nightly.cwd: "jobs" must be an absolute path or start with ~'])
-    expect(errors(sched('target = "ops"\nworkdir = "jobs"'))).toEqual(['schedules.nightly.workdir: "jobs" must be an absolute path or start with ~'])
+    expect(errors(sched('target = "specialist:ops"\ncwd = "jobs"'))).toEqual(['schedules.nightly.cwd: "jobs" must be an absolute path or start with ~'])
+    expect(errors(sched('target = "specialist:ops"\nworkdir = "jobs"'))).toEqual(['schedules.nightly.workdir: "jobs" must be an absolute path or start with ~'])
     expect(errors(sched('check = "c.sh"\nprompt = "hi"'))).toEqual(['schedules.nightly.prompt: a schedule with no target sends nothing, so it takes no message'])
     expect(errors(sched('check = "c.sh"\nmessage = "hi"'))).toEqual(['schedules.nightly.message: a schedule with no target sends nothing, so it takes no message'])
-    expect(errors(sched('target = "ops"\nprompt = 5'))).toEqual(['schedules.nightly.prompt: must be a non-empty string'])
+    expect(errors(sched('target = "specialist:ops"\nprompt = 5'))).toEqual(['schedules.nightly.prompt: must be a non-empty string'])
   })
   test('the loader stays strict: an unknown key is still refused', () => {
-    expect(errors(sched('target = "ops"\ntext = "x"'))).toEqual(['schedules.nightly.text: unknown key "text"'])
+    expect(errors(sched('target = "specialist:ops"\ntext = "x"'))).toEqual(['schedules.nightly.text: unknown key "text"'])
   })
 })
 

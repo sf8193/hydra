@@ -14,6 +14,7 @@
 import { whyNotServed } from '../config/pins.js'
 import { DEFAULT_SLACK_APP, type Address, type HydraConfig, type Person, type Place, type Rule, type Specialist } from '../config/types.js'
 import { isSessionThread } from '../shared/specialist-name.js'
+import { spelledBare } from '../shared/target-kind.js'
 export { isSessionThread }
 
 /** Who sent a message, as hydra knows them. `roles` includes the built-in ones they hold. */
@@ -273,9 +274,9 @@ export function explain(d: Decision, guardCommand?: string): string {
   const lines = [`person: ${who}`]
   // Only when it says something: not for the one app a single-app hydra has.
   if (d.app && (d.owner || d.app !== DEFAULT_SLACK_APP)) lines.push(`app: ${d.app}${d.owner ? (d.owner === d.app ? ' (owns this message)' : ` (does not own it: ${d.owner} does)`) : ''}`)
-  for (const s of d.trace) lines.push(`  ${s.matched ? '→' : ' '} ${s.via}${s.to ? ` ${s.to}` : ''}: ${s.why}`)
+  for (const s of d.trace) lines.push(`  ${s.matched ? '→' : ' '} ${s.via}${s.to ? ` ${s.via === 'owner' ? s.to : spelledBare(s.to)}` : ''}: ${s.why}`)
   if (d.fate === 'deliver') {
-    lines.push(`delivers to ${d.to} (by ${d.via})${d.bind ? ', and binds the conversation to it' : ''}`)
+    lines.push(`delivers to ${spelledBare(d.to)} (by ${d.via})${d.bind ? ', and binds the conversation to it' : ''}`)
     if (guardCommand && !d.sender.operator) lines.push(`then the guard judges it: ${guardCommand}`)
   } else if (d.fate === 'refused') lines.push(`refused (🚫): ${d.why}`)
   else if (d.fate === 'unrouted') lines.push('unrouted (🚫): no rule or specialist hears this place')

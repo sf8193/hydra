@@ -15,6 +15,7 @@ export { conversationId, appOfEntry, TOP_LEVEL }
 export type RouteTarget = { to: string; conversation?: string }
 import { runGuard, type GuardInput, type GuardVerdict } from '../../routing/guard.js'
 import type { Guard } from '../../config/types.js'
+import { spelledBare } from '../../shared/target-kind.js'
 
 /**
  * Slack conversations: the Slack connector's side of routing (routing/route.ts).
@@ -1200,7 +1201,7 @@ export class SlackWatcher {
       if (entry.waitingSince !== undefined) { delete entry.waitingSince; this.persist() }
       if (!result.ok && !result.permanent) {
         // Still owed: it stays in `owed`, so the catch-up pass fetches it again. Unless the owed list was full and cut it.
-        this.deps.log(`daemon: slack connector: delivery to ${target.to} failed for ${key} (${first}..${last}): ${result.error}\n`)
+        this.deps.log(`daemon: slack connector: delivery to ${spelledBare(target.to)} failed for ${key} (${first}..${last}): ${result.error}\n`)
         if (result.exit === 8 && fallback) {
           this.deps.log(`daemon: slack connector: the guard redirected ${key} (${first}..${last}) to ${target.to}, which has no session record; delivering to ${fallback}\n`)
           this.alertOnce(`guard-redirect:${target.to}`, fallback, `⚠️ The guard redirected a Slack message in ${placeName(cfg, entry.channel)} to "${target.to}", which has no session record (${result.error}), so it went to ${fallback} instead.`, appOfEntry(entry))

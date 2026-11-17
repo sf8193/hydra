@@ -1,5 +1,7 @@
 import { spawn } from 'child_process'
 import type { Guard } from '../config/types.js'
+import { SPECIALIST_NAME_RE, isSessionThread } from '../shared/specialist-name.js'
+import { bareOf, readTarget } from '../shared/target-kind.js'
 
 /**
  * `[guard]`: the operator's own command, run for each message after routing and the allow check, for anyone but the operator.
@@ -37,8 +39,6 @@ export const GUARD_LATER = 75
 export const GUARD_STDOUT_MAX = 4096
 /** After the guard exits, how long a child it left behind may keep stdout open before it is killed. */
 const STDOUT_GRACE_MS = 200
-/** A redirect names a specialist, or `main`: the names `hydra specialist set` accepts. */
-const TARGET_RE = /^[a-z0-9][a-z0-9-]*$/
 /** What a guard inherits: an allowlist, so a secret added to the daemon's environment later never reaches it. */
 const GUARD_ENV = new Set(['PATH', 'HOME', 'USER', 'LANG', 'TZ', 'TMPDIR', 'SHELL'])
 const SECRET_NAME = /TOKEN|SECRET|KEY|PASSWORD|PASS|AUTH|CREDENTIAL/i
@@ -104,6 +104,9 @@ function judge(code: number | null, out: string): GuardVerdict {
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return { fate: 'open', why: 'exited 0 but printed JSON that is not an object' }
   const to = (parsed as { to?: unknown }).to
   if (to === undefined) return { fate: 'deliver' }
-  if (typeof to !== 'string' || !TARGET_RE.test(to)) return { fate: 'open', why: `printed an unusable "to": ${JSON.stringify(to).slice(0, 80)}` }
-  return { fate: 'deliver', to }
+  // A redirect names `main` or a specialist (`specialist:<name>`; a bare name still reads, silently: the guard has no way to warn). Whether the
+  // specialist is declared is the delivery's to say, as before. A thread is no redirect: the guard cannot move a message into a session's thread.
+  const read = typeof to === 'string' && to === to.trim() ? readTarget(to, id => SPECIALIST_NAME_RE.test(id) && !isSessionThread(id)) : undefined
+  if (!read || !read.ok || read.ref.kind === 'thread') return { fate: 'open', why: `printed an unusable "to": ${JSON.stringify(to).slice(0, 80)}` }
+  return { fate: 'deliver', to: bareOf(read.ref) }
 }

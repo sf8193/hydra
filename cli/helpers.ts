@@ -499,6 +499,7 @@ export function printResponse(response: Record<string, unknown>, json: boolean):
       return
     case 'deliver':
       console.log(`${data.status}: ${data.sessionName} (${data.proof})`)
+      if (data.target) console.log(`delivers to ${data.target}`)
       return
     default:
       console.log(JSON.stringify(data, null, 2))

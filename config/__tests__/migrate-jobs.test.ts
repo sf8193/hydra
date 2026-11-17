@@ -53,7 +53,7 @@ describe('migrate jobs.toml → [schedules]', () => {
     const m = migrateJobs(LIVE, opts)
     expect(m.refusals).toEqual([])
     expect(m.schedules).toEqual({
-      review: { cron: '0 11 * * FRI', check: '~/ledger/review-check.sh', runner: 'daemon', needs: ['internet'], target: 'review' },
+      review: { cron: '0 11 * * FRI', check: '~/ledger/review-check.sh', runner: 'daemon', needs: ['internet'], target: 'specialist:review' },
       nudge: { cron: '0 11,19 * * 0-4,6', check: '~/ledger/nudge.sh', runner: 'launchd' },
       keepalive: { cron: '*/5 * * * *', check: '~/bridge/ensure.sh', runner: 'launchd' },
       pull: { cron: '23 * * * *', check: '~/ledger/pull.sh', runner: 'daemon', needs: ['internet'], alert_after: '2d' },
@@ -133,7 +133,7 @@ describe('migrate jobs.toml → [schedules]', () => {
       writeFileSync(stateFile(dir, 'review'), JSON.stringify({ v: 1, covered: { slot: latest.label, at: latest.at.toISOString() }, last: { at: latest.at.toISOString(), result: 'done' } }))
       const out = jobsStep.run({ stateDir: dir, env: testLoadEnv({ home: '/h', sessionNames: [] }), spawnCwd: '/h/work', platform: 'discord' })!
       const line = (id: string) => out.notes.find(n => n.startsWith(`${id}: next `))
-      expect(line('review')).toBe(`review: next ${nextSlot('0 11 * * FRI', new Date())!.label}, not owed; runner daemon, needs internet; to review: a fresh session in a new thread in 1551794455227404370; initiator jobs:review`)
+      expect(line('review')).toBe(`review: next ${nextSlot('0 11 * * FRI', new Date())!.label}, not owed; runner daemon, needs internet; to specialist:review: a fresh session in a new thread in 1551794455227404370; initiator jobs:review`)
       expect(line('pull')).toMatch(/^pull: next \S+ \S+, no record yet \(nothing owed\); runner daemon, needs internet, alert_after 2d; a sensor \(no message\); initiator jobs:pull$/)
       expect(line('health')).toMatch(/^health: next \S+ \S+; runner launchd; to main; initiator jobs:health$/)
     } finally { rmSync(dir, { recursive: true }) }
@@ -174,7 +174,7 @@ describe('migrate jobs.toml → [schedules]', () => {
   test("a spawn table carries its kickoff and model; the session stays in SPAWN_CWD, the check in its cwd; no idle is today's 30m", () => {
     const m = migrateJobs(`[s]\nschedule="0 6 * * *"\ncwd="/srv/s"\ncheck="c.sh"\nprompt="Triage."\nspawn={ channel="c1", kickoff_file="/k.md", model="haiku" }\n`, opts)
     expect(m.specialists.s).toEqual({ workdir: '/home/u/work', home: 'c1', sessions: 'per-conversation', idle: '30m', kickoff_file: '/k.md', model: 'haiku' })
-    expect(m.schedules.s).toMatchObject({ target: 's', workdir: '/srv/s', message: 'Triage.' })
+    expect(m.schedules.s).toMatchObject({ target: 'specialist:s', workdir: '/srv/s', message: 'Triage.' })
     expect(m.notes).toEqual([
       's: a per-conversation specialist; each run is a fresh session in a new thread, as before',
       's: workdir /home/u/work is where its spawned sessions ran (SPAWN_CWD); its check still runs in /srv/s; set workdir to run them elsewhere',
@@ -184,14 +184,14 @@ describe('migrate jobs.toml → [schedules]', () => {
 
   test('a spawn job with a prompt and no check keeps its prompt on the schedule: it is the only message a run has', () => {
     const m = migrateJobs(`[s]\nschedule="0 9 * * MON"\nprompt="Run the retro."\nspawn={ channel="c1" }\n`, opts)
-    expect(m.schedules.s).toEqual({ cron: '0 9 * * MON', message: 'Run the retro.', runner: 'launchd', target: 's' })
+    expect(m.schedules.s).toEqual({ cron: '0 9 * * MON', message: 'Run the retro.', runner: 'launchd', target: 'specialist:s' })
     expect(m.specialists.s.kickoff).toBe('Run the retro.')
     expect(m.notes).toContain('s: no check, so the schedule sends its message each run, and a fresh session also starts with it')
   })
 
   test('daemon keys carry over; runner is written on each schedule; the file-wide channel and runner are noted', () => {
     const m = migrateJobs(`runner = "daemon"\nchannel = "c9"\n[w]\nschedule="0 11 * * 5"\nto="ops"\nprompt="p"\nneeds=["internet"]\nalert_after="2d"\nrevive=true\nchannel="c2"\ndurable=true\n`, opts)
-    expect(m.schedules.w).toEqual({ cron: '0 11 * * 5', target: 'ops', message: 'p', runner: 'daemon', needs: ['internet'], alert_after: '2d' })
+    expect(m.schedules.w).toEqual({ cron: '0 11 * * 5', target: 'specialist:ops', message: 'p', runner: 'daemon', needs: ['internet'], alert_after: '2d' })
     expect(m.notes).toEqual([
       'channel = "c9" (top level): dropped; a failing schedule alerts the operator',
       'runner = "daemon" (top level): written on each schedule',

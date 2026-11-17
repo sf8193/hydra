@@ -141,7 +141,7 @@ describe('`prompt` and `prompt_file` are now `kickoff` and `kickoff_file`', () =
     expect(renameWarnings(r.warnings)).toEqual(['defaults.specialist.prompt: rename `prompt` to `kickoff`; `prompt` still loads and will be removed'])
   })
   test('a schedule\'s message is not renamed to kickoff', () => {
-    const r = ok(`${spec('')}[schedules.nightly]\ncron = "@daily"\ntarget = "ops"\nmessage = "go"\n`)
+    const r = ok(`${spec('')}[schedules.nightly]\ncron = "@daily"\ntarget = "specialist:ops"\nmessage = "go"\n`)
     expect(r.config.schedules.nightly.message).toBe('go')
     expect(renameWarnings(r.warnings)).toEqual([])
   })
@@ -210,10 +210,10 @@ describe('`apps` is now `pinned_to`', () => {
       .toEqual(['specialists.ops.apps (from defaults.specialist)[0]: no app "nope": declare [slack.apps.nope]; hydra.toml declares default, sales'])
   })
   test('the old name is not read on a rule or a place: `app` is not renamed', () => {
-    expect(load(`${spec('')}[[rules]]\napps = "sales"\ntarget = "ops"\n`).errors).toEqual(['rules[0].apps: unknown key "apps"', 'rules[0]: a rule needs `place`, `app` or both; `person` only narrows who it applies to'])
+    expect(load(`${spec('')}[[rules]]\napps = "sales"\ntarget = "specialist:ops"\n`).errors).toEqual(['rules[0].apps: unknown key "apps"', 'rules[0]: a rule needs `place`, `app` or both; `person` only narrows who it applies to'])
   })
   test('a rule pointing at a pinned specialist names pinned_to in its fix', () => {
-    expect(load(`${spec('pinned_to = ["sales"]')}[[rules]]\napp = "default"\ntarget = "ops"\n`).errors[0]).toContain("add default to ops's `pinned_to`")
+    expect(load(`${spec('pinned_to = ["sales"]')}[[rules]]\napp = "default"\ntarget = "specialist:ops"\n`).errors[0]).toContain("add default to ops's `pinned_to`")
   })
 })
 

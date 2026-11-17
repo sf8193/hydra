@@ -27,6 +27,15 @@ describe('the guard: the exit code is the verdict', () => {
     expect(await run(script('junk.sh', 'echo hello'))).toMatchObject({ fate: 'open', why: expect.stringContaining('other than JSON') })
     expect(await run(script('badto.sh', 'echo \'{"to": "../x"}\''))).toMatchObject({ fate: 'open', why: expect.stringContaining('unusable') })
     expect(await run(script('caps.sh', 'echo \'{"to": "Ops_Team"}\''))).toMatchObject({ fate: 'open', why: expect.stringContaining('unusable') })
+  })
+
+  test('a redirect says its kind: specialist:<name> and main redirect, a bare name still does, a thread or unknown prefix is unusable', async () => {
+    expect(await run(script('kind1.sh', 'echo \'{"to": "specialist:billing"}\''))).toEqual({ fate: 'deliver', to: 'billing' })
+    expect(await run(script('kind2.sh', 'echo \'{"to": "main"}\''))).toEqual({ fate: 'deliver', to: 'main' })
+    expect(await run(script('kind3.sh', 'echo \'{"to": "billing"}\''))).toEqual({ fate: 'deliver', to: 'billing' })
+    for (const bad of ['thread:123', '123', 'specialist:main', 'specialist:123', 'team:ops', 'specialist:Ops', ' billing']) {
+      expect(await run(script('kindbad.sh', `echo '{"to": "${bad}"}'`))).toMatchObject({ fate: 'open', why: expect.stringContaining('unusable') })
+    }
     expect(await run(script('str.sh', 'echo \'"ops"\''))).toMatchObject({ fate: 'open', why: expect.stringContaining('not an object') })
   })
 

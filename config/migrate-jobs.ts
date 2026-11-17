@@ -6,7 +6,7 @@
 //   check, env_file                → the same keys; prompt → message; cwd → workdir
 //   runner (job or file-wide)      → runner on each schedule
 //   needs, alert_after             → the same keys (daemon runner only, as before)
-//   to = "<specialist>" / "main"   → target; mode = "main" → target = "main"; mode = "none" → no target (a sensor)
+//   to = "<specialist>" / "main"   → target = "specialist:<name>" / "main"; mode = "main" → target = "main"; mode = "none" → no target (a sensor)
 //   spawn = {…} / mode = "spawn"   → a per-conversation specialist of the same id, and the schedule sends to it: each
 //                                    run opens a new conversation (a fresh session in a new thread in its home), as before
 //   to = "<thread id>"             → refused: a specialist is the only pointer to a thread
@@ -18,6 +18,7 @@ import { daemonFile, jobInitiator, owedSlot, parseJobsConfig, readDaemonState, r
 import { nextSlot } from '../shared/cron-local.js'
 import { DEFAULT_IDLE_TTL_MS } from '../shared/constants.js'
 import { invalidSpecialistName, isSessionThread } from '../shared/specialist-name.js'
+import { readTarget, spelled } from '../shared/target-kind.js'
 import type { MigrateStep } from './migrate.js'
 
 export type ScheduleTable = {
@@ -116,17 +117,20 @@ export function migrateJobs(text: string, opts: JobsMigrationOpts): JobsMigratio
       // With a check, its output is the run's message and the job's prompt is the session's first words. With none, the
       // prompt is the only message there is, so the schedule keeps it too (the session reads it twice).
       if (!kickoff && j.check !== undefined) delete s.message
-      s.target = j.name
+      s.target = `specialist:${j.name}`
       note(`${j.name}: a per-conversation specialist; each run is a fresh session in a new thread, as before`)
       if (!kickoff && j.check === undefined) note(`${j.name}: no check, so the schedule sends its message each run, and a fresh session also starts with it`)
       note(`${j.name}: workdir ${workdir} is where its spawned sessions ran (SPAWN_CWD)${j.cwd ? `; its check still runs in ${j.cwd}` : ''}; set workdir to run them elsewhere`)
       if (r.idle === undefined) note(`${j.name}: idle ${SPAWN_IDLE}, the default its spawned sessions had`)
-    } else if (target.to === 'main' || !isSessionThread(target.to)) {
-      s.target = target.to
-      if (target.revive) note(`${j.name}: revive dropped; a specialist always revives`)
     } else {
-      out.refusals.push(`${j.name}: to = "${target.to}" is a thread; declare a specialist for it and send to that`)
-      continue
+      // A job's `to` is main, a specialist's name or a thread id, bare or saying its kind; the schedule says it.
+      const ref = readTarget(target.to, id => !isSessionThread(id))
+      if (!ref.ok || ref.ref.kind === 'thread') {
+        out.refusals.push(`${j.name}: to = "${target.to}" is ${ref.ok ? 'a thread; declare a specialist for it and send to that' : ref.error ?? 'not a target'}`)
+        continue
+      }
+      s.target = spelled(ref.ref)
+      if (target.revive) note(`${j.name}: revive dropped; a specialist always revives`)
     }
     out.schedules[j.name] = s
   }

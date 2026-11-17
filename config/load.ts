@@ -14,6 +14,7 @@ import { engineConfinesAccess } from '../shared/engine-capabilities.js'
 import { noSuchApp, pinnersOf, serves, speaksAsOf, whyNotServed } from './pins.js'
 import { SLACK_APP_DEFAULTS } from '../connectors/slack/app.js'
 import { invalidSpecialistName } from '../shared/specialist-name.js'
+import { bareOf, readTarget, spelled } from '../shared/target-kind.js'
 import {
   BUILTIN_ROLES, DEFAULT_SLACK_APP, type Address, type ConfigIssue, type Connectors, type Gateways, type Guard, type HydraConfig, type LoadEnv, type LoadResult,
   type McpServer, type WorkdirScan, type Person, type Place, type PlaceOptions, type Platform, type Rule, type Schedule, type SessionsMode, type SlackApp, type Specialist, type Vitals,
@@ -661,8 +662,16 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       ...(envFile !== undefined && { envFile: underWorkdir(envFile) }),
     }
   }
-  // `main` is the built-in specialist: a valid target, never declared, never in `listens`.
-  const isTarget = (id: string) => id === 'main' || has(specialists, id)
+  // A target value says its kind: `main` (the built-in specialist: never declared, never in `listens`) or `specialist:<name>` (declared here).
+  // A bare name still loads, as the same target, with a warning that says how to write it. Read by `readTarget`, as delivery and the CLI read it;
+  // the loaded config holds the bare form (`main`, a specialist's id), which is what routing and the schedules compare against.
+  const targetOf = (raw: string, path: string, owner: 'rule' | 'schedule'): string | undefined => {
+    const r = readTarget(raw, id => has(specialists, id))
+    if (!r.ok) { error(path, r.error ?? `no specialist "${r.undeclared}": declare [specialists.${r.undeclared}], or use main`); return undefined }
+    if (r.ref.kind === 'thread') { error(path, `"${raw}" is a thread, and a ${owner}'s target is main or a declared specialist: declare a specialist for that thread, and write specialist:<name>`); return undefined }
+    if (r.bare) warn(path, `write "${spelled(r.ref)}" instead of "${raw}": a target says its kind; the bare name still works and will be removed`)
+    return bareOf(r.ref)
+  }
 
   // --- places --------------------------------------------------------------------------------------------------------
 
@@ -709,12 +718,12 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     else if (cron !== undefined) {
       try { parseCron(cron) } catch (e) { error(`${path}.cron`, (e as Error).message) }
     }
-    const target = str(t, 'target', path)
-    if (target !== undefined && !isTarget(target)) error(`${path}.target`, `no specialist "${target}"`)
+    const targetRaw = str(t, 'target', path)
+    const target = targetRaw === undefined ? undefined : targetOf(targetRaw, `${path}.target`, 'schedule')
     const message = t.message === '' ? '' : str(t, 'message', path) ?? ''
     const check = str(t, 'check', path)
     // No `target`: a sensor. It sends nothing, so it needs a check and takes no message.
-    if (t.target === undefined && check === undefined) error(`${path}.target`, 'is required unless there is a check (a sensor): a specialist, or main')
+    if (t.target === undefined && check === undefined) error(`${path}.target`, 'is required unless there is a check (a sensor): specialist:<name>, or main')
     if (t.target === undefined && message !== '') error(`${path}.message`, 'a schedule with no target sends nothing, so it takes no message')
     const workdirRaw = str(t, 'workdir', path)
     const workdir = workdirRaw === undefined ? undefined : expand(workdirRaw)
@@ -760,9 +769,9 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     }
     const person = str(t, 'person', path)
     if (person !== undefined && !has(people, person) && !isRole(person)) error(`${path}.person`, `"${person}" is neither a person nor a role anyone holds`)
-    const ruleTarget = str(t, 'target', path)
-    if (t.target === undefined) error(`${path}.target`, 'is required: a specialist, or main')
-    else if (ruleTarget !== undefined && !isTarget(ruleTarget)) error(`${path}.target`, `no specialist "${ruleTarget}"`)
+    const ruleTargetRaw = str(t, 'target', path)
+    if (t.target === undefined) error(`${path}.target`, 'is required: specialist:<name>, or main')
+    const ruleTarget = ruleTargetRaw === undefined ? undefined : targetOf(ruleTargetRaw, `${path}.target`, 'rule')
     // Whether `target` can ever take what the rule matches: a pinned specialist only through its `pinned_to` apps, and an app that any specialist is pinned to delivers only to them.
     const specialist = ruleTarget !== undefined ? specialists[ruleTarget] : undefined
     if (specialist && ruleTarget !== undefined) {

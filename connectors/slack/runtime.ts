@@ -24,6 +24,7 @@ import { notServedBy } from '../../routing/route.js'
 import { NO_SLACK_APP, notConnected } from './app.js'
 import { timed } from '../../shared/loop-watch.js'
 import { registerSlackChannelNames } from '../../shared/link-previews.js'
+import { bareOf, readTarget } from '../../shared/target-kind.js'
 
 const log = (line: string) => { process.stderr.write(line) }
 
@@ -534,9 +535,12 @@ async function postParts(app: string, channel: string, thread: string | undefine
 }
 
 /** `hydra conversations bind`: the operator binds or moves a conversation to any declared specialist, main, or a session's thread (listen-only there). */
-export function operatorBind(conversation: string, to: string): string {
+export function operatorBind(conversation: string, target: string): string {
   const h = hydraConfig()
-  if (to !== MAIN && !h.specialists[to] && !isSessionThread(to)) throw new Error(`no specialist "${to}" in hydra.toml (or a session's thread id)`)
+  // The target says its kind (`ops` and `specialist:ops` are one); a binding stores the bare form, as it always has.
+  const ref = readTarget(target, id => Object.hasOwn(h.specialists, id))
+  if (!ref.ok) throw new Error(ref.error ?? `no specialist "${ref.undeclared}" in hydra.toml (or a session's thread id)`)
+  const to = bareOf(ref.ref)
   const c = parseConversation(conversation)
   const app = appOfEntry(c)
   declaredApp(h, app)

@@ -170,18 +170,18 @@ socket_token_env = "SALES_SLACK_APP_TOKEN"
 
 An app is a way in: a message reaches hydra through the app whose connection delivered it. Routing knows which, and three things use it. `hydra route --person <person> --place <place> --app <app>` shows each.
 
-**Rules match an app, a place, or both.** A `[[rules]]` entry names `place`, `app` (an app id), or both; an absent one matches every place or every app, so a rule in a hydra.toml with no `[slack.apps.*]` tables and no `app` keys behaves as it did. `person` only narrows who: a rule with `person` and neither `place` nor `app` is an error. The first rule in file order that matches wins.
+**Rules match an app, a place, or both.** A `[[rules]]` entry names `place`, `app` (an app id), or both; an absent one matches every place or every app, so a rule in a hydra.toml with no `[slack.apps.*]` tables and no `app` keys behaves as it did. `person` only narrows who: a rule with `person` and neither `place` nor `app` is an error. The first rule in file order that matches wins. A `target` says its kind: `main`, or `specialist:<name>` for a declared specialist (a bare name still loads, with a warning that gives the prefixed form; `thread:<id>` is not a rule's target).
 
 ```toml
 [[rules]]
 app = "sales"                    # everything that comes through the sales app
-target = "deals"
+target = "specialist:deals"
 
 [[rules]]
 place = "slack:#help"
 app = "support"                  # #help, through the support app only
 person = "staff"
-target = "desk"
+target = "specialist:desk"
 ```
 
 **A specialist can be pinned to apps.** `pinned_to = ["sales"]` in a specialist means two things:

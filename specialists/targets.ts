@@ -20,11 +20,11 @@ import { currentHydraConfig } from '../daemon/hydra-config.js'
 import { ensureSpecialist, SpecialistError } from './specialist-deliver.js'
 import { currentRecoveryDeps, reviveThreadForDelivery } from '../daemon/recovery.js'
 import type { DeliveryResult } from '../daemon/engines/engine-adapter.js'
-import { isSessionThread } from '../shared/specialist-name.js'
+import { readTarget, TARGET_FORMS, type TargetRef } from '../shared/target-kind.js'
 
 export type Recipe = { channel: string; kickoff?: string; kickoffFile?: string; model?: string; idle?: string }
 export type Target =
-  | { to: string; revive?: boolean }   // a specialist name, "main", or a thread id
+  | { to: string; revive?: boolean }   // `main`, `specialist:<name>` or `thread:<id>` (a bare name or thread id still reads: resolveTo)
   | { spawn: Recipe }
   /**
    * `sessions = "per-conversation"`: the conversation's own session, made from the specialist's recipe and never stored,
@@ -47,12 +47,14 @@ export type DeliverOpts = { initiator: string; idempotencyKey?: string; idempote
 /** Test seam: pane-probe's verdict that a session sits on a dialog or prompt. */
 export const targetDeps = { stuckState: confirmedStuckState }
 
-/** `to` resolves in this order: `main`, a declared specialist, an all-digit thread id; anything else is no such specialist. */
-export function resolveTo(to: string): { kind: 'main' } | { kind: 'specialist'; name: string } | { kind: 'thread'; threadId: string } | { kind: 'unknown' } {
-  if (to === 'main') return { kind: 'main' }
-  if (getSpecialist(to)) return { kind: 'specialist', name: to }
-  if (isSessionThread(to)) return { kind: 'thread', threadId: to }
-  return { kind: 'unknown' }
+/**
+ * What a `to` names: the one place a target value is read, for delivery, the CLI and bindings (the hydra.toml loader reads it through the
+ * same `readTarget`). `main`, `specialist:<name>` and `thread:<id>` say their kind. A bare value reads as it always did: `main`, a
+ * declared specialist, then an all-digit thread id. Anything else is unknown, with the reason (exit 8).
+ */
+export function resolveTo(to: string): TargetRef | { kind: 'unknown'; reason: string } {
+  const r = readTarget(to, name => !!getSpecialist(name))
+  return r.ok ? r.ref : { kind: 'unknown', reason: r.error ?? `no such specialist: ${r.undeclared}` }
 }
 
 /**
@@ -85,7 +87,7 @@ export function parseTarget(raw: unknown, where: string): Target {
   const kinds = (['to', 'spawn'] as const).filter(k => r[k] !== undefined)
   if (kinds.length !== 1) throw new Error(`${where}: give exactly one of to, spawn (got ${kinds.length ? kinds.join(', ') : 'none'})`)
   if (kinds[0] === 'to') {
-    if (typeof r.to !== 'string' || !r.to.trim()) throw new Error(`${where}: to must be a specialist name, "main" or a thread id`)
+    if (typeof r.to !== 'string' || !r.to.trim()) throw new Error(`${where}: to must be ${TARGET_FORMS}`)
     if (r.revive !== undefined && typeof r.revive !== 'boolean') throw new Error(`${where}: revive must be true or false`)
     return { to: r.to.trim(), ...(r.revive === true && { revive: true }) }
   }
@@ -177,7 +179,7 @@ async function route(t: Target, text: string, opts: DeliverOpts): Promise<Delive
   switch (to.kind) {
     case 'main': return toMain(text, opts)
     case 'specialist': return toSpecialist(to.name, text, opts)
-    case 'unknown': return { ok: false, exit: 8, reason: `no such specialist: ${t.to}` }
+    case 'unknown': return { ok: false, exit: 8, reason: to.reason }
     case 'thread': return toThread(to.threadId, text, opts, !!t.revive)
   }
 }
