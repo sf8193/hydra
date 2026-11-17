@@ -32,7 +32,7 @@ describe.skipIf(!LIVE)('deny_tools under the real claude and the real confinemen
   }, 90_000)
 
   describe('the start check, on the real Claude Code\'s own debug file (the parser and the comparison the daemon\'s start check uses)', () => {
-    const want = (denyTools?: string[]) => { const r = confinementRules({ denyCommands: [], cannotRead: pr.places(), servers: [{ name: 'browser', command: 'x', tokenEnv: [], profileArgs: [], profileEnv: {}, ...(denyTools && { denyTools }) }] }); return { ...r, servers: ['browser'] } }
+    const want = (denyTools?: string[]) => { const r = confinementRules({ denyCommands: [], cannotRead: pr.places(), workdir: pr.workdir, servers: [{ name: 'browser', command: 'x', tokenEnv: [], profileArgs: [], profileEnv: {}, ...(denyTools && { denyTools }) }] }); return { ...r, servers: ['browser'] } }
     test('a launch with deny_tools set applied its rule: nothing is short', async () => {
       await pr.run({ name: 'mcp__browser__harmless', input: {} }, undefined, { servers: [server(['unsafe_tool'])] })
       expect(want(['unsafe_tool']).deny).toContain('mcp__browser__unsafe_tool')

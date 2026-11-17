@@ -9,7 +9,7 @@ import { CLAUDE_CONFIG, STATE_DIR } from '../config.js'
 import { PolicyRefusal, bornPolicy, describePolicy, policyDrifted, policyProblem, confinementIdFor, type LaunchPolicy } from '../restricted.js'
 import { removeRestrictedFiles, restrictedDir } from '../restricted-files.js'
 import { confinementShortfall, confinementSurplus, readLoaded, verifyConfinement, verifyDeps } from '../engines/claude-verify.js'
-import { bridgeServerCommands, claudeSettingsProblems, MIN_CLAUDE_VERSION, claudeVersion, claudeVersionRefusal, confinementRules, confinementSettings } from '../write-confinement.js'
+import { bridgeServerCommands, claudeSettingsProblems, MIN_CLAUDE_VERSION, claudeVersion, claudeVersionRefusal, confinementMcp, confinementRules, confinementSettings } from '../write-confinement.js'
 import { EMPTY_CONFIG } from '../../config/load.js'
 import { readDenyRoots } from '../../config/write-confinement.js'
 import { hydraLoadEnv } from '../hydra-config.js'
@@ -125,7 +125,7 @@ describe('the settings', () => {
   test('pinned exactly: the sandbox on, no unsandboxed retry, no unsandboxed commands, the write block, the deny list', async () => {
     await launch()
     expect(readJson(settingsFile())).toEqual({
-      allowedMcpServers: [{ serverName: 'browser' }, ...[...new Map([bridgeCmd(), bridgeCmd(true)].map(c => [c.join('\0'), { serverCommand: c }])).values()]],
+      allowedMcpServers: [{ serverCommand: ['/usr/local/bin/browser-mcp', '--user-data-dir', join(work, '.browser', 'profile'), `--downloads=${join(work, '.browser', 'downloads')}`] }, ...[...new Map([bridgeCmd(), bridgeCmd(true)].map(c => [c.join('\0'), { serverCommand: c }])).values()]],
       disableClaudeAiConnectors: true,
       sandbox: { enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, excludedCommands: [], filesystem: { disabled: false, denyRead: ['/home/op/.ssh', '/home/op/other'] }, enableWeakerNestedSandbox: false, autoAllowBashIfSandboxed: true },
       permissions: { blockWritesOutsideWorkingDirectories: true, allow: ['WebFetch(domain:*)'], deny: ['Read(//home/op/.ssh/**)', 'Read(//home/op/other/**)', 'Bash(rm -rf *)'] },
@@ -144,12 +144,22 @@ describe('the settings', () => {
     expect(pick(confinementSettings({ denyCommands: [], cannotRead: [] }))).toEqual(want)
   })
 
-  test('the allowlist is the listed servers by name and the bridge by the exact command it runs (never a `plugin:` key: Claude Code rejects a colon in a serverName and stops at a dialog)', () => {
+  test('the allowlist is each listed server and the bridge by the exact command it runs (never a `serverName`, never a `plugin:` key)', () => {
     const cmd = ['bun', 'run', '--cwd', '/cfg/plugins/cache/claude-plugins-official/discord/0.0.4', '--shell=bun', '--silent', 'start']
-    const s: any = confinementSettings({ denyCommands: [], cannotRead: [], servers: [server], bridgeCommands: [cmd] })
-    expect(s.allowedMcpServers).toEqual([{ serverName: 'browser' }, { serverCommand: cmd }])
+    const s: any = confinementSettings({ denyCommands: [], cannotRead: [], workdir: '/w', servers: [server], bridgeCommands: [cmd] })
+    expect(s.allowedMcpServers).toEqual([{ serverCommand: ['/usr/local/bin/browser-mcp', '--user-data-dir', '/w/.browser/profile', '--downloads=/w/.browser/downloads'] }, { serverCommand: cmd }])
     expect(claudeSettingsProblems(s)).toEqual([])
     expect(s.disableClaudeAiConnectors).toBe(true)
+  })
+
+  // Claude Code 2.1.326 matches a stdio server by its full command once any serverCommand entry (the bridge's) exists: a name no longer admits it (F-16).
+  test('the allowlist admits the MCP config it ships with: every server\'s command, as the config runs it, is an entry', () => {
+    const policy = { specialist: 's', workdir: '/w', denyCommands: [], cannotRead: [], servers: [server, { ...server, name: 'second', command: 'npx', profileArgs: ['-y', 'pkg', '--out', '{download_dir}'] }], browserProfile: '/w/p1' }
+    const mcp: any = confinementMcp(policy, 's', { BR_TOKEN: 't' }, {}, '/env')
+    const entries = new Set(((confinementSettings({ ...policy, bridgeCommands: [['bun', 'run', 'x']] }) as any).allowedMcpServers as any[]).map(e => JSON.stringify(e.serverCommand)))
+    expect(Object.keys(mcp.mcpServers)).toEqual(['browser', 'second'])
+    for (const [name, c] of Object.entries<any>(mcp.mcpServers)) expect([name, entries.has(JSON.stringify([c.command, ...c.args]))]).toEqual([name, true])
+    expect(entries.has(JSON.stringify(['/usr/local/bin/browser-mcp', '--user-data-dir', '/w/p1', '--downloads=/w/p1-downloads']))).toBe(true)
   })
 
   test('with no servers listed the allowlist is the bridge alone', () => {
@@ -201,15 +211,10 @@ describe('the settings', () => {
     expect(existsSync(settingsFile())).toBe(false)
   })
 
-  test('settings Claude Code would reject refuse the launch before anything is written (a server name with a colon is the regression)', async () => {
-    await expect(launch({}, policyOf({ servers: [{ ...server, name: 'bad:name' }] }))).rejects.toThrow(/would reject \(allowedMcpServers\[0\]: server name "bad:name" can only contain letters/)
-    expect(existsSync(settingsFile())).toBe(false)
-  })
-
   test('the written settings carry the bridge command for each synced folder', async () => {
     await launch()
     const got = readJson(settingsFile()).allowedMcpServers
-    expect(got[0]).toEqual({ serverName: 'browser' })
+    expect(got[0]).toEqual({ serverCommand: ['/usr/local/bin/browser-mcp', '--user-data-dir', join(work, '.browser', 'profile'), `--downloads=${join(work, '.browser', 'downloads')}`] })
     expect(got.slice(1).every((e: any) => e.serverCommand[0] === 'bun' && e.serverCommand[3].includes('/plugins/cache/claude-plugins-official/discord/0.0.4'))).toBe(true)
   })
 
