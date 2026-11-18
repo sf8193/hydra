@@ -117,6 +117,9 @@ const incumbentHolds = new Map<string, { until: number; socket: import('net').So
 // Bridge protocol handler
 // ---------------------------------------------------------------------------
 
+/** A session registering this soon after its record was made (a first start, a resume or a refill) may be in Claude Code's startup: see settleThenFlush. */
+const FRESH_START_MS = 120_000
+
 /** Role of a registering bridge connection: 'control' (tool-only sidecar) or 'session'. */
 export function connectionRoleFor(msg: { connectionRole?: unknown }, info: SessionInfo | undefined): 'control' | 'session' {
   return msg.connectionRole === 'control' || info?.adapter?.channel === 'engine' ? 'control' : 'session'
@@ -287,7 +290,8 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       // Reply guard: re-arm from queued user messages before the flush hands
       // them over — the queue survives daemon restarts, the guard map doesn't.
       notePendingFromQueue(sessionId, transport.messageQueues.get(sessionId))
-      transport.flushQueue(sessionId)
+      if (info?.engine === 'claude' && info.adapter && Date.now() - info.createdAt < FRESH_START_MS) transport.settleThenFlush(sessionId, () => info.adapter!.turn(info, 0).live === 'idle')
+      else transport.flushQueue(sessionId)
       dispatchReconnect(sessionId)
       if (info && info.sessionType !== 'thread_guest') refreshSessionVisual(info.threadId)
       if (sessionId === 'main') {
