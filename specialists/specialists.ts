@@ -9,7 +9,7 @@ import { SPECIALIST_NAME_RE, invalidSpecialistName as invalidName, isSessionThre
 import { currentHydraConfig, hydraConfigInUse, onHydraConfigLoad } from '../daemon/hydra-config.js'
 import { isChannelName, parsePlace, type HydraConfig, type Specialist as DeclaredSpecialist } from '../config/types.js'
 import type { EngineName } from '../shared/engine-capabilities.js'
-import { engineOfModel } from '../shared/constants.js'
+import { engineOfModel, SPECIALIST_THREADS } from '../shared/constants.js'
 
 /**
  * A specialist is a named pointer to a thread (or the channel to open one in) plus the recipe for filling it.
@@ -51,7 +51,7 @@ export { SPECIALIST_NAME_RE }
 export const invalidSpecialistName = (name: string): string | undefined => invalidName(name, SESSION_NAMES)
 
 const specialistsPath = () => join(STATE_DIR, 'specialists.json')
-const threadsPath = () => join(STATE_DIR, 'specialist-threads.json')
+const threadsPath = () => join(STATE_DIR, SPECIALIST_THREADS)
 
 let specialists: Map<string, Specialist> = new Map()
 
