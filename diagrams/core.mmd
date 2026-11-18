@@ -9,6 +9,8 @@ flowchart LR
   IN --> RU{{"<b>Rule</b><br/>place, person, target:<br/>first match wins"}}
   RU --> TG(["<b>Target</b><br/>who receives it"])
   CN -. "GitHub watch, clock job:<br/>target named at creation" .-> TG
+  RU -. "route" .-> EV["<b>Event</b><br/>what hydra decided,<br/>read with hydra events"]
+  CV -. "bind, unbind" .-> EV
   TG --> SP["<b>Specialist</b><br/>a named session,<br/>refilled when it ends"]
   SP -.-> RS["<b>Restricted specialist</b><br/>knows only what its<br/>audience can already see"]
   SP -.-> WC["<b>Write-confined specialist</b><br/>the operator's account,<br/>writes only in its workdir"]
@@ -16,5 +18,5 @@ flowchart LR
   classDef step fill:#eef2ff,stroke:#6366f1,color:#1f2937
   classDef gate fill:#fff7ed,stroke:#f97316,color:#1f2937
   class TG,SP,RS,WC,MN core
-  class GW,AP,CN,IN,PE,PL,TR,CV step
+  class GW,AP,CN,IN,PE,PL,TR,CV,EV step
   class RU gate

@@ -310,6 +310,16 @@ addresses = ["github:alice"]
       .toEqual({ overloadLoadPerCore: 2, overloadIdlePct: 10, swapUsedPct: 90.5, ticks: 5, resumeSettleMs: 30 * 60_000, memoryCooldownMs: 12 * 3_600_000 })
   })
 
+  test('[events]: keep_days is optional, a whole number of days above 0; other keys are refused', () => {
+    expect(ok(BASE).config.events).toBeUndefined()
+    expect(ok(`${BASE}\n[events]\n`).config.events).toBeUndefined()
+    expect(ok(`${BASE}\n[events]\nkeep_days = 7\n`).config.events).toEqual({ keepDays: 7 })
+    for (const v of ['0', '-3', '1.5', '"30"']) expect(errorsOf(`${BASE}\n[events]\nkeep_days = ${v}\n`)).toEqual(['events.keep_days: must be a whole number above 0'])
+    expect(errorsOf(`${BASE}\n[events]\nkeep_days = 3651\n`)).toEqual(['events.keep_days: must be at most 3650 days'])
+    expect(ok(`${BASE}\n[events]\nkeep_days = 3650\n`).config.events).toEqual({ keepDays: 3650 })
+    expect(errorsOf(`${BASE}\n[events]\nkeep = 7\n`).join('\n')).toContain('events.keep')
+  })
+
   test('[vitals]: overload_load_per_core is a ratio, not a percentage: no cap at 100, but above 0 and finite (#781)', () => {
     for (const v of ['100.5', '1000']) expect(ok(`${BASE}\n[vitals]\noverload_load_per_core = ${v}\n`).config.vitals?.overloadLoadPerCore).toBe(Number(v))
     for (const v of ['0', '-1', 'inf', 'nan', '1e400', '"2"']) {

@@ -45,11 +45,13 @@ describe('the example router kickoff', () => {
     }
   })
 
-  test('it keeps the decision log that tunes it: read before routing, one line per route, and a correction is appended', () => {
-    expect(kickoff).toContain('decisions.md')
-    expect(kickoff).toMatch(/Read your decision log/)
-    expect(kickoff).toMatch(/Append one line to `decisions.md`/)
-    expect(kickoff).toMatch(/corrected/)
+  test('it reads its history from the event stream, writes no log of its own, and a correction is another bind', () => {
+    expect(kickoff).not.toContain('decisions.md')
+    expect(kickoff).toContain('hydra events --kind bind --since 14d')
+    expect(kickoff).toContain('hydra events --conversation <conversation>')
+    expect(cli).toContain('hydra [--state-dir <dir>] events [--kind route|bind|unbind]')
+    expect(kickoff).toMatch(/a correction/)
+    expect(slackDoc).not.toContain('decisions.md')
     expect(kickoff).toMatch(/Never ask a session that declined the same thread again/)
     expect(kickoff).toMatch(/about 2 minutes/)
   })

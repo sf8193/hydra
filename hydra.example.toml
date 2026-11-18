@@ -310,6 +310,11 @@ timeout = "5s"                        # past this, the message is delivered and 
 include_text = false
 owed_max = "1h"                       # how long deferred may keep a message accepted but undelivered before it fails visibly
 
+# --- events: how long the event stream (routes, binds, unbinds; read with `hydra events`) is kept ---
+
+[events]
+keep_days = 30                        # day files in <state dir>/events older than this many days are deleted (optional, default 30)
+
 # --- vitals: when the once-a-minute vitals tick tells the operator the host is in trouble (every key optional) ---
 
 [vitals]

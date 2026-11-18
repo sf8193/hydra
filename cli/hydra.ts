@@ -17,6 +17,7 @@ import { peopleCommand } from './people.js'
 import { configAddCommand } from './config-add.js'
 import { configCheckCommand } from './config-check.js'
 import { slackCommand } from './slack.js'
+import { eventsCommand } from './events.js'
 import { readBootRefusal } from './boot-refusal.js'
 import { bootRefusal } from '../config/migrate.js'
 import { isPlatform, jobsAttempt, jobsLaunchdRun, jobsList, jobsMarkDone, jobsRun, jobsSync } from './jobs.js'
@@ -132,6 +133,10 @@ Routing (hydra.toml):
                                        (slack:<channel id>:<thread ts>; slack:<app>:… through an app other than default).
                                        To thread:<id>, the app posts in the Slack thread which session took it, its link and the reason
   hydra conversations unbind <conversation>
+  hydra [--state-dir <dir>] events [--kind route|bind|unbind] [--since <dur>] [--conversation <id>] [--json]
+                                       What the daemon decided, from its event stream (<state dir>/events/<day>.jsonl): routes (what took
+                                       a message, or that a tag found no one), binds and unbinds with their reasons. Never message text.
+                                       --since takes 90m, 12h or 7d. --json prints one JSON event per line
 
 Platform: slack | discord (required for lifecycle commands)
 
@@ -250,6 +255,11 @@ async function main(): Promise<void> {
   if (command === 'people') {
     if (daemonName) { console.error('error: people takes --state-dir <dir>, not --daemon'); process.exit(1) }
     process.exit(peopleCommand(filtered.slice(1), stateDirOpt))
+  }
+
+  if (command === 'events') {
+    if (daemonName) { console.error('error: events takes --state-dir <dir>, not --daemon'); process.exit(1) }
+    process.exit(eventsCommand(filtered.slice(1), stateDirOpt, json))
   }
 
   if (command === 'slack') {
