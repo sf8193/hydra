@@ -5,9 +5,10 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { expectedLoad, mismatches, readLoaded, surplus, verifyDeps, verifyLaunch } from '../engines/claude-verify.js'
-import { BRIDGE_MCP_SERVER_KEY } from '../plugin-manifest.js'
+import { BRIDGE_MCP_SERVER_KEY, bridgePluginCache } from '../plugin-manifest.js'
 import { serverToolRule } from '../restricted.js'
 import type { RestrictedPolicy } from '../restricted.js'
+import { claudeConfigDir } from '../../shared/constants.js'
 
 // The live launch's lines (restricted-debug-live.txt: three live launches, claude 2.1.3xx, in the order they came) and the earlier recording, which lacks the bridge's `plugin.register` line.
 const REAL = readFileSync(join(import.meta.dir, 'fixtures', 'restricted-debug-live.txt'), 'utf8')
@@ -313,9 +314,9 @@ describe('a plugin is allowed by the source it registered from', () => {
   })
 })
 
-// The bridge must register as its exact id (live launches: its `plugin.register` arrives 2-6 s before its MCP server connects, so by the final judgement it is there).
+// The bridge must register as its exact id, or with no register line for it, have loaded only from hydra's install in the plugin cache (next block).
 describe('the bridge and the hydra mod must have registered as their own ids', () => {
-  const NOT_BRIDGE = 'the plugin `discord` did not register as `discord@claude-plugins-official`, so it may not be the one hydra installed'
+  const NOT_BRIDGE = 'the plugin `discord` neither registered as `discord@claude-plugins-official` nor loaded only from its folder in the plugin cache (plugins/cache/claude-plugins-official/discord/<version>/skills), so it may not be the one hydra installed'
   const noBridgeRegister = () => REAL.split('\n').filter(l => !l.includes('plugin.register: discord')).join('\n')
   const check = (n: string) => `Checking plugin ${n}: skillsPath=none, skillsPaths=0 paths`
 
@@ -342,5 +343,91 @@ describe('the bridge and the hydra mod must have registered as their own ids', (
   })
   test('the earlier recording has no bridge register line: it is refused for that, and for nothing else', () => {
     expect(mismatches(policy, readLoaded(RECORDED))).toEqual([NOT_BRIDGE])
+  })
+})
+
+// A whole restricted launch's debug file (claude 2.1.327, no listed servers; the home folder and project path replaced). Claude Code logged the
+// bridge's `plugin.register` line here, judged by its `cc-plugin-sec-default` built-in; where that built-in is not seated there is no such line,
+// and the bridge is proven by where it loaded from. Taking the line out stands for that launch.
+describe('with no register line, the bridge is proven by where Claude Code loaded it from', () => {
+  // The check reads the cache under the config dir hydra launches with (`claudeConfigDir()`): the recording's config dir is put in its place.
+  const CONFIG = claudeConfigDir()
+  const LAUNCH = readFileSync(join(import.meta.dir, 'fixtures', 'restricted-debug-2.1.327.txt'), 'utf8').replaceAll('/Users/someone/.claude', CONFIG)
+  const none = { servers: [] } as Pick<RestrictedPolicy, 'servers'>
+  const cache = `${bridgePluginCache(CONFIG)}/`
+  const noRegister = LAUNCH.split('\n').filter(l => !l.includes('plugin.register: discord')).join('\n')
+  const at = '2026-11-18T16:34:42.400Z [DEBUG] '
+  const checked = (skillsPath = 'exists') => `${at}Checking plugin discord: skillsPath=${skillsPath}, skillsPaths=0 paths\n`
+  const loadedFrom = (path: string) => `${at}Attempting to load skills from plugin discord default skillsPath: ${path}\n`
+  // A second `discord`, checked and loaded from `path`, beside the bridge.
+  const second = (path: string) => checked() + loadedFrom(path)
+  const NOT_BRIDGE = 'the plugin `discord` neither registered as `discord@claude-plugins-official` nor loaded only from its folder in the plugin cache (plugins/cache/claude-plugins-official/discord/<version>/skills), so it may not be the one hydra installed'
+  const judge = (log: string) => mismatches(none, readLoaded(log))
+
+  test('the launch passes as recorded, and with its register line taken out', () => {
+    expect(judge(LAUNCH)).toEqual([])
+    expect(noRegister).not.toContain('plugin.register: discord')
+    expect(judge(noRegister)).toEqual([])
+  })
+  test('it reads two checks of the bridge, each followed by its skills folder in a version folder of the cache', () => {
+    const bridge = { name: 'discord', skillsPath: 'exists', skillsDir: `${cache}0.0.5/skills` }
+    expect(readLoaded(noRegister).pluginChecks.filter(c => c.name === 'discord')).toEqual([bridge, bridge])
+  })
+  test('verifyLaunch passes it end to end with no register line', async () => {
+    let now = 0
+    const deps: typeof verifyDeps = { read: () => noRegister, sleep: async ms => { now += ms }, now: () => now, deadlineMs: 5_000, pollMs: 250, settleMs: 100 }
+    expect(await verifyLaunch(none, '/state/debug.log', deps)).toEqual({ ok: true })
+  })
+
+  // Each test below is the guard it names: removing that guard makes it fail.
+  test('refused: a second discord with no skills folder (a check with no path line)', () => {
+    expect(judge(noRegister + checked('none'))).toEqual([NOT_BRIDGE])
+  })
+  test('refused: a check that says `skillsPath=none`, even with a path line in the cache after it', () => {
+    expect(judge(noRegister + checked('none') + loadedFrom(`${cache}0.0.5/skills`))).toEqual([NOT_BRIDGE])
+  })
+  test('refused: a path line no check waits for, even in the cache', () => {
+    expect(judge(noRegister + loadedFrom(`${cache}0.0.5/skills`))).toEqual([NOT_BRIDGE])
+  })
+  test('refused: a second discord from outside the cache, by a folder whose prefix is as long as the cache\'s', () => {
+    const outside = `/${'x'.repeat(cache.length - 2)}/0.0.5/skills`   // past the cache's length, it reads `0.0.5/skills`
+    expect(outside.slice(cache.length)).toBe('0.0.5/skills')
+    expect(judge(noRegister + second(outside))).toEqual([NOT_BRIDGE])
+  })
+  test('refused: an empty, `.` or `..` version folder', () => {
+    expect(judge(noRegister + second(`${cache}/skills`))).toEqual([NOT_BRIDGE])
+    expect(judge(noRegister + second(`${cache}./skills`))).toEqual([NOT_BRIDGE])
+    expect(judge(noRegister + second(`${cache}../skills`))).toEqual([NOT_BRIDGE])
+  })
+  test('refused: a folder that is not `<version>/skills` (the cache folder itself, deeper, or another name)', () => {
+    expect(judge(noRegister + second(`${cache}skills`))).toEqual([NOT_BRIDGE])
+    expect(judge(noRegister + second(`${cache}0.0.5/node_modules/x/skills`))).toEqual([NOT_BRIDGE])
+    expect(judge(noRegister + second(`${cache}0.0.5/elsewhere`))).toEqual([NOT_BRIDGE])
+    expect(judge(noRegister + second(`${cache}0.0.5/skills/more`))).toEqual([NOT_BRIDGE])
+  })
+  test('refused: the cache folder of another marketplace', () => {
+    expect(judge(noRegister + second(`${CONFIG}/plugins/cache/evil-market/discord/0.0.5/skills`))).toEqual([NOT_BRIDGE])
+  })
+  test('refused: a discord loaded inline from a --plugin-dir, even when every path is in the cache', () => {
+    expect(judge(noRegister + `${at}Loaded inline plugin from path: discord\n`)).toEqual([NOT_BRIDGE])
+  })
+  test('refused: no line about the bridge at all, though its server connected', () => {
+    expect(judge(noRegister.split('\n').filter(l => !/plugin discord/.test(l)).join('\n'))).toEqual([NOT_BRIDGE])
+  })
+  test('refused: a register line with another id, even when every path is in the cache', () => {
+    const why = judge(noRegister + `${at}plugin.register: discord (user, discord@evil-market), judged by cc-plugin-sec-default: admitted\n`)
+    expect(why).toContainEqual(expect.stringContaining('`discord@evil-market`'))
+    expect(why).toContainEqual(NOT_BRIDGE)
+  })
+  test('a check or path in a line that is not Claude Code\'s own [DEBUG] line is not read', () => {
+    const forged = noRegister + `2026-11-18T16:34:42.400Z [ERROR] Checking plugin discord: skillsPath=exists, skillsPaths=0 paths\n` + `2026-11-18T16:34:42.400Z [ERROR] Attempting to load skills from plugin discord default skillsPath: /tmp/evil/discord/0.0.5/skills\n`
+    expect(readLoaded(forged)).toEqual(readLoaded(noRegister))
+  })
+  // Server stderr reaches the file as one [ERROR] line with its newlines escaped (`\n`): this launch's bridge printed three lines.
+  test('a server\'s multi-line stderr is one escaped line in the file', () => {
+    const stderr = LAUNCH.split('\n').filter(l => l.includes('Server stderr:'))
+    expect(stderr).toHaveLength(1)
+    expect(stderr[0]).toMatch(/^\S+ \[ERROR\] /)
+    expect(stderr[0]).toContain('daemon.sock\\nbridge: identity:')
   })
 })

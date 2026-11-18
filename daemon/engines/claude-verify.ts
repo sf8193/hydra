@@ -19,8 +19,9 @@
 // refuses at once), then judge. A file that never appears, or never completes, within the deadline refuses.
 
 import { readFileSync } from 'fs'
-import { BRIDGE_MCP_SERVER_KEY, BRIDGE_PLUGIN_ID, BRIDGE_TOOLS_PERMISSION } from '../plugin-manifest.js'
+import { BRIDGE_MCP_SERVER_KEY, BRIDGE_PLUGIN_ID, BRIDGE_TOOLS_PERMISSION, bridgePluginCache } from '../plugin-manifest.js'
 import { HYDRA_MOD, serverToolRule, type RestrictedPolicy } from '../restricted.js'
+import { claudeConfigDir } from '../../shared/constants.js'
 
 /** What a launch's debug file says Claude Code loaded. Each field is read from the lines that say it, and nothing is inferred. */
 export type Loaded = {
@@ -30,6 +31,12 @@ export type Loaded = {
   connected: string[]
   /** Plugins it loaded (a name per plugin, built-in ones included). */
   plugins: string[]
+  /**
+   * Each `Checking plugin <name>: skillsPath=<state>` line, one entry per line (a plugin checked twice is two entries), with the folder
+   * its `Attempting to load skills from plugin <name> default skillsPath: <folder>` line names, when one follows it. A path line that no
+   * check of its name is waiting for is an entry of its own, with no state.
+   */
+  pluginChecks: PluginCheck[]
   /** The permission rules it applied under `--settings`. Undefined when it applied none. */
   allow: string[] | undefined
   /** `[STARTUP] Loading MCP configs...` was logged, and `[STARTUP] MCP configs resolved in` after it: without the second, Claude Code is stuck before MCP init (typically a dialog on its screen). */
@@ -49,9 +56,13 @@ export type Loaded = {
   registeredPlugins: string[]
   /** Every `plugin.register` line, one entry each: the name, the kind Claude Code gave it and the id (`name@source`) it registered as. Not de-duplicated: a name that registers twice is two entries. */
   registrations: Registration[]
+  /** Plugins it loaded from a folder named on its command line or in `CLAUDE_CODE_PLUGIN_DIRS` (`Loaded inline plugin from path: <name>`). */
+  inlinePlugins: string[]
 }
 
 export type Registration = { name: string; kind: string; id: string }
+/** A plugin's skills check: `skillsPath` is `exists` or `none` (`''` for a path line with no check), `skillsDir` the folder it loads skills from (`<plugin folder>/skills`). */
+export type PluginCheck = { name: string; skillsPath: string; skillsDir?: string }
 
 /** The only registrations a restricted specialist may have: Claude Code's own (`name@builtin`, of kind builtin or prepend), the hydra mod inline, and the bridge by its exact id. */
 export const registrationAllowed = (r: Registration): boolean =>
@@ -65,7 +76,9 @@ const flatten = (rules: unknown): string[] => (Array.isArray(rules) ? rules.filt
 /** Reads a debug file's text into what it says loaded. Lines it does not recognize are ignored: the judgement rests on what it does recognize. */
 export function readLoaded(log: string): Loaded {
   const servers = new Set<string>(), connected = new Set<string>(), plugins = new Set<string>(), builtin = new Set<string>(), registered = new Set<string>()
+  const pluginChecks: PluginCheck[] = []
   const registrations: Registration[] = []
+  const inline = new Set<string>()
   let allow: Set<string> | undefined
   let deny: Set<string> | undefined
   const otherAllow: Record<string, Set<string>> = {}
@@ -81,17 +94,25 @@ export function readLoaded(log: string): Loaded {
   const lines = log.split('\n')
   if (!log.endsWith('\n')) lines.pop()
   for (const raw of lines) {
-    // Claude Code's own debug lines only: `<timestamp> [DEBUG] <message>`. A line is only read when it begins that way. Text a server prints is
-    // believed to reach the file inside an [ERROR] line, not as a line of its own, but no recording shows how a newline in it is written:
-    // if one arrived raw, a forged `plugin.register: X (builtin, X@builtin)` line would be read as Claude Code's (unverified).
+    // Claude Code's own debug lines only: `<timestamp> [DEBUG] <message>`. A line is only read when it begins that way. Text from a server
+    // does reach the file: its stderr in one [ERROR] line, and a channel notification's text, cut short, in a [DEBUG] line. What keeps it
+    // from starting a line of its own is Claude Code writing a newline in it as `\n`: for stderr in the test fixture, for notifications in
+    // recorded launches (none in a fixture). A Claude Code that wrote one raw would let a message beginning with a timestamp and `[DEBUG]`
+    // read here as Claude Code's.
     const prefix = raw.match(DEBUG_LINE)
     if (!prefix) continue
     const line = raw.slice(prefix[0].length)
     let m: RegExpMatchArray | null
     if ((m = line.match(/^MCP server "([^"]+)": Starting connection/))) servers.add(m[1])
     else if ((m = line.match(/^MCP server "([^"]+)": Successfully connected/))) { servers.add(m[1]); connected.add(m[1]) }
-    else if ((m = line.match(/^Checking plugin (\S+?): skillsPath=/))) plugins.add(m[1])
-    else if ((m = line.match(/^Loaded inline plugin from path: (\S+)/))) plugins.add(m[1])
+    else if ((m = line.match(/^Checking plugin (\S+?): skillsPath=(\w*)/))) { plugins.add(m[1]); pluginChecks.push({ name: m[1], skillsPath: m[2] }) }
+    else if ((m = line.match(/^Loaded inline plugin from path: (\S+)/))) { plugins.add(m[1]); inline.add(m[1]) }
+    else if ((m = line.match(/^Attempting to load skills from plugin (\S+) default skillsPath: (.+?)\s*$/))) {
+      // Claude Code writes it right after its plugin's check: it belongs to the last check of that name, if that one has none yet.
+      const last = pluginChecks.findLast(c => c.name === m![1])
+      if (last && last.skillsDir === undefined) last.skillsDir = m[2]
+      else pluginChecks.push({ name: m[1], skillsPath: '', skillsDir: m[2] })
+    }
     else if ((m = line.match(/^plugin\.register: (\S+) \(([^,()]+), (\S+)\)/))) {
       const r = { name: m[1], kind: m[2], id: m[3] }
       registered.add(r.name)
@@ -112,9 +133,10 @@ export function readLoaded(log: string): Loaded {
     }
   }
   return {
-    servers: [...servers], connected: [...connected], plugins: [...plugins], allow: allow ? [...allow] : undefined, deny: deny ? [...deny] : undefined,
+    servers: [...servers], connected: [...connected], plugins: [...plugins], pluginChecks, allow: allow ? [...allow] : undefined, deny: deny ? [...deny] : undefined,
     otherAllow: Object.fromEntries(Object.entries(otherAllow).filter(([, v]) => v.size).map(([k, v]) => [k, [...v]])),
     mcpConfigsLoading, mcpConfigsResolved, connectorsOff, connectorActivity, builtinPlugins: [...builtin], registeredPlugins: [...registered], registrations,
+    inlinePlugins: [...inline],
   }
 }
 
@@ -158,7 +180,7 @@ export function surplus(p: Pick<RestrictedPolicy, 'servers'>, got: Loaded, final
   // Two judgements. By registration: every `plugin.register` line is judged by its id, so a name that registers from another source
   // (as `discord` or `hydra` from a marketplace, or once as built in and once as a user's) is refused, and so is one never named on a
   // `Checking plugin` line. By name: a plugin named but not registered is judged only at `final`. The hydra mod and the bridge are
-  // left to `shortfall`, which needs each to have registered as its exact id: a slow register is reported there, with that reason.
+  // left to `shortfall`, which needs the hydra mod to have registered as its exact id and the bridge to be proven by `bridgeProven`.
   const badRegistrations = got.registrations.filter(r => !registrationAllowed(r))
   const badNames = new Set(badRegistrations.map(r => r.name))
   const extraPlugins = [...new Set([
@@ -186,11 +208,42 @@ export function shortfall(p: Pick<RestrictedPolicy, 'servers'>, got: Loaded): st
   if (missingRules.length) out.push(`it did not apply these permission rules: ${list(missingRules)}`)
   const notOff = connectorsNotOff(got)
   if (notOff) out.push(notOff)
-  // Claude Code registers the bridge about 2-6 s before its MCP server connects (live launches), and this runs after that, so a missing line is a refusal, not a wait.
-  for (const [name, id] of [[HYDRA_MOD, `${HYDRA_MOD}@inline`], [BRIDGE_PLUGIN_NAME, BRIDGE_PLUGIN_ID]]) {
-    if (!got.registrations.some(r => r.name === name && r.id === id && registrationAllowed(r))) out.push(`the plugin ${list([name])} did not register as ${list([id])}, so it may not be the one hydra installed`)
-  }
+  // The hydra mod registers before the bridge's MCP server connects, and this runs after that, so a missing line is a refusal, not a wait.
+  if (!got.registrations.some(r => r.name === HYDRA_MOD && r.id === `${HYDRA_MOD}@inline`)) out.push(`the plugin ${list([HYDRA_MOD])} did not register as ${list([`${HYDRA_MOD}@inline`])}, so it may not be the one hydra installed`)
+  // The bridge's skills load, and its register line (when there is one) is written, before its server connects, and this runs after that.
+  if (!bridgeProven(got)) out.push(`the plugin ${list([BRIDGE_PLUGIN_NAME])} neither registered as ${list([BRIDGE_PLUGIN_ID])} nor loaded only from its folder in the plugin cache (plugins/cache/claude-plugins-official/discord/<version>/skills), so it may not be the one hydra installed`)
   return out
+}
+
+/** `dir` is `<cache><version>/skills`: the skills folder of a version folder of the bridge's folder in the plugin cache, with no `.`, `..` or empty segment. Lexical: a path that names the cache another way (through a symlinked config dir, with `//`, in another case) is refused, never accepted. */
+const versionSkillsDir = (dir: string, cache: string): boolean => {
+  if (!dir.startsWith(cache)) return false
+  const segs = dir.slice(cache.length).split('/')
+  return segs.length === 2 && segs[1] === 'skills' && segs[0] !== '' && segs[0] !== '.' && segs[0] !== '..'
+}
+
+/**
+ * The bridge's provenance, from what Claude Code says of it. Two cases:
+ *
+ * - **It logged a `plugin.register` line for `discord`**: that line must carry the bridge's exact id (any other id is also refused by `surplus`).
+ * - **It logged none** (reported where Claude Code's `cc-plugin-sec-default` built-in, which judges and logs a plugin's registration, is
+ *   not seated; no such launch is recorded here): the bridge is proven by where it loaded from. Every `Checking plugin discord` line says `skillsPath=exists` and is followed by its skills
+ *   folder, every such folder is `<version>/skills` in the bridge's folder in the plugin cache (`bridgePluginCache`), and no `discord` was
+ *   loaded inline. A second `discord` without a skills folder is a check with `skillsPath=none`, and a path line no check waits for counts too.
+ *
+ * What both cases rest on. The lines are Claude Code's own: `DEBUG_LINE`'s anchor, with Claude Code writing a newline in a server's text as
+ * `\n` (see `readLoaded`). And neither tells hydra's bridge from upstream's: `discord@claude-plugins-official` is the upstream plugin's id
+ * too, and the cache's version folders are installed by Claude Code from that marketplace (its updater writes there too); the daemon
+ * links hydra's bridge server into each one it finds. The path check is as strong as the id check it stands in for, no stronger.
+ */
+const bridgeProven = (got: Loaded): boolean => {
+  const regs = got.registrations.filter(r => r.name === BRIDGE_PLUGIN_NAME)
+  if (regs.length) return regs.some(r => r.id === BRIDGE_PLUGIN_ID)
+  const cache = `${bridgePluginCache(claudeConfigDir())}/`
+  const checks = got.pluginChecks.filter(c => c.name === BRIDGE_PLUGIN_NAME)
+  return checks.length > 0
+    && checks.every(c => c.skillsPath === 'exists' && c.skillsDir !== undefined && versionSkillsDir(c.skillsDir, cache))
+    && !got.inlinePlugins.includes(BRIDGE_PLUGIN_NAME)
 }
 
 /** All the ways a launch's loaded set differs from its policy; empty when it is exactly what the policy says. */

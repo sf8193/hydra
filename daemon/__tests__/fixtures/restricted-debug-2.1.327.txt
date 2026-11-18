@@ -1,0 +1,452 @@
+2026-11-18T16:34:41.554Z [DEBUG] MDM settings load completed in 0ms
+2026-11-18T16:34:41.565Z [DEBUG] CA certs: Config fallback - globalEnv keys: , settingsEnv keys: none
+2026-11-18T16:34:41.567Z [DEBUG] [init] configureGlobalMTLS starting
+2026-11-18T16:34:41.567Z [DEBUG] [init] configureGlobalMTLS complete
+2026-11-18T16:34:41.567Z [DEBUG] [init] configureGlobalAgents starting
+2026-11-18T16:34:41.567Z [DEBUG] CA certs: stores=bundled,system, extraCertsPath=undefined
+2026-11-18T16:34:41.567Z [DEBUG] CA certs: Loaded 118 bundled root certificates
+2026-11-18T16:34:41.591Z [DEBUG] CA certs: Loaded 5 system CA certificates
+2026-11-18T16:34:41.591Z [DEBUG] CA certs: Dropped blocked certificate 40f6af0346a99aa1cd1d555a4e9cce62c7f9634603ee406615833dc8c8d00367 from bundled
+2026-11-18T16:34:41.594Z [DEBUG] mTLS: Creating HTTPS agent with custom certificates
+2026-11-18T16:34:41.595Z [DEBUG] [init] configureGlobalAgents complete
+2026-11-18T16:34:41.599Z [DEBUG] Error log sink initialized
+2026-11-18T16:34:41.603Z [DEBUG] clearPluginCache: invalidating loadAllPlugins cache (preAction: CLAUDE_CODE_PLUGIN_DIRS inline plugins)
+2026-11-18T16:34:41.662Z [DEBUG] [ToolSearch:optimistic] mode=tst, ENABLE_TOOL_SEARCH=undefined, result=true
+2026-11-18T16:34:41.671Z [DEBUG] Applying permission update: Adding 1 allow rule(s) to destination 'flagSettings': ["mcp__plugin_discord_discord__*"]
+2026-11-18T16:34:41.672Z [DEBUG] [STARTUP] Loading MCP configs...
+2026-11-18T16:34:41.672Z [DEBUG] [STARTUP] Running setup()...
+2026-11-18T16:34:41.674Z [DEBUG] [uds-messaging] Skipped: restricted session
+2026-11-18T16:34:41.675Z [DEBUG] Error log sink initialized
+2026-11-18T16:34:41.675Z [DEBUG] Broken symlink or missing file encountered for settings.json at path: /Users/someone/project/.claude/settings.json
+2026-11-18T16:34:41.678Z [DEBUG] [Claude in Chrome] Found chrome profiles: Profile 1, Profile 4, Profile 2, Profile 5
+2026-11-18T16:34:41.680Z [DEBUG] Loading skills from: managed=/Library/Application Support/ClaudeCode/.claude/skills, user=/Users/someone/.claude/skills, project=[]
+2026-11-18T16:34:41.681Z [DEBUG] Wrote per-PID lock for 2.1.327 (PID 38858)
+2026-11-18T16:34:41.700Z [DEBUG] Cannot acquire lock for 2.1.327 - held by PID 78809
+2026-11-18T16:34:41.701Z [ERROR] NON-FATAL: Lock acquisition failed for /Users/someone/.local/share/claude/versions/2.1.327 (expected in multi-process scenarios): Lock already held by another process
+2026-11-18T16:34:41.707Z [DEBUG] [STARTUP] setup() completed in 35ms
+2026-11-18T16:34:41.709Z [DEBUG] Broken symlink or missing file encountered for settings.json at path: /Users/someone/project/.claude/settings.local.json
+2026-11-18T16:34:41.710Z [DEBUG] [STARTUP] Loading commands and agents...
+2026-11-18T16:34:41.712Z [DEBUG] --plugin-dir /Users/someone/.claude/channels/discord/mods/hydra is one plugin: .claude-plugin at its top marks it
+2026-11-18T16:34:41.713Z [DEBUG] [Claude in Chrome] Extension fcoeoabgfenejglbffodgkkbkcdhcgfn found in chrome Profile 1
+2026-11-18T16:34:41.713Z [DEBUG] Failed to stat directory /Library/Application Support/ClaudeCode/.claude/agents: ENOENT: no such file or directory, stat '/Library/Application Support/ClaudeCode/.claude/agents'
+2026-11-18T16:34:41.741Z [DEBUG] Loaded 7 installed plugins from /Users/someone/.claude/plugins/installed_plugins.json
+2026-11-18T16:34:41.743Z [DEBUG] Failed to stat directory /Library/Application Support/ClaudeCode/.claude/commands: ENOENT: no such file or directory, stat '/Library/Application Support/ClaudeCode/.claude/commands'
+2026-11-18T16:34:41.743Z [DEBUG] Loaded 0 unique skills (0 unconditional, 0 conditional, managed: 0, user: 0, project: 0, additional: 0, legacy commands: 0)
+2026-11-18T16:34:41.773Z [DEBUG] Read hooks.json for plugin hydra (enabled=true): /Users/someone/.claude/channels/discord/mods/hydra/hooks/hooks.json
+2026-11-18T16:34:41.809Z [DEBUG] Loaded inline plugin from path: hydra
+2026-11-18T16:34:41.809Z [DEBUG] Loaded 1 directory-loaded plugins
+2026-11-18T16:34:41.826Z [DEBUG] Found 9 plugins (8 enabled, 1 disabled)
+2026-11-18T16:34:41.828Z [DEBUG] getPluginSkills: Processing 6 enabled plugins
+2026-11-18T16:34:41.828Z [DEBUG] Checking plugin cc-plugin-sec-default: skillsPath=none, skillsPaths=0 paths
+2026-11-18T16:34:41.828Z [DEBUG] Checking plugin cc-plugin-agents-md: skillsPath=none, skillsPaths=0 paths
+2026-11-18T16:34:41.828Z [DEBUG] Checking plugin cc-plugin-telemetry: skillsPath=none, skillsPaths=0 paths
+2026-11-18T16:34:41.828Z [DEBUG] Checking plugin cc-plugin-privacy: skillsPath=none, skillsPaths=0 paths
+2026-11-18T16:34:41.828Z [DEBUG] Checking plugin cc-plugin-plugin-authoring: skillsPath=none, skillsPaths=0 paths
+2026-11-18T16:34:41.828Z [DEBUG] Checking plugin cc-plugin-diff: skillsPath=none, skillsPaths=0 paths
+2026-11-18T16:34:41.828Z [DEBUG] Total plugin workflows loaded: 0
+2026-11-18T16:34:41.829Z [DEBUG] Total plugin commands loaded: 0
+2026-11-18T16:34:41.830Z [DEBUG] Total plugin skills loaded: 0 (0 duplicate/user-owned entries skipped)
+2026-11-18T16:34:41.832Z [DEBUG] Total plugin agents loaded: 0
+2026-11-18T16:34:41.836Z [DEBUG] cc-plugin-sec-default@builtin seated outermost: this machine has managed settings
+2026-11-18T16:34:41.838Z [DEBUG] getSkills returning: 0 skill dir commands, 0 plugin skills, 31 bundled skills, 1 builtin plugin skills
+2026-11-18T16:34:41.840Z [DEBUG] Artifact gates frozen: capabilities=true comments=true db=true files=true types=true type_create=true type_catalog=true room=false verify=false delete=true preview=false preview_browser=unread open=true endpoints=false pin=true share=false versions=false flag_source=disk gb_fresh=false
+2026-11-18T16:34:41.846Z [DEBUG] [STARTUP] Commands and agents loaded in 135ms
+2026-11-18T16:34:41.849Z [DEBUG] [servedCatalog] primary: using served rows (13 rows via cache over the org route, fetched 2480s ago); the served list replaces the compiled picker for this session
+2026-11-18T16:34:41.852Z [DEBUG] nonBlockingStdout: active
+2026-11-18T16:34:41.853Z [DEBUG] [STARTUP] Running showSetupScreens()...
+2026-11-18T16:34:41.854Z [DEBUG] Cleared mTLS configuration cache
+2026-11-18T16:34:41.855Z [DEBUG] [STARTUP] showSetupScreens() completed in 2ms
+2026-11-18T16:34:41.856Z [DEBUG] org-config gate: pass_cached on startup after 0ms
+2026-11-18T16:34:41.856Z [DEBUG] [LSP MANAGER] initializeLspServerManager() called
+2026-11-18T16:34:41.856Z [DEBUG] [LSP MANAGER] Created manager instance, state=pending
+2026-11-18T16:34:41.856Z [DEBUG] [LSP MANAGER] Starting async initialization (generation 1)
+2026-11-18T16:34:41.857Z [DEBUG] Starting background startup prefetches
+2026-11-18T16:34:41.857Z [DEBUG] [Bootstrap] Fetching
+2026-11-18T16:34:41.861Z [DEBUG] [STARTUP] MCP configs resolved in 164ms (awaited at +189ms)
+2026-11-18T16:34:41.862Z [DEBUG] Artifacts MCP server not added: artifact_tool_denied (tools_list)
+2026-11-18T16:34:41.864Z [DEBUG] Total LSP servers loaded: 0
+2026-11-18T16:34:41.864Z [DEBUG] [LSP SERVER MANAGER] getAllLspServers returned 0 server(s)
+2026-11-18T16:34:41.864Z [DEBUG] LSP manager initialized with 0 servers
+2026-11-18T16:34:41.865Z [DEBUG] LSP server manager initialized successfully
+2026-11-18T16:34:41.865Z [DEBUG] LSP notification handlers registered successfully for all 0 server(s)
+2026-11-18T16:34:41.866Z [DEBUG] Fast mode unavailable: Fast mode is currently unavailable
+2026-11-18T16:34:41.867Z [DEBUG] All plugins already exist, skipping migration
+2026-11-18T16:34:41.867Z [DEBUG] Initialized versioned plugins system with 7 plugins
+2026-11-18T16:34:41.868Z [DEBUG] LSP Diagnostics: Resetting all state (0 pending, 0 files tracked)
+2026-11-18T16:34:41.892Z [DEBUG] [3P telemetry] Waiting for remote managed settings fetch before telemetry init
+2026-11-18T16:34:41.894Z [DEBUG] getPluginSkills: Processing 6 enabled plugins
+2026-11-18T16:34:41.894Z [DEBUG] Checking plugin cc-plugin-sec-default: skillsPath=none, skillsPaths=0 paths
+2026-11-18T16:34:41.894Z [DEBUG] Checking plugin cc-plugin-agents-md: skillsPath=none, skillsPaths=0 paths
+2026-11-18T16:34:41.894Z [DEBUG] Checking plugin cc-plugin-telemetry: skillsPath=none, skillsPaths=0 paths
+2026-11-18T16:34:41.894Z [DEBUG] Checking plugin cc-plugin-privacy: skillsPath=none, skillsPaths=0 paths
+2026-11-18T16:34:41.894Z [DEBUG] Checking plugin cc-plugin-plugin-authoring: skillsPath=none, skillsPaths=0 paths
+2026-11-18T16:34:41.894Z [DEBUG] Checking plugin cc-plugin-diff: skillsPath=none, skillsPaths=0 paths
+2026-11-18T16:34:41.894Z [DEBUG] Total plugin workflows loaded: 0
+2026-11-18T16:34:41.895Z [DEBUG] Total plugin commands loaded: 0
+2026-11-18T16:34:41.895Z [DEBUG] Total plugin skills loaded: 0 (0 duplicate/user-owned entries skipped)
+2026-11-18T16:34:41.898Z [DEBUG] Loading skills from: managed=/Library/Application Support/ClaudeCode/.claude/skills, user=/Users/someone/.claude/skills, project=[]
+2026-11-18T16:34:41.900Z [DEBUG] [API REQUEST] /v1/messages x-client-request-id=19eb7b39-d06d-4aaa-86a8-37641f429ea1 source=quota_check
+2026-11-18T16:34:41.902Z [DEBUG] Failed to stat directory /Library/Application Support/ClaudeCode/.claude/commands: ENOENT: no such file or directory, stat '/Library/Application Support/ClaudeCode/.claude/commands'
+2026-11-18T16:34:41.902Z [DEBUG] Loaded 0 unique skills (0 unconditional, 0 conditional, managed: 0, user: 0, project: 0, additional: 0, legacy commands: 0)
+2026-11-18T16:34:41.902Z [DEBUG] getSkills returning: 0 skill dir commands, 0 plugin skills, 31 bundled skills, 1 builtin plugin skills
+2026-11-18T16:34:41.911Z [DEBUG] Keeping /Users/someone/.claude/plugins/cache/superpowers-marketplace/superpowers: it still holds a directory, a symlink, a versioned archive or an entry of unknown type
+2026-11-18T16:34:41.911Z [DEBUG] [sessionRegistry] sweep permitted (domain darwin)
+2026-11-18T16:34:41.918Z [DEBUG] Keeping /Users/someone/.claude/plugins/cache/superpowers-marketplace: it still holds a directory, a symlink, a versioned archive or an entry of unknown type
+2026-11-18T16:34:41.919Z [DEBUG] Git remote URL: null
+2026-11-18T16:34:41.919Z [DEBUG] No git remote URL found
+2026-11-18T16:34:41.919Z [DEBUG] Not in a GitHub repository, skipping path mapping update
+2026-11-18T16:34:41.919Z [DEBUG] Preserving file permissions: 100600
+2026-11-18T16:34:41.919Z [DEBUG] Writing to temp file: /Users/someone/.claude/.claude.json.tmp.38858.80ef51f324ca
+2026-11-18T16:34:41.927Z [DEBUG] plugin cc-plugin-agents-md: no pluginConfigs["agents-md@builtin" or "cc-plugin-agents-md@builtin"].options in user, --settings or managed settings (project settings are not read); every option is its default
+2026-11-18T16:34:41.927Z [DEBUG] cc-plugin-telemetry: hooks telemetry for: anthropic, collector
+2026-11-18T16:34:41.929Z [DEBUG] Applied original permissions to temp file
+2026-11-18T16:34:41.930Z [DEBUG] hooks native host made (for the plugins the binary carries)
+2026-11-18T16:34:41.931Z [DEBUG] hooks module cc-plugin-sec-default@builtin loaded (native, environment 1, tier prepend); events: classic.*,prompt.section,prompt.context,prompt.attachment,prompt.compose,skill.prompt,attribution.text,session.append,session.compact,settings.read,session.identity,tool.describe,command.describe,agent.offer,agent.spawn,tool.register,tool.list,tool.call,agent.call,tool.run,prompt.submit,fs.write,fs.stat,process.run,process.spawn,tool.check,tool.judge,ui.log,env.get,env.set,wasm.compile,plugin.register
+2026-11-18T16:34:41.931Z [DEBUG] hooks worker spawned (one for every plugin)
+2026-11-18T16:34:41.932Z [DEBUG] Keeping /Users/someone/.claude/plugins/cache/claude-plugins-official/discord: it still holds a directory, a symlink, a versioned archive or an entry of unknown type
+2026-11-18T16:34:41.933Z [DEBUG] Temp file written successfully, size: 242627 bytes
+2026-11-18T16:34:41.933Z [DEBUG] Renaming /Users/someone/.claude/.claude.json.tmp.38858.80ef51f324ca to /Users/someone/.claude/.claude.json
+2026-11-18T16:34:41.935Z [DEBUG] File /Users/someone/.claude/.claude.json written atomically
+2026-11-18T16:34:41.936Z [DEBUG] Keeping /Users/someone/.claude/plugins/cache/claude-plugins-official/code-review: it still holds a directory, a symlink, a versioned archive or an entry of unknown type
+2026-11-18T16:34:41.951Z [DEBUG] Policy limits: Using cached restrictions (304)
+2026-11-18T16:34:41.952Z [DEBUG] Policy limits: Cache still valid (304 Not Modified)
+2026-11-18T16:34:41.955Z [DEBUG] FileHistory: No need to copy file history for resuming with same session id: e9e57fd8-588a-49a5-af70-4d1b1fc05391
+2026-11-18T16:34:41.966Z [DEBUG] hooks module hydra@inline loaded (worker, environment 2, tier user); events: tool.call,session.measure,session.end,prompt.submit,classic.Stop,turn.complete
+2026-11-18T16:34:41.967Z [DEBUG] hooks module cc-plugin-agents-md@builtin loaded (native, environment 3, tier builtin); events: session.start,prompt.context,command.run,session.compact,prompt.submit,turn.start,turn.complete,agent.spawn,tool.call,prompt.mention
+2026-11-18T16:34:41.967Z [DEBUG] hooks module cc-plugin-telemetry@builtin loaded (native, environment 4, tier builtin); events: telemetry.*,telemetry.log,telemetry.mark,session.start,session.end,engine.create
+2026-11-18T16:34:41.967Z [DEBUG] hooks module cc-plugin-plugin-authoring@builtin loaded (native, environment 5, tier builtin); events: skill.prompt,tool.check,tool.call
+2026-11-18T16:34:41.967Z [DEBUG] hooks module cc-plugin-diff@builtin loaded (native, environment 6, tier builtin); events: session.start,ui.render,command.run,ui.close,ui.focus,ui.scroll,tool.call,prompt.submit
+2026-11-18T16:34:41.968Z [DEBUG] hooks module cc-plugin-privacy@builtin loaded (native, environment 7, tier builtin); events: tool.check,session.identity
+2026-11-18T16:34:41.969Z [DEBUG] hooks module cc-plugin-telemetry@builtin engine.create settled in 0.5ms (native hop, next() included)
+2026-11-18T16:34:41.969Z [DEBUG] engine.create: no plugin-provided interfaces; $ built for cc-plugin-sec-default,hydra,cc-plugin-agents-md,cc-plugin-telemetry,cc-plugin-plugin-authoring,cc-plugin-diff,cc-plugin-privacy
+2026-11-18T16:34:41.970Z [DEBUG] plugin.register: cc-plugin-sec-default (prepend, cc-plugin-sec-default@builtin), judged by core alone: admitted
+2026-11-18T16:34:41.970Z [DEBUG] plugin.register: cc-plugin-agents-md (builtin, cc-plugin-agents-md@builtin), judged by core alone: admitted
+2026-11-18T16:34:41.970Z [DEBUG] plugin.register: cc-plugin-telemetry (builtin, cc-plugin-telemetry@builtin), judged by core alone: admitted
+2026-11-18T16:34:41.970Z [DEBUG] plugin.register: cc-plugin-plugin-authoring (builtin, cc-plugin-plugin-authoring@builtin), judged by core alone: admitted
+2026-11-18T16:34:41.970Z [DEBUG] plugin.register: cc-plugin-diff (builtin, cc-plugin-diff@builtin), judged by core alone: admitted
+2026-11-18T16:34:41.970Z [DEBUG] plugin.register: cc-plugin-privacy (builtin, cc-plugin-privacy@builtin), judged by core alone: admitted
+2026-11-18T16:34:41.971Z [DEBUG] hooks module cc-plugin-sec-default@builtin (native): settings.read nested in cc-plugin-sec-default#35
+2026-11-18T16:34:41.971Z [DEBUG] hooks module cc-plugin-sec-default@builtin settings.read settled in 0.3ms (native link, next() included)
+2026-11-18T16:34:41.971Z [DEBUG] hooks module cc-plugin-sec-default@builtin plugin.register settled in 1.4ms (native link, next() included)
+2026-11-18T16:34:41.972Z [DEBUG] plugin.register: hydra (user, hydra@inline), judged by cc-plugin-sec-default: admitted
+2026-11-18T16:34:41.982Z [DEBUG] hooks module cc-plugin-sec-default@builtin (native): settings.read nested in cc-plugin-sec-default#35
+2026-11-18T16:34:41.982Z [DEBUG] hooks module cc-plugin-sec-default@builtin settings.read settled in 0.2ms (native link, next() included)
+2026-11-18T16:34:41.982Z [DEBUG] hooks module cc-plugin-sec-default@builtin plugin.register settled in 0.5ms (native link, next() included)
+2026-11-18T16:34:41.982Z [DEBUG] plugin.register: discord (user, discord@claude-plugins-official), judged by cc-plugin-sec-default: admitted
+2026-11-18T16:34:41.982Z [DEBUG] plugin-dir watch: watching hydra; folders of plugins none
+2026-11-18T16:34:42.006Z [DEBUG] Artifact publish edits offer frozen: edit_hook=true
+2026-11-18T16:34:42.006Z [DEBUG] Artifact input schema built: assets=true copy_from=true publish_edits=false assets_source=disk
+2026-11-18T16:34:42.128Z [DEBUG] Preserving file permissions: 100600
+2026-11-18T16:34:42.128Z [DEBUG] Writing to temp file: /Users/someone/.claude/.claude.json.tmp.38858.2a6305643d08
+2026-11-18T16:34:42.131Z [DEBUG] Applied original permissions to temp file
+2026-11-18T16:34:42.132Z [DEBUG] Remote settings: Fetched successfully
+2026-11-18T16:34:42.133Z [DEBUG] Org fast mode: disabled (preference)
+2026-11-18T16:34:42.134Z [DEBUG] [Bootstrap] Fetch ok
+2026-11-18T16:34:42.134Z [DEBUG] [Bootstrap] Cache unchanged, skipping write
+2026-11-18T16:34:42.136Z [DEBUG] Cleared mTLS configuration cache
+2026-11-18T16:34:42.136Z [DEBUG] Temp file written successfully, size: 242812 bytes
+2026-11-18T16:34:42.136Z [DEBUG] Renaming /Users/someone/.claude/.claude.json.tmp.38858.2a6305643d08 to /Users/someone/.claude/.claude.json
+2026-11-18T16:34:42.137Z [DEBUG] File /Users/someone/.claude/.claude.json written atomically
+2026-11-18T16:34:42.137Z [DEBUG] Remote settings: Saved to /Users/someone/.claude/remote-settings.json
+2026-11-18T16:34:42.165Z [DEBUG] [keybindings] KeybindingSetup initialized with 232 bindings, 0 warnings
+2026-11-18T16:34:42.180Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-11-18T16:34:42.193Z [DEBUG] [engine] send set_max_thinking_tokens max=null
+2026-11-18T16:34:42.193Z [DEBUG] [engine] send set_model model=claude-sonnet-5-5
+2026-11-18T16:34:42.195Z [DEBUG] prompt.edit: unhooked; the composer relays nothing
+2026-11-18T16:34:42.198Z [DEBUG] [claudeai-mcp] Disabled via env var
+2026-11-18T16:34:42.199Z [DEBUG] performStartupChecks called
+2026-11-18T16:34:42.202Z [DEBUG] [jobStateNameSync] watch skipped: Error: ENOENT: no such file or directory, watch '/Users/someone/.claude/jobs/e9e57fd8'
+2026-11-18T16:34:42.206Z [DEBUG] [REPL:mount] REPL mounted, disabled=false
+2026-11-18T16:34:42.206Z [DEBUG] Official marketplace auto-install skipped: already_installed
+2026-11-18T16:34:42.208Z [DEBUG] [ScheduledTasks] scheduler start() — enabled=false, hasTasks=false
+2026-11-18T16:34:42.261Z [DEBUG] plugin-dir watch: watching hydra; folders of plugins none
+2026-11-18T16:34:42.267Z [DEBUG] High write ratio: blit=0, write=5028 (100.0% writes), screen=32x149
+2026-11-18T16:34:42.279Z [DEBUG] Starting background plugin installations
+2026-11-18T16:34:42.281Z [DEBUG] [servedCatalog] shadow compare logged (fetch=cache_fresh, rows=13, source=served)
+2026-11-18T16:34:42.281Z [DEBUG] [servedCatalog] primary: served list replaces the compiled picker; every compiled row is served
+2026-11-18T16:34:42.281Z [DEBUG] No CLAUDE.md/rules files found
+2026-11-18T16:34:42.282Z [DEBUG] Total plugin commands loaded: 0
+2026-11-18T16:34:42.282Z [DEBUG] performBackgroundPluginInstallations called
+2026-11-18T16:34:42.283Z [DEBUG] [event-loop-stall] detector started (interval=200ms, at rest 1000ms, threshold=500ms)
+2026-11-18T16:34:42.284Z [DEBUG] $.fs.ancestors (cc-plugin-agents-md): project memory is off
+2026-11-18T16:34:42.285Z [DEBUG] hooks module cc-plugin-diff@builtin ui.render settled in 10.2ms (native link, next() included)
+2026-11-18T16:34:42.286Z [DEBUG] $.fs.ancestors (cc-plugin-agents-md): project memory is off
+2026-11-18T16:34:42.286Z [DEBUG] hooks module cc-plugin-agents-md@builtin prompt.context settled in 3.4ms (native link, next() included)
+2026-11-18T16:34:42.286Z [DEBUG] hooks module cc-plugin-sec-default@builtin prompt.context settled in 3.6ms (native link, next() included)
+2026-11-18T16:34:42.290Z [DEBUG] [FileIndex] getProjectFiles called, respectGitignore=true
+2026-11-18T16:34:42.291Z [DEBUG] [FileIndex] getFilesUsingGit called
+2026-11-18T16:34:42.291Z [DEBUG] [FileIndex] not a git repo, returning null
+2026-11-18T16:34:42.291Z [DEBUG] [FileIndex] git ls-files returned null, falling back to ripgrep
+2026-11-18T16:34:42.302Z [DEBUG] [keybindings] Watching for changes to /Users/someone/.claude/keybindings.json
+2026-11-18T16:34:42.303Z [DEBUG] mcp runtime arm: v2 (source: default)
+2026-11-18T16:34:42.358Z [DEBUG] [sessionRegistry] sweep permitted (domain darwin)
+2026-11-18T16:34:42.360Z [DEBUG] [sessionRegistry] sweep permitted (domain darwin)
+2026-11-18T16:34:42.368Z [DEBUG] getPluginSkills: Processing 8 enabled plugins
+2026-11-18T16:34:42.368Z [DEBUG] Checking plugin hydra: skillsPath=exists, skillsPaths=0 paths
+2026-11-18T16:34:42.368Z [DEBUG] Attempting to load skills from plugin hydra default skillsPath: /Users/someone/.claude/channels/discord/mods/hydra/skills
+2026-11-18T16:34:42.368Z [DEBUG] Checking plugin discord: skillsPath=exists, skillsPaths=0 paths
+2026-11-18T16:34:42.368Z [DEBUG] Attempting to load skills from plugin discord default skillsPath: /Users/someone/.claude/plugins/cache/claude-plugins-official/discord/0.0.5/skills
+2026-11-18T16:34:42.368Z [DEBUG] Checking plugin cc-plugin-sec-default: skillsPath=none, skillsPaths=0 paths
+2026-11-18T16:34:42.368Z [DEBUG] Checking plugin cc-plugin-agents-md: skillsPath=none, skillsPaths=0 paths
+2026-11-18T16:34:42.368Z [DEBUG] Checking plugin cc-plugin-telemetry: skillsPath=none, skillsPaths=0 paths
+2026-11-18T16:34:42.368Z [DEBUG] Checking plugin cc-plugin-privacy: skillsPath=none, skillsPaths=0 paths
+2026-11-18T16:34:42.368Z [DEBUG] Checking plugin cc-plugin-plugin-authoring: skillsPath=none, skillsPaths=0 paths
+2026-11-18T16:34:42.368Z [DEBUG] Checking plugin cc-plugin-diff: skillsPath=none, skillsPaths=0 paths
+2026-11-18T16:34:42.368Z [DEBUG] Total plugin workflows loaded: 0
+2026-11-18T16:34:42.369Z [DEBUG] [auto-mode] verifyAutoModeGateAccess: enabledState=enabled disabledBySettings=false model=claude-sonnet-5-5 modelSupported=true disableFastModeBreakerFires=false carouselAvailable=true canEnterAuto=true
+2026-11-18T16:34:42.371Z [DEBUG] Failed to stat directory /Library/Application Support/ClaudeCode/.claude/agents: ENOENT: no such file or directory, stat '/Library/Application Support/ClaudeCode/.claude/agents'
+2026-11-18T16:34:42.371Z [DEBUG] Total plugin agents loaded: 0
+2026-11-18T16:34:42.372Z [DEBUG] Failed to stat directory /Library/Application Support/ClaudeCode/.claude/skills: ENOENT: no such file or directory, stat '/Library/Application Support/ClaudeCode/.claude/skills'
+2026-11-18T16:34:42.372Z [DEBUG] Failed to stat directory /Library/Application Support/ClaudeCode/.claude/routines: ENOENT: no such file or directory, stat '/Library/Application Support/ClaudeCode/.claude/routines'
+2026-11-18T16:34:42.372Z [DEBUG] Failed to stat directory /Library/Application Support/ClaudeCode/.claude/workflows: ENOENT: no such file or directory, stat '/Library/Application Support/ClaudeCode/.claude/workflows'
+2026-11-18T16:34:42.372Z [DEBUG] Failed to stat directory /Library/Application Support/ClaudeCode/.claude/output-styles: ENOENT: no such file or directory, stat '/Library/Application Support/ClaudeCode/.claude/output-styles'
+2026-11-18T16:34:42.372Z [DEBUG] Failed to stat directory /Library/Application Support/ClaudeCode/.claude/commands: ENOENT: no such file or directory, stat '/Library/Application Support/ClaudeCode/.claude/commands'
+2026-11-18T16:34:42.372Z [DEBUG] Loading skills from: managed=/Library/Application Support/ClaudeCode/.claude/skills, user=/Users/someone/.claude/skills, project=[]
+2026-11-18T16:34:42.374Z [DEBUG] Loaded 0 unique skills (0 unconditional, 0 conditional, managed: 0, user: 0, project: 0, additional: 0, legacy commands: 0)
+2026-11-18T16:34:42.374Z [DEBUG] Remote settings: Applied new settings successfully
+2026-11-18T16:34:42.375Z [DEBUG] Programmatic settings change notification for policySettings
+2026-11-18T16:34:42.377Z [DEBUG] Plugin hooks: skipping reload, plugin-affecting settings unchanged
+2026-11-18T16:34:42.378Z [DEBUG] Settings changed from policySettings, updating app state
+2026-11-18T16:34:42.386Z [DEBUG] Replacing all allow rules for destination 'userSettings' with 0 rule(s): []
+2026-11-18T16:34:42.387Z [DEBUG] Replacing all deny rules for destination 'userSettings' with 0 rule(s): []
+2026-11-18T16:34:42.387Z [DEBUG] Replacing all ask rules for destination 'userSettings' with 0 rule(s): []
+2026-11-18T16:34:42.387Z [DEBUG] Replacing all allow rules for destination 'projectSettings' with 0 rule(s): []
+2026-11-18T16:34:42.387Z [DEBUG] Replacing all deny rules for destination 'projectSettings' with 0 rule(s): []
+2026-11-18T16:34:42.387Z [DEBUG] Replacing all ask rules for destination 'projectSettings' with 0 rule(s): []
+2026-11-18T16:34:42.387Z [DEBUG] Replacing all allow rules for destination 'localSettings' with 0 rule(s): []
+2026-11-18T16:34:42.387Z [DEBUG] Replacing all deny rules for destination 'localSettings' with 0 rule(s): []
+2026-11-18T16:34:42.387Z [DEBUG] Replacing all ask rules for destination 'localSettings' with 0 rule(s): []
+2026-11-18T16:34:42.387Z [DEBUG] Replacing all allow rules for destination 'flagSettings' with 0 rule(s): []
+2026-11-18T16:34:42.387Z [DEBUG] Replacing all deny rules for destination 'flagSettings' with 0 rule(s): []
+2026-11-18T16:34:42.387Z [DEBUG] Replacing all ask rules for destination 'flagSettings' with 0 rule(s): []
+2026-11-18T16:34:42.387Z [DEBUG] Replacing all allow rules for destination 'policySettings' with 0 rule(s): []
+2026-11-18T16:34:42.387Z [DEBUG] Replacing all deny rules for destination 'policySettings' with 0 rule(s): []
+2026-11-18T16:34:42.387Z [DEBUG] Replacing all ask rules for destination 'policySettings' with 0 rule(s): []
+2026-11-18T16:34:42.387Z [DEBUG] Replacing all allow rules for destination 'flagSettings' with 1 rule(s): ["mcp__plugin_discord_discord__*"]
+2026-11-18T16:34:42.389Z [DEBUG] Total plugin workflows loaded: 0
+2026-11-18T16:34:42.390Z [DEBUG] [3P telemetry] Remote managed settings fetch settled, initializing telemetry
+2026-11-18T16:34:42.390Z [DEBUG] Cleared mTLS configuration cache
+2026-11-18T16:34:42.392Z [DEBUG] [Perfetto] initializePerfettoTracing called, env value: undefined
+2026-11-18T16:34:42.392Z [DEBUG] [3P telemetry] isTelemetryEnabled=false (CLAUDE_CODE_ENABLE_TELEMETRY=undefined)
+2026-11-18T16:34:42.393Z [DEBUG] getPluginSkills: Processing 8 enabled plugins
+2026-11-18T16:34:42.393Z [DEBUG] Checking plugin hydra: skillsPath=exists, skillsPaths=0 paths
+2026-11-18T16:34:42.393Z [DEBUG] Attempting to load skills from plugin hydra default skillsPath: /Users/someone/.claude/channels/discord/mods/hydra/skills
+2026-11-18T16:34:42.393Z [DEBUG] Checking plugin discord: skillsPath=exists, skillsPaths=0 paths
+2026-11-18T16:34:42.393Z [DEBUG] Attempting to load skills from plugin discord default skillsPath: /Users/someone/.claude/plugins/cache/claude-plugins-official/discord/0.0.5/skills
+2026-11-18T16:34:42.393Z [DEBUG] Checking plugin cc-plugin-sec-default: skillsPath=none, skillsPaths=0 paths
+2026-11-18T16:34:42.393Z [DEBUG] Checking plugin cc-plugin-agents-md: skillsPath=none, skillsPaths=0 paths
+2026-11-18T16:34:42.393Z [DEBUG] Checking plugin cc-plugin-telemetry: skillsPath=none, skillsPaths=0 paths
+2026-11-18T16:34:42.393Z [DEBUG] Checking plugin cc-plugin-privacy: skillsPath=none, skillsPaths=0 paths
+2026-11-18T16:34:42.393Z [DEBUG] Checking plugin cc-plugin-plugin-authoring: skillsPath=none, skillsPaths=0 paths
+2026-11-18T16:34:42.393Z [DEBUG] Checking plugin cc-plugin-diff: skillsPath=none, skillsPaths=0 paths
+2026-11-18T16:34:42.393Z [DEBUG] Total plugin workflows loaded: 0
+2026-11-18T16:34:42.394Z [DEBUG] Total plugin commands loaded: 0
+2026-11-18T16:34:42.394Z [DEBUG] Keeping /Users/someone/.claude/plugins/cache/claude-plugins-official/playwright: it still holds a directory, a symlink, a versioned archive or an entry of unknown type
+2026-11-18T16:34:42.395Z [DEBUG] Loading skills from: managed=/Library/Application Support/ClaudeCode/.claude/skills, user=/Users/someone/.claude/skills, project=[]
+2026-11-18T16:34:42.396Z [DEBUG] Loaded 1 skills from plugin hydra default directory
+2026-11-18T16:34:42.397Z [DEBUG] Failed to stat directory /Library/Application Support/ClaudeCode/.claude/commands: ENOENT: no such file or directory, stat '/Library/Application Support/ClaudeCode/.claude/commands'
+2026-11-18T16:34:42.397Z [DEBUG] Loaded 0 unique skills (0 unconditional, 0 conditional, managed: 0, user: 0, project: 0, additional: 0, legacy commands: 0)
+2026-11-18T16:34:42.397Z [DEBUG] Watching for changes in skill/command directories: /Users/someone/.claude/skills, /Users/someone/.claude/skills/synced, /Users/someone/.claude/commands, /Users/someone/.claude/agents...
+2026-11-18T16:34:42.397Z [DEBUG] Keeping /Users/someone/.claude/plugins/cache/claude-plugins-official/ruby-lsp: it still holds a directory, a symlink, a versioned archive or an entry of unknown type
+2026-11-18T16:34:42.409Z [DEBUG] [claudeai-mcp] Disabled via env var
+2026-11-18T16:34:42.411Z [DEBUG] Ripgrep first use test: PASSED (mode=embedded, path=/Users/someone/.local/share/claude/versions/2.1.327)
+2026-11-18T16:34:42.412Z [DEBUG] [FileIndex] ripgrep: 2 files in 121ms
+2026-11-18T16:34:42.412Z [DEBUG] [FileIndex] cache refresh completed in 122ms
+2026-11-18T16:34:42.413Z [DEBUG] Loaded 1 skills from plugin hydra default directory
+2026-11-18T16:34:42.413Z [DEBUG] Preserving file permissions: 100600
+2026-11-18T16:34:42.413Z [DEBUG] Writing to temp file: /Users/someone/.claude/.claude.json.tmp.38858.80c085399175
+2026-11-18T16:34:42.414Z [DEBUG] Loaded 2 skills from plugin discord default directory
+2026-11-18T16:34:42.414Z [DEBUG] Total plugin skills loaded: 3 (0 duplicate/user-owned entries skipped)
+2026-11-18T16:34:42.414Z [DEBUG] getSkills returning: 0 skill dir commands, 3 plugin skills, 31 bundled skills, 1 builtin plugin skills
+2026-11-18T16:34:42.415Z [DEBUG] getSkills returning: 0 skill dir commands, 3 plugin skills, 31 bundled skills, 1 builtin plugin skills
+2026-11-18T16:34:42.419Z [DEBUG] Keeping /Users/someone/.claude/plugins/cache/claude-plugins-official/slack: it still holds a directory, a symlink, a versioned archive or an entry of unknown type
+2026-11-18T16:34:42.420Z [DEBUG] Watching /Users/someone/project for /Users/someone/project/.claude to appear
+2026-11-18T16:34:42.420Z [DEBUG] Watching for changes in setting files /Users/someone/.claude/settings.json, /Library/Application Support/ClaudeCode/managed-settings.json...
+2026-11-18T16:34:42.421Z [DEBUG] Loaded 2 skills from plugin discord default directory
+2026-11-18T16:34:42.421Z [DEBUG] Total plugin skills loaded: 3 (0 duplicate/user-owned entries skipped)
+2026-11-18T16:34:42.421Z [DEBUG] getSkills returning: 0 skill dir commands, 3 plugin skills, 31 bundled skills, 1 builtin plugin skills
+2026-11-18T16:34:42.427Z [DEBUG] [mcp-registry] Loaded 1080 official MCP URLs
+2026-11-18T16:34:42.427Z [DEBUG] Applied original permissions to temp file
+2026-11-18T16:34:42.433Z [DEBUG] Temp file written successfully, size: 242813 bytes
+2026-11-18T16:34:42.433Z [DEBUG] Renaming /Users/someone/.claude/.claude.json.tmp.38858.80c085399175 to /Users/someone/.claude/.claude.json
+2026-11-18T16:34:42.434Z [DEBUG] File /Users/someone/.claude/.claude.json written atomically
+2026-11-18T16:34:42.434Z [DEBUG] Keeping /Users/someone/.claude/plugins/cache/claude-plugins-official/superpowers: it still holds a directory, a symlink, a versioned archive or an entry of unknown type
+2026-11-18T16:34:42.435Z [DEBUG] Keeping /Users/someone/.claude/plugins/cache/claude-plugins-official: it still holds a directory, a symlink, a versioned archive or an entry of unknown type
+2026-11-18T16:34:42.446Z [DEBUG] XTVERSION: terminal identified as "tmux 3.5a"
+2026-11-18T16:34:42.447Z [DEBUG] tmux images: passthrough off, focus events on, kitty no, iTerm2 no, pane's top-left at row 0, column 0 (from 0)
+2026-11-18T16:34:42.447Z [DEBUG] Terminal capabilities: extendedKeys=yes (env: terminal=tmux); synchronizedOutput=no (env: TMUX (tmux answers for itself), no answer); kittyKeyboard=no (probe: no reply to CSI ? u); kittyGraphics=no (probe: tmux does not know which terminal is outside it, so Claude Code draws no images here: attach tmux from kitty 0.28 or later, Ghostty, or iTerm2 3.5 or later, run `tmux set -g allow-passthrough on` and `tmux set -g focus-events on`, detach and attach again, then restart Claude Code); itermImages=no (probe: tmux does not know which terminal is outside it, so Claude Code draws no images here: attach tmux from kitty 0.28 or later, Ghostty, or iTerm2 3.5 or later, run `tmux set -g allow-passthrough on` and `tmux set -g focus-events on`, detach and attach again, then restart Claude Code); mousePixels=no (env: inside tmux or screen); programStatus=no (probe: no reply to OSC 7501 ; ?); terminal said: no reply to CSI ? u; no reply to DECRQM 2026
+2026-11-18T16:34:42.447Z [DEBUG] DECSTBM: gated (TMUX=set ZELLIJ=unset TERM_PROGRAM=tmux TERM=tmux-256color)
+2026-11-18T16:34:42.449Z [DEBUG] Preserving file permissions: 100600
+2026-11-18T16:34:42.449Z [DEBUG] Writing to temp file: /Users/someone/.claude/.claude.json.tmp.38858.b85063eb612c
+2026-11-18T16:34:42.450Z [DEBUG] Applied original permissions to temp file
+2026-11-18T16:34:42.451Z [DEBUG] Temp file written successfully, size: 242879 bytes
+2026-11-18T16:34:42.451Z [DEBUG] Renaming /Users/someone/.claude/.claude.json.tmp.38858.b85063eb612c to /Users/someone/.claude/.claude.json
+2026-11-18T16:34:42.457Z [DEBUG] File /Users/someone/.claude/.claude.json written atomically
+2026-11-18T16:34:42.522Z [DEBUG] type root of hydra at /Users/someone/.claude/channels/discord/mods/hydra/.claude-plugin/types: entries claude-code, claude-code-tools, claude-code-mcp; wrote .claude-plugin/types/claude-code/index.d.ts, .claude-plugin/types/claude-code-tools/index.d.ts, .claude-plugin/types/claude-code-mcp/index.d.ts, .claude-plugin/types/tsconfig.json, .claude-plugin/types/.gitignore, tsconfig.json
+2026-11-18T16:34:42.522Z [DEBUG] Registered 0 hooks from 8 plugins
+2026-11-18T16:34:42.522Z [DEBUG] session.start: raised (surface terminal, interactive)
+2026-11-18T16:34:42.523Z [DEBUG] hooks module cc-plugin-telemetry@builtin (native): telemetry.log nested in cc-plugin-agents-md#0
+2026-11-18T16:34:42.524Z [DEBUG] hooks module cc-plugin-sec-default@builtin (native): settings.read nested in cc-plugin-agents-md#0 > cc-plugin-telemetry#1
+2026-11-18T16:34:42.525Z [DEBUG] hooks module cc-plugin-sec-default@builtin (native): settings.read nested in
+2026-11-18T16:34:42.525Z [DEBUG] $.command.register (cc-plugin-diff): /diff listed
+2026-11-18T16:34:42.526Z [DEBUG] hooks module cc-plugin-telemetry@builtin telemetry.log settled in 2.7ms (native link, next() included)
+2026-11-18T16:34:42.526Z [DEBUG] hooks module cc-plugin-sec-default@builtin settings.read settled in 1.9ms (native link, next() included)
+2026-11-18T16:34:42.526Z [DEBUG] cc-plugin-telemetry (builtin) answered telemetry.log without next() in 2.8ms; nothing beneath it ran for this dispatch
+2026-11-18T16:34:42.526Z [DEBUG] hooks module cc-plugin-sec-default@builtin settings.read settled in 1.8ms (native link, next() included)
+2026-11-18T16:34:42.527Z [DEBUG] settings.read: the engine's merge was raised (the loaded plugins changed) in 4.9 ms; 0 keys answered otherwise than the files.
+2026-11-18T16:34:42.527Z [DEBUG] hooks module cc-plugin-telemetry@builtin (native): telemetry.log nested in cc-plugin-agents-md
+2026-11-18T16:34:42.527Z [DEBUG] hooks module cc-plugin-telemetry@builtin (native): telemetry.mark nested in cc-plugin-agents-md
+2026-11-18T16:34:42.527Z [DEBUG] settings.read: the engine's merge is not raised again (the loaded plugins changed): neither the loaded plugins nor the settings changed.
+2026-11-18T16:34:42.527Z [DEBUG] hooks module cc-plugin-diff@builtin session.start settled in 3.8ms (native link, next() included)
+2026-11-18T16:34:42.527Z [DEBUG] hooks module cc-plugin-telemetry@builtin telemetry.log settled in 0.2ms (native link, next() included)
+2026-11-18T16:34:42.527Z [DEBUG] hooks module cc-plugin-telemetry@builtin telemetry.mark settled in 0.2ms (native link, next() included)
+2026-11-18T16:34:42.527Z [DEBUG] cc-plugin-telemetry (builtin) answered telemetry.mark without next() in 0.2ms; nothing beneath it ran for this dispatch
+2026-11-18T16:34:42.527Z [DEBUG] hooks module cc-plugin-telemetry@builtin session.start settled in 4.5ms (native link, next() included)
+2026-11-18T16:34:42.528Z [DEBUG] hooks module cc-plugin-agents-md@builtin session.start settled in 4.9ms (native link, next() included)
+2026-11-18T16:34:42.531Z [DEBUG] hooks module cc-plugin-sec-default@builtin (native): process.run nested in cc-plugin-telemetry
+2026-11-18T16:34:42.532Z [DEBUG] $.process.run (cc-plugin-telemetry): sh with 2 args in /Users/someone/project (pid 38932)
+2026-11-18T16:34:42.535Z [DEBUG] Loaded plugins - Enabled: 8, Disabled: 1, Commands: 0, Agents: 0, Errors: 0
+2026-11-18T16:34:42.538Z [DEBUG] MCP server "plugin:discord:discord": Starting connection with timeout of 30000ms
+2026-11-18T16:34:42.564Z [DEBUG] $.process.run (cc-plugin-telemetry): sh exited 0 in 33ms, 40 + 0 chars
+2026-11-18T16:34:42.564Z [DEBUG] hooks module cc-plugin-sec-default@builtin process.run settled in 33.4ms (native link, next() included)
+2026-11-18T16:34:42.617Z [ERROR] "MCP server \"plugin:discord:discord\" Server stderr: bridge: socket path from DAEMON_SOCK env: /Users/someone/.claude/channels/discord/daemon.sock\nbridge: identity: spawned session 00000000-0000-0000-0000-000000000000\nbridge: connected to daemon"
+2026-11-18T16:34:42.617Z [DEBUG] MCP server "plugin:discord:discord": Successfully connected (transport: stdio) in 85ms
+2026-11-18T16:34:42.617Z [DEBUG] MCP server "plugin:discord:discord": Connection established with capabilities: {"hasTools":true,"hasPrompts":false,"hasResources":false,"hasResourceSubscribe":false,"serverVersion":{"name":"hydra-bridge","version":"1.0.0"},"protocolEra":"legacy","negotiatedProtocolVersion":"2025-11-25"}
+2026-11-18T16:34:42.617Z [DEBUG] [MCP] Server "plugin:discord:discord" connected with subscribe=false
+2026-11-18T16:34:42.617Z [DEBUG] [3P telemetry] Event dropped (no event logger initialized): mcp_server_connection
+2026-11-18T16:34:42.621Z [DEBUG] MCP server "plugin:discord:discord": Channel notifications registered
+2026-11-18T16:34:42.621Z [DEBUG] MCP server "plugin:discord:discord": Channel notifications registered
+2026-11-18T16:34:42.738Z [DEBUG] [fs.watch probe] verdict: delivers
+2026-11-18T16:34:43.130Z [DEBUG] MCP server "plugin:discord:discord": notifications/claude/channel: [system] You were recovered automatically after a system restart with full conve
+2026-11-18T16:34:43.132Z [DEBUG] MCP server "plugin:discord:discord": Received tools/list_changed notification, refreshing tools
+2026-11-18T16:34:43.144Z [DEBUG] Started caffeinate to prevent sleep
+2026-11-18T16:34:43.153Z [DEBUG] hooks module cc-plugin-diff@builtin ui.render settled in 2.7ms (native link, next() included)
+2026-11-18T16:34:43.153Z [DEBUG] hooks module cc-plugin-diff@builtin ui.render settled in 2.6ms (native link, next() included)
+2026-11-18T16:34:43.158Z [DEBUG] hooks module cc-plugin-agents-md@builtin turn.start settled in 1.2ms (native link, next() included)
+2026-11-18T16:34:43.158Z [DEBUG] hooks module cc-plugin-diff@builtin prompt.submit settled in 3.8ms (native link, next() included)
+2026-11-18T16:34:43.158Z [DEBUG] hooks module cc-plugin-agents-md@builtin prompt.submit settled in 3.9ms (native link, next() included)
+2026-11-18T16:34:43.158Z [DEBUG] Failed to stat directory /Library/Application Support/ClaudeCode/.claude/output-styles: ENOENT: no such file or directory, stat '/Library/Application Support/ClaudeCode/.claude/output-styles'
+2026-11-18T16:34:43.158Z [DEBUG] Total plugin output styles loaded: 0
+2026-11-18T16:34:43.159Z [DEBUG] act_dont_rederive_arm_active source=growthbook
+2026-11-18T16:34:43.160Z [DEBUG] hooks module cc-plugin-sec-default@builtin prompt.compose settled in 1.4ms (native link, next() included)
+2026-11-18T16:34:43.161Z [DEBUG] [engine] yield system/init (first)
+2026-11-18T16:34:43.161Z [DEBUG] [engine] turn 1 start
+2026-11-18T16:34:43.164Z [DEBUG] autocompact: tokens=[REDACTED] level=ok effectiveWindow=980000
+2026-11-18T16:34:43.165Z [DEBUG] [AdvisorTool] Server-side tool enabled with claude-opus-5-5 as the advisor model
+2026-11-18T16:34:43.170Z [DEBUG] Tool search disabled: ToolSearchTool is not available (may have been disallowed via disallowedTools).
+2026-11-18T16:34:43.171Z [DEBUG] Dynamic tool loading: found 8 discovered tools in message history
+2026-11-18T16:34:43.173Z [DEBUG] Dynamic tool loading: 0/8 deferred tools included
+2026-11-18T16:34:43.178Z [DEBUG] attribution header x-anthropic-billing-header: cc_version=2.1.327.0f7; cc_entrypoint=cli; cch=00000; cc_prev_req=req_x; cc_prompt_id=25031eae-4d99-4b58-8e22-048988190f42; cc_turn_origin=peer; cc_prompt_index=1; cc_turn_index=2;
+2026-11-18T16:34:43.179Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-11-18T16:34:43.184Z [DEBUG] hooks module hydra@inline prompt.submit settled in 31.4ms (worker hop, next() included)
+2026-11-18T16:34:43.184Z [DEBUG] hooks module cc-plugin-sec-default@builtin prompt.submit settled in 31.7ms (native link, next() included)
+2026-11-18T16:34:43.185Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-11-18T16:34:43.187Z [DEBUG] [API:timing] dispatching to firstParty model=claude-sonnet-5-5
+2026-11-18T16:34:43.187Z [DEBUG] [dispatch] sent anthropic-dispatch-id=v2d
+2026-11-18T16:34:43.197Z [DEBUG] Preserving file permissions: 100600
+2026-11-18T16:34:43.197Z [DEBUG] Writing to temp file: /Users/someone/.claude/.claude.json.tmp.38858.4951d78d4eff
+2026-11-18T16:34:43.199Z [DEBUG] Applied original permissions to temp file
+2026-11-18T16:34:43.200Z [DEBUG] [API REQUEST] /v1/messages x-client-request-id=36b2ba80-bae8-482d-a566-4915e2cce808 source=repl_main_thread
+2026-11-18T16:34:43.201Z [DEBUG] Temp file written successfully, size: 242879 bytes
+2026-11-18T16:34:43.201Z [DEBUG] Renaming /Users/someone/.claude/.claude.json.tmp.38858.4951d78d4eff to /Users/someone/.claude/.claude.json
+2026-11-18T16:34:43.203Z [DEBUG] File /Users/someone/.claude/.claude.json written atomically
+2026-11-18T16:34:43.383Z [DEBUG] High write ratio: blit=1043, write=3789 (78.4% writes), screen=32x149
+2026-11-18T16:34:44.332Z [DEBUG] Stream started - received first chunk
+2026-11-18T16:34:44.332Z [DEBUG] [API:timing] first byte after 1147ms
+2026-11-18T16:34:44.388Z [DEBUG] High write ratio: blit=1043, write=3425 (76.7% writes), screen=32x149
+2026-11-18T16:34:44.594Z [DEBUG] hooks module cc-plugin-privacy@builtin tool.check settled in 0.7ms (native link, next() included)
+2026-11-18T16:34:44.594Z [DEBUG] hooks module cc-plugin-sec-default@builtin tool.check settled in 1.1ms (native link, next() included)
+2026-11-18T16:34:44.595Z [INFO] [Stall] tool_dispatch_start tool=mcp_tool toolUseId=toolu_0163YFKMjuryZDwQEtQEHRfF permissionDecisionMs=2
+2026-11-18T16:34:44.596Z [DEBUG] MCP server "plugin:discord:discord": Calling MCP tool: fetch_messages
+2026-11-18T16:34:44.841Z [DEBUG] MCP server "plugin:discord:discord": Tool 'fetch_messages' completed successfully in 245ms
+2026-11-18T16:34:44.842Z [DEBUG] hooks module cc-plugin-sec-default@builtin tool.run settled in 247.0ms (native link, next() included)
+2026-11-18T16:34:44.842Z [INFO] [Stall] tool_dispatch_end tool=mcp_tool toolUseId=toolu_0163YFKMjuryZDwQEtQEHRfF outcome=ok durationMs=247
+2026-11-18T16:34:44.845Z [DEBUG] hooks module hydra@inline tool.call settled in 261.8ms (worker hop, next() included)
+2026-11-18T16:34:44.845Z [DEBUG] hooks module cc-plugin-sec-default@builtin tool.call settled in 262.0ms (native link, next() included)
+2026-11-18T16:34:44.845Z [DEBUG] hooks module cc-plugin-sec-default@builtin tool.call settled in 267.4ms (native link, next() included)
+2026-11-18T16:34:44.845Z [DEBUG] hooks module cc-plugin-sec-default@builtin tool.call settled in 267.1ms (native link, next() included)
+2026-11-18T16:34:44.848Z [DEBUG] Hooks: checkForNewResponses returning 0 responses, 0 hooks still pending
+2026-11-18T16:34:44.849Z [DEBUG] autocompact: tokens=[REDACTED] level=ok effectiveWindow=980000
+2026-11-18T16:34:44.850Z [DEBUG] Tool search disabled: ToolSearchTool is not available (may have been disallowed via disallowedTools).
+2026-11-18T16:34:44.850Z [DEBUG] Dynamic tool loading: found 8 discovered tools in message history
+2026-11-18T16:34:44.850Z [DEBUG] Dynamic tool loading: 0/8 deferred tools included
+2026-11-18T16:34:44.851Z [DEBUG] attribution header x-anthropic-billing-header: cc_version=2.1.327.0f7; cc_entrypoint=cli; cch=00000; cc_prev_req=req_x; cc_prompt_id=25031eae-4d99-4b58-8e22-048988190f42; cc_turn_origin=peer; cc_prompt_index=1; cc_turn_index=2;
+2026-11-18T16:34:44.851Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-11-18T16:34:44.852Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-11-18T16:34:44.852Z [DEBUG] [API:timing] dispatching to firstParty model=claude-sonnet-5-5
+2026-11-18T16:34:44.852Z [DEBUG] [dispatch] sent anthropic-dispatch-id=v2d
+2026-11-18T16:34:44.853Z [DEBUG] [API REQUEST] /v1/messages x-client-request-id=aad58ba7-a739-4328-9f4d-88dfea9c536c source=repl_main_thread
+2026-11-18T16:34:45.958Z [DEBUG] Stream started - received first chunk
+2026-11-18T16:34:45.958Z [DEBUG] [API:timing] first byte after 1106ms
+2026-11-18T16:34:45.978Z [DEBUG] hydra: classic.Stop bypassed by cc-plugin-sec-default (tier user); beneath runs
+2026-11-18T16:34:45.978Z [DEBUG] [hydra] $.ui.log: its classic.Stop hook was skipped. "cc-plugin-sec-default" runs first and sent the event on past it.
+2026-11-18T16:34:45.980Z [DEBUG] hooks module cc-plugin-sec-default@builtin classic.Stop settled in 2.8ms (native link, next() included)
+2026-11-18T16:34:45.981Z [DEBUG] Tool search disabled: ToolSearchTool is not available (may have been disallowed via disallowedTools).
+2026-11-18T16:34:45.982Z [DEBUG] Dynamic tool loading: found 8 discovered tools in message history
+2026-11-18T16:34:45.982Z [DEBUG] Dynamic tool loading: 0/8 deferred tools included
+2026-11-18T16:34:45.983Z [DEBUG] attribution header x-anthropic-billing-header: cc_version=2.1.327.0f7; cc_entrypoint=cli; cch=00000; cc_prev_req=req_x;
+2026-11-18T16:34:45.984Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-11-18T16:34:45.985Z [DEBUG] [engine] turn 1 end (turns=2 usage in=3397 out=536 cost=$0.0451 api=8452ms stop=end_turn resultLen=172)
+2026-11-18T16:34:45.992Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-11-18T16:34:45.993Z [DEBUG] [API:timing] dispatching to firstParty model=claude-sonnet-5-5
+2026-11-18T16:34:45.993Z [DEBUG] [dispatch] sent anthropic-dispatch-id=v2d
+2026-11-18T16:34:45.993Z [DEBUG] [API REQUEST] /v1/messages x-client-request-id=f381d0df-2b20-4434-9170-d3afc303e85e source=prompt_suggestion
+2026-11-18T16:34:45.994Z [DEBUG] [sessionRegistry] sweep permitted (domain darwin)
+2026-11-18T16:34:45.996Z [DEBUG] [sessionRegistry] sweep permitted (domain darwin)
+2026-11-18T16:34:45.998Z [DEBUG] hooks module cc-plugin-agents-md@builtin turn.complete settled in 0.1ms (native link, next() included)
+2026-11-18T16:34:45.999Z [DEBUG] Failed to stat directory /Library/Application Support/ClaudeCode/.claude/agents: ENOENT: no such file or directory, stat '/Library/Application Support/ClaudeCode/.claude/agents'
+2026-11-18T16:34:45.999Z [DEBUG] Failed to stat directory /Library/Application Support/ClaudeCode/.claude/skills: ENOENT: no such file or directory, stat '/Library/Application Support/ClaudeCode/.claude/skills'
+2026-11-18T16:34:45.999Z [DEBUG] hooks module hydra@inline turn.complete settled in 12.1ms (worker hop, next() included)
+2026-11-18T16:34:46.011Z [DEBUG] hooks module cc-plugin-diff@builtin ui.render settled in 0.7ms (native link, next() included)
+2026-11-18T16:34:46.011Z [DEBUG] hooks module cc-plugin-diff@builtin ui.render settled in 0.6ms (native link, next() included)
+2026-11-18T16:34:46.013Z [DEBUG] $.ui.status (hydra): ctx: 1%
+2026-11-18T16:34:46.014Z [DEBUG] hooks module hydra@inline session.measure settled in 14.4ms (worker hop, next() included)
+2026-11-18T16:34:46.018Z [DEBUG] Preserving file permissions: 100600
+2026-11-18T16:34:46.018Z [DEBUG] Writing to temp file: /Users/someone/.claude/.claude.json.tmp.38858.53f670022cb8
+2026-11-18T16:34:46.018Z [DEBUG] Applied original permissions to temp file
+2026-11-18T16:34:46.018Z [DEBUG] Temp file written successfully, size: 242879 bytes
+2026-11-18T16:34:46.018Z [DEBUG] Renaming /Users/someone/.claude/.claude.json.tmp.38858.53f670022cb8 to /Users/someone/.claude/.claude.json
+2026-11-18T16:34:46.018Z [DEBUG] File /Users/someone/.claude/.claude.json written atomically
+2026-11-18T16:34:46.020Z [DEBUG] Preserving file permissions: 100600
+2026-11-18T16:34:46.020Z [DEBUG] Writing to temp file: /Users/someone/.claude/.claude.json.tmp.38858.98c5360c4596
+2026-11-18T16:34:46.020Z [DEBUG] Applied original permissions to temp file
+2026-11-18T16:34:46.020Z [DEBUG] Temp file written successfully, size: 242879 bytes
+2026-11-18T16:34:46.020Z [DEBUG] Renaming /Users/someone/.claude/.claude.json.tmp.38858.98c5360c4596 to /Users/someone/.claude/.claude.json
+2026-11-18T16:34:46.020Z [DEBUG] File /Users/someone/.claude/.claude.json written atomically
+2026-11-18T16:34:46.775Z [DEBUG] Stream started - received first chunk
+2026-11-18T16:34:46.775Z [DEBUG] [API:timing] first byte after 783ms
+2026-11-18T16:34:46.933Z [DEBUG] Forked agent [prompt_suggestion] received message: type=assistant
+2026-11-18T16:34:46.939Z [DEBUG] Forked agent [prompt_suggestion] finished: 1 messages, types=[assistant], totalUsage: input=506 output=19 cacheRead=11265 cacheCreate=60
+2026-11-18T16:34:47.528Z [DEBUG] hooks module cc-plugin-sec-default@builtin (native): settings.read nested in cc-plugin-telemetry
+2026-11-18T16:34:47.528Z [DEBUG] hooks module cc-plugin-sec-default@builtin settings.read settled in 0.2ms (native link, next() included)
+2026-11-18T16:34:47.529Z [DEBUG] $.http.fetch (cc-plugin-telemetry): POST https://api.anthropic.com/api/event_logging/v2/batch
+2026-11-18T16:34:47.747Z [DEBUG] $.http.fetch (cc-plugin-telemetry): 200 in 218ms, 39 chars
+2026-11-18T16:34:47.747Z [DEBUG] hooks module cc-plugin-sec-default@builtin (native): ui.log nested in cc-plugin-telemetry
+2026-11-18T16:34:47.747Z [DEBUG] [cc-plugin-telemetry] $.ui.log (to debug): telemetry: sent 3 row(s)
+2026-11-18T16:34:47.747Z [DEBUG] hooks module cc-plugin-sec-default@builtin ui.log settled in 0.1ms (native link, next() included)
+2026-11-18T16:34:51.494Z [DEBUG] AutoUpdaterWrapper: Installation type: native
+2026-11-18T16:34:51.632Z [DEBUG] Checking for native installer update to version 2.1.327
+2026-11-18T16:34:51.632Z [DEBUG] Found 2.1.327 at /Users/someone/.local/bin/claude, skipping install
+2026-11-18T16:34:52.244Z [DEBUG] hooks module cc-plugin-diff@builtin ui.render settled in 0.2ms (native link, next() included)
+2026-11-18T16:34:52.325Z [DEBUG] Preserving file permissions: 100600
+2026-11-18T16:34:52.326Z [DEBUG] Writing to temp file: /Users/someone/.claude/.claude.json.tmp.38858.086a0681d755
+2026-11-18T16:34:52.360Z [DEBUG] Applied original permissions to temp file
+2026-11-18T16:34:52.361Z [DEBUG] Temp file written successfully, size: 242694 bytes
+2026-11-18T16:34:52.361Z [DEBUG] Renaming /Users/someone/.claude/.claude.json.tmp.38858.086a0681d755 to /Users/someone/.claude/.claude.json
+2026-11-18T16:34:52.361Z [DEBUG] File /Users/someone/.claude/.claude.json written atomically
+2026-11-18T16:34:52.361Z [DEBUG] fullscreen boot canary: healthy
+2026-11-18T16:34:52.384Z [DEBUG] Protecting locked version from cleanup: 2.1.322
+2026-11-18T16:34:52.384Z [DEBUG] Protecting locked version from cleanup: 2.1.326
+2026-11-18T16:34:52.527Z [DEBUG] cc-plugin-telemetry (builtin) answered telemetry.log without next() 1 more times in the last 10s (the last in 0.3ms)
+2026-11-18T16:35:16.008Z [DEBUG] Stopped sleep inhibitor, allowing sleep
+2026-11-18T16:35:42.196Z [DEBUG] [skills] idle — switching poll interval to 30000ms
+2026-11-18T16:35:44.600Z [DEBUG] Preserving file permissions: 100600
+2026-11-18T16:35:44.600Z [DEBUG] Writing to temp file: /Users/someone/.claude/.claude.json.tmp.38858.e441ef981d93
+2026-11-18T16:35:44.600Z [DEBUG] Applied original permissions to temp file
+2026-11-18T16:35:44.600Z [DEBUG] Temp file written successfully, size: 242694 bytes
+2026-11-18T16:35:44.600Z [DEBUG] Renaming /Users/someone/.claude/.claude.json.tmp.38858.e441ef981d93 to /Users/someone/.claude/.claude.json
+2026-11-18T16:35:44.601Z [DEBUG] File /Users/someone/.claude/.claude.json written atomically
+2026-11-18T16:35:51.996Z [DEBUG] plugin-dir watch on /Users/someone/.claude/channels/discord/mods/hydra: idle, polling every 30000ms
+2026-11-18T16:39:42.576Z [DEBUG] [Anthropic telemetry] BigQuery metrics exported successfully
+2026-11-18T16:39:42.577Z [DEBUG] "[Anthropic telemetry] BigQuery API Response: {\n  \"accepted_count\": 17,\n  \"rejected_count\": 0\n}"
+2026-11-18T16:55:15.277Z [DEBUG] MCP server "plugin:discord:discord": Received tools/list_changed notification, refreshing tools
