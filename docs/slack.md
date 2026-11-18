@@ -405,7 +405,7 @@ roles = ["staff"]
 # Listing a server means running code you trust with your own privileges; `tools` limits which of its tools the specialist may call. Most specialists list none (see [Listed servers](#listed-servers-code-you-trust-run-with-best-effort-hygiene)).
 [mcp_servers.datadog]
 command = "/usr/local/bin/datadog-mcp"    # a pinned binary or a versioned package, not `npx -y` latest
-token_env = ["DD_API_KEY"]                # names in the state dir's .env; only these reach the server
+token_env = ["DD_API_KEY"]                # names in the state dir's .env; only these reach the server, and hydra removes them from every session's environment (not a variable sessions need, like `GH_TOKEN`)
 tools = ["search_logs", "get_monitor"]    # the tools of it a specialist may call (default: none, which is refused)
 
 [specialists.ops]

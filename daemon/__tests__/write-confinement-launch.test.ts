@@ -14,6 +14,7 @@ import { EMPTY_CONFIG } from '../../config/load.js'
 import { readDenyRoots } from '../../config/write-confinement.js'
 import { hydraLoadEnv } from '../hydra-config.js'
 import type { HydraConfig } from '../../config/types.js'
+import { _resetSourcedEnvNamesForTesting, sourceEnvFiles } from '../../shared/env-parse.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 
 process.stderr.write = (() => true) as any
@@ -101,6 +102,21 @@ describe('every way a session starts gets the settings', () => {
   test('every start tells its bridge it is write-confined (HYDRA_WRITE_CONFINED), so a record that is gone cannot widen it; no other launch does', async () => {
     for (const extra of [{}, { resumeFrom: 'C-old' }, { forkFrom: { claudeSessionId: 'C-parent' } }]) expect(await launch(extra)).toContain("export HYDRA_WRITE_CONFINED=1")
     expect(await launch({}, null)).not.toContain('HYDRA_WRITE_CONFINED')
+  })
+
+  test('a write-confined session keeps only the allowlisted part of the state .env: every other name it sets is unset, on every shape; no other launch has the line', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'confined-env-'))
+    writeFileSync(join(dir, '.env'), 'FAKE_SERVER_KEY=1\nHYDRA_MODEL=m\nCHAT_PLATFORM=discord\n')
+    const was = process.env.FAKE_SERVER_KEY
+    try {
+      sourceEnvFiles([join(dir, '.env')])
+      for (const extra of [{}, { resumeFrom: 'C-old' }, { forkFrom: { claudeSessionId: 'C-parent' } }]) expect(await launch(extra)).toContain('unset FAKE_SERVER_KEY && ')
+      expect(await launch({}, null)).not.toContain('unset FAKE_SERVER_KEY')
+    } finally {
+      if (was === undefined) delete process.env.FAKE_SERVER_KEY; else process.env.FAKE_SERVER_KEY = was
+      _resetSourcedEnvNamesForTesting()
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   test('no servers listed: no --mcp-config', async () => {

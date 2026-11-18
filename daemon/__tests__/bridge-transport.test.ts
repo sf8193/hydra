@@ -355,7 +355,7 @@ describe('engines/instances import (adapter-policy S2)', () => {
     // Subprocess: this file's module cache already holds bridge-transport, so
     // only a fresh process can catch a TDZ from an import cycle.
     const code = "const { engines } = await import('./daemon/engines/instances.ts'); console.log(engines.claude.isConnected({ sessionId: 'nope' }))"
-    const r = Bun.spawnSync(['bun', '-e', code], { cwd: join(import.meta.dir, '..', '..'), env: process.env })
+    const r = Bun.spawnSync(['bun', '-e', code], { cwd: join(import.meta.dir, '..', '..'), env: { ...process.env, DISCORD_BOT_TOKEN: 'test-token' } })
     expect(r.stderr.toString()).not.toContain('Error')
     expect(r.stdout.toString().trim()).toBe('false')
     expect(r.exitCode).toBe(0)
