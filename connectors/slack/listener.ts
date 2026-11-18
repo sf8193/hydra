@@ -8,7 +8,7 @@ import { linkPreviewsOff } from '../../shared/link-previews.js'
 import { routedChannels, hearsDms, dmsDeclared, namedChannels, unresolvedPlaces, isDm, type SlackReactionEvent, mentionedApps, NOT_A_MEMBER, OPERATOR_TOKEN_REFUSED, NO_DIRECTORY, SLACK_LIMITS, type AppConversations, type DmOtherParty, type SlackDirectory, type ConversationConfig, type ConversationTable } from './watch.js'
 import { DEFAULT_SLACK_APP, mustParsePlace, placeCovers, placeKey, isChannelName, placeOf, placesAnsweredBy, samePlace, type HydraConfig, type SlackApp } from '../../config/types.js'
 import { reachableBy } from '../../routing/route.js'
-import { SLACK_APP_NEEDS, NO_SLACK_APP, appKey, appSuffix, type Apps, type ScopeNeed } from './app.js'
+import { SLACK_APP_NEEDS, NO_SLACK_APP, appKey, appName, appSuffix, type Apps, type ScopeNeed } from './app.js'
 import { ConnectedApps } from './apps.js'
 import { timed } from '../../shared/loop-watch.js'
 import { awakeSince, suspendedSince, describeCause, type ResumeDetector } from '../../shared/resume.js'
@@ -89,6 +89,12 @@ export const CATCH_UP_STALE_AFTER_MS = CATCH_UP_INTERVAL_MS * 2.5
 /** An owed message that two catch-up passes have not delivered is stuck: `hydra health` lists it with its cause. */
 export const OWED_LATE_AFTER_MS = CATCH_UP_INTERVAL_MS * 2
 const MISSED_LIVE_ALERT_EVERY_MS = 60 * 60_000
+/**
+ * Periodic passes that find messages the socket never delivered, while it held and with no live event since, before the
+ * connector says Slack has switched the app's events off. One such pass is a quiet stretch of a split stream as often as not;
+ * three are at least half an hour of messages that all came by catch-up and none live.
+ */
+export const EVENTS_OFF_AFTER_PASSES = 3
 /** The longest a message waits to learn which apps are in its channel. */
 export const MEMBERSHIP_WAIT_MS = 5_000
 
@@ -215,6 +221,8 @@ export type ListenerHealth = {
   lastActivityAgeMin: number | null
   catchUp: { ageMin: number; ok: boolean; accepted: number; reason?: string } | null
   lastOkCatchUpAgeMin: number | null
+  /** Slack has probably switched this app's events off: said once, until a live event arrives. */
+  eventsOff: boolean
   /** The scopes this app's bot token lacks for what hydra.toml has it do, by option; empty when it has them all. Null when Slack did not say what the token holds (or it has not connected yet). */
   missingScopes: { option: string; any: string[] }[] | null
 }
@@ -313,10 +321,14 @@ export class SlackListener {
   private firstTimer: ReturnType<typeof setTimeout> | undefined
   private firstAttempts = 0
   private timers: ReturnType<typeof setInterval>[] = []
-  private alerted: { down: boolean; catchUp: boolean; permanent: string | null } = { down: false, catchUp: false, permanent: null }
+  private alerted: { down: boolean; catchUp: boolean; permanent: string | null; eventsOff: boolean } = { down: false, catchUp: false, permanent: null, eventsOff: false }
   private readonly told: ToldScopes
   private missingScopes: { option: string; any: string[] }[] | null = null
   private lastMissedLiveAlertAt = 0
+  /** When the socket last delivered an event (a message, a reaction, a rename or a membership change). */
+  private lastLiveAt = 0
+  /** Passes since the last live event that found messages the socket never delivered while it held: the evidence that Slack switched this app's events off. */
+  private silentPasses = 0
   private identity: { botUserId: string; botId?: string; workspaceUrl?: string } | null = null
   private readonly directory = new Directory()
   private directoryRead = false
@@ -543,9 +555,9 @@ export class SlackListener {
       if (gen !== this.generation || !raw.channel || !(isDm(raw.channel) || raw.channel_type === 'im' || raw.channel_type === 'mpim')) return
       this.d.log(`daemon: slack connector: ${this.id} socket received message in ${raw.channel} (${raw.ts ?? '-'}) from ${raw.user ?? '-'} subtype=${raw.subtype ?? '-'} bot_id=${raw.bot_id ?? '-'} via ${via} token\n`)
     })
-    app.onReaction?.(r => { if (gen === this.generation) { this.sup?.touch(); this.w.handleReaction(r) } })
-    app.onRename((id, name) => { this.directory.rename(id, name); this.d.log(`daemon: slack connector: channel ${id} is now #${name}\n`) })
-    app.onMembership?.(channel => { this.apps.changed(channel, this.id); this.w.reactionsMayWork(channel) })
+    app.onReaction?.(r => { if (gen === this.generation) { this.sup?.touch(); this.heardLive(); this.w.handleReaction(r) } })
+    app.onRename((id, name) => { if (gen === this.generation) this.heardLive(); this.directory.rename(id, name); this.d.log(`daemon: slack connector: channel ${id} is now #${name}\n`) })
+    app.onMembership?.(channel => { if (gen === this.generation) this.heardLive(); this.apps.changed(channel, this.id); this.w.reactionsMayWork(channel) })
     this.app = app
     this.sup!.attach() // before start, so the first `connected` is seen
     app.emitter()?.on('connected', () => {
@@ -599,6 +611,7 @@ export class SlackListener {
   private onMessage(raw: RawEvent): void {
     try {
       this.sup?.touch()
+      this.heardLive()
       const channel = raw.channel
       if (!channel) { this.d.log(`daemon: slack connector: dropped: event with no channel (type=${raw.type ?? '-'} subtype=${raw.subtype ?? '-'} ts=${raw.ts ?? '-'})\n`); return }
       // A DM's arrival is said, so a message that is later passed over (`dropped …`) or never arrives is told apart.
@@ -759,12 +772,8 @@ export class SlackListener {
       else this.alertIfPermanent(result.reason)
       this.d.log(`daemon: slack connector: catch-up (${why}${deep ? ', deep' : ''}): ${result.complete ? 'done' : 'incomplete'}, ${result.calls} call(s), ${result.accepted} message(s) the live stream had not delivered\n`)
       // A quiet pass should find nothing. Finding messages while the stream held from the last complete pass's start to
-      // this pass's end means it is losing events, e.g. another process holds a connection on this Slack app. Judged
-      // now, at the end, so a gap that lands while this pass runs counts.
-      if (why === 'periodic' && this.streamHeldSince(windowStart) && result.accepted > 0 && this.now() - this.lastMissedLiveAlertAt > MISSED_LIVE_ALERT_EVERY_MS) {
-        this.lastMissedLiveAlertAt = this.now()
-        this.d.alert(`⚠️ The Slack catch-up pass${this.appSuffix()} found ${result.accepted} message(s) the live stream never delivered, though the connection stayed up since the previous complete pass began. Another process is probably connected to this Slack app (another Bolt server, for instance): stop it, since Slack splits events across connections. Nothing is lost, but it arrives up to ${CATCH_UP_INTERVAL_MS / 60_000} minutes late.`)
-      }
+      // this pass's end means it is losing events. Judged now, at the end, so a gap that lands while this pass runs counts.
+      if (why === 'periodic' && windowStart !== null && this.streamHeldSince(windowStart) && result.accepted > 0) this.missedLive(windowStart, result.accepted)
     } catch (err) {
       this.d.log(`daemon: slack connector: catch-up crashed: ${err instanceof Error ? err.stack ?? err.message : err}\n`)
     } finally {
@@ -776,6 +785,37 @@ export class SlackListener {
     }
     if (this.rerun !== null) { const again = this.rerun; this.rerun = null; void this.runCatchUp(again, 'queued') }
     return result
+  }
+
+  /**
+   * A pass found `accepted` messages the socket never delivered, though it held since `windowStart`. With live events in that
+   * window the stream is split: another process holds a connection on this app, and Slack shares the events between them.
+   * With none since, the stream is off: Slack switches an app's events off after too many failed deliveries (every stretch
+   * with the socket down fails some), and says so only by email. Said once, after EVENTS_OFF_AFTER_PASSES such passes.
+   */
+  private missedLive(windowStart: number, accepted: number): void {
+    if (this.lastLiveAt >= windowStart) {
+      if (this.now() - this.lastMissedLiveAlertAt <= MISSED_LIVE_ALERT_EVERY_MS) return
+      this.lastMissedLiveAlertAt = this.now()
+      this.d.alert(`⚠️ The Slack catch-up pass${this.appSuffix()} found ${accepted} message(s) the live stream never delivered, though the connection stayed up since the previous complete pass began. Another process is probably connected to this Slack app (another Bolt server, for instance): stop it, since Slack splits events across connections. Nothing is lost, but it arrives up to ${CATCH_UP_INTERVAL_MS / 60_000} minutes late.`)
+      return
+    }
+    if (++this.silentPasses < EVENTS_OFF_AFTER_PASSES || this.alerted.eventsOff) return
+    this.alerted.eventsOff = true
+    this.d.alert(`⚠️ Slack has probably switched off live events for ${appName(this.declaredApps(), this.id)}: ${this.silentPasses} catch-up passes found messages the socket never delivered while it stayed connected, and nothing has arrived live since before the first. Slack does this after too many failed deliveries. Fix: in the app's settings at api.slack.com/apps, open Event Subscriptions and turn **Enable Events** back on (Socket Mode needs no Request URL). Until then nothing is lost, but every message arrives through catch-up, up to ${CATCH_UP_INTERVAL_MS / 60_000} minutes late. If it is already on, another process is probably connected to this app and taking its events.`)
+  }
+
+  /**
+   * The socket delivered an event: live events are on. After passes that found it silent, the stream has just come back, so
+   * what it missed until now is a gap's, for the next pass to fill, not a sign of a split. Ends an episode of them off, and says so.
+   */
+  private heardLive(): void {
+    this.lastLiveAt = this.now()
+    if (this.silentPasses > 0) this.noteGap()
+    this.silentPasses = 0
+    if (!this.alerted.eventsOff) return
+    this.alerted.eventsOff = false
+    this.d.alert(`✅ Live events are arriving again for ${appName(this.declaredApps(), this.id)}.`)
   }
 
   /**
@@ -812,6 +852,7 @@ export class SlackListener {
       lastActivityAgeMin: s ? min(now - s.lastActivityAt) : null,
       catchUp: this.lastCatchUp ? { ageMin: min(now - this.lastCatchUp.at), ok: this.lastCatchUp.result.complete, accepted: this.lastCatchUp.result.accepted, ...(this.lastCatchUp.result.reason && { reason: this.lastCatchUp.result.reason }) } : null,
       lastOkCatchUpAgeMin: this.lastOkCatchUpAt === null ? null : min(now - this.lastOkCatchUpAt),
+      eventsOff: this.alerted.eventsOff,
       missingScopes: this.missingScopes,
     }
   }

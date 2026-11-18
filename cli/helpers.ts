@@ -624,7 +624,7 @@ export function pinnedBun(hydraDir: string, io: BunIO = bunIO()): { path: string
   }
 }
 
-type AppHealthView = { name?: string; state: string; downMin: number | null; lastActivityAgeMin: number | null; catchUp: { ok: boolean; ageMin: number; reason?: string } | null; missingScopes?: { option: string; any: string[] }[] | null; tokens?: { ok: boolean; why?: string }; probeError?: string }
+type AppHealthView = { name?: string; state: string; downMin: number | null; lastActivityAgeMin: number | null; catchUp: { ok: boolean; ageMin: number; reason?: string } | null; missingScopes?: { option: string; any: string[] }[] | null; tokens?: { ok: boolean; why?: string }; probeError?: string; eventsOff?: boolean }
 type SlackHealthView = { listener?: AppHealthView; apps?: Record<string, AppHealthView>; conversations: number; readAsOperator: number; owed: number; oldestOwedAgeMin: number | null; owedLate?: { conversation: string; to?: string; count: number; oldestAgeMin: number; cause: string }[]; owedLateAfterMin?: number }
 
 /**
@@ -634,6 +634,8 @@ type SlackHealthView = { listener?: AppHealthView; apps?: Record<string, AppHeal
 export function slackHealthLines(s: SlackHealthView): string[] {
   const catchUpOf = (l: AppHealthView | undefined) => l?.catchUp ? ` · catch-up ${l.catchUp.ok ? 'ok' : `failing (${l.catchUp.reason ?? 'see log'})`} ${l.catchUp.ageMin} min ago` : ''
   const stateOf = (l: AppHealthView | undefined) => !l ? 'off' : l.state === 'up' ? 'up' : `${l.state}${l.downMin !== null ? ` ${l.downMin} min` : ''}`
+  // Said beside the catch-up it explains: messages still arrive, only through catch-up.
+  const eventsOffOf = (l: AppHealthView | undefined) => l?.eventsOff ? ' · live events probably off: turn Enable Events back on' : ''
   const asOperator = s.readAsOperator ? ` (${s.readAsOperator} read as the operator)` : ''
   const owed = s.owed ? `${s.owed} owed, oldest ${s.oldestOwedAgeMin} min` : '0 owed'
   const conversations = `${s.conversations} conversation${s.conversations === 1 ? '' : 's'}${asOperator} · ${owed}`
@@ -644,7 +646,7 @@ export function slackHealthLines(s: SlackHealthView): string[] {
   if (ids.length <= 1 && (ids.length === 0 || ids[0] === 'default')) {
     const l = s.listener
     const lacks = l?.missingScopes?.length ? ` · missing ${l.missingScopes.map(m => `${m.any.join(' or ')} (${m.option})`).join('; ')}` : ''
-    return [`slack connector: ${stateOf(l)}${catchUpOf(l)} · ${conversations}${lacks}`, ...(l ? unreadable(l, 'default').map(x => `  ${l.name ?? 'default'}: ${x}`) : []), ...late]
+    return [`slack connector: ${stateOf(l)}${catchUpOf(l)}${eventsOffOf(l)} · ${conversations}${lacks}`, ...(l ? unreadable(l, 'default').map(x => `  ${l.name ?? 'default'}: ${x}`) : []), ...late]
   }
   const lines = [`slack connector: ${ids.length} app${ids.length === 1 ? '' : 's'} · ${conversations}`]
   for (const id of ids) {
@@ -653,6 +655,7 @@ export function slackHealthLines(s: SlackHealthView): string[] {
       stateOf(a),
       ...(a.lastActivityAgeMin !== null ? [`last event ${a.lastActivityAgeMin} min ago`] : []),
       catchUpOf(a).replace(/^ · /, '') || 'catch-up not yet run',
+      ...(a.eventsOff ? [eventsOffOf(a).replace(/^ · /, '')] : []),
       a.missingScopes === null || a.missingScopes === undefined ? 'scopes unchecked' : a.missingScopes.length ? `missing ${a.missingScopes.map(m => `${m.any.join(' or ')} (${m.option})`).join('; ')}` : 'scopes ok',
       ...unreadable(a, id),
     ]

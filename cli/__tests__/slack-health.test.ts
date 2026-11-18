@@ -29,6 +29,13 @@ describe('hydra health, Slack lines', () => {
     ])
   })
 
+  test('an app whose live events are probably off says so on its line, with the fix', () => {
+    expect(slackHealthLines({ listener: { ...up, eventsOff: true }, apps: { default: { ...up, eventsOff: true } }, ...totals }))
+      .toEqual(['slack connector: up · catch-up ok 3 min ago · live events probably off: turn Enable Events back on · 14 conversations · 0 owed'])
+    expect(slackHealthLines({ apps: { sales: { ...up, name: 'Sales desk', eventsOff: true } }, ...totals }).at(-1))
+      .toBe('  Sales desk: up · last event 1 min ago · catch-up ok 3 min ago · live events probably off: turn Enable Events back on · scopes ok')
+  })
+
   test('a lone app that is not `default` is still named', () => {
     expect(slackHealthLines({ apps: { sales: { ...up, name: 'Sales desk' } }, ...totals })).toEqual(['slack connector: 1 app · 14 conversations · 0 owed', '  Sales desk: up · last event 1 min ago · catch-up ok 3 min ago · scopes ok'])
   })

@@ -155,7 +155,7 @@ export class SlackConnections {
   health(): Record<string, AppHealth> {
     return Object.fromEntries(this.ids().map(id => {
       const r = this.record(id)
-      const l = this.byApp.get(id)?.health() ?? { state: 'off', downMin: null, lastActivityAgeMin: null, catchUp: null, lastOkCatchUpAgeMin: null, missingScopes: null } satisfies ListenerHealth
+      const l = this.byApp.get(id)?.health() ?? { state: 'off', downMin: null, lastActivityAgeMin: null, catchUp: null, lastOkCatchUpAgeMin: null, eventsOff: false, missingScopes: null } satisfies ListenerHealth
       return [id, { ...l, name: appName(this.d.hydra().slackApps, id), tokens: r.tokens, connection: r.connection, ...(r.probeError && { probeError: r.probeError }) }]
     }))
   }
