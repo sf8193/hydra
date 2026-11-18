@@ -29,6 +29,8 @@ import { MODEL_ALIASES, parseIdempotencyTtl } from '../shared/constants.js'
 
 /** A request that may spawn a session (creating a thread and a tmux session) outlasts the 10 s default. */
 const SPAWNING_REQUEST_TIMEOUT_MS = 60_000
+/** A bind to a session's thread posts its notice before answering: two Slack posts at most (the thread, then the operator's DM), each up to 35 s. */
+const BIND_REQUEST_TIMEOUT_MS = 120_000
 
 const USAGE = `hydra — manage hydra daemons and sessions
 
@@ -124,9 +126,10 @@ Routing (hydra.toml):
                                        named "default"). --heard-by adds the other apps in the channel. --mentioned lists the
                                        apps the text tags, first tag first. --bound-app is the app the bound conversation is bound through.
   hydra conversations [list]           Conversations (one per app, channel and thread), the specialist each is bound to, and health
-  hydra conversations bind <conversation> <target>
+  hydra conversations bind <conversation> <target> [--why <reason>]
                                        Bind or move a conversation to main, specialist:<name> or thread:<id>, named as list prints it
-                                       (slack:<channel id>:<thread ts>; slack:<app>:… through an app other than default)
+                                       (slack:<channel id>:<thread ts>; slack:<app>:… through an app other than default).
+                                       To thread:<id>, the app posts in the Slack thread which session took it, its link and the reason
   hydra conversations unbind <conversation>
 
 Platform: slack | discord (required for lifecycle commands)
@@ -584,15 +587,20 @@ async function main(): Promise<void> {
     }
 
     case 'conversations': {
-      const [action = 'list', conversation, to] = [filtered[1], filtered[2], filtered[3]]
-      if (!['list', 'bind', 'unbind'].includes(action) || (action === 'bind' && (!conversation || !to)) || (action === 'unbind' && !conversation)) {
-        console.error('error: usage: hydra conversations [list] | bind <conversation> <target> | unbind <conversation>')
+      // `--why <text>`: on a bind, the reason the notice in the Slack thread gives.
+      const w = filtered.indexOf('--why')
+      const why = w > 0 ? filtered[w + 1] : undefined
+      const positional = w > 0 ? [...filtered.slice(0, w), ...filtered.slice(w + 2)] : filtered
+      const [action = 'list', conversation, to] = [positional[1], positional[2], positional[3]]
+      if (!['list', 'bind', 'unbind'].includes(action) || (action === 'bind' && (!conversation || !to)) || (action === 'unbind' && !conversation) || (w > 0 && (action !== 'bind' || !why?.trim()))) {
+        console.error('error: usage: hydra conversations [list] | bind <conversation> <target> [--why <reason>] | unbind <conversation>')
         process.exit(1)
       }
+      // A bind to a session's thread waits for its notice to post in Slack (and, where the bot is not in the channel, in the operator's DM).
       const response = await sendRequest(socketPath(), {
         type: 'cli', command: 'conversations', id: randomUUID(),
-        params: { action, ...(conversation && { conversation }), ...(to && { to }) },
-      })
+        params: { action, ...(conversation && { conversation }), ...(to && { to }), ...(why && { why }) },
+      }, action === 'bind' ? BIND_REQUEST_TIMEOUT_MS : undefined)
       printResponse(response, json)
       break
     }

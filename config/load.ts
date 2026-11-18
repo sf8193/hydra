@@ -19,7 +19,7 @@ import { invalidSpecialistName } from '../shared/specialist-name.js'
 import { bareOf, readTarget, spelled } from '../shared/target-kind.js'
 import { readValue, spelledApp, spelledPerson, spelledRole, whoSpelled } from '../shared/value-kind.js'
 import {
-  BUILTIN_ROLES, DEFAULT_SLACK_APP, SLACK_APP_ID_RE, homePlaceOf, isChannelName, isDmPlace, isEvery, namesDmWithOthers, optionsOf, parsePlace, placeKey, placeShadows, placesAnsweredBy, samePlace, type Address, type ConfigIssue, type Connectors, type Gateways, type Guard, type HydraConfig, type LoadEnv, type LoadResult, type MainOptions,
+  BUILTIN_ROLES, DEFAULT_SLACK_APP, SLACK_APP_ID_RE, homePlaceOf, isCatchAll, isChannelName, isDmPlace, isEvery, namesDmWithOthers, optionsOf, parsePlace, placeKey, placeShadows, placesAnsweredBy, samePlace, type Address, type ConfigIssue, type Connectors, type Gateways, type Guard, type HydraConfig, type LoadEnv, type LoadResult, type MainOptions,
   type McpServer, type WorkdirScan, type Person, type Place, type PlaceOptions, type Platform, type Rule, type Schedule, type SlackApp, type Specialist, type Vitals,
   MAX_ALERT_AFTER_MS, NEEDS, RUNNERS, SESSIONS_MODES, WORKDIR_TOOLS, type Need, HANDOFF_PROTOCOLS, type HandoffProtocol, type HandoffWithoutTool,
 } from './types.js'
@@ -1056,7 +1056,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   }
   for (const [j, later] of rules.entries()) {
     if (clashed.has(j)) continue
-    const i = rules.findIndex((earlier, k) => k < j && (earlier.place === undefined || (later.place !== undefined && placeShadows(earlier.place, later.place))) && appsCover(earlier, later) && covers(earlier.person, later.person))
+    // A catch-all is tried after every other rule (`isCatchAll`), so it shadows only another catch-all.
+    const i = rules.findIndex((earlier, k) => k < j && (!isCatchAll(earlier) || isCatchAll(later)) && (earlier.place === undefined || (later.place !== undefined && placeShadows(earlier.place, later.place))) && appsCover(earlier, later) && covers(earlier.person, later.person))
     if (i >= 0) warn(ruleAt[j], `never matches: ${ruleAt[i]} already takes ${later.person ? `${whoSpelled(people, later.person)}'s messages` : 'every message'} ${where(later)}`)
   }
   /** Where a specialist answers every message (see `placesAnsweredBy`). */

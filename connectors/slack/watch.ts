@@ -7,7 +7,7 @@ import { DEFAULT_SLACK_APP, isChannelName, isDmPlace, optionsAt, optionsOf, plac
 import { appKey, appName, type Apps } from './app.js'
 import { attr, fence, oneLine, quoteBody, UNTRUSTED_TEXT_MAX_CHARS } from '../../shared/untrusted-text.js'
 import { archiveUrl, conversationId, appOfEntry, appPrefix, scopeKey, unscopeKey, TOP_LEVEL } from './conversation.js'
-import { reachableBy, route, owningApp, refusal, notServedBy, identify, currentId, isLive, isSessionThread, MAIN } from '../../routing/route.js'
+import { reachableBy, route, owningApp, refusal, notServedBy, identify, currentId, isLive, isSessionThread, isCatchAll, MAIN } from '../../routing/route.js'
 
 export { conversationId, appOfEntry, TOP_LEVEL }
 
@@ -515,14 +515,23 @@ const formatBytes = (n: number): string => n < 1024 ? `${n} B` : n < 1024 * 1024
 export function formatDelivery(
   entry: Pick<ConversationEntry, 'channel' | 'threadTs'>,
   items: Item[],
-  where: { place: string; workspaceUrl?: string },
+  where: { place: string; workspaceUrl?: string; note?: string },
   nonce: string = randomBytes(6).toString('hex'),
 ): string {
   const dm = isDm(entry.channel)
   const link = where.workspaceUrl ? archiveUrl(where.workspaceUrl, entry.channel, dm || entry.threadTs === TOP_LEVEL ? undefined : entry.threadTs) : undefined
   const attrs = [`place=${attr(where.place)}`, `conversation=${attr(conversationId(entry))}`, ...(link ? [`link=${attr(link)}`] : [])]
-  return fence('SLACK-UNTRUSTED', nonce, attrs, [items.map(renderItem).join('\n\n')])
+  // hydra's own line, unquoted, ahead of the items: every line of a sender's words is quoted, so none can pose as it.
+  return fence('SLACK-UNTRUSTED', nonce, attrs, [...(where.note ? [where.note] : []), items.map(renderItem).join('\n\n')])
 }
+
+/**
+ * What main is told with the first messages of a channel thread new to it: main answers it, or hands it to a session and says so in the thread.
+ * The bind posts the notice, so attaching and telling the people in the thread are one step.
+ */
+export const NEW_TO_MAIN_NOTE = 'hydra: this Slack thread is new to main. Answer it (reply with the conversation above as chat_id), or hand it to a session: '
+  + 'one already on this work, or one you spawn for it, with `hydra conversations bind <conversation> thread:<thread id> --why "<one line>"`. '
+  + 'The bind posts in the Slack thread which session took it, a link to that session\'s thread, and the reason; later messages in the thread go to that session.'
 
 /** Split a burst into deliveries that each fit under the cap. */
 export function packItems(items: Item[], maxBytes: number = BATCH_MAX_BYTES): Item[][] {
@@ -1134,8 +1143,9 @@ export class ConversationTable {
     const addressed = dm || tagged || (!!existing && !existing.specialist)
     if (existing?.delivered?.includes(ev.ts)) return skip(() => `it was already delivered`)
     // A tag in a thread a session only listens to is for whoever answers a fresh one here: they take the thread, and the session is told.
+    // A catch-all (`isCatchAll`) takes only what nothing holds, so it never takes a thread from a session: the fresh route is read without catch-alls.
     if (tagged && existing?.specialist && isSessionThread(existing.specialist)) {
-      const fresh = route(cfg.hydra, { from: addressOf(ev.user), at, addressed: true, app })
+      const fresh = route({ ...cfg.hydra, rules: cfg.hydra.rules.filter(r => !isCatchAll(r)) }, { from: addressOf(ev.user), at, addressed: true, app })
       if (fresh.fate === 'deliver') {
         const from = existing.specialist
         existing.specialist = fresh.to
@@ -1608,7 +1618,9 @@ export class ConversationTable {
 
   /** One send: the items as the session reads them, to `target`. The target is part of the key: the same items re-routed elsewhere are a different send. */
   private async post(entry: ConversationEntry, target: RouteTarget, batch: Item[], cfg: ConversationConfig): Promise<DeliverResult> {
-    const message = formatDelivery(entry, batch, { place: placeName(cfg, entry.channel), ...(cfg.workspaceUrl && { workspaceUrl: cfg.workspaceUrl }) })
+    // A channel thread main hears for the first time: main is told what it may do with it. A DM or a group DM is main's to answer, and has no session to hand it to.
+    const fresh = target.to === MAIN && !isDm(entry.channel) && !cfg.directory.isGroupDm?.(entry.channel) && entry.threadTs !== TOP_LEVEL && !entry.delivered?.length
+    const message = formatDelivery(entry, batch, { place: placeName(cfg, entry.channel), ...(cfg.workspaceUrl && { workspaceUrl: cfg.workspaceUrl }), ...(fresh && { note: NEW_TO_MAIN_NOTE }) })
     const idempotencyKey = `slack-watch-${appPrefix(entry.app, '-')}${entry.channel}-${entry.threadTs}-${batch[0].ts}-${batch[batch.length - 1].ts}-${target.to}`
     try { return await this.deps.deliver({ ...target, conversation: conversationId(entry) }, message, idempotencyKey) } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
