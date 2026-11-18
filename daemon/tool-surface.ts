@@ -44,16 +44,15 @@ export function sessionCapabilities(info: Pick<SessionInfo, 'capabilities' | 'en
 }
 
 /**
- * Session ids whose bridge declared itself restricted when it registered (HYDRA_RESTRICTED=1, set by the launch; a launch before
- * that boolean declared it as HYDRA_SESSION_TYPE=scoped, which is read the same). A bridge can only narrow itself this way: a
- * declaration is believed whether or not the registry knows the id, and never undone.
+ * Session ids whose bridge declared itself restricted when it registered (HYDRA_RESTRICTED=1, set by the launch). A bridge can only
+ * narrow itself this way: a declaration is believed whether or not the registry knows the id, and never undone.
  */
 const declaredRestricted = new Set<string>()
 
-/** Records what a registering bridge says it is. Only a restriction matters: the declaration that takes tools away. `declaredType` is the old spelling (`scoped`). */
-export function noteDeclaredRestrictions(sessionId: string, declared: { restricted?: unknown; sessionType?: unknown; writeConfined?: unknown }): void {
-  const { restricted, sessionType: declaredType, writeConfined } = declared
-  if ((restricted === true || declaredType === 'scoped') && sessionId !== 'main') declaredRestricted.add(sessionId)
+/** Records what a registering bridge says it is. Only a restriction matters: the declaration that takes tools away. */
+export function noteDeclaredRestrictions(sessionId: string, declared: { restricted?: unknown; writeConfined?: unknown }): void {
+  const { restricted, writeConfined } = declared
+  if (restricted === true && sessionId !== 'main') declaredRestricted.add(sessionId)
   if (writeConfined === true && sessionId !== 'main') declaredConfined.add(sessionId)
 }
 

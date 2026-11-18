@@ -90,17 +90,6 @@ describe('bridge flap circuit breaker', () => {
     }
   })
 
-  // Golden for a session already running when the boolean arrived: its bridge was launched with HYDRA_SESSION_TYPE=scoped and says so in its registration.
-  test('an accepted bridge that declares the old type `scoped` is narrowed the same', async () => {
-    const id = 'flap-restricted-old-form'
-    session(id)
-    const b = await bridge(id, undefined, undefined, { sessionType: 'scoped' })
-    try {
-      expect(b.accepted).toBe(true)
-      expect(isToolAllowed(id, 'spawn_session')).toBe(false)
-    } finally { b.socket.destroy(); registry.delete(id) }
-  })
-
   test('an accepted bridge that declares restricted is narrowed', async () => {
     const id = 'flap-restricted-accepted'
     session(id)
