@@ -209,6 +209,8 @@ export type ConversationDeps = {
   /** A plain message to a person (not a session turn): how a drop is surfaced. `to`: the specialist it concerns, whose `home_place` should hear it. */
   alert?: (text: string, to?: string, app?: string) => void
   hosted?: (threadId: string) => boolean
+  /** Whether the session in this thread may speak in a conversation bound to it (a plain session). Absent, or no session there: it only listens. */
+  speaksIn?: (threadId: string) => boolean
 }
 
 /** `refused`: `reachable_by` does not admit the sender. `unrouted`: a mention or DM no specialist hears. */
@@ -479,10 +481,20 @@ const insertTs = (list: string[] | undefined, ts: string, keep: number): string[
 // Event subtypes that are ordinary messages. Edits, deletes, joins and the rest are not.
 const PLAIN_SUBTYPES = new Set([undefined, 'thread_broadcast', 'file_share', 'bot_message'])
 
-/** One message. `person`, `roles` and `operator` are who hydra.toml says sent it, filled in at delivery. */
+/**
+ * Who sent a message in a thread bound to a session's thread, as that session weighs it: the operator, someone declared in hydra.toml's `[people]` (approved),
+ * or anyone else.
+ */
+export type SenderStanding = 'operator' | 'approved' | 'other'
+
+/**
+ * One message. `person`, `roles` and `operator` are who hydra.toml says sent it, filled in at delivery. `tagged` and `from` are set only on a
+ * delivery to the session the conversation is bound to (`boundSessionFacts`).
+ */
 export type Item = {
   ts: string; user?: string; name?: string; person?: string; roles?: string[]; operator?: boolean
   kind: 'mention' | 'follow-up' | 'dm' | 'reaction'; text: string; files?: SlackFile[]; saved?: FileRef[]
+  tagged?: boolean; from?: SenderStanding
 }
 
 export const ITEM_TEXT_MAX_CHARS = UNTRUSTED_TEXT_MAX_CHARS
@@ -500,6 +512,7 @@ export function renderItem(i: Item): string {
     `operator=${i.operator ? 'true' : 'false'}`,
     ...(i.user ? [`address=${attr(`slack:${i.user}`)}`] : []),
     ...(name ? [`name=${attr(name)}`] : []),
+    ...(i.from ? [`tagged=${i.tagged ? 'true' : 'false'}`, `from=${i.from}`] : []),
   ]
   // File names are the sender's words too: one line each, cleaned, and never at the start of a line where they could pose as an item.
   const files = (i.saved ?? []).map(f => `  file: ${oneLine(f.name, 120) || '(unnamed)'}${f.size !== undefined ? ` (${formatBytes(f.size)})` : ''}${f.path ? ` → ${f.path}` : `: ${f.note}`}`)
@@ -532,6 +545,35 @@ export function formatDelivery(
 export const NEW_TO_MAIN_NOTE = 'hydra: this Slack thread is new to main. Answer it (reply with the conversation above as chat_id), or hand it to a session: '
   + 'one already on this work, or one you spawn for it, with `hydra conversations bind <conversation> thread:<thread id> --why "<one line>"`. '
   + 'The bind posts in the Slack thread which session took it, a link to that session\'s thread, and the reason; later messages in the thread go to that session.'
+
+/**
+ * A delivery's items as the session the conversation is bound to reads them: whether the app that heard the thread was tagged in each (the connector's
+ * own tag detection, `kind`), and who sent it. Approved is declared in `[people]`, the roster: the default a specialist's `reachable_by` admits.
+ */
+export const boundSessionFacts = (items: Item[]): Item[] => items.map(i => ({ ...i, tagged: i.kind === 'mention', from: i.operator ? 'operator' : i.person ? 'approved' : 'other' }))
+
+/** Whether a message likely asks the session its conversation is bound to: the app was tagged in it by the operator or an approved person. */
+export const asksBoundSession = (i: Item): boolean => i.tagged === true && (i.from === 'operator' || i.from === 'approved')
+
+/** How many asking messages the line names; past that it counts them, so the line stays within the room packing leaves for it. */
+const ASKED_NAMED_MAX = 5
+/** Room a delivery to a session's thread keeps for the line and the facts it adds beyond what `packItems` counts. */
+const BOUND_NOTE_ROOM = 700
+
+/**
+ * The hydra line the session a conversation is bound to reads with each delivery: the default its items' facts suggest, which the session applies with
+ * judgment. A tag from the operator or an approved person likely asks something; anything else is for listening. A session that may not speak
+ * there (restricted or write-confined: `speaks` false) is told it only listens.
+ */
+export function boundSessionNote(items: Item[], app: string, speaks: boolean): string {
+  if (!speaks) return 'hydra: this Slack thread is bound to you to listen to: this session does not speak in Slack here (reply would be refused), so take it in and stay quiet.'
+  const asking = items.filter(asksBoundSession).map(i => `ts=${i.ts}`)
+  const asked = asking.length > ASKED_NAMED_MAX ? [...asking.slice(0, ASKED_NAMED_MAX), `${asking.length - ASKED_NAMED_MAX} more`] : asking
+  if (!asked.length) return `hydra: this Slack thread is bound to you, and you are listening: nothing here tags ${app} from the operator or an approved person (from=operator or from=approved). Stay quiet in Slack.`
+  return `hydra: this Slack thread is bound to you, and the operator or an approved person tagged ${app} in ${asked.join(', ')}: you are likely being asked. `
+    + 'Answer in the thread (reply with the conversation above as chat_id) if it asks or needs something from you; a pure cc needs no reply.'
+    + (asking.length < items.length ? ' The other messages here are for listening.' : '')
+}
 
 /** Split a burst into deliveries that each fit under the cap. */
 export function packItems(items: Item[], maxBytes: number = BATCH_MAX_BYTES): Item[][] {
@@ -1142,7 +1184,7 @@ export class ConversationTable {
     // A DM is addressed to the bot by being one, and so is every message in a conversation whose binding still holds (route decides that).
     const addressed = dm || tagged || (!!existing && !existing.specialist)
     if (existing?.delivered?.includes(ev.ts)) return skip(() => `it was already delivered`)
-    // A tag in a thread a session only listens to is for whoever answers a fresh one here: they take the thread, and the session is told.
+    // A tag in a thread bound to a session is for whoever answers a fresh one here, when someone does: they take the thread, and the session is told.
     // A catch-all (`isCatchAll`) takes only what nothing holds, so it never takes a thread from a session: the fresh route is read without catch-alls.
     if (tagged && existing?.specialist && isSessionThread(existing.specialist)) {
       const fresh = route({ ...cfg.hydra, rules: cfg.hydra.rules.filter(r => !isCatchAll(r)) }, { from: addressOf(ev.user), at, addressed: true, app })
@@ -1620,7 +1662,12 @@ export class ConversationTable {
   private async post(entry: ConversationEntry, target: RouteTarget, batch: Item[], cfg: ConversationConfig): Promise<DeliverResult> {
     // A channel thread main hears for the first time: main is told what it may do with it. A DM or a group DM is main's to answer, and has no session to hand it to.
     const fresh = target.to === MAIN && !isDm(entry.channel) && !cfg.directory.isGroupDm?.(entry.channel) && entry.threadTs !== TOP_LEVEL && !entry.delivered?.length
-    const message = formatDelivery(entry, batch, { place: placeName(cfg, entry.channel), ...(cfg.workspaceUrl && { workspaceUrl: cfg.workspaceUrl }), ...(fresh && { note: NEW_TO_MAIN_NOTE }) })
+    // The session the conversation is bound to reads, with each message (a reaction too), whether the app was tagged and by whom, and one line on
+    // what that likely means. deliverGroup added the facts already, to pack with them: adding them again changes nothing.
+    const toSession = isSessionThread(target.to)
+    const items = toSession ? boundSessionFacts(batch) : batch
+    const note = fresh ? NEW_TO_MAIN_NOTE : toSession ? boundSessionNote(items, appName(cfg.hydra.slackApps, appOfEntry(entry)), !!this.deps.speaksIn?.(target.to)) : undefined
+    const message = formatDelivery(entry, items, { place: placeName(cfg, entry.channel), ...(cfg.workspaceUrl && { workspaceUrl: cfg.workspaceUrl }), ...(note && { note }) })
     const idempotencyKey = `slack-watch-${appPrefix(entry.app, '-')}${entry.channel}-${entry.threadTs}-${batch[0].ts}-${batch[batch.length - 1].ts}-${target.to}`
     try { return await this.deps.deliver({ ...target, conversation: conversationId(entry) }, message, idempotencyKey) } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
@@ -1652,7 +1699,9 @@ export class ConversationTable {
 
   /** `fallback`: the binding, for a guard redirect whose specialist has no session record. A broken guard never holds a message back. */
   private async deliverGroup(key: string, entry: ConversationEntry, target: RouteTarget, items: Item[], cfg: ConversationConfig, fallback?: string): Promise<void> {
-    for (const batch of packItems(items)) {
+    // To a session's thread, each message says whether the app was tagged and by whom: added before packing, with room kept for the line, so no batch outgrows the cap.
+    const toSession = isSessionThread(target.to)
+    for (const batch of toSession ? packItems(boundSessionFacts(items), BATCH_MAX_BYTES - BOUND_NOTE_ROOM) : packItems(items)) {
       const first = batch[0].ts
       const last = batch[batch.length - 1].ts
       const result = await this.post(entry, target, batch, cfg)
