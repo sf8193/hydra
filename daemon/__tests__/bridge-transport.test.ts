@@ -359,7 +359,7 @@ describe('engines/instances import (adapter-policy S2)', () => {
 })
 
 describe('persisted queues at boot', () => {
-  test('a fresh process that imports sessions.ts first, as daemon.ts does, restores the queue of a known session', () => {
+  test('a fresh process that imports sessions.ts first, as daemon.ts does, restores the queue of a known session and keeps it on disk', () => {
     const stateDir = mkdtempSync(join(STATE_DIR, 'boot-queue-'))
     const queueFile = join(stateDir, 'message-queue.json')
     writeFileSync(queueFile, JSON.stringify({ known: [{ type: 'notification', content: 'kept' }], gone: [{ type: 'notification', content: 'dropped' }] }))
@@ -373,7 +373,13 @@ describe('persisted queues at boot', () => {
     const r = Bun.spawnSync(['bun', '-e', code], { cwd: join(import.meta.dir, '..', '..'), env: { ...process.env, HYDRA_STATE_DIR: stateDir, DISCORD_BOT_TOKEN: 'test-token' } })
     expect(r.stderr.toString()).not.toContain('Error')
     expect(JSON.parse(r.stdout.toString())).toEqual({ known: [{ type: 'notification', content: 'kept' }] })
-    expect(existsSync(queueFile)).toBe(false)
+    expect(JSON.parse(readFileSync(queueFile, 'utf8'))).toEqual({ known: [{ type: 'notification', content: 'kept' }] })
+  })
+
+  test('a restore that keeps no queue removes the file', () => {
+    writeFileSync(join(STATE_DIR, 'message-queue.json'), JSON.stringify({ 'restore-unknown': [{ type: 'notification', content: 'dropped' }] }))
+    new BridgeTransport().restorePersistedQueues()
+    expect(existsSync(join(STATE_DIR, 'message-queue.json'))).toBe(false)
   })
 
   test('the daemon restores them before its bridge server starts', () => {
