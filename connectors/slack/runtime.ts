@@ -7,7 +7,7 @@ import type { SessionInfo } from '../../daemon/sessions.js'
 import { pushToolSurface } from '../../daemon/tool-surface.js'
 import { deliverToTarget, conversationSessionName, conversationSessionRunning, placesFree, type Target } from '../../specialists/targets.js'
 import { on } from '../../daemon/event-bus.js'
-import { SlackListener, boltApp, POST_TIMEOUT_MS, OWED_LATE_AFTER_MS, type ToldScopes } from './listener.js'
+import { SlackListener, boltApp, POST_TIMEOUT_MS, OWED_LATE_AFTER_MS, type ToldScopes, type MessageAuthor, type Writer } from './listener.js'
 import { SlackConnections, type AppHealth } from './connections.js'
 import { STATE_DIR } from '../../daemon/config.js'
 import { ENV_NAME_RE, capturedSpawnVars, scrubbedSpawnVars, tokenVarRefusal } from '../../shared/spawn-env.js'
@@ -17,12 +17,13 @@ import { safeSend, atomicWriteFileSync } from '../../daemon/util.js'
 import { mainChannel } from '../../daemon/main-session.js'
 import { gateway } from '../../daemon/config.js'
 import { currentHydraConfig, onHydraConfigLoad } from '../../daemon/hydra-config.js'
+import { isRestricted } from '../../daemon/policy-record.js'
 import { MAIN, currentId, isSessionThread, slackSpecialistsOf } from '../../routing/route.js'
 import { chunk } from '../../daemon/util.js'
 import { DEFAULT_SLACK_APP, coversAny, homePlaceOf, isChannelName, placeKey, placeOf, placesAnsweredBy, samePlace, slackConfigured, type Place, type HydraConfig, type SlackApp } from '../../config/types.js'
 import { speaksAsOf, noSuchApp } from '../../config/pins.js'
 import { notServedBy } from '../../routing/route.js'
-import { NO_SLACK_APP, appKey, notConnected } from './app.js'
+import { NO_SLACK_APP, SLACK_APP_NEEDS, appKey, appName, notConnected } from './app.js'
 import { timed } from '../../shared/loop-watch.js'
 import { registerSlackChannelNames } from '../../shared/link-previews.js'
 import { bareOf, readTarget } from '../../shared/target-kind.js'
@@ -43,6 +44,24 @@ export const slackRuntimeDeps = {
     const l = connections.listener(app)
     if (!l) return Promise.reject(new Error(notConnected(hydraConfig().slackApps, app)))
     return l.post(channel, threadTs, text)
+  },
+  /** Whose a message is, to one app: its own bot's, the operator's, or someone else's. Read from Slack. */
+  author: (channel: string, ts: string, threadTs: string | undefined, app: string = DEFAULT_SLACK_APP): Promise<MessageAuthor> => {
+    const l = connections.listener(app)
+    if (!l) return Promise.reject(new Error(notConnected(hydraConfig().slackApps, app)))
+    return l.author(channel, ts, threadTs)
+  },
+  /** Rewrites a message through one app: with its bot's token, or the operator's. */
+  edit: (channel: string, ts: string, text: string, app: string = DEFAULT_SLACK_APP, as: Writer = 'app'): Promise<void> => {
+    const l = connections.listener(app)
+    if (!l) return Promise.reject(new Error(notConnected(hydraConfig().slackApps, app)))
+    return l.edit(channel, ts, text, as)
+  },
+  /** Deletes a message through one app: with its bot's token, or the operator's. */
+  remove: (channel: string, ts: string, app: string = DEFAULT_SLACK_APP, as: Writer = 'app'): Promise<void> => {
+    const l = connections.listener(app)
+    if (!l) return Promise.reject(new Error(notConnected(hydraConfig().slackApps, app)))
+    return l.remove(channel, ts, as)
   },
   /**
    * Who can read a thread now, through one app: its bot, the operator's user token, or (null) nobody can be asked because
@@ -297,11 +316,12 @@ export function startConversationTable(): void {
   // A deleted thread is found by asking the platform (the gateway's `threadExists`): when its session ends, at start, and at each sweep.
   // What the operator ends ends: a killed session takes its thread's subscriptions with it, said once in the thread. A crash, a handoff or a respawn does not.
   const offDeleted = on('session:death', ({ threadId, deliberate, sessionId }) => { if (deliberate) unbindOnKill(threadId); else { void unbindIfThreadDeleted(threadId); reconcileVacancy(threadId, sessionId) } }, 'slack connector: unbind a killed session thread\'s conversations, or those of a deleted one')
+  const offDestroyed = on('thread:destroyed', ({ threadId }) => { void unbindIfThreadDeleted(threadId) }, 'slack connector: unbind the conversations of a thread destroyed with no session in it')
   const offDeath = on('session:death', freed, 'slack connector: wake conversations waiting at max')
   const offDead = on('session:marked-dead', freed, 'slack connector: wake conversations waiting at max (found dead)')
   // After a sleep the socket is likely dead and Slack replays nothing: replace it and catch up now, not when a timer notices.
   const offResumed = on('clock:resumed', () => { for (const l of connections.listeners().values()) l.onResume() }, 'slack connector: replace the socket and catch up after a resume')
-  unsubscribe = () => { offConfig(); offRegistered(); offDeleted(); offDeath(); offDead(); offResumed() }
+  unsubscribe = () => { offConfig(); offRegistered(); offDeleted(); offDestroyed(); offDeath(); offDead(); offResumed() }
 }
 
 /** A session registered in this thread: the conversations bound to it that owe messages are refetched and delivered now, not at the next periodic catch-up. */
@@ -482,6 +502,94 @@ export function conversationBelongsTo(callerSessionId: string | undefined, conve
 }
 
 /**
+ * Throws unless the caller answers this open conversation, whatever it does there (reply, edit, delete); returns who it is bound to.
+ * The one place the rule is spelled, so a tool added beside `reply` cannot reach a conversation `reply` could not.
+ */
+function answeredBy(h: HydraConfig, caller: SessionInfo | undefined, me: string | undefined, entry: ConversationEntry, entryId: string, what = 'a reply'): string | undefined {
+  const bound = entry.specialist ? currentId(h, entry.specialist) : undefined
+  // A thread a session bound to itself is listen-only: only a specialist (or main) speaks in Slack.
+  if (bound && isSessionThread(bound)) throw new Error(`${entryId} is bound to a session to listen to: hydra posts to Slack only for a specialist (or main), so reply to the operator instead`)
+  if (!mayAnswerConversation(h, caller, me, bound, entryId)) throw new Error(`${entryId} is bound to ${bound ?? 'no one yet'}${me ? `, not ${me}` : ''}: ${what} goes only to a conversation bound to your specialist (or its home_place)${isConversationSession(caller) ? ', and from a conversation\'s own session only to that conversation' : ''}`)
+  return bound
+}
+
+/** `edit_message` and `delete_message` with a conversation id as their chat_id. */
+export const editInConversation = (callerSessionId: string | undefined, conversation: unknown, messageId: unknown, text: string): Promise<string> => amendInConversation(callerSessionId, conversation, messageId, { text })
+export const deleteInConversation = (callerSessionId: string | undefined, conversation: unknown, messageId: unknown): Promise<string> => amendInConversation(callerSessionId, conversation, messageId, undefined)
+
+/** The user scope the operator's own messages are rewritten with. */
+const OPERATOR_WRITE_SCOPE = SLACK_APP_NEEDS.operatorWriteScope
+
+/**
+ * Whose a message is, and through which app. A named app is asked alone. With none named, every declared app is asked, the conversation's own
+ * first: the app whose bot wrote it is the one to rewrite it, and the operator's own message goes through the app that holds the operator's token.
+ * An app that cannot read the message is passed over unless none can.
+ */
+async function authorAcross(h: HydraConfig, c: ReturnType<typeof parseConversation>, named: boolean, first: string, ts: string): Promise<{ app: string; author: MessageAuthor }> {
+  const apps = named ? [first] : [...new Set([first, ...Object.keys(h.slackApps)])]
+  const threadTs = c.threadTs === TOP_LEVEL ? undefined : c.threadTs
+  let failure: unknown
+  let asked = false
+  for (const app of apps) {
+    try {
+      const author = await slackRuntimeDeps.author(c.channel, ts, threadTs, app)
+      if (author !== 'other') return { app, author }
+      asked = true
+    } catch (err) { failure ??= err }
+  }
+  if (!asked && failure !== undefined) throw failure
+  return { app: first, author: 'other' }
+}
+
+/**
+ * Rewrites or deletes one Slack message. Whose message it is is asked of Slack, and decides the token: an app's bot's, with that app's bot token,
+ * and the operator's, with the operator's user token. Anyone else's is refused before Slack is asked to touch it. `change` is the new text, or absent to delete.
+ * A session that is not a restricted specialist (and main) may do this in any conversation, bound or not. A restricted specialist only
+ * touches its own app's posts, in a conversation bound to it (the rule `reply` holds, `answeredBy`), and never the operator's.
+ */
+async function amendInConversation(callerSessionId: string | undefined, conversation: unknown, messageId: unknown, change: { text: string } | undefined): Promise<string> {
+  const verb = change ? 'edit' : 'delete'
+  const done = verb === 'edit' ? 'edited' : 'deleted'
+  const h = hydraConfig()
+  const c = parseConversation(conversation)
+  const named = typeof conversation === 'string' && /^slack:[a-z][a-z0-9_-]{0,34}:/.test(conversation.trim())
+  const id = conversationId(c)
+  const e = getConversationTable().get(c.channel, c.threadTs, appOfEntry(c))
+  const caller = callerSessionId ? registry.get(callerSessionId) : undefined
+  const restricted = callerSessionId !== 'main' && (!caller || isRestricted(caller))
+  const me = callerSessionId === 'main' ? MAIN : boundAs(caller, h)
+  const what = verb === 'edit' ? 'an edit' : 'a delete'
+  if (restricted) {
+    if (!e) throw new Error(`${id} is not an open conversation, so there is nothing there to ${verb}`)
+    answeredBy(h, caller, me, e, id, what)
+  }
+  // Exactly Slack's form: a destructive call never completes a ts into a different message.
+  if (typeof messageId !== 'string' || !/^\d{1,12}\.\d{6}$/.test(messageId)) throw new Error(`message_id ${String(messageId)} is not a Slack message ts (like 1793732224.093059, six digits after the point): copy it from the delivery`)
+  const ts = messageId
+  if (change && (typeof change.text !== 'string' || !change.text.trim())) throw new Error('nothing to edit to: the text is empty (delete_message removes a message)')
+  // An edit is one message: it cannot be split as a reply is.
+  if (change && change.text.length > SLACK_CHUNK) throw new Error(`an edit is one message: ${change.text.length} characters is over ${SLACK_CHUNK}. Shorten it, or edit to a short text and reply with the rest`)
+  const { app, author } = await authorAcross(h, c, named || restricted, appOfEntry(c), ts)
+  if (author === 'other') throw new Error(`${ts} in ${id} was written by neither ${named || restricted ? `${appName(h.slackApps, app)}'s` : 'any hydra app\'s'} bot nor the operator, so it is not hydra's to ${verb}${restricted ? `: a restricted specialist may ${verb} only its own app's posts` : ' (an app knows the operator\'s only with `operator_token_env`)'}`)
+  if (author === 'operator' && restricted) throw new Error(`${ts} in ${id} is the operator's own message: a restricted specialist may ${verb} only its own app's posts`)
+  if (restricted) {
+    // Slack was asked in between: a conversation moved away meanwhile gets no write (reply checks before every part too).
+    const now = getConversationTable().get(c.channel, c.threadTs, app)
+    if (!now) throw new Error(`${id} is no longer an open conversation: nothing was ${done}`)
+    answeredBy(hydraConfig(), caller, me, now, id, what)
+  }
+  try {
+    if (change) await slackRuntimeDeps.edit(c.channel, ts, change.text, app, author)
+    else await slackRuntimeDeps.remove(c.channel, ts, app, author)
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err)
+    if (author === 'operator' && /missing_scope/.test(why)) throw new Error(`the operator token of ${appName(h.slackApps, app)} lacks the user scope ${OPERATOR_WRITE_SCOPE}, so its owner's messages cannot be ${done}: add ${OPERATOR_WRITE_SCOPE} under User Token Scopes (\`hydra slack manifest ${app}\` lists it) and reinstall the app (${why})`)
+    throw new Error(`${verb} failed: ${why}`)
+  }
+  return `${done} ${ts} in ${id}`
+}
+
+/**
  * `reply` with a conversation id as its chat_id: the specialist answers a Slack conversation. Hydra posts the text
  * as given, and only into a conversation bound to the caller's specialist (with `replyTo`, in a DM, into the thread of that message, bound to the caller): a reply goes back where its question came from. A thread
  * bound to a session's own thread is listen-only.
@@ -514,13 +622,7 @@ export async function replyInConversation(callerSessionId: string | undefined, c
   if (!e) throw new Error(`${id} is not an open conversation, so there is nothing there to answer`)
   const caller = callerSessionId ? registry.get(callerSessionId) : undefined
   /** Throws unless the caller answers this open conversation; returns who it is bound to, which `stillMine` holds it to before every part. */
-  const mayAnswer = (entry: ConversationEntry, entryId: string): string | undefined => {
-    const bound = entry.specialist ? currentId(h, entry.specialist) : undefined
-    // A thread a session bound to itself is listen-only: only a specialist (or main) speaks in Slack.
-    if (bound && isSessionThread(bound)) throw new Error(`${entryId} is bound to a session to listen to: hydra posts to Slack only for a specialist (or main), so reply to the operator instead`)
-    if (!mayAnswerConversation(h, caller, me, bound, entryId)) throw new Error(`${entryId} is bound to ${bound ?? 'no one yet'}${me ? `, not ${me}` : ''}: a reply goes only to a conversation bound to your specialist (or its home_place)${isConversationSession(caller) ? ', and from a conversation\'s own session only to that conversation' : ''}`)
-    return bound
-  }
+  const mayAnswer = (entry: ConversationEntry, entryId: string): string | undefined => answeredBy(h, caller, me, entry, entryId)
   const bound = mayAnswer(e, id)
   // Which thread the post goes in. A thread conversation is its one thread (Slack threads are flat: no message inside one can be answered on its own);
   // a top-level conversation (only a DM has one) is answered in the thread of the message `reply_to` names, else at its top level.

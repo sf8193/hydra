@@ -4,9 +4,9 @@ import { basename, join } from 'path'
 
 import type { ChatGateway } from '../gateways/gateway.js'
 import { sourceEnvFiles } from '../shared/env-parse.js'
-import { captureSpawnVars } from '../shared/spawn-env.js'
+import { captureSpawnVars, capturedSpawnVars } from '../shared/spawn-env.js'
 import { scrubTokenVarsInFile } from '../config/token-vars.js'
-import { claudeConfigDir, platformStateDir, SLACK_GATEWAY_TOKEN_ENVS } from '../shared/constants.js'
+import { claudeConfigDir, DISCORD_GATEWAY_TOKEN_ENV, platformStateDir, SLACK_GATEWAY_TOKEN_ENVS } from '../shared/constants.js'
 import { isUnder } from '../shared/path-containment.js'
 
 // ---------------------------------------------------------------------------
@@ -43,10 +43,11 @@ for (const envFile of [LOCAL_ENV_FILE, ENV_FILE]) {
   try { if (!process.env.HYDRA_PROBE_SOCK) chmodSync(envFile, 0o600) } catch {}
 }
 sourceEnvFiles([LOCAL_ENV_FILE, ENV_FILE])
-// Names hydra.toml's Slack apps take tokens from join the scrubbed set before anything is captured, so no session can inherit them.
+// Names hydra.toml declares as tokens (Slack apps, the Discord gateway, each server's token_env) join the scrubbed set before anything is captured, so no session can inherit them.
 scrubTokenVarsInFile(join(STATE_DIR, 'hydra.toml'))
-// What is scrubbed from the environment is kept for the daemon's own use (capturedSpawnVars): Raindrop's settings and the Slack tokens.
+// What is scrubbed from the environment is kept for the daemon's own use (capturedSpawnVars): Raindrop's settings, the gateway's tokens and every token hydra.toml names.
 captureSpawnVars()
+const held = capturedSpawnVars()
 
 export const CLAUDE_CONFIG = claudeConfigDir()
 
@@ -135,8 +136,8 @@ let TOKEN: string | undefined
 let SLACK_APP_TOKEN: string | undefined
 
 if (PLATFORM === 'slack') {
-  TOKEN = process.env[SLACK_GATEWAY_TOKEN_ENVS.bot]
-  SLACK_APP_TOKEN = process.env[SLACK_GATEWAY_TOKEN_ENVS.app]
+  TOKEN = held[SLACK_GATEWAY_TOKEN_ENVS.bot]
+  SLACK_APP_TOKEN = held[SLACK_GATEWAY_TOKEN_ENVS.app]
   if (!TOKEN || !SLACK_APP_TOKEN) {
     process.stderr.write(
       `daemon: SLACK_BOT_TOKEN and SLACK_APP_TOKEN required for slack platform\n` +
@@ -145,7 +146,7 @@ if (PLATFORM === 'slack') {
     process.exit(1)
   }
 } else {
-  TOKEN = process.env.DISCORD_BOT_TOKEN
+  TOKEN = held[DISCORD_GATEWAY_TOKEN_ENV]
   if (!TOKEN) {
     process.stderr.write(
       `daemon: DISCORD_BOT_TOKEN required for discord platform\n` +

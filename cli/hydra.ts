@@ -61,7 +61,7 @@ Session management:
                                        Spawn the session for a declared specialist (its kickoff, which it must have, is the prompt; refuses if it is already filled)
   hydra list                           List active sessions
   hydra status <name>                  Session details
-  hydra kill <name> [--destroy]        Kill a session; --destroy (or +d) then deletes its Discord thread, permanently
+  hydra kill <name|thread id> [--destroy]  Kill a session; --destroy (or +d) then deletes its Discord thread, permanently; with [threads] allow_destroy it also deletes the thread of a session that has ended
   hydra peek [name]                    Read-only view of live sessions
   hydra attach <name>                  Attach to a running session's tmux surface
                                        <name>: a session's name or id, a specialist's name, or a thread id

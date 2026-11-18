@@ -23,6 +23,11 @@ operator = "op"
 [main]
 model = "claude-opus-5-5[1m]"         # the model main starts with: a Claude alias (opus, sonnet, ...) or a full ID; main runs on Claude, so a Codex or omp alias is a load error (default: HYDRA_MODEL in .env, else hydra's default)
 
+# --- threads: what may be done to a thread. Read at each use, so an edit applies at once. ---
+
+[threads]
+allow_destroy = false                 # true: `hydra kill <name or thread id> --destroy` (and main's kill_session with thread_id and destroy) may also delete a thread whose session record is gone (a killed session, or none ever lived there), permanently, and its starting message where hydra posted it; never a channel, a DM or a specialist's home thread (default false: it refuses and names this key; destroying a live session's thread works either way)
+
 # --- gateways: how you talk to hydra. Discord is a gateway only if it has a table here. Tokens stay in .env. ---
 # (Slack's gateway reads SLACK_BOT_TOKEN and SLACK_APP_TOKEN from .env and has no table.)
 
@@ -154,7 +159,7 @@ off_limits = ["~/notes"]               # absolute paths, or starting with ~
 
 [mcp_servers.datadog]
 command = "/usr/local/bin/datadog-mcp"   # required: a pinned binary or versioned package, not `npx -y` latest
-token_env = ["DD_API_KEY"]               # names in the state dir's .env; only these reach the server (never GH_TOKEN or the SSH agent)
+token_env = ["DD_API_KEY"]               # names in the state dir's .env; only these reach the server, and hydra removes them from every session's environment (never GH_TOKEN or the SSH agent: a variable sessions need cannot be removed from them)
 tools = ["search_logs", "get_monitor"]   # the tools of it a specialist may call (default: none, which a specialist cannot list)
 # Listing a server means running code you trust with your own privileges. Its `tools` limits which of its tools the specialist may call.
 # On macOS it also runs under a best-effort sandbox (hygiene, not containment; the network stays open): no unix sockets but name lookup,

@@ -26,7 +26,7 @@ import { readClaudeStatus } from './claude-status.js'
 import { defaultTurnSources } from './codex-observation.js'
 import { CLAUDE_CONFIG, ENV_FILE, SOCK_PATH, PLATFORM, STATE_DIR } from '../config.js'
 import { gateway } from '../config.js'
-import { SESSION_IDENTITY_VARS, capturedSpawnVars, scrubbedSpawnEnv, withRaisedFdLimit } from '../../shared/spawn-env.js'
+import { SESSION_IDENTITY_VARS, capturedSpawnVars, confinedEnvUnsets, scrubbedSpawnEnv, withRaisedFdLimit } from '../../shared/spawn-env.js'
 import { modsExport } from '../../shared/mods.js'
 import { BRIDGE_CHANNEL_FLAG, BRIDGE_MCP_SERVER_KEY, BRIDGE_PLUGIN_ID, BRIDGE_TOOLS_PERMISSION } from '../plugin-manifest.js'
 import { deliveryRefusal, type LaunchPolicy, missingTokenRefusal, PolicyRefusal, remedy, RESTRICTED_MODS, RESTRICTED_PREAMBLE, sandboxInputs, serverToolRule, type RestrictedPolicy } from '../restricted.js'
@@ -143,9 +143,12 @@ function writeConfinementConfig(w: NonNullable<LaunchPolicy['canOnlyWriteTo']>, 
 //   override:     session-specific identity (thread and type as hookEnv gives them: '' when unknown)
 //   strip:        byte-only (HYDRA_ROLE), kept from leaking into sessions
 //   lineage:      the Claude session a fork continues, for hooks keyed on Claude's session_id (fresh: unset)
+//   unset:        a restricted or write-confined launch keeps only the allowlisted part of the state .env (confinedEnvUnsets)
 function buildSpawnEnv(input: LaunchInput): string[] {
   const forkedFromClaudeSessionId = input.forkFrom?.claudeSessionId
+  const dropped = confined(input.policy, input.tmuxName) || input.policy?.canOnlyWriteTo ? confinedEnvUnsets() : []
   return [
+    ...(dropped.length ? [`unset ${dropped.join(' ')}`] : []),
     `export HYDRA_SESSION_ID=${shq(input.sessionId)}`,
     `export HYDRA_SESSION_NAME=${shq(input.tmuxName)}`,
     `export HYDRA_THREAD_ID=${shq(input.threadId ?? '')}`,

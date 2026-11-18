@@ -1,0 +1,13 @@
+%% `hydra kill <name|thread id> --destroy` and `kill_session {thread_id, destroy}` when no session record answers to the name (a killed session, or none ever).
+%% A live session's destroy (killThenDestroy) is unchanged and ungated. The ended case is destroyThreadById (daemon/destroy.ts).
+
+flowchart TD
+    ask["kill --destroy<br/>name or thread id"] --> live{"a session record<br/>holds the name?"}
+    live -- yes --> today["kill, then destroy<br/>(unchanged)"]
+    live -- no --> who{"operator's shell<br/>or main?"}
+    who -- no --> r1["refused: a session destroys<br/>only what it spawned"]
+    who -- yes --> set{"[threads] allow_destroy<br/>is on?"}
+    set -- no --> r2["refused: names the key"]
+    set -- yes --> g{"a thread, not a specialist's<br/>home, no live session in it,<br/>Discord, no protocol?"}
+    g -- no --> r3["refused: says which"]
+    g -- yes --> del["destroyThread: delete the thread,<br/>clear threads.json entry,<br/>PR watches and bindings"]

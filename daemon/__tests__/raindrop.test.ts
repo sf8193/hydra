@@ -443,7 +443,7 @@ describe('raindrop: defaultProjectFor', () => {
     const r = Bun.spawnSync(['bun', '-e', code], {
       cwd: join(import.meta.dir, '..', '..'),
       env: {
-        ...process.env,
+        ...process.env, DISCORD_BOT_TOKEN: 'test-token',
         GIT_DIR: join(root, 'victim', '.git'), GIT_WORK_TREE: join(root, 'victim'),
         GIT_CEILING_DIRECTORIES: join(root, 'myproj'),
       },

@@ -786,9 +786,24 @@ export function unwatchPr(prUrl: string, callerSessionId?: string): string {
  * specialist's watches do not: the specialist outlives its sessions, and ends with `specialist rm` (exit 8).
  */
 export function unwatchBySession(who: Watcher): number {
+  if (who.sessionId !== 'main') return unwatchThread(who.threadId)
   let removed = 0
   for (const [url, entry] of watches) {
-    if (watchedBy(entry, who) && (entry.to === 'main' || entry.to === who.threadId)) {
+    if (entry.to === 'main') {
+      watches.delete(url)
+      unpinWatch(entry)
+      removed++
+    }
+  }
+  if (removed > 0) persist()
+  return removed
+}
+
+/** The watches that deliver to this thread, ended: for a thread that is gone, with or without a session in it. */
+export function unwatchThread(threadId: string): number {
+  let removed = 0
+  for (const [url, entry] of watches) {
+    if (entry.to === threadId) {
       watches.delete(url)
       unpinWatch(entry)
       removed++
