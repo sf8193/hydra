@@ -1,9 +1,13 @@
 # Hydra
 
-A new interface to building — run coding agents over Discord/Slack.
+Talk to many Claude Code (or Codex) sessions from Slack or Discord. Each session gets its own thread and its own tmux window, so you can read it in chat or attach to the terminal.
 
-- Spawn and manage parallel agents from chat
-- tmux in to manage from terminal
+**Example.** In your main thread: `spawn: fix the 5 easiest tech-debt tickets`. Hydra opens five threads (spark, pixel, glyph...), each with its own worktree. Each reports back to the main thread when done. To see what one is really doing: `tmux attach -t <name>`.
+
+**Why not sub-agents?** A sub-agent hides inside one session. Here every session has a thread you can read, interrupt and steer, and sessions message each other.
+
+- Commands: `spawn:`, `kill:`, `review <PR>` (a builder and an adversarial reviewer talk in a thread), `help` lists the rest. Session names are just unique IDs.
+- Setup: see [Quick Start](#quick-start), then [Discord](docs/discord.md) or [Slack](docs/slack.md).
 
 ## Architecture
 
