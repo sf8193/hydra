@@ -682,6 +682,10 @@
     ],
     [
       "daemon_cli-handler",
+      "daemon_tool-surface"
+    ],
+    [
+      "daemon_cli-handler",
       "daemon_bridge-transport"
     ],
     [

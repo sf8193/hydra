@@ -4,7 +4,6 @@ import { ConnectedApps, type AppIdentity } from './apps.js'
 import { getSpecialist, conversationSpecialistOf, specialistOf, boundAs } from '../../specialists/specialists.js'
 import { registry } from '../../daemon/sessions.js'
 import type { SessionInfo } from '../../daemon/sessions.js'
-import { pushToolSurface } from '../../daemon/tool-surface.js'
 import { deliverToTarget, conversationSessionName, conversationSessionRunning, placesFree, type Target } from '../../specialists/targets.js'
 import { on } from '../../daemon/event-bus.js'
 import { SlackListener, boltApp, POST_TIMEOUT_MS, OWED_LATE_AFTER_MS, type ToldScopes, type MessageAuthor, type Writer } from './listener.js'
@@ -266,26 +265,6 @@ export function startSlackListener(): Promise<void> { return connections.start()
 
 export function stopSlackListener(): void { connections.stop() }
 
-let lastSpecialists: string[] = []
-let lastConnected: boolean | undefined
-/**
- * Tell each session whose tools changed: a hydra.toml edit can add or remove a Slack specialist, and connecting or
- * disconnecting Slack gives or takes every thread session's conversation tools.
- */
-export function refreshSlackSpecialistSurface(): void {
-  const connected = slackConfigured(hydraConfig())
-  if (lastConnected !== undefined && connected !== lastConnected) for (const s of registry.values()) pushToolSurface(s.sessionId)
-  lastConnected = connected
-  const now = slackSpecialistsOf(hydraConfig())
-  const all = [...new Set([...now, ...lastSpecialists])]
-  lastSpecialists = now
-  for (const to of all) {
-    const thread = getSpecialist(to)?.threadId
-    const id = thread ? registry.getByThread(thread) : undefined
-    if (id) pushToolSurface(id)
-  }
-}
-
 let unsubscribe: (() => void) | undefined
 
 /**
@@ -300,8 +279,6 @@ export function startConversationTable(): void {
   void unbindDeletedThreads()
   sweepTimer = setInterval(() => timed('slack-watch-sweep', () => { reconcileVacancy(); w.sweep(); void unbindDeletedThreads() }), SWEEP_INTERVAL_MS)
   ;(sweepTimer as { unref?: () => void }).unref?.()
-  refreshSlackSpecialistSurface()
-  const offConfig = onHydraConfigLoad(() => queueMicrotask(refreshSlackSpecialistSurface))
   // A conversation session ending frees a place: the waiters are offered it at once (catch-up refetches them, oldest first).
   const freed = ({ tmuxName }: { tmuxName: string }) => {
     const to = conversationSpecialistOf(tmuxName)
@@ -321,7 +298,7 @@ export function startConversationTable(): void {
   const offDead = on('session:marked-dead', freed, 'slack connector: wake conversations waiting at max (found dead)')
   // After a sleep the socket is likely dead and Slack replays nothing: replace it and catch up now, not when a timer notices.
   const offResumed = on('clock:resumed', () => { for (const l of connections.listeners().values()) l.onResume() }, 'slack connector: replace the socket and catch up after a resume')
-  unsubscribe = () => { offConfig(); offRegistered(); offDeleted(); offDestroyed(); offDeath(); offDead(); offResumed() }
+  unsubscribe = () => { offRegistered(); offDeleted(); offDestroyed(); offDeath(); offDead(); offResumed() }
 }
 
 /** A session registered in this thread: the conversations bound to it that owe messages are refetched and delivered now, not at the next periodic catch-up. */

@@ -7,7 +7,7 @@ import { isRestricted } from './policy-record.js'
 import type { SessionInfo } from './sessions.js'
 import { resolveEngine } from './engines/instances.js'
 import { specialistOf, boundAs, sendsToOf } from '../specialists/specialists.js'
-import { currentHydraConfig } from './hydra-config.js'
+import { currentHydraConfig, onHydraConfigLoad } from './hydra-config.js'
 import { slackConfigured } from '../config/types.js'
 
 // Widened views: isToolAllowed checks arbitrary wire names, not just known ToolNames.
@@ -120,8 +120,33 @@ export function refusalText(sessionId: string, name: string): string {
     : `${name} is not available to this session`
 }
 
-export function pushToolSurface(sessionId: string): void {
+/** A hash of the tool list each session was last sent: what pushChangedToolSurfaces compares against, so only a changed list is pushed. */
+const advertised = new Map<string, number | bigint>()
+const listKey = (tools: readonly SessionTool[]): number | bigint => Bun.hash(JSON.stringify(tools))
+
+/** The tool list to send this session now, noted as the one it holds. Every list the daemon sends a bridge comes from here: registration, a pull and a push. */
+export function advertiseTools(sessionId: string): SessionTool[] {
   const tools = getToolsForSession(sessionId)
+  advertised.set(sessionId, listKey(tools))
+  return tools
+}
+
+export function pushToolSurface(sessionId: string): void {
+  const tools = advertiseTools(sessionId)
   process.stderr.write(`daemon: pushToolSurface ${sessionId} → ${tools.length} tools\n`)
   transport.sendOrQueue(sessionId, { type: 'tools_update', tools })
 }
+
+/**
+ * Pushes the tool list to every session whose list is no longer the one it was sent: after a hydra.toml load (`sends_to` adds or removes
+ * send_to_thread; Slack being configured adds or removes the conversation tools) or a specialist's thread moved by the CLI. Sessions never
+ * sent a list are skipped: their registration will carry the current one.
+ */
+export function pushChangedToolSurfaces(): void {
+  for (const [sessionId, sent] of advertised) {
+    if (!registry.has(sessionId)) { advertised.delete(sessionId); continue }
+    if (listKey(getToolsForSession(sessionId)) !== sent) pushToolSurface(sessionId)
+  }
+}
+// Everything the list reads from hydra.toml is read live, so a load is where a config change reaches a running session's list.
+onHydraConfigLoad(() => pushChangedToolSurfaces())

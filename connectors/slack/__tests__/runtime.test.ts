@@ -7,9 +7,9 @@ import { registry } from '../../../daemon/sessions.js'
 import { setSpecialistThread, _reloadSpecialists } from '../../../specialists/specialists.js'
 import { _setHydraConfigForTesting } from '../../../daemon/hydra-config.js'
 import {
-  getConversationTable, bindConversation, unbindConversation, formatConversations, formatConversationsFor, operatorBind, refreshSlackSpecialistSurface, slackConversationHealth, slackTokens, slackRuntimeDeps, placeFileFor, parseConversation, replyInConversation, targetFor, startConversationTable, stopConversationTable,
+  getConversationTable, bindConversation, unbindConversation, formatConversations, formatConversationsFor, operatorBind, slackConversationHealth, slackTokens, slackRuntimeDeps, placeFileFor, parseConversation, replyInConversation, targetFor, startConversationTable, stopConversationTable,
 } from '../runtime.js'
-import { sessionCapabilities, isSpecialistOccupant, isToolAllowed } from '../../../daemon/tool-surface.js'
+import { sessionCapabilities, isSpecialistOccupant, isToolAllowed, advertiseTools } from '../../../daemon/tool-surface.js'
 import { emit } from '../../../daemon/event-bus.js'
 import { transport } from '../../../daemon/bridge-transport.js'
 import { handleCLIRequest, type CLIRequest } from '../../../daemon/cli-handler.js'
@@ -325,19 +325,19 @@ describe('any session listens to a Slack thread: bound to its own thread', () =>
     })
   })
 
-  test('connecting or disconnecting Slack re-pushes every session its tools', () => {
+  test('a reload that connects or disconnects Slack re-pushes a session its tools; one that changes nothing pushes nothing', () => {
     session('sw-pushed', MINE)
+    advertiseTools('sw-pushed')                                            // its bridge was sent its list, as at registration
     const pushed: { id: string; tools: string[] }[] = []
     const real = transport.sendOrQueue
     ;(transport as any).sendOrQueue = (id: string, m: any) => { if (m.type === 'tools_update') pushed.push({ id, tools: m.tools.map((t: any) => t.name) }) }
     try {
-      refreshSlackSpecialistSurface()                                    // remembers: connected
+      configure()
+      expect(pushed.filter(p => p.id === 'sw-pushed')).toEqual([])
       configure(TOML.replace(/\[slack\.apps\.default\][^[]*/, ''))
-      refreshSlackSpecialistSurface()
       expect(pushed.find(p => p.id === 'sw-pushed')?.tools).not.toContain('bind_conversation')
       pushed.length = 0
       configure()
-      refreshSlackSpecialistSurface()
       expect(pushed.find(p => p.id === 'sw-pushed')?.tools).toContain('bind_conversation')
     } finally { (transport as any).sendOrQueue = real }
   })
