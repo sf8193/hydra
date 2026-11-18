@@ -139,6 +139,8 @@ export async function reviveThread(req: ReviveRequest): Promise<ReviveOutcome> {
   const specialistId = req.specialist ?? specialistForThread(thread.threadId) ?? carriedPolicy?.specialist
   const kickoff = currentKickoff(specialistId)
   const kickoffChanged = !req.respawnOnly && bornKickoff !== undefined && kickoff !== undefined && bornKickoff !== kickoff.hash
+  // A conversation its specialist's kill_and_respawn replaced is never continued, by any caller: that would bring back the context the restart dropped.
+  const restartedFresh = entry?.restartedFresh === true
   // A worktree still on disk is kept on every tier and into a new thread; boot recovery reattaches a missing one first.
   const worktree = dead?.worktreeRepo && dead.worktreePath && existsSync(dead.worktreePath)
     ? { repo: dead.worktreeRepo, path: dead.worktreePath, branch: dead.worktreeBranch ?? `wt/${dead.tmuxName}` }
@@ -208,7 +210,8 @@ export async function reviveThread(req: ReviveRequest): Promise<ReviveOutcome> {
 
     // The gate reads both ids (PINNED R9: a mixed-ID record logs both tier failures, then respawns).
     if (kickoffChanged) process.stderr.write(`daemon: revive ${lastTmuxName}: the kickoff of ${specialistId} changed since this conversation began, so it is not resumed or forked\n`)
-    if (!req.respawnOnly && !kickoffChanged && (claudeSessionId || entry?.codexThreadId || dead?.codexThreadId || plan.resume)) {
+    if (restartedFresh && !req.respawnOnly) process.stderr.write(`daemon: revive ${lastTmuxName}: this conversation was restarted fresh (handoff_protocol = "kill_and_respawn"), so it is not resumed or forked\n`)
+    if (!req.respawnOnly && !kickoffChanged && !restartedFresh && (claudeSessionId || entry?.codexThreadId || dead?.codexThreadId || plan.resume)) {
       let result: (SpawnResult & { bridgeOrphan?: boolean }) | null = null
       const r = plan.resume
       if (r?.kind === 'await-bridge') {
@@ -265,7 +268,8 @@ export async function reviveThread(req: ReviveRequest): Promise<ReviveOutcome> {
 
     try {
       const { prompt, kickoffHash: bornUnder } = respawnPrompt()
-      const result = await recoveryDeps.tryRespawn(thread.threadId, prompt, entry?.tmuxName ?? dead?.tmuxName, model, {
+      // A conversation restarted fresh is replaced by a new birth from the kickoff, not a resurrection told to pick up where it left off.
+      const result = await recoveryDeps.tryRespawn(thread.threadId, prompt, restartedFresh ? undefined : entry?.tmuxName ?? dead?.tmuxName, model, {
         ...shared, ...(bornUnder && { kickoffHash: bornUnder }), ...req.respawnOpts, ...(req.promptPrefix && { promptPrefix: req.promptPrefix }), ...(req.cwd && { cwd: req.cwd }),
       })
       if (result) return ok(result, 'respawned')

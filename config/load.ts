@@ -21,7 +21,7 @@ import { readValue, spelledApp, spelledPerson, spelledRole, whoSpelled } from '.
 import {
   BUILTIN_ROLES, DEFAULT_SLACK_APP, SLACK_APP_ID_RE, homePlaceOf, isChannelName, isDmPlace, isEvery, namesDmWithOthers, optionsOf, parsePlace, placeKey, placeShadows, placesAnsweredBy, samePlace, type Address, type ConfigIssue, type Connectors, type Gateways, type Guard, type HydraConfig, type LoadEnv, type LoadResult, type MainOptions,
   type McpServer, type WorkdirScan, type Person, type Place, type PlaceOptions, type Platform, type Rule, type Schedule, type SlackApp, type Specialist, type Vitals,
-  MAX_ALERT_AFTER_MS, NEEDS, RUNNERS, SESSIONS_MODES, WORKDIR_TOOLS, type Need,
+  MAX_ALERT_AFTER_MS, NEEDS, RUNNERS, SESSIONS_MODES, WORKDIR_TOOLS, type Need, HANDOFF_PROTOCOLS, type HandoffProtocol, type HandoffWithoutTool,
 } from './types.js'
 
 export const VITALS_DEFAULTS: Vitals = Object.freeze({
@@ -60,7 +60,14 @@ const TOP_KEYS = ['operator', 'main', 'gateways', 'connectors', 'slack', 'people
 const OPERATOR_FREE_KEYS = ['operator', 'main', 'threads']
 /** `[main]`: the operator's harness, as `[specialists.<id>]` is a specialist. */
 const MAIN_KEYS = ['model']
-const SPECIALIST_KEYS = ['workdir', 'kickoff', 'kickoff_file', 'pinned_to', 'speaks_as', 'reachable_by', 'sessions', 'max_sessions', 'idle', 'home_place', 'model', 'emoji', 'engine', 'env_file', 'renamed_from', 'handoff_at', 'restricted', 'can_only_write_to', 'cannot_read', 'deny_commands', 'browser_profile', 'tools', 'mcp_servers', 'sends_to']
+const SPECIALIST_KEYS = ['workdir', 'kickoff', 'kickoff_file', 'pinned_to', 'speaks_as', 'reachable_by', 'sessions', 'max_sessions', 'idle', 'home_place', 'model', 'emoji', 'engine', 'env_file', 'renamed_from', 'handoff_at_pct', 'handoff_protocol', 'restricted', 'can_only_write_to', 'cannot_read', 'deny_commands', 'browser_profile', 'tools', 'mcp_servers', 'sends_to']
+/** A key that was renamed: a file still using the old name fails to load at that key, naming the new one, never loads without it. */
+const RENAMED_KEYS: Record<string, string> = { handoff_at: 'handoff_at_pct' }
+/** A restricted or write-confined specialist's handoff keys: the loader keeps a line only with kill_and_respawn (it reports the rest). */
+function withoutTool(h: { handoffAtPct?: number; handoffProtocol?: HandoffProtocol }): HandoffWithoutTool {
+  if (h.handoffProtocol === 'kill_and_respawn') return { handoffProtocol: 'kill_and_respawn', ...(h.handoffAtPct !== undefined && { handoffAtPct: h.handoffAtPct }) }
+  return h.handoffProtocol === 'letter' ? { handoffProtocol: 'letter' } : {}
+}
 /** A Slack app's keys, as `[slack.apps.<id>]` spells them. */
 const SLACK_APP_KEYS = ['bot_token_env', 'socket_token_env', 'operator_token_env', 'display_name', 'description']
 /** Keys only a hand edit of one specialist's own table sets: a default would reach every specialist, a fragment's table is someone else's. */
@@ -196,7 +203,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   // --- small readers: each reports a wrong type at its path and returns undefined ----------------------------------
 
   const unknownKeys = (t: Table, known: readonly string[], path: string) => {
-    for (const k of Object.keys(t)) if (!known.includes(k)) error(join2(path, k), `unknown key "${k}"`)
+    for (const k of Object.keys(t)) if (!known.includes(k)) error(join2(path, k), Object.hasOwn(RENAMED_KEYS, k) ? `${k} is now ${RENAMED_KEYS[k]}: rename it` : `unknown key "${k}"`)
   }
   const table = (v: unknown, path: string): Table | undefined => {
     if (v === undefined) return undefined
@@ -551,7 +558,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   // A default reaches every specialist, including ones nobody meant to scope: these are set on one specialist's own table.
   for (const k of RESTRICTION_KEYS) if (has(defaults, k)) error(`defaults.specialist.${k}`, `can't be a default: ${k} says what one specialist's session may reach. Set it under [specialists.<id>] by editing hydra.toml`)
   if (has(defaults, 'emoji')) error('defaults.specialist.emoji', "can't be a default: an emoji tells one specialist's threads from the others'. Set it under [specialists.<id>]")
-  if (has(defaults, 'handoff_at')) error('defaults.specialist.handoff_at', "can't be a default: it sets when one specialist's sessions hand off. Set it under [specialists.<id>]")
+  if (has(defaults, 'handoff_at_pct')) error('defaults.specialist.handoff_at_pct', "can't be a default: it sets when one specialist's sessions hand off. Set it under [specialists.<id>]")
+  if (has(defaults, 'handoff_protocol')) error('defaults.specialist.handoff_protocol', "can't be a default: it sets how one specialist's sessions hand off. Set it under [specialists.<id>]")
   if (defaults.workdir !== undefined && typeof defaults.workdir === 'string' && !defaults.workdir.includes('{id}')) {
     warn('defaults.specialist.workdir', 'has no {id}, so every specialist without its own workdir shares one folder')
   }
@@ -559,7 +567,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   // Defaults are type-checked once, here, so a bad default is reported once, not once per specialist.
   const goodDefaults: Table = {}
   for (const k of Object.keys(defaults)) {
-    if (!SPECIALIST_KEYS.includes(k) || k === 'emoji' || k === 'handoff_at' || (RESTRICTION_KEYS as readonly string[]).includes(k)) continue
+    if (!SPECIALIST_KEYS.includes(k) || k === 'emoji' || k === 'handoff_at_pct' || k === 'handoff_protocol' || (RESTRICTION_KEYS as readonly string[]).includes(k)) continue
     const n = errors.length
     readSpecialistKeyTypes({ [k]: defaults[k] }, 'defaults.specialist')
     if (errors.length === n && k === 'idle') checkIdle(defaults.idle as string, 'defaults.specialist.idle')
@@ -726,15 +734,19 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       else if (/[()]/.test(c)) error(`${path}.deny_commands[${i}]`, `"${c}" has a parenthesis, which a Bash rule cannot hold; write the command without it`)
       else if (!denyCommands.includes(c)) denyCommands.push(c)
     }
-    // `handoff_at`: the context percent at which its idle sessions are asked to hand off. Only a session with the handoff tool can answer that ask.
-    let handoffAt: number | undefined
-    if (t.handoff_at !== undefined) {
-      const v = t.handoff_at
-      if (typeof v !== 'number' || !Number.isInteger(v) || v < 1 || v > 99) error(`${path}.handoff_at`, 'must be a whole number from 1 to 99 (a context percent)')
-      else if (restricted) error(`${path}.handoff_at`, "restricted specialists can't hand off: a restricted session has no handoff tool. Remove handoff_at, or set restricted = false")
-      else if (keyed) error(`${path}.handoff_at`, "write-confined specialists can't hand off: a write-confined session has no handoff tool. Remove handoff_at, or remove can_only_write_to")
-      else handoffAt = v
+    // `handoff_at_pct`: the context percent at which its idle sessions are replaced; `handoff_protocol`: how. A letter needs the handoff
+    // tool, which a restricted or write-confined session does not hold: such a specialist's line comes only with kill_and_respawn.
+    const handoffProtocol = oneOf(t, 'handoff_protocol', path, HANDOFF_PROTOCOLS)
+    let handoffAtPct: number | undefined
+    if (t.handoff_at_pct !== undefined) {
+      const v = t.handoff_at_pct
+      const byLetter = handoffProtocol !== 'kill_and_respawn'
+      if (typeof v !== 'number' || !Number.isInteger(v) || v < 1 || v > 99) error(`${path}.handoff_at_pct`, 'must be a whole number from 1 to 99 (a context percent)')
+      else if (restricted && byLetter) error(`${path}.handoff_at_pct`, `a restricted session has no handoff tool, so it can't write a letter. Set handoff_protocol = "kill_and_respawn" (a fresh session from the kickoff at the line), or remove handoff_at_pct`)
+      else if (keyed && byLetter) error(`${path}.handoff_at_pct`, `a write-confined session has no handoff tool, so it can't write a letter. Set handoff_protocol = "kill_and_respawn" (a fresh session from the kickoff at the line), or remove handoff_at_pct`)
+      else handoffAtPct = v
     }
+    const handoff = { ...(handoffAtPct !== undefined && { handoffAtPct }), ...(handoffProtocol !== undefined && { handoffProtocol }) }
     if (confinesWrites && engine !== undefined && engine !== 'claude') error(`${path}.engine`, `${engine} can't run a write-confined specialist: only Claude Code's own sandbox does the confining; set engine = "claude", or remove can_only_write_to`)
     // A folder the layer would deny reading is no folder for the specialist: it could not read its own workdir.
     if (confinesWrites && workdirRaw !== undefined && isAbsolute(workdir)) {
@@ -821,7 +833,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     }
     // One of the three, never a mix: a table that sets both restricted and can_only_write_to is refused above, by name, and loads nothing.
     specialists[id] = restricted
-      ? { ...base, restricted, tools: tools!, mcpServerNames: mcpServerNames!, ...(sendsToRaw && { sendsTo: [...new Set(sendsToRaw)] }) }
+      ? { ...base, restricted, tools: tools!, mcpServerNames: mcpServerNames!, ...(sendsToRaw && { sendsTo: [...new Set(sendsToRaw)] }), ...withoutTool(handoff) }
       : confinesWrites
         ? {
             ...base, restricted, canOnlyWriteTo: 'workdir', cannotRead,
@@ -829,8 +841,9 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
             ...(browserProfile !== undefined && { browserProfile }),
             ...(tools && { tools }),
             mcpServerNames: mcpServerNames!,
+            ...withoutTool(handoff),
           }
-        : { ...base, restricted, ...(handoffAt !== undefined && { handoffAt }) }
+        : { ...base, restricted, ...handoff }
   }
   // A target value says its kind: `main` (the built-in specialist: never declared) or `specialist:<name>` (declared here).
   // Read by `readTarget`, as delivery and the CLI read it; the loaded config holds the bare form (`main`, a specialist's id), which is what routing and the schedules compare against.

@@ -10,9 +10,12 @@ describe('Specialist is a union', () => {
     const kinds: Specialist[] = [
       { ...base, restricted: true, tools: ['Read'], mcpServerNames: [], sendsTo: ['desk'] },
       { ...base, restricted: false, canOnlyWriteTo: 'workdir', cannotRead: [], mcpServerNames: [], denyCommands: ['rm *'] },
-      { ...base, restricted: false, handoffAt: 40 },
+      { ...base, restricted: false, handoffAtPct: 40, handoffProtocol: 'letter' as const },
+      // A line with no letter: a restricted or write-confined specialist's sessions are restarted fresh at it.
+      { ...base, restricted: true, tools: ['Read'], mcpServerNames: [], handoffAtPct: 25, handoffProtocol: 'kill_and_respawn' as const },
+      { ...base, restricted: false, canOnlyWriteTo: 'workdir', cannotRead: [], mcpServerNames: [], handoffAtPct: 25, handoffProtocol: 'kill_and_respawn' as const },
     ]
-    expect(kinds.map(k => k.restricted)).toEqual([true, false, false])
+    expect(kinds.map(k => k.restricted)).toEqual([true, false, false, true, false])
   })
 
   test('tsc rejects a specialist that is restricted and write-confined', () => {
@@ -27,11 +30,13 @@ describe('Specialist is a union', () => {
       { ...base, restricted: false, canOnlyWriteTo: 'workdir', cannotRead: [], mcpServerNames: [], sendsTo: ['desk'] },
       // @ts-expect-error cannot_read without can_only_write_to
       { ...base, restricted: false, cannotRead: ['/x'] },
-      // @ts-expect-error handoff_at on a restricted specialist: its session has no handoff tool
-      { ...base, restricted: true, tools: ['Read'], mcpServerNames: [], handoffAt: 40 },
-      // @ts-expect-error handoff_at on a write-confined specialist: its session has no handoff tool
-      { ...base, restricted: false, canOnlyWriteTo: 'workdir', cannotRead: [], mcpServerNames: [], handoffAt: 40 },
+      // @ts-expect-error handoff_at_pct with a letter on a restricted specialist: its session has no handoff tool
+      { ...base, restricted: true, tools: ['Read'], mcpServerNames: [], handoffAtPct: 40, handoffProtocol: 'letter' as const },
+      // @ts-expect-error handoff_at_pct with a letter on a write-confined specialist: its session has no handoff tool
+      { ...base, restricted: false, canOnlyWriteTo: 'workdir', cannotRead: [], mcpServerNames: [], handoffAtPct: 40, handoffProtocol: 'letter' as const },
+      // @ts-expect-error handoff_at_pct with no protocol (a letter) on a restricted specialist
+      { ...base, restricted: true, tools: ['Read'], mcpServerNames: [], handoffAtPct: 40 },
     ]
-    expect(mixes).toHaveLength(7)
+    expect(mixes).toHaveLength(8)
   })
 })

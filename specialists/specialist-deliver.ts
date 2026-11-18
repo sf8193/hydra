@@ -1,4 +1,4 @@
-import { registry, threadRegistry } from '../daemon/sessions.js'
+import { registry, repointChildren, threadRegistry } from '../daemon/sessions.js'
 import type { SessionInfo } from '../daemon/sessions.js'
 import { transport } from '../daemon/bridge-transport.js'
 import { backoffRefusal, reviveDeps, reviveThread, threadStub } from '../daemon/recovery.js'
@@ -9,7 +9,10 @@ import { resumeIdleLimit } from '../daemon/idle-limit.js'
 import { parseIdleTtl } from '../shared/constants.js'
 import { conversationSpecialistOf, getSpecialist, setSpecialistThread, readKickoff, declaredInToml, specialistOf, declaredEngineOf, withTargetLock, type Specialist } from './specialists.js'
 import { safeSend } from '../daemon/util.js'
-import { deliverToTarget } from './targets.js'
+import { endForFreshStart } from '../daemon/session-lifecycle.js'
+import { currentHydraConfig } from '../daemon/hydra-config.js'
+import { declaredSpecialist } from '../config/types.js'
+import { conversationRecipe, deliverToTarget } from './targets.js'
 
 export type SpecialistDeliverResult =
   | { ok: true; data: unknown }
@@ -108,6 +111,38 @@ async function fill(name: string, specialist: Specialist, initiator: string | un
   // The occupant's tools depend on the specialist it now fills (see tool-surface.ts).
   if (info.adapter.channel === 'bridge') pushToolSurface(info.sessionId)
   return { info, url: result.url }
+}
+
+/**
+ * `handoff_protocol = "kill_and_respawn"`: replace a specialist's live session with a fresh one in its thread, started from the kickoff,
+ * with no letter. The session's conversation is marked `restartedFresh` before the kill, so no revive (this one, a refill, `resume`, boot
+ * recovery, one after a daemon restart mid-swap) resumes or forks it. The fresh session is the specialist's own refill (`fill`), with
+ * everything a refill gives it (its name, workdir, model, idle and tools); a per-conversation session is refilled from its specialist's
+ * recipe, in its own thread. The specialist's lock is held from the kill to the spawn, as a letter handoff holds it: a delivery waits on
+ * it, and an operator's message in a shared specialist's thread is held for the specialist, then lands in the fresh session. Throws
+ * NotReplaced when it refuses before ending anything.
+ */
+/** killAndRespawn refused before ending anything: the session it was asked to replace is untouched (or already replaced). */
+export class NotReplaced extends SpecialistError {}
+
+export async function killAndRespawn(info: SessionInfo): Promise<SessionInfo> {
+  const conversationOf = conversationSpecialistOf(info.tmuxName)
+  const id = conversationOf ?? info.policy?.specialist ?? specialistOf(info)
+  const declared = id !== undefined ? declaredSpecialist(currentHydraConfig(), id) : undefined
+  if (!declared) throw new NotReplaced(`${info.tmuxName} fills no declared specialist, so it has no kickoff to restart fresh from`, 8)
+  // A conversation's own session keeps its own name, and is keyed by its thread, as ensureSpecialist keys it.
+  const name = conversationOf ? info.tmuxName : declared.id
+  const recipe = conversationOf ? await conversationRecipe(declared.id) : undefined
+  const key = conversationOf ? info.threadId : name
+  return withTargetLock(key, async () => {
+    if (registry.get(info.sessionId) !== info) throw new NotReplaced(`${info.tmuxName} is already being replaced (or gone)`, 5)
+    const specialist = recipe ? { ...recipe, threadId: info.threadId } : getSpecialist(name)
+    if (!specialist) throw new NotReplaced(`no such specialist: ${name}`, 8)
+    if (!await endForFreshStart(info)) throw new NotReplaced(`${info.tmuxName} has no history entry in its thread to mark as restarted fresh, so it was left running`)
+    const { info: next } = await fill(name, specialist, `specialist:${declared.id}`, { ignoreBackoff: true, unstored: !!recipe, key })
+    repointChildren(info, next.sessionId)
+    return next
+  })
 }
 
 /**

@@ -23,6 +23,7 @@ import { pendingPermissions } from '../permission.js'
 import { HANDOFF_TEMPLATE_DIR } from '../handoff-templates.js'
 import { fakeAdapter } from './test-harness.js'
 import { _setHydraConfigForTesting } from '../hydra-config.js'
+import { autoHandoffIO } from '../auto-handoff.js'
 import { bornPolicy, policyDrifted } from '../restricted.js'
 import type { HydraConfig, Specialist } from '../../config/types.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
@@ -797,15 +798,15 @@ describe('auto handoff', () => {
     expect(asked).toEqual([plain.sessionId])
   })
 
-  describe('a specialist\'s handoff_at', () => {
+  describe('a specialist\'s handoff_at_pct', () => {
     // hydra.toml as the poll reads it: only the specialists matter here.
     const withSpecialists = (...s: Array<Partial<Specialist> & { id: string }>) =>
       _setHydraConfigForTesting({ specialists: Object.fromEntries(s.map(x => [x.id, { workdir: '/w', reachableBy: [], sessions: 'shared', maxSessions: 20, restricted: false, renamedFrom: [], ...x }])) } as unknown as HydraConfig)
     const of = (specialist: string): SessionInfo['policy'] => ({ specialist, restricted: false, id: 'operator' })
     beforeEach(() => { delete process.env.AUTO_HANDOFF_CACHE; delete process.env.AUTO_HANDOFF_FULL })
 
-    test('handoff_at = 30 asks an idle session at 30% with AUTO_HANDOFF_FULL unset, and not at 29%', () => {
-      withSpecialists({ id: 'ops', handoffAt: 30 })
+    test('handoff_at_pct = 30 asks an idle session at 30% with AUTO_HANDOFF_FULL unset, and not at 29%', () => {
+      withSpecialists({ id: 'ops', handoffAtPct: 30 })
       let pct = 29
       const info = session({ pct: () => pct, policy: of('ops'), lastActive: LATER - MIN })
       pollAt(LATER)
@@ -816,7 +817,7 @@ describe('auto handoff', () => {
     })
 
     test('a specialist without it is not asked (AUTO_HANDOFF_FULL unset), and a plain session is not either', () => {
-      withSpecialists({ id: 'ops', handoffAt: 30 }, { id: 'docs' })
+      withSpecialists({ id: 'ops', handoffAtPct: 30 }, { id: 'docs' })
       session({ pct: () => 90, policy: of('docs'), lastActive: LATER - MIN })
       session({ pct: () => 90, lastActive: LATER - MIN })
       pollAt(LATER)
@@ -834,7 +835,7 @@ describe('auto handoff', () => {
 
     test('it wins over the env line both ways: AUTO_HANDOFF_FULL=0, and AUTO_HANDOFF_FULL_PCT=20 does not ask at 25%', () => {
       process.env.AUTO_HANDOFF_FULL = '0'
-      withSpecialists({ id: 'ops', handoffAt: 30 })
+      withSpecialists({ id: 'ops', handoffAtPct: 30 })
       const at30 = session({ pct: () => 30, policy: of('ops'), lastActive: LATER - MIN })
       process.env.AUTO_HANDOFF_FULL_PCT = '20'
       session({ pct: () => 25, policy: of('ops'), lastActive: LATER - MIN })
@@ -843,56 +844,145 @@ describe('auto handoff', () => {
     })
 
     test('the same idle rule: a working session at its line is not asked', () => {
-      withSpecialists({ id: 'ops', handoffAt: 30 })
+      withSpecialists({ id: 'ops', handoffAtPct: 30 })
       session({ pct: () => 50, policy: of('ops'), live: 'working', lastActive: LATER - MIN })
       pollAt(LATER)
       expect(asked).toEqual([])
     })
 
     test('a session born under an old id finds its specialist through renamed_from', () => {
-      withSpecialists({ id: 'ops', handoffAt: 30, renamedFrom: ['operations'] })
+      withSpecialists({ id: 'ops', handoffAtPct: 30, renamedFrom: ['operations'] })
       const info = session({ pct: () => 40, policy: of('operations'), lastActive: LATER - MIN })
       pollAt(LATER)
       expect(asked).toEqual([info.sessionId])
     })
 
     test('a session with no stored policy finds its specialist as every other setting does (here: a per-conversation session by its name)', () => {
-      withSpecialists({ id: 'crm', handoffAt: 30, sessions: 'per-conversation' })
+      withSpecialists({ id: 'crm', handoffAtPct: 30, sessions: 'per-conversation' })
       const info = session({ pct: () => 40, tmuxName: 'crm_c0abc-1-2', lastActive: LATER - MIN })
       pollAt(LATER)
       expect(asked).toEqual([info.sessionId])
     })
 
-    test('a session born write-confined is never asked by it, even after hydra.toml drops can_only_write_to and adds handoff_at: it has no handoff tool', () => {
-      withSpecialists({ id: 'ops', handoffAt: 30 })
+    test('a session born write-confined is never asked by it, even after hydra.toml drops can_only_write_to and adds handoff_at_pct: it has no handoff tool', () => {
+      withSpecialists({ id: 'ops', handoffAtPct: 30 })
       const confined = { specialist: 'ops', restricted: false, id: 'writes:x', canOnlyWriteTo: { workdir: '/w', denyCommands: [], cannotRead: [], servers: [] } } as SessionInfo['policy']
       session({ pct: () => 40, policy: confined, lastActive: LATER - MIN })
       pollAt(LATER)
       expect(asked).toEqual([])
     })
 
-    test('a change to handoff_at reaches a running session on the next poll', () => {
-      withSpecialists({ id: 'ops', handoffAt: 50 })
+    test('a change to handoff_at_pct reaches a running session on the next poll', () => {
+      withSpecialists({ id: 'ops', handoffAtPct: 50 })
       const info = session({ pct: () => 40, policy: of('ops'), lastActive: LATER - MIN })
       pollAt(LATER)
       expect(asked).toEqual([])
-      withSpecialists({ id: 'ops', handoffAt: 30 })
+      withSpecialists({ id: 'ops', handoffAtPct: 30 })
       pollSessionsOnce(LATER + MIN)
       expect(asked).toEqual([info.sessionId])
     })
 
     test('it is not part of the launch policy: adding or changing it drifts nothing', () => {
-      const policyWith = (handoffAt?: number) => { withSpecialists({ id: 'ops', ...(handoffAt !== undefined && { handoffAt }) }); return bornPolicy('ops') }
+      const policyWith = (handoffAtPct?: number) => { withSpecialists({ id: 'ops', ...(handoffAtPct !== undefined && { handoffAtPct }) }); return bornPolicy('ops') }
       expect(policyDrifted(policyWith(undefined), policyWith(30))).toEqual([])
       expect(policyDrifted(policyWith(30), policyWith(60))).toEqual([])
     })
 
     test('the converge nudge names the specialist\'s line', () => {
       process.env.AUTO_CONVERGE_PCT = '20'
-      withSpecialists({ id: 'ops', handoffAt: 30 })
+      withSpecialists({ id: 'ops', handoffAtPct: 30 })
       session({ pct: () => 25, policy: of('ops'), lastActive: LATER - MIN })
       pollAt(LATER)
       expect(requests.filter(r => r.includes('converg'))).toEqual([expect.stringContaining('At 30% hydra asks you to hand off.')])
+    })
+  })
+
+  describe('handoff_protocol = "kill_and_respawn"', () => {
+    const withSpecialists = (...s: Array<Partial<Specialist> & { id: string }>) =>
+      _setHydraConfigForTesting({ specialists: Object.fromEntries(s.map(x => [x.id, { workdir: '/w', reachableBy: [], sessions: 'shared', maxSessions: 20, restricted: false, renamedFrom: [], ...x }])) } as unknown as HydraConfig)
+    const of = (specialist: string): SessionInfo['policy'] => ({ specialist, restricted: false, id: 'operator' })
+    const restrictedOf = (specialist: string) => ({ specialist, restricted: true, id: 'restricted:x', workdir: '/w', tools: ['Read'], servers: [] }) as unknown as SessionInfo['policy']
+    let restarted: string[] = []
+    const realIO = { ...autoHandoffIO }
+    beforeEach(() => {
+      delete process.env.AUTO_HANDOFF_CACHE; delete process.env.AUTO_HANDOFF_FULL
+      restarted = []
+      autoHandoffIO.killAndRespawn = async (info: SessionInfo) => { restarted.push(info.sessionId) }
+    })
+    afterEach(() => Object.assign(autoHandoffIO, realIO))
+
+    test('an idle session at its line is restarted fresh, and is sent no handoff request (no letter)', () => {
+      withSpecialists({ id: 'ops', handoffAtPct: 30, handoffProtocol: 'kill_and_respawn' })
+      let pct = 29
+      const info = session({ pct: () => pct, policy: of('ops'), lastActive: LATER - MIN })
+      pollAt(LATER)
+      expect(restarted).toEqual([])
+      pct = 30; pollAt(LATER + MIN)
+      expect(restarted).toEqual([info.sessionId])
+      expect(asked).toEqual([])
+      expect(to(info, 'Asked')).toHaveLength(0)
+    })
+
+    test('a busy session at its line waits, and is restarted once it is idle', () => {
+      withSpecialists({ id: 'ops', handoffAtPct: 30, handoffProtocol: 'kill_and_respawn' })
+      let live = 'working'
+      const info = seed({
+        ageMs: OLD, lastActive: LATER - MIN, engine: 'claude', sessionType: 'thread_owner', policy: of('ops'),
+        adapter: fakeAdapter({ usage: () => ({ usedTokens: 0, contextWindow: 0, percent: 40 }), turn: () => ({ activityAt: null, confirmedComplete: false, answer: () => null, live }) }),
+      })
+      transport.bridges.set(info.sessionId, {} as any)
+      pollAt(LATER)
+      expect(restarted).toEqual([])
+      live = 'idle'
+      pollSessionsOnce(LATER + MIN)
+      expect(restarted).toEqual([info.sessionId])
+    })
+
+    test('a restricted session, which has no handoff tool, is restarted at its line', () => {
+      withSpecialists({ id: 'ops', restricted: true, handoffAtPct: 25, handoffProtocol: 'kill_and_respawn' } as Partial<Specialist> & { id: string })
+      const info = session({ pct: () => 25, policy: restrictedOf('ops'), lastActive: LATER - MIN })
+      pollAt(LATER)
+      expect(restarted).toEqual([info.sessionId])
+      expect(asked).toEqual([])
+    })
+
+    test('without the key, the same session is asked for a letter: the default is unchanged', () => {
+      withSpecialists({ id: 'ops', handoffAtPct: 30 })
+      const info = session({ pct: () => 30, policy: of('ops'), lastActive: LATER - MIN })
+      pollAt(LATER)
+      expect(restarted).toEqual([])
+      expect(asked).toEqual([info.sessionId])
+    })
+
+    test('the env line governs a specialist with no handoff_at_pct, and its protocol still decides what happens there', () => {
+      process.env.AUTO_HANDOFF_FULL = '1'
+      withSpecialists({ id: 'ops', handoffProtocol: 'kill_and_respawn' })
+      const info = session({ pct: () => 85, policy: of('ops'), lastActive: LATER - MIN })
+      pollAt(LATER)
+      expect(restarted).toEqual([info.sessionId])
+      expect(asked).toEqual([])
+    })
+
+    test('a per-conversation session is restarted by its own name', () => {
+      withSpecialists({ id: 'crm', handoffAtPct: 30, handoffProtocol: 'kill_and_respawn', sessions: 'per-conversation' })
+      const info = session({ pct: () => 40, tmuxName: 'crm_c0abc-1-2', lastActive: LATER - MIN })
+      pollAt(LATER)
+      expect(restarted).toEqual([info.sessionId])
+    })
+
+    test('a guest in the thread is never restarted: only the specialist\'s own sessions are', () => {
+      withSpecialists({ id: 'ops', handoffAtPct: 30, handoffProtocol: 'kill_and_respawn' })
+      session({ pct: () => 40, policy: of('ops'), type: 'thread_guest', lastActive: LATER - MIN })
+      pollAt(LATER)
+      expect(restarted).toEqual([])
+    })
+
+    test('it is never told to converge: there is no letter to write toward', () => {
+      process.env.AUTO_CONVERGE_PCT = '20'
+      withSpecialists({ id: 'ops', handoffAtPct: 30, handoffProtocol: 'kill_and_respawn' })
+      session({ pct: () => 25, policy: of('ops'), lastActive: LATER - MIN })
+      pollAt(LATER)
+      expect(requests.filter(r => r.includes('converg'))).toEqual([])
     })
   })
 

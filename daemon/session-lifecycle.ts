@@ -367,6 +367,29 @@ export async function handOff(info: SessionInfo, artifact: string): Promise<Spaw
   })
 }
 
+/**
+ * kill_and_respawn's departing step, in place of a letter: mark the session's conversation as never to be continued (on disk, before
+ * anything ends it, so a daemon restart mid-swap cannot resume it), then end the session as a handoff ends one. False, with nothing
+ * ended: there was no history entry to mark. Not deliberate: its
+ * PR watches, the messages held for its specialist and its bound conversations stay with the thread for the fresh session. A fresh
+ * start continues no worktree, so a clean one goes (one with work at risk is kept, as on any kill). The caller holds the thread's lock.
+ */
+export async function endForFreshStart(info: SessionInfo): Promise<boolean> {
+  // Fail closed: with no entry to mark, a later revive could find an older, unmarked one; nothing is ended.
+  if (!threadRegistry.markRestartedFresh(info.threadId, info.sessionId)) return false
+  // The thread stops pointing at it first: a message arriving while the kill runs finds nobody home (and is held for the specialist),
+  // instead of landing in a conversation that will never be continued. Put back if the kill throws with the thread still unclaimed.
+  const mapped = registry.getByThread(info.threadId) === info.sessionId
+  if (mapped) registry.deleteThread(info.threadId)
+  try {
+    await handoffIO.killSession(info, 'restarting fresh: handoff_protocol = "kill_and_respawn" starts a new session here from the kickoff, with no letter', { skipWorktreeDestroy: false, keepWatches: true, ended: 'handed off' })
+  } catch (err) {
+    if (mapped && registry.get(info.sessionId) === info && registry.getByThread(info.threadId) === undefined) registry.setThread(info.threadId, info.sessionId)
+    throw err
+  }
+  return true
+}
+
 export function handoffRequest(artifact: string, requester: string | undefined, note?: string): string {
   return [
     requester ? `[system] ${requester} asked you to hand off this thread to a fresh session.` : `[system] hydra is handing this thread off to a fresh session automatically.`,

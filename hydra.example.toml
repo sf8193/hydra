@@ -86,7 +86,8 @@ home_place = "discord:200000000000000001"   # a Place (not a folder; that is `wo
 model = "claude-opus-5-5"
 emoji = "🛠️"                          # shown in its threads' names in place of the default session emoji: one emoji character (not a :name:). Dead and paused still show their own mark. Default: the session's own emoji
 renamed_from = ["operations"]         # old ids (bare), so a rename keeps its thread, session and messages accepted but not yet delivered
-handoff_at = 60                       # context percent (1-99) at which an idle session is asked to hand off, whatever AUTO_HANDOFF_FULL says; read on each health poll. Not on a restricted or can_only_write_to specialist
+handoff_at_pct = 60                   # context percent (1-99) at which an idle session is replaced, whatever AUTO_HANDOFF_FULL says; read on each health poll. On a restricted or can_only_write_to specialist only with kill_and_respawn
+handoff_protocol = "letter"           # what replaces it there: "letter" (default: it writes a letter for its successor) or "kill_and_respawn" (a fresh session in the same thread from the kickoff, no letter; the old conversation is never resumed)
 
 # One session per conversation: staff questions in a channel, each thread on its own.
 [specialists.crm]

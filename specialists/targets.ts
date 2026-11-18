@@ -265,14 +265,10 @@ const reserve = (to: string, name: string, by: 1 | -1) => {
  * whose session runs goes straight to it, and the spawn and the landing happen outside, so one slow start holds up no one else.
  */
 async function toConversation(to: string, conversation: string, text: string, opts: DeliverOpts): Promise<DeliverOutcome> {
-  const base = getSpecialist(to)
-  if (!base) return { ok: false, exit: 8, reason: `no such specialist: ${to}` }
+  const recipe = await conversationRecipe(to)
+  if (!recipe) return { ok: false, exit: 8, reason: `no such specialist: ${to}` }
   const s = currentHydraConfig().specialists[to]
   const names = conversationNames(to, conversation)
-  const { threadId: shared, ...recipe } = base
-  // A specialist declared by its thread alone opens its conversations' threads beside it, in that thread's channel.
-  if (!recipe.channel && shared) recipe.channel = await gateway.fetchChannel(shared).then(c => c.parentId ?? undefined, () => undefined)
-  if (!recipe.idle && s?.idleMs) recipe.idle = `${Math.max(1, Math.round(s.idleMs / 60_000))}m`
   // Running already: straight to that very session (a name lookup could find a dead predecessor's record first).
   const live = names.map(liveNamed).find(Boolean)
   if (live) return landRunning(live, text, opts)
@@ -299,6 +295,21 @@ async function toConversation(to: string, conversation: string, text: string, op
   } finally {
     reserve(to, decided.name, -1)
   }
+}
+
+/**
+ * What a per-conversation specialist's conversation sessions are made from: the specialist without its own thread (its channel, or its
+ * thread's channel; its kickoff, model, and `idle`, else hydra.toml's). Undefined when no such specialist is declared.
+ */
+export async function conversationRecipe(to: string): Promise<Specialist | undefined> {
+  const base = getSpecialist(to)
+  if (!base) return undefined
+  const s = currentHydraConfig().specialists[to]
+  const { threadId: shared, ...recipe } = base
+  // A specialist declared by its thread alone opens its conversations' threads beside it, in that thread's channel.
+  if (!recipe.channel && shared) recipe.channel = await gateway.fetchChannel(shared).then(c => c.parentId ?? undefined, () => undefined)
+  if (!recipe.idle && s?.idleMs) recipe.idle = `${Math.max(1, Math.round(s.idleMs / 60_000))}m`
+  return recipe
 }
 
 /** A specialist always queues: whoever is home (or is filled now, by the rule) gets it once its bridge is up. */

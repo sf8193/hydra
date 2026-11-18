@@ -220,6 +220,9 @@ export type ThreadSessionEntry = {
   policy?: LaunchPolicy
   /** The kickoff the conversation was born under: the evidence left once a kill deletes the record (read by reviveThread). */
   kickoffHash?: string
+  /** Its specialist's kill_and_respawn replaced it with a fresh session: written before the kill, so no revive (a refill, `resume`, boot
+   *  recovery, one after a daemon restart mid-swap) ever resumes or forks this conversation (read by reviveThread). */
+  restartedFresh?: true
 }
 
 export type ThreadMetadata = {
@@ -665,6 +668,15 @@ export class ThreadRegistry {
       ...(opts.kickoffHash !== undefined && { kickoffHash: opts.kickoffHash }),
     })
     this.persist()
+  }
+
+  /** Mark a session's conversation as never to be continued (kill_and_respawn), on disk before anything ends it. False: it has no history entry to mark. */
+  markRestartedFresh(threadId: string, sessionId: string): boolean {
+    const entry = this.threads.get(threadId)?.sessionHistory.findLast(h => h.sessionId === sessionId)
+    if (!entry) return false
+    entry.restartedFresh = true
+    this.persist()
+    return true
   }
 
   // The durable record a later resume reads; killSession drops the registry entry.
