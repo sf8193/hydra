@@ -213,9 +213,25 @@ export function ownPlaceRefusal(callerSessionId: string, name: string, args: Rec
   return `${name}: ${arg} ${target} is not this session's own conversation; ${who} acts only in its own thread or in a Slack conversation bound to its specialist`
 }
 
+/**
+ * A Slack message link (`https://<team>.slack.com/archives/<channel>/p<ts without the dot>`) as the chat_id and message_id
+ * edit_message and delete_message take: `slack:<channel>` and the ts with its dot back. Undefined when it is not one.
+ */
+export function slackMessageLink(link: string): { chat_id: string; message_id: string } | undefined {
+  const m = /^https:\/\/[\w-]+\.slack\.com\/archives\/([A-Z0-9]+)\/p(\d{10})(\d{6})(?:[?#].*)?$/.exec(link.trim())
+  return m ? { chat_id: `slack:${m[1]}`, message_id: `${m[2]}.${m[3]}` } : undefined
+}
+
 export async function executeTool(name: string, args: Record<string, unknown>, callerSessionId?: string): Promise<ToolResult> {
   const cleanups: (() => void)[] = []
   try {
+    // edit_message and delete_message also take a Slack message's link: read as the chat_id and message_id it names, before any check.
+    if ((name === 'edit_message' || name === 'delete_message') && typeof args.link === 'string') {
+      const target = slackMessageLink(args.link)
+      if (!target) throw new Error(`${name}: link is not a Slack message link (https://<team>.slack.com/archives/<channel>/p<digits>)`)
+      args = { ...args, ...target }
+      delete args.link
+    }
     // Bridge-server enforces this at the socket boundary. Keep the dispatcher
     // fail-closed too: Codex advertises phase-scoped tools statically, and tests
     // or future callers may invoke executeTool without crossing bridge-server.
