@@ -25,9 +25,12 @@ export const SLACK_APP_NEEDS = {
   } as const satisfies Record<string, ScopeNeed>,
   /**
    * With `operator_token_env`: hearing every channel, DM and group DM the operator is in, and reading threads in channels the bot isn't in;
-   * `im:read` lists the operator's DMs, which is how a DM with a person gets its place (the bot's own DM comes from the bot's list). Never a write scope.
+   * `im:read` lists the operator's DMs, which is how a DM with a person gets its place (the bot's own DM comes from the bot's list). `chat:write` is the one
+   * write scope: main's `edit_message` and `delete_message` rewrite the operator's own messages with it. Nothing posts as the operator.
    */
-  userScopes: ['channels:history', 'groups:history', 'im:history', 'mpim:history', 'im:read'],
+  userScopes: ['channels:history', 'groups:history', 'im:history', 'mpim:history', 'im:read', 'chat:write'],
+  /** The user scope that edits and deletes the operator's own messages; a refused edit names it. */
+  operatorWriteScope: 'chat:write',
   /** `renames` are the events the listener subscribes to by name; messages arrive through Bolt's message handler. */
   botEvents: { messages: ['message.channels', 'message.groups', 'message.im', 'message.mpim'], renames: ['channel_rename', 'group_rename'], reactions: ['reaction_added'] },
   /** With `operator_token_env`. */

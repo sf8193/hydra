@@ -24,6 +24,18 @@ describe('slackManifest for an app other than default', () => {
   })
 })
 
+describe('slackManifest for the operator’s own messages', () => {
+  test('an app with an operator token asks for the user scope chat:write, and one without asks for no user scope at all', () => {
+    const withToken = hydra(`${BASE.replace('[people.op]', 'operator_token_env = "OP_USER"\n[people.op]')}`).slackApps.default
+    expect(withToken.operatorTokenEnv).toBe('OP_USER')
+    const m = Bun.YAML.parse(slackManifest(withToken)) as Manifest
+    expect(m.oauth_config.scopes.user).toContain('chat:write')
+    expect(SLACK_APP_NEEDS.operatorWriteScope).toBe('chat:write')
+    expect(m.oauth_config.scopes.bot).toContain('chat:write')
+    expect((Bun.YAML.parse(slackManifest(hydra(BASE).slackApps.default)) as Manifest).oauth_config.scopes.user).toBeUndefined()
+  })
+})
+
 describe('slackManifest', () => {
   test('the name and description are the ones hydra.toml gives, quoted so any text stays a string', () => {
     const m = manifestOf(withSlack('display_name = "Acme helper: #1"\ndescription = "Answers threads # in Slack."'))

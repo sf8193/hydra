@@ -21,7 +21,7 @@ import { watchPr, unwatchPr, listWatches, getWatchesBySession, formatWatchEntry,
 import { fileArgTools, snapshotConfinedFiles } from './write-confinement.js'
 import { attachmentTarget } from './attachment-target.js'
 import { fileRefusal } from '../config/write-confinement.js'
-import { bindConversation, unbindConversation, formatConversationsFor, replyInConversation, conversationBelongsTo } from '../connectors/slack/runtime.js'
+import { bindConversation, unbindConversation, formatConversationsFor, replyInConversation, editInConversation, deleteInConversation, conversationBelongsTo } from '../connectors/slack/runtime.js'
 import { refreshSessionVisual, emojiOf, emojiOfName } from './anchor-state.js'
 import { refreshDashboard } from './dashboard.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './artifacts.js'
@@ -380,12 +380,19 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       }
 
       case 'edit_message': {
+        // A Slack conversation's message: rewritten through the app that heard the conversation (connectors/slack/runtime.ts holds who may).
+        if (typeof args.chat_id === 'string' && args.chat_id.startsWith('slack:')) {
+          return { content: [{ type: 'text', text: await editInConversation(callerSessionId, args.chat_id, args.message_id, args.text as string) }] }
+        }
         // An edit cannot add files: the gateway shapes the text with no room for any.
         const edited = await withOutbound(args.text as string, 0, out => retrySend(() => gateway.edit(args.chat_id as string, args.message_id as string, out.text)))
         return { content: [{ type: 'text', text: `edited (id: ${edited})` }] }
       }
 
       case 'delete_message': {
+        if (typeof args.chat_id === 'string' && args.chat_id.startsWith('slack:')) {
+          return { content: [{ type: 'text', text: await deleteInConversation(callerSessionId, args.chat_id, args.message_id) }] }
+        }
         await gateway.delete(args.chat_id as string, args.message_id as string)
         return { content: [{ type: 'text', text: 'deleted' }] }
       }
