@@ -97,6 +97,21 @@ export const FORK_RE = /^(?:fork|\/fork)(?::\s*([\s\S]+))?$/i
 export const FORKS_RE = /^(?:forks|\/forks)\s*$/i
 export const REVIEW_RE = /^(?:\/review_v2|review_v2|\/review|review)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i
 export const BUILD_RE = /^(?:\/build_v2|build_v2|\/build|build)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i
+
+/** A model the sender put in the topic instead of before the colon, so the command would run the default model with the alias as part of the topic. Returns the hint to send, or undefined for a topic that merely starts with a word that is also an alias ("opus is slow"). Refused: an alias then a count (`fable 3 topic`), an alias then a spaced dash (`fable - topic`), or a versioned alias such as `fable-5-2` (the form that is easy to type in place of `fable-5-2:`; a task that opens by naming a versioned model is refused too, and is retyped). The separator is a space or tab, so a list or number on the alias's next line is not read as one. */
+export function misplacedModelHint(command: 'review' | 'build', topic: string): string | undefined {
+  const counted = topic.match(/^(\S+)[ \t]+(\d+)(?=\s|$)/)
+  const known = (w: string) => resolveModelAlias(w) || resolveCodexModelAlias(w)
+  if (counted && known(counted[1])) {
+    return `_Model syntax: \`/${command} ${counted[2]} ${counted[1]}: topic\` or \`/${command} ${counted[1]}: ${counted[2]} topic\`_`
+  }
+  const lead = topic.match(/^(\S+)([ \t]+[-\u2013\u2014](?=\s))?/)
+  if (lead && known(lead[1]) && (lead[2] || lead[1].includes('-'))) {
+    return `_Model syntax: \`${command} ${lead[1].toLowerCase()}: topic\`_`
+  }
+  return undefined
+}
+
 export const LISTEN_RE = /^(listen|unlisten)\s*$/i
 export const PAUSE_RE = /^(pause|unpause)\s*$/i
 export const KEYS_RE = /^(?:\/keys|keys)\s+([\s\S]+)/i
@@ -779,9 +794,9 @@ gateway.onMessage(async (msg: InboundMessage) => {
         const rounds = parseInt(reviewMatch[2] ?? String(DEFAULT_REVIEW_ROUNDS))
         let topic: string | undefined = reviewMatch[4]?.trim()
         if (!selection && topic) {
-          const badOrder = topic.match(/^(\S+)\s+(\d+)\b/)
-          if (badOrder && (resolveModelAlias(badOrder[1]) || resolveCodexModelAlias(badOrder[1]))) {
-            void gateway.send(msg.channelId, `_Model syntax: \`/review ${badOrder[2]} ${badOrder[1]}: topic\` or \`/review ${badOrder[1]}: ${badOrder[2]} topic\`_`, { replyTo: msg.id }).catch(() => {})
+          const hint = misplacedModelHint('review', topic)
+          if (hint) {
+            void gateway.send(msg.channelId, hint, { replyTo: msg.id }).catch(() => {})
             return
           }
         }
@@ -813,6 +828,13 @@ gateway.onMessage(async (msg: InboundMessage) => {
         const v2Rounds = parseInt(buildV2Match[2] ?? '3')
         const v2Task = buildV2Match[4]?.trim()
         const selection = preModel ?? postModel
+        if (!selection && v2Task) {
+          const hint = misplacedModelHint('build', v2Task)
+          if (hint) {
+            void gateway.send(msg.channelId, hint, { replyTo: msg.id }).catch(() => {})
+            return
+          }
+        }
         void handleBuildV2Intercept(msg, v2Rounds, v2Task, selection?.model, selection?.engine)
         return
       }
