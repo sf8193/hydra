@@ -12,7 +12,7 @@
 // Then `reachable_by`: the operator is always allowed, `anyone` admits strangers, `people` admits the roster, a role admits who holds it.
 
 import { whyNotServed } from '../config/pins.js'
-import { DEFAULT_SLACK_APP, coversAny, isDmPlace, optionsOf, placeKey, type Address, type HydraConfig, type Person, type Place, type Rule, type Specialist } from '../config/types.js'
+import { DEFAULT_SLACK_APP, coversAny, declaredSpecialist, isDmPlace, optionsOf, placeKey, type Address, type HydraConfig, type Person, type Place, type Rule, type Specialist } from '../config/types.js'
 import { isSessionThread } from '../shared/specialist-name.js'
 import { spelledBare } from '../shared/target-kind.js'
 import { spelledApp, spelledPerson, spelledRole, whoSpelled } from '../shared/value-kind.js'
@@ -106,8 +106,7 @@ export function isLive(cfg: HydraConfig, id: string): boolean {
 
 /** A binding names the specialist as it was called then; a rename lists the old id in `renamed_from`. */
 export function currentId(cfg: HydraConfig, id: string): string {
-  if (id === MAIN || cfg.specialists[id]) return id
-  return Object.values(cfg.specialists).find(s => s.renamedFrom.includes(id))?.id ?? id
+  return id === MAIN ? id : declaredSpecialist(cfg, id)?.id ?? id
 }
 
 /** Whether an unaddressed message at this place may open a conversation: a place with `messages = "all"`. */

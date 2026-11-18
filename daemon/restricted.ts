@@ -17,7 +17,7 @@ import { createHash } from 'crypto'
 import { isAbsolute } from 'path'
 import { currentHydraConfig } from './hydra-config.js'
 import { specialistOf } from '../specialists/specialists.js'
-import { type HydraConfig, type LoadEnv } from '../config/types.js'
+import { declaredSpecialist, type HydraConfig, type LoadEnv } from '../config/types.js'
 import { offLimitRoots, type PrivateRoot } from '../config/restricted-workdir.js'
 import { readDenyRoots } from '../config/write-confinement.js'
 import { macosGateIssue, unprovenMacos } from '../config/server-sandbox.js'
@@ -134,8 +134,7 @@ export class PolicyRefusal extends Error {}
  * declared. This is what a birth stores.
  */
 export function bornPolicy(specialistId: string | undefined, h: HydraConfig = currentHydraConfig()): LaunchPolicy | undefined {
-  const declared = specialistId === undefined ? undefined
-    : (Object.hasOwn(h.specialists, specialistId) ? h.specialists[specialistId] : undefined) ?? Object.values(h.specialists).find(s => s.renamedFrom.includes(specialistId))
+  const declared = specialistId === undefined ? undefined : declaredSpecialist(h, specialistId)
   if (!declared) return undefined
   if (!declared.restricted && declared.canOnlyWriteTo) {
     const servers = (declared.mcpServerNames ?? []).map((name): ConfinementServer => {

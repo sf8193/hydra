@@ -7,7 +7,7 @@ import { SESSION_NAMES, type SessionInfo } from '../daemon/sessions.js'
 import { clearBackoff } from '../daemon/recovery-backoff.js'
 import { SPECIALIST_NAME_RE, invalidSpecialistName as invalidName, isSessionThread } from '../shared/specialist-name.js'
 import { currentHydraConfig, hydraConfigInUse, onHydraConfigLoad } from '../daemon/hydra-config.js'
-import { isChannelName, parsePlace, type HydraConfig, type Specialist as DeclaredSpecialist } from '../config/types.js'
+import { declaredSpecialist, isChannelName, parsePlace, type HydraConfig, type Specialist as DeclaredSpecialist } from '../config/types.js'
 import type { EngineName } from '../shared/engine-capabilities.js'
 import { engineOfModel, SPECIALIST_THREADS } from '../shared/constants.js'
 
@@ -231,7 +231,7 @@ export const kickoffHash = (text: string): string => createHash('sha256').update
  */
 export function currentKickoff(id: string | undefined, h: HydraConfig = currentHydraConfig()): { text: string; hash: string } | undefined {
   if (id === undefined) return undefined
-  const current = Object.hasOwn(h.specialists, id) ? id : Object.values(h.specialists).find(s => s.renamedFrom.includes(id))?.id ?? id
+  const current = declaredSpecialist(h, id)?.id ?? id
   try {
     const specialist = getSpecialist(current)
     const text = specialist && readKickoff(specialist)
@@ -297,16 +297,14 @@ export function conversationSpecialistOf(tmuxName: string | undefined): string |
   const i = tmuxName?.indexOf('_') ?? -1
   if (!tmuxName || i <= 0) return undefined
   const id = tmuxName.slice(0, i)
-  const declared = currentHydraConfig().specialists
-  const s = declared[id] ?? Object.values(declared).find(d => d.renamedFrom.includes(id))
+  const s = declaredSpecialist(currentHydraConfig(), id)
   return s?.sessions === 'per-conversation' ? s.id : undefined
 }
 
 /** A declared specialist's `emoji`, by its id or by an id it was renamed from (a session records the id it was born under); undefined when it has none or is not declared. */
 export function specialistEmoji(id: string | undefined, h: HydraConfig = currentHydraConfig()): string | undefined {
   if (id === undefined) return undefined
-  const declared = Object.hasOwn(h.specialists, id) ? h.specialists[id] : Object.values(h.specialists).find(s => s.renamedFrom.includes(id))
-  return declared?.emoji
+  return declaredSpecialist(h, id)?.emoji
 }
 
 /**
