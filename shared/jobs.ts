@@ -9,7 +9,7 @@ import { isAbsolute, join, normalize } from 'path'
 import { latestSlot, nextSlot, parseCron, type Slot } from './cron-local.js'
 import { parseDuration, parseIdleTtl } from './constants.js'
 import { launchdCalendar } from './jobs-launchd.js'
-import { DEFAULT_ALERT_AFTER_MS, MAX_ALERT_AFTER_MS, NEEDS, RUNNERS, type Need, type Runner } from '../config/types.js'
+import { DEFAULT_ALERT_AFTER_MS, MAX_ALERT_AFTER_DAYS, MAX_ALERT_AFTER_MS, NEEDS, RUNNERS, type Need, type Runner } from '../config/types.js'
 import type { LoopClock } from './loop-watch.js'
 
 // ---------------------------------------------------------------------------
@@ -59,7 +59,7 @@ export function jobFromWire(o: Job & { mode?: string; model?: string; idleTtl?: 
 export const isSpawn = (t: JobTarget | undefined): t is { spawn: Recipe } => !!t && 'spawn' in t
 export const targetLabel = (t: JobTarget | undefined) => !t ? 'none' : 'spawn' in t ? 'spawn' : `to ${t.to}`
 
-/** alert_after: a duration up to 30d. */
+/** alert_after: a duration up to MAX_ALERT_AFTER_MS. */
 export const parseAlertAfter = (s: string): number | null => parseDuration(s, MAX_ALERT_AFTER_MS)
 
 /**
@@ -193,7 +193,7 @@ export function parseJobsConfig(text: string): JobsConfig {
     if (t.overlap !== undefined) fail('overlap is gone: for one standing session that sees every run, use to = "<specialist>"')
     const alertAfter = str('alert_after')
     const alertAfterMs = alertAfter === undefined ? DEFAULT_ALERT_AFTER_MS : parseAlertAfter(alertAfter)
-    if (alertAfterMs === null) fail(`alert_after "${alertAfter}" must be a duration like 90m, 12h or 2d, at most 30d`)
+    if (alertAfterMs === null) fail(`alert_after "${alertAfter}" must be a duration like 90m, 12h or 2d, at most ${MAX_ALERT_AFTER_DAYS}d`)
     const own = str('runner')
     if (own !== undefined && !RUNNERS.includes(own as Runner)) fail(`runner must be "${RUNNERS[0]}" (the default) or ${RUNNERS.slice(1).map(r => `"${r}"`).join(' or ')}`)
     // A schedule launchd can't hold never fails the file (it parsed on main).

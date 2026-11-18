@@ -172,7 +172,8 @@ export const RUNNERS = ['launchd', 'daemon'] as const
 export type Runner = typeof RUNNERS[number]
 /** A daemon schedule's alert_after when it names none, and the most it may name. */
 export const DEFAULT_ALERT_AFTER_MS = 24 * 60 * 60_000
-export const MAX_ALERT_AFTER_MS = 30 * 24 * 60 * 60_000
+export const MAX_ALERT_AFTER_DAYS = 30
+export const MAX_ALERT_AFTER_MS = MAX_ALERT_AFTER_DAYS * 24 * 60 * 60_000
 
 /** A precondition the daemon checks before a daemon schedule's slot runs. */
 export const NEEDS = ['internet'] as const
