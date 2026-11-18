@@ -75,6 +75,10 @@ export async function readReplies(read: (token: string) => Promise<Page>, tokens
 export type MessageAuthor = 'app' | 'operator' | 'other'
 /** Whose token rewrites a message: the app's bot, or the operator. */
 export type Writer = Exclude<MessageAuthor, 'other'>
+/** One message of a conversation as `fetch_messages` shows it: `mine` when this app's bot wrote it; `author` a display name, else the Slack id. */
+export type ReadMessage = { ts: string; author: string; mine: boolean; text: string; files: number }
+/** Pages of a thread read to reach its newest messages (Slack lists a thread oldest first, 200 a page): past them a read is refused, never cut short. */
+export const READ_MAX_PAGES = 10
 
 /** One post's deadline. Past it the post's outcome is unknown: it may have landed. */
 export const POST_TIMEOUT_MS = 30_000
@@ -427,6 +431,42 @@ export class SlackListener {
     const app = this.live()
     if (!app.edit) throw new Error('this Slack client cannot edit messages')
     await app.edit(channel, ts, text, as)
+  }
+
+  /**
+   * A conversation's newest `limit` messages, oldest first: a thread's (read to its end, so its newest are reached; a thread longer than
+   * READ_MAX_PAGES pages is refused, not answered with its oldest), or, with no `threadTs`, a channel's or a DM's top level. Read with this app's bot
+   * token; with `asOperator`, a thread the bot is not in with the operator's, as catch-up reads it (the caller says when: the operator's token
+   * reaches the operator's own DMs and groups). Slack's refusal is thrown as it came.
+   */
+  async read(channel: string, threadTs: string | undefined, limit: number, asOperator: boolean): Promise<ReadMessage[]> {
+    const app = this.live()
+    let raw: RawMessage[] = []
+    if (threadTs) {
+      let cursor: string | undefined
+      const seen = new Set<string | undefined>()
+      for (let pages = 0; ; pages++) {
+        if (pages === READ_MAX_PAGES) throw new Error(`the thread ${threadTs} is longer than ${READ_MAX_PAGES * 200} messages, more than fetch_messages reads: its newest can't be reached`)
+        const page = await app.api.replies({ channel, ts: threadTs, oldest: threadTs, inclusive: true, limit: 200, botOnly: !asOperator, ...(cursor && { cursor }) })
+        // Each page may lead with the thread's first message again: a message is kept once.
+        raw = [...raw, ...page.messages.filter(m => !seen.has(m.ts) && !!seen.add(m.ts))].slice(-limit)
+        cursor = page.next
+        if (!cursor) break
+      }
+    } else {
+      // History is newest first.
+      raw = (await app.api.history({ channel, oldest: '0' })).messages.slice(0, limit).reverse()
+    }
+    const names = new Map<string, Promise<string | undefined>>()
+    const nameOf = (user: string) => { let n = names.get(user); if (!n) names.set(user, n = app.userName(user).catch(() => undefined)); return n }
+    const out: ReadMessage[] = []
+    for (const m of raw) {
+      if (!m.ts) continue
+      const mine = !!this.identity && (m.user === this.identity.botUserId || (!!m.bot_id && m.bot_id === this.identity.botId))
+      const author = mine ? 'me' : m.user ? (await nameOf(m.user)) ?? m.user : m.bot_id ?? 'unknown'
+      out.push({ ts: m.ts, author, mine, text: m.text ?? '', files: m.files?.length ?? 0 })
+    }
+    return out
   }
 
   /** Deletes a message as its bot or as the operator. Slack's refusal is thrown as it came. */
@@ -1032,7 +1072,7 @@ export function boltApp(tokens: { app: string; bot: string; user?: string }): Sl
         return out
       } }),
       replies: a => readReplies(token => client.conversations.replies({ token, channel: a.channel, ts: a.ts, oldest: a.oldest, inclusive: a.inclusive, limit: a.limit ?? 200, ...(a.cursor && { cursor: a.cursor }) })
-        .then(page, e => { throw explainSlackError(e) }), tokens),
+        .then(page, e => { throw explainSlackError(e) }), a.botOnly ? { bot: tokens.bot } : tokens),
     },
   }
 }

@@ -3,7 +3,14 @@ import * as bolt from '@slack/bolt'
 import * as web from '@slack/web-api'
 
 // The Slack SDK is faked at its two edges: Bolt's App (a real one calls auth.test as it is built) and the WebClient, which records whose token each call used.
-class FakeApp { receiver: unknown; client = {}; constructor(opts: { receiver: unknown }) { this.receiver = opts.receiver } message() {} event() {} }
+// Bolt's own client reads (conversations.replies, with the token each call names); the bot is in no channel here, the operator in every one.
+const reads: string[] = []
+const appClient = { conversations: { replies: async (a: { token: string }) => {
+  reads.push(a.token)
+  if (a.token === 'xoxb-BOT') throw Object.assign(new Error('An API error occurred: not_in_channel'), { data: { error: 'not_in_channel' } })
+  return { messages: [{ ts: '5.000001', text: 'hi' }] }
+} } }
+class FakeApp { receiver: unknown; client = appClient; constructor(opts: { receiver: unknown }) { this.receiver = opts.receiver } message() {} event() {} }
 const calls: { token: string; method: string; args: unknown }[] = []
 const refusals: Record<string, { error: string; needed?: string; provided?: string }> = {}
 class FakeWeb {
@@ -62,5 +69,17 @@ describe('the real client writes with the token of whoever wrote the message', (
     const a = boltApp(TOKENS)
     await expect(a.edit!('C1', '6.000001', 'x', 'operator')).rejects.toThrow('missing_scope: the token needs chat:write and has channels:history,im:read')
     delete refusals['xoxp-OPERATOR:chat.update']
+  })
+})
+
+describe('the real client reads a thread the bot is not in as the operator only when asked to', () => {
+  test('botOnly: the bot’s refusal stands and the operator’s token is never sent; without it, the operator reads', async () => {
+    const a = boltApp(TOKENS)
+    reads.length = 0
+    await expect(a.api.replies({ channel: 'C1', ts: '5.000001', oldest: '5.000001', inclusive: true, botOnly: true })).rejects.toThrow('not_in_channel')
+    expect(reads).toEqual(['xoxb-BOT'])
+    reads.length = 0
+    expect(await a.api.replies({ channel: 'C1', ts: '5.000001', oldest: '5.000001', inclusive: true })).toMatchObject({ via: 'user' })
+    expect(reads).toEqual(['xoxb-BOT', 'xoxp-OPERATOR'])
   })
 })

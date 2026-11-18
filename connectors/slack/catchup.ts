@@ -49,9 +49,9 @@ export type SlackApi = {
   history(a: { channel: string; oldest: string; cursor?: string }): Promise<Page>
   /**
    * `inclusive`: the message at `oldest` itself is wanted too (an owed message starts a thread read exactly there).
-   * A page read as the operator (`via: 'user'`) cost two calls: the bot's refusal, then the operator's read.
+   * A page read as the operator (`via: 'user'`) cost two calls: the bot's refusal, then the operator's read. `botOnly`: never as the operator.
    */
-  replies(a: { channel: string; ts: string; oldest: string; inclusive: boolean; cursor?: string; limit?: number }): Promise<Page>
+  replies(a: { channel: string; ts: string; oldest: string; inclusive: boolean; cursor?: string; limit?: number; botOnly?: boolean }): Promise<Page>
   /** The bot's DM conversations and who is on the other end (users.conversations, types=im). Optional: without it, only DMs already seen are scanned. */
   dms?(): Promise<{ channel: string; user?: string }[]>
   /** Every DM the operator is in and who is on the other end (users.conversations, types=im, with the operator's user token; scope im:read). Present only with a user token: it is how a DM with a person gets its place. */
