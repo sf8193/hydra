@@ -252,6 +252,7 @@ import { restoreHeld } from './daemon/specialist-thread.js'
 import { startPrWatcher, backfillTitles, fetchPrTitle, parsePrUrl } from './connectors/github/pr-watch.js'
 import { startConversationTable, stopConversationTable, startSlackListener } from './connectors/slack/runtime.js'
 import { parseArchiveUrl } from './connectors/slack/conversation.js'
+import { pruneEvents } from './daemon/events.js'
 import { startHydraConfig, stopHydraConfig, retryHydraConfigAlert, currentHydraConfig, onHydraConfigLoad, reloadHydraConfig, hydraConfigLoadedOk } from './daemon/hydra-config.js'
 import { jobsFromSchedules, schedulesAreSource } from './shared/schedules.js'
 import { readDaemonState } from './shared/jobs.js'
@@ -441,6 +442,7 @@ async function backfillArtifacts(): Promise<void> {
 startHydraConfig({ alert: notifyOperator })
 startPrWatcher()
 startConversationTable()
+pruneEvents()
 
 // Reply guard: polls session activity every 20s (see below).
 

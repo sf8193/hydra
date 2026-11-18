@@ -5,6 +5,7 @@ import { statSync, accessSync, lstatSync, readdirSync, readFileSync, realpathSyn
 import { parseEnvLine } from '../shared/env-parse.js'
 import { homedir } from 'os'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'path'
+import { EVENTS_KEEP_DAYS_MAX } from '../shared/events.js'
 import { isZone, parseCron } from '../shared/cron-local.js'
 import { DISCORD_GATEWAY_TOKEN_ENV, engineOfModel, parseIdleTtl, SLACK_GATEWAY_TOKEN_ENVS } from '../shared/constants.js'
 import { ENV_NAME_RE, tokenVarRefusal } from '../shared/spawn-env.js'
@@ -55,7 +56,7 @@ const GUARD_TIMEOUT_MAX_MS = 30_000 // deliveries for a conversation wait on the
 const BUILTIN: readonly string[] = BUILTIN_ROLES
 const MAIN_TARGET = 'main'
 
-const TOP_KEYS = ['operator', 'main', 'gateways', 'connectors', 'slack', 'people', 'specialists', 'defaults', 'places', 'schedules', 'rules', 'guard', 'vitals', 'mcp_servers', 'restricted', 'threads']
+const TOP_KEYS = ['operator', 'main', 'gateways', 'connectors', 'slack', 'people', 'specialists', 'defaults', 'places', 'schedules', 'rules', 'guard', 'vitals', 'events', 'mcp_servers', 'restricted', 'threads']
 /** Keys a file may set without an operator: the operator itself, `[main]`, which says how main runs, and `[threads]`, which says what the operator's CLI may do to a thread, not who reaches what. */
 const OPERATOR_FREE_KEYS = ['operator', 'main', 'threads']
 /** `[main]`: the operator's harness, as `[specialists.<id>]` is a specialist. */
@@ -1118,6 +1119,16 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       memoryCooldownMs: duration(vt, 'memory_cooldown', 'vitals', 7 * MAX_DAY_MS) ?? d.memoryCooldownMs,
     }
   }
+  // --- events: how long the event stream is kept ---------------------------------------------------------------------------
+
+  let events: { keepDays: number } | undefined
+  const ev = table(doc.events, 'events')
+  if (ev) {
+    unknownKeys(ev, ['keep_days'], 'events')
+    const keepDays = positiveInt(ev, 'keep_days', 'events')
+    if (keepDays !== undefined && keepDays > EVENTS_KEEP_DAYS_MAX) error('events.keep_days', `must be at most ${EVENTS_KEEP_DAYS_MAX} days`)
+    else if (keepDays !== undefined) events = { keepDays }
+  }
   // A percentage (past 100 is no threshold at all).
   function positiveUpTo100(t: Table, k: string, path: string): number | undefined {
     const v = t[k]
@@ -1275,7 +1286,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   }
 
   if (errors.length) return { ok: false, errors, warnings }
-  return { ok: true, config: { ...(operator && { operator }), ...(main && { main }), connectors, gateways, slackApps, people, specialists, places, schedules, rules, ...(Object.keys(mcpServers).length && { mcpServers }), ...(offLimits.length && { offLimits }), ...(allowUnprovenMacos && { allowUnprovenMacos }), ...(allowThreadDestroy && { allowThreadDestroy }), ...(guard && { guard }), ...(vitals && { vitals }) }, warnings }
+  return { ok: true, config: { ...(operator && { operator }), ...(main && { main }), connectors, gateways, slackApps, people, specialists, places, schedules, rules, ...(Object.keys(mcpServers).length && { mcpServers }), ...(offLimits.length && { offLimits }), ...(allowUnprovenMacos && { allowUnprovenMacos }), ...(allowThreadDestroy && { allowThreadDestroy }), ...(guard && { guard }), ...(vitals && { vitals }), ...(events && { events }) }, warnings }
 }
 
 /** The program a `sh -c` command runs: past any leading VAR=value, with one level of quotes removed. */

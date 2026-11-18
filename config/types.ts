@@ -519,6 +519,8 @@ export type HydraConfig = {
   guard?: Guard
   /** Absent: `VITALS_DEFAULTS`. */
   vitals?: Vitals
+  /** `[events] keep_days`: days of event stream kept. Absent: `EVENTS_KEEP_DAYS_DEFAULT`. */
+  events?: { keepDays: number }
 }
 
 /** One finding, located by its path in the file (`rules[1].target`). */

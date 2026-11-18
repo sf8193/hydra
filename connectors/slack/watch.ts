@@ -3,6 +3,7 @@ import { join, basename } from 'path'
 import { randomBytes } from 'crypto'
 import { STATE_DIR } from '../../daemon/config.js'
 import { atomicWriteFileSync } from '../../daemon/util.js'
+import { recordEvent } from '../../daemon/events.js'
 import { DEFAULT_SLACK_APP, isChannelName, isDmPlace, optionsAt, optionsOf, placeCovers, placeKey, placeOf, type Address, type HydraConfig, type Place, type PlaceOptions, type SlackApp } from '../../config/types.js'
 import { appKey, appName, type Apps } from './app.js'
 import { attr, fence, oneLine, quoteBody, UNTRUSTED_TEXT_MAX_CHARS } from '../../shared/untrusted-text.js'
@@ -1208,6 +1209,7 @@ export class ConversationTable {
     const d = route(cfg.hydra, { from: addressOf(ev.user), at, addressed, ...(tagged && !dm && { tagged }), app, ...(existing?.specialist && { bound: existing.specialist }) })
     if (d.fate === 'ignored') {
       // A tag of an app that can't hear it, with nothing here to answer it instead: counted, logged and reacted to, never silent.
+      if (unheard.length) this.noRoute(ev, app, threadTs)
       if (unheard.length) this.refuse({ ...ev, app }, threadTs, `it tags ${unheard.map(a => this.appName(a)).join(', ')}, whose bot is not in this channel and which has no operator token, so no app can take it: invite that bot to the channel`, 'unrouted', true)
       return skip(() => `routing ignored it: ${d.trace.filter(t => !t.matched).map(t => t.why).join('; ') || 'no reason given'}`)
     }
@@ -1221,6 +1223,7 @@ export class ConversationTable {
         this.settle(keyOf(existing), existing, [ev.ts])
         return d.fate
       }
+      if (tagged) this.noRoute(ev, app, threadTs)
       // The 🚫 is for the bot's own DMs and for tags in channels. A DM with a person or a group DM is logged and counted, never reacted to: the bot is not part of it.
       this.refuse({ ...ev, app }, threadTs, why, d.fate, !inNoBotDm && (d.fate === 'refused' ? dm || tagged : tagged && !dm))
       return d.fate
@@ -1246,6 +1249,8 @@ export class ConversationTable {
     const kind = dm ? 'dm' : tagged ? 'mention' : 'follow-up'
     // A tag the app's router takes is answered at once with a 👀 from the app that heard it, whatever the place's `ack` says: the router (a session
     // that may have to start) takes a while. Also a tag in a thread still bound to a router specialist; `main` is not told apart from main.
+    // A replay of a message still owed was recorded when it was first accepted.
+    if (!existing?.owed?.includes(ev.ts)) recordEvent({ kind: 'route', app, conversation: conversationId(entry), by: addressOf(ev.user), tagged, via: d.via, to: d.to })
     if (d.via === 'router') this.deps.log(`daemon: slack connector: → router ${spelledBare(d.to)} for ${keyOf(entry)} (ts ${ev.ts})\n`)
     if (kind === 'mention' && (d.via === 'router' || (d.to !== MAIN && d.to === routerOf(cfg.hydra, app)))) {
       const slack = this.actions.get(appOfEntry(entry))
@@ -1357,6 +1362,12 @@ export class ConversationTable {
     set.add(fact)
     if (set.size > NOTED_KEEP) set.delete(set.values().next().value!)
     return true
+  }
+
+  /** A tag no one took (refused, or no place hears it) is a route event with `via: none`, once per message; untagged messages nobody takes are not recorded. */
+  private noRoute(ev: Pick<SlackMessageEvent, 'channel' | 'ts' | 'user'>, app: string, threadTs: string): void {
+    if (!this.firstTime(this.noted.refused, `route:${scoped(app, ev.channel)}:${ev.ts}`)) return
+    recordEvent({ kind: 'route', app, conversation: conversationId({ app, channel: ev.channel, threadTs }), by: addressOf(ev.user), tagged: true, via: 'none' })
   }
 
   /** `react`: a mention (refused or unrouted) or a refused DM, whose sender sees a 🚫; an unrouted DM is logged and counted, and gets no reply. A replay is neither logged, counted nor reacted to twice. */

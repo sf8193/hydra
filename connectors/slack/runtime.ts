@@ -14,6 +14,7 @@ import { ENV_NAME_RE, capturedSpawnVars, scrubbedSpawnVars, tokenVarRefusal } fr
 import { join } from 'path'
 import { existsSync, readFileSync } from 'fs'
 import { safeSend, atomicWriteFileSync } from '../../daemon/util.js'
+import { recordEvent } from '../../daemon/events.js'
 import { mainChannel } from '../../daemon/main-session.js'
 import { gateway } from '../../daemon/config.js'
 import { currentHydraConfig, onHydraConfigLoad } from '../../daemon/hydra-config.js'
@@ -428,6 +429,7 @@ export async function bindConversation(caller: Partial<Pick<SessionInfo, 'thread
     throw new Error(`${me} already holds ${TOOL_BIND_MAX} conversations it opened itself; unbind one first`)
   }
   if (!w.bind(c.channel, c.threadTs, me, 'tool', app)) throw new Error(`the conversation table is full (${SLACK_LIMITS.maxConversations}); unbind one first`)
+  if (bound !== me) recordEvent({ kind: 'bind', conversation: conversationId(c), ...(bound && { from: bound }), to: me, by: me })
   if (via) w.setVia(c.channel, c.threadTs, via, app)
   if (takeover) alert(`ℹ️ ${conversationId(c)} was bound to this session to listen; ${me} took it, since it answers there. This session no longer hears it.`, bound!)
   const place = placeName(v, c.channel)
@@ -465,7 +467,7 @@ async function bindToSession(caller: Partial<Pick<SessionInfo, 'threadId' | 'tmu
   if (me !== MAIN && routerOf(h, appOfEntry(c)) !== me) throw new Error(`${conversationId(c)} is through ${appOfEntry(c)}, whose router is not ${me}: a router hands on only conversations of the app that names it`)
   const boundTo = getConversationTable().get(c.channel, c.threadTs, appOfEntry(c))?.specialist
   if (!boundTo || currentId(h, boundTo) !== me) throw new Error(`${conversationId(c)} is ${boundTo ? `bound to ${boundTo}` : 'not an open conversation'}, not to ${me}: ${me} hands on only a conversation delivered to it`)
-  return operatorBind(conversationId(c), `thread:${session.threadId}`, why)
+  return operatorBind(conversationId(c), `thread:${session.threadId}`, why, me)
 }
 
 /** `unbind_conversation`: a session lets go of one of its own conversations. */
@@ -480,6 +482,7 @@ export function unbindConversation(caller: Partial<Pick<SessionInfo, 'threadId' 
   // A session that unbinds learns of its drop from this result; a specialist's drop is alerted in its thread.
   const own = isSessionThread(me)
   getConversationTable().unwatch(c.channel, c.threadTs, appOfEntry(c), own)
+  recordEvent({ kind: 'unbind', conversation: conversationId(c), from: e.specialist, by: me })
   return `${conversationId(c)} is unbound${owed ? `; ${owed} message${owed === 1 ? '' : 's'} it still owed were dropped${own ? '' : ' (and alerted)'}` : ''}`
 }
 
@@ -839,7 +842,7 @@ const BIND_WHY_MAX = 300
  * session's thread (a plain session there answers in it). To a session's thread, the app also posts in the Slack conversation which session took it, a link
  * to that session's thread, and `why` when given: binding and telling the people there are one step. The bind holds if the notice fails; the result says so.
  */
-export async function operatorBind(conversation: string, target: string, why?: string): Promise<string> {
+export async function operatorBind(conversation: string, target: string, why?: string, by = 'operator'): Promise<string> {
   const h = hydraConfig()
   // The target must say its kind (a bare `ops` is an error); a binding stores the bare form.
   const ref = readTarget(target, id => Object.hasOwn(h.specialists, id))
@@ -855,7 +858,9 @@ export async function operatorBind(conversation: string, target: string, why?: s
   // A channel has no top-level conversation: every one is a thread (a DM's top level is one, and may be moved).
   if (!isDm(c.channel) && c.threadTs === TOP_LEVEL) throw new Error(`${conversationId(c)} names a channel, not a conversation: add the thread's ts`)
   if (ref.ref.kind === 'thread' && registry.getByThread(`${c.channel}:${c.threadTs}`)) throw new Error(`${conversationId(c)} is a hydra session's own thread: another session can't listen to it`)
+  const from = getConversationTable().get(c.channel, c.threadTs, app)?.specialist
   if (!getConversationTable().bind(c.channel, c.threadTs, to, 'cli', app)) throw new Error('the conversation table is full')
+  if (from !== to) recordEvent({ kind: 'bind', conversation: conversationId(c), ...(from && { from }), to, ...(why?.trim() && { why: oneLine(why, BIND_WHY_MAX) }), by })
   const bound = `${conversationId(c)} → ${to}`
   if (ref.ref.kind !== 'thread') return bound
   return `${bound}; ${await bindNotice(c, to, why)}`
@@ -886,7 +891,9 @@ async function bindNotice(c: ReturnType<typeof parseConversation>, threadId: str
 export function operatorUnbind(conversation: string): string {
   const c = parseConversation(conversation)
   const owed = getConversationTable().get(c.channel, c.threadTs, appOfEntry(c))?.owed?.length ?? 0
+  const from = getConversationTable().get(c.channel, c.threadTs, appOfEntry(c))?.specialist
   if (!getConversationTable().unwatch(c.channel, c.threadTs, appOfEntry(c))) return `${conversationId(c)} was not bound`
+  recordEvent({ kind: 'unbind', conversation: conversationId(c), ...(from && { from }), by: 'operator' })
   return `${conversationId(c)} is unbound${owed ? `; ${owed} message${owed === 1 ? '' : 's'} it still owed were dropped (and alerted)` : ''}`
 }
 

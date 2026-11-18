@@ -251,7 +251,7 @@ The operator's app may still route something the operator saw to a specialist, b
 router = "specialist:slack-router"      # or "main"
 
 [specialists.slack-router]
-workdir = "~/agents/slack-router"       # a folder of its own: it keeps its decision log here
+workdir = "~/agents/slack-router"       # a folder of its own
 kickoff_file = "~/agents/slack-router/kickoff.md"   # a copy of docs/router-kickoff.example.md
 model = "sonnet"                        # reading descriptions and asking questions: no need for the default opus
 reachable_by = ["role:router-approved"] # who may have a thread routed; a role you give people in [people] (default: all of them)
@@ -265,7 +265,7 @@ The first tag binds the thread to the router, so later messages in it go to the 
 
 **Binding to another session.** `bind_conversation` takes two more arguments for main and for the router (every other session is refused): `target`, a session by name (`list_sessions`) or `thread:<id>`, and `why`, one line. It is `hydra conversations bind <conversation> thread:<id> --why "<reason>"`: the thread binds to that session, which listens, and the app posts in the thread `→ <session> <link to its thread>: <why>`. A caller hands on only a conversation bound to it, and never to the router itself. Every later message in the thread, tagged or not, goes to that session, saying with each whether the app was tagged and whether it is from the operator, an approved person (declared in `[people]`) or anyone else; such a tag likely asks the session something, and it answers in the thread, through the app, when it judges so, otherwise it listens (a restricted or write-confined session only listens). A tag in a thread bound to a session stays with that session: the router never takes it back.
 
-**Finding the session** is the router's own behaviour, written in its kickoff, not in hydra: [`router-kickoff.example.md`](router-kickoff.example.md) is one to copy. It looks in tiers, stops at the first that fits, and writes one line per decision to a log in its workdir, which it reads before the next one:
+**Finding the session** is the router's own behaviour, written in its kickoff, not in hydra: [`router-kickoff.example.md`](router-kickoff.example.md) is one to copy. It looks in tiers, stops at the first that fits, and reads its past decisions from the event stream (`hydra events`) before the next one:
 
 | Tier | Where it looks | How it takes the thread |
 |---|---|---|
@@ -275,7 +275,22 @@ The first tag binds the thread to the router, so later messages in it go to the 
 | 4 | **Nothing fits** | Spawns a new session for the thread and binds it |
 | 5 | **Last resort** | Asks the operator |
 
-`list_sessions` with `include_ended: true` (`ended_within_days`, 1 to 90, default 14, at most 50) also lists the latest session of each thread nobody is in now, read-only, from the thread history hydra keeps: name, description, thread id, link, when it ended. The router's decision log is the tuning surface: each line says what was routed, where, which tier took it, why, and who corrected it; read before the next decision, a correction changes the next one. Sonnet is enough for it (`model = "sonnet"`): the work is reading descriptions and asking questions, not writing code.
+`list_sessions` with `include_ended: true` (`ended_within_days`, 1 to 90, default 14, at most 50) also lists the latest session of each thread nobody is in now, read-only, from the thread history hydra keeps: name, description, thread id, link, when it ended. The event stream is the router's memory and the tuning surface: its `bind_conversation` is recorded as a `bind` event with its `why`, a correction is another bind of the same conversation by someone else, and `hydra events --kind bind` shows both, so a correction changes the next decision. Sonnet is enough for it (`model = "sonnet"`): the work is reading descriptions and asking questions, not writing code.
+
+**The event stream.** *The daemon.* The daemon appends one JSON line per event to `<state dir>/events/YYYY-MM-DD.jsonl` (UTC day): ids, names and a bind's `why`, never a message's text (`why` is the one free-text field: the reason whoever binds gave). Only the daemon writes; `hydra events` reads, with the daemon down too. Three kinds:
+
+| Kind | Written when | Fields |
+|---|---|---|
+| `route` | The Slack connector routes a message that something takes, or an app is tagged and nothing takes it. Untagged messages nobody takes are not recorded | `app`, `conversation`, `by` (the sender's address), `tagged`, `via` (`binding`, `rule`, `router`, `operator-dm`, or `none` when a tag found no one), `to` |
+| `bind` | A conversation is bound or moved by hand: `bind_conversation` (a session binding to itself, main or the router handing on) or `hydra conversations bind`. Not recorded: a bind to the thread's current session, and the bindings hydra makes itself (a first message opening a conversation, a tag taking a thread from a session, a rename); a route event shows where each message went | `conversation`, `from` (absent when it opened with this bind), `to` (a specialist id, or a session's thread id), `why` (the reason given, one line, at most 300 characters), `by` (`operator`, `main`, or the session or specialist) |
+| `unbind` | A conversation is let go by `unbind_conversation` or `hydra conversations unbind`. Not recorded: hydra letting one go itself (idle, a killed session, a deleted thread) | `conversation`, `from`, `by` |
+
+```sh
+hydra events --kind bind --since 14d             # a table: time, kind, conversation, what happened
+hydra events --conversation slack:C0ABC:1793732224.093059 --json   # one JSON event per line
+```
+
+`--since` takes `90m`, `12h` or `7d`. Day files older than `[events] keep_days` days (default 30, at most 3650) are deleted when the daemon starts (once hydra.toml has loaded) and when the UTC day turns.
 
 Where the bot is not in the channel, main's answer, the bound session's and the bind's notice go to the operator's DM with the app, under a line naming who wrote it and linking the thread (a restricted specialist's answer never does: it fails as before). The bot never joins a channel; invite it wherever answers should go in the thread. No Slack app change is needed.
 

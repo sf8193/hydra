@@ -48,15 +48,15 @@ Talk to many Claude Code (or Codex) sessions from Slack or Discord. Each session
 
 ## Core abstractions
 
-Twenty-two names carry the design. Each answers one question.
+Twenty-three names carry the design. Each answers one question.
 
 | Name | Question | Sentence |
 |---|---|---|
 | Gateway | How does the operator talk to hydra? | A chat platform (Discord or Slack) that carries the operator's messages and commands. One identity: its bot. |
 | App | Who hears, who speaks? | A Slack app. Its bot hears where it is a member and is the only one that speaks. The operator's token, if given, hears every channel, DM and group DM the operator is in and never speaks; nothing it hears is delivered unless a place names it. A value that names one says its kind: `app:sales`. |
 | App › router | Where does a tag go that nothing else takes? | `router = "main"` or `"specialist:<name>"` on a Slack app: a tag of the app in a channel thread that no binding and no rule takes goes to it, third in order. A specialist so named, the router, hears whoever its own `reachable_by` lets in, may bind the thread to another session, and is never restricted or write-confined. |
-| Connector | Where do events from outside come from? | A source of events: Slack, GitHub, a clock. |
-| Inbound | What arrived? | One event as routing sees it: who sent it, where, why it counts. |
+| Connector | Where does what arrives from outside come from? | A source of inbounds: Slack, GitHub, a clock. |
+| Inbound | What arrived? | One thing that arrived, as routing sees it: who sent it, where, why it counts. |
 | Place | Where did it happen? | A channel, a DM or a repository, named `slack:#ops`, `github:owner/repo`. |
 | Person, roles | Who sent it? | A name from `[people]`, and the roles it holds. Written with their kind: `person:alice`, `role:finance`. |
 | Conversation | Which exchange? | An app, a channel and a thread; what a binding attaches to. |
@@ -73,6 +73,7 @@ Twenty-two names carry the design. Each answers one question.
 | Address | Who or where, on which platform? | `platform:thing`, like `slack:U0ALICE` or `slack:#ops`. A Person holds addresses; a Place is one. |
 | Pin | Which apps deliver to it? | A specialist's list of Slack apps (`pinned_to`). Only those apps deliver to it, and it takes nothing from the others. |
 | Operator | Whose hydra is it? | The Person (`operator = "…"`) whose DMs reach main and who reaches every specialist. |
+| Event | What did hydra decide? | One line the daemon appends to `<state dir>/events/<day>.jsonl` when it routes a message that something takes (or a tag no one takes), or binds or unbinds a conversation: ids, names and a bind's reason, never message text. Read with `hydra events`; day files older than `[events] keep_days` days (default 30) are deleted. Its `kind` is `route`, `bind` or `unbind`; a route's `via` is `binding`, `rule`, `router`, `operator-dm`, or `none` for a tag no one took. |
 | Guard | May this sender's message go through? | The operator's command (`[guard]`) that judges a non-operator's Slack message after routing: deliver, redirect, hold or drop. |
 
 A schedule is the one name for a clock that sends a message to a specialist; `job` is its old name. An audience is not a key: it is derived from who `reachable_by` lets reach a specialist, the places its `[[rules]]` send to it, and whether those places hear other bots (`bots = true` on the place).
@@ -91,6 +92,8 @@ flowchart LR
   IN --> RU{{"<b>Rule</b><br/>place, person, target:<br/>first match wins"}}
   RU --> TG(["<b>Target</b><br/>who receives it"])
   CN -. "GitHub watch, clock job:<br/>target named at creation" .-> TG
+  RU -. "route" .-> EV["<b>Event</b><br/>what hydra decided,<br/>read with hydra events"]
+  CV -. "bind, unbind" .-> EV
   TG --> SP["<b>Specialist</b><br/>a named session,<br/>refilled when it ends"]
   SP -.-> RS["<b>Restricted specialist</b><br/>knows only what its<br/>audience can already see"]
   SP -.-> WC["<b>Write-confined specialist</b><br/>the operator's account,<br/>writes only in its workdir"]
@@ -98,7 +101,7 @@ flowchart LR
   classDef step fill:#eef2ff,stroke:#6366f1,color:#1f2937
   classDef gate fill:#fff7ed,stroke:#f97316,color:#1f2937
   class TG,SP,RS,WC,MN core
-  class GW,AP,CN,IN,PE,PL,TR,CV step
+  class GW,AP,CN,IN,PE,PL,TR,CV,EV step
   class RU gate
 ```
 
