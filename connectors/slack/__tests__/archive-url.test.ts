@@ -1,5 +1,6 @@
-import { expect, test } from 'bun:test'
+import { afterEach, expect, test } from 'bun:test'
 import { archiveUrl, parseArchiveUrl } from '../conversation'
+import { slackConversationLink, slackRuntimeDeps } from '../runtime'
 
 const WS = 'https://acme.slack.com'
 
@@ -26,4 +27,13 @@ test('parseArchiveUrl reads back what each old parser read', () => {
   // a lowercase id is no channel id, whichever form of link asks
   expect(parseArchiveUrl(`${WS}/archives/c0food/p1793732224093059`, true)).toBeUndefined()
   expect(parseArchiveUrl(`${WS}/archives/c0food`)).toBeUndefined()
+})
+
+const realView = slackRuntimeDeps.view
+afterEach(() => { slackRuntimeDeps.view = realView })
+
+test('slackConversationLink links a top-level conversation to its channel and a thread to its message', () => {
+  slackRuntimeDeps.view = () => ({ workspaceUrl: WS }) as never
+  expect(slackConversationLink('slack:C0FOOD')).toBe(`${WS}/archives/C0FOOD`)
+  expect(slackConversationLink('slack:C0FOOD:1793732224.093059')).toBe(`${WS}/archives/C0FOOD/p1793732224093059`)
 })
