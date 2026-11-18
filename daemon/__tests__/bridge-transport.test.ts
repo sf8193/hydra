@@ -382,10 +382,12 @@ describe('persisted queues at boot', () => {
     expect(existsSync(join(STATE_DIR, 'message-queue.json'))).toBe(false)
   })
 
-  test('the daemon restores them before its bridge server starts', () => {
+  test('the daemon restores them after its singleton check and before its bridge server starts', () => {
     const daemon = readFileSync(new URL('../../daemon.ts', import.meta.url), 'utf8')
     const restore = daemon.indexOf('transport.restorePersistedQueues()')
-    expect(restore).toBeGreaterThan(-1)
+    const singleton = daemon.indexOf('another daemon is already listening')
+    expect(singleton).toBeGreaterThan(-1)
+    expect(restore).toBeGreaterThan(singleton)
     expect(restore).toBeLessThan(daemon.indexOf('\nstartBridgeServer()'))
   })
 })
