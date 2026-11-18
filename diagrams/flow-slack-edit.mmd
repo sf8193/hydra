@@ -1,0 +1,17 @@
+%% `edit_message` / `delete_message` with a Slack conversation as chat_id (daemon/bridge-dispatch.ts -> connectors/slack/runtime.ts amendInConversation).
+%% Whose message it is is read from Slack and picks the token; Discord chat_ids still go to the gateway.
+
+flowchart TD
+    call["edit_message / delete_message<br/>chat_id slack:…, message_id ts"] --> open{"conversation open and<br/>bound to the caller?<br/>(the rule reply holds)"}
+    open -- no --> r1["refused: says whose it is"]
+    open -- yes --> who["read the message's author<br/>from Slack (listener.author)"]
+    who --> a{"author"}
+    a -- "the app's bot" --> bot["chat.update / chat.delete<br/>with the bot token"]
+    a -- "someone else" --> r2["refused before Slack is asked"]
+    a -- "the operator" --> m{"caller is main?"}
+    m -- no --> r3["refused: only main"]
+    m -- yes --> op["chat.update / chat.delete<br/>with the operator's user token"]
+    op --> s{"token has chat:write?"}
+    s -- no --> r4["refused: names chat:write,<br/>reinstall the app"]
+    s -- yes --> done["done"]
+    bot --> done

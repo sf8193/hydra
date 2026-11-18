@@ -9,7 +9,7 @@ Hydra bridges a Slack app to a Claude Code session: you DM the bot (or @mention 
 | What it is | Slack as the operator's own chat surface (`gateways/slack.ts`, `CHAT_PLATFORM=slack`), as Discord is for a Discord daemon | Slack as a source of events, routed by hydra.toml (`connectors/slack/`, in every daemon, Discord's included) |
 | What it does | the operator talks to the byte, spawns sessions in threads, runs commands | delivers what its apps hear to specialists, to threads bound to sessions, and to restricted specialists; it runs no commands, and routing never reads what a message says |
 | Configured by | `.env` (`SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`) and `access.json` | `[slack.apps.<id>]`, `[[rules]]`, `reachable_by` in hydra.toml |
-| Connections | one, on the gateway's app | one per app declared, each with an optional read-only operator token |
+| Connections | one, on the gateway's app | one per app declared, each with an optional operator token (reads; rewrites the operator's own messages from main) |
 
 Steps 1–6 below set up the gateway. [Apps in hydra.toml](#apps-in-hydratoml) onward is the connector.
 
@@ -147,7 +147,7 @@ hydra.toml declares each Slack app by name, `[slack.apps.<id>]`. Tokens stay in 
 [slack.apps.default]
 bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"      # required: the bot token (xoxb-…)
 socket_token_env = "CONNECTOR_SLACK_APP_TOKEN"      # the Socket Mode token (xapp-…, the app-level token): required for Slack to connect, not for `hydra slack manifest`
-operator_token_env = "SLACK_USER_TOKEN"    # optional: hear the channels, DMs and group DMs the operator is in, as the operator; never posts
+operator_token_env = "SLACK_USER_TOKEN"    # optional: hear the channels, DMs and group DMs the operator is in, as the operator; used to edit or delete the operator's own messages from main, never to post
 display_name = "Acme helper"           # the app's name: in `hydra slack manifest`, and in every alert, health line and notice hydra says about it (default: `hydra` for `default`, else the id; at most 35 characters)
 description = "Answers Acme's threads it is tagged in."   # at most 140 characters
 
@@ -225,7 +225,7 @@ A message from another app's bot is another bot's message: it is passed over unl
 
 *Slack connector.* Hydra serves two uses through one routing system, and which app listens follows from the use.
 
-- **The operator's harness.** The operator's own app: a bot plus `operator_token_env`, the operator's read-only token (a Slack user token). With it, a thread in a channel the bot isn't in is still read, as the operator, and routed to the operator's own sessions (`bind_conversation`), so no bot has to join that channel; the operator's DMs and group DMs are heard too, and delivered only where a place names them ([below](#dms-and-group-dms-the-operators-app-hears)). A whole channel (a place in hydra.toml) is still read through the bot today, so its bot must be in it. These sessions serve the operator, so they may see what the operator sees.
+- **The operator's harness.** The operator's own app: a bot plus `operator_token_env`, the operator's own token (a Slack user token; it reads, and rewrites the operator's own messages, [below](#editing-and-deleting-slack-messages)). With it, a thread in a channel the bot isn't in is still read, as the operator, and routed to the operator's own sessions (`bind_conversation`), so no bot has to join that channel; the operator's DMs and group DMs are heard too, and delivered only where a place names them ([below](#dms-and-group-dms-the-operators-app-hears)). A whole channel (a place in hydra.toml) is still read through the bot today, so its bot must be in it. These sessions serve the operator, so they may see what the operator sees.
 - **Agents for other people.** A restricted app whose own bot sits in the channels its agent serves, routed to specialists, usually restricted specialists (`restricted = true`, [below](#a-specialist-other-people-talk-to-restricted--true)). It listens through its own bot.
 
 **When not to listen through the operator's app.** Give the agent an app of its own that listens through its own bot when any of these is true:
@@ -236,7 +236,7 @@ A message from another app's bot is another bot's message: it is passed over unl
 
 The operator's app may still route something the operator saw to a specialist, by a rule or a place in hydra.toml. An app that only speaks or reacts is allowed too. Neither is the default.
 
-**Hearing and speaking are separate.** The operator token only reads, and never posts. Replies, reactions and new threads go out through a bot, and only where that bot is a member. So in a channel where only the operator's token hears, hydra can listen and route, but nothing answers there until a bot is invited.
+**Hearing and speaking are separate.** The operator token reads, and (from main only) edits or deletes the operator's own messages; it never posts. Replies, reactions and new threads go out through a bot, and only where that bot is a member. So in a channel where only the operator's token hears, hydra can listen and route, but nothing answers there until a bot is invited.
 
 ## DMs and group DMs the operator's app hears
 
@@ -296,6 +296,10 @@ home_place = "slack:#sales-ops"
 **Answering one message: `reply_to`.** `reply(chat_id=<the delivery's conversation>, reply_to=<the message's ts>)` posts in the thread of that message; `chat_id` stays the conversation, never the ts (a message's ts is not a conversation until something opens it). In a DM (the one conversation with no thread ts: every message elsewhere is its own thread), the thread opens under that message and is bound to the replying specialist or `main` as the first part lands, so the person's answer in it comes back to that session and not to whoever the rules name for the place; if the conversation table or the replier's `TOOL_BIND_MAX` is full, the post still lands and the result says follow-ups will not come back. An existing conversation under that message is answered only by whoever it is bound to. In a thread conversation the post goes to the thread as a whole (Slack has no reply to one message inside a thread): a `reply_to` other than its first message is said in the result. A `reply_to` that is not a message ts, one on a `home_place` post, or one from a per-conversation session at a top level (its thread would be a new conversation with a session of its own) posts nothing and errors. Replies on the Slack gateway (`gateways/slack.ts`) already use `reply_to` as the thread ts.
 
 `bind_conversation` and `hydra conversations bind` carry the app too, and refuse what routing would: a specialist can be bound only through an app it is pinned to (any app if it is unpinned).
+
+### Editing and deleting Slack messages
+
+*Slack connector.* `edit_message` and `delete_message` take a conversation id as `chat_id` and the message's ts as `message_id`, in a conversation bound to the caller (the rule `reply` holds). Hydra reads the message's author from Slack and picks the token: a message **its app posted** is rewritten with the app's bot token (Slack itself refuses any other bot's), and the **operator's own** message with the operator's user token, from **main** only. Anyone else's message is refused, and so is the operator's from any other session. The operator's token needs the user scope `chat:write`, which `hydra slack manifest <app>` lists for an app with `operator_token_env`; an app installed before that has the old scopes, so add `chat:write` under User Token Scopes and reinstall, and until then the call says exactly that. There is no `hydra.toml` key for it: the scope, main-only and the author check already gate it, and an app whose owner never adds the scope never edits their messages. An edit is one message (at most 3,900 characters, not split) and takes no files.
 
 ## Health and alerts, per app
 

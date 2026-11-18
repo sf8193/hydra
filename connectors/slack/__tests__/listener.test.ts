@@ -31,7 +31,7 @@ afterEach(() => { for (const l of listeners.splice(0)) l.stop(); for (const d of
 
 type Lister = { channel: string; user?: string }[] | Error | (() => Promise<{ channel: string; user?: string }[]>)
 const lister = (name: string, calls: string[], l: Lister | undefined) => l && (async () => { calls.push(name); if (l instanceof Error) throw l; return typeof l === 'function' ? l() : l })
-function setup(over: { tokens?: { app?: string; bot?: string }; toml?: string | null; failStart?: boolean; firstRetryBaseMs?: number; scopes?: string[]; historyError?: string; history?: RawMessage[]; threads?: Record<string, RawMessage[]>; duringStart?: (deliverLive: (e: RawEvent) => void) => void; channels?: { id: string; name: string }[]; channelsError?: string; told?: ToldScopes; otherParties?: Lister; dms?: Lister } = {}) {
+function setup(over: { tokens?: { app?: string; bot?: string }; toml?: string | null; failStart?: boolean; firstRetryBaseMs?: number; scopes?: string[]; historyError?: string; history?: RawMessage[]; threads?: Record<string, RawMessage[]>; duringStart?: (deliverLive: (e: RawEvent) => void) => void; channels?: { id: string; name: string }[]; channelsError?: string; told?: ToldScopes; otherParties?: Lister; dms?: Lister; operatorId?: string } = {}) {
   const toml = over.toml === undefined ? TOML : over.toml
   const h: HydraConfig = toml === null ? EMPTY_CONFIG : load(toml)
   const dir = mkdtempSync(join(tmpdir(), 'slack-listener-'))
@@ -84,6 +84,9 @@ function setup(over: { tokens?: { app?: string; bot?: string }; toml?: string | 
         authTest: async () => ({ botId: 'BBOT', userId: BOT, url: 'https://x.slack.com/', ...(over.scopes && { scopes: over.scopes }) }),
         userName: async id => { state.nameLookups.push(id); return id === 'UB' ? 'Bea B' : undefined },
         react: async (c, ts, name) => { rec.apiCalls.push(`react:${c}:${ts}:${name}`) },
+        edit: async (c, ts, text, as) => { rec.apiCalls.push(`edit:${as}:${c}:${ts}:${text}`) },
+        remove: async (c, ts, as) => { rec.apiCalls.push(`remove:${as}:${c}:${ts}`) },
+        operatorUserId: async () => over.operatorId,
         post: async (c, thread, text, opts) => { rec.apiCalls.push(`post:${c}:${thread ?? '-'}:${text}${opts ? `:${JSON.stringify(opts)}` : ''}`); return '9999.000001' },
         download: async (url, dest) => { rec.apiCalls.push(`download:${url}`); mkdirSync(dirname(dest), { recursive: true }); writeFileSync(dest, 'bytes', { mode: 0o600 }) },
         api,
@@ -838,5 +841,55 @@ describe("the operator's own app hears DMs and group DMs", () => {
     expect(t.sent.some(m => m.includes('a DM to the bot'))).toBe(true)
     expect(reads(t, 'otherParties')).toBe(0)
     expect(reads(t, 'dms') - base).toBe(0)
+  })
+})
+
+describe('rewriting a message through the connection', () => {
+  const THREAD = `${CH}:2000.000001`
+  const thread = (...m: RawMessage[]) => ({ [THREAD]: [{ ts: '2000.000001', user: 'UB' }, ...m] })
+
+  test('whose a message is: the bot’s (by user or bot id), the operator’s, or someone else’s', async () => {
+    const t = setup({ operatorId: 'UOP', threads: thread({ ts: '2001.000001', user: BOT, bot_id: 'BBOT' }, { ts: '2002.000001', bot_id: 'BBOT' }, { ts: '2003.000001', user: 'UOP' }, { ts: '2004.000001', user: 'UB' }) })
+    await t.listener.start()
+    const of = (ts: string) => t.listener.author(CH, ts, '2000.000001')
+    expect(await of('2001.000001')).toBe('app')
+    expect(await of('2002.000001')).toBe('app')
+    expect(await of('2003.000001')).toBe('operator')
+    expect(await of('2004.000001')).toBe('other')
+    await expect(of('2999.000001')).rejects.toThrow('message 2999.000001 was not found')
+  })
+
+  test('the operator is known only with the operator’s token: without one their message is someone else’s', async () => {
+    const t = setup({ threads: thread({ ts: '2003.000001', user: 'UOP' }) })
+    await t.listener.start()
+    expect(await t.listener.author(CH, '2003.000001', '2000.000001')).toBe('other')
+  })
+
+  test('a reply is found when Slack puts the thread’s first message ahead of it, and a nested reply is not a top-level conversation’s', async () => {
+    const t = setup({ threads: thread({ ts: '2001.000001', user: BOT }), operatorId: 'UOP' })
+    await t.listener.start()
+    // The fake serves a thread whole; a reply is the second message of the page, as Slack serves it.
+    expect(await t.listener.author(CH, '2001.000001', '2000.000001')).toBe('app')
+    const top = setup({ threads: { [`${CH}:3000.000001`]: [{ ts: '3000.000001', user: 'UB' }, { ts: '3001.000001', thread_ts: '3000.000001', user: BOT }], [`${CH}:3001.000001`]: [{ ts: '3001.000001', thread_ts: '3000.000001', user: BOT }] } })
+    await top.listener.start()
+    await expect(top.listener.author(CH, '3001.000001', undefined)).rejects.toThrow('is a reply inside the thread 3000.000001')
+    expect(await top.listener.author(CH, '3001.000001', '3000.000001')).toBe('app')
+  })
+
+  test('a top-level message is read as its own thread', async () => {
+    const t = setup({ threads: { [`${CH}:3000.000001`]: [{ ts: '3000.000001', user: BOT }] } })
+    await t.listener.start()
+    expect(await t.listener.author(CH, '3000.000001', undefined)).toBe('app')
+    expect(t.apps[0].apiCalls).toContain('replies:3000.000001')
+  })
+
+  test('edit and delete reach the client with the writer named, and need a connection', async () => {
+    const t = setup()
+    await expect(t.listener.edit(CH, '1.000001', 'x', 'app')).rejects.toThrow('Slack is not connected')
+    await t.listener.start()
+    await t.listener.edit(CH, '2001.000001', 'new', 'app')
+    await t.listener.edit(CH, '2001.000001', 'newer', 'operator')
+    await t.listener.remove(CH, '2001.000001', 'operator')
+    expect(t.apps[0].apiCalls.filter(c => /^(edit|remove)/.test(c))).toEqual([`edit:app:${CH}:2001.000001:new`, `edit:operator:${CH}:2001.000001:newer`, `remove:operator:${CH}:2001.000001`])
   })
 })
