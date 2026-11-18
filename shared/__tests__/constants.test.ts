@@ -1,5 +1,5 @@
 import { describe, test, expect, afterEach } from 'bun:test'
-import { ompProvider, OMP_MODEL_ALIASES, OMP_MODEL_ALIAS_PATTERN, resolveOmpModelAlias, SESSION_LABELS, isSessionLabel, parseSessionLabel, resolveModelAlias, resolveCodexModelAlias, isKnownModel, canonicalModel, byteTmuxName, MODEL_ALIASES, MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, KNOWN_MODELS, normalizeReviewRounds, parseIdleTtl, MAX_IDLE_TTL_MS } from '../constants.js'
+import { ompProvider, OMP_MODEL_ALIASES, OMP_MODEL_ALIAS_PATTERN, resolveOmpModelAlias, SESSION_LABELS, isSessionLabel, parseSessionLabel, resolveModelAlias, resolveCodexModelAlias, isKnownModel, contextWindowOf, withContextSuffix, canonicalModel, byteTmuxName, MODEL_ALIASES, MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, KNOWN_MODELS, normalizeReviewRounds, parseIdleTtl, MAX_IDLE_TTL_MS } from '../constants.js'
 
 test('review rounds have a twenty-round default and hard cap', () => {
   expect(normalizeReviewRounds()).toBe(20)
@@ -16,7 +16,9 @@ describe('resolveModelAlias', () => {
     expect(resolveModelAlias('sonnet')).toBe('claude-sonnet-5-5[1m]')
     expect(resolveModelAlias('haiku')).toBe('claude-haiku-4-5-20251001')
     expect(resolveModelAlias('opus')).toBe('claude-opus-5-5[1m]')
-    expect(resolveModelAlias('fable')).toBe('claude-fable-5-1[1m]')
+    expect(resolveModelAlias('fable')).toBe('claude-fable-5-2[1m]')
+    expect(resolveModelAlias('fable-5-2')).toBe('claude-fable-5-2[1m]')
+    expect(resolveModelAlias('fable-5-1')).toBe('claude-fable-5-1[1m]')
   })
 
   test('resolves hyphenated aliases', () => {
@@ -56,11 +58,35 @@ describe('resolveCodexModelAlias', () => {
   })
 })
 
+describe('fable versions', () => {
+  test('bare ids get the same 1M suffix as their alias', () => {
+    expect(withContextSuffix('claude-fable-5-1')).toBe('claude-fable-5-1[1m]')
+    expect(withContextSuffix('claude-fable-5-2')).toBe('claude-fable-5-2[1m]')
+  })
+  test('omp aliases follow the Claude ones', () => {
+    expect(resolveOmpModelAlias('omp-fable')).toBe('claude-fable-5-2[1m]')
+    expect(resolveOmpModelAlias('omp-fable-5-1')).toBe('claude-fable-5-1[1m]')
+  })
+  test('the alias pattern takes the longest alias, not the `fable` prefix', () => {
+    const m = 'fable-5-1: x'.match(new RegExp(`^(${MODEL_ALIAS_PATTERN}):`, 'i'))
+    expect(m?.[1]).toBe('fable-5-1')
+  })
+})
+
+describe('contextWindowOf fable', () => {
+  test('claude-fable-5-2[1m] is a 1M window; bare is 200k', () => {
+    expect(contextWindowOf('claude-fable-5-2[1m]')).toBe(1_000_000)
+    expect(contextWindowOf('claude-fable-5-2')).toBe(200_000)
+  })
+})
+
 describe('isKnownModel', () => {
   test('recognizes bare model IDs', () => {
     expect(isKnownModel('claude-opus-4-6')).toBe(true)
     expect(isKnownModel('claude-sonnet-5')).toBe(true)
     expect(isKnownModel('claude-haiku-4-5-20251001')).toBe(true)
+    expect(isKnownModel('claude-fable-5-2')).toBe(true)
+    expect(isKnownModel('claude-fable-5-2[1m]')).toBe(true)
   })
 
   test('recognizes [1m] suffixed model IDs', () => {
