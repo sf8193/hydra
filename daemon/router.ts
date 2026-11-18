@@ -2,6 +2,7 @@ import { gateway, PERMISSION_REPLY_RE } from './config.js'
 import { attachmentTarget, tellsSaveFailure } from './attachment-target.js'
 import { reserveUserIngress } from './user-ingress.js'
 import { cacheSlackChannel, cacheSlackThread } from './artifacts.js'
+import { parseArchiveUrl } from '../connectors/slack/conversation.js'
 import { refreshDashboard } from './dashboard.js'
 import { registry, threadRegistry } from './sessions.js'
 import { transport } from './bridge-transport.js'
@@ -257,23 +258,15 @@ const CONTEXT_LINK_DOMAINS = /slack\.com\/archives|linear\.app|notion\.so|incide
 const MAX_CONTEXT_LINKS = 5
 const MAX_THREAD_SUMMARY_LEN = 60
 
-function parseSlackArchiveUrl(url: string): { channel: string; threadTs: string } | null {
-  const m = url.match(/slack\.com\/archives\/([A-Z0-9]+)\/p(\d+)/)
-  if (!m) return null
-  const raw = m[2]
-  const threadTs = raw.length > 10 ? raw.slice(0, 10) + '.' + raw.slice(10) : raw
-  return { channel: m[1], threadTs }
-}
-
 function stripMrkdwn(text: string): string {
   return text.replace(/<[^|>]+\|([^>]+)>/g, '$1').replace(/<[^>]+>/g, '').replace(/[*_~`]/g, '').trim()
 }
 
 export async function fetchSlackThreadSummary(url: string): Promise<string | null> {
-  const parsed = parseSlackArchiveUrl(url)
-  if (!parsed) return null
+  const parsed = parseArchiveUrl(url)
+  if (!parsed?.ts) return null
   try {
-    const msgs = await gateway.fetchMessages(`${parsed.channel}:${parsed.threadTs}`, 1)
+    const msgs = await gateway.fetchMessages(`${parsed.channel}:${parsed.ts}`, 1)
     if (!msgs.length) return null
     const clean = stripMrkdwn(msgs[0].content)
     if (!clean) return null
@@ -327,10 +320,10 @@ async function deliverToSession(msg: InboundMessage, targetSessionId: string, ac
       sessionInfo.contextLinks = [...existing].slice(-MAX_CONTEXT_LINKS)
       registry.debouncedPersist()
       for (const url of links) {
-        const m = url.match(/slack\.com\/archives\/([A-Z0-9]+)/)
-        if (!m) continue
-        gateway.fetchChannel(m[1]).then(ch => {
-          if (ch.name) cacheSlackChannel(m[1], ch.name)
+        const channel = parseArchiveUrl(url)?.channel
+        if (!channel) continue
+        gateway.fetchChannel(channel).then(ch => {
+          if (ch.name) cacheSlackChannel(channel, ch.name)
         }).catch(() => {})
         fetchSlackThreadSummary(url).then(summary => {
           if (summary) { cacheSlackThread(url, summary); refreshDashboard() }

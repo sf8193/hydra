@@ -250,6 +250,7 @@ import { fetchSlackThreadSummary } from './daemon/router.js'
 import { restoreHeld } from './daemon/specialist-thread.js'
 import { startPrWatcher, backfillTitles, fetchPrTitle, parsePrUrl } from './connectors/github/pr-watch.js'
 import { startConversationTable, stopConversationTable, startSlackListener } from './connectors/slack/runtime.js'
+import { parseArchiveUrl } from './connectors/slack/conversation.js'
 import { startHydraConfig, stopHydraConfig, retryHydraConfigAlert, currentHydraConfig, onHydraConfigLoad, reloadHydraConfig, hydraConfigLoadedOk } from './daemon/hydra-config.js'
 import { jobsFromSchedules, schedulesAreSource } from './shared/schedules.js'
 import { readDaemonState } from './shared/jobs.js'
@@ -489,8 +490,8 @@ void (async () => {
   const threadUrls: string[] = []
   for (const s of registry.values()) {
     for (const url of s.contextLinks ?? []) {
-      const m = url.match(/slack\.com\/archives\/([A-Z0-9]+)/)
-      if (m) { channelIds.add(m[1]); threadUrls.push(url) }
+      const channel = parseArchiveUrl(url)?.channel
+      if (channel) { channelIds.add(channel); threadUrls.push(url) }
     }
   }
   let filled = 0

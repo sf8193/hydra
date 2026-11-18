@@ -33,7 +33,10 @@ export function unscopeKey(key: string): { app?: string; rest: string } {
 export const conversationId = (e: ConversationRef): string =>
   `slack:${appPrefix(e.app, ':')}${e.channel}${e.threadTs === TOP_LEVEL ? '' : `:${e.threadTs}`}`
 
-const CONVERSATION_RE = /^slack:(?:([a-z][a-z0-9_-]{0,34}):)?([CGD][A-Z0-9]+)(?::(\d{1,12}\.\d{1,6}))?$/
+/** A Slack channel id: a channel (C), a private group (G) or a DM (D). */
+const CHANNEL_ID = '[CGD][A-Z0-9]+'
+
+const CONVERSATION_RE = new RegExp(`^slack:(?:([a-z][a-z0-9_-]{0,34}):)?(${CHANNEL_ID})(?::(\\d{1,12}\\.\\d{1,6}))?$`)
 
 export const CONVERSATION_FORMAT = 'slack:<channel id>[:<thread ts>], with the app first outside `default` (slack:<app>:<channel id>[:<thread ts>]), e.g. slack:C0ABC:1793732224.093059 or slack:sales:C0ABC:1793732224.093059'
 
@@ -47,4 +50,20 @@ export function parseConversation(raw: unknown): { app?: string; channel: string
   const [, app, channel, ts] = m
   if (ts && !THREAD_TS.test(ts)) throw new Error('thread ts must look like 1793732224.093059')
   return { ...(app && app !== DEFAULT_SLACK_APP && { app }), channel, threadTs: ts ? ts.replace(/\.(\d+)$/, (_, f: string) => `.${f.padEnd(6, '0')}`) : TOP_LEVEL }
+}
+
+/**
+ * A Slack archive link: the channel; with `ts`, that message (its ts without the dot); with `threadTs`, the message
+ * opened in its thread (Slack needs both `thread_ts` and `cid`, or it opens the channel at the message).
+ */
+export const archiveUrl = (base: string, channel: string, ts?: string, threadTs?: string): string =>
+  `${base}/archives/${channel}${ts ? `/p${ts.replace('.', '')}` : ''}${threadTs ? `?thread_ts=${threadTs}&cid=${channel}` : ''}`
+
+const ARCHIVE_RE = new RegExp(`slack\\.com/archives/(${CHANNEL_ID})(?:/p(\\d+))?`)
+
+/** `archiveUrl` read back: the channel, and the message's ts when the link names one (a dot before the last six digits). */
+export function parseArchiveUrl(url: string): { channel: string; ts?: string } | undefined {
+  const m = url.match(ARCHIVE_RE)
+  if (!m) return undefined
+  return { channel: m[1], ...(m[2] && { ts: m[2].replace(/^(\d{10})(\d+)$/, '$1.$2') }) }
 }
