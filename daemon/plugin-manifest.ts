@@ -29,6 +29,13 @@ export const BRIDGE_CHANNEL_FLAG = `plugin:${BRIDGE_PLUGIN}@${BRIDGE_MARKETPLACE
 export const BRIDGE_MCP_SERVER_KEY = `plugin:${BRIDGE_PLUGIN}:${BRIDGE_SERVER_NAME}`
 /** The plugin as `enabledPlugins` names it. */
 export const BRIDGE_PLUGIN_ID = `${BRIDGE_PLUGIN}@${BRIDGE_MARKETPLACE}`
+/**
+ * Claude Code's built-in plugins that serve tools of their own, as an MCP server the session connects to.
+ * A restricted specialist's launch turns these off: its policy lists every server it may start, and the
+ * launch check refuses any other (claude-verify.ts), so one left on stops every restricted session from starting.
+ * `cc-plugin-easel` arrived with Claude Code 2.1.327 (18 Nov 2026) and serves `mcp__easel__chart`.
+ */
+export const BUILTIN_TOOL_PLUGIN_IDS = ['cc-plugin-easel@builtin'] as const
 /** The permission rule that allows the bridge's tools: Claude Code names them `mcp__<server key with ':' as '_'>__<tool>`. */
 export const BRIDGE_TOOLS_PERMISSION = `mcp__${BRIDGE_MCP_SERVER_KEY.replaceAll(':', '_')}__*`
 
