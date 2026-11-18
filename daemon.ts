@@ -53,7 +53,7 @@ try {
 // DEFAULT_SESSION_CHANNEL is a live binding: resolveDefaultChannel fills it after boot.
 import { gateway, TOKEN, PLATFORM, STATE_DIR, CLAUDE_CONFIG, SOCK_PATH, heartbeatPath, DEFAULT_SESSION_CHANNEL } from './daemon/config.js'
 import { syncMods } from './shared/mods.js'
-import { bridgePluginCache, syncBridgePlugin } from './daemon/plugin-manifest.js'
+import { syncDaemonBridge } from './daemon/bridge-sync.js'
 import { registry, threadRegistry, reattachAdapters } from './daemon/sessions.js'
 import { isPlainWorker } from './daemon/policy-record.js'
 import { emojiOfName } from './daemon/anchor-state.js'
@@ -304,15 +304,9 @@ process.stderr.write(`daemon: synced mods into ${STATE_DIR}/mods: ${syncMods(imp
 // ---------------------------------------------------------------------------
 
 try {
-  const discordCache = bridgePluginCache(CLAUDE_CONFIG)
-  const relinked = syncBridgePlugin({
-    bridgeSrc: join(import.meta.dir, 'bridge.ts'),
-    cacheDir: discordCache,
-    platform: PLATFORM,
-    daemonConfig: JSON.stringify({ socket: SOCK_PATH, platform: PLATFORM }),
-    log: line => process.stderr.write(`daemon: ${line}\n`),
-  })
-  process.stderr.write(`daemon: synced bridge.ts link + daemon-${PLATFORM}.json + .mcp.json into ${discordCache}/*/${relinked.length ? ` (relinked ${relinked.join(', ')})` : ''}\n`)
+  // Not awaiting `ready`: boot never waits on the registry. A spawn awaits it (claude-engine.ts).
+  const { dirs, relinked } = syncDaemonBridge()
+  process.stderr.write(`daemon: synced the bridge plugin in ${dirs.length} version dir(s)${relinked.length ? `; relinked server.ts in ${relinked.join(', ')}` : ''}\n`)
 } catch (err) {
   process.stderr.write(`daemon: bridge sync skipped (non-fatal): ${err instanceof Error ? err.message : String(err)}\n`)
 }

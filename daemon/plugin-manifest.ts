@@ -8,7 +8,7 @@
  */
 
 import { execFile } from 'child_process'
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, symlinkSync, unlinkSync, writeFileSync } from 'fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from 'fs'
 import { join } from 'path'
 
 const PLUGIN_VERSION = '0.0.4'
@@ -92,7 +92,8 @@ export const MCP_CONFIG = JSON.stringify({ mcpServers: { [BRIDGE_SERVER_NAME]: B
  * Code then caches that failure for 15 minutes — so one bad start leaves every
  * session spawned in that window bridgeless, with no attempt logged. Dependency
  * installation is a setup concern, and the daemon's plugin-cache sync already
- * owns making that directory correct; it runs once at boot instead.
+ * owns making that directory correct; it runs at boot and before each spawn
+ * (`syncBridgePlugin`), not inside the bridge's start.
  *
  * The script is rewritten rather than replaced because the entry file differs by
  * layout — `server.ts` in the plugin cache, `bridge.ts` in this repo — and the
@@ -118,10 +119,11 @@ const bunInstall: InstallRunner = cwd => new Promise((resolve, reject) => {
 /**
  * Make a plugin-cache dir launch its bridge without installing on every spawn.
  *
- * Async and bounded, so a slow registry never blocks daemon boot. The start
- * script is lifted only after a complete install (marker present), so a failed
- * or partial install leaves the published install-on-spawn script in place and
- * is retried on the next boot. Only `scripts.start` is rewritten; the rest of
+ * Async and bounded (BRIDGE_INSTALL_TIMEOUT_MS). Boot does not wait on it; a
+ * spawn and the byte start do, so the bridge they start never installs into the
+ * same node_modules at the same time. The start script is lifted only after a
+ * complete install (marker present), so a failed or partial install leaves the
+ * published install-on-spawn script in place and is retried on the next sync. Only `scripts.start` is rewritten; the rest of
  * package.json stays upstream's. Resolves true only when this call ran the install.
  */
 export async function ensureBridgeReady(targetDir: string, install: InstallRunner = bunInstall): Promise<boolean> {
@@ -159,52 +161,95 @@ function writeIfChanged(path: string, content: string): void {
   writeFileSync(path, content)
 }
 
-const readyInFlight = new Set<string>()
+/**
+ * Point `serverTs` at `bridgeSrc`, replacing whatever is there in one rename: no moment
+ * without a server.ts, and no EEXIST when the daemon and a CLI byte start relink at once.
+ */
+function linkAtomically(bridgeSrc: string, serverTs: string): void {
+  const tmp = `${serverTs}.hydra-link-${process.pid}-${Math.random().toString(36).slice(2)}`
+  symlinkSync(bridgeSrc, tmp)
+  try { renameSync(tmp, serverTs) } catch (err) { try { unlinkSync(tmp) } catch {} ; throw err }
+}
+
+/** How a dir is made ready; a seam so tests can hold or count it. */
+export const bridgeReadiness = { run: (dir: string): Promise<boolean> => ensureBridgeReady(dir) }
+
+/** One ensureBridgeReady per dir at a time, shared by every caller that asks while it runs. */
+const readyInFlight = new Map<string, Promise<void>>()
+
+export interface BridgeSyncResult {
+  /** Every plugin version dir found. */
+  dirs: string[]
+  /** Dirs whose server.ts was not a link to the bridge and now is. */
+  relinked: string[]
+  /** Dirs the sync could not finish, with why (the others are still synced). */
+  failed: { dir: string; error: string }[]
+  /** Settles when every dir's ensureBridgeReady has; never rejects (failures are logged). */
+  ready: Promise<void>
+}
 
 /**
  * Make every plugin version directory launch this repo's bridge.
  *
  * `server.ts` is a symlink to `bridge.ts`, never a copy: bridge.ts imports
  * `./shared/*`, which a copy in the cache cannot find, so every bridge started
- * from a copy dies at load and its session has no channel (Nov 18: the plugin
- * auto-updated 0.0.4 → 0.0.5, the next sync copied, every new spawn was bridgeless).
+ * from a copy dies at load and its session has no channel.
  *
- * Claude Code can add a version directory at any time (plugin auto-update), so
- * this runs before each spawn as well as at boot. It is idempotent and only
- * writes what differs. Returns the version dirs whose server.ts it (re)linked.
+ * Claude Code can add or refill a version directory at any time (plugin
+ * auto-update), so the daemon runs this at boot and before every Claude spawn,
+ * and the byte start runs it too. Idempotent; writes only what differs. Each
+ * dir succeeds or fails alone.
  */
 export function syncBridgePlugin(o: {
   bridgeSrc: string
   cacheDir: string
   platform: string
   daemonConfig: string
-  ready?: (dir: string) => Promise<boolean>
   log?: (line: string) => void
-}): string[] {
+}): BridgeSyncResult {
   const log = o.log ?? (() => {})
-  const ready = o.ready ?? (dir => ensureBridgeReady(dir))
-  const relinked: string[] = []
-  const versionDirs = readdirSync(o.cacheDir, { withFileTypes: true }).filter(d => d.isDirectory())
-  for (const d of versionDirs) {
+  const result: BridgeSyncResult = { dirs: [], relinked: [], failed: [], ready: Promise.resolve() }
+  const readies: Promise<void>[] = []
+  for (const d of readdirSync(o.cacheDir, { withFileTypes: true }).filter(e => e.isDirectory())) {
     const targetDir = join(o.cacheDir, d.name)
-    const serverTs = join(targetDir, 'server.ts')
-    if (!isLinkedTo(serverTs, o.bridgeSrc)) {
-      try { unlinkSync(serverTs) } catch {}
-      symlinkSync(o.bridgeSrc, serverTs)
-      relinked.push(targetDir)
+    result.dirs.push(targetDir)
+    try {
+      const serverTs = join(targetDir, 'server.ts')
+      if (!isLinkedTo(serverTs, o.bridgeSrc)) {
+        linkAtomically(o.bridgeSrc, serverTs)
+        result.relinked.push(targetDir)
+      }
+      writeIfChanged(join(targetDir, `daemon-${o.platform}.json`), o.daemonConfig)
+      writeIfChanged(join(targetDir, '.mcp.json'), MCP_CONFIG)
+      mkdirSync(join(targetDir, '.claude-plugin'), { recursive: true })
+      writeIfChanged(join(targetDir, '.claude-plugin', 'plugin.json'), PLUGIN_MANIFEST)
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err)
+      result.failed.push({ dir: targetDir, error })
+      log(`bridge sync failed in ${targetDir}: ${error}`)
+      continue
     }
-    writeIfChanged(join(targetDir, `daemon-${o.platform}.json`), o.daemonConfig)
-    writeIfChanged(join(targetDir, '.mcp.json'), MCP_CONFIG)
-    mkdirSync(join(targetDir, '.claude-plugin'), { recursive: true })
-    writeIfChanged(join(targetDir, '.claude-plugin', 'plugin.json'), PLUGIN_MANIFEST)
-    // Not awaited: neither boot nor a spawn waits on the registry. One ensureBridgeReady per dir at a time (it is a cheap read once deps are in).
-    if (!readyInFlight.has(targetDir)) {
-      readyInFlight.add(targetDir)
-      void ready(targetDir).then(
+    let ready = readyInFlight.get(targetDir)
+    if (!ready) {
+      ready = bridgeReadiness.run(targetDir).then(
         installed => { if (installed) log(`installed bridge deps + lifted start script in ${targetDir}`) },
-        err => log(`bridge deps install failed in ${targetDir} (spawns keep installing): ${err instanceof Error ? err.message : String(err)}`),
+        err => log(`bridge deps install failed in ${targetDir} (its start script keeps installing): ${err instanceof Error ? err.message : String(err)}`),
       ).finally(() => readyInFlight.delete(targetDir))
+      readyInFlight.set(targetDir, ready)
     }
+    readies.push(ready)
   }
-  return relinked
+  result.ready = Promise.all(readies).then(() => {})
+  return result
+}
+
+/** syncBridgePlugin for a hydra checkout: its bridge.ts, the config dir's plugin cache, and this daemon's socket. */
+export function syncHydraBridge(o: { claudeConfig: string; hydraDir: string; platform: string; sockPath: string; log?: (line: string) => void }): BridgeSyncResult {
+  return syncBridgePlugin({
+    bridgeSrc: join(o.hydraDir, 'bridge.ts'),
+    cacheDir: bridgePluginCache(o.claudeConfig),
+    platform: o.platform,
+    daemonConfig: JSON.stringify({ socket: o.sockPath, platform: o.platform }),
+    log: o.log,
+  })
 }
