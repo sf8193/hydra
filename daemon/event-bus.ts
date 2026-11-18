@@ -19,6 +19,8 @@ export interface EventMap {
   'session:marked-dead': { sessionId: string; tmuxName: string }
   // `deliberate`: ended on purpose (a kill), not by a crash, a handoff, a respawn or a resumable idle end.
   'session:death': { deliberate?: boolean; sessionId: string; threadId: string; wasOwner: boolean; tmuxName: string; deadAt?: number; claudeSessionId?: string; engine?: ProviderId; codexThreadId?: string; codexHomeName?: string }
+  // A thread was deleted by `destroy`, whether or not a session was ever in it: what hangs on the thread (bindings) lets go.
+  'thread:destroyed': { threadId: string }
   // Fires on every successful bridge registration, including reconnects —
   // subscribers must be idempotent.
   'session:bridge-registered': { sessionId: string; threadId: string }

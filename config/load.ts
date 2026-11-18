@@ -56,9 +56,9 @@ const MAX_ALERT_AFTER_MS = 30 * MAX_DAY_MS
 const BUILTIN: readonly string[] = BUILTIN_ROLES
 const MAIN_TARGET = 'main'
 
-const TOP_KEYS = ['operator', 'main', 'gateways', 'connectors', 'slack', 'people', 'specialists', 'defaults', 'places', 'schedules', 'rules', 'guard', 'vitals', 'mcp_servers', 'restricted']
-/** Keys a file may set without an operator: the operator itself, and `[main]`, which says how main runs, not who reaches it. */
-const OPERATOR_FREE_KEYS = ['operator', 'main']
+const TOP_KEYS = ['operator', 'main', 'gateways', 'connectors', 'slack', 'people', 'specialists', 'defaults', 'places', 'schedules', 'rules', 'guard', 'vitals', 'mcp_servers', 'restricted', 'threads']
+/** Keys a file may set without an operator: the operator itself, `[main]`, which says how main runs, and `[threads]`, which says what the operator's CLI may do to a thread, not who reaches what. */
+const OPERATOR_FREE_KEYS = ['operator', 'main', 'threads']
 /** `[main]`: the operator's harness, as `[specialists.<id>]` is a specialist. */
 const MAIN_KEYS = ['model']
 const SPECIALIST_KEYS = ['workdir', 'kickoff', 'kickoff_file', 'pinned_to', 'speaks_as', 'reachable_by', 'sessions', 'max_sessions', 'idle', 'home_place', 'model', 'emoji', 'engine', 'env_file', 'renamed_from', 'restricted', 'can_only_write_to', 'cannot_read', 'deny_commands', 'browser_profile', 'tools', 'mcp_servers', 'sends_to']
@@ -527,6 +527,10 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
 
   const defaultsTable = table(doc.defaults, 'defaults') ?? {}
   unknownKeys(defaultsTable, ['specialist'], 'defaults')
+  // [threads]: `allow_destroy` lets `hydra kill <name or thread id> --destroy` and main's `kill_session` delete a thread whose session record is gone (a killed session, or none ever).
+  const threadsTable = table(doc.threads, 'threads') ?? {}
+  unknownKeys(threadsTable, ['allow_destroy'], 'threads')
+  const allowThreadDestroy = bool(threadsTable, 'allow_destroy', 'threads') ?? false
   const restrictedTable = table(doc.restricted, 'restricted') ?? {}
   unknownKeys(restrictedTable, ['off_limits', ALLOW_UNPROVEN_MACOS], 'restricted')
   const allowUnprovenMacos = bool(restrictedTable, ALLOW_UNPROVEN_MACOS, 'restricted') ?? false
@@ -1216,7 +1220,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   }
 
   if (errors.length) return { ok: false, errors, warnings }
-  return { ok: true, config: { ...(operator && { operator }), ...(main && { main }), connectors, gateways, slackApps, people, specialists, places, schedules, rules, ...(Object.keys(mcpServers).length && { mcpServers }), ...(offLimits.length && { offLimits }), ...(allowUnprovenMacos && { allowUnprovenMacos }), ...(guard && { guard }), ...(vitals && { vitals }) }, warnings }
+  return { ok: true, config: { ...(operator && { operator }), ...(main && { main }), connectors, gateways, slackApps, people, specialists, places, schedules, rules, ...(Object.keys(mcpServers).length && { mcpServers }), ...(offLimits.length && { offLimits }), ...(allowUnprovenMacos && { allowUnprovenMacos }), ...(allowThreadDestroy && { allowThreadDestroy }), ...(guard && { guard }), ...(vitals && { vitals }) }, warnings }
 }
 
 /** The program a `sh -c` command runs: past any leading VAR=value, with one level of quotes removed. */

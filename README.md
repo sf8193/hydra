@@ -163,7 +163,7 @@ hydra spawn <prompt>           # Spawn a new session
 hydra list                     # List active sessions
 hydra status <name>            # Session details
 hydra kill <name>              # Kill a session
-hydra kill <name> --destroy    # ...then delete its Discord thread (permanent; alias +d). Run from inside a session, only for sessions it spawned, as kill_session
+hydra kill <name> --destroy    # ...then delete its Discord thread (permanent; alias +d). Run from inside a session, only for sessions it spawned, as kill_session. <name> may be an ended session's name or a thread id, with [threads] allow_destroy
 hydra peek [name]              # View live sessions (chooser or direct attach)
 hydra health                   # Daemon diagnostics
 hydra clear-key <key>          # Clear a stuck idempotency key
@@ -190,6 +190,8 @@ Four homes, each for one kind of fact. A fact lives in exactly one of them.
 The state dir is `~/.claude/channels/<platform>/` by default. Every `hydra.toml` key, with a one-line comment each, is in [`hydra.example.toml`](hydra.example.toml); a test loads it, so it stays current. To start from an existing install (`access.json`'s `allowFrom`, `specialists.json`, `slack-watch.json`), stop the daemon and run `hydra migrate <platform>` (`--dry-run` first shows what it would write). It keeps every file it changes as `*.migrated`, and an interrupted run is finished by running it again. A daemon refuses to start while `hydra.toml` sits beside old state it replaces, and says why in its log and in `hydra health`.
 
 **A specialist's emoji.** `emoji = "🔐"` on a specialist is the glyph its sessions wear in their thread names, in place of the session's default emoji: `🔐 security audit · glyph`. It takes the default's position only, so the rest of the name is as before: a dead (`› ☠️`) or paused (`› ⏸`) session still shows that mark instead, a protocol badge still follows it, and the respawn count still trails. It is one emoji character (`:name:` and text are refused when hydra.toml loads, with what to write), is set per specialist (not in `[defaults.specialist]`), and applies at each session's next name update after an edit. Without it names are unchanged. `hydra specialist show` lists it.
+
+**Destroying an ended session's thread.** `[threads] allow_destroy = true` lets `hydra kill <name or thread id> --destroy` (and main's `kill_session` with `thread_id` and `destroy: true`) delete the Discord thread of a session that has ended and left no record (a killed session; a crashed one that still has its record is destroyed as any live one is), or of a thread no session ever lived in, and clear its records (its `threads.json` entry, PR watches and bound conversations). Without it the command refuses and names the key; destroying a live session's thread (`kill +d`, `--destroy`, `destroy: true`) works either way. It never deletes a channel or DM, a specialist's home thread, or a thread a live session is in, and it deletes the thread's starting message only where hydra posted it.
 
 **Main's model.** `[main] model` in hydra.toml is the model main (the operator's harness) starts with, written as a specialist's `model` is: a Claude alias (`opus`) or a full ID (`claude-opus-5-5[1m]`); main runs on Claude, so a Codex or omp alias is a load error. Every start of main reads it (`hydra up`, a watchdog revival, the deprecated `start-byte.sh`), so an edit applies at main's next start (`hydra restart` restarts only the daemon: main takes it at `hydra down` then `hydra up`, or when the watchdog revives it); `hydra config check` shows it. Without it main starts on `HYDRA_MODEL`, else hydra's default, as spawned sessions do. A hydra.toml that does not load still starts main, on that default, and says why in the byte log.
 
@@ -505,7 +507,7 @@ live-but-slow one delays only the voice message itself, up to
 | `create_thread` | Create a thread on a message or standalone. |
 | `spawn_session` | Spawn a new Claude session for a topic (main session only). |
 | `list_sessions` | List active spawned sessions (main session only). |
-| `kill_session` | Kill a session you spawned (main: any). `destroy: true` also deletes its Discord thread, through the same step as `kill +d`; a session may destroy only a thread hydra created for that spawn and no other session answers in, else it is refused before anything is killed. |
+| `kill_session` | Kill a session you spawned (main: any). `destroy: true` also deletes its Discord thread, through the same step as `kill +d`; a session may destroy only a thread hydra created for that spawn and no other session answers in, else it is refused before anything is killed. Main alone may pass `thread_id` and `destroy: true` for a thread no live session is in; that needs `[threads] allow_destroy`. |
 
 ## Sessions
 

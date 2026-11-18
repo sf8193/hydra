@@ -293,6 +293,19 @@ describe('any session listens to a Slack thread: bound to its own thread', () =>
       } finally { (gateway as any).threadExists = real; process.stderr.write = realWrite }
     })
 
+    test('a thread destroyed with no session in it lets its conversations go at once, and another thread keeps its own', async () => {
+      const real = gateway.threadExists
+      try {
+        await bindConversation({ threadId: MINE }, 'slack:C9:12.000001')
+        await bindConversation({ threadId: OTHER }, 'slack:C9:13.000001')
+        ;(gateway as any).threadExists = async (t: string) => t !== MINE
+        emit('thread:destroyed', { threadId: MINE })
+        await new Promise(r => setTimeout(r, 10))
+        expect(getConversationTable().get('C9', '12.000001')).toBeUndefined()
+        expect(getConversationTable().get('C9', '13.000001')?.specialist).toBe(OTHER)
+      } finally { (gateway as any).threadExists = real }
+    })
+
     test('a thread deleted while the daemon was down is found at start, not an hour later', async () => {
       const real = gateway.threadExists
       try {

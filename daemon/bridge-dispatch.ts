@@ -3,7 +3,7 @@ import { isAbsolute, join, resolve as resolvePath } from 'path'
 import { gateway, STATE_DIR } from './config.js'
 import { isParentOf, parentSessionOf, registry, resolveSendTarget, threadRegistry, type Predecessor, type SessionInfo, type ThreadSessionEntry } from './sessions.js'
 import { transport } from './bridge-transport.js'
-import { callerRefusal, destroyDeclinedText, killThenDestroy } from './destroy.js'
+import { callerRefusal, destroyDeclinedText, destroyThreadById, killThenDestroy } from './destroy.js'
 import { loadAccess, operatorIds, maxChunkLimit, channelPolicy, MAX_ATTACHMENT_BYTES } from './access.js'
 import { quietSend, shouldQuiet } from './quiet-send.js'
 import { beginMainHandoff } from './main-handoff.js'
@@ -621,6 +621,13 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         }
 
         if (!targetId || !registry.has(targetId)) {
+          // A thread id with no live session in it, and destroy: with no session left, a destroy by thread id (`[threads] allow_destroy`).
+          // Main's alone: a session's right to destroy is having spawned the session, and an ended one keeps no such record.
+          if (!sessionId && threadId && args.destroy === true && (!callerSessionId || callerSessionId === 'main')) {
+            const out = await destroyThreadById(threadId, 'main')
+            if (!out.ok) return { content: [{ type: 'text', text: out.text }], isError: true }
+            return { content: [{ type: 'text', text: `deleted thread ${threadId}` }] }
+          }
           throw new Error('session not found')
         }
 

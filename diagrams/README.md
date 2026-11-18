@@ -58,6 +58,7 @@ for f in diagrams/*.mmd; do [ -f "${f%.mmd}.png" ] || { echo "unrendered: $f"; e
 | `flow-recovery-cascade` | Resume/respawn tiers: --resume → fork-transcript → respawn + death detection |
 | `flow-revive` | **Who is home, putting a session back, and where a message goes**: `occupancy()`'s decision; every revive under one lock per target through `reviveThread()`; `deliver --revive`; and every target (`to`, `spawn`, `perThread`) resolving to a session that lands through `deliverToSession` (stuck → exit 5) |
 | `flow-destroy` | Destroy: delete thread + anchor message (Discord only, dead/orphan threads), plus the `kill +d` composite that kills first |
+| `flow-destroy-ended` | `kill --destroy` by name or thread id when no live session answers: who may, the `[threads] allow_destroy` gate, the guards |
 | `flow-reply` | **A post's text on its way out**: a session's reply or send_to_thread, and the daemon's own safeSend/safeEdit, all through `withOutbound` → the gateway's `shapeOutbound` (Discord: tables drawn as PNGs by sips, else code blocks; box art fenced) → chunks, files on the first → `gateways/discord.ts`; the drawn files removed once the send settles |
 | `flow-deliver` | **Whisper channel**: CLI deliver → reachability → sendToBridge (default) or sendOrQueue (`--queue`). Codex sessions route through adapter. Delivery proof in response. |
 | `flow-dialog-dismiss` | Stuck dialog: pane-probe → re-read screen → Esc (or alert only on "No, exit" screens) → thread alert → notification to the session |

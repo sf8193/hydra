@@ -297,11 +297,12 @@ export function startConversationTable(): void {
   // A deleted thread is found by asking the platform (the gateway's `threadExists`): when its session ends, at start, and at each sweep.
   // What the operator ends ends: a killed session takes its thread's subscriptions with it, said once in the thread. A crash, a handoff or a respawn does not.
   const offDeleted = on('session:death', ({ threadId, deliberate, sessionId }) => { if (deliberate) unbindOnKill(threadId); else { void unbindIfThreadDeleted(threadId); reconcileVacancy(threadId, sessionId) } }, 'slack connector: unbind a killed session thread\'s conversations, or those of a deleted one')
+  const offDestroyed = on('thread:destroyed', ({ threadId }) => { void unbindIfThreadDeleted(threadId) }, 'slack connector: unbind the conversations of a thread destroyed with no session in it')
   const offDeath = on('session:death', freed, 'slack connector: wake conversations waiting at max')
   const offDead = on('session:marked-dead', freed, 'slack connector: wake conversations waiting at max (found dead)')
   // After a sleep the socket is likely dead and Slack replays nothing: replace it and catch up now, not when a timer notices.
   const offResumed = on('clock:resumed', () => { for (const l of connections.listeners().values()) l.onResume() }, 'slack connector: replace the socket and catch up after a resume')
-  unsubscribe = () => { offConfig(); offRegistered(); offDeleted(); offDeath(); offDead(); offResumed() }
+  unsubscribe = () => { offConfig(); offRegistered(); offDeleted(); offDestroyed(); offDeath(); offDead(); offResumed() }
 }
 
 /** A session registered in this thread: the conversations bound to it that owe messages are refetched and delivered now, not at the next periodic catch-up. */
