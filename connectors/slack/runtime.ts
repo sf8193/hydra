@@ -17,6 +17,7 @@ import { safeSend, atomicWriteFileSync } from '../../daemon/util.js'
 import { mainChannel } from '../../daemon/main-session.js'
 import { gateway } from '../../daemon/config.js'
 import { currentHydraConfig, onHydraConfigLoad } from '../../daemon/hydra-config.js'
+import { isRestricted } from '../../daemon/policy-record.js'
 import { MAIN, currentId, isSessionThread, slackSpecialistsOf } from '../../routing/route.js'
 import { chunk } from '../../daemon/util.js'
 import { DEFAULT_SLACK_APP, coversAny, homePlaceOf, isChannelName, placeKey, placeOf, placesAnsweredBy, samePlace, slackConfigured, type Place, type HydraConfig, type SlackApp } from '../../config/types.js'
@@ -520,44 +521,72 @@ export const deleteInConversation = (callerSessionId: string | undefined, conver
 const OPERATOR_WRITE_SCOPE = SLACK_APP_NEEDS.operatorWriteScope
 
 /**
- * Rewrites or deletes one message of a conversation the caller answers (the rule `reply` holds, `answeredBy`). Whose message it is is asked of
- * Slack, and decides the token: the app's own, with its bot's token (Slack refuses any other); the operator's, with the operator's user token,
- * and only from main. Anyone else's is refused before Slack is asked to touch it. `change` is the new text, or absent to delete.
+ * Whose a message is, and through which app. A named app is asked alone. With none named, every declared app is asked, the conversation's own
+ * first: the app whose bot wrote it is the one to rewrite it, and the operator's own message goes through the app that holds the operator's token.
+ * An app that cannot read the message is passed over unless none can.
+ */
+async function authorAcross(h: HydraConfig, c: ReturnType<typeof parseConversation>, named: boolean, first: string, ts: string): Promise<{ app: string; author: MessageAuthor }> {
+  const apps = named ? [first] : [...new Set([first, ...Object.keys(h.slackApps)])]
+  const threadTs = c.threadTs === TOP_LEVEL ? undefined : c.threadTs
+  let failure: unknown
+  let asked = false
+  for (const app of apps) {
+    try {
+      const author = await slackRuntimeDeps.author(c.channel, ts, threadTs, app)
+      if (author !== 'other') return { app, author }
+      asked = true
+    } catch (err) { failure ??= err }
+  }
+  if (!asked && failure !== undefined) throw failure
+  return { app: first, author: 'other' }
+}
+
+/**
+ * Rewrites or deletes one Slack message. Whose message it is is asked of Slack, and decides the token: an app's bot's, with that app's bot token,
+ * and the operator's, with the operator's user token. Anyone else's is refused before Slack is asked to touch it. `change` is the new text, or absent to delete.
+ * A session that is not a restricted specialist (and main) may do this in any conversation, bound or not. A restricted specialist only
+ * touches its own app's posts, in a conversation bound to it (the rule `reply` holds, `answeredBy`), and never the operator's.
  */
 async function amendInConversation(callerSessionId: string | undefined, conversation: unknown, messageId: unknown, change: { text: string } | undefined): Promise<string> {
   const verb = change ? 'edit' : 'delete'
+  const done = verb === 'edit' ? 'edited' : 'deleted'
   const h = hydraConfig()
   const c = parseConversation(conversation)
-  const app = appOfEntry(c)
+  const named = typeof conversation === 'string' && /^slack:[a-z][a-z0-9_-]{0,34}:/.test(conversation.trim())
   const id = conversationId(c)
-  const e = getConversationTable().get(c.channel, c.threadTs, app)
-  if (!e) throw new Error(`${id} is not an open conversation, so there is nothing there to ${verb}`)
-  const me = callerSessionId === 'main' ? MAIN : boundAs(callerSessionId ? registry.get(callerSessionId) : undefined, h)
+  const e = getConversationTable().get(c.channel, c.threadTs, appOfEntry(c))
   const caller = callerSessionId ? registry.get(callerSessionId) : undefined
-  const what = `${verb === 'edit' ? 'an edit' : 'a delete'}`
-  answeredBy(h, caller, me, e, id, what)
+  const restricted = callerSessionId !== 'main' && (!caller || isRestricted(caller))
+  const me = callerSessionId === 'main' ? MAIN : boundAs(caller, h)
+  const what = verb === 'edit' ? 'an edit' : 'a delete'
+  if (restricted) {
+    if (!e) throw new Error(`${id} is not an open conversation, so there is nothing there to ${verb}`)
+    answeredBy(h, caller, me, e, id, what)
+  }
   // Exactly Slack's form: a destructive call never completes a ts into a different message.
   if (typeof messageId !== 'string' || !/^\d{1,12}\.\d{6}$/.test(messageId)) throw new Error(`message_id ${String(messageId)} is not a Slack message ts (like 1793732224.093059, six digits after the point): copy it from the delivery`)
   const ts = messageId
   if (change && (typeof change.text !== 'string' || !change.text.trim())) throw new Error('nothing to edit to: the text is empty (delete_message removes a message)')
   // An edit is one message: it cannot be split as a reply is.
   if (change && change.text.length > SLACK_CHUNK) throw new Error(`an edit is one message: ${change.text.length} characters is over ${SLACK_CHUNK}. Shorten it, or edit to a short text and reply with the rest`)
-  const author = await slackRuntimeDeps.author(c.channel, ts, c.threadTs === TOP_LEVEL ? undefined : c.threadTs, app)
-  if (author === 'other') throw new Error(`${ts} in ${id} was written by neither ${appName(h.slackApps, app)} nor the operator, so it is not hydra's to ${verb}: a session ${verb}s only messages its app posted, and main the operator's too (an app knows the operator's only with \`operator_token_env\`)`)
-  if (author === 'operator' && callerSessionId !== 'main') throw new Error(`${ts} in ${id} is the operator's own message: only main may ${verb} it`)
-  // Slack was asked in between: a conversation moved away meanwhile gets no write (reply checks before every part too).
-  const now = getConversationTable().get(c.channel, c.threadTs, app)
-  if (!now) throw new Error(`${id} is no longer an open conversation: nothing was ${verb === 'edit' ? 'edited' : 'deleted'}`)
-  answeredBy(hydraConfig(), caller, me, now, id, what)
+  const { app, author } = await authorAcross(h, c, named || restricted, appOfEntry(c), ts)
+  if (author === 'other') throw new Error(`${ts} in ${id} was written by neither ${named || restricted ? `${appName(h.slackApps, app)}'s` : 'any hydra app\'s'} bot nor the operator, so it is not hydra's to ${verb}${restricted ? `: a restricted specialist may ${verb} only its own app's posts` : ' (an app knows the operator\'s only with `operator_token_env`)'}`)
+  if (author === 'operator' && restricted) throw new Error(`${ts} in ${id} is the operator's own message: a restricted specialist may ${verb} only its own app's posts`)
+  if (restricted) {
+    // Slack was asked in between: a conversation moved away meanwhile gets no write (reply checks before every part too).
+    const now = getConversationTable().get(c.channel, c.threadTs, app)
+    if (!now) throw new Error(`${id} is no longer an open conversation: nothing was ${done}`)
+    answeredBy(hydraConfig(), caller, me, now, id, what)
+  }
   try {
     if (change) await slackRuntimeDeps.edit(c.channel, ts, change.text, app, author)
     else await slackRuntimeDeps.remove(c.channel, ts, app, author)
   } catch (err) {
     const why = err instanceof Error ? err.message : String(err)
-    if (author === 'operator' && /missing_scope/.test(why)) throw new Error(`the operator token of ${appName(h.slackApps, app)} lacks the user scope ${OPERATOR_WRITE_SCOPE}, so its owner's messages cannot be ${verb === 'edit' ? 'edited' : 'deleted'}: add ${OPERATOR_WRITE_SCOPE} under User Token Scopes (\`hydra slack manifest ${app}\` lists it) and reinstall the app (${why})`)
+    if (author === 'operator' && /missing_scope/.test(why)) throw new Error(`the operator token of ${appName(h.slackApps, app)} lacks the user scope ${OPERATOR_WRITE_SCOPE}, so its owner's messages cannot be ${done}: add ${OPERATOR_WRITE_SCOPE} under User Token Scopes (\`hydra slack manifest ${app}\` lists it) and reinstall the app (${why})`)
     throw new Error(`${verb} failed: ${why}`)
   }
-  return `${verb === 'edit' ? 'edited' : 'deleted'} ${ts} in ${id}`
+  return `${done} ${ts} in ${id}`
 }
 
 /**

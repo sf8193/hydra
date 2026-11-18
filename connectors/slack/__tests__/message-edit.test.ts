@@ -34,11 +34,12 @@ type Call = { verb: 'edit' | 'delete'; channel: string; ts: string; text?: strin
 const calls: Call[] = []
 const reads: { channel: string; ts: string; threadTs: string | undefined; app: string | undefined }[] = []
 /** Whose each message is; what Slack answers a write with, when it refuses. */
-const state = { author: 'app' as MessageAuthor, refuse: undefined as string | undefined }
+const state = { author: 'app' as MessageAuthor, refuse: undefined as string | undefined, byApp: undefined as Record<string, MessageAuthor> | undefined }
 const sessionIds: string[] = []
-const session = (id: string, threadId: string) => {
+/** A restricted specialist's session, unless `restricted` is false: a plain session. */
+const session = (id: string, threadId: string, restricted = true) => {
   sessionIds.push(id)
-  registry.set(id, { sessionId: id, tmuxName: id, threadId, sessionType: 'thread_owner', engine: 'claude', createdAt: Date.now() } as any)
+  registry.set(id, { sessionId: id, tmuxName: id, threadId, sessionType: 'thread_owner', engine: 'claude', createdAt: Date.now(), policy: { restricted } } as any)
 }
 const real = { author: slackRuntimeDeps.author, edit: slackRuntimeDeps.edit, remove: slackRuntimeDeps.remove, view: slackRuntimeDeps.view }
 
@@ -50,13 +51,15 @@ beforeEach(() => {
   reads.length = 0
   state.author = 'app'
   state.refuse = undefined
-  slackRuntimeDeps.author = async (channel, ts, threadTs, app) => { reads.push({ channel, ts, threadTs, app }); return state.author }
+  state.byApp = undefined
+  slackRuntimeDeps.author = async (channel, ts, threadTs, app) => { reads.push({ channel, ts, threadTs, app }); return state.byApp ? state.byApp[app ?? 'default'] ?? 'other' : state.author }
   slackRuntimeDeps.edit = async (channel, ts, text, app, as) => { if (state.refuse) throw new Error(state.refuse); calls.push({ verb: 'edit', channel, ts, text, app, as }) }
   slackRuntimeDeps.remove = async (channel, ts, app, as) => { if (state.refuse) throw new Error(state.refuse); calls.push({ verb: 'delete', channel, ts, app, as }) }
   setSpecialistThread(CRM, 'crm-thread-1')
   setSpecialistThread(DEALS, 'deals-thread-1')
   session('crm-session', 'crm-thread-1')
   session('deals-session', 'deals-thread-1')
+  session('worker-session', 'worker-thread-1', false)
   getConversationTable().bind('C1', '5.000001', DEALS, 'tool', 'sales')
   getConversationTable().bind('C1', '6.000001', CRM, 'tool')
   getConversationTable().bind('C1', '7.000001', 'main', 'tool')
@@ -97,7 +100,7 @@ describe('a session edits and deletes the messages its own app posted', () => {
   test('a message that is neither the app’s nor the operator’s is refused, and Slack is not asked to touch it', async () => {
     state.author = 'other'
     await expect(editInConversation('crm-session', 'slack:C1:6.000001', '8.000001', 'x')).rejects.toThrow('was written by neither')
-    await expect(deleteInConversation('crm-session', 'slack:C1:6.000001', '8.000001')).rejects.toThrow('only messages its app posted')
+    await expect(deleteInConversation('crm-session', 'slack:C1:6.000001', '8.000001')).rejects.toThrow('a restricted specialist may delete only its own app')
     expect(calls).toEqual([])
   })
 
@@ -136,7 +139,7 @@ describe('a session edits and deletes the messages its own app posted', () => {
   })
 })
 
-describe('the operator’s own messages are main’s alone', () => {
+describe('the operator’s own messages: a restricted specialist never touches them', () => {
   beforeEach(() => { state.author = 'operator' })
 
   test('main edits and deletes one in a conversation bound to it, with the operator’s token', async () => {
@@ -148,15 +151,30 @@ describe('the operator’s own messages are main’s alone', () => {
     ])
   })
 
-  test('a session other than main is refused, and the operator’s token is not used', async () => {
-    await expect(editInConversation('crm-session', 'slack:C1:6.000001', '8.000001', 'x')).rejects.toThrow("is the operator's own message: only main may edit it")
-    await expect(deleteInConversation('deals-session', 'slack:sales:C1:5.000001', '8.000001')).rejects.toThrow("is the operator's own message: only main may delete it")
+  test('a restricted specialist is refused, and the operator’s token is not used', async () => {
+    await expect(editInConversation('crm-session', 'slack:C1:6.000001', '8.000001', 'x')).rejects.toThrow("is the operator's own message: a restricted specialist may edit only its own app's posts")
+    await expect(deleteInConversation('deals-session', 'slack:sales:C1:5.000001', '8.000001')).rejects.toThrow("a restricted specialist may delete only its own app's posts")
     expect(calls).toEqual([])
   })
 
-  test('main is held to the conversation rule too: one bound to another is refused', async () => {
-    await expect(editInConversation('main', 'slack:C1:6.000001', '8.000001', 'x')).rejects.toThrow(`slack:C1:6.000001 is bound to ${CRM}, not main`)
-    expect(calls).toEqual([])
+  test('a restricted specialist is held to the conversation rule: one bound to another is refused before Slack is asked', async () => {
+    await expect(editInConversation('crm-session', 'slack:C1:7.000001', '8.000001', 'x')).rejects.toThrow(`slack:C1:7.000001 is bound to main, not ${CRM}`)
+    expect(reads).toEqual([])
+  })
+
+  test('a session that is not a restricted specialist edits and deletes one in a channel no conversation is bound in', async () => {
+    expect(await editInConversation('worker-session', 'slack:C9', '8.000001', 'fixed')).toBe('edited 8.000001 in slack:C9')
+    expect(await deleteInConversation('worker-session', 'slack:C9:3.000001', '8.000001')).toBe('deleted 8.000001 in slack:C9:3.000001')
+    expect(calls).toEqual([
+      { verb: 'edit', channel: 'C9', ts: '8.000001', text: 'fixed', app: 'default', as: 'operator' },
+      { verb: 'delete', channel: 'C9', ts: '8.000001', app: 'default', as: 'operator' },
+    ])
+  })
+
+  test('with no app named, the operator’s message goes through the app that holds the operator’s token', async () => {
+    state.byApp = { default: 'other', sales: 'operator' }
+    await editInConversation('worker-session', 'slack:C9', '8.000001', 'fixed')
+    expect(calls).toEqual([{ verb: 'edit', channel: 'C9', ts: '8.000001', text: 'fixed', app: 'sales', as: 'operator' }])
   })
 
   test('a token without the write scope is refused naming the scope, and that the app must be reinstalled', async () => {
@@ -175,6 +193,38 @@ describe('the operator’s own messages are main’s alone', () => {
   })
 })
 
+describe('any message an app’s bot posted, in any conversation, by a session that is not a restricted specialist', () => {
+  test('in a channel no conversation is bound in, with the bot token of the app whose bot wrote it', async () => {
+    state.byApp = { default: 'other', sales: 'app' }
+    expect(await editInConversation('worker-session', 'slack:C9:3.000001', '8.000001', 'v2')).toBe('edited 8.000001 in slack:C9:3.000001')
+    state.byApp = { default: 'app', sales: 'other' }
+    await deleteInConversation('main', 'slack:C9', '8.000001')
+    expect(calls).toEqual([
+      { verb: 'edit', channel: 'C9', ts: '8.000001', text: 'v2', app: 'sales', as: 'app' },
+      { verb: 'delete', channel: 'C9', ts: '8.000001', app: 'default', as: 'app' },
+    ])
+  })
+
+  test('an app named in the id is the only one asked', async () => {
+    state.byApp = { default: 'app', sales: 'other' }
+    await expect(editInConversation('worker-session', 'slack:sales:C9', '8.000001', 'x')).rejects.toThrow(/was written by neither .+'s bot nor the operator/)
+    expect(reads.map(r => r.app)).toEqual(['sales'])
+    expect(calls).toEqual([])
+  })
+
+  test('anyone else’s message is refused before Slack is asked to touch it', async () => {
+    state.author = 'other'
+    await expect(editInConversation('worker-session', 'slack:C9', '8.000001', 'x')).rejects.toThrow("was written by neither any hydra app's bot nor the operator")
+    await expect(deleteInConversation('main', 'slack:C9', '8.000001')).rejects.toThrow('is not hydra\'s to delete')
+    expect(calls).toEqual([])
+  })
+
+  test('a message no app can read is Slack’s refusal, shown as it came', async () => {
+    slackRuntimeDeps.author = async () => { throw new Error('An API error occurred: channel_not_found') }
+    await expect(editInConversation('worker-session', 'slack:C9', '8.000001', 'x')).rejects.toThrow('channel_not_found')
+  })
+})
+
 describe('the tools reach it: edit_message and delete_message with a Slack conversation as chat_id', () => {
   test('a session’s call is answered by the connector, not the chat gateway', async () => {
     const e = await executeTool('edit_message', { chat_id: 'slack:C1:6.000001', message_id: '8.000001', text: 'v2' }, 'crm-session')
@@ -189,7 +239,7 @@ describe('the tools reach it: edit_message and delete_message with a Slack conve
     expect(calls.map(c => [c.verb, c.as])).toEqual([['edit', 'operator']])
     const refused = await executeTool('delete_message', { chat_id: 'slack:C1:6.000001', message_id: '8.000001' }, 'crm-session')
     expect(refused.isError).toBe(true)
-    expect(refused.content[0].text).toContain('only main may delete it')
+    expect(refused.content[0].text).toContain('a restricted specialist may delete only its own app')
     expect(calls).toHaveLength(1)
   })
 })
