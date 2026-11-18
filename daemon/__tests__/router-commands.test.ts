@@ -1,10 +1,10 @@
-import { describe, test, expect } from 'bun:test'
-import { PERMISSION_REPLY_RE } from '../config.js'
+import { describe, test, expect, spyOn } from 'bun:test'
+import { PERMISSION_REPLY_RE, gateway } from '../config.js'
 import { listModifierKeys } from '../modifiers.js'
 import {
   SPAWN_RE, SPAWN_WT_RE, KILL_RE, LIST_RE, RESTART_RE, HEALTH_RE, RECONNECT_RE, COMMANDS_RE,
   THREAD_KILL_RE, DESTROY_RE, USAGE_RE, LISTEN_RE, PAUSE_RE, FORK_RE, FORKS_RE, REVIEW_RE, BUILD_RE, misplacedModelHint,
-  KEYS_RE, resolveTmuxKey, SPAWN_OMP_ALIAS_RE, SPAWN_WT_OMP_MODEL_RE, BARE_OMP_ALIAS_RE,
+  KEYS_RE, resolveTmuxKey, fetchSlackThreadSummary, SPAWN_OMP_ALIAS_RE, SPAWN_WT_OMP_MODEL_RE, BARE_OMP_ALIAS_RE,
 } from '../router.js'
 
 // Suppress stderr
@@ -524,5 +524,15 @@ describe('misplacedModelHint', () => {
     for (const t of ['opus is slow here', 'fable of the two reefs', 'sonnet-like output', 'opus -x flag', 'sol', 'fix the opus - sonnet mixup', 'claude-opus-4-6 pinned', 'unknown-5 - x', 'opus 4.7 support', 'opus\n- item\n- item2', 'opus\n3 things']) {
       expect(misplacedModelHint('review', t)).toBeUndefined()
     }
+  })
+})
+
+describe('fetchSlackThreadSummary', () => {
+  test('a channel link names no message, so nothing is fetched', async () => {
+    const fetched = spyOn(gateway, 'fetchMessages').mockImplementation((async () => []) as any)
+    try {
+      expect(await fetchSlackThreadSummary('https://acme.slack.com/archives/C0FOOD')).toBeNull()
+      expect(fetched).not.toHaveBeenCalled()
+    } finally { fetched.mockRestore() }
   })
 })

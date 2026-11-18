@@ -234,6 +234,11 @@ describe('renderContextLink', () => {
     expect(renderContextLink('https://acme.slack.com/archives/C1/p1')).toBe('• 🔗 <https://acme.slack.com/archives/C1/p1|Slack thread>')
     expect(renderContextLink('https://app.datadoghq.com/x')).toContain('|Datadog>')
   })
+
+  test('a channel link without a message is not a thread, even in a known channel', () => {
+    cacheSlackChannel('C0FOOD', 'food')
+    expect(renderContextLink('https://acme.slack.com/archives/C0FOOD')).toBe('• 🔗 <https://acme.slack.com/archives/C0FOOD|Slack thread>')
+  })
 })
 
 // ---------------------------------------------------------------------------

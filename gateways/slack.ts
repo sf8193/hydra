@@ -16,6 +16,7 @@ import { HOME_STATUS_ACTION_PREFIX } from '../shared/constants.js'
 import { buildSocketApp, parseAuth, unfurlFields } from '../shared/slack-client.js'
 import { parseHomeStatusClick } from '../daemon/home-status.js'
 import { linkPreviewsOff } from '../shared/link-previews.js'
+import { archiveUrl } from '../connectors/slack/conversation.js'
 import type {
   ChatGateway,
   InboundMessage,
@@ -985,10 +986,7 @@ export class SlackGateway implements ChatGateway {
   }
 
   private buildMessageUrl(channelId: string, ts: string, threadTs?: string): string {
-    const tsClean = ts.replace('.', '')
-    const domain = this._teamDomain ?? 'app'
-    const threadParam = threadTs ? `?thread_ts=${threadTs}&cid=${channelId}` : ''
-    return `https://${domain}.slack.com/archives/${channelId}/p${tsClean}${threadParam}`
+    return archiveUrl(`https://${this._teamDomain ?? 'app'}.slack.com`, channelId, ts, threadTs || undefined) + (threadTs ? `&cid=${channelId}` : '')
   }
 
   private emojiToSlackName(emoji: string): string {
