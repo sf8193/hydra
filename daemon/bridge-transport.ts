@@ -45,7 +45,6 @@ export class BridgeTransport {
   private readonly settling = new Map<string, ReturnType<typeof setInterval>>()
   constructor() {
     this.queueFile = join(STATE_DIR, 'message-queue.json')
-    this.loadPersistedQueues()
   }
 
   get(sessionId: string): BridgeConn | undefined {
@@ -260,7 +259,7 @@ export class BridgeTransport {
     }
   }
 
-  private loadPersistedQueues(): void {
+  restorePersistedQueues(): void {
     try {
       const raw = readFileSync(this.queueFile, 'utf8')
       const data = JSON.parse(raw) as Record<string, Array<Record<string, unknown>>>

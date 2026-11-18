@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { readFileSync } from 'fs'
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { BridgeTransport } from '../bridge-transport.js'
 import { registry } from '../sessions.js'
@@ -22,10 +22,6 @@ function mockSocket(): { written: string[]; socket: any } {
   }
   return { written, socket }
 }
-
-// BridgeTransport reads from config.js STATE_DIR which may not exist in test.
-// We test the class methods that don't depend on persistence by creating instances
-// and intercepting the constructor's file load (it silently catches ENOENT).
 
 describe('BridgeTransport', () => {
   let bt: BridgeTransport
@@ -362,6 +358,32 @@ describe('engines/instances import (adapter-policy S2)', () => {
   })
 })
 
+describe('persisted queues at boot', () => {
+  test('a fresh process that imports sessions.ts first, as daemon.ts does, restores the queue of a known session', () => {
+    const stateDir = mkdtempSync(join(STATE_DIR, 'boot-queue-'))
+    const queueFile = join(stateDir, 'message-queue.json')
+    writeFileSync(queueFile, JSON.stringify({ known: [{ type: 'notification', content: 'kept' }], gone: [{ type: 'notification', content: 'dropped' }] }))
+    const code = [
+      "const { registry } = await import('./daemon/sessions.ts')",
+      "const { transport } = await import('./daemon/bridge-transport.ts')",
+      "registry.set('known', { sessionId: 'known', threadId: 't', tmuxName: 'known' })",
+      "transport.restorePersistedQueues()",
+      "console.log(JSON.stringify(Object.fromEntries(transport.messageQueues)))",
+    ].join('\n')
+    const r = Bun.spawnSync(['bun', '-e', code], { cwd: join(import.meta.dir, '..', '..'), env: { ...process.env, HYDRA_STATE_DIR: stateDir, DISCORD_BOT_TOKEN: 'test-token' } })
+    expect(r.stderr.toString()).not.toContain('Error')
+    expect(JSON.parse(r.stdout.toString())).toEqual({ known: [{ type: 'notification', content: 'kept' }] })
+    expect(existsSync(queueFile)).toBe(false)
+  })
+
+  test('the daemon restores them before its bridge server starts', () => {
+    const daemon = readFileSync(new URL('../../daemon.ts', import.meta.url), 'utf8')
+    const restore = daemon.indexOf('transport.restorePersistedQueues()')
+    expect(restore).toBeGreaterThan(-1)
+    expect(restore).toBeLessThan(daemon.indexOf('\nstartBridgeServer()'))
+  })
+})
+
 // adapter-policy T7: pins every delivery path through sendOrQueue on a SEPARATE
 // transport, so S7's move to adapter.deliver is checked against the same bytes.
 // Claude records are bound to their own transport (new ClaudeEngine(t)); a
@@ -437,6 +459,7 @@ describe('delivery paths (adapter-policy T7)', () => {
     claude('t7-c5')
     t.sendOrQueue('t7-c5', envelope)
     const t2 = new BridgeTransport()
+    t2.restorePersistedQueues()
     claude('t7-c5', t2) // re-bind the record to the transport that now owns it
     expect(t2.messageQueues.get('t7-c5')).toEqual([envelope])
     const { written } = socketOn(t2, 't7-c5')

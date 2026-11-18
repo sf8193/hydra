@@ -101,6 +101,7 @@ process.on('exit', () => {
   try { if (readFileSync(PID_FILE, 'utf8').trim() === String(process.pid)) unlinkSync(PID_FILE) } catch {}
 })
 
+transport.restorePersistedQueues()
 startBridgeServer()
 
 // Start each engine over its persisted records (Codex reconnects its sessions to
