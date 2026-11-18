@@ -6,7 +6,7 @@ import { parseEnvLine } from '../shared/env-parse.js'
 import { homedir } from 'os'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'path'
 import { isZone, parseCron } from '../shared/cron-local.js'
-import { engineOfModel, parseIdleTtl, SLACK_GATEWAY_TOKEN_ENVS } from '../shared/constants.js'
+import { DISCORD_GATEWAY_TOKEN_ENV, engineOfModel, parseIdleTtl, SLACK_GATEWAY_TOKEN_ENVS } from '../shared/constants.js'
 import { ENV_NAME_RE, tokenVarRefusal } from '../shared/spawn-env.js'
 import { offLimitRoots, workdirRestrictionIssues } from './restricted-workdir.js'
 import { ALLOW_UNPROVEN_MACOS, macosGateIssue, sandboxIssues, unquotablePath } from './server-sandbox.js'
@@ -272,6 +272,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   // The Slack gateway holds its own app's two tokens, so on its daemon it owns them: one Slack app belongs to one system.
   const GATEWAY = 'the Slack gateway (CHAT_PLATFORM=slack)'
   const GATEWAY_HINT = '; give the connector its own Slack app, with its own variables like CONNECTOR_SLACK_BOT_TOKEN'
+  const GATEWAY_DEFAULT_ENVS: readonly string[] = [DISCORD_GATEWAY_TOKEN_ENV, ...Object.values(SLACK_GATEWAY_TOKEN_ENVS)]
   const envOwner = new Map<string, string>(env.platform === 'slack' ? Object.values(SLACK_GATEWAY_TOKEN_ENVS).map(v => [v, GATEWAY] as const) : [])
   const claimEnv = (v: string, path: string): boolean => {
     const other = envOwner.get(v)
@@ -375,8 +376,12 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     const tokenEnv: string[] = []
     for (const [i, v] of (strList(t, 'token_env', path) ?? []).entries()) {
       if (!ENV_NAME_RE.test(v)) { error(`${path}.token_env[${i}]`, `"${v}" must name an environment variable, like DD_API_KEY`); continue }
-      const owned = envOwner.get(v)
+      // The gateway's default variables, whichever platform this daemon runs: the daemon holds them for its gateway alone.
+      const owned = envOwner.get(v) ?? (GATEWAY_DEFAULT_ENVS.includes(v) ? 'the chat gateway' : undefined)
       if (owned) { error(`${path}.token_env[${i}]`, `"${v}" is the token variable of ${owned}: a server never gets hydra's own tokens`); continue }
+      // A variable sessions need cannot be kept from them: the server gets it, and so does every session.
+      const needed = tokenVarRefusal(v)
+      if (needed) warn(`${path}.token_env[${i}]`, `"${v}" ${needed}, so hydra cannot keep it from sessions: [mcp_servers.${name}] gets it, and so does every session`)
       if (!tokenEnv.includes(v)) tokenEnv.push(v)
     }
     const tools: string[] = []

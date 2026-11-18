@@ -13,6 +13,7 @@ import { _setHydraConfigForTesting, _setLoadEnvForTesting } from '../hydra-confi
 import { EMPTY_CONFIG } from '../../config/load.js'
 import { sandboxInputs } from '../restricted.js'
 import { configInput, macLike, rootsOf, withoutSandbox } from './sandbox-host.js'
+import { _resetSourcedEnvNamesForTesting, sourceEnvFiles } from '../../shared/env-parse.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 
 process.stderr.write = (() => true) as any
@@ -98,6 +99,40 @@ describe('argv', () => {
     expect(cmd).toContain("export HYDRA_SESSION_TYPE='thread_owner'")   // a restricted specialist is an owner; HYDRA_RESTRICTED says the rest
     expect(cmd).toContain('export HYDRA_RESTRICTED=1')
     expect([...RESTRICTED_MODS]).toEqual(['hydra'])
+  })
+
+  test('only the allowlisted part of the state .env survives in the session: every other name it sets is unset, first, on every shape', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'restricted-env-'))
+    writeFileSync(join(dir, '.env'), 'FAKE_SERVER_KEY=1\nFAKE_OTHER_KEY=2\nHYDRA_MODEL=m\nCHAT_PLATFORM=discord\nCLAUDE_CONFIG_DIR=/c\n')
+    const keep = { k: process.env.FAKE_SERVER_KEY, o: process.env.FAKE_OTHER_KEY }
+    try {
+      sourceEnvFiles([join(dir, '.env')])
+      for (const extra of [{}, { resumeFrom: 'C-old' }, { forkFrom: { claudeSessionId: 'C-parent' } }]) {
+        const cmd = await launch(extra)
+        expect(cmd).toContain('unset FAKE_OTHER_KEY FAKE_SERVER_KEY && ')
+        expect(cmd.indexOf('unset FAKE_OTHER_KEY')).toBeLessThan(cmd.indexOf('export HYDRA_SESSION_ID'))
+        expect(cmd).not.toMatch(/unset [^&]*(HYDRA_MODEL|CHAT_PLATFORM|CLAUDE_CONFIG_DIR)/)
+      }
+      // Any other launch keeps the whole .env but its tokens.
+      expect(await launch({ policy: undefined, sessionType: 'thread_owner' })).not.toContain('FAKE_SERVER_KEY')
+    } finally {
+      for (const [n, v] of [['FAKE_SERVER_KEY', keep.k], ['FAKE_OTHER_KEY', keep.o]] as const) { if (v === undefined) delete process.env[n]; else process.env[n] = v }
+      _resetSourcedEnvNamesForTesting()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('each listed server gets its own token_env value and no other server\'s', () => {
+    const two = [
+      { name: 'datadog', command: '/usr/local/bin/datadog-mcp', tokenEnv: ['DD_API_KEY'], tools: ['search_logs'] },
+      { name: 'github', command: '/usr/local/bin/gh-mcp', tokenEnv: ['GH_PAT'], tools: ['get_pr'] },
+    ]
+    const { mcp } = restrictedConfig(configInput({ policy: { ...policy, servers: two }, env: {}, held: { DD_API_KEY: 'fake-dd', GH_PAT: 'fake-gh', DISCORD_BOT_TOKEN: 'fake-bot' } }, macLike())) as any
+    expect(mcp.mcpServers.datadog.env.DD_API_KEY).toBe('fake-dd')
+    expect(mcp.mcpServers.github.env.GH_PAT).toBe('fake-gh')
+    expect(JSON.stringify(mcp.mcpServers.datadog.env)).not.toContain('fake-gh')
+    expect(JSON.stringify(mcp.mcpServers.github.env)).not.toContain('fake-dd')
+    expect(JSON.stringify(mcp)).not.toContain('fake-bot')
   })
 
   test('every other shape of launch still loads every mod and leaves the connectors on', async () => {

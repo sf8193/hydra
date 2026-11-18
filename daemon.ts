@@ -9,7 +9,7 @@
  */
 
 import { join } from 'path'
-import { copyFileSync, readFileSync, writeFileSync, readdirSync, unlinkSync, mkdirSync, existsSync } from 'fs'
+import { readFileSync, writeFileSync, readdirSync, unlinkSync, mkdirSync, existsSync, lstatSync, readlinkSync, symlinkSync } from 'fs'
 import { connect } from 'net'
 import { bootRefusal, BOOT_REFUSED_FILE } from './config/migrate.js'
 
@@ -310,7 +310,15 @@ try {
   const versionDirs = readdirSync(discordCache, { withFileTypes: true }).filter(d => d.isDirectory())
   for (const d of versionDirs) {
     const targetDir = join(discordCache, d.name)
-    copyFileSync(bridgeSrc, join(targetDir, 'server.ts'))
+    // A symlink, never a copy: bridge.ts imports ./shared/*, which a copy in the cache cannot find (every new session's bridge then dies).
+    // A plugin update can leave a plain file here; replace whatever is there unless it already points at this bridge.
+    const serverTs = join(targetDir, 'server.ts')
+    let current: string | undefined
+    try { current = lstatSync(serverTs).isSymbolicLink() ? readlinkSync(serverTs) : undefined } catch {}
+    if (current !== bridgeSrc) {
+      try { unlinkSync(serverTs) } catch {}
+      symlinkSync(bridgeSrc, serverTs)
+    }
     writeFileSync(join(targetDir, `daemon-${PLATFORM}.json`), daemonConfig)
     writeFileSync(join(targetDir, '.mcp.json'), MCP_CONFIG)
     mkdirSync(join(targetDir, '.claude-plugin'), { recursive: true })
