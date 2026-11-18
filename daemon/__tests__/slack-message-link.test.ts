@@ -8,6 +8,9 @@ describe('slackMessageLink', () => {
   test('a thread reply link keeps its own ts (the query names the parent)', () => {
     expect(slackMessageLink('https://acme.slack.com/archives/C0CF2698RQC/p1794969986907669?thread_ts=1794969983.366379&cid=C0CF2698RQC')).toEqual({ chat_id: 'slack:C0CF2698RQC', message_id: '1794969986.907669' })
   })
+  test('an Enterprise Grid host is a link too', () => {
+    expect(slackMessageLink('https://grid-acme.enterprise.slack.com/archives/C0CF2698RQC/p1794969983366379')).toEqual({ chat_id: 'slack:C0CF2698RQC', message_id: '1794969983.366379' })
+  })
   test('anything else is not a link', () => {
     for (const s of ['slack:C0CF2698RQC', 'https://discord.com/channels/1/2', 'https://acme.slack.com/archives/C0CF2698RQC', 'https://acme.slack.com/archives/C0CF2698RQC/p123']) expect(slackMessageLink(s)).toBeUndefined()
   })
