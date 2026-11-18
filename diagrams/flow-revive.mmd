@@ -42,6 +42,10 @@ flowchart TD
     HO["handOff"] --> HL["withThreadLock"] --> HC{"record still this one?"}
     HC -- no --> HX["throw: already handing off"]
     HC -- yes --> HS["handoffSpawnOpts: carryOver minus read_only and predecessor<br/>→ kill → spawn(handedOffFrom)<br/>→ restoreWatches → repointChildren"]
+    KR["killAndRespawn<br/>(handoff_protocol = kill_and_respawn)"] --> KL["withTargetLock(specialist,<br/>or a conversation session's thread)"] --> KC{"record still this one?"}
+    KC -- no --> KX["throw: already being replaced"]
+    KC -- yes --> KE["endForFreshStart: mark restartedFresh (on disk),<br/>unmap the thread → kill (not deliberate)<br/>(no entry to mark: nothing ended)"] --> KF["fill → reviveThread: tier 3 as a new birth<br/>→ repointChildren"]
+    KF --> RT
 
     RT["reviveThread<br/>chat and recover pass the target's key, ignoring its wait"] --> BG{"backoffKey active and not ignored?"}
     RTN --> BG
@@ -53,7 +57,7 @@ flowchart TD
     ORPH --> SNAP["resolve entry/dead · carryOver unless respawnOnly (to every tier, tryResume too)<br/>worktree if on disk · reserve branch base<br/>(never the name being claimed)"]
     SNAP --> NT{"newThreadIn?"}
     NT -- yes --> NEWT["spawn in channel from kickoff, worktree kept,<br/>told its old thread is gone"]
-    NT -- no --> T1{"ids and not respawnOnly?"}
+    NT -- no --> T1{"ids, not respawnOnly, kickoff unchanged,<br/>entry not restartedFresh?"}
     T1 -- yes --> R1["tier 1: tryResume · omp / codex: home reserved?"]
     R1 -- "reserved" --> BUSY[busy: exit 5]
     R1 -- fail --> R2["tier 2: fork"] -- fail --> R3

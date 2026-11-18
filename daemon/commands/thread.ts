@@ -15,6 +15,8 @@ import { emit } from "../event-bus.js"
 import { getTemplate, buildTemplateSpawnOpts } from '../templates.js'
 import type { InboundMessage } from '../../gateways/gateway.js'
 import { recoveryEntry } from '../recovery-selection.js'
+import { autoHandoffIO, canAskHandoff, canHandOff, handoffProtocolFor } from '../auto-handoff.js'
+import { NotReplaced } from '../../specialists/specialist-deliver.js'
 import { recoveryEngine } from '../engines/history.js'
 import { formatContextPercent, type ProviderId } from '../engines/engine-adapter.js'
 import { claudeEngine, resolveEngine } from '../engines/instances.js'
@@ -511,6 +513,32 @@ export async function handleHandoffIntercept(msg: InboundMessage, selection?: { 
   const info = liveId ? registry.get(liveId) : undefined
   if (!info) {
     await reportError(msg.channelId, msg.id, 'handoff', 'no live session in this thread', 'Use `respawn` to start one from the thread history.')
+    return
+  }
+  // Its specialist restarts fresh: the same step as at its line, now. No letter is written, so there is nothing to carry a note or ask for a model.
+  if (handoffProtocolFor(info) === 'kill_and_respawn') {
+    if (selection || note) {
+      await reportError(msg.channelId, msg.id, 'handoff', `\`${info.tmuxName}\` hands off by kill_and_respawn (its specialist's handoff_protocol): a fresh session starts from the kickoff, with no letter to carry a note, on its specialist's model`, 'Type a plain `handoff`.')
+      return
+    }
+    // Ending it mid-turn would lose that turn's work for good (nothing resumes it): only an idle session, as at the line.
+    if (!canAskHandoff(info, 'kill_and_respawn')) {
+      await reportError(msg.channelId, msg.id, 'handoff', `\`${info.tmuxName}\` is busy (working, waiting on a permission, or in a protocol run), and a fresh restart would end that work`, 'Type `handoff` again once it is idle.')
+      return
+    }
+    void gateway.react(msg.channelId, msg.id, '🔄').catch(() => {})
+    const ended = info.tmuxName
+    await autoHandoffIO.killAndRespawn(info).then(
+      () => safeSend(threadId, `🔄 \`${ended}\` restarted fresh from its kickoff (handoff_protocol = "kill_and_respawn"): no letter, and its old conversation is not continued.`, { replyTo: msg.id }),
+      (err: unknown) => err instanceof NotReplaced
+        ? reportError(msg.channelId, msg.id, 'handoff', `\`${ended}\` was not restarted: ${err.message}`)
+        : reportError(msg.channelId, msg.id, 'handoff', `restarting \`${ended}\` fresh failed: ${err instanceof Error ? err.message : err}`, 'The next message to it starts it again, fresh.'),
+    ).catch(() => {})
+    return
+  }
+  // A letter needs the handoff tool: a session without it (restricted, write-confined) could only ignore the ask.
+  if (!canHandOff(info)) {
+    await reportError(msg.channelId, msg.id, 'handoff', `\`${info.tmuxName}\` has no handoff tool (a restricted or write-confined session), so it can't write a letter`, `Set handoff_protocol = "kill_and_respawn" on its specialist in hydra.toml, or \`kill\` then \`respawn\`.`)
     return
   }
   requestHandoff(info, { channelId: msg.channelId, msgId: msg.id, threadId, requester: msg.authorUsername || 'the user', options: { selection, note } })

@@ -1105,6 +1105,10 @@
       "daemon_session-lifecycle"
     ],
     [
+      "daemon_auto-handoff",
+      "daemon_util"
+    ],
+    [
       "daemon_raindrop",
       "daemon_tmux"
     ],
@@ -1259,6 +1263,10 @@
     [
       "daemon_commands_thread",
       "daemon_templates"
+    ],
+    [
+      "daemon_commands_thread",
+      "daemon_auto-handoff"
     ],
     [
       "daemon_commands_thread",

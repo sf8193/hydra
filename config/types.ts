@@ -163,6 +163,13 @@ export type Person = {
 
 export const SESSIONS_MODES = ['shared', 'per-conversation'] as const
 export type SessionsMode = typeof SESSIONS_MODES[number]
+/**
+ * `handoff_protocol`: what replaces a specialist's session at its handoff line. `letter` (the default): the session writes a letter
+ * and a successor starts from it. `kill_and_respawn`: hydra ends the session and starts a fresh one in its thread from the kickoff,
+ * with no letter; the old conversation is never resumed or forked.
+ */
+export const HANDOFF_PROTOCOLS = ['letter', 'kill_and_respawn'] as const
+export type HandoffProtocol = typeof HANDOFF_PROTOCOLS[number]
 
 /**
  * What fires a schedule's slot. launchd (the default): a launchd calendar entry runs the check at each slot, once on wake
@@ -241,6 +248,17 @@ type SpecialistBase = {
   renamedFrom: string[]
 }
 
+/**
+ * When and how its sessions are replaced, for a specialist whose sessions have no handoff tool (restricted, write-confined): they cannot
+ * write a letter, so a line (`handoffAtPct`) comes only with `kill_and_respawn`. On every specialist, `handoffAtPct` (toml `handoff_at_pct`)
+ * is the context percent (1-99) at which an idle session of it is replaced (daemon/auto-handoff.ts), whatever AUTO_HANDOFF_FULL and
+ * AUTO_HANDOFF_FULL_PCT say, read on each health poll and not part of the launch policy; absent, the env vars decide.
+ * `handoffProtocol` absent is `letter`.
+ */
+export type HandoffWithoutTool =
+  | { handoffProtocol: 'kill_and_respawn'; handoffAtPct?: number }
+  | { handoffProtocol?: 'letter'; handoffAtPct?: never }
+
 /** The write-confined layer's keys: only a write-confined specialist has them. */
 type WriteConfinedKeys = 'canOnlyWriteTo' | 'cannotRead' | 'browserProfile' | 'denyCommands'
 
@@ -256,9 +274,7 @@ export type RestrictedSpecialist = SpecialistBase & {
   mcpServerNames: string[]
   /** The specialists its session may send to with `send_to_thread` (default none). Shared-session specialists; never `main`. */
   sendsTo?: string[]
-  /** Never: a restricted session has no handoff tool. */
-  handoffAt?: never
-} & { [K in WriteConfinedKeys]?: never }
+} & HandoffWithoutTool & { [K in WriteConfinedKeys]?: never }
 
 /**
  * `restricted = false` with `can_only_write_to = "workdir"`: the operator's account and tools, with Bash and Edit/Write writes confined to `workdir`
@@ -278,19 +294,15 @@ export type WriteConfinedSpecialist = SpecialistBase & {
   /** The servers started for it, each with its own browser profile if it declares one. */
   mcpServerNames: string[]
   sendsTo?: never
-  /** Never: a write-confined session has no handoff tool. */
-  handoffAt?: never
-}
+} & HandoffWithoutTool
 
 /** `restricted = false` with no `can_only_write_to`: operator access, the operator's whole account, with all their tools, servers and files (its policy id is `operator`). */
 export type OperatorSpecialist = SpecialistBase & {
   restricted: false
-  /**
-   * `handoff_at`: the context percent (1-99) at which its idle sessions are asked to hand off (daemon/auto-handoff.ts), whatever
-   * AUTO_HANDOFF_FULL and AUTO_HANDOFF_FULL_PCT say. Read on each health poll, so a change reaches running sessions; not part of the
-   * launch policy. Absent: the env vars decide.
-   */
-  handoffAt?: number
+  /** `handoff_at_pct`: the context percent (1-99) at which an idle session of it is replaced, whatever the env vars say (see HandoffWithoutTool). */
+  handoffAtPct?: number
+  /** `handoff_protocol`: what replaces it there. Absent: `letter`. */
+  handoffProtocol?: HandoffProtocol
   tools?: never
   mcpServerNames?: never
   sendsTo?: never
@@ -323,6 +335,11 @@ export type SlackApp = {
 /** The specialist declared under this id now, or under an old one (`renamed_from`): undefined when none is. */
 export function declaredSpecialist(config: Pick<HydraConfig, 'specialists'>, id: string): Specialist | undefined {
   return (Object.hasOwn(config.specialists, id) ? config.specialists[id] : undefined) ?? Object.values(config.specialists).find(s => s.renamedFrom.includes(id))
+}
+
+/** What replaces a specialist's session at its handoff line: its `handoff_protocol`, else `letter` (and `letter` for a session that fills no specialist). */
+export function handoffProtocolOf(specialist: Specialist | undefined): HandoffProtocol {
+  return specialist?.handoffProtocol ?? 'letter'
 }
 
 /** The app named `default`, used where nothing names an app. */
