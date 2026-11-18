@@ -198,7 +198,7 @@ describe('any session listens to a Slack thread: bound to its own thread', () =>
   test('the operator can bind a thread to a session; hydra conversations shows the session by name', async () => {
     session('sw-named', MINE)
     expect(await operatorBind('slack:C9:8.000001', `thread:${MINE}`)).toStartWith(`slack:C9:8.000001 → ${MINE}; `)
-    expect(formatConversations().find(l => l.startsWith('slack:C9:8.000001'))).toContain(`→ sw-named (listening, thread ${MINE})`)
+    expect(formatConversations().find(l => l.startsWith('slack:C9:8.000001'))).toContain(`→ sw-named (its thread ${MINE})`)
   })
 
   describe('a session thread keeps its bound conversations while no session is in it', () => {
@@ -347,15 +347,15 @@ describe('any session listens to a Slack thread: bound to its own thread', () =>
     expect(await bindConversation(food, 'slack:C1:2.000001')).toStartWith(`slack:C1:2.000001 is bound to ${FOOD}`)
   })
 
-  test('delivery targets the thread, and it is listen-only: no reply is posted, from that session or any other', async () => {
+  test('delivery targets the thread; the session it is bound to answers there, and no other session does', async () => {
     expect(targetFor(MINE, 'slack:C9:3.000001')).toEqual({ to: MINE })
     session('sw-mine', MINE)
     session('sw-other', OTHER)
     await bindConversation({ threadId: MINE }, 'slack:C9:3.000001')
     fakePost()
-    await expect(replyInConversation('sw-mine', 'slack:C9:3.000001', 'on it')).rejects.toThrow('bound to a session to listen to')
-    await expect(replyInConversation('sw-other', 'slack:C9:3.000001', 'me too')).rejects.toThrow('bound to a session to listen to')
-    expect(posts).toEqual([])
+    await expect(replyInConversation('sw-other', 'slack:C9:3.000001', 'me too')).rejects.toThrow(`is bound to ${MINE}, not ${OTHER}`)
+    expect(await replyInConversation('sw-mine', 'slack:C9:3.000001', 'on it')).toBe('posted 1 message to slack:C9:3.000001')
+    expect(posts).toEqual(['C9|3.000001|on it'])
   })
 })
 
@@ -1024,7 +1024,7 @@ describe('reply_to answers in the thread of one message', () => {
     expect(posts).toEqual(['C1|5.000001|a', 'C1|5.000001|b'])
   })
 
-  test("never under a message whose thread is another specialist's, or a session's to listen to", async () => {
+  test("never under a message whose thread is another specialist's, or bound to a session", async () => {
     fakePost()
     session('r-food', FOOD_THREAD)
     getConversationTable().bind('C1', '0.000000', FOOD)
@@ -1033,7 +1033,7 @@ describe('reply_to answers in the thread of one message', () => {
     getConversationTable().unwatch('C1', MSG)
     session('sw-listener', '1552619225032425525')
     getConversationTable().bind('C1', MSG, '1552619225032425525')
-    await expect(replyInConversation('r-food', 'slack:C1', 'x', [], MSG)).rejects.toThrow('listen to')
+    await expect(replyInConversation('r-food', 'slack:C1', 'x', [], MSG)).rejects.toThrow(`is bound to 1552619225032425525, not ${FOOD}`)
     expect(posts).toEqual([])
   })
 

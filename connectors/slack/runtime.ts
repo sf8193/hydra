@@ -17,6 +17,7 @@ import { mainChannel } from '../../daemon/main-session.js'
 import { gateway } from '../../daemon/config.js'
 import { currentHydraConfig, onHydraConfigLoad } from '../../daemon/hydra-config.js'
 import { isRestricted } from '../../daemon/policy-record.js'
+import { isRestrictedSession, isWriteConfinedSession } from '../../daemon/tool-surface.js'
 import { MAIN, currentId, isSessionThread, slackSpecialistsOf } from '../../routing/route.js'
 import { chunk } from '../../daemon/util.js'
 import { DEFAULT_SLACK_APP, coversAny, homePlaceOf, isChannelName, placeKey, placeOf, placesAnsweredBy, samePlace, slackConfigured, type Place, type HydraConfig, type SlackApp } from '../../config/types.js'
@@ -165,6 +166,7 @@ export function getConversationTable(): ConversationTable {
     apps: () => hydraConfig().slackApps,
     alert,
     hosted: threadId => !!registry.getByThread(threadId),
+    speaksIn: threadId => { const id = registry.getByThread(threadId); return isPlainSession(id, id ? registry.get(id) : undefined) },
     deliver: async (target, message, idempotencyKey) => {
       const t = targetFor(target.to, target.conversation)
       // First come, first served, when places are short: a newer conversation without a session takes a place only if
@@ -431,7 +433,7 @@ export async function bindConversation(caller: Partial<Pick<SessionInfo, 'thread
     : via === 'user' ? `live, read as the operator: the bot isn't in ${place}`
     : isSessionThread(me) ? "not checked: Slack isn't connected; if the thread can't be read, the next deep catch-up lets it go and says so here"
     : "not checked: Slack isn't connected"
-  if (isSessionThread(me)) return `${conversationId(c)} is bound to this session, listen-only (${how}): each new message in it is delivered here until it has been idle a week`
+  if (isSessionThread(me)) return `${conversationId(c)} is bound to this session (${how}): each new message in it is delivered here until it has been idle a week, saying whether ${appName(v.hydra.slackApps, app)} was tagged and by whom. Answer in it with reply (chat_id ${conversationId(c)}) when the operator or an approved person (declared in [people]) tags ${appName(v.hydra.slackApps, app)} and asks you something; otherwise listen${via === 'user' ? `. While the bot isn't in ${place}, a reply goes to the operator's DM with a link to the thread` : ''}`
   return `${conversationId(c)} is bound to ${me} (${how})`
 }
 
@@ -480,14 +482,14 @@ export function ownConversationRefusal(callerSessionId: string | undefined, conv
 
 /**
  * Throws unless `conversation` is an open conversation the caller answers, and returns it: bound to the caller's specialist (a conversation's own
- * session: that conversation only), never one a session bound to itself to listen. The one ownership rule: `reply` holds every session to it, and
+ * session: that conversation only); a conversation bound to a session's own thread, only for that session, and only a plain one. The one ownership rule: `reply` holds every session to it, and
  * the dispatcher holds a restricted or write-confined session's every tool to it (`ownConversationRefusal`), `fetch_messages`, `edit_message`
  * and `delete_message` among them. It never counts the specialist's `home_place` (`reply` posts there on its own path).
  *
  * A read never reaches a channel's top level. Its conversation (`messages = "all"`) is only the untagged top-level messages, but Slack's
  * `history` returns every one, those routing gave to another specialist or app too. A DM's top level is the DM's alone, and stays readable.
  */
-function assertOwnConversation(h: HydraConfig, callerSessionId: string | undefined, conversation: unknown, use: OwnUse): { c: ReturnType<typeof parseConversation>; app: string; id: string; entry: ConversationEntry; bound: string | undefined; caller: SessionInfo | undefined; me: string | undefined } {
+function assertOwnConversation(h: HydraConfig, callerSessionId: string | undefined, conversation: unknown, use: OwnUse): { c: ReturnType<typeof parseConversation>; app: string; id: string; entry: ConversationEntry; bound: string | undefined; caller: SessionInfo | undefined; me: string | undefined; plain: boolean } {
   const c = parseConversation(conversation)
   const app = appOfEntry(c)
   const id = conversationId(c)
@@ -498,14 +500,23 @@ function assertOwnConversation(h: HydraConfig, callerSessionId: string | undefin
   if (!entry) throw new Error(`${id} is not an open conversation, so there is nothing there to ${OWN_VERB[use]}`)
   const caller = callerSessionId ? registry.get(callerSessionId) : undefined
   const me = callerSessionId === 'main' ? MAIN : boundAs(caller, h)
-  return { c, app, id, entry, bound: answeredBy(h, caller, me, entry, id, use), caller, me }
+  const plain = isPlainSession(callerSessionId, caller)
+  return { c, app, id, entry, bound: answeredBy(h, caller, me, plain, entry, id, use), caller, me, plain }
+}
+
+/**
+ * A plain session: one with a record, not main, and neither restricted nor write-confined (by its record or its bridge's declaration). It alone
+ * speaks in a thread bound to its own thread; a restricted or write-confined session speaks only where its specialist answers.
+ */
+function isPlainSession(callerSessionId: string | undefined, caller: SessionInfo | undefined): boolean {
+  return !!callerSessionId && callerSessionId !== 'main' && !!caller && !isRestrictedSession(callerSessionId) && !isWriteConfinedSession(callerSessionId)
 }
 
 /** Throws unless the caller answers this open conversation (assertOwnConversation's rule, for an entry already in hand); returns who it is bound to. */
-function answeredBy(h: HydraConfig, caller: SessionInfo | undefined, me: string | undefined, entry: ConversationEntry, entryId: string, use: OwnUse): string | undefined {
+function answeredBy(h: HydraConfig, caller: SessionInfo | undefined, me: string | undefined, plain: boolean, entry: ConversationEntry, entryId: string, use: OwnUse): string | undefined {
   const bound = entry.specialist ? currentId(h, entry.specialist) : undefined
-  // A thread a session bound to itself is listen-only: only a specialist (or main) speaks in Slack.
-  if (bound && isSessionThread(bound)) throw new Error(`${entryId} is bound to a session to listen to: hydra posts to Slack only for a specialist (or main), so reply to the operator instead`)
+  // A thread bound to a session's own thread is that session's: a plain session speaks in it (mayAnswerConversation: bound === me), any other only listens.
+  if (bound && isSessionThread(bound) && bound === me && !plain) throw new Error(`${entryId} is bound to this session's thread to listen to: a restricted or write-confined session uses Slack only in a conversation bound to its specialist`)
   if (!mayAnswerConversation(h, caller, me, bound, entryId)) throw new Error(`${entryId} is bound to ${bound ?? 'no one yet'}${me ? `, not ${me}` : ''}: ${use} goes only to a conversation bound to your specialist${isConversationSession(caller) ? ', and from a conversation\'s own session only to that conversation' : ''}`)
   return bound
 }
@@ -600,7 +611,7 @@ async function amendInConversation(callerSessionId: string | undefined, conversa
     // Slack was asked in between: a conversation moved away meanwhile gets no write (reply checks before every part too).
     const now = getConversationTable().get(c.channel, c.threadTs, app)
     if (!now) throw new Error(`${id} is no longer an open conversation: nothing was ${done}`)
-    answeredBy(hydraConfig(), caller, me, now, id, what)
+    answeredBy(hydraConfig(), caller, me, false, now, id, what)
   }
   try {
     if (change) await slackRuntimeDeps.edit(c.channel, ts, change.text, app, author)
@@ -616,7 +627,8 @@ async function amendInConversation(callerSessionId: string | undefined, conversa
 /**
  * `reply` with a conversation id as its chat_id: the specialist answers a Slack conversation. Hydra posts the text
  * as given, and only into a conversation bound to the caller's specialist (with `replyTo`, in a DM, into the thread of that message, bound to the caller): a reply goes back where its question came from. A thread
- * bound to a session's own thread is listen-only.
+ * bound to a session's own thread is that session's to answer when it is a plain session (assertOwnConversation); when the bot isn't in its channel,
+ * the answer goes to the operator's DM with a link, as main's does.
  */
 export async function replyInConversation(callerSessionId: string | undefined, conversation: unknown, text: string, files: string[] = [], replyTo?: string): Promise<string> {
   if (files.length) throw new Error('attachments are not posted to Slack yet; reply with text (a link works)')
@@ -640,7 +652,7 @@ export async function replyInConversation(callerSessionId: string | undefined, c
     return unbound ? `posted to ${where}, but its thread is not bound to ${me}: ${unbound}` : `posted to ${where}; replies in its thread come back to ${me}`
   }
   // Who it is bound to, which `stillMine` holds it to before every part.
-  const { c, app, id, caller, bound } = assertOwnConversation(h, callerSessionId, conversation, 'a reply')
+  const { c, app, id, caller, bound, plain } = assertOwnConversation(h, callerSessionId, conversation, 'a reply')
   // Which thread the post goes in. A thread conversation is its one thread (Slack threads are flat: no message inside one can be answered on its own);
   // a top-level conversation (only a DM has one) is answered in the thread of the message `reply_to` names, else at its top level.
   let thread = c.threadTs === TOP_LEVEL ? undefined : c.threadTs
@@ -656,7 +668,7 @@ export async function replyInConversation(callerSessionId: string | undefined, c
       // Its thread is a new conversation, with a session of its own when the specialist runs one per conversation: not this one's to open.
       if (isConversationSession(caller)) throw new Error(`reply_to cannot open a thread from a conversation's own session: the thread would be a new conversation with a session of its own. Nothing was posted; answer ${id} without reply_to`)
       nested = getConversationTable().get(c.channel, ts, app)
-      if (nested) answeredBy(h, caller, me, nested, conversationId({ ...c, threadTs: ts }), 'a reply')
+      if (nested) answeredBy(h, caller, me, plain, nested, conversationId({ ...c, threadTs: ts }), 'a reply')
       thread = ts
       opened = nested ? undefined : ts
       how = `, in the thread of message ${ts}`
@@ -675,7 +687,7 @@ export async function replyInConversation(callerSessionId: string | undefined, c
   } catch (err) {
     // A restricted specialist's words go only where its conversation is: never to the operator's DM in its place.
     if (!(err instanceof NotInChannel) || (me !== MAIN && h.specialists[me ?? '']?.restricted)) throw err
-    return toOperatorDm(app, id, err.message, text, stillMine, `From ${me === MAIN ? 'main' : me ?? 'a session'}`)
+    return toOperatorDm(app, id, err.message, text, stillMine, `From ${me === MAIN ? 'main' : me && isSessionThread(me) ? sessionNameIn(me) ?? `the session in thread ${me}` : me ?? 'a session'}`)
   }
   const said = `posted ${posted} message${posted === 1 ? '' : 's'} to ${id}${how}`
   return opened ? (unbound ? `${said}; its thread is not bound to ${me}: ${unbound}, so replies in it go to whoever the rules name here` : `${said}; replies in it come back to ${me}`) : said
@@ -793,7 +805,7 @@ const BIND_WHY_MAX = 300
 
 /**
  * `hydra conversations bind`: the operator (or main, for them) binds or moves a conversation to any declared specialist, main, or a
- * session's thread (listen-only there). To a session's thread, the app also posts in the Slack conversation which session took it, a link
+ * session's thread (a plain session there answers in it). To a session's thread, the app also posts in the Slack conversation which session took it, a link
  * to that session's thread, and `why` when given: binding and telling the people there are one step. The bind holds if the notice fails; the result says so.
  */
 export async function operatorBind(conversation: string, target: string, why?: string): Promise<string> {
@@ -854,7 +866,7 @@ const line = (v: Pick<ConversationConfig, 'hydra' | 'directory'>, e: Conversatio
   const idle = Math.max(0, Math.round((now - e.lastEventAt) / 3_600_000))
   const owed = e.owed?.length ? ` · ${e.owed.length} owed` : ''
   const via = e.via === 'user' ? ' · read as the operator' : ''
-  const to = e.specialist && isSessionThread(e.specialist) ? `${sessionNameIn(e.specialist) ?? 'no session'} (listening, thread ${e.specialist})` : e.specialist
+  const to = e.specialist && isSessionThread(e.specialist) ? `${sessionNameIn(e.specialist) ?? 'no session'} (its thread ${e.specialist})` : e.specialist
   return `${conversationId(e)} (${placeName(v, e.channel)}) → ${to ?? '(unbound: its next message binds it)'} · idle ${idle}h${owed}${via}`
 }
 
