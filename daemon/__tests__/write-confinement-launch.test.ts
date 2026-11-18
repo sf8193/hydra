@@ -405,6 +405,9 @@ describe('the stored policy', () => {
   test('described in words for a log line and the thread', () => {
     expect(describePolicy(policyOf())).toBe(`restricted = false, can_only_write_to = "workdir" (folder ${work}; tools all; cannot_read 2 places; mcp_servers browser; deny_commands rm -rf *)`)
     expect(describePolicy({ specialist: 'gem', restricted: false, id: 'operator' })).toBe('restricted = false')
+    expect(describePolicy({ specialist: 'gem', restricted: true, workdir: '/w', tools: ['Read'], servers: [], id: 'x' })).toBe('restricted = true (folder /w; tools Read; mcp_servers none)')
+    // An old write-confined record stored `access: 'operator'` and no `restricted`: it counts as restricted, with none of the fields.
+    expect(describePolicy({ ...policyOf(), restricted: undefined } as unknown as LaunchPolicy)).toBe('restricted = true (folder ?; tools none; mcp_servers none)')
   })
 })
 

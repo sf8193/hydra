@@ -7,9 +7,10 @@ import { STATE_DIR } from '../config.js'
 import { SessionRegistry, ThreadRegistry, type SessionInfo } from '../sessions.js'
 import { _setTmuxForTesting } from '../tmux.js'
 import { isPlainWorker, isRestricted } from '../policy-record.js'
-import { confinementIdFor, OPERATOR_POLICY_ID, policyIdFor, policyProblem, type LaunchPolicy } from '../restricted.js'
+import { confinementIdFor, deliveryRefusal, OPERATOR_POLICY_ID, policyIdFor, policyProblem, type LaunchPolicy } from '../restricted.js'
 import { isToolAllowed, noteDeclaredRestrictions } from '../tool-surface.js'
 import { registry } from '../sessions.js'
+import { _setHydraConfigForTesting } from '../hydra-config.js'
 
 process.stderr.write = (() => true) as any
 
@@ -63,6 +64,16 @@ describe('records on disk hold the boolean and nothing older', () => {
     const old = { specialist: 'ops', access: 'workdir', workdir: '/work/ops', tools: ['Read', 'Grep'], servers, id: confinedId }
     expect(isRestricted({ policy: old as {} })).toBe(true)
     expect(policyProblem(old)).toBe('its restricted is undefined')
+  })
+
+  // Delivery describes a stored policy without validating it: an old operator record has no `restricted`, so it is restricted with no folder, tools or servers.
+  test('an old operator record, verified: delivery refuses it with its description, never throws', () => {
+    writeFileSync(sessionsFile, JSON.stringify([rec('old-op', { specialist: 'ops', access: 'operator', id: OPERATOR_POLICY_ID }, { verified: true })]))
+    _setHydraConfigForTesting({ connectors: {}, gateways: {}, slackApps: {}, people: {}, places: {}, schedules: {}, rules: [],
+      specialists: { ops: { id: 'ops', workdir: '/work/ops', reachableBy: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: true, tools: ['Read'] } } })
+    try {
+      expect(deliveryRefusal(new SessionRegistry().get('old-op')!)).toContain('restricted = true (folder ?')
+    } finally { _setHydraConfigForTesting(undefined) }
   })
 })
 

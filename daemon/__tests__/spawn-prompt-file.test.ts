@@ -9,7 +9,7 @@ import { ClaudeEngine } from '../engines/claude-engine.js'
 import { OmpEngine } from '../engines/omp-engine.js'
 import { STATE_DIR } from '../config.js'
 import { removeLaunchFiles, spawnPromptDir } from '../launch-files.js'
-import { PolicyRefusal, policyIdFor, type ConfinedPolicy } from '../restricted.js'
+import { PolicyRefusal, policyIdFor, type RestrictedPolicy } from '../restricted.js'
 import { _setLoadEnvForTesting } from '../hydra-config.js'
 import { macLike } from './sandbox-host.js'
 
@@ -96,8 +96,8 @@ describe('Claude: the prompt is absent from every command line, and arrives unch
   })
 
   test('a restricted kickoff (preamble + prompt) arrives whole, and the command line holds none of it', async () => {
-    const servers: ConfinedPolicy['servers'] = []
-    const policy: ConfinedPolicy = { specialist: 'ops', restricted: true, workdir: dir, tools: ['Read'], servers, id: policyIdFor(dir, ['Read'], servers) }
+    const servers: RestrictedPolicy['servers'] = []
+    const policy: RestrictedPolicy = { specialist: 'ops', restricted: true, workdir: dir, tools: ['Read'], servers, id: policyIdFor(dir, ['Read'], servers) }
     _setLoadEnvForTesting(macLike())
     await launchClaude({ prompt: `ops ${MARKER}`, policy, sessionType: 'thread_owner' })
     expect(tmuxCalls()).not.toContain(MARKER)
@@ -187,7 +187,9 @@ describe('the file: private, replaced by the next launch of the name, removed wi
   })
 
   test('a restricted launch the policy refuses leaves no file', async () => {
-    const policy: ConfinedPolicy = { specialist: 'ops', restricted: true, workdir: undefined as any, tools: ['Read'], servers: [], id: 'x' }
+    // A listed server whose token variable is not set: the launch refuses after the prompt file is written.
+    const servers = [{ name: 'dd', command: '/bin/dd-mcp', tokenEnv: ['HYDRA_TEST_UNSET_TOKEN'], tools: ['a'] }]
+    const policy: RestrictedPolicy = { specialist: 'ops', restricted: true, workdir: '/w/ops', tools: ['Read'], servers, id: policyIdFor('/w/ops', ['Read'], servers) }
     await expect(launchClaude({ prompt: 'a', policy })).rejects.toThrow(PolicyRefusal)
     expect(files()).toEqual([])
   })

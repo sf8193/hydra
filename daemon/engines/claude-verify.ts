@@ -20,7 +20,7 @@
 
 import { readFileSync } from 'fs'
 import { BRIDGE_MCP_SERVER_KEY, BRIDGE_PLUGIN_ID, BRIDGE_TOOLS_PERMISSION } from '../plugin-manifest.js'
-import { HYDRA_MOD, serverToolRule, type ConfinedPolicy } from '../restricted.js'
+import { HYDRA_MOD, serverToolRule, type RestrictedPolicy } from '../restricted.js'
 
 /** What a launch's debug file says Claude Code loaded. Each field is read from the lines that say it, and nothing is inferred. */
 export type Loaded = {
@@ -133,7 +133,7 @@ const connectorsNotOff = (got: Loaded): string | undefined => !got.connectorsOff
 /** The servers a launch may run: the bridge and the policy's listed ones (a restricted launch's and a write-confined one's alike). */
 export const expectedServerNames = (listed: ReadonlyArray<{ name: string }>): string[] => [BRIDGE_MCP_SERVER_KEY, ...listed.map(s => s.name)]
 
-export function expectedLoad(p: Pick<ConfinedPolicy, 'servers'>): { servers: string[]; allow: string[] } {
+export function expectedLoad(p: Pick<RestrictedPolicy, 'servers'>): { servers: string[]; allow: string[] } {
   return {
     servers: expectedServerNames(p.servers),
     allow: [BRIDGE_TOOLS_PERMISSION, ...p.servers.flatMap(s => s.tools.map(t => serverToolRule(s.name, t)))],
@@ -150,7 +150,7 @@ const list = (xs: string[]): string => `${xs.slice(0, 5).map(x => `\`${safe(x)}\
  * registered is not yet a surplus (Claude Code's own built-ins are named ~100 ms before they register as built in). `final` is the
  * judgement that ends the wait: a plugin that never registered is refused then, because its source is unknown.
  */
-export function surplus(p: Pick<ConfinedPolicy, 'servers'>, got: Loaded, final = false): string[] {
+export function surplus(p: Pick<RestrictedPolicy, 'servers'>, got: Loaded, final = false): string[] {
   const want = expectedLoad(p)
   const out: string[] = []
   const extraServers = extraServerNames(want.servers, got)
@@ -175,7 +175,7 @@ export function surplus(p: Pick<ConfinedPolicy, 'servers'>, got: Loaded, final =
 }
 
 /** The ways what loaded falls short of the policy, judged once every expected server has connected (or the deadline passed). */
-export function shortfall(p: Pick<ConfinedPolicy, 'servers'>, got: Loaded): string[] {
+export function shortfall(p: Pick<RestrictedPolicy, 'servers'>, got: Loaded): string[] {
   const want = expectedLoad(p)
   const out: string[] = []
   const unconnected = unconnectedServers(want.servers, got)
@@ -194,7 +194,7 @@ export function shortfall(p: Pick<ConfinedPolicy, 'servers'>, got: Loaded): stri
 }
 
 /** All the ways a launch's loaded set differs from its policy; empty when it is exactly what the policy says. */
-export const mismatches = (p: Pick<ConfinedPolicy, 'servers'>, got: Loaded): string[] => [...surplus(p, got, true), ...shortfall(p, got)]
+export const mismatches = (p: Pick<RestrictedPolicy, 'servers'>, got: Loaded): string[] => [...surplus(p, got, true), ...shortfall(p, got)]
 
 /** Test seams: the file read, the clock and the deadline. */
 export const verifyDeps = {
@@ -215,7 +215,7 @@ export type Verdict = { ok: true } | { ok: false; why: string }
  * policy does not give) refuses as soon as it is read (a plugin only once it has registered: see `surplus`); otherwise it waits until every expected server has connected, then judges
  * the whole. A file that cannot be read, or a launch that has not finished loading by the deadline, refuses: never "no news, good news".
  */
-export async function verifyLaunch(policy: Pick<ConfinedPolicy, 'servers'>, path: string | undefined, deps: typeof verifyDeps = verifyDeps): Promise<Verdict> {
+export async function verifyLaunch(policy: Pick<RestrictedPolicy, 'servers'>, path: string | undefined, deps: typeof verifyDeps = verifyDeps): Promise<Verdict> {
   if (!path) return { ok: false, why: 'the launch wrote no debug file to check what it loaded' }
   const start = deps.now()
   const want = expectedLoad(policy)

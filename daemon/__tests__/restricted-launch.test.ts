@@ -162,7 +162,7 @@ describe('the launch policy of a specialist', () => {
 })
 
 describe('every launch shape is restricted', () => {
-  const restrictedInput = (l: LaunchInput | undefined) => ({ type: l?.sessionType as string | undefined, restricted: l?.policy?.restricted === true ? l.policy.specialist : undefined, tools: l?.policy?.tools, servers: l?.policy?.servers?.map(s => s.name) })
+  const restrictedInput = (l: LaunchInput | undefined) => ({ type: l?.sessionType as string | undefined, ...(l?.policy?.restricted === true ? { restricted: l.policy.specialist, tools: l.policy.tools, servers: l.policy.servers.map(s => s.name) } : { restricted: undefined, tools: undefined, servers: undefined }) })
   const RESTRICTED = { type: 'thread_owner', restricted: 'ops', tools: ['Read', 'Grep'], servers: ['datadog'] }
 
   test('fresh: opts.specialist restricts the launch and records specialist and policy on the session and its history entry', async () => {

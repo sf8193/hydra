@@ -5,7 +5,7 @@
 // callers just call info.adapter.deliver(...) — no dispatch logic needed.
 
 import type { SessionInfo, SpawnOpts } from '../sessions.js'
-import type { ConfinedPolicy, LaunchPolicy } from '../restricted.js'
+import type { LaunchPolicy, RestrictedPolicy } from '../restricted.js'
 import type { BlockingState } from '../pane-probe.js'
 import type { PhaseTotals, TokenTotals } from '../usage.js'
 import type { LatchPhase, UsagePhase } from '../usage-phase.js'
@@ -191,7 +191,7 @@ export interface EngineAdapter {
   readonly confinesAccess: boolean
   launch(input: LaunchInput): Promise<LaunchResult>
   /** A confined launch's check, from the engine's own record of what it loaded: refuse (with the cause) or pass. Absent: the engine cannot say, so it cannot run a confined session. */
-  verifyLaunch?(policy: ConfinedPolicy, launched: LaunchResult): Promise<{ ok: true } | { ok: false; why: string }>
+  verifyLaunch?(policy: RestrictedPolicy, launched: LaunchResult): Promise<{ ok: true } | { ok: false; why: string }>
   /** What a write-confined launch (`can_only_write_to`) applied, from the engine's own record, judged against its policy. Absent: the engine cannot run that layer. */
   verifyConfinement?(policy: LaunchPolicy, launched: LaunchResult): Promise<{ ok: true } | { ok: false; why: string }>
   // Deliver one notification. Claude: strip the intents, then write to the

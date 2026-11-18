@@ -2,13 +2,12 @@
 // believed, the one remedy sentence, and the one rate limit behind every notice a thread is sent.
 import { describe, expect, test } from 'bun:test'
 import { NoticeLimiter } from '../notice-limit.js'
-import { bornPolicy, OPERATOR_POLICY_ID, policyDrifted, policyIdFor, policyProblem, remedy, type LaunchPolicy } from '../restricted.js'
-import type { HydraConfig } from '../../config/types.js'
+import { OPERATOR_POLICY_ID, policyDrifted, policyIdFor, policyProblem, remedy, type LaunchPolicy, type PolicyServer, type RestrictedPolicy } from '../restricted.js'
 
-const server = (over: Partial<LaunchPolicy['servers'] extends (infer S)[] | undefined ? S : never> = {}) => ({ name: 'datadog', command: '/usr/local/bin/datadog-mcp', tokenEnv: ['DD_API_KEY'], tools: ['a'], ...over })
-const confinedPolicy = (over: Partial<LaunchPolicy> = {}): LaunchPolicy => {
+const server = (over: Partial<PolicyServer> = {}) => ({ name: 'datadog', command: '/usr/local/bin/datadog-mcp', tokenEnv: ['DD_API_KEY'], tools: ['a'], ...over })
+const confinedPolicy = (over: Partial<RestrictedPolicy> = {}): RestrictedPolicy => {
   const base = { specialist: 'ops', restricted: true as const, workdir: '/w/ops', tools: ['Read', 'Grep'], servers: [server()], ...over }
-  return { ...base, id: policyIdFor(base.workdir!, base.tools!, base.servers!) }
+  return { ...base, id: policyIdFor(base.workdir, base.tools, base.servers) }
 }
 const operatorPolicy: LaunchPolicy = { specialist: 'ops', restricted: false, id: OPERATOR_POLICY_ID }
 
@@ -55,6 +54,7 @@ describe('a stored policy is believed only if its id matches its facts', () => {
   test('an id that is not the facts\' own is not (a hand-edited sessions.json, a half-written record)', () => {
     expect(policyProblem({ ...confinedPolicy(), id: 'workdir:000000000000' })).toMatch(/does not match/)
     expect(policyProblem({ ...confinedPolicy(), tools: ['Read', 'Bash'] })).toMatch(/does not match/)
+    expect(policyProblem({ ...confinedPolicy(), canOnlyWriteTo: { workdir: '/w', denyCommands: [], cannotRead: [], servers: [] } })).toMatch(/has no can_only_write_to/)
     expect(policyProblem({ ...confinedPolicy(), workdir: '/somewhere/else' })).toMatch(/does not match/)
   })
   test('an operator policy has the operator id and nothing else', () => {
@@ -95,18 +95,5 @@ describe('NoticeLimiter: at most once a minute per cause, and bounded', () => {
     t += 120_000
     l.allow('f')
     expect(l.size).toBe(1)             // everything else had expired
-  })
-})
-
-describe('bornPolicy from a config that skipped the loader', () => {
-  const config = (over: Record<string, unknown>): HydraConfig => ({
-    connectors: {}, gateways: {}, slackApps: {}, people: {}, places: {}, schedules: {}, rules: [],
-    specialists: { ops: { id: 'ops', workdir: '/w/ops', reachableBy: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: true, ...over } as any },
-  })
-  test('a workdir specialist with no tools list gets Read, Grep, Glob: the narrowest set, never every tool', () => {
-    expect(bornPolicy('ops', config({}))!.tools).toEqual(['Read', 'Grep', 'Glob'])
-  })
-  test('a listed server nobody declared refuses, with the remedy', () => {
-    expect(() => bornPolicy('ops', config({ mcpServerNames: ['nope'] }), 'ops-sess')).toThrow(/lists \[mcp_servers\.nope\].*Run `hydra kill ops-sess`/s)
   })
 })

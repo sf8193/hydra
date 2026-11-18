@@ -10,7 +10,7 @@ import { tmuxHasSession, tmuxSync, tmuxTimedOut } from './tmux.js'
 import { nameHeldByAnother, occupancy, occupied } from './session-reachability.js'
 import { withThreadLock } from '../specialists/specialists.js'
 import { browserProfileProblem, managedMcpNameClashes, unreadableWorkdir } from '../config/write-confinement.js'
-import { confinementRefusal, endVerifying, startVerifying, verifyBackoff, verifyRefusal, confined, describePolicy, macosRefusal, missingTokenRefusal, PolicyRefusal, remedy, resolvePolicy, type LaunchPolicy } from './restricted.js'
+import { confinementRefusal, endVerifying, startVerifying, verifyBackoff, verifyRefusal, describePolicy, macosRefusal, missingTokenRefusal, PolicyRefusal, remedy, resolvePolicy, type LaunchPolicy } from './restricted.js'
 import { refusalNoticeKey, threadNotices } from './notice-limit.js'
 import { hydraLoadEnv, currentHydraConfig } from './hydra-config.js'
 import { workdirRestrictionIssues } from '../config/restricted-workdir.js'
@@ -1029,7 +1029,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     if (err instanceof PolicyRefusal && threadId) await tellThread(threadId, err.message)
     throw err
   }
-  const confinedPolicy = confined(policy, sessionName)
+  const confinedPolicy = isRestrictedPolicy(policy) ? policy : undefined
   // `can_only_write_to`: the operator's account with writes confined to the workdir. Not a restricted session, but it starts in its folder, is checked, and takes no message until it passes.
   const layerPolicy = !confinedPolicy && policy?.canOnlyWriteTo ? { ...policy, canOnlyWriteTo: policy.canOnlyWriteTo } : undefined
   // The kickoff the conversation was born under: a fresh start names its own; a resume or fork keeps the one it continues, and a

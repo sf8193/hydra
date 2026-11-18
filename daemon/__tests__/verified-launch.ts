@@ -2,10 +2,10 @@
 // launch was given, so the start's own check (engines/claude-verify.ts) passes, and a way to make it see something else.
 import { BRIDGE_MCP_SERVER_KEY } from '../plugin-manifest.js'
 import { expectedLoad, verifyDeps } from '../engines/claude-verify.js'
-import type { ConfinedPolicy } from '../restricted.js'
+import type { RestrictedPolicy } from '../restricted.js'
 
 /** The lines of a launch's debug file that say what loaded, for a launch that loaded exactly this policy. */
-export function debugLogFor(policy: Pick<ConfinedPolicy, 'servers'>, extra: string[] = []): string {
+export function debugLogFor(policy: Pick<RestrictedPolicy, 'servers'>, extra: string[] = []): string {
   const want = expectedLoad(policy)
   const T = '2026-11-13T04:34:18.000Z [DEBUG] '
   return [
@@ -25,10 +25,10 @@ export function debugLogFor(policy: Pick<ConfinedPolicy, 'servers'>, extra: stri
 }
 
 /** Makes the check read `logFor(the policy of the latest launch)`; returns what to call to put the real reader back. */
-export function verifyLaunchesAgainst(latest: () => { policy?: unknown } | undefined, logFor: (p: ConfinedPolicy) => string = p => debugLogFor(p)): () => void {
+export function verifyLaunchesAgainst(latest: () => { policy?: unknown } | undefined, logFor: (p: RestrictedPolicy) => string = p => debugLogFor(p)): () => void {
   const real = verifyDeps.read
   verifyDeps.read = () => {
-    const p = latest()?.policy as ConfinedPolicy | undefined
+    const p = latest()?.policy as RestrictedPolicy | undefined
     if (!p) throw new Error('no launch to read a debug file for')
     return logFor(p)
   }
