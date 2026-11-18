@@ -21,7 +21,7 @@ import { watchPr, unwatchPr, listWatches, getWatchesBySession, formatWatchEntry,
 import { fileArgTools, snapshotConfinedFiles } from './write-confinement.js'
 import { attachmentTarget } from './attachment-target.js'
 import { fileRefusal } from '../config/write-confinement.js'
-import { bindConversation, unbindConversation, formatConversationsFor, replyInConversation, editInConversation, deleteInConversation, conversationBelongsTo } from '../connectors/slack/runtime.js'
+import { bindConversation, unbindConversation, formatConversationsFor, replyInConversation, editInConversation, deleteInConversation, fetchInConversation, ownConversationRefusal, type OwnUse } from '../connectors/slack/runtime.js'
 import { refreshSessionVisual, emojiOf, emojiOfName } from './anchor-state.js'
 import { refreshDashboard } from './dashboard.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './artifacts.js'
@@ -185,10 +185,12 @@ const handoffChecksInFlight = new Set<string>()
 
 const askingPredecessor = new Set<string>()  // session ids with an ask_predecessor fork running
 
-/** The argument that names where a restricted session's tool acts, by tool. */
-const RESTRICTED_PLACE_ARG: Readonly<Record<string, string>> = {
+/** The argument that names where a tool acts, by tool. */
+const PLACE_ARG: Readonly<Record<string, string>> = {
   reply: 'chat_id', send_to_thread: 'chat_id', react: 'chat_id', edit_message: 'chat_id', delete_message: 'chat_id', download_attachment: 'chat_id', fetch_messages: 'channel',
 }
+/** What a tool does in a Slack conversation, as the one ownership rule (assertOwnConversation) names it: a read is held to more than a reply. */
+export const PLACE_USE: Readonly<Record<string, OwnUse>> = { fetch_messages: 'a read', edit_message: 'an edit', delete_message: 'a delete', react: 'a reaction', download_attachment: 'a download' }
 
 /**
  * Why a restricted session may not make this call, or undefined. The tools it keeps work only where it speaks: its own session
@@ -205,12 +207,16 @@ export function restrictedRefusal(callerSessionId: string, name: string, args: R
 /** The place rule a restricted and a write-confined session share: it describes only itself and acts only in its own conversation (or a Slack one bound to its specialist). */
 export function ownPlaceRefusal(callerSessionId: string, name: string, args: Record<string, unknown>, who: string): string | undefined {
   if (name === 'set_description') return args.session_id === callerSessionId ? undefined : `set_description: ${who} describes only itself; session_id must be this session's own`
-  const arg = RESTRICTED_PLACE_ARG[name]
+  const arg = PLACE_ARG[name]
   const target = arg ? args[arg] : undefined
   const own = registry.get(callerSessionId)
-  if (typeof target === 'string' && ((!!own && target === own.threadId) || conversationBelongsTo(callerSessionId, target))) return undefined
+  if (typeof target === 'string' && !!own && target === own.threadId) return undefined
   if (typeof target !== 'string' || !target) return `${name}: ${arg ?? 'chat_id'} is required: pass the ${arg ?? 'chat_id'} of ${arg === 'channel' ? 'the conversation you are reading' : 'the message you are answering'}`
-  return `${name}: ${arg} ${target} is not this session's own conversation; ${who} acts only in its own thread or in a Slack conversation bound to its specialist`
+  const refusal = `${name}: ${arg} ${target} is not this session's own conversation; ${who} acts only in its own thread or in a Slack conversation bound to its specialist`
+  if (!target.startsWith('slack:')) return refusal
+  // A Slack conversation: the one rule (assertOwnConversation) says whether it is this session's, and why not.
+  const why = ownConversationRefusal(callerSessionId, target, PLACE_USE[name])
+  return why && `${refusal} (${why})`
 }
 
 /**
@@ -220,6 +226,12 @@ export function ownPlaceRefusal(callerSessionId: string, name: string, args: Rec
 export function slackMessageLink(link: string): { chat_id: string; message_id: string } | undefined {
   const m = /^https:\/\/[\w.-]+\.slack\.com\/archives\/([A-Z0-9]+)\/p(\d{10})(\d{6})(?:[?#].*)?$/.exec(link.trim())
   return m ? { chat_id: `slack:${m[1]}`, message_id: `${m[2]}.${m[3]}` } : undefined
+}
+
+/** `fetch_messages`' answer: one line per message, oldest first. */
+function fetchedText(msgs: { at: Date; who: string; text: string; id: string; files: number }[]): string {
+  if (msgs.length === 0) return '(no messages)'
+  return msgs.map(m => `[${m.at.toISOString()}] ${m.who}: ${m.text.replace(/[\r\n]+/g, ' ⏎ ')}  (id: ${m.id}${m.files > 0 ? ` +${m.files}att` : ''})`).join('\n')
 }
 
 export async function executeTool(name: string, args: Record<string, unknown>, callerSessionId?: string): Promise<ToolResult> {
@@ -232,6 +244,11 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       args = { ...args, ...target }
       delete args.link
     }
+    // A Slack conversation id is read once, trimmed, before any check: the check below and the routing in each tool see the same id
+    // (`" slack:…"` would pass a check that trims and be routed, untrimmed, to the chat gateway).
+    const placeArg = PLACE_ARG[name]
+    const place = placeArg ? args[placeArg] : undefined
+    if (typeof place === 'string' && place !== place.trim() && place.trim().startsWith('slack:')) args = { ...args, [placeArg!]: place.trim() }
     // Bridge-server enforces this at the socket boundary. Keep the dispatcher
     // fail-closed too: Codex advertises phase-scoped tools statically, and tests
     // or future callers may invoke executeTool without crossing bridge-server.
@@ -372,21 +389,22 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
 
       case 'fetch_messages': {
         const channelId = args.channel as string
-        const limit = Math.min((args.limit as number) ?? 20, 100)
+        const asked = args.limit ?? 20
+        if (typeof asked !== 'number' || !Number.isFinite(asked) || asked < 1) throw new Error(`fetch_messages: limit ${JSON.stringify(asked)} is not a number of messages: pass a whole number from 1 to 100 (20 when left out)`)
+        const limit = Math.min(Math.floor(asked), 100)
+        // A conversation id from a Slack delivery: read through the app that heard it, never the chat gateway. Who may read it was settled above (ownPlaceRefusal).
+        if (typeof channelId === 'string' && channelId.startsWith('slack:')) {
+          // A caller with no record that did not declare itself restricted (a stray bridge) is held as a restricted one is: a missing record never widens a read.
+          if (callerSessionId && callerSessionId !== 'main' && !registry.get(callerSessionId)) {
+            const why = ownConversationRefusal(callerSessionId, channelId, 'a read')
+            if (why) throw new Error(`fetch_messages: ${why}`)
+          }
+          const read = await fetchInConversation(channelId, limit)
+          return { content: [{ type: 'text', text: fetchedText(read.map(m => ({ at: new Date(parseFloat(m.ts) * 1000), who: m.author, text: m.text, id: m.ts, files: m.files }))) }] }
+        }
         const msgs = await gateway.fetchMessages(channelId, limit)
         const botId = gateway.botId
-        const out =
-          msgs.length === 0
-            ? '(no messages)'
-            : msgs
-                .map(m => {
-                  const who = m.authorId === botId ? 'me' : m.authorUsername
-                  const atts = m.attachmentCount > 0 ? ` +${m.attachmentCount}att` : ''
-                  const text = m.content.replace(/[\r\n]+/g, ' ⏎ ')
-                  return `[${m.createdAt.toISOString()}] ${who}: ${text}  (id: ${m.id}${atts})`
-                })
-                .join('\n')
-        return { content: [{ type: 'text', text: out }] }
+        return { content: [{ type: 'text', text: fetchedText(msgs.map(m => ({ at: m.createdAt, who: m.authorId === botId ? 'me' : m.authorUsername, text: m.content, id: m.id, files: m.attachmentCount }))) }] }
       }
 
       case 'react': {

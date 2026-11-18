@@ -6,7 +6,7 @@ import { ConversationTable, placesOf, type SlackReactionEvent } from '../watch.j
 import { alsoHeard, hydra as load, hydra, oneListener, view, BASE } from './slack-config.js'
 import { EMPTY_CONFIG } from '../../../config/load.js'
 import { mustParsePlace, type HydraConfig } from '../../../config/types.js'
-import { SlackListener, DM_LIST_BACKOFF_MS, postPayload, DOWN_ALERT_AFTER_MS, implicitScopeOptions, scopesNeeded, type ToldScopes, CATCH_UP_STALE_AFTER_MS, EVENTS_OFF_AFTER_PASSES, explainSlackError, readReplies, type SlackAppLike, type RawEvent } from '../listener.js'
+import { SlackListener, DM_LIST_BACKOFF_MS, postPayload, DOWN_ALERT_AFTER_MS, implicitScopeOptions, scopesNeeded, type ToldScopes, CATCH_UP_STALE_AFTER_MS, EVENTS_OFF_AFTER_PASSES, explainSlackError, readReplies, READ_MAX_PAGES, type SlackAppLike, type RawEvent } from '../listener.js'
 import type { SlackApi, RawMessage } from '../catchup.js'
 import type { SocketEmitter } from '../../../shared/socket-supervisor.js'
 import { createResumeDetector, type LastSleep } from '../../../shared/resume.js'
@@ -31,7 +31,7 @@ afterEach(() => { for (const l of listeners.splice(0)) l.stop(); for (const d of
 
 type Lister = { channel: string; user?: string }[] | Error | (() => Promise<{ channel: string; user?: string }[]>)
 const lister = (name: string, calls: string[], l: Lister | undefined) => l && (async () => { calls.push(name); if (l instanceof Error) throw l; return typeof l === 'function' ? l() : l })
-function setup(over: { tokens?: { app?: string; bot?: string }; toml?: string | null; failStart?: boolean; firstRetryBaseMs?: number; scopes?: string[]; historyError?: string; history?: RawMessage[]; threads?: Record<string, RawMessage[]>; duringStart?: (deliverLive: (e: RawEvent) => void) => void; channels?: { id: string; name: string }[]; channelsError?: string; told?: ToldScopes; otherParties?: Lister; dms?: Lister; operatorId?: string } = {}) {
+function setup(over: { tokens?: { app?: string; bot?: string }; toml?: string | null; failStart?: boolean; firstRetryBaseMs?: number; scopes?: string[]; historyError?: string; history?: RawMessage[]; threads?: Record<string, RawMessage[]>; duringStart?: (deliverLive: (e: RawEvent) => void) => void; channels?: { id: string; name: string }[]; channelsError?: string; told?: ToldScopes; otherParties?: Lister; dms?: Lister; operatorId?: string; repliesPage?: number } = {}) {
   const toml = over.toml === undefined ? TOML : over.toml
   const h: HydraConfig = toml === null ? EMPTY_CONFIG : load(toml)
   const dir = mkdtempSync(join(tmpdir(), 'slack-listener-'))
@@ -71,7 +71,15 @@ function setup(over: { tokens?: { app?: string; bot?: string }; toml?: string | 
         async history(a) { rec.apiCalls.push(`history:${a.oldest}`); state.duringHistory?.(); if (state.historyError) throw new Error(state.historyError); return { messages: state.history.filter(m => parseFloat(m.ts!) > parseFloat(a.oldest)) } },
         ...(over.otherParties && { otherParties: lister('otherParties', rec.apiCalls, over.otherParties) }),
         ...(over.dms && { dms: lister('dms', rec.apiCalls, over.dms) }),
-        async replies(a) { rec.apiCalls.push(`replies:${a.ts}`); return { messages: (state.threads[`${a.channel}:${a.ts}`] ?? []).filter(m => a.inclusive ? parseFloat(m.ts!) >= parseFloat(a.oldest) : parseFloat(m.ts!) > parseFloat(a.oldest)) } },
+        async replies(a) {
+          rec.apiCalls.push(`replies:${a.ts}${a.botOnly ? ':botOnly' : ''}${a.cursor ? `@${a.cursor}` : ''}`)
+          const all = (state.threads[`${a.channel}:${a.ts}`] ?? []).filter(m => a.inclusive ? parseFloat(m.ts!) >= parseFloat(a.oldest) : parseFloat(m.ts!) > parseFloat(a.oldest))
+          if (!over.repliesPage) return { messages: all }
+          // Paged as Slack pages a thread: oldest first, each later page led by the thread's first message again.
+          const start = Number(a.cursor ?? 0), end = start + over.repliesPage
+          const body = all.slice(start, end)
+          return { messages: start > 0 ? [all[0], ...body] : body, ...(end < all.length && { next: String(end) }) }
+        },
       }
       return {
         onMessage: h => { rec.handler = h },
@@ -948,5 +956,59 @@ describe('rewriting a message through the connection', () => {
     await t.listener.edit(CH, '2001.000001', 'newer', 'operator')
     await t.listener.remove(CH, '2001.000001', 'operator')
     expect(t.apps[0].apiCalls.filter(c => /^(edit|remove)/.test(c))).toEqual([`edit:app:${CH}:2001.000001:new`, `edit:operator:${CH}:2001.000001:newer`, `remove:operator:${CH}:2001.000001`])
+  })
+})
+
+describe('reading a conversation through the connection (fetch_messages)', () => {
+  test('a thread: its newest messages oldest first, the bot’s own as “me”, a person by name, files counted; it needs a connection', async () => {
+    const t = setup({ threads: { [`${CH}:2000.000001`]: [
+      { ts: '2000.000001', user: 'UB', text: 'first' },
+      { ts: '2001.000001', user: BOT, text: 'answer' },
+      { ts: '2002.000001', bot_id: 'BOTHER', text: 'other bot' },
+      { ts: '2003.000001', user: 'UX', text: 'line\ntwo', files: [{ id: 'F1' }] },
+    ] } })
+    await expect(t.listener.read(CH, '2000.000001', 10, false)).rejects.toThrow('Slack is not connected')
+    await t.listener.start()
+    expect(await t.listener.read(CH, '2000.000001', 10, false)).toEqual([
+      { ts: '2000.000001', author: 'Bea B', mine: false, text: 'first', files: 0 },
+      { ts: '2001.000001', author: 'me', mine: true, text: 'answer', files: 0 },
+      { ts: '2002.000001', author: 'BOTHER', mine: false, text: 'other bot', files: 0 },
+      { ts: '2003.000001', author: 'UX', mine: false, text: 'line\ntwo', files: 1 },
+    ])
+    expect((await t.listener.read(CH, '2000.000001', 2, false)).map(m => m.ts)).toEqual(['2002.000001', '2003.000001'])
+  })
+
+  test('a thread is read with the bot’s token alone unless the caller says the operator’s may read it', async () => {
+    const t = setup({ threads: { [`${CH}:2000.000001`]: [{ ts: '2000.000001', user: 'UB', text: 'first' }] } })
+    await t.listener.start()
+    t.apps[0].apiCalls.length = 0
+    await t.listener.read(CH, '2000.000001', 10, false)
+    await t.listener.read(CH, '2000.000001', 10, true)
+    expect(t.apps[0].apiCalls).toEqual(['replies:2000.000001:botOnly', 'replies:2000.000001'])
+  })
+
+  test('a thread longer than a page is read to its end: its newest messages, its first message once, oldest first', async () => {
+    const msgs = Array.from({ length: 25 }, (_, i) => ({ ts: `${3000 + i}.000001`, user: 'UB', text: `m${i}` }))
+    const t = setup({ repliesPage: 10, threads: { [`${CH}:3000.000001`]: msgs } })
+    await t.listener.start()
+    t.apps[0].apiCalls.length = 0
+    expect((await t.listener.read(CH, '3000.000001', 7, false)).map(m => m.text)).toEqual(['m18', 'm19', 'm20', 'm21', 'm22', 'm23', 'm24'])
+    expect(t.apps[0].apiCalls).toEqual(['replies:3000.000001:botOnly', 'replies:3000.000001:botOnly@10', 'replies:3000.000001:botOnly@20'])
+    expect((await t.listener.read(CH, '3000.000001', 100, false)).map(m => m.text)).toEqual(msgs.map(m => m.text))
+  })
+
+  test(`a thread longer than ${READ_MAX_PAGES} pages is refused, never answered with its oldest messages`, async () => {
+    const thread = (n: number) => Array.from({ length: n }, (_, i) => ({ ts: `${4000 + i}.000001`, user: 'UB', text: `m${i}` }))
+    const t = setup({ repliesPage: 3, threads: { [`${CH}:4000.000001`]: thread(READ_MAX_PAGES * 3 + 1), [`${CH}:5000.000001`]: thread(READ_MAX_PAGES * 3).map(m => ({ ...m, ts: m.ts.replace(/^4/, '5') })) } })
+    await t.listener.start()
+    await expect(t.listener.read(CH, '4000.000001', 5, false)).rejects.toThrow(`the thread 4000.000001 is longer than ${READ_MAX_PAGES * 200} messages, more than fetch_messages reads: its newest can't be reached`)
+    expect((await t.listener.read(CH, '5000.000001', 1, false)).map(m => m.text)).toEqual([`m${READ_MAX_PAGES * 3 - 1}`])
+  })
+
+  test('a channel’s or DM’s top level: Slack’s newest-first history, turned oldest first', async () => {
+    const t = setup({ history: [{ ts: '1003.000001', user: 'UB', text: 'c' }, { ts: '1002.000001', user: BOT, text: 'b' }, { ts: '1001.000001', user: 'UB', text: 'a' }] })
+    await t.listener.start()
+    expect((await t.listener.read(CH, undefined, 2, false)).map(m => [m.ts, m.author])).toEqual([['1002.000001', 'me'], ['1003.000001', 'Bea B']])
+    expect((await t.listener.read(CH, undefined, 100, false)).map(m => m.ts)).toEqual(['1001.000001', '1002.000001', '1003.000001'])
   })
 })

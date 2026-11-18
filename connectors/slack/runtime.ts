@@ -1,4 +1,4 @@
-import { ConversationTable, namedChannels, cantRead, cmpTs, slackWatchesPath, unresolvedPlaces, conversationId, placeName, isDm, appOfEntry, TOP_LEVEL, NO_DIRECTORY, SLACK_LIMITS, type ConversationConfig, type ConversationEntry, type ConversationStats, type LateOwed } from './watch.js'
+import { ConversationTable, namedChannels, cantRead, NOT_A_MEMBER, cmpTs, slackWatchesPath, unresolvedPlaces, conversationId, placeName, isDm, appOfEntry, TOP_LEVEL, NO_DIRECTORY, SLACK_LIMITS, type ConversationConfig, type ConversationEntry, type ConversationStats, type LateOwed } from './watch.js'
 import { archiveUrl, parseConversation, THREAD_TS } from './conversation.js'
 import { ConnectedApps, type AppIdentity } from './apps.js'
 import { getSpecialist, conversationSpecialistOf, specialistOf, boundAs } from '../../specialists/specialists.js'
@@ -6,7 +6,7 @@ import { registry } from '../../daemon/sessions.js'
 import type { SessionInfo } from '../../daemon/sessions.js'
 import { deliverToTarget, conversationSessionName, conversationSessionRunning, placesFree, type Target } from '../../specialists/targets.js'
 import { on } from '../../daemon/event-bus.js'
-import { SlackListener, boltApp, POST_TIMEOUT_MS, OWED_LATE_AFTER_MS, type ToldScopes, type MessageAuthor, type Writer } from './listener.js'
+import { SlackListener, boltApp, POST_TIMEOUT_MS, OWED_LATE_AFTER_MS, type ToldScopes, type MessageAuthor, type Writer, type ReadMessage } from './listener.js'
 import { SlackConnections, type AppHealth } from './connections.js'
 import { STATE_DIR } from '../../daemon/config.js'
 import { ENV_NAME_RE, capturedSpawnVars, scrubbedSpawnVars, tokenVarRefusal } from '../../shared/spawn-env.js'
@@ -55,6 +55,12 @@ export const slackRuntimeDeps = {
     const l = connections.listener(app)
     if (!l) return Promise.reject(new Error(notConnected(hydraConfig().slackApps, app)))
     return l.edit(channel, ts, text, as)
+  },
+  /** A conversation's newest messages, oldest first, read through one app; with `asOperator`, a thread its bot is not in with the operator's token. */
+  read: (channel: string, threadTs: string | undefined, limit: number, app: string = DEFAULT_SLACK_APP, asOperator = false): Promise<ReadMessage[]> => {
+    const l = connections.listener(app)
+    if (!l) return Promise.reject(new Error(notConnected(hydraConfig().slackApps, app)))
+    return l.read(channel, threadTs, limit, asOperator)
   },
   /** Deletes a message through one app: with its bot's token, or the operator's. */
   remove: (channel: string, ts: string, app: string = DEFAULT_SLACK_APP, as: Writer = 'app'): Promise<void> => {
@@ -459,40 +465,84 @@ function mayAnswerConversation(h: HydraConfig, caller: SessionInfo | undefined, 
   return isConversationSession(caller) ? ownSession : (!!me && bound === me)
 }
 
+/** What a session does in a conversation it must answer: the one rule below holds each, and names it in a refusal. */
+export type OwnUse = 'a reply' | 'a read' | 'an edit' | 'a delete' | 'a reaction' | 'a download'
+const OWN_VERB: Readonly<Record<OwnUse, string>> = { 'a reply': 'answer', 'a read': 'read', 'an edit': 'edit', 'a delete': 'delete', 'a reaction': 'react to', 'a download': 'download' }
+
 /**
- * Whether `conversation` is an open conversation the caller answers: bound to its specialist (a conversation's own session:
- * its own). Never throws: an id that parses to nothing, or is not open, is not theirs. Unlike `reply`, this does not count
- * the specialist's `home_place`: a restricted session's tools are held to this.
+ * Why `conversation` is not one the caller may use as `use` (assertOwnConversation), or undefined when it is. Never throws: an id that parses
+ * to nothing, or is not open, is not theirs. The dispatcher holds a restricted or write-confined session's every tool to this.
  */
-export function conversationBelongsTo(callerSessionId: string | undefined, conversation: unknown): boolean {
-  try {
-    const h = hydraConfig()
-    const caller = callerSessionId ? registry.get(callerSessionId) : undefined
-    const me = boundAs(caller, h)
-    const c = parseConversation(conversation)
-    const e = getConversationTable().get(c.channel, c.threadTs, appOfEntry(c))
-    if (!e) return false
-    const bound = e.specialist ? currentId(h, e.specialist) : undefined
-    if (bound && isSessionThread(bound)) return false
-    return mayAnswerConversation(h, caller, me, bound, conversationId(c))
-  } catch { return false }
+export function ownConversationRefusal(callerSessionId: string | undefined, conversation: unknown, use: OwnUse = 'a reply'): string | undefined {
+  try { assertOwnConversation(hydraConfig(), callerSessionId, conversation, use); return undefined } catch (err) { return err instanceof Error ? err.message : String(err) }
 }
 
 /**
- * Throws unless the caller answers this open conversation, whatever it does there (reply, edit, delete); returns who it is bound to.
- * The one place the rule is spelled, so a tool added beside `reply` cannot reach a conversation `reply` could not.
+ * Throws unless `conversation` is an open conversation the caller answers, and returns it: bound to the caller's specialist (a conversation's own
+ * session: that conversation only), never one a session bound to itself to listen. The one ownership rule: `reply` holds every session to it, and
+ * the dispatcher holds a restricted or write-confined session's every tool to it (`ownConversationRefusal`), `fetch_messages`, `edit_message`
+ * and `delete_message` among them. It never counts the specialist's `home_place` (`reply` posts there on its own path).
+ *
+ * A read never reaches a channel's top level. Its conversation (`messages = "all"`) is only the untagged top-level messages, but Slack's
+ * `history` returns every one, those routing gave to another specialist or app too. A DM's top level is the DM's alone, and stays readable.
  */
-function answeredBy(h: HydraConfig, caller: SessionInfo | undefined, me: string | undefined, entry: ConversationEntry, entryId: string, what = 'a reply'): string | undefined {
+function assertOwnConversation(h: HydraConfig, callerSessionId: string | undefined, conversation: unknown, use: OwnUse): { c: ReturnType<typeof parseConversation>; app: string; id: string; entry: ConversationEntry; bound: string | undefined; caller: SessionInfo | undefined; me: string | undefined } {
+  const c = parseConversation(conversation)
+  const app = appOfEntry(c)
+  const id = conversationId(c)
+  if (use === 'a read' && c.threadTs === TOP_LEVEL && !isDm(c.channel)) {
+    throw new Error(`${id} is a channel's top level, which holds every top-level message there, others' too: a read goes only to a thread bound to your specialist (${conversationId({ ...c, threadTs: '<thread ts>' })}) or a DM`)
+  }
+  const entry = getConversationTable().get(c.channel, c.threadTs, app)
+  if (!entry) throw new Error(`${id} is not an open conversation, so there is nothing there to ${OWN_VERB[use]}`)
+  const caller = callerSessionId ? registry.get(callerSessionId) : undefined
+  const me = callerSessionId === 'main' ? MAIN : boundAs(caller, h)
+  return { c, app, id, entry, bound: answeredBy(h, caller, me, entry, id, use), caller, me }
+}
+
+/** Throws unless the caller answers this open conversation (assertOwnConversation's rule, for an entry already in hand); returns who it is bound to. */
+function answeredBy(h: HydraConfig, caller: SessionInfo | undefined, me: string | undefined, entry: ConversationEntry, entryId: string, use: OwnUse): string | undefined {
   const bound = entry.specialist ? currentId(h, entry.specialist) : undefined
   // A thread a session bound to itself is listen-only: only a specialist (or main) speaks in Slack.
   if (bound && isSessionThread(bound)) throw new Error(`${entryId} is bound to a session to listen to: hydra posts to Slack only for a specialist (or main), so reply to the operator instead`)
-  if (!mayAnswerConversation(h, caller, me, bound, entryId)) throw new Error(`${entryId} is bound to ${bound ?? 'no one yet'}${me ? `, not ${me}` : ''}: ${what} goes only to a conversation bound to your specialist (or its home_place)${isConversationSession(caller) ? ', and from a conversation\'s own session only to that conversation' : ''}`)
+  if (!mayAnswerConversation(h, caller, me, bound, entryId)) throw new Error(`${entryId} is bound to ${bound ?? 'no one yet'}${me ? `, not ${me}` : ''}: ${use} goes only to a conversation bound to your specialist${isConversationSession(caller) ? ', and from a conversation\'s own session only to that conversation' : ''}`)
   return bound
 }
 
 /** `edit_message` and `delete_message` with a conversation id as their chat_id. */
 export const editInConversation = (callerSessionId: string | undefined, conversation: unknown, messageId: unknown, text: string): Promise<string> => amendInConversation(callerSessionId, conversation, messageId, { text })
 export const deleteInConversation = (callerSessionId: string | undefined, conversation: unknown, messageId: unknown): Promise<string> => amendInConversation(callerSessionId, conversation, messageId, undefined)
+
+/**
+ * `fetch_messages` with a conversation id as its channel: the conversation's newest `limit` messages, oldest first, read through the app the id
+ * names (`default` when it names none), as `reply` posts through it. Who may read is the dispatcher's: a restricted or write-confined session is
+ * held there to its own conversations (assertOwnConversation, before this runs); any other session (and main) reads what that app's bot can read.
+ * The operator's token, which also reads the operator's own DMs and groups, reads only a conversation hydra holds (in the conversation table), the
+ * reach catch-up has: a thread the bot is not in is read as the operator once it is bound, and refused before then.
+ */
+export async function fetchInConversation(conversation: unknown, limit: number): Promise<ReadMessage[]> {
+  const h = hydraConfig()
+  const c = parseConversation(conversation)
+  const app = appOfEntry(c)
+  const id = conversationId(c)
+  declaredApp(h, app)
+  const bound = !!getConversationTable().get(c.channel, c.threadTs, app)
+  const threadTs = c.threadTs === TOP_LEVEL ? undefined : c.threadTs
+  try {
+    return await slackRuntimeDeps.read(c.channel, threadTs, limit, app, bound)
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err)
+    if (threadTs && !bound && NOT_A_MEMBER.test(why)) {
+      const place = placeName(offlineView(app), c.channel)
+      // Binding helps only where the operator's token can read: it is what a bind is checked with too.
+      const how = h.slackApps[app]?.operatorTokenEnv
+        ? `Bind it first (bind_conversation(conversation="${id}")), then read it: a bound thread is read as the operator, and its new messages are delivered to this session until it is idle a week. Or ask the operator to invite the bot to ${place}`
+        : `Ask the operator to invite the bot to ${place}`
+      throw new Error(`fetch_messages: ${id} can't be read through ${appName(h.slackApps, app)}: its bot isn't in ${place} (${why}), and the operator's token reads only a conversation hydra holds. ${how}`)
+    }
+    throw new Error(`fetch_messages failed for ${id} through ${appName(h.slackApps, app)}: ${why}`)
+  }
+}
 
 /** The user scope the operator's own messages are rewritten with. */
 const OPERATOR_WRITE_SCOPE = SLACK_APP_NEEDS.operatorWriteScope
@@ -522,7 +572,8 @@ async function authorAcross(h: HydraConfig, c: ReturnType<typeof parseConversati
  * Rewrites or deletes one Slack message. Whose message it is is asked of Slack, and decides the token: an app's bot's, with that app's bot token,
  * and the operator's, with the operator's user token. Anyone else's is refused before Slack is asked to touch it. `change` is the new text, or absent to delete.
  * A session that is not a restricted specialist (and main) may do this in any conversation, bound or not. A restricted specialist only
- * touches its own app's posts, in a conversation bound to it (the rule `reply` holds, `answeredBy`), and never the operator's.
+ * touches its own app's posts, never the operator's, and only in a conversation bound to it: the dispatcher holds it there before this runs
+ * (assertOwnConversation), and this holds it again once Slack has been asked, since the conversation may have moved meanwhile.
  */
 async function amendInConversation(callerSessionId: string | undefined, conversation: unknown, messageId: unknown, change: { text: string } | undefined): Promise<string> {
   const verb = change ? 'edit' : 'delete'
@@ -531,15 +582,10 @@ async function amendInConversation(callerSessionId: string | undefined, conversa
   const c = parseConversation(conversation)
   const named = typeof conversation === 'string' && /^slack:[a-z][a-z0-9_-]{0,34}:/.test(conversation.trim())
   const id = conversationId(c)
-  const e = getConversationTable().get(c.channel, c.threadTs, appOfEntry(c))
   const caller = callerSessionId ? registry.get(callerSessionId) : undefined
   const restricted = callerSessionId !== 'main' && (!caller || isRestricted(caller))
   const me = callerSessionId === 'main' ? MAIN : boundAs(caller, h)
-  const what = verb === 'edit' ? 'an edit' : 'a delete'
-  if (restricted) {
-    if (!e) throw new Error(`${id} is not an open conversation, so there is nothing there to ${verb}`)
-    answeredBy(h, caller, me, e, id, what)
-  }
+  const what: OwnUse = verb === 'edit' ? 'an edit' : 'a delete'
   // Exactly Slack's form: a destructive call never completes a ts into a different message.
   if (typeof messageId !== 'string' || !/^\d{1,12}\.\d{6}$/.test(messageId)) throw new Error(`message_id ${String(messageId)} is not a Slack message ts (like 1793732224.093059, six digits after the point): copy it from the delivery`)
   const ts = messageId
@@ -592,15 +638,8 @@ export async function replyInConversation(callerSessionId: string | undefined, c
     await postParts(speaks!, homePlaceId, undefined, text, where, true, () => homePlaceChannel(hydraConfig(), me!, speaks) === homePlaceId, bindThread)
     return unbound ? `posted to ${where}, but its thread is not bound to ${me}: ${unbound}` : `posted to ${where}; replies in its thread come back to ${me}`
   }
-  const c = parseConversation(conversation)
-  const app = appOfEntry(c)
-  const id = conversationId(c)
-  const e = getConversationTable().get(c.channel, c.threadTs, app)
-  if (!e) throw new Error(`${id} is not an open conversation, so there is nothing there to answer`)
-  const caller = callerSessionId ? registry.get(callerSessionId) : undefined
-  /** Throws unless the caller answers this open conversation; returns who it is bound to, which `stillMine` holds it to before every part. */
-  const mayAnswer = (entry: ConversationEntry, entryId: string): string | undefined => answeredBy(h, caller, me, entry, entryId)
-  const bound = mayAnswer(e, id)
+  // Who it is bound to, which `stillMine` holds it to before every part.
+  const { c, app, id, caller, bound } = assertOwnConversation(h, callerSessionId, conversation, 'a reply')
   // Which thread the post goes in. A thread conversation is its one thread (Slack threads are flat: no message inside one can be answered on its own);
   // a top-level conversation (only a DM has one) is answered in the thread of the message `reply_to` names, else at its top level.
   let thread = c.threadTs === TOP_LEVEL ? undefined : c.threadTs
@@ -616,7 +655,7 @@ export async function replyInConversation(callerSessionId: string | undefined, c
       // Its thread is a new conversation, with a session of its own when the specialist runs one per conversation: not this one's to open.
       if (isConversationSession(caller)) throw new Error(`reply_to cannot open a thread from a conversation's own session: the thread would be a new conversation with a session of its own. Nothing was posted; answer ${id} without reply_to`)
       nested = getConversationTable().get(c.channel, ts, app)
-      if (nested) mayAnswer(nested, conversationId({ ...c, threadTs: ts }))
+      if (nested) answeredBy(h, caller, me, nested, conversationId({ ...c, threadTs: ts }), 'a reply')
       thread = ts
       opened = nested ? undefined : ts
       how = `, in the thread of message ${ts}`

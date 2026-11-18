@@ -91,8 +91,9 @@ describe('a session edits and deletes the messages its own app posted', () => {
   })
 
   test('only in a conversation bound to it, as reply holds: another’s, or one not open, is refused before Slack is asked', async () => {
-    await expect(editInConversation('crm-session', 'slack:sales:C1:5.000001', '8.000001', 'x')).rejects.toThrow(`slack:sales:C1:5.000001 is bound to ${DEALS}, not ${CRM}`)
-    await expect(deleteInConversation('deals-session', 'slack:C1:5.000001', '8.000001')).rejects.toThrow('slack:C1:5.000001 is not an open conversation')
+    // Held at the dispatcher, the one place a restricted session's tools are checked.
+    expect((await executeTool('edit_message', { chat_id: 'slack:sales:C1:5.000001', message_id: '8.000001', text: 'x' }, 'crm-session')).content[0].text).toContain(`slack:sales:C1:5.000001 is bound to ${DEALS}, not ${CRM}`)
+    expect((await executeTool('delete_message', { chat_id: 'slack:C1:5.000001', message_id: '8.000001' }, 'deals-session')).content[0].text).toContain('slack:C1:5.000001 is not an open conversation')
     expect(reads).toEqual([])
     expect(calls).toEqual([])
   })
@@ -158,7 +159,7 @@ describe('the operator’s own messages: a restricted specialist never touches t
   })
 
   test('a restricted specialist is held to the conversation rule: one bound to another is refused before Slack is asked', async () => {
-    await expect(editInConversation('crm-session', 'slack:C1:7.000001', '8.000001', 'x')).rejects.toThrow(`slack:C1:7.000001 is bound to main, not ${CRM}`)
+    expect((await executeTool('edit_message', { chat_id: 'slack:C1:7.000001', message_id: '8.000001', text: 'x' }, 'crm-session')).content[0].text).toContain(`slack:C1:7.000001 is bound to main, not ${CRM}`)
     expect(reads).toEqual([])
   })
 

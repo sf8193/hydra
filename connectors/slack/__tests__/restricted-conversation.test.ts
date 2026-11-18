@@ -7,8 +7,8 @@ import { STATE_DIR } from '../../../daemon/config.js'
 import { registry } from '../../../daemon/sessions.js'
 import { setSpecialistThread, _reloadSpecialists } from '../../../specialists/specialists.js'
 import { _setHydraConfigForTesting } from '../../../daemon/hydra-config.js'
-import { restrictedRefusal } from '../../../daemon/bridge-dispatch.js'
-import { conversationBelongsTo, getConversationTable, slackRuntimeDeps, stopSlackListener } from '../runtime.js'
+import { restrictedRefusal, PLACE_USE } from '../../../daemon/bridge-dispatch.js'
+import { ownConversationRefusal, getConversationTable, slackRuntimeDeps, stopSlackListener } from '../runtime.js'
 import { TOP_LEVEL } from '../conversation.js'
 import { TWO_APPS, hydra, view } from './slack-config.js'
 
@@ -56,14 +56,14 @@ afterEach(() => {
 describe('a Slack conversation bound to the specialist', () => {
   test.each(KEPT)('%s passes the scope check there', (tool, key) => {
     getConversationTable().bind('C1', '5.000001', CRM, 'tool')
-    expect(conversationBelongsTo('crm-session', 'slack:C1:5.000001')).toBe(true)
+    expect(ownConversationRefusal('crm-session', 'slack:C1:5.000001')).toBeUndefined()
     expect(restrictedRefusal('crm-session', tool, { [key]: 'slack:C1:5.000001', text: 'x' })).toBeUndefined()
   })
   test.each(KEPT)('%s is refused in a conversation bound to another specialist, and in one bound to no one', (tool, key) => {
     getConversationTable().bind('C2', '6.000001', OPS, 'tool')
     for (const other of ['slack:C2:6.000001', 'slack:C1:7.000001']) {
-      expect(conversationBelongsTo('crm-session', other)).toBe(false)
-      expect(restrictedRefusal('crm-session', tool, { [key]: other, text: 'x' })).toBe(`${tool}: ${key} ${other} is not this session's own conversation; a restricted session acts only in its own thread or in a Slack conversation bound to its specialist`)
+      expect(ownConversationRefusal('crm-session', other)).toBeDefined()
+      expect(restrictedRefusal('crm-session', tool, { [key]: other, text: 'x' })).toBe(`${tool}: ${key} ${other} is not this session's own conversation; a restricted session acts only in its own thread or in a Slack conversation bound to its specialist (${ownConversationRefusal('crm-session', other, PLACE_USE[tool as string])})`)
     }
   })
 })
@@ -71,18 +71,18 @@ describe('a Slack conversation bound to the specialist', () => {
 describe("the specialist's home_place is not its conversation", () => {
   // Every spelling reply accepts for a home_place: the configured value, the channel, and the channel's top level.
   const HOME = ['slack:C9', 'slack:C9:' + TOP_LEVEL, 'C9']
-  test.each(HOME)('conversationBelongsTo(%s) is false', home => {
-    expect(conversationBelongsTo('crm-session', home)).toBe(false)
+  test.each(HOME)('%s is not its own conversation', home => {
+    expect(ownConversationRefusal('crm-session', home)).toBeDefined()
   })
   for (const [tool, key] of KEPT) {
     test.each(HOME)(`${tool} on home %s is refused`, home => {
-      expect(restrictedRefusal('crm-session', tool, { [key]: home, text: 'x' })).toBe(`${tool}: ${key} ${home} is not this session's own conversation; a restricted session acts only in its own thread or in a Slack conversation bound to its specialist`)
+      expect(restrictedRefusal('crm-session', tool, { [key]: home, text: 'x' })).toStartWith(`${tool}: ${key} ${home} is not this session's own conversation; a restricted session acts only in its own thread or in a Slack conversation bound to its specialist`)
     })
   }
   test('even with the home_place open as a conversation bound to the specialist (a post to it opens one)', () => {
     getConversationTable().bind('C9', '8.000001', CRM, 'home')
     // That thread IS bound to the specialist, so it is its conversation: the refusal is for the channel itself.
-    expect(conversationBelongsTo('crm-session', 'slack:C9:8.000001')).toBe(true)
-    expect(conversationBelongsTo('crm-session', 'slack:C9')).toBe(false)
+    expect(ownConversationRefusal('crm-session', 'slack:C9:8.000001')).toBeUndefined()
+    expect(ownConversationRefusal('crm-session', 'slack:C9')).toBeDefined()
   })
 })
