@@ -8,7 +8,7 @@
  */
 
 import { execFile } from 'child_process'
-import { existsSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, symlinkSync, unlinkSync, writeFileSync } from 'fs'
 import { join } from 'path'
 
 const PLUGIN_VERSION = '0.0.4'
@@ -144,4 +144,67 @@ export async function ensureBridgeReady(targetDir: string, install: InstallRunne
     }
   }
   return installed
+}
+
+/** The plugin cache directory that holds one folder per installed bridge plugin version. */
+export const bridgePluginCache = (claudeConfig: string): string => join(claudeConfig, 'plugins', 'cache', BRIDGE_MARKETPLACE, BRIDGE_PLUGIN)
+
+/** True when `serverTs` is a symlink to `bridgeSrc`. */
+export function isLinkedTo(serverTs: string, bridgeSrc: string): boolean {
+  try { return lstatSync(serverTs).isSymbolicLink() && readlinkSync(serverTs) === bridgeSrc } catch { return false }
+}
+
+function writeIfChanged(path: string, content: string): void {
+  try { if (readFileSync(path, 'utf8') === content) return } catch {}
+  writeFileSync(path, content)
+}
+
+const readyInFlight = new Set<string>()
+
+/**
+ * Make every plugin version directory launch this repo's bridge.
+ *
+ * `server.ts` is a symlink to `bridge.ts`, never a copy: bridge.ts imports
+ * `./shared/*`, which a copy in the cache cannot find, so every bridge started
+ * from a copy dies at load and its session has no channel (Nov 18: the plugin
+ * auto-updated 0.0.4 → 0.0.5, the next sync copied, every new spawn was bridgeless).
+ *
+ * Claude Code can add a version directory at any time (plugin auto-update), so
+ * this runs before each spawn as well as at boot. It is idempotent and only
+ * writes what differs. Returns the version dirs whose server.ts it (re)linked.
+ */
+export function syncBridgePlugin(o: {
+  bridgeSrc: string
+  cacheDir: string
+  platform: string
+  daemonConfig: string
+  ready?: (dir: string) => Promise<boolean>
+  log?: (line: string) => void
+}): string[] {
+  const log = o.log ?? (() => {})
+  const ready = o.ready ?? (dir => ensureBridgeReady(dir))
+  const relinked: string[] = []
+  const versionDirs = readdirSync(o.cacheDir, { withFileTypes: true }).filter(d => d.isDirectory())
+  for (const d of versionDirs) {
+    const targetDir = join(o.cacheDir, d.name)
+    const serverTs = join(targetDir, 'server.ts')
+    if (!isLinkedTo(serverTs, o.bridgeSrc)) {
+      try { unlinkSync(serverTs) } catch {}
+      symlinkSync(o.bridgeSrc, serverTs)
+      relinked.push(targetDir)
+    }
+    writeIfChanged(join(targetDir, `daemon-${o.platform}.json`), o.daemonConfig)
+    writeIfChanged(join(targetDir, '.mcp.json'), MCP_CONFIG)
+    mkdirSync(join(targetDir, '.claude-plugin'), { recursive: true })
+    writeIfChanged(join(targetDir, '.claude-plugin', 'plugin.json'), PLUGIN_MANIFEST)
+    // Not awaited: neither boot nor a spawn waits on the registry. One ensureBridgeReady per dir at a time (it is a cheap read once deps are in).
+    if (!readyInFlight.has(targetDir)) {
+      readyInFlight.add(targetDir)
+      void ready(targetDir).then(
+        installed => { if (installed) log(`installed bridge deps + lifted start script in ${targetDir}`) },
+        err => log(`bridge deps install failed in ${targetDir} (spawns keep installing): ${err instanceof Error ? err.message : String(err)}`),
+      ).finally(() => readyInFlight.delete(targetDir))
+    }
+  }
+  return relinked
 }

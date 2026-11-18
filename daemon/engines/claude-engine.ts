@@ -28,7 +28,7 @@ import { CLAUDE_CONFIG, ENV_FILE, SOCK_PATH, PLATFORM, STATE_DIR } from '../conf
 import { gateway } from '../config.js'
 import { SESSION_IDENTITY_VARS, capturedSpawnVars, confinedEnvUnsets, scrubbedSpawnEnv, withRaisedFdLimit } from '../../shared/spawn-env.js'
 import { modsExport } from '../../shared/mods.js'
-import { BRIDGE_CHANNEL_FLAG, BRIDGE_MCP_SERVER_KEY, BRIDGE_PLUGIN_ID, BRIDGE_TOOLS_PERMISSION, BUILTIN_TOOL_PLUGIN_IDS } from '../plugin-manifest.js'
+import { BRIDGE_CHANNEL_FLAG, BRIDGE_MCP_SERVER_KEY, BRIDGE_PLUGIN_ID, BRIDGE_TOOLS_PERMISSION, BUILTIN_TOOL_PLUGIN_IDS, bridgePluginCache, syncBridgePlugin } from '../plugin-manifest.js'
 import { confined, deliveryRefusal, type LaunchPolicy, missingTokenRefusal, PolicyRefusal, remedy, RESTRICTED_MODS, RESTRICTED_PREAMBLE, sandboxInputs, serverToolRule, type ConfinedPolicy } from '../restricted.js'
 import { verifyConfinement as verifyConfinementLoaded, verifyLaunch as verifyLoaded, type Verdict } from './claude-verify.js'
 import { ENGINE_CAPABILITIES } from '../../shared/engine-capabilities.js'
@@ -47,6 +47,8 @@ export type ClaudeSubject = Pick<SessionInfo, 'tmuxName'> & Partial<Pick<Session
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
+/** This repo's bridge, which every plugin version dir's server.ts must link to. */
+const BRIDGE_SRC = join(import.meta.dir, '..', '..', 'bridge.ts')
 
 /**
  * What a restricted launch writes and passes: the settings (the bridge plugin on, and the only tool permissions: the bridge's
@@ -463,6 +465,20 @@ export class ClaudeEngine implements EngineAdapter {
       ...(promptFile ? [promptFile.load] : []),
       `${claudeArgs} 2>>${shq(stderrLog)}`,
     ].join(' && ')
+
+    // Claude Code may have added a plugin version dir since boot (auto-update); link its server.ts before this spawn loads it.
+    try {
+      const relinked = syncBridgePlugin({
+        bridgeSrc: BRIDGE_SRC,
+        cacheDir: bridgePluginCache(CLAUDE_CONFIG),
+        platform: PLATFORM,
+        daemonConfig: JSON.stringify({ socket: SOCK_PATH, platform: PLATFORM }),
+        log: line => process.stderr.write(`daemon: ${line}\n`),
+      })
+      if (relinked.length) process.stderr.write(`daemon: spawn ${tmuxName}: relinked bridge server.ts in ${relinked.join(', ')}\n`)
+    } catch (err) {
+      process.stderr.write(`daemon: spawn ${tmuxName}: bridge sync skipped (non-fatal): ${err instanceof Error ? err.message : String(err)}\n`)
+    }
 
     // A needs-auth entry for the bridge would make this process skip it silently (claude-needs-auth.ts).
     const cleared = await clearNeedsAuthEntry(BRIDGE_MCP_SERVER_KEY)

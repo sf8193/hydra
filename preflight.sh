@@ -61,6 +61,15 @@ fi
 BRIDGE_DIR="$CONFIG_DIR/plugins/cache/claude-plugins-official/discord"
 if ls "$BRIDGE_DIR"/*/server.ts >/dev/null 2>&1; then
   ok "bridge plugin present in config dir"
+  # Each version dir's server.ts must be a symlink to this repo's bridge.ts: a copy cannot find ./shared/*
+  # and every bridge started from it dies at load. The daemon relinks at boot and before each spawn.
+  for s in "$BRIDGE_DIR"/*/server.ts; do
+    if [ "$(readlink "$s" 2>/dev/null)" = "$SCRIPT_DIR/bridge.ts" ]; then
+      ok "$(basename "$(dirname "$s")")/server.ts links to bridge.ts"
+    else
+      bad "$s is not a symlink to $SCRIPT_DIR/bridge.ts (a copy breaks every new bridge). Fix: ln -sfn '$SCRIPT_DIR/bridge.ts' '$s', or restart the daemon"
+    fi
+  done
 else
   bad "bridge plugin NOT in $CONFIG_DIR — sessions can't reach the daemon. Install: claude plugin install discord@claude-plugins-official"
 fi
