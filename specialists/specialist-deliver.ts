@@ -7,7 +7,7 @@ import { occupancy, occupied } from '../daemon/session-reachability.js'
 import { pushToolSurface } from '../daemon/tool-surface.js'
 import { resumeIdleLimit } from '../daemon/idle-limit.js'
 import { parseIdleTtl } from '../shared/constants.js'
-import { conversationSpecialistOf, getSpecialist, setSpecialistThread, readKickoff, specialistOf, declaredEngineOf, withTargetLock, type Specialist } from './specialists.js'
+import { conversationSpecialistOf, getSpecialist, setSpecialistThread, readKickoff, declaredInToml, specialistOf, declaredEngineOf, withTargetLock, type Specialist } from './specialists.js'
 import { safeSend } from '../daemon/util.js'
 import { deliverToTarget } from './targets.js'
 
@@ -77,7 +77,7 @@ async function fill(name: string, specialist: Specialist, initiator: string | un
     ...(!onPlatform && { newThreadIn: specialist.channel }),
     respawnTopic: () => {
       const kickoff = readKickoff(specialist)
-      if (!kickoff) throw new Error('the specialist has no kickoff')
+      if (!kickoff) throw new Error(`the specialist has no kickoff: ${declaredInToml() ? `give [specialists.${name}] a kickoff or kickoff_file in hydra.toml` : `set one with \`hydra specialist set ${name} --kickoff-file <file>\``}`)
       return kickoff
     },
     name, model: specialist.model, declaredEngine: declaredEngineOf(specialist), ...(specialist.workdir && { cwd: specialist.workdir }),

@@ -57,7 +57,8 @@ Lifecycle:
 Session management:
   hydra spawn <prompt>                 Spawn a new session
   hydra spawn [options] -- <prompt>    Everything after -- is the prompt, even text starting with "-"
-  hydra spawn --specialist <name>      Spawn the session for a declared specialist (its kickoff is the prompt; refuses if it is already filled)
+  hydra spawn --specialist <name> --initiator <who> --idempotency-key <key>
+                                       Spawn the session for a declared specialist (its kickoff, which it must have, is the prompt; refuses if it is already filled)
   hydra list                           List active sessions
   hydra status <name>                  Session details
   hydra kill <name> [--destroy]        Kill a session; --destroy (or +d) then deletes its Discord thread, permanently
@@ -114,7 +115,7 @@ Specialists (named addresses that refill themselves):
                                        a name needs a letter (an all-digit one reads as a thread id);
                                        once hydra.toml declares specialists, recipes live there and set takes only --thread
   hydra specialist show <name> | list | rm <name>   (rm: without hydra.toml only)
-  hydra [--state-dir <dir>] specialist browser <name> [--server <name>] [--trust-existing] [--dry-run]   open a write-confined specialist's browser profile to log it in (run before its first session)
+  hydra [--state-dir <dir>] specialist browser <name> [--server <name>] [--trust-existing] [--dry-run]   open a write-confined specialist's browser profile to log it in (run before its first session; --dry-run only prints the plan, and a session may run it)
 
 Routing (hydra.toml):
   hydra route --person <person:id|address|stranger> --place <place> [--app <app:id>] [--heard-by <app:id,app:id>] [--mentioned <app:id,app:id>] [--bound <specialist> [--bound-app <app:id>]]
@@ -370,12 +371,9 @@ async function main(): Promise<void> {
         console.error('error: prompt is required')
         process.exit(1)
       }
-      if (!idempotencyKey) {
-        console.error('error: --idempotency-key is required')
-        process.exit(1)
-      }
-      if (!initiator) {
-        console.error('error: --initiator is required')
+      const missing = [!idempotencyKey && '--idempotency-key <key>', !initiator && '--initiator <who>'].filter(Boolean)
+      if (missing.length) {
+        console.error(`error: ${missing.join(' and ')} ${missing.length > 1 ? 'are' : 'is'} required`)
         process.exit(1)
       }
       if (message && !channel) {

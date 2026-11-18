@@ -32,6 +32,21 @@ describe('what it refuses', () => {
   test('a session (this is the operator\'s command, never a session\'s)', () => {
     expect(planBrowser(cfg(), 'gem', {}, probes({ isSession: true }))).toEqual({ ok: false, error: 'hydra specialist browser is for the operator at their own terminal; it is not run from a hydra session' })
   })
+  test('a session may dry-run it: the plan is the operator\'s plan, nothing is opened', async () => {
+    expect(planBrowser(cfg(), 'gem', { dryRun: true }, probes({ isSession: true }))).toEqual(planBrowser(cfg(), 'gem', {}, probes()))
+    const out: string[] = [], err: string[] = []
+    let opened = 0
+    const code = await browserCommand(['gem', '--dry-run'], { config: cfg(), probes: probes({ isSession: true }), mkdir: () => { opened++ }, mark: () => { opened++ }, setup: async () => { opened++ }, spawn: async () => { opened++ }, log: l => out.push(l), error: l => err.push(l) })
+    expect({ code, err, opened }).toEqual({ code: 0, err: [], opened: 0 })
+    expect(out.join('\n')).toContain('would open: /opt/b/browser')
+  })
+  test('a session\'s real run is still refused, with --dry-run absent', async () => {
+    const err: string[] = []
+    let opened = 0
+    const code = await browserCommand(['gem'], { config: cfg(), probes: probes({ isSession: true }), mkdir: () => { opened++ }, mark: () => { opened++ }, setup: async () => { opened++ }, spawn: async () => { opened++ }, log: () => {}, error: l => err.push(l) })
+    expect({ code, opened }).toEqual({ code: 1, opened: 0 })
+    expect(err[0]).toContain('for the operator at their own terminal')
+  })
   test('a profile in use: a declared lock file is there; says which and how it knows, and to hydra kill first', () => {
     const r = planBrowser(cfg(), 'gem', {}, probes({ present: p => p === `${WORK}/.browser/profile/SingletonLock` }))
     expect(r).toMatchObject({ ok: false })
