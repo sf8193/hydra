@@ -202,7 +202,7 @@ Two rules may send the same place, to everyone, to two specialists only when no 
 4. The app named `default`, if it delivers to someone at this place.
 5. The first app, in hydra.toml order, that delivers to someone at this place.
 
-An app "delivers to someone at this place" when a rule that matches there sends to a specialist it serves (or to `main`), or it is a DM. If no app that heard the message does, 4 and 5 pick among all that heard it. So a channel whose only app is pinned to `sales` is answered by `sales` with no `default_app` set; set one only to choose between apps that all deliver.
+An app "delivers to someone at this place" when a rule that matches there sends to a specialist it serves (or to `main`), or it is a DM. A catch-all (a rule that sends every place to `main`: no `place`) does not count: it takes only what nothing else claims. If no app that heard the message does, 4 and 5 pick among all that heard it. So a channel whose only app is pinned to `sales` is answered by `sales` with no `default_app` set; set one only to choose between apps that all deliver.
 
 The other apps do nothing: `hydra route` shows them as `ignored`, with the owning app. The owning app is decided before any specialist, and never hands a message on: if it reaches no one (an explicit `default_app` that delivers to nobody there), the message is unrouted.
 
@@ -236,7 +236,24 @@ A message from another app's bot is another bot's message: it is passed over unl
 
 The operator's app may still route something the operator saw to a specialist, by a rule or a place in hydra.toml. An app that only speaks or reacts is allowed too. Neither is the default.
 
-**Hearing and speaking are separate.** The operator token reads, and edits or deletes the operator's own messages ([below](#editing-and-deleting-slack-messages)); it never posts. Replies, reactions and new threads go out through a bot, and only where that bot is a member. So in a channel where only the operator's token hears, hydra can listen and route, but nothing answers there until a bot is invited.
+**Hearing and speaking are separate.** The operator token reads, and edits or deletes the operator's own messages ([below](#editing-and-deleting-slack-messages)); it never posts. Replies, reactions and new threads go out through a bot, and only where that bot is a member; the bot never joins a channel by itself. So in a channel where only the operator's token hears, hydra can listen and route, and an answer meant for a thread there goes to the operator's DM with the app instead, with a link to the thread and why. Invite the bot wherever answers should go in the thread.
+
+### The operator tags their own app
+
+*Slack connector.* With the operator's app, the operator can tag it in any thread they are in, and the thread goes to `main`. One rule says so:
+
+```toml
+[[rules]]
+app = "app:<the operator's app>"    # the app with operator_token_env
+person = "person:<operator id>"      # only the operator's tag; anyone else's stays unrouted (logged)
+target = "main"
+```
+
+It names no place, so it is a catch-all: a thread already bound goes to its binding, and every other rule is tried first, wherever the catch-all is written; it takes what would otherwise be unrouted. It reads only what the operator addresses to the app (a tag, or a thread already with main), and, where a place hears every message (`messages = "all"`) and the operator's app answers that place's untagged messages, the operator's own messages there that no other rule takes. Never someone else's message, nor a DM between the operator and another person.
+
+The first delivery to main of any channel thread (this one, or one a rule sends to main) tells main what it may do: answer it (`reply` with the conversation as `chat_id`), or hand it to a session already on that work, or one it spawns, with `hydra conversations bind <conversation> thread:<id> --why "<one line>"`. That bind posts in the thread, through the app, `→ <session> <link to its thread>: <why>`. Every later message in the thread, tagged or not, goes to the session. The session listens; main and specialists speak in Slack. A tag in a thread a session holds stays with that session: the catch-all never takes it back.
+
+Where the bot is not in the channel, main's answer and the bind's notice go to the operator's DM with the app, under a line naming who wrote it and linking the thread (a restricted specialist's answer never does: it fails as before). The bot never joins a channel; invite it wherever answers should go in the thread. No Slack app change is needed.
 
 ## DMs and group DMs the operator's app hears
 
@@ -265,7 +282,7 @@ place = "slack:group-dm:*"   # every group DM the operator is in
 target = "specialist:deals"
 ```
 
-`hydra route --person person:alice --place slack:person-dm:alice` shows what a DM with Alice would do (`--place` names one place, never `*`). Settings in `[places]` (`ack`, `files`, `messages`, `bots`, `default_app`, `link_previews`) resolve the specific place before `*`: an entry for `slack:app-dm:sales` wins over `slack:app-dm:*`, whole, so a setting the specific entry leaves out is not read from the `*` one. Rules are still first match in file order. Only `ack` and `files` apply to `[places."slack:person-dm:alice"]` and `[places."slack:group-dm:*"]`; `link_previews`, `messages`, `bots` and `reactions` there are errors when hydra.toml loads. A `[places]` entry alone counts as naming a place, so untagged chatter in a channel only `[places]` names is heard.
+`hydra route --person person:alice --place slack:person-dm:alice` shows what a DM with Alice would do (`--place` names one place, never `*`). Settings in `[places]` (`ack`, `files`, `messages`, `bots`, `default_app`, `link_previews`) resolve the specific place before `*`: an entry for `slack:app-dm:sales` wins over `slack:app-dm:*`, whole, so a setting the specific entry leaves out is not read from the `*` one. Rules are still first match in file order, except that a catch-all (no `place`, `target = "main"`) is tried after every other rule. Only `ack` and `files` apply to `[places."slack:person-dm:alice"]` and `[places."slack:group-dm:*"]`; `link_previews`, `messages`, `bots` and `reactions` there are errors when hydra.toml loads. A `[places]` entry alone counts as naming a place, so untagged chatter in a channel only `[places]` names is heard.
 
 **How a DM gets its place.** Two lists answer two questions. The bot's own DMs (`users.conversations`, types `im`, with the bot token) say which DM is `slack:app-dm:<app>`. For any other DM, the operator's DMs (the same call with the user token, scope `im:read`) say who is on the other end: a person in `[people]` is `slack:person-dm:<person>`. Each list is read at connect and for a DM it has not seen, once at a time; the user list is capped at 25 pages of 200 DMs, so a DM beyond the first 5,000 is not named and is dropped; a DM on neither list goes by no name and is dropped, and a failed read is not tried again for a minute. A group DM's id looks like a channel's, so it is told by the event's `channel_type` (`mpim`). Read-only calls against a real install showed each DM from `users.conversations` carries its other party in `user`, on both tokens (one page, no cursor, for 138 DMs; the pagination stays). **Not yet proven:** the `message.im` and `message.mpim` user-event shapes, and a live drop of a real DM (the go-live check). DMs with people and group DMs are heard live only: catch-up does not rescan them, and the bot answers only where it is a member.
 

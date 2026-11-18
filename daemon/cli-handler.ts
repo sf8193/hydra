@@ -488,14 +488,14 @@ function setSpecialistUnderLock(
 // Conversations and routing: the operator's view
 // ---------------------------------------------------------------------------
 
-function handleConversations(req: CLIRequest): CLIResponse {
-  const p = req.params as { action?: string; conversation?: string; to?: string }
+async function handleConversations(req: CLIRequest): Promise<CLIResponse> {
+  const p = req.params as { action?: string; conversation?: string; to?: string; why?: string }
   try {
     switch (p.action ?? 'list') {
       case 'list': return respond(req, true, { conversations: formatConversations(), health: slackConversationHealth() })
       case 'bind':
         if (!p.conversation || !p.to) return respond(req, false, 'a conversation and a specialist are required')
-        return respond(req, true, { bound: operatorBind(p.conversation, p.to) })
+        return respond(req, true, { bound: await operatorBind(p.conversation, p.to, typeof p.why === 'string' ? p.why : undefined) })
       case 'unbind':
         if (!p.conversation) return respond(req, false, 'a conversation is required')
         return respond(req, true, { unbound: operatorUnbind(p.conversation) })
@@ -530,7 +530,7 @@ export async function handleCLIRequest(req: CLIRequest): Promise<CLIResponse> {
       case 'check-key': response = handleCheckKey(req); break
       case 'deliver': response = withResult(await handleDeliver(req)); break
       case 'specialist': response = await handleSpecialist(req); break
-      case 'conversations': response = handleConversations(req); break
+      case 'conversations': response = await handleConversations(req); break
       case 'route': response = handleRoute(req); break
       case 'jobs-run': response = handleJobsRun(req); break
       case 'jobs-mark-done': response = handleJobsMarkDone(req); break

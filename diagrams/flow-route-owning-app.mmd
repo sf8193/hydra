@@ -13,7 +13,7 @@ flowchart TD
     o3["c. the <b>Place</b>'s default_app"]
     o4["d. the app named default"]
     o5["e. the first app hydra.toml declares"]
-    pool["d and e: among the apps that deliver<br/>to someone here, if any do"]
+    pool["d and e: among the apps that deliver<br/>to someone here, if any do<br/>(a catch-all rule to main does not count)"]
     o1 --> o2 --> o3 --> o4 --> o5 ~~~ pool
   end
   g2{"2. is this app<br/>the owning app?"}

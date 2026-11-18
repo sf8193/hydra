@@ -43,7 +43,10 @@ function genNew(r: R): HydraConfig {
   const rules = Array.from({ length: 1 + Math.floor(r() * 7) }, () => {
     const key = chance(r, 0.85) ? pick(r, KEYS) : undefined
     const app = key === undefined || chance(r, 0.2) ? pick(r, apps) : undefined
-    return { target: pick(r, TARGETS), ...(key && { place: mustParsePlace(key) }), ...(app && { app }), ...(chance(r, 0.25) && { person: pick(r, ['alice', 'bob', 'staff', 'anyone']) }) }
+    // A rule to main with no place is a catch-all, whose owning-app rule came after the frozen parent: it is fuzzed against main in
+    // operator-tag-fuzz.test.ts. Same draw, so every other generated config is unchanged.
+    const target = pick(r, TARGETS)
+    return { target: key === undefined && target === 'main' ? 's1' : target, ...(key && { place: mustParsePlace(key) }), ...(app && { app }), ...(chance(r, 0.25) && { person: pick(r, ['alice', 'bob', 'staff', 'anyone']) }) }
   })
   const places: Record<string, Opt> = {}
   for (const k of KEYS) if (chance(r, 0.35)) {

@@ -148,8 +148,8 @@ describe('any session listens to a Slack thread: bound to its own thread', () =>
     try {
       for (const c of ['slack:C9:1793732224.093060', 'slack:C9:1793732224.09306', 'slack:default:C9:1793732224.093060'])
         await expect(bindConversation({ threadId: SLACK }, c)).rejects.toThrow("is a hydra session's own thread")
-      expect(() => operatorBind('slack:C9:1793732224.093060', `thread:${SLACK}`)).toThrow("is a hydra session's own thread")
-      expect(operatorBind('slack:C9:1793732224.093060', 'main')).toBe('slack:C9:1793732224.093060 → main')
+      await expect(operatorBind('slack:C9:1793732224.093060', `thread:${SLACK}`)).rejects.toThrow("is a hydra session's own thread")
+      expect(await operatorBind('slack:C9:1793732224.093060', 'main')).toBe('slack:C9:1793732224.093060 → main')
     } finally { registry.deleteThread('C9:1793732224.093060') }
   })
 
@@ -195,9 +195,9 @@ describe('any session listens to a Slack thread: bound to its own thread', () =>
     } finally { (gateway as any).send = realSend }
   })
 
-  test('the operator can bind a thread to a session; hydra conversations shows the session by name', () => {
+  test('the operator can bind a thread to a session; hydra conversations shows the session by name', async () => {
     session('sw-named', MINE)
-    expect(operatorBind('slack:C9:8.000001', `thread:${MINE}`)).toBe(`slack:C9:8.000001 → ${MINE}`)
+    expect(await operatorBind('slack:C9:8.000001', `thread:${MINE}`)).toStartWith(`slack:C9:8.000001 → ${MINE}; `)
     expect(formatConversations().find(l => l.startsWith('slack:C9:8.000001'))).toContain(`→ sw-named (listening, thread ${MINE})`)
   })
 

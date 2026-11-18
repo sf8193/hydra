@@ -54,7 +54,10 @@ function genOld(r: R): HydraConfig {
   const rules = Array.from({ length: 1 + Math.floor(r() * 6) }, () => {
     const place = chance(r, 0.85) ? pick(r, OLD_PLACES) : undefined
     const app = place === undefined || chance(r, 0.2) ? pick(r, apps) : undefined
-    return { target: pick(r, TARGETS), ...(place && { place }), ...(app && { app }), ...(chance(r, 0.25) && { person: pick(r, ['alice', 'bob', 'staff', 'anyone']) }) }
+    // A rule to main with no place is a catch-all, whose owning-app rule came after the frozen parent: it is fuzzed against main in
+    // operator-tag-fuzz.test.ts. Same draw, so every other generated config is unchanged.
+    const target = pick(r, TARGETS)
+    return { target: place === undefined && target === 'main' ? 's1' : target, ...(place && { place }), ...(app && { app }), ...(chance(r, 0.25) && { person: pick(r, ['alice', 'bob', 'staff', 'anyone']) }) }
   })
   const places: Record<string, OldOptions> = {}
   for (const p of OLD_PLACES) if (chance(r, 0.35)) {

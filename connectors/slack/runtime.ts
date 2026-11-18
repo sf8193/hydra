@@ -27,6 +27,7 @@ import { timed } from '../../shared/loop-watch.js'
 import { registerSlackChannelNames } from '../../shared/link-previews.js'
 import { bareOf, readTarget } from '../../shared/target-kind.js'
 import { placeInInbox } from '../../shared/confined-inbox.js'
+import { oneLine } from '../../shared/untrusted-text.js'
 
 const log = (line: string) => { process.stderr.write(line) }
 
@@ -668,7 +669,14 @@ export async function replyInConversation(callerSessionId: string | undefined, c
   // Through the app that heard the conversation, and no other. A thread opened under a message is bound to the replier as its first part lands,
   // so the person's answer in it comes back to the session that asked, not to whoever the rules name for that place.
   let unbound: string | undefined
-  const { posted } = await postParts(app, c.channel, thread, text, id, false, stillMine, opened ? () => { unbound = bindOpenedThread(h, me!, c.channel, opened!, app, `reply in the thread of message ${opened}`, 'tool') } : undefined)
+  let posted: number
+  try {
+    ({ posted } = await postParts(app, c.channel, thread, text, id, false, stillMine, opened ? () => { unbound = bindOpenedThread(h, me!, c.channel, opened!, app, `reply in the thread of message ${opened}`, 'tool') } : undefined))
+  } catch (err) {
+    // A restricted specialist's words go only where its conversation is: never to the operator's DM in its place.
+    if (!(err instanceof NotInChannel) || (me !== MAIN && h.specialists[me ?? '']?.restricted)) throw err
+    return toOperatorDm(app, id, err.message, text, stillMine, `From ${me === MAIN ? 'main' : me ?? 'a session'}`)
+  }
   const said = `posted ${posted} message${posted === 1 ? '' : 's'} to ${id}${how}`
   return opened ? (unbound ? `${said}; its thread is not bound to ${me}: ${unbound}, so replies in it go to whoever the rules name here` : `${said}; replies in it come back to ${me}`) : said
 }
@@ -706,6 +714,44 @@ function homePlaceChannel(h: HydraConfig, id: string, app?: string): string | un
   return isChannelName(home) ? offlineView(app).directory.idOf(home.ref.slice(1)) : home.ref
 }
 
+/** Slack refused a post because the bot is not in the channel: nothing was posted there. */
+export class NotInChannel extends Error {}
+
+const errText = (err: unknown): string => err instanceof Error ? err.message : String(err)
+
+/**
+ * One part, as the app's bot: never as the operator, and the bot never joins a channel to post. An app with the operator's token hears
+ * threads in channels its bot is not in: Slack's refusal there is `NotInChannel`, so the caller can take the words to the operator instead.
+ * An app without the token is a member wherever it hears, so its refusal stands as Slack gave it.
+ */
+async function postPart(app: string, channel: string, thread: string | undefined, part: string): Promise<string> {
+  try { return await slackRuntimeDeps.post(channel, thread, part, app) } catch (err) {
+    // A DM or a group DM between people never takes a bot's post: that refusal is not a channel the bot could be invited to.
+    if (NOT_A_MEMBER.test(errText(err)) && !isDm(channel) && !config(app)?.directory.isGroupDm?.(channel) && hydraConfig().slackApps[app]?.operatorTokenEnv) throw new NotInChannel(`the bot isn't in that channel (${errText(err)}); invite it to the channel to post there`)
+    throw err
+  }
+}
+
+/** The operator's Slack user id, from hydra.toml: where an answer goes that could not be posted where it was meant to. */
+function operatorSlackUser(h: HydraConfig): string | undefined {
+  const a = h.operator ? h.people[h.operator]?.addresses.find(x => x.startsWith('slack:')) : undefined
+  return a?.slice('slack:'.length)
+}
+
+/**
+ * An answer the bot could not post in `id` (it is not in the channel and could not join): posted instead in the operator's DM with the
+ * app, under a line that links the thread and says why. Throws when the operator has no Slack address, or that post fails too.
+ */
+async function toOperatorDm(app: string, id: string, why: string, text: string, allowed: () => boolean, from: string): Promise<string> {
+  const h = hydraConfig()
+  const user = operatorSlackUser(h)
+  if (!user) throw new Error(`nothing was posted to ${id}: ${why}, and hydra.toml gives the operator no Slack address to send it to instead`)
+  const where = `the operator's DM with ${appName(h.slackApps, app)}`
+  const link = slackConversationLink(id)
+  const { posted } = await postParts(app, user, undefined, `${from}, not posted in ${link ?? id}: ${why}. Here instead:\n\n${text}`, where, true, allowed)
+  return `not posted to ${id}: ${why}. Posted ${posted} message${posted === 1 ? '' : 's'} to ${where} instead, with a link to the thread`
+}
+
 /**
  * The text as written, split under Slack's limit, posted part by part while `allowed()` still holds. `thread` undefined:
  * the first part at the top level, and with `threadRest` the others in its thread. Posting never retries on its own, so
@@ -721,10 +767,12 @@ async function postParts(app: string, channel: string, thread: string | undefine
     let ts: string
     try {
       ts = await Promise.race([
-        slackRuntimeDeps.post(channel, thread, part, app),
+        postPart(app, channel, thread, part),
         new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('timeout')), POST_BACKSTOP_MS) }),
       ]).finally(() => clearTimeout(timer))
     } catch (err) {
+      // Nothing of it posted, and Slack said why: the caller may take the words elsewhere.
+      if (err instanceof NotInChannel && posted === 0) throw err
       const why = err instanceof Error ? err.message : String(err)
       // Only an answer that says it didn't post counts as not posted: Slack refusing it outright, a rate limit, or no
       // connection at all. Anything else (fatal_error, a 5xx, a timeout, a dropped socket) may have half succeeded.
@@ -740,12 +788,20 @@ async function postParts(app: string, channel: string, thread: string | undefine
   return { first: first!, posted }
 }
 
-/** `hydra conversations bind`: the operator binds or moves a conversation to any declared specialist, main, or a session's thread (listen-only there). */
-export function operatorBind(conversation: string, target: string): string {
+/** How long a bind's reason may be: one line in the notice. */
+const BIND_WHY_MAX = 300
+
+/**
+ * `hydra conversations bind`: the operator (or main, for them) binds or moves a conversation to any declared specialist, main, or a
+ * session's thread (listen-only there). To a session's thread, the app also posts in the Slack conversation which session took it, a link
+ * to that session's thread, and `why` when given: binding and telling the people there are one step. The bind holds if the notice fails; the result says so.
+ */
+export async function operatorBind(conversation: string, target: string, why?: string): Promise<string> {
   const h = hydraConfig()
   // The target must say its kind (a bare `ops` is an error); a binding stores the bare form.
   const ref = readTarget(target, id => Object.hasOwn(h.specialists, id))
   if (!ref.ok) throw new Error(ref.error ?? `no specialist "${ref.undeclared}" in hydra.toml (or a session's thread id)`)
+  if (why !== undefined && ref.ref.kind !== 'thread') throw new Error(`--why gives the reason in the notice that a bind to a session's thread (thread:<id>) posts; a bind to ${target} posts no notice`)
   const to = bareOf(ref.ref)
   const c = parseConversation(conversation)
   const app = appOfEntry(c)
@@ -757,7 +813,31 @@ export function operatorBind(conversation: string, target: string): string {
   if (!isDm(c.channel) && c.threadTs === TOP_LEVEL) throw new Error(`${conversationId(c)} names a channel, not a conversation: add the thread's ts`)
   if (ref.ref.kind === 'thread' && registry.getByThread(`${c.channel}:${c.threadTs}`)) throw new Error(`${conversationId(c)} is a hydra session's own thread: another session can't listen to it`)
   if (!getConversationTable().bind(c.channel, c.threadTs, to, 'cli', app)) throw new Error('the conversation table is full')
-  return `${conversationId(c)} → ${to}`
+  const bound = `${conversationId(c)} → ${to}`
+  if (ref.ref.kind !== 'thread') return bound
+  return `${bound}; ${await bindNotice(c, to, why)}`
+}
+
+/** The notice a bind to a session's thread posts in the Slack conversation: `→ <session> <link>: <why>`. Never throws: it says what became of the notice. */
+async function bindNotice(c: ReturnType<typeof parseConversation>, threadId: string, why: string | undefined): Promise<string> {
+  const app = appOfEntry(c)
+  const id = conversationId(c)
+  const session = [...registry.values()].find(s => s.threadId === threadId && s.deadAt === undefined)
+  let url = session?.threadUrl
+  if (!url) { try { url = await gateway.getThreadUrl(threadId) } catch { url = undefined } }
+  const reason = why ? oneLine(why, BIND_WHY_MAX) : ''
+  const text = `→ ${session?.tmuxName ?? `thread ${threadId}`}${url ? ` ${url}` : ''}${reason ? `: ${reason}` : ''}`
+  // Posted only while the conversation is still bound to that thread.
+  const stillThere = () => getConversationTable().get(c.channel, c.threadTs, app)?.specialist === threadId
+  try {
+    await postParts(app, c.channel, c.threadTs === TOP_LEVEL ? undefined : c.threadTs, text, id, false, stillThere)
+    return `posted in ${id}: ${text}`
+  } catch (err) {
+    if (err instanceof NotInChannel) {
+      try { return `${await toOperatorDm(app, id, err.message, text, stillThere, 'The bind notice')} (the bind notice)` } catch (dmErr) { return `the notice was not posted: ${errText(dmErr)}` }
+    }
+    return `the notice was not posted: ${errText(err)}`
+  }
 }
 
 export function operatorUnbind(conversation: string): string {

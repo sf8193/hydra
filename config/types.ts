@@ -435,6 +435,13 @@ export type Rule = {
 }
 
 /**
+ * A rule that sends every place to `main` (no `place`): a catch-all. It takes what nothing else holds or claims, and claims no place itself:
+ * routing tries it after every other rule wherever it is written, it never makes its app the owning app of a channel's untagged messages,
+ * and it never takes back a thread a session holds (connectors/slack/watch.ts). The loader reads rule order the same way.
+ */
+export const isCatchAll = (r: Pick<Rule, 'place' | 'target'>): boolean => r.place === undefined && r.target === 'main'
+
+/**
  * The places where specialist `id` answers every message: the `place` of its `[[rules]]` that name no `person` (or `anyone`), in file order.
  * A rule with a `person` takes only those people's messages, so it does not make the place the specialist's to answer.
  */

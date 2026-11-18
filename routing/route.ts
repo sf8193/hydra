@@ -5,6 +5,7 @@
 //   1. A bound conversation follows its binding, unless hydra.toml no longer declares that specialist, or this app cannot be served by it
 //      (it is pinned elsewhere, or this app serves only specialists pinned to it): then the message is routed anew, and counts as unbound for "is it addressed" (a gone specialist's thread stays addressed).
 //   2. Otherwise the first matching [[rules]] entry: its place, app and sender all match (an absent `place` or `app` matches every one). An old `listens` was read as rules at load, after the explicit ones.
+//      A catch-all (`isCatchAll`: no place, to main) is tried only after every other rule, wherever it is written.
 //   3. Otherwise, the operator's DM goes to `main`; anything else is unrouted.
 // A specialist answers where a rule sends a place to it: nothing else says where.
 // Every candidate above must be served by the app the message came through (`notServedBy`, config/pins.ts): a specialist pinned to apps
@@ -12,11 +13,11 @@
 // Then `reachable_by`: the operator is always allowed, `anyone` admits strangers, `people` admits the roster, a role admits who holds it.
 
 import { whyNotServed } from '../config/pins.js'
-import { DEFAULT_SLACK_APP, coversAny, declaredSpecialist, isDmPlace, optionsOf, placeKey, type Address, type HydraConfig, type Person, type Place, type Rule, type Specialist } from '../config/types.js'
+import { DEFAULT_SLACK_APP, coversAny, declaredSpecialist, isCatchAll, isDmPlace, optionsOf, placeKey, type Address, type HydraConfig, type Person, type Place, type Rule, type Specialist } from '../config/types.js'
 import { isSessionThread } from '../shared/specialist-name.js'
 import { spelledBare } from '../shared/target-kind.js'
 import { spelledApp, spelledPerson, spelledRole, whoSpelled } from '../shared/value-kind.js'
-export { isSessionThread }
+export { isSessionThread, isCatchAll }
 
 /** Who sent a message, as hydra knows them. `roles` includes the built-in ones they hold. */
 export type Sender = {
@@ -159,11 +160,12 @@ export function slackSpecialistsOf(cfg: HydraConfig, app?: string): string[] {
   return [...new Set(r.rules.filter(x => x.place === undefined || isSlackPlace(x.place)).map(x => x.target))]
 }
 
-/** Whether a message at this place, through `app`, would be delivered to anyone: a rule's target that `app` serves, or `main` in a DM. */
+
+/** Whether a message at this place, through `app`, would be delivered to anyone: a rule's target that `app` serves, or `main` in a DM. A catch-all does not count. */
 export function reachesAnyone(cfg: HydraConfig, app: string, at: Place[]): boolean {
   if (at.some(isDmPlace)) return true
   const r = reachableBy(cfg, app)
-  return r.rules.some(x => x.place === undefined || coversAny(x.place, at))
+  return r.rules.some(x => x.place === undefined ? !isCatchAll(x) : coversAny(x.place, at))
 }
 
 /**
@@ -237,7 +239,9 @@ export function route(cfg: HydraConfig, msg: Inbound): Decision {
   }
 
   let winner: { to: string; via: Via } | undefined
-  for (const [i, r] of cfg.rules.entries()) {
+  // In file order, but a catch-all after every other rule: it takes only what no other rule sends.
+  const ordered = [...cfg.rules.entries()].sort(([, a], [, b]) => Number(isCatchAll(a)) - Number(isCatchAll(b)))
+  for (const [i, r] of ordered) {
     const atOk = r.place === undefined || coversAny(r.place, msg.at)
     const appOk = r.app === undefined || r.app === app
     const fromOk = r.person === undefined || r.person === sender.person?.id || sender.roles.includes(r.person)

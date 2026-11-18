@@ -144,23 +144,23 @@ describe('a pinned specialist cannot be reached through another app', () => {
     await expect(bindConversation(deals, 'slack:ghost:C1:5.000001')).rejects.toThrow('no app "ghost": declare [slack.apps.ghost]; hydra.toml declares app:default, app:sales')
   })
 
-  test('the operator’s bind carries the app, and refuses a specialist pinned elsewhere, or an app that is not declared', () => {
-    expect(() => operatorBind('slack:C1:5.000001', `specialist:${DEALS}`)).toThrow('deals-t is pinned to app:sales, and this conversation is through app:default')
-    expect(() => operatorBind('slack:sales:C1:5.000001', `specialist:${CRM}`)).toThrow('app:sales serves only specialists pinned to it')
-    expect(() => operatorBind('slack:ghost:C1:5.000001', `specialist:${DEALS}`)).toThrow('no app "ghost"')
-    expect(operatorBind('slack:sales:C1:5.000001', `specialist:${DEALS}`)).toBe(`slack:sales:C1:5.000001 → ${DEALS}`)
-    expect(operatorBind('slack:C1:5.000001', `specialist:${CRM}`)).toBe(`slack:C1:5.000001 → ${CRM}`)
+  test('the operator’s bind carries the app, and refuses a specialist pinned elsewhere, or an app that is not declared', async () => {
+    await expect(operatorBind('slack:C1:5.000001', `specialist:${DEALS}`)).rejects.toThrow('deals-t is pinned to app:sales, and this conversation is through app:default')
+    await expect(operatorBind('slack:sales:C1:5.000001', `specialist:${CRM}`)).rejects.toThrow('app:sales serves only specialists pinned to it')
+    await expect(operatorBind('slack:ghost:C1:5.000001', `specialist:${DEALS}`)).rejects.toThrow('no app "ghost"')
+    expect(await operatorBind('slack:sales:C1:5.000001', `specialist:${DEALS}`)).toBe(`slack:sales:C1:5.000001 → ${DEALS}`)
+    expect(await operatorBind('slack:C1:5.000001', `specialist:${CRM}`)).toBe(`slack:C1:5.000001 → ${CRM}`)
     expect(getConversationTable().list().map(e => [e.app, e.specialist])).toEqual([['sales', DEALS], [undefined, CRM]])
     // main is exempt from pinning.
-    expect(operatorBind('slack:sales:C1:7.000001', 'main')).toBe('slack:sales:C1:7.000001 → main')
+    expect(await operatorBind('slack:sales:C1:7.000001', 'main')).toBe('slack:sales:C1:7.000001 → main')
     expect(operatorUnbind('slack:sales:C1:5.000001')).toBe('slack:sales:C1:5.000001 is unbound')
     expect(getConversationTable().get('C1', '5.000001', 'sales')).toBeUndefined()
     expect(getConversationTable().get('C1', '5.000001')?.specialist).toBe(CRM)
   })
 
-  test('the list prints every conversation in its own id, the app first where it is not `default`', () => {
-    operatorBind('slack:sales:C1:5.000001', `specialist:${DEALS}`)
-    operatorBind('slack:C1:6.000001', `specialist:${CRM}`)
+  test('the list prints every conversation in its own id, the app first where it is not `default`', async () => {
+    await operatorBind('slack:sales:C1:5.000001', `specialist:${DEALS}`)
+    await operatorBind('slack:C1:6.000001', `specialist:${CRM}`)
     const lines = formatConversations()
     expect(lines[0]).toStartWith(`slack:sales:C1:5.000001 (slack:C1) → ${DEALS}`)
     expect(lines[1]).toStartWith(`slack:C1:6.000001 (slack:C1) → ${CRM}`)
