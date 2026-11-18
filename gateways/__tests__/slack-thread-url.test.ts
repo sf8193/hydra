@@ -18,3 +18,9 @@ test('getMessageAppLink opens the message in its thread in the Slack app; empty 
   ;(gw as any)._teamId = null
   expect(gw.getMessageAppLink('D0B6KKFNH4N:1786502966.648539', '1786503000.000100')).toBe('')
 })
+
+test('a message link with an empty thread ts carries no thread_ts and no cid', () => {
+  const gw = Object.create(SlackGateway.prototype) as SlackGateway
+  ;(gw as any)._teamDomain = 'acme'
+  expect((gw as any).buildMessageUrl('D0B6KKFNH4N', '1786503000.000100', '')).toBe('https://acme.slack.com/archives/D0B6KKFNH4N/p1786503000000100')
+})

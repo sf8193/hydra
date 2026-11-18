@@ -23,4 +23,7 @@ test('parseArchiveUrl reads back what each old parser read', () => {
   expect(parseArchiveUrl(`${WS}/archives/T0TEAM`)).toEqual({ channel: 'T0TEAM' })
   expect(parseArchiveUrl(`${WS}/archives/C0FOOD/p1793732224093059`)?.channel).toBe('C0FOOD')
   expect(parseArchiveUrl('https://linear.app/x/issue/BANK-1')).toBeUndefined()
+  // a lowercase id is no channel id, whichever form of link asks
+  expect(parseArchiveUrl(`${WS}/archives/c0food/p1793732224093059`, true)).toBeUndefined()
+  expect(parseArchiveUrl(`${WS}/archives/c0food`)).toBeUndefined()
 })
