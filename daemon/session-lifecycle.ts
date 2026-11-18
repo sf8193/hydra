@@ -1031,7 +1031,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   }
   const confinedPolicy = isRestrictedPolicy(policy) ? policy : undefined
   // `can_only_write_to`: the operator's account with writes confined to the workdir. Not a restricted session, but it starts in its folder, is checked, and takes no message until it passes.
-  const layerPolicy = policy?.canOnlyWriteTo ? { ...policy, canOnlyWriteTo: policy.canOnlyWriteTo } : undefined
+  const layerPolicy = !confinedPolicy && policy?.canOnlyWriteTo ? { ...policy, canOnlyWriteTo: policy.canOnlyWriteTo } : undefined
   // The kickoff the conversation was born under: a fresh start names its own; a resume or fork keeps the one it continues, and a
   // handoff successor keeps its predecessor's (it learns its role from the predecessor's letter, which is the old definition).
   const kickoffHash = continuing || isHandoff ? actingRecords.find(r => r?.kickoffHash !== undefined)?.kickoffHash : opts?.kickoffHash

@@ -146,7 +146,7 @@ function writeConfinementConfig(w: NonNullable<LaunchPolicy['canOnlyWriteTo']>, 
 //   unset:        a restricted or write-confined launch keeps only the allowlisted part of the state .env (confinedEnvUnsets)
 function buildSpawnEnv(input: LaunchInput): string[] {
   const forkedFromClaudeSessionId = input.forkFrom?.claudeSessionId
-  const dropped = confined(input.policy, input.tmuxName) || input.policy?.canOnlyWriteTo ? confinedEnvUnsets() : []
+  const dropped = isRestrictedPolicy(input.policy) || input.policy?.canOnlyWriteTo ? confinedEnvUnsets() : []
   return [
     ...(dropped.length ? [`unset ${dropped.join(' ')}`] : []),
     `export HYDRA_SESSION_ID=${shq(input.sessionId)}`,
