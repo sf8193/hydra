@@ -316,6 +316,7 @@ In `hydra health --json`, `slack.apps.<id>` holds each declared app's:
 - `name`: what messages call the app (its `display_name`, set or defaulted);
 - `state`: `off` (no connection: its tokens are missing, or it failed to start), `connecting`, `up`, `down`, or `exhausted` (reconnect attempts keep failing; hydra keeps trying);
 - `downMin`, `lastActivityAgeMin`, and the last catch-up (`ok`, `accepted`, `reason`) with `lastOkCatchUpAgeMin`;
+- `eventsOff`: Slack has probably switched the app's live events off (below); the line adds `live events probably off: turn Enable Events back on`;
 - `missingScopes`: what the bot token lacks of what hydra.toml has the app do (empty when complete; `null` until Slack has said what the token holds, which the line prints as `scopes unchecked`);
 - `tokens`: `{ ok: true }`, or `{ ok: false, why }` naming the key to fix;
 - `connection`: `pending` (starting), `up`, `down` (lost, or never possible without tokens), or `gaveUp` (the first connection failed and was let go, or reconnecting is exhausted);
@@ -339,7 +340,7 @@ A missing scope is always logged and shown in `hydra health` (`missing <scope> (
 
 - the app's connection is down for 5 minutes awake, and back up;
 - the catch-up pass has not completed for 25 minutes awake, or Slack refuses it for a reason retrying cannot fix (`missing_scope`, `invalid_auth`, `not_in_channel`, which names the channel);
-- the periodic pass finds messages the live stream never delivered (at most hourly);
+- the periodic pass finds messages the live stream never delivered, with the connection up since the previous complete pass began. When the socket delivered events in that window, the stream is split: another process probably holds a connection on the app (at most hourly). When it has delivered none, the stream is most likely off (on a quiet app, a split stream can look the same, and the alert says so): after 3 such passes with no live event since, the alert says Slack has probably switched off the app's live events (it does this after too many failed deliveries, and says so only by email to the app's owner), and gives the fix: turn **Enable Events** back on in the app's Event Subscriptions page (Socket Mode needs no Request URL). Once per episode; the next live event ends it, says so, and makes what the stream missed until then a gap for catch-up to fill. Passes after a reconnect or a wake never count;
 - a thread is let go because no token can read it any more, or the operator's token is refused (each at most hourly);
 - a message is dropped, or catch-up skipped part of a busy channel (once an hour per kind, specialist and app);
 - channel names can't be read and a `#name` the app needs goes unresolved;
@@ -361,7 +362,8 @@ Start with `hydra health`; `hydra health --json` has every field above.
 | `missing <scope> (<option>)` | Add the scope to that app (`hydra slack manifest <app>` lists them), reinstall it, update its bot token, restart the daemon. |
 | `scopes unchecked` | The app has connected but Slack did not say what its token holds, or it has not connected yet. Check again after the next reconnect. |
 | `catch-up failing (…)` | Read the reason. A budget or a rate limit: the next pass resumes from the held cursor. A permanent error: the alert says what to do. |
-| `up`, and `catchUp.accepted > 0` in `hydra health --json` pass after pass | A second connection holds this app (Slack splits events). Stop the other process. |
+| `live events probably off: turn Enable Events back on` | Slack switched off the app's events (it does after too many failed deliveries, and emails the app's owner). In the app's settings at api.slack.com/apps, open Event Subscriptions and turn **Enable Events** back on; Socket Mode needs no Request URL. The next live event clears it. If it is already on, another connection is probably taking this app's events: stop the other process. |
+| `up`, and `catchUp.accepted > 0` in `hydra health --json` pass after pass, with live events still arriving | A second connection holds this app (Slack splits events). Stop the other process. |
 | `owed … oldest N min (past 20 min): <cause>` | A message has been owed longer than two catch-up passes. The cause names what holds it and what to change; with none recorded, wait for the next pass, and look for the app's own line above it. |
 | `membership unreadable` | The app could not read whether its bot is in a channel. The line gives Slack's reason, and the kind of channel (public or private) when Slack names the scope it needed (`channels:read` or `groups:read`). Where several apps share a channel, a top-level tag of that app is left to it when no other tagged app is known to hear it, and nobody answers if its bot is not in the channel (the log says so once). Untagged messages may be answered by more than one app. Add the scope and reinstall. |
 | A join was not noticed | An app lacks `member_joined_channel` and `member_left_channel`: add them to its Event Subscriptions and reinstall (the *Add the membership events* step of [Adding an app](#adding-an-app)). |

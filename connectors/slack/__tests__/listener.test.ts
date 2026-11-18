@@ -6,7 +6,7 @@ import { ConversationTable, placesOf, type SlackReactionEvent } from '../watch.j
 import { alsoHeard, hydra as load, hydra, oneListener, view, BASE } from './slack-config.js'
 import { EMPTY_CONFIG } from '../../../config/load.js'
 import { mustParsePlace, type HydraConfig } from '../../../config/types.js'
-import { SlackListener, DM_LIST_BACKOFF_MS, postPayload, DOWN_ALERT_AFTER_MS, implicitScopeOptions, scopesNeeded, type ToldScopes, CATCH_UP_STALE_AFTER_MS, explainSlackError, readReplies, type SlackAppLike, type RawEvent } from '../listener.js'
+import { SlackListener, DM_LIST_BACKOFF_MS, postPayload, DOWN_ALERT_AFTER_MS, implicitScopeOptions, scopesNeeded, type ToldScopes, CATCH_UP_STALE_AFTER_MS, EVENTS_OFF_AFTER_PASSES, explainSlackError, readReplies, type SlackAppLike, type RawEvent } from '../listener.js'
 import type { SlackApi, RawMessage } from '../catchup.js'
 import type { SocketEmitter } from '../../../shared/socket-supervisor.js'
 import { createResumeDetector, type LastSleep } from '../../../shared/resume.js'
@@ -370,6 +370,7 @@ describe('catch-up', () => {
     await t.listener.start()
     await t.listener.runCatchUp(true, 'periodic')
     expect(t.alerts).toHaveLength(0)
+    t.apps[0].handler(message({ ts: '1900.000001' })) // live events arrive, so the stream is split, not off
     t.state.history = [{ ts: '2000.000001', user: 'UB', text: mention }] // the live stream never delivered this
     await t.listener.runCatchUp(true, 'periodic')
     expect(t.alerts).toHaveLength(1)
@@ -400,6 +401,7 @@ describe('catch-up', () => {
     await Bun.sleep(20) // the reconnect's catch-up, queued behind it, closes the window
     expect(t.logs.some(l => l.includes('slack connector: catch-up (queued'))).toBe(true)
     t.tick(10 * 60_000)
+    t.apps[0].handler(message({ ts: '2050.000001' }))
     t.state.history = [...t.state.history, { ts: '2100.000001', user: 'UB', text: mention }]
     await t.listener.runCatchUp(true, 'periodic') // no gap since that pass started
     expect(t.alerts).toHaveLength(1)
@@ -417,6 +419,7 @@ describe('catch-up', () => {
     await Bun.sleep(20)
     expect(t.logs.some(l => l.includes('slack connector: catch-up (reconnected') && l.includes('1 message(s)'))).toBe(true)
     t.tick(10 * 60_000)
+    t.apps[0].handler(message({ ts: '2050.000001' }))
     t.state.history = [...t.state.history, { ts: '2100.000001', user: 'UB', text: mention }] // after that pass read, socket up
     await t.listener.runCatchUp(true, 'periodic')
     expect(t.alerts).toHaveLength(1)
@@ -455,6 +458,60 @@ describe('catch-up', () => {
     await t.listener.runCatchUp(true, 'periodic')
     expect(t.apps).toHaveLength(1)
     expect(t.alerts).toHaveLength(0)
+  })
+
+  /** One periodic pass, ten minutes on, that finds a message the socket never delivered. */
+  const missedPass = async (t: ReturnType<typeof setup>, n: number) => {
+    t.tick(10 * 60_000)
+    t.state.history = [...t.state.history, { ts: `${3000 + n}.000001`, user: 'UB', text: mention }]
+    await t.listener.runCatchUp(true, 'periodic')
+  }
+
+  test(`live events off: ${EVENTS_OFF_AFTER_PASSES} held passes that find socket-missed messages, with nothing live, alert once; a live event clears it`, async () => {
+    const t = setup()
+    await t.listener.start()
+    await t.listener.runCatchUp(true, 'periodic') // the first complete pass opens the window
+    for (let n = 1; n < EVENTS_OFF_AFTER_PASSES; n++) await missedPass(t, n)
+    expect(t.alerts).toHaveLength(0) // no "another process?" either: nothing arrived live, so the stream is not split
+    expect(t.listener.health().eventsOff).toBe(false)
+    await missedPass(t, EVENTS_OFF_AFTER_PASSES)
+    expect(t.alerts).toHaveLength(1)
+    expect(t.alerts[0]).toContain(`Slack has probably switched off live events for ${load(TOML).slackApps.default.displayName}:`)
+    expect(t.alerts[0]).toContain('turn **Enable Events** back on (Socket Mode needs no Request URL)')
+    expect(t.listener.health().eventsOff).toBe(true)
+    for (let n = 1; n <= 3; n++) await missedPass(t, EVENTS_OFF_AFTER_PASSES + n)
+    expect(t.alerts).toHaveLength(1) // once per episode
+    t.tick(60_000)
+    t.apps[0].react({ channel: CH, itemTs: '1000.000001', reaction: 'eyes', user: 'UB', eventTs: '4000.000001' }) // the operator turned events back on: any live event ends it
+    expect(t.listener.health().eventsOff).toBe(false)
+    expect(t.alerts).toHaveLength(2)
+    expect(t.alerts[1]).toContain('Live events are arriving again')
+    await missedPass(t, 2000) // what the stream missed while it was off: a gap filled, not "another process?"
+    expect(t.alerts).toHaveLength(2)
+    for (let n = 1; n < EVENTS_OFF_AFTER_PASSES; n++) await missedPass(t, 2000 + n)
+    expect(t.alerts).toHaveLength(2) // the count starts again from the live event
+  })
+
+  test('messages that catch-up finds after reconnects never count toward live events off', async () => {
+    const t = setup()
+    await t.listener.start()
+    await t.listener.runCatchUp(true, 'periodic')
+    for (let n = 1; n <= EVENTS_OFF_AFTER_PASSES + 2; n++) {
+      t.tick(10 * 60_000)
+      t.apps[0].client.emit('reconnecting')
+      t.tick(30_000)
+      t.state.history = [...t.state.history, { ts: `${3000 + n}.000001`, user: 'UB', text: mention }] // posted during the gap
+      t.apps[0].client.emit('connected')
+      await Bun.sleep(20) // the reconnect's pass fills the gap
+      await t.listener.runCatchUp(true, 'periodic')
+    }
+    expect(t.logs.filter(l => l.includes('catch-up (reconnected') && l.includes('1 message(s)'))).toHaveLength(EVENTS_OFF_AFTER_PASSES + 2)
+    expect(t.alerts).toHaveLength(0)
+    expect(t.listener.health().eventsOff).toBe(false)
+    // Held passes still count from there: the reconnects neither counted nor hid the episode.
+    for (let n = 1; n <= EVENTS_OFF_AFTER_PASSES; n++) await missedPass(t, 100 + n)
+    expect(t.alerts).toHaveLength(1)
+    expect(t.alerts[0]).toContain('switched off live events')
   })
 
   test('one pass at a time: a request during a pass runs once more afterwards', async () => {

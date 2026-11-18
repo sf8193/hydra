@@ -6,7 +6,7 @@ import type { SlackApp } from '../../../config/types.js'
 import { hydra, TWO_APPS } from './slack-config.js'
 
 type Fake = { started: number; stopped: boolean; state: ListenerHealth['state']; startOk: boolean }
-const health = (state: ListenerHealth['state']): ListenerHealth => ({ state, downMin: null, lastActivityAgeMin: null, catchUp: null, lastOkCatchUpAgeMin: null, missingScopes: null })
+const health = (state: ListenerHealth['state']): ListenerHealth => ({ state, downMin: null, lastActivityAgeMin: null, catchUp: null, lastOkCatchUpAgeMin: null, eventsOff: false, missingScopes: null })
 
 function setup(toml = TWO_APPS, have: Record<string, { bot?: string; app?: string }> = { default: { bot: 'b', app: 'a' }, sales: { bot: 'b', app: 'a' } }) {
   let h = hydra(toml)
