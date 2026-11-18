@@ -37,7 +37,7 @@ export type ConfinementServer = { name: string; command: string; tokenEnv: strin
  */
 export type ConfinementPolicy = { specialist: string; workdir: string; denyCommands: string[]; /** Every place Claude Code's tools and shell may not read, as worked out at birth (config/write-confinement.ts `readDenyRoots`). */ cannotRead: string[]; /** The built-in tools it may use (`--tools`); absent: all, as for any unrestricted session. */ tools?: string[]; /** The folder its listed servers get as `{profile_dir}`, resolved and inside `workdir`; absent: `<workdir>/.browser/profile`. */ browserProfile?: string; servers: ConfinementServer[] }
 
-/** `restricted = true`: the one folder it runs in, its built-in tools and its MCP servers. `restricted = false`: the operator's account, its writes confined when `canOnlyWriteTo` is there. Never a mix. Records from before this stored `access: 'workdir' | 'operator'` (policy-record.ts reads that). */
+/** `restricted = true`: the one folder it runs in, its built-in tools and its MCP servers. `restricted = false`: the operator's account, its writes confined when `canOnlyWriteTo` is there. Never a mix. */
 export type LaunchPolicy = {
   /** The specialist's id when the session was born. */
   specialist: string
@@ -210,7 +210,7 @@ export function macosGateHealth(h: HydraConfig = currentHydraConfig(), env: Pick
 
 /** What a policy says in words, for a log line or a message (the id is a hash). */
 export function describePolicy(p: LaunchPolicy | undefined): string {
-  if (p?.canOnlyWriteTo) return `restricted = false, can_only_write_to = "workdir" (folder ${p.canOnlyWriteTo.workdir}; tools ${p.canOnlyWriteTo.tools ? p.canOnlyWriteTo.tools.join(',') : 'all'}; cannot_read ${p.canOnlyWriteTo.cannotRead.length} places; mcp_servers ${p.canOnlyWriteTo.servers.map(s => s.name).join(',') || 'none'}; deny_commands ${p.canOnlyWriteTo.denyCommands.join(' | ') || 'none'})`
+  if (p?.restricted === false && p.canOnlyWriteTo) return `restricted = false, can_only_write_to = "workdir" (folder ${p.canOnlyWriteTo.workdir}; tools ${p.canOnlyWriteTo.tools ? p.canOnlyWriteTo.tools.join(',') : 'all'}; cannot_read ${p.canOnlyWriteTo.cannotRead.length} places; mcp_servers ${p.canOnlyWriteTo.servers.map(s => s.name).join(',') || 'none'}; deny_commands ${p.canOnlyWriteTo.denyCommands.join(' | ') || 'none'})`
   if (!isRestrictedPolicy(p)) return 'restricted = false'
   // A stored policy with no `restricted` (an old `access: 'operator'` record) is restricted and has none of these (policy-record.ts isRestricted), and delivery describes it unvalidated.
   return `restricted = true (folder ${p.workdir ?? '?'}; tools ${(p.tools ?? []).join(',') || 'none'}; mcp_servers ${(p.servers ?? []).map(s => s.name).join(',') || 'none'})`
