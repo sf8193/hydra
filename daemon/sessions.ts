@@ -280,7 +280,7 @@ export type SpawnOpts = {
   launchCwd?: string          // fork: launch from the source's launch dir, where --resume finds its transcript (no worktree)
   cwd?: string                // a fresh launch's working dir (a specialist's workdir) in place of SPAWN_CWD; a fork, resume or worktree wins
   tools?: string[]            // Claude --tools whitelist (must include MCP tools with prefix)
-  sessionType?: SessionType  // declared at spawn — determines base tool set (a specialist with restricted = true is always `scoped`)
+  sessionType?: SessionType  // declared at spawn — its role in its thread (a restricted specialist is a thread_owner whose policy says `restricted`)
   kickoffHash?: string        // a fresh start's prompt is the specialist's kickoff: the hash stored with the conversation it begins (a resume or fork keeps its own, through carryOver)
   specialist?: string        // the specialist a caller names as the one this session acts for (a fill, a conversation's own session); its launch policy is decided from hydra.toml at birth (restricted.ts)
   worktree?: string           // git repo subdirectory to create a worktree from (structural alternative to topic prefix)
@@ -791,6 +791,9 @@ export function markDead(info: SessionInfo, at = Date.now()): void {
  * who the sender meant — so deliver there and say so, rather than failing with
  * "no session named" and leaving the sender to rediscover names by hand.
  *
+ * Only the thread of the name's most recent occupancy is consulted; with no live occupant there the
+ * answer is undefined ("gone"), never an older thread.
+ *
  * A killed session is removed from the registry outright, so its thread comes
  * from threadRegistry's session history; the registry's own `deadAt` entries
  * (sessions whose tmux vanished across a daemon restart) are checked first.
@@ -823,9 +826,13 @@ export function resolveSendTarget(
     }
   }
 
-  const ranked = [...lastSeen.entries()].sort((a, b) => b[1] - a[1])
-  for (const [threadId] of ranked) {
-    const successorId = reg.getByThread(threadId)
+  // Only that newest seat is a handoff. If nobody lives there now, the name is gone: older
+  // occupancies of a recycled name say nothing about who the sender means, and walking on to
+  // them would deliver the message (instructions, authority) to an unrelated session.
+  // Ranked by last-seen time; a tie resolves to registry order (the same ranking findSessionByName uses).
+  const newest = [...lastSeen.entries()].sort((a, b) => b[1] - a[1])[0]
+  if (newest) {
+    const successorId = reg.getByThread(newest[0])
     const successor = successorId ? reg.get(successorId) : undefined
     if (successor && occupied(occupancy(successor, undefined, reg.values())) && successor.tmuxName !== targetName) {
       return { session: successor, replaced: targetName }

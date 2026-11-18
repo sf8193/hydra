@@ -578,7 +578,7 @@ describe('session:death cleanup', () => {
     ].join('; ')
     const dir = mkdtempSync(join(tmpdir(), 'hydra-test-pbdeath-'))
     try {
-      const r = Bun.spawnSync(['bun', '-e', code], { cwd: join(import.meta.dir, '..', '..'), env: { ...process.env, HYDRA_STATE_DIR: dir } })
+      const r = Bun.spawnSync(['bun', '-e', code], { cwd: join(import.meta.dir, '..', '..'), env: { ...process.env, HYDRA_STATE_DIR: dir, DISCORD_BOT_TOKEN: 'test-token' } })
       expect(r.stdout.toString().trim()).toBe(JSON.stringify([null, ['y']]))
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })

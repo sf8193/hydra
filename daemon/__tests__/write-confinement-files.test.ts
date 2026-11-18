@@ -12,7 +12,7 @@ import { registry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { confinementIdFor } from '../restricted.js'
 import { confinedTemp, fileArgTools, snapshotHooks } from '../write-confinement.js'
-import { noteDeclaredSessionType } from '../tool-surface.js'
+import { noteDeclaredRestrictions } from '../tool-surface.js'
 import { fileRefusal } from '../../config/write-confinement.js'
 import { MAX_ATTACHMENT_BYTES } from '../access.js'
 
@@ -30,7 +30,7 @@ type Sent = { channel: string; files?: string[]; bytes?: string[] }
 const sends: Sent[] = []
 const stderr = process.stderr.write
 let spies: { mockRestore(): void }[] = []
-const policy = () => { const w = { workdir: WORK, denyCommands: [], cannotRead: [STATE], servers: [] }; return { specialist: 'ops', access: 'operator', canOnlyWriteTo: w, id: confinementIdFor(w) } }
+const policy = () => { const w = { workdir: WORK, denyCommands: [], cannotRead: [STATE], servers: [] }; return { specialist: 'ops', restricted: false, canOnlyWriteTo: w, id: confinementIdFor(w) } }
 const mk = (id: string, extra: Record<string, unknown> = {}) => registry.set(id, {
   sessionId: id, tmuxName: id, topic: '', threadId: `${id}-thread`, createdAt: Date.now(), lastActive: Date.now(), listening: false, engine: 'claude',
   adapter: { stop: async () => {}, isAlive: () => true, isConnected: () => false }, sessionType: 'thread_owner', specialist: 'ops', ...extra,
@@ -159,7 +159,7 @@ describe('a swap between the check and the send', () => {
 
 describe('a write-confined session known only by its bridge', () => {
   test('a bridge that declared write confinement, whose record is gone, attaches nothing and holds no orchestration tool', async () => {
-    noteDeclaredSessionType('wc-stray', 'thread_owner', true)
+    noteDeclaredRestrictions('wc-stray', { writeConfined: true })
     for (const t of ['spawn_session', 'kill_session', 'peek_session', 'send_to_thread', 'handoff', 'list_sessions']) {
       const r = await executeTool(t, { target: 'x', type: 'result', text: 't', chat_id: 'c', topic: 't' }, 'wc-stray')
       expect(r.isError).toBe(true)

@@ -25,11 +25,11 @@ const events: string[] = []
 let spies: { mockRestore(): void }[] = []
 const saved = { shape: (gateway as any).shapeOutbound, edit: gateway.edit, deliver: transport.deliver, stderr: process.stderr.write }
 
-function session(id: string, type: string) {
+function session(id: string, type: string, policy?: object) {
   registry.set(id, {
     sessionId: id, tmuxName: id, topic: '', threadId: `${id}-thread`, threadUrl: `https://x/${id}`,
     createdAt: Date.now(), lastActive: Date.now(), listening: false, engine: 'claude',
-    adapter: { stop: async () => {}, isAlive: () => true, isConnected: () => false }, sessionType: type, specialist: 'ops',
+    adapter: { stop: async () => {}, isAlive: () => true, isConnected: () => false }, sessionType: type, specialist: 'ops', ...(policy && { policy }),
   } as any)
 }
 
@@ -52,7 +52,7 @@ beforeEach(() => {
     spyOn(access, 'loadAccess').mockImplementation((() => ({ allowFrom: ['u1'], groups: { 'ob-parent': {} }, pending: {} })) as any),
   ]
   session('ob-owner', 'thread_owner')
-  session('ob-restricted', 'scoped')
+  session('ob-restricted', 'thread_owner', { specialist: 'ops', restricted: true, id: 'x' })
   session('ob-target', 'thread_owner')
 })
 

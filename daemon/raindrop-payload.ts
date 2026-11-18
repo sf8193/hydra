@@ -21,6 +21,8 @@ export type SessionFacts = {
   engine?: string
   model?: string
   sessionType?: string
+  /** `true` or `false`: a restricted specialist's session is a thread_owner, so the type alone no longer says it. */
+  restricted?: string
   originType?: string
   platform?: string
   label?: string
@@ -98,7 +100,8 @@ export const safeUserId = gate(USER_ID)
 const SESSION_PROPERTY_GATES = {
   tmuxName: safeProperty,
   engine: oneOf(['claude', 'codex', 'omp']),
-  sessionType: oneOf(Object.keys(BASE_TOOLS)),
+  sessionType: oneOf(Object.keys(BASE_TOOLS).filter(t => t !== 'restricted')),   // `restricted` is a tool base, not a session type
+  restricted: oneOf(['true', 'false']),
   originType: oneOf(['spawn', 'fork', 'handoff', 'resurrect']),
   platform: oneOf(['slack', 'discord']),
   label: oneOf(SESSION_LABELS),

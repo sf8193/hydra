@@ -121,7 +121,7 @@ describe('specialists', () => {
       setSpecialistThread(name, thread)
       return occupy(thread, { policy, sessionType: 'thread_owner', adapter: gated() })
     }
-    const operatorPolicy = (id: string): LaunchPolicy => ({ specialist: id, access: 'operator', id: 'operator' })
+    const operatorPolicy = (id: string): LaunchPolicy => ({ specialist: id, restricted: false, id: 'operator' })
     const nameOf = () => { const name = `t-scope-${++n}`; names.push(name); return name }
 
     test('operator access to workdir: nothing is delivered, the thread is told the command, the log names both accesses; after a respawn it delivers', async () => {
@@ -169,7 +169,7 @@ describe('specialists', () => {
     test('a tools-only change refuses too', async () => {
       const name = nameOf()
       configure(name, { restricted: true, tools: ['Read', 'Grep', 'Glob'], mcpServerNames: [] })
-      const sid = occupy('thread-scope-2', { policy: bornPolicy(name), sessionType: 'scoped', verified: true, adapter: gated() })
+      const sid = occupy('thread-scope-2', { policy: bornPolicy(name), sessionType: 'thread_owner', verified: true, adapter: gated() })
       setSpecialistThread(name, 'thread-scope-2')
       expect((await deliver(name)).ok).toBe(true)                                  // same scope: delivered
       configure(name, { restricted: true, tools: ['Read'], mcpServerNames: [] })
@@ -183,7 +183,7 @@ describe('specialists', () => {
     test('an mcp-only change refuses too', async () => {
       const name = nameOf()
       configure(name, { restricted: true, tools: ['Read'], mcpServerNames: ['datadog'] })
-      const sid = occupy('thread-scope-3', { policy: bornPolicy(name), sessionType: 'scoped', verified: true, adapter: gated() })
+      const sid = occupy('thread-scope-3', { policy: bornPolicy(name), sessionType: 'thread_owner', verified: true, adapter: gated() })
       setSpecialistThread(name, 'thread-scope-3')
       expect((await deliver(name)).ok).toBe(true)
       configure(name, { restricted: true, tools: ['Read'], mcpServerNames: ['datadog', 'loki'] })
@@ -196,7 +196,7 @@ describe('specialists', () => {
     test('a listed server gaining a tool: the refusal and the thread say what changed (the old and new tools differ in the words)', async () => {
       const name = nameOf()
       configure(name, { restricted: true, tools: ['Read'], mcpServerNames: ['datadog'] })
-      const sid = occupy('thread-scope-7', { policy: bornPolicy(name), sessionType: 'scoped', verified: true, adapter: gated() })
+      const sid = occupy('thread-scope-7', { policy: bornPolicy(name), sessionType: 'thread_owner', verified: true, adapter: gated() })
       setSpecialistThread(name, 'thread-scope-7')
       _setHydraConfigForTesting({ ...currentHydraConfig(), mcpServers: { ...MCP, datadog: { ...MCP.datadog, tools: ['search_logs', 'get_monitor'] } } })
       const r = await quiet(() => deliver(name, { idempotencyKey: `scope-k-${++n}` }))
@@ -211,7 +211,7 @@ describe('specialists', () => {
     test('workdir back to operator refuses as well (the session still holds the narrower scope)', async () => {
       const name = nameOf()
       configure(name, { restricted: true, tools: ['Read'], mcpServerNames: [] })
-      const sid = occupy('thread-scope-4', { policy: bornPolicy(name), sessionType: 'scoped', verified: true, adapter: gated() })
+      const sid = occupy('thread-scope-4', { policy: bornPolicy(name), sessionType: 'thread_owner', verified: true, adapter: gated() })
       setSpecialistThread(name, 'thread-scope-4')
       configure(name, { restricted: false })
       const r = await quiet(() => deliver(name, { idempotencyKey: `scope-k-${++n}` }))
@@ -332,7 +332,7 @@ describe('specialists', () => {
       const reason = (await quiet(async () => deliveryRefusal(conv))).out
       expect(reason).toContain(`hydra kill ${name}_c1`)
       expect(reason).toContain('restricted = false')
-      expect(deliveryRefusal({ ...conv, policy: bornPolicy(name), sessionType: 'scoped', verified: true })).toBeUndefined()
+      expect(deliveryRefusal({ ...conv, policy: bornPolicy(name), sessionType: 'thread_owner', verified: true })).toBeUndefined()
     })
 
     test('an unchanged scope is never refused, and a session no specialist fills is not looked at', async () => {
@@ -383,7 +383,7 @@ describe('specialists', () => {
     const calls = fakeSpawn()
     specialistDeps.threadExists = async () => false
     expect(await deliver(specialist('thread-gone'))).toMatchObject({ ok: false, error: expect.stringContaining('no channel') })
-    expect(await deliver(specialist('thread-gone-2', { kickoff: undefined, channel: 'c' }))).toMatchObject({ ok: false, error: expect.stringContaining('no kickoff') })
+    expect(await deliver(specialist('thread-gone-2', { kickoff: undefined, channel: 'c' }))).toMatchObject({ ok: false, error: expect.stringContaining('no kickoff: set one with `hydra specialist set') })
     expect(await deliver('no-such-specialist')).toMatchObject({ ok: false, exitCode: 8, error: 'no such specialist: no-such-specialist' })
     expect(calls).toHaveLength(0)
   })
@@ -444,6 +444,21 @@ describe('specialists', () => {
     expect((calls[0][3] as any).existingThreadId).toBeUndefined()
     expect((calls[0][3] as any).name).toBe(name)
     expect(getSpecialist(name)!.threadId).toMatch(/^fresh-thread-/)
+  })
+
+  test('a hydra.toml specialist with no kickoff is told to add one to its table, not to run `specialist set` (which hydra.toml refuses)', async () => {
+    const calls = fakeSpawn()
+    const name = `t-specialist-${++n}`
+    _setHydraConfigForTesting({
+      operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
+      people: { op: { id: 'op', addresses: ['discord:100000000000000001'], roles: [], name: 'op' } },
+      specialists: { [name]: { id: name, workdir: '/srv/x', homePlace: '555', reachableBy: ['people'], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false } },
+    })
+    try {
+      const r = await deliver(name)
+      expect(r).toMatchObject({ ok: false, error: expect.stringContaining(`give [specialists.${name}] a kickoff or kickoff_file in hydra.toml`) })
+      expect(calls).toHaveLength(0)
+    } finally { _setHydraConfigForTesting(undefined) }
   })
 
   test('a hydra.toml specialist opens its thread in its home_place on the first delivery; only its pointer is written, and only --thread moves it', async () => {

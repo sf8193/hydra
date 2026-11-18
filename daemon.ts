@@ -9,7 +9,7 @@
  */
 
 import { join } from 'path'
-import { copyFileSync, readFileSync, writeFileSync, readdirSync, unlinkSync, mkdirSync, existsSync } from 'fs'
+import { readFileSync, writeFileSync, readdirSync, unlinkSync, mkdirSync, existsSync, lstatSync, readlinkSync, symlinkSync } from 'fs'
 import { connect } from 'net'
 import { bootRefusal, BOOT_REFUSED_FILE } from './config/migrate.js'
 
@@ -55,6 +55,7 @@ import { gateway, TOKEN, PLATFORM, STATE_DIR, CLAUDE_CONFIG, SOCK_PATH, heartbea
 import { syncMods } from './shared/mods.js'
 import { PLUGIN_MANIFEST, MCP_CONFIG, ensureBridgeReady } from './daemon/plugin-manifest.js'
 import { registry, threadRegistry, reattachAdapters } from './daemon/sessions.js'
+import { isPlainWorker } from './daemon/policy-record.js'
 import { emojiOfName } from './daemon/anchor-state.js'
 import { engines, resolveEngine } from './daemon/engines/instances.js'
 import { engineRecords } from './daemon/engines/boot.js'
@@ -308,7 +309,15 @@ try {
   const versionDirs = readdirSync(discordCache, { withFileTypes: true }).filter(d => d.isDirectory())
   for (const d of versionDirs) {
     const targetDir = join(discordCache, d.name)
-    copyFileSync(bridgeSrc, join(targetDir, 'server.ts'))
+    // A symlink, never a copy: bridge.ts imports ./shared/*, which a copy in the cache cannot find (every new session's bridge then dies).
+    // A plugin update can leave a plain file here; replace whatever is there unless it already points at this bridge.
+    const serverTs = join(targetDir, 'server.ts')
+    let current: string | undefined
+    try { current = lstatSync(serverTs).isSymbolicLink() ? readlinkSync(serverTs) : undefined } catch {}
+    if (current !== bridgeSrc) {
+      try { unlinkSync(serverTs) } catch {}
+      symlinkSync(bridgeSrc, serverTs)
+    }
     writeFileSync(join(targetDir, `daemon-${PLATFORM}.json`), daemonConfig)
     writeFileSync(join(targetDir, '.mcp.json'), MCP_CONFIG)
     mkdirSync(join(targetDir, '.claude-plugin'), { recursive: true })
@@ -362,7 +371,7 @@ async function startGateway(attempt = 0): Promise<void> {
     // fires ~30s later) and the standalone report would mislead with "N disconnected"
     // right before auto-recovery fixes them.
     if (startupGapMs !== null) {
-      const hasDeadWorkers = [...registry.values()].some(s => !!s.deadAt && s.sessionType === 'thread_owner')
+      const hasDeadWorkers = [...registry.values()].some(s => !!s.deadAt && isPlainWorker(s))
       if (!hasDeadWorkers || (process.env.HYDRA_AUTO_RECOVER || '') !== '1') {
         sendRecoveryReport(startupGapMs)
       }

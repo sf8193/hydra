@@ -9,7 +9,7 @@ import { safeSend, formatSpawnLine, atomicWriteFileSync } from './util.js'
 import { tmuxHasSession, tmuxSync, tmuxTimedOut } from './tmux.js'
 import { nameHeldByAnother, occupancy, occupied } from './session-reachability.js'
 import { withThreadLock } from '../specialists/specialists.js'
-import { browserProfileProblem, operatorMcpNameClashes, unreadableWorkdir } from '../config/write-confinement.js'
+import { browserProfileProblem, managedMcpNameClashes, unreadableWorkdir } from '../config/write-confinement.js'
 import { confinementRefusal, endVerifying, startVerifying, verifyBackoff, verifyRefusal, confined, describePolicy, macosRefusal, missingTokenRefusal, PolicyRefusal, remedy, resolvePolicy, type LaunchPolicy } from './restricted.js'
 import { refusalNoticeKey, threadNotices } from './notice-limit.js'
 import { hydraLoadEnv, currentHydraConfig } from './hydra-config.js'
@@ -26,7 +26,8 @@ import { parseSpawnTopic, resolveSpawnLabel } from './util.js'
 import { startPhaseBudget, clearPhaseBudget } from './phase-budget.js'
 import { clearIdleLimit, resumeIdleLimit } from './idle-limit.js'
 import { resolveLaunchSelection, spawnModel, withContextSuffix } from '../shared/constants.js'
-import type { SessionType, SessionLabel } from '../shared/constants.js'
+import type { SessionType, ToolBase, SessionLabel } from '../shared/constants.js'
+import { isRestricted, isRestrictedPolicy } from './policy-record.js'
 import { resolveEngine } from './engines/instances.js'
 import type { EngineAdapter, ProviderId } from './engines/engine-adapter.js'
 import { resumeHomeOwner } from './engines/codex-engine-adapter.js'
@@ -163,7 +164,7 @@ export function buildWorktreePromptAppend(isFork: boolean, worktreePath: string 
 
 /** Tool names recorded in a spawn's sessionMetadata. Codex sessions discover
  *  tools via their own MCP sidecar, not the daemon bridge. */
-export function spawnToolNames(adapter: EngineAdapter, spawnType: SessionType): string[] {
+export function spawnToolNames(adapter: EngineAdapter, spawnType: ToolBase): string[] {
   return adapter.channel === 'bridge' ? computeToolsForSession(spawnType, new Set()).map(t => t.name) : []
 }
 
@@ -425,6 +426,7 @@ function hookEnv(info: HookSubject): Record<string, string> {
     HYDRA_CLAUDE_SESSION_ID: info.claudeSessionId ?? '',
     HYDRA_CODEX_HOME_NAME: info.codexHomeName ?? '',
     HYDRA_SESSION_TYPE: info.sessionType ?? '',
+    HYDRA_RESTRICTED: isRestricted(info) ? '1' : '',
   }
 }
 
@@ -454,7 +456,7 @@ export type PreHandoffVerdict = { ok: true } | { ok: false; output: string }
 
 /** What the hooks read about a session. Main has no SessionInfo, so hooks take only this (it has no thread and no worktree). */
 export type HookSubject = Pick<SessionInfo, 'tmuxName' | 'sessionId'>
-  & Partial<Pick<SessionInfo, 'threadId' | 'engine' | 'claudeSessionId' | 'codexHomeName' | 'sessionType' | 'worktreePath'>>
+  & Partial<Pick<SessionInfo, 'threadId' | 'engine' | 'claudeSessionId' | 'codexHomeName' | 'sessionType' | 'policy' | 'worktreePath'>>
   & { sessionMetadata?: Pick<SessionMetadata, 'cwd'> }
 
 /** Where the session works: its Hydra worktree, else the cwd it was launched in. */
@@ -1014,7 +1016,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     }
     policy = continuing ? (r.stored ?? r.current) : r.current
     // The engine comes from the thread's history, and `handoff <model>` can change it: only an engine that confines can run a confined session.
-    if (policy?.access === 'workdir' && !resolveEngine(engine).confinesAccess) {
+    if (isRestrictedPolicy(policy) && !resolveEngine(engine).confinesAccess) {
       throw new PolicyRefusal(`specialist ${policy.specialist} has restricted = true, which the ${engine} engine cannot give: set engine = "claude", or set restricted = false. ${remedy(sessionName)}`)
     }
     // The sandbox its servers run under is proven only on some macOS versions: refused here, where every start passes, never run on a guess.
@@ -1075,11 +1077,11 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     // The folder can change after hydra.toml loaded (a link added into a place the layer denies): the load's check runs again, on resolved paths.
     const inside = unreadableWorkdir(w.workdir, w.cannotRead, hydraLoadEnv().realpath)
     if (inside) await refuse(`specialist ${layerPolicy.specialist}: its workdir ${w.workdir} is, or now holds, ${inside}, which the layer denies reading, so it could not read its own folder and no session starts. ${remedy(sessionName)}`)
-    // Claude Code's server allowlist matches by name: a listed server whose name the operator's own config (or the workdir's .mcp.json) also declares would admit that one too, so none starts. Checked again here because the files change after the load.
-    const probe = operatorMcpNameClashes(hydraLoadEnv(), w.workdir, w.servers.map(x => x.name))
-    if (probe.clashes.length) await refuse(`specialist ${layerPolicy.specialist}: ${probe.clashes.map(c => `${c.file} already declares an MCP server named ${c.name}`).join('; ')}; Claude Code's allowlist matches by name, so that one would be admitted too and could take the place of the server hydra starts, and no session starts: rename it in hydra.toml. ${remedy(sessionName)}`)
+    // A managed MCP config (managed-mcp.json) is admitted without being listed and takes exclusive control, so a server of a listed name there would run in the listed one's place, and the start check sees names only. Checked again here because the file can change after the load. (The operator's own config is not admitted: its server has another command.)
+    const probe = managedMcpNameClashes(hydraLoadEnv(), w.servers.map(x => x.name))
+    if (probe.clashes.length) await refuse(`specialist ${layerPolicy.specialist}: ${probe.clashes.map(c => `${c.file} already declares an MCP server named ${c.name}`).join('; ')}; Claude Code's own text says a managed MCP config's servers are admitted without listing them (not shown live), so that one could run in place of the server hydra starts, and no session starts: rename it in hydra.toml. ${remedy(sessionName)}`)
     // A file that cannot be read is not "no clash": the start fails closed.
-    if (probe.unreadable.length) await refuse(`specialist ${layerPolicy.specialist}: ${probe.unreadable.map(u => u.why).join('; ')}, so hydra cannot tell whether it declares an MCP server named like a listed one (Claude Code's allowlist matches by name), and no session starts: fix or remove the file. ${remedy(sessionName)}`)
+    if (probe.unreadable.length) await refuse(`specialist ${layerPolicy.specialist}: ${probe.unreadable.map(u => u.why).join('; ')}, so hydra cannot tell whether it declares an MCP server named like a listed one (Claude Code's own text says a managed MCP config's servers are admitted without listing them (not shown live)), and no session starts: fix or remove the file. ${remedy(sessionName)}`)
     // A named browser profile must still resolve inside the workdir (a link added after the load could lead out of it).
     const profileWhy = w.browserProfile === undefined ? undefined : browserProfileProblem(w.workdir, w.browserProfile, hydraLoadEnv().realpath, w.cannotRead)
     if (profileWhy) await refuse(`specialist ${layerPolicy.specialist}: ${profileWhy}, so no session starts. ${remedy(sessionName)}`)
@@ -1180,7 +1182,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     }
   }
   const adapter = resolveEngine(engine)
-  const spawnType: SessionType = confinedPolicy ? 'scoped' : opts?.sessionType ?? (isJoin ? 'thread_guest' : 'thread_owner')
+  const spawnType: SessionType = confinedPolicy ? 'thread_owner' : opts?.sessionType ?? (isJoin ? 'thread_guest' : 'thread_owner')
   const launched = await adapter.launch({
     sessionId, tmuxName, cwd: effectiveCwd, originalCwd: spawnCwd, model, prompt,
     worktreePath, forkFromOriginalCwd: !!worktreeTarget,
@@ -1196,7 +1198,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   const now = Date.now()
   const sessionMetadata = {
     role: 'worker' as const,
-    tools: spawnToolNames(adapter, spawnType),
+    tools: spawnToolNames(adapter, confinedPolicy ? 'restricted' : spawnType),
     model: launched.model,
     cwd: effectiveCwd,
     platform: PLATFORM,

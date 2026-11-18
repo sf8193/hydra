@@ -11,7 +11,7 @@ import { discoverClaudeSessionId, killSession } from './session-lifecycle.js'
 import { loadAccess, operatorIds } from './access.js'
 import { dispatchReconnect, dispatchSessionReply, dispatchDisconnect } from './protocol-registry.js'
 import './restricted.js'   // registers the queue-flush gate on the transport
-import { getToolsForSession, isToolAllowed, noteDeclaredSessionType, refusalText } from './tool-surface.js'
+import { getToolsForSession, isToolAllowed, noteDeclaredRestrictions, refusalText } from './tool-surface.js'
 import { getProtocolContext } from './protocol-runner.js'
 import { maybeNudgeMissingAdvance } from './advance-nudge.js'
 import { clearPendingReply, settlePendingOnReact, notePendingFromQueue } from './reply-guard.js'
@@ -116,6 +116,9 @@ const incumbentHolds = new Map<string, { until: number; socket: import('net').So
 // ---------------------------------------------------------------------------
 // Bridge protocol handler
 // ---------------------------------------------------------------------------
+
+/** A session registering this soon after its record was made (a first start, a resume or a refill) may be in Claude Code's startup: see settleThenFlush. */
+const FRESH_START_MS = 120_000
 
 /** Role of a registering bridge connection: 'control' (tool-only sidecar) or 'session'. */
 export function connectionRoleFor(msg: { connectionRole?: unknown }, info: SessionInfo | undefined): 'control' | 'session' {
@@ -266,7 +269,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       }
 
       // Only a registration that was accepted may declare: a refused newcomer must not narrow the session it was refused for.
-      noteDeclaredSessionType(sessionId, msg.sessionType, msg.writeConfined)
+      noteDeclaredRestrictions(sessionId, msg)
       transport.set(sessionId, conn)
       const tools = getToolsForSession(sessionId)
       transport.sendToBridge(conn, {
@@ -287,7 +290,8 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       // Reply guard: re-arm from queued user messages before the flush hands
       // them over — the queue survives daemon restarts, the guard map doesn't.
       notePendingFromQueue(sessionId, transport.messageQueues.get(sessionId))
-      transport.flushQueue(sessionId)
+      if (info?.engine === 'claude' && info.adapter && Date.now() - info.createdAt < FRESH_START_MS) transport.settleThenFlush(sessionId, () => info.adapter!.turn(info, 0).live === 'idle')
+      else transport.flushQueue(sessionId)
       dispatchReconnect(sessionId)
       if (info && info.sessionType !== 'thread_guest') refreshSessionVisual(info.threadId)
       if (sessionId === 'main') {

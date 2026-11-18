@@ -50,7 +50,7 @@ const KINDS: Kind[] = [
   { what: 'a session born for a specialist with no emoji', name: 'glyph', specialist: 'plain', glyph: '🔣' },
   { what: 'a name outside the catalog', name: 'not-in-the-catalog', glyph: '🔹' },
 ]
-const born = (k: Kind) => k.specialist ? { policy: { specialist: k.specialist, access: 'operator' } } : {}
+const born = (k: Kind) => k.specialist ? { policy: { specialist: k.specialist, restricted: false } } : {}
 
 let n = 0
 const made: SessionInfo[] = []
@@ -501,7 +501,7 @@ describe('sends-to.ts: the note a restricted specialist\'s hand-off leaves in th
   afterEach(() => { Object.assign(sendDeps, real); rmSync(join(STATE_DIR, 'specialist-threads.json'), { force: true }); _reloadSpecialists() })
 
   const asSpecialist = async (id: string) => {
-    const s = mk(`${id}-session`, { sessionType: 'scoped', threadId: `eve-home-${id}` })
+    const s = mk(`${id}-session`, { sessionType: 'thread_owner', policy: { specialist: id, restricted: true, id: 'x' }, threadId: `eve-home-${id}` })
     setSpecialistThread(id, s.threadId)
     try { await sendToThread(s.sessionId, { target: 'deep', type: 'result', text: 'the answer', chat_id: 'eve-chat' }) } finally { rm(s) }
     return notes.at(-1)?.line
@@ -560,7 +560,7 @@ describe('the spawn-time sites (source-pinned)', () => {
 })
 
 describe('a name is resolved to the right record', () => {
-  const own = { policy: { specialist: 'ops', access: 'operator' as const } }
+  const own = { policy: { specialist: 'ops', restricted: false as const } }
 
   test('an older record holding the name (a dead predecessor) does not hide its successor', () => {
     configure(decl('ops', { emoji: '🔐' }))

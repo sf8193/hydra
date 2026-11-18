@@ -292,6 +292,17 @@ describe('cli-handler: deliver (Z2)', () => {
     expect(checkIdempotency(k)).toEqual({ blocked: false })
   })
 
+  test('codex rejected as retryable → exit 5 (deferred), no key (#782)', async () => {
+    const info = codex(async () => ({ status: 'rejected', retryable: true, reason: 'steer refused: turn busy' }))
+    const k = key()
+    const res = await deliver(info.sessionId, { idempotencyKey: k })
+    expect(res.ok).toBe(false)
+    expect(res.error).toContain('steer refused: turn busy')
+    expect(res.exitCode).toBe(5)
+    expect(res.result).toBe('deferred')
+    expect(checkIdempotency(k)).toEqual({ blocked: false })
+  })
+
   test('codex unknown → exit 6, no key', async () => {
     const info = codex(async () => ({ status: 'unknown', reason: 'steer timed out' }))
     const k = key()

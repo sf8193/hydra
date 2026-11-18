@@ -21,7 +21,7 @@ import { MAX_ATTACHMENT_BYTES } from './access.js'
 import { expectedServerNames } from './engines/claude-verify.js'
 import { bridgeCommand } from './plugin-manifest.js'
 import { readdirSync, readFileSync } from 'fs'
-import { PolicyRefusal, missingTokenRefusal, remedy, serverToolRule, type ConfinementPolicy, type LaunchPolicy } from './restricted.js'
+import { PolicyRefusal, missingTokenRefusal, remedy, serverToolRule, type ConfinementPolicy, type ConfinementServer, type LaunchPolicy } from './restricted.js'
 
 /** The first Claude Code with `permissions.blockWritesOutsideWorkingDirectories`: an older one ignores the key, which would leave Edit/Write unconfined. */
 export const MIN_CLAUDE_VERSION = [2, 1, 314] as const
@@ -33,11 +33,15 @@ export const NETWORK_ALLOW_RULE = 'WebFetch(domain:*)'
 /** The MCP servers the session may see: hydra's bridge (its one way to the thread) and the servers its policy lists. Nothing else: not the operator's own, a plugin's, a project's or a claude.ai connector. */
 export const confinementServers = (policy: Pick<ConfinementPolicy, 'servers'>): string[] => expectedServerNames(policy.servers)
 
-export function confinementSettings(policy: Pick<ConfinementPolicy, 'denyCommands' | 'cannotRead'> & Partial<Pick<ConfinementPolicy, 'servers'>> & { bridgeCommands?: readonly string[][] }): object {
+/** The command Claude Code runs for a listed server, as the MCP config (`confinementMcp`) and the allowlist (`confinementSettings`) both say it: the one place its profile and download folders are filled in. */
+export const confinementServerCommand = (policy: Pick<ConfinementPolicy, 'workdir' | 'browserProfile'>, s: Pick<ConfinementServer, 'command' | 'profileArgs'>): string[] =>
+  [s.command, ...s.profileArgs.map(a => fillProfile(a, policy.workdir, policy.browserProfile))]
+
+export function confinementSettings(policy: Pick<ConfinementPolicy, 'denyCommands' | 'cannotRead'> & ({ servers?: undefined } | Pick<ConfinementPolicy, 'servers' | 'workdir' | 'browserProfile'>) & { bridgeCommands?: readonly string[][] }): object {
   return {
     // Claude Code's own allowlist, which governs user/project/local config, --mcp-config, plugins and claude.ai connectors alike (not --strict-mcp-config: shown against the real Claude Code to drop a plugin's server, and the bridge is one; write-confinement-mcp.live.test.ts).
-    // The listed servers by name (a `serverName` is letters, digits, hyphens and underscores only: a plugin's key, with its colons, is refused by Claude Code with a dialog that stops the start), the bridge by the exact command it runs.
-    allowedMcpServers: [...(policy.servers ?? []).map(s => ({ serverName: s.name })), ...(policy.bridgeCommands ?? []).map(serverCommand => ({ serverCommand: [...serverCommand] }))],
+    // Every server by the exact command it runs: the listed ones with their folders filled in, the bridge once per plugin folder. Not by `serverName`: once any `serverCommand` entry exists (the bridge's), Claude Code 2.1.326 matches a stdio server by its full command only and a `serverName` entry no longer admits it (the server is dropped as "blocked by enterprise policy"; write-confinement-mcp.live.test.ts, Claude Code 2.1.326, #772). A name entry would also be dead weight. All servers here are stdio (`confinementMcp`), so there is no `serverUrl` case.
+    allowedMcpServers: [...(policy.servers ?? []).map(s => ({ serverCommand: confinementServerCommand(policy as Pick<ConfinementPolicy, 'workdir' | 'browserProfile'>, s) })), ...(policy.bridgeCommands ?? []).map(serverCommand => ({ serverCommand: [...serverCommand] }))],
     // Honored from any settings source; the environment variable at launch says the same, and the start check wants its debug line.
     disableClaudeAiConnectors: true,
     sandbox: {
@@ -65,7 +69,7 @@ export function confinementSettings(policy: Pick<ConfinementPolicy, 'denyCommand
 }
 
 /** The permission rules the settings carry, as the start check expects to see Claude Code apply them. */
-export function confinementRules(policy: Pick<ConfinementPolicy, 'denyCommands' | 'cannotRead'> & Partial<Pick<ConfinementPolicy, 'servers'>>): { allow: string[]; deny: string[] } {
+export function confinementRules(policy: Pick<ConfinementPolicy, 'denyCommands' | 'cannotRead'> & ({ servers?: undefined } | Pick<ConfinementPolicy, 'servers' | 'workdir' | 'browserProfile'>)): { allow: string[]; deny: string[] } {
   const p = (confinementSettings(policy) as { permissions: { allow: string[]; deny: string[] } }).permissions
   return { allow: p.allow, deny: p.deny }
 }
@@ -76,7 +80,7 @@ export function confinementMcp(policy: ConfinementPolicy, sessionName: string, e
     mcpServers: Object.fromEntries(policy.servers.map(s => [s.name, {
       type: 'stdio',
       command: s.command,
-      args: s.profileArgs.map(a => fillProfile(a, policy.workdir, policy.browserProfile)),
+      args: confinementServerCommand(policy, s).slice(1),
       env: {
         ...Object.fromEntries(s.tokenEnv.map(v => {
           const value = env[v] ?? held[v]

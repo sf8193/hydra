@@ -57,10 +57,11 @@ Lifecycle:
 Session management:
   hydra spawn <prompt>                 Spawn a new session
   hydra spawn [options] -- <prompt>    Everything after -- is the prompt, even text starting with "-"
-  hydra spawn --specialist <name>      Spawn the session for a declared specialist (its kickoff is the prompt; refuses if it is already filled)
+  hydra spawn --specialist <name> --initiator <who> --idempotency-key <key>
+                                       Spawn the session for a declared specialist (its kickoff, which it must have, is the prompt; refuses if it is already filled)
   hydra list                           List active sessions
   hydra status <name>                  Session details
-  hydra kill <name> [--destroy]        Kill a session; --destroy (or +d) then deletes its Discord thread, permanently
+  hydra kill <name|thread id> [--destroy]  Kill a session; --destroy (or +d) then deletes its Discord thread, permanently; with [threads] allow_destroy it also deletes the thread of a session that has ended
   hydra peek [name]                    Read-only view of live sessions
   hydra attach <name>                  Attach to a running session's tmux surface
                                        <name>: a session's name or id, a specialist's name, or a thread id
@@ -88,7 +89,7 @@ Deliver (whisper channel — message to session context, not thread):
     --revive                           With --to thread:<id> or --thread: a dead session is revived in its thread first
                                        (resume, else fork, else a fresh one that reads the thread); the message queues for it.
   Exit codes: 2 already delivered with this key · 3 gone or refused · 4 running but unreachable · 5 deferred (booting,
-  or busy; stuck on a dialog is a failure) · 6 starting failed or backing off, died during delivery, or outcome unknown · 7 a delivery with this key is in flight (deferred) · 8 no such specialist
+  busy, or a retryable engine rejection; stuck on a dialog is a failure) · 6 starting failed or backing off, died during delivery, or outcome unknown · 7 a delivery with this key is in flight (deferred) · 8 no such specialist
   --json adds "result" (done, deferred or failed) and exits 0 whenever the daemon answers (no answer: exit 1, no JSON). Every code and word: README, "Exit codes and result words"
 
 Config:
@@ -114,7 +115,7 @@ Specialists (named addresses that refill themselves):
                                        a name needs a letter (an all-digit one reads as a thread id);
                                        once hydra.toml declares specialists, recipes live there and set takes only --thread
   hydra specialist show <name> | list | rm <name>   (rm: without hydra.toml only)
-  hydra [--state-dir <dir>] specialist browser <name> [--server <name>] [--trust-existing] [--dry-run]   open a write-confined specialist's browser profile to log it in (run before its first session)
+  hydra [--state-dir <dir>] specialist browser <name> [--server <name>] [--trust-existing] [--dry-run]   open a write-confined specialist's browser profile to log it in (run before its first session; --dry-run only prints the plan, and a session may run it)
 
 Routing (hydra.toml):
   hydra route --person <person:id|address|stranger> --place <place> [--app <app:id>] [--heard-by <app:id,app:id>] [--mentioned <app:id,app:id>] [--bound <specialist> [--bound-app <app:id>]]
@@ -146,7 +147,7 @@ Model aliases:
 ${Object.entries(MODEL_ALIASES).map(([k, v]) => `  ${k.padEnd(16)} → ${v}`).join('\n')}
 
 Global options:
-  --daemon <name>                      Target a specific daemon
+  --daemon <name>                      Target a specific daemon (else CHAT_PLATFORM picks among several)
   --state-dir <dir>                    Target the daemon (and jobs state) in this state dir: a worktree or test daemon
   --json                               Output raw JSON
   -h, --help                           Show this help
@@ -370,12 +371,9 @@ async function main(): Promise<void> {
         console.error('error: prompt is required')
         process.exit(1)
       }
-      if (!idempotencyKey) {
-        console.error('error: --idempotency-key is required')
-        process.exit(1)
-      }
-      if (!initiator) {
-        console.error('error: --initiator is required')
+      const missing = [!idempotencyKey && '--idempotency-key <key>', !initiator && '--initiator <who>'].filter(Boolean)
+      if (missing.length) {
+        console.error(`error: ${missing.join(' and ')} ${missing.length > 1 ? 'are' : 'is'} required`)
         process.exit(1)
       }
       if (message && !channel) {

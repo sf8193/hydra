@@ -1,14 +1,15 @@
 // `can_only_write_to = "workdir"`: the middle trust level. Every load refusal and warning, one test per row.
 import { describe, test, expect } from 'bun:test'
-import { readFileSync } from 'fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
 import { join } from 'path'
-import { loadHydraConfig } from '../load.js'
+import { loadHydraConfig, systemEnv } from '../load.js'
 import type { HydraConfig, LoadEnv } from '../types.js'
 import { testLoadEnv } from './load-env.js'
 import { KNOWN_BUILTIN_TOOLS, confinementWarning, readDenyRoots, unreadableWorkdir } from '../write-confinement.js'
 
 const HOME = '/home/op'
-const env: LoadEnv = testLoadEnv({ home: HOME, stateDir: `${HOME}/.claude/channels/discord`, claudeConfigDir: `${HOME}/.claude`, isCommand: c => c === '/usr/local/bin/browser-mcp' || c === '/usr/local/bin/datadog-mcp' })
+const env: LoadEnv = testLoadEnv({ home: HOME, stateDir: `${HOME}/.claude/channels/discord`, claudeConfigDir: `${HOME}/.claude`, isCommand: c => c === '/usr/local/bin/browser-mcp' || c === '/home/op/bin/setup' || c === '/usr/local/bin/datadog-mcp' })
 
 const BASE = `
 operator = "op"
@@ -108,35 +109,36 @@ describe('tools and mcp_servers are the write-confined specialist\'s allowlist',
 })
 
 describe('the same-name hole and the tool warnings', () => {
-  test('a listed server whose name the operator\'s own Claude config or the workdir\'s .mcp.json also declares is an error naming the file', () => {
-    const clash = testLoadEnv({ ...env, mcpNamesIn: f => (f === '/home/op/.claude.json' ? ['browser'] : []) })
-    const r = loadHydraConfig(spec('can_only_write_to = "workdir"\nmcp_servers = ["browser"]'), clash)
-    expect(r.ok).toBe(false)
-    expect((r as any).errors.map((i: any) => `${i.path}: ${i.message}`)).toEqual(['specialists.ops.mcp_servers[0]: /home/op/.claude.json already declares an MCP server named browser; Claude Code\'s allowlist matches by name, so that one would be admitted too and could take the place of [mcp_servers.browser]: rename [mcp_servers.browser]'])
-    const proj = testLoadEnv({ ...env, mcpNamesIn: f => (f === '/home/op/agents/ops/.mcp.json' ? ['browser'] : []) })
-    expect(loadHydraConfig(spec('can_only_write_to = "workdir"\nmcp_servers = ["browser"]'), proj).ok).toBe(false)
+  const MANAGED = '/Library/Application Support/ClaudeCode/managed-mcp.json'
+  const withNames = (over: Record<string, string[] | Error>) => testLoadEnv({ ...env, mcpNamesIn: (f: string) => { const v = over[f]; if (v instanceof Error) throw v; return v ?? [] } })
+  const clashErrors = (e: LoadEnv) => { const r = loadHydraConfig(spec('can_only_write_to = "workdir"\nmcp_servers = ["browser"]'), e); return r.ok ? [] : r.errors.map(i => `${i.path}: ${i.message}`) }
+  test('a listed server whose name a managed MCP config also declares is an error naming the file', () => {
+    expect(clashErrors(withNames({ [MANAGED]: ['browser'] }))).toEqual([`specialists.ops.mcp_servers[0]: ${MANAGED} already declares an MCP server named browser; Claude Code's own text says a managed MCP config's servers are admitted without listing them (not shown live), so that one could run in place of [mcp_servers.browser]: rename [mcp_servers.browser]`])
+    expect(clashErrors(withNames({ '/etc/claude-code/managed-mcp.json': ['browser'] }))[0]).toContain('/etc/claude-code/managed-mcp.json already declares an MCP server named browser')
   })
-  const withNames = (over: Record<string, string[] | Error>, extra: object = {}) => testLoadEnv({ ...env, ...extra, mcpNamesIn: (f: string) => { const v = over[f]; if (v instanceof Error) throw v; return v ?? [] } })
-  const clashErrors = (e: LoadEnv) => { const r = loadHydraConfig(spec('can_only_write_to = "workdir"\nmcp_servers = ["browser"]'), e); return r.ok ? [] : r.errors.map(i => i.message) }
-  test('a .mcp.json in any folder ABOVE the workdir counts (Claude Code walks up from its working directory)', () => {
-    expect(clashErrors(withNames({ '/home/op/.mcp.json': ['browser'] }))[0]).toContain('/home/op/.mcp.json already declares an MCP server named browser')
-    expect(clashErrors(withNames({ '/.mcp.json': ['browser'] }))[0]).toContain('/.mcp.json already declares')
-    expect(clashErrors(withNames({ '/home/op/agents/.mcp.json': ['other'] }))).toEqual([])
+  test('the operator\'s own config does not clash: its server has another command, so the allowlist does not admit it (live: write-confinement-mcp.live.test.ts)', () => {
+    // Only the managed file is read: a name in ~/.claude.json, its project entry or any .mcp.json is never looked up.
+    const seen: string[] = []
+    const e = testLoadEnv({ ...env, mcpNamesIn: (f: string) => { seen.push(f); return ['browser'] } })
+    expect(clashErrors(e).length).toBe(2)   // both managed paths say it; nothing else is asked
+    expect(seen.sort()).toEqual(['/Library/Application Support/ClaudeCode/managed-mcp.json', '/etc/claude-code/managed-mcp.json'])
   })
-  test('a file that exists and cannot be read or parsed is an error naming it, never "no clash"', () => {
-    const errs = clashErrors(withNames({ '/home/op/.claude.json': new Error('/home/op/.claude.json is not valid JSON (Unexpected end)') }))
-    expect(errs).toEqual(['/home/op/.claude.json is not valid JSON (Unexpected end), so hydra cannot tell whether it declares an MCP server named browser (Claude Code\'s allowlist matches by name): fix or remove the file'])
-    expect(clashErrors(withNames({ '/home/op/agents/.mcp.json': new Error('/home/op/agents/.mcp.json cannot be read (EACCES)') }))[0]).toContain('cannot be read (EACCES)')
+  test('a managed file that exists and cannot be read or parsed is an error naming it, never "no clash"', () => {
+    const errs = clashErrors(withNames({ [MANAGED]: new Error(`${MANAGED} is not valid JSON (Unexpected end)`) }))
+    expect(errs).toEqual([`specialists.ops.mcp_servers[0]: ${MANAGED} is not valid JSON (Unexpected end), so hydra cannot tell whether it declares an MCP server named browser (Claude Code's own text says a managed MCP config's servers are admitted without listing them (not shown live)): fix or remove the file`])
+    expect(clashErrors(withNames({ '/etc/claude-code/managed-mcp.json': new Error('/etc/claude-code/managed-mcp.json cannot be read (EACCES)') }))[0]).toContain('cannot be read (EACCES)')
   })
-  test('the managed file counts, with the same rules', () => {
-    expect(clashErrors(withNames({ '/Library/Application Support/ClaudeCode/managed-mcp.json': ['browser'] }))[0]).toContain('managed-mcp.json already declares an MCP server named browser')
-    expect(clashErrors(withNames({ '/etc/claude-code/managed-mcp.json': new Error('/etc/claude-code/managed-mcp.json cannot be read (EACCES)') }))[0]).toContain('managed-mcp.json cannot be read')
-  })
-  test('a symlinked workdir is looked up under both its written and its resolved path (the project keys of ~/.claude.json, and the .mcp.json files above each)', () => {
-    const seen: string[][] = []
-    const e = testLoadEnv({ ...env, realpath: p => (p === '/home/op/agents/ops' ? '/srv/real/ops' : p), mcpNamesIn: (f: string, projects?: readonly string[]) => { if (f === '/home/op/.claude.json') seen.push([...(projects ?? [])]); return f === '/srv/real/.mcp.json' ? ['browser'] : [] } })
-    expect(clashErrors(e)[0]).toContain('/srv/real/.mcp.json already declares')
-    expect(seen[0]).toEqual(['/home/op/agents/ops', '/srv/real/ops'])
+  test('the real reader: a missing file declares nothing; an unparseable or unreadable one throws, naming it (what "fails closed" rests on)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcpnames-'))
+    try {
+      const read = systemEnv([], dir, 'discord').mcpNamesIn
+      expect(read(join(dir, 'absent.json'))).toEqual([])
+      writeFileSync(join(dir, 'ok.json'), JSON.stringify({ mcpServers: { browser: {}, other: {} } }))
+      expect(read(join(dir, 'ok.json'))).toEqual(['browser', 'other'])
+      writeFileSync(join(dir, 'bad.json'), '{ not json')
+      expect(() => read(join(dir, 'bad.json'))).toThrow(`${join(dir, 'bad.json')} is not valid JSON`)
+      expect(() => read(dir)).toThrow(`${dir} cannot be read`)   // a directory where a file should be
+    } finally { rmSync(dir, { recursive: true, force: true }) }
   })
   test('a name only another file declares, or no clash at all, loads', () => {
     expect(ok(spec('can_only_write_to = "workdir"\nmcp_servers = ["browser"]')).config.specialists.ops.mcpServerNames).toEqual(['browser'])
@@ -290,6 +292,16 @@ describe('[mcp_servers.<name>] login_command and profile_locks (hydra specialist
     const r = load('login_command = ["/usr/local/bin/browser-mcp", "--user-data-dir={profile_dir}"]\nprofile_locks = ["SingletonLock", ".parentlock"]')
     expect(r.ok).toBe(true)
     expect((r as any).config.mcpServers.browser).toMatchObject({ loginCommand: ['/usr/local/bin/browser-mcp', '--user-data-dir={profile_dir}'], profileLocks: ['SingletonLock', '.parentlock'] })
+  })
+  test('setup_command loads with the executable ~-expanded; it takes no placeholder, is not empty, names an executable that exists, and needs a login_command', () => {
+    const r = load('login_command = ["/usr/local/bin/browser-mcp", "--user-data-dir={profile_dir}"]\nsetup_command = ["/usr/local/bin/browser-mcp", "install-browser", "pinned"]')
+    expect(r.ok).toBe(true)
+    expect((r as any).config.mcpServers.browser.setupCommand).toEqual(['/usr/local/bin/browser-mcp', 'install-browser', 'pinned'])
+    expect((load('login_command = ["/usr/local/bin/browser-mcp", "{profile_dir}"]\nsetup_command = ["~/bin/setup", "~/keep"]') as any).config.mcpServers.browser.setupCommand).toEqual(['/home/op/bin/setup', '~/keep'])
+    expect(errs('setup_command = ["/usr/local/bin/browser-mcp"]')).toEqual(['mcp_servers.browser: setup_command runs only as part of `hydra specialist browser`, which needs login_command: declare how to open the browser too'])
+    expect(errs('login_command = ["/usr/local/bin/browser-mcp", "{profile_dir}"]\nsetup_command = []')).toEqual(['mcp_servers.browser.setup_command: is empty: it is the command that installs what the server needs, its first element the executable'])
+    expect(errs('login_command = ["/usr/local/bin/browser-mcp", "{profile_dir}"]\nsetup_command = ["/usr/local/bin/browser-mcp", "{profile_dir}"]')[0]).toContain('takes no placeholder')
+    expect(errs('login_command = ["/usr/local/bin/browser-mcp", "{profile_dir}"]\nsetup_command = ["/no/such/installer"]')[0]).toContain('is not an executable file or a command on PATH')
   })
   test('errors: no {profile_dir}, an unknown placeholder, an empty command, an executable that does not exist, a lock name with a slash', () => {
     expect(errs('login_command = ["/usr/local/bin/browser-mcp"]')).toEqual(["mcp_servers.browser: login_command holds no {profile_dir}, so it would not open the specialist's own profile"])

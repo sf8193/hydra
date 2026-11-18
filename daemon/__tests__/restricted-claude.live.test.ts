@@ -62,7 +62,7 @@ describe.skipIf(!LIVE)('a restricted launch, run for real', () => {
 
   const liveServers = [{ name: 'stub', command: stub, tokenEnv: ['STUB_KEY'], tools: ['search_logs'] }]
   const policy: LaunchPolicy = {
-    specialist: 'ops', access: 'workdir', workdir, tools: ['Read', 'Grep', 'Glob'], servers: liveServers,
+    specialist: 'ops', restricted: true, workdir, tools: ['Read', 'Grep', 'Glob'], servers: liveServers,
     id: policyIdFor(workdir, ['Read', 'Grep', 'Glob'], liveServers),
   }
 
@@ -116,7 +116,7 @@ for line in sys.stdin:
     try {
       await new ClaudeEngine({} as any).launch({
         sessionId: 'live-s', tmuxName: 'live-t', cwd: workdir, originalCwd: workdir, model: 'claude-sonnet-4-5',
-        prompt: 'Reply with the single word ok.', sessionType: 'scoped', policy,
+        prompt: 'Reply with the single word ok.', sessionType: 'thread_owner', policy,
       } as any)
       command = fake.calls().find(c => c.startsWith('new-session'))!.replace(/^new-session -d -s \S+ /, '')
     } finally { fake.restore() }
@@ -189,7 +189,7 @@ for line in sys.stdin:
     expect(control.ok).toBe(false)
   })
   test('the listed server runs under sandbox-exec, still connects and answers, and cannot reach a stand-in for the daemon\'s socket', async () => {
-    const mcpConfig = JSON.parse(readFileSync(join(STATE_DIR, 'scoped', readdirSync(join(STATE_DIR, 'scoped')).find(f => f.endsWith('.mcp.json'))!), 'utf8'))
+    const mcpConfig = JSON.parse(readFileSync(join(STATE_DIR, 'restricted', readdirSync(join(STATE_DIR, 'restricted')).find(f => f.endsWith('.mcp.json'))!), 'utf8'))
     expect(mcpConfig.mcpServers.stub.command).toBe('/usr/bin/sandbox-exec')
     expect(mcpConfig.mcpServers.stub.args.at(-1)).toBe(stub)
     expect(init.mcp_servers.find((m: any) => m.name === 'stub').status).toBe('connected')

@@ -3,7 +3,7 @@ import { isAbsolute, join, resolve as resolvePath } from 'path'
 import { gateway, STATE_DIR } from './config.js'
 import { isParentOf, parentSessionOf, registry, resolveSendTarget, threadRegistry, type Predecessor, type SessionInfo, type ThreadSessionEntry } from './sessions.js'
 import { transport } from './bridge-transport.js'
-import { callerRefusal, destroyDeclinedText, killThenDestroy } from './destroy.js'
+import { callerRefusal, destroyDeclinedText, destroyThreadById, killThenDestroy } from './destroy.js'
 import { loadAccess, operatorIds, maxChunkLimit, channelPolicy, MAX_ATTACHMENT_BYTES } from './access.js'
 import { quietSend, shouldQuiet } from './quiet-send.js'
 import { beginMainHandoff } from './main-handoff.js'
@@ -21,7 +21,7 @@ import { watchPr, unwatchPr, listWatches, getWatchesBySession, formatWatchEntry,
 import { fileArgTools, snapshotConfinedFiles } from './write-confinement.js'
 import { attachmentTarget } from './attachment-target.js'
 import { fileRefusal } from '../config/write-confinement.js'
-import { bindConversation, unbindConversation, formatConversationsFor, replyInConversation, conversationBelongsTo } from '../connectors/slack/runtime.js'
+import { bindConversation, unbindConversation, formatConversationsFor, replyInConversation, editInConversation, deleteInConversation, conversationBelongsTo } from '../connectors/slack/runtime.js'
 import { refreshSessionVisual, emojiOf, emojiOfName } from './anchor-state.js'
 import { refreshDashboard } from './dashboard.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './artifacts.js'
@@ -213,9 +213,25 @@ export function ownPlaceRefusal(callerSessionId: string, name: string, args: Rec
   return `${name}: ${arg} ${target} is not this session's own conversation; ${who} acts only in its own thread or in a Slack conversation bound to its specialist`
 }
 
+/**
+ * A Slack message link (`https://<team>.slack.com/archives/<channel>/p<ts without the dot>`) as the chat_id and message_id
+ * edit_message and delete_message take: `slack:<channel>` and the ts with its dot back. Undefined when it is not one.
+ */
+export function slackMessageLink(link: string): { chat_id: string; message_id: string } | undefined {
+  const m = /^https:\/\/[\w-]+\.slack\.com\/archives\/([A-Z0-9]+)\/p(\d{10})(\d{6})(?:[?#].*)?$/.exec(link.trim())
+  return m ? { chat_id: `slack:${m[1]}`, message_id: `${m[2]}.${m[3]}` } : undefined
+}
+
 export async function executeTool(name: string, args: Record<string, unknown>, callerSessionId?: string): Promise<ToolResult> {
   const cleanups: (() => void)[] = []
   try {
+    // edit_message and delete_message also take a Slack message's link: read as the chat_id and message_id it names, before any check.
+    if ((name === 'edit_message' || name === 'delete_message') && typeof args.link === 'string') {
+      const target = slackMessageLink(args.link)
+      if (!target) throw new Error(`${name}: link is not a Slack message link (https://<team>.slack.com/archives/<channel>/p<digits>)`)
+      args = { ...args, ...target }
+      delete args.link
+    }
     // Bridge-server enforces this at the socket boundary. Keep the dispatcher
     // fail-closed too: Codex advertises phase-scoped tools statically, and tests
     // or future callers may invoke executeTool without crossing bridge-server.
@@ -380,12 +396,19 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       }
 
       case 'edit_message': {
+        // A Slack conversation's message: rewritten through the app that heard the conversation (connectors/slack/runtime.ts holds who may).
+        if (typeof args.chat_id === 'string' && args.chat_id.startsWith('slack:')) {
+          return { content: [{ type: 'text', text: await editInConversation(callerSessionId, args.chat_id, args.message_id, args.text as string) }] }
+        }
         // An edit cannot add files: the gateway shapes the text with no room for any.
         const edited = await withOutbound(args.text as string, 0, out => retrySend(() => gateway.edit(args.chat_id as string, args.message_id as string, out.text)))
         return { content: [{ type: 'text', text: `edited (id: ${edited})` }] }
       }
 
       case 'delete_message': {
+        if (typeof args.chat_id === 'string' && args.chat_id.startsWith('slack:')) {
+          return { content: [{ type: 'text', text: await deleteInConversation(callerSessionId, args.chat_id, args.message_id) }] }
+        }
         await gateway.delete(args.chat_id as string, args.message_id as string)
         return { content: [{ type: 'text', text: 'deleted' }] }
       }
@@ -621,6 +644,13 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         }
 
         if (!targetId || !registry.has(targetId)) {
+          // A thread id with no live session in it, and destroy: with no session left, a destroy by thread id (`[threads] allow_destroy`).
+          // Main's alone: a session's right to destroy is having spawned the session, and an ended one keeps no such record.
+          if (!sessionId && threadId && args.destroy === true && (!callerSessionId || callerSessionId === 'main')) {
+            const out = await destroyThreadById(threadId, 'main')
+            if (!out.ok) return { content: [{ type: 'text', text: out.text }], isError: true }
+            return { content: [{ type: 'text', text: `deleted thread ${threadId}` }] }
+          }
           throw new Error('session not found')
         }
 

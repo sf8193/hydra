@@ -142,7 +142,7 @@ describe('raindrop-payload: egress allowlist', () => {
 
   test('the allowlist holds only non-freeform session metadata', () => {
     expect([...SESSION_PROPERTY_KEYS]).toEqual([
-      'tmuxName', 'engine', 'sessionType', 'originType', 'platform', 'label',
+      'tmuxName', 'engine', 'sessionType', 'restricted', 'originType', 'platform', 'label',
     ])
   })
 })
@@ -483,5 +483,20 @@ describe('raindrop-payload: model egress gate', () => {
 
   test.each(['SSN 123-45-6789 Acme Corp $2.4M', '__proto__'])('uncatalogued free text %p is dropped', (model) => {
     expect('model' in ev({ event: 'hydra.session.reply', facts: { ...facts, model }, threadId: 'c' }).properties).toBe(false)
+  })
+})
+
+describe('restricted is a session property, since the type no longer says it', () => {
+  test('a restricted session reports restricted=true and its thread_owner type; an unrestricted one false; anything else is dropped', async () => {
+    const { registry } = await import('../sessions.js')
+    const { factsFromRegistry } = await import('../raindrop.js')
+    const mk = (id: string, policy?: object) => registry.set(id, { sessionId: id, tmuxName: id, threadId: `th-${id}`, topic: '', createdAt: 1, lastActive: 1, listening: false, engine: 'claude', sessionType: 'thread_owner', ...(policy && { policy }) } as any)
+    mk('rp-r', { specialist: 'x', restricted: true, id: 'x' }); mk('rp-p'); mk('rp-o', { specialist: 'x', restricted: false, id: 'operator' })
+    try {
+      expect(factsFromRegistry('rp-r')).toMatchObject({ sessionType: 'thread_owner', restricted: 'true' })
+      expect(factsFromRegistry('rp-p')).toMatchObject({ restricted: 'false' })
+      expect(factsFromRegistry('rp-o')).toMatchObject({ restricted: 'false' })
+      expect(SESSION_PROPERTY_KEYS).toContain('restricted')
+    } finally { for (const i of ['rp-r', 'rp-p', 'rp-o']) registry.delete(i) }
   })
 })

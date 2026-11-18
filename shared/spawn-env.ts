@@ -1,4 +1,5 @@
 import * as childProcess from 'child_process'
+import { sourcedEnvNames } from './env-parse.js'
 /**
  * tmux panes inherit RLIMIT_NOFILE from the tmux *server*, not from whoever ran
  * `new-session`. A server started by launchd carries the macOS default of 256
@@ -32,9 +33,12 @@ const NO_SERVER = /no server running|error connecting to/
 export const SCRUBBED_SPAWN_VARS = [
   'RAINDROP_WRITE_KEY', 'RAINDROP_MODE', 'RAINDROP_USER_ID', 'RAINDROP_OMIT_REPO',
   // The Slack connector's default tokens: only the Slack connector may hold them. HYDRA_SLACK_USER_TOKEN reads as the
-  // operator. Names hydra.toml's Slack apps declare are added to these by registerSpawnVars.
+  // operator. Names hydra.toml declares as tokens (Slack apps, the Discord gateway, each [mcp_servers.*] token_env) are added to these by registerSpawnVars.
   'SLOPBOT_SLACK_APP_TOKEN', 'SLOPBOT_SLACK_BOT_TOKEN',
   'HYDRA_SLACK_APP_TOKEN', 'HYDRA_SLACK_BOT_TOKEN', 'HYDRA_SLACK_USER_TOKEN',
+  // The chat gateway's own tokens (daemon/config.ts reads them from capturedSpawnVars): the daemon alone connects to the chat service,
+  // and a session reaches it only through the daemon's socket.
+  'DISCORD_BOT_TOKEN', 'SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN',
 ] as const
 
 /** The shape of an environment variable name: the one rule hydra.toml's `*_token_env` keys and the scrub share. */
@@ -68,7 +72,7 @@ export function _resetScrubbedForTesting(): void {
   for (const k of Object.keys(captured)) delete captured[k]
 }
 
-/** The names scrubbed from every spawn right now: the fixed ones, then those hydra.toml's Slack apps name. */
+/** The names scrubbed from every spawn right now: the fixed ones, then those hydra.toml names as tokens. */
 export function scrubbedSpawnVars(): readonly string[] {
   return [...SCRUBBED_SPAWN_VARS, ...registered]
 }
@@ -117,6 +121,29 @@ export function scrubbedSpawnEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.
   return env
 }
 
+/**
+ * What a restricted or write-confined session keeps of the names the state `.env` sets: what a shell, tmux and Claude need
+ * (NEVER_SCRUBBED and its prefixes, minus the two credentials in it: `GH_TOKEN` and `SSH_AUTH_SOCK`), hydra's own control settings
+ * (`HYDRA_*`, `CHAT_PLATFORM`, `DISCORD_STATE_DIR`: where the bridge finds the daemon), and Claude's own (`CLAUDE_*`, and
+ * `ANTHROPIC_API_KEY`, the key its engine signs in with: a session's shell can read it). Every other name the `.env` sets is
+ * unset in that session's shell. An allowlist: a name added to the `.env` tomorrow is out until it is listed. It covers what the
+ * `.env` sets, not what the daemon's own shell or a frozen tmux server carry; `HYDRA_SLACK_*` are tokens, scrubbed from every session first.
+ */
+const CONFINED_DROPS = new Set(['GH_TOKEN', 'SSH_AUTH_SOCK'])
+export const CONFINED_ENV_KEEP: ReadonlySet<string> = new Set([
+  ...[...NEVER_SCRUBBED].filter(n => !CONFINED_DROPS.has(n)), 'CHAT_PLATFORM', 'DISCORD_STATE_DIR',
+])
+export const CONFINED_ENV_KEEP_PREFIXES: readonly string[] = NEVER_SCRUBBED_PREFIXES
+// Shell variables a shell will not let a script unset: an `unset` of one fails and would abort the launch's `&&` chain.
+const SHELL_READONLY = new Set(['PPID', 'UID', 'EUID', 'GID', 'EGID', 'SHELLOPTS', 'BASHOPTS', 'BASH_VERSINFO'])
+
+/** The names the state `.env` sets that a confined session does not keep: the daemon reads the file at boot, so this is final per boot. */
+export function confinedEnvUnsets(names: Iterable<string> = sourcedEnvNames()): string[] {
+  return [...new Set(names)]
+    .filter(n => /^[A-Za-z_][A-Za-z0-9_]*$/.test(n) && !SHELL_READONLY.has(n) && !CONFINED_ENV_KEEP.has(n) && !CONFINED_ENV_KEEP_PREFIXES.some(p => n.startsWith(p)))
+    .sort()
+}
+
 let onSweepFailure: ((reason: string) => void) | null = null
 
 export function setSweepFailureHandler(fn: ((reason: string) => void) | null): void {
@@ -155,7 +182,7 @@ export function tmuxNewSession(
 
 // A session's identity. Claude and omp export their own at launch. A process started from a session's
 // shell inherits that session's; codex gets none of its own, so drop any it inherited.
-export const SESSION_IDENTITY_VARS = ['HYDRA_SESSION_ID', 'HYDRA_SESSION_NAME', 'HYDRA_THREAD_ID', 'HYDRA_SESSION_TYPE', 'HYDRA_WRITE_CONFINED'] as const
+export const SESSION_IDENTITY_VARS = ['HYDRA_SESSION_ID', 'HYDRA_SESSION_NAME', 'HYDRA_THREAD_ID', 'HYDRA_SESSION_TYPE', 'HYDRA_RESTRICTED', 'HYDRA_WRITE_CONFINED'] as const
 
 export function codexSpawnEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const env = scrubbedSpawnEnv({ ...process.env, ...extra })

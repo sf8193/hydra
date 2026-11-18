@@ -3,7 +3,7 @@ import { PERMISSION_REPLY_RE } from '../config.js'
 import { listModifierKeys } from '../modifiers.js'
 import {
   SPAWN_RE, SPAWN_WT_RE, KILL_RE, LIST_RE, RESTART_RE, HEALTH_RE, RECONNECT_RE, COMMANDS_RE,
-  THREAD_KILL_RE, DESTROY_RE, USAGE_RE, LISTEN_RE, PAUSE_RE, FORK_RE, FORKS_RE, REVIEW_RE, BUILD_RE,
+  THREAD_KILL_RE, DESTROY_RE, USAGE_RE, LISTEN_RE, PAUSE_RE, FORK_RE, FORKS_RE, REVIEW_RE, BUILD_RE, misplacedModelHint,
   KEYS_RE, resolveTmuxKey, SPAWN_OMP_ALIAS_RE, SPAWN_WT_OMP_MODEL_RE, BARE_OMP_ALIAS_RE,
 } from '../router.js'
 
@@ -506,5 +506,23 @@ describe('/keys command', () => {
     expect(isRawMode('/compact')).toBe(false)
     expect(isRawMode('/model sonnet')).toBe(false)
     expect(isRawMode('hello Enter')).toBe(false)
+  })
+})
+
+describe('misplacedModelHint', () => {
+  test('refuses a known alias followed by a spaced dash, with the same hint', () => {
+    expect(misplacedModelHint('review', 'fable-5-2 - fix the thing')).toBe('_Model syntax: `review fable-5-2: topic`_')
+    expect(misplacedModelHint('build', 'opus - add x')).toBe('_Model syntax: `build opus: topic`_')
+    expect(misplacedModelHint('review', 'sol \u2014 look at y')).toBe('_Model syntax: `review sol: topic`_')
+  })
+  test('refuses a versioned alias with plain words, and an alias then a count', () => {
+    expect(misplacedModelHint('review', 'fable-5-2 fix the thing')).toBe('_Model syntax: `review fable-5-2: topic`_')
+    expect(misplacedModelHint('review', 'opus 3 topic')).toBe('_Model syntax: `/review 3 opus: topic` or `/review opus: 3 topic`_')
+    expect(misplacedModelHint('build', 'Opus - x')).toBe('_Model syntax: `build opus: topic`_')
+  })
+  test('lets a topic that merely starts with an alias word through', () => {
+    for (const t of ['opus is slow here', 'fable of the two reefs', 'sonnet-like output', 'opus -x flag', 'sol', 'fix the opus - sonnet mixup', 'claude-opus-4-6 pinned', 'unknown-5 - x', 'opus 4.7 support', 'opus\n- item\n- item2', 'opus\n3 things']) {
+      expect(misplacedModelHint('review', t)).toBeUndefined()
+    }
   })
 })

@@ -2,7 +2,7 @@ import type { DeliveryResult } from './engines/engine-adapter.js'
 
 export type Landing =
   | { ok: true; status: 'delivered' | 'queued'; proof: 'socket_write' | 'persisted' | 'adapter' }
-  | { ok: false; error: string; exitCode?: number }
+  | { ok: false; error: string; exitCode?: 5 | 6 }
 
 /**
  * What an adapter's DeliveryResult means to a CLI caller, shared by every
@@ -12,7 +12,10 @@ export type Landing =
  */
 export function landingOf(result: DeliveryResult, queued: boolean): Landing {
   const via = result.status === 'accepted' ? result.via : undefined
-  if (result.status === 'rejected') return { ok: false, error: `delivery rejected: ${result.reason}` }
+  // A rejection the engine says may clear is exit 5, `deferred` ("busy, try again later"); one that cannot stays a plain failure.
+  if (result.status === 'rejected') return result.retryable
+    ? { ok: false, error: `delivery rejected: ${result.reason} — transient, retry`, exitCode: 5 }
+    : { ok: false, error: `delivery rejected: ${result.reason}` }
   if (result.status === 'unknown') return { ok: false, error: `delivery outcome unknown: ${result.reason} — transient, retry`, exitCode: 6 }
   if (via === 'requeued' && !queued) return { ok: false, error: 'bridge write failed (socket destroyed) — transient, retry', exitCode: 6 }
   if (via === 'requeued') return { ok: true, status: 'queued', proof: 'persisted' }

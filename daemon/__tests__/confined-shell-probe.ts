@@ -68,7 +68,7 @@ export function makeProbe(prefix: string): Probe {
       lastDebugFile = join(fake, `debug-${Math.random().toString(36).slice(2)}.log`)
       const settings = join(fake, `settings-${Math.random().toString(36).slice(2)}.json`)
       const servers = (extra.servers ?? []).map(x => ({ name: x.name, command: x.command, tokenEnv: [], profileArgs: x.args, profileEnv: {}, ...(x.denyTools && { denyTools: x.denyTools }) }))
-      const body = confinementSettings({ denyCommands: [], cannotRead, servers }); extra.tweak?.(body)
+      const body = confinementSettings({ denyCommands: [], cannotRead, workdir, servers }); extra.tweak?.(body)
       writeFileSync(settings, JSON.stringify(body))
       const mcp = join(fake, `mcp-${Math.random().toString(36).slice(2)}.json`)
       writeFileSync(mcp, JSON.stringify({ mcpServers: Object.fromEntries(servers.map(x => [x.name, { type: 'stdio', command: x.command, args: x.profileArgs, env: {} }])) }))

@@ -192,6 +192,8 @@ export type McpServer = {
   tools: string[]
   /** For a `can_only_write_to` specialist: arguments added to the server's command, with {profile_dir} and {download_dir} for its own browser folders. */
   profileArgs?: string[]
+  /** `hydra specialist browser`: a command (argv, no placeholders) it runs first, to install what the server needs on this machine (a pinned browser build, say). Safe to repeat. Per-operator: hydra names no installer. */
+  setupCommand?: string[]
   /** `hydra specialist browser`: the command (argv, `{profile_dir}`/`{download_dir}` placeholders) that opens this server's browser, headed, on the specialist's profile folder, for the operator to log it in. Per-operator: no browser is named in hydra's code. */
   loginCommand?: string[]
   /** `hydra specialist browser`: file names a running browser leaves in a profile folder in use (Chromium's `SingletonLock`, Firefox's `.parentlock`): if one is there, the profile is in use and the command refuses. */
@@ -430,6 +432,8 @@ export type HydraConfig = {
   offLimits?: string[]
   /** `[restricted] allow_unproven_macos = true`: restricted specialists that list servers may launch on a macOS version the sandbox is not proven on. Absent: they are refused there. */
   allowUnprovenMacos?: boolean
+  /** `[threads] allow_destroy = true`: `hydra kill <name or thread id> --destroy` and main's `kill_session` may delete a thread whose session record is gone (a killed session, or none ever). Absent: they refuse and name the key. */
+  allowThreadDestroy?: boolean
   guard?: Guard
   /** Absent: `VITALS_DEFAULTS`. */
   vitals?: Vitals
@@ -460,8 +464,8 @@ export type LoadEnv = {
   /** The path with symlinks resolved, or the path itself when it does not exist. */
   realpath(path: string): string
   exists(path: string): boolean
-  /** The MCP server names a Claude Code config file declares (`mcpServers`, and under `projects[<key>]` for each project key given). [] only when the file does not exist; a file that cannot be read or parsed throws, naming it. */
-  mcpNamesIn(path: string, projects?: readonly string[]): string[]
+  /** The MCP server names a Claude Code MCP config file declares (`mcpServers`). [] only when the file does not exist; a file that cannot be read or parsed throws, naming it. */
+  mcpNamesIn(path: string): string[]
   /** Whether the state dir's `.env` sets this variable (to something non-blank). */
   envFileHas(name: string): boolean
   /** Whether the path is, or sits inside, a git work tree. */

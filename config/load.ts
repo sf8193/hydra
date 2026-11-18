@@ -6,12 +6,12 @@ import { parseEnvLine } from '../shared/env-parse.js'
 import { homedir } from 'os'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'path'
 import { isZone, parseCron } from '../shared/cron-local.js'
-import { engineOfModel, parseIdleTtl, SLACK_GATEWAY_TOKEN_ENVS } from '../shared/constants.js'
+import { DISCORD_GATEWAY_TOKEN_ENV, engineOfModel, parseIdleTtl, SLACK_GATEWAY_TOKEN_ENVS } from '../shared/constants.js'
 import { ENV_NAME_RE, tokenVarRefusal } from '../shared/spawn-env.js'
 import { offLimitRoots, workdirRestrictionIssues } from './restricted-workdir.js'
 import { ALLOW_UNPROVEN_MACOS, macosGateIssue, sandboxIssues, unquotablePath } from './server-sandbox.js'
 import { engineConfinesAccess } from '../shared/engine-capabilities.js'
-import { CAN_ONLY_WRITE_TO_VALUES, KNOWN_BUILTIN_TOOLS, browserDownloadDir, browserProfileDir, browserProfileProblem, browserProfilesOverlap, canonicalFolder, confinementWarning, hasPlaceholder, operatorMcpNameClashes, readDenyRoots, unknownPlaceholders, unreadableWorkdir } from './write-confinement.js'
+import { CAN_ONLY_WRITE_TO_VALUES, KNOWN_BUILTIN_TOOLS, browserDownloadDir, browserProfileDir, browserProfileProblem, browserProfilesOverlap, canonicalFolder, confinementWarning, hasPlaceholder, managedMcpNameClashes, readDenyRoots, unknownPlaceholders, unreadableWorkdir } from './write-confinement.js'
 import { noSuchApp, pinnersOf, speaksAsOf, whyNotServed } from './pins.js'
 import { SLACK_APP_DEFAULTS } from '../connectors/slack/app.js'
 import { emojiProblem, reactionNameProblem } from '../shared/emoji.js'
@@ -55,9 +55,9 @@ const GUARD_TIMEOUT_MAX_MS = 30_000 // deliveries for a conversation wait on the
 const BUILTIN: readonly string[] = BUILTIN_ROLES
 const MAIN_TARGET = 'main'
 
-const TOP_KEYS = ['operator', 'main', 'gateways', 'connectors', 'slack', 'people', 'specialists', 'defaults', 'places', 'schedules', 'rules', 'guard', 'vitals', 'mcp_servers', 'restricted']
-/** Keys a file may set without an operator: the operator itself, and `[main]`, which says how main runs, not who reaches it. */
-const OPERATOR_FREE_KEYS = ['operator', 'main']
+const TOP_KEYS = ['operator', 'main', 'gateways', 'connectors', 'slack', 'people', 'specialists', 'defaults', 'places', 'schedules', 'rules', 'guard', 'vitals', 'mcp_servers', 'restricted', 'threads']
+/** Keys a file may set without an operator: the operator itself, `[main]`, which says how main runs, and `[threads]`, which says what the operator's CLI may do to a thread, not who reaches what. */
+const OPERATOR_FREE_KEYS = ['operator', 'main', 'threads']
 /** `[main]`: the operator's harness, as `[specialists.<id>]` is a specialist. */
 const MAIN_KEYS = ['model']
 const SPECIALIST_KEYS = ['workdir', 'kickoff', 'kickoff_file', 'pinned_to', 'speaks_as', 'reachable_by', 'sessions', 'max_sessions', 'idle', 'home_place', 'model', 'emoji', 'engine', 'env_file', 'renamed_from', 'restricted', 'can_only_write_to', 'cannot_read', 'deny_commands', 'browser_profile', 'tools', 'mcp_servers', 'sends_to']
@@ -96,16 +96,16 @@ export function systemEnv(sessionNames: readonly string[], stateDir: string, pla
     stateDir,
     claudeConfigDir,
     exists: path => { try { statSync(path); return true } catch { return false } },
-    mcpNamesIn: (path, projects = []) => {
+    mcpNamesIn: path => {
       let text: string
       try { text = readFileSync(path, 'utf8') } catch (err) {
         const code = (err as NodeJS.ErrnoException).code
         if (code === 'ENOENT' || code === 'ENOTDIR') return []   // no such file: nothing declared there
         throw new Error(`${path} cannot be read (${err instanceof Error ? err.message : String(err)})`)
       }
-      let j: { mcpServers?: object; projects?: Record<string, { mcpServers?: object }> }
+      let j: { mcpServers?: object }
       try { j = JSON.parse(text) } catch (err) { throw new Error(`${path} is not valid JSON (${err instanceof Error ? err.message : String(err)})`) }
-      return [...new Set([...Object.keys(j?.mcpServers ?? {}), ...projects.flatMap(k => Object.keys(j?.projects?.[k]?.mcpServers ?? {}))])]
+      return Object.keys(j?.mcpServers ?? {})
     },
     envFileHas: name => {
       try {
@@ -271,6 +271,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   // The Slack gateway holds its own app's two tokens, so on its daemon it owns them: one Slack app belongs to one system.
   const GATEWAY = 'the Slack gateway (CHAT_PLATFORM=slack)'
   const GATEWAY_HINT = '; give the connector its own Slack app, with its own variables like CONNECTOR_SLACK_BOT_TOKEN'
+  const GATEWAY_DEFAULT_ENVS: readonly string[] = [DISCORD_GATEWAY_TOKEN_ENV, ...Object.values(SLACK_GATEWAY_TOKEN_ENVS)]
   const envOwner = new Map<string, string>(env.platform === 'slack' ? Object.values(SLACK_GATEWAY_TOKEN_ENVS).map(v => [v, GATEWAY] as const) : [])
   const claimEnv = (v: string, path: string): boolean => {
     const other = envOwner.get(v)
@@ -367,15 +368,19 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (!ID_RE.test(name)) { error(path, `"${name}" is not a valid server name: lowercase letters, digits and dashes`); continue }
     const t = table(raw, path)
     if (!t) continue
-    unknownKeys(t, ['command', 'token_env', 'tools', 'profile_args', 'profile_env', 'login_command', 'profile_locks', 'deny_tools'], path)
+    unknownKeys(t, ['command', 'token_env', 'tools', 'profile_args', 'profile_env', 'login_command', 'setup_command', 'profile_locks', 'deny_tools'], path)
     const command = str(t, 'command', path)
     if (t.command === undefined) error(`${path}.command`, 'is required: the server\'s executable, pinned (a path or a versioned binary, not `npx -y` latest)')
     else if (command !== undefined && !env.isCommand(expand(command))) error(`${path}.command`, `${expand(command)} is not an executable file or a command on PATH`)
     const tokenEnv: string[] = []
     for (const [i, v] of (strList(t, 'token_env', path) ?? []).entries()) {
       if (!ENV_NAME_RE.test(v)) { error(`${path}.token_env[${i}]`, `"${v}" must name an environment variable, like DD_API_KEY`); continue }
-      const owned = envOwner.get(v)
+      // The gateway's default variables, whichever platform this daemon runs: the daemon holds them for its gateway alone.
+      const owned = envOwner.get(v) ?? (GATEWAY_DEFAULT_ENVS.includes(v) ? 'the chat gateway' : undefined)
       if (owned) { error(`${path}.token_env[${i}]`, `"${v}" is the token variable of ${owned}: a server never gets hydra's own tokens`); continue }
+      // A variable sessions need cannot be kept from them: the server gets it, and so does every session.
+      const needed = tokenVarRefusal(v)
+      if (needed) warn(`${path}.token_env[${i}]`, `"${v}" ${needed}, so hydra cannot keep it from sessions: [mcp_servers.${name}] gets it, and so does every session`)
       if (!tokenEnv.includes(v)) tokenEnv.push(v)
     }
     const tools: string[] = []
@@ -409,6 +414,16 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
         else loginCommand = [expand(loginRaw[0]), ...loginRaw.slice(1)]
       }
     }
+    // `hydra specialist browser` runs this first: whatever the server needs installed on this machine. No placeholder: it is not about one profile.
+    const setupRaw = strList(t, 'setup_command', path)
+    let setupCommand: string[] | undefined
+    if (setupRaw !== undefined) {
+      if (setupRaw.length === 0) error(`${path}.setup_command`, 'is empty: it is the command that installs what the server needs, its first element the executable')
+      else if (setupRaw.some(hasPlaceholder)) error(`${path}.setup_command`, 'takes no placeholder: it installs for the machine, not for one specialist\'s profile')
+      else if (!env.isCommand(expand(setupRaw[0]))) error(`${path}.setup_command[0]`, `${expand(setupRaw[0])} is not an executable file or a command on PATH`)
+      else if (loginRaw === undefined) error(path, 'setup_command runs only as part of `hydra specialist browser`, which needs login_command: declare how to open the browser too')
+      else setupCommand = [expand(setupRaw[0]), ...setupRaw.slice(1)]
+    }
     const locksRaw = strList(t, 'profile_locks', path)
     const profileLocks: string[] = []
     for (const [i, f] of (locksRaw ?? []).entries()) {
@@ -421,7 +436,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(n) || n.startsWith('mcp__')) error(`${path}.deny_tools[${i}]`, `"${n}" must be the name of one of the server's tools, like browser_run_code_unsafe`)
       else if (!denyTools.includes(n)) denyTools.push(n)
     }
-    if (command !== undefined) mcpServers[name] = { name, command: expand(command), tokenEnv, tools, ...(denyTools.length && { denyTools }), ...(loginCommand && { loginCommand }), ...(profileLocks.length && { profileLocks }), ...(profileArgs && { profileArgs }), ...(Object.keys(profileEnv).length && { profileEnv }) }
+    if (command !== undefined) mcpServers[name] = { name, command: expand(command), tokenEnv, tools, ...(denyTools.length && { denyTools }), ...(loginCommand && { loginCommand }), ...(setupCommand && { setupCommand }), ...(profileLocks.length && { profileLocks }), ...(profileArgs && { profileArgs }), ...(Object.keys(profileEnv).length && { profileEnv }) }
   }
 
   // --- people --------------------------------------------------------------------------------------------------------
@@ -516,6 +531,10 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
 
   const defaultsTable = table(doc.defaults, 'defaults') ?? {}
   unknownKeys(defaultsTable, ['specialist'], 'defaults')
+  // [threads]: `allow_destroy` lets `hydra kill <name or thread id> --destroy` and main's `kill_session` delete a thread whose session record is gone (a killed session, or none ever).
+  const threadsTable = table(doc.threads, 'threads') ?? {}
+  unknownKeys(threadsTable, ['allow_destroy'], 'threads')
+  const allowThreadDestroy = bool(threadsTable, 'allow_destroy', 'threads') ?? false
   const restrictedTable = table(doc.restricted, 'restricted') ?? {}
   unknownKeys(restrictedTable, ['off_limits', ALLOW_UNPROVEN_MACOS], 'restricted')
   const allowUnprovenMacos = bool(restrictedTable, ALLOW_UNPROVEN_MACOS, 'restricted') ?? false
@@ -735,11 +754,11 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
         for (const [i, name] of (mcpServerNamesRaw ?? []).entries()) {
           if (!Object.hasOwn(mcpServers, name)) { error(`${path}.mcp_servers[${i}]`, `no [mcp_servers.${name}]: declare the server in hydra.toml first`); continue }
           const server = mcpServers[name]
-          // Claude Code's allowlist matches by name: an operator's own server of this name (in a Claude config or the workdir's .mcp.json) would be admitted too, and could take this one's place.
-          const probe = operatorMcpNameClashes(env, workdir, [name])
-          for (const c of probe.clashes) error(`${path}.mcp_servers[${i}]`, `${c.file} already declares an MCP server named ${name}; Claude Code's allowlist matches by name, so that one would be admitted too and could take the place of [mcp_servers.${name}]: rename [mcp_servers.${name}]`)
+          // A managed MCP config (managed-mcp.json) is admitted without being listed and takes exclusive control, so a server of this name there would run in this one's place; the operator's own config is not admitted (it has another command).
+          const probe = managedMcpNameClashes(env, [name])
+          for (const c of probe.clashes) error(`${path}.mcp_servers[${i}]`, `${c.file} already declares an MCP server named ${name}; Claude Code's own text says a managed MCP config's servers are admitted without listing them (not shown live), so that one could run in place of [mcp_servers.${name}]: rename [mcp_servers.${name}]`)
           // A file that cannot be read is not "no clash": the check fails closed.
-          for (const u of probe.unreadable) error(`${path}.mcp_servers[${i}]`, `${u.why}, so hydra cannot tell whether it declares an MCP server named ${name} (Claude Code's allowlist matches by name): fix or remove the file`)
+          for (const u of probe.unreadable) error(`${path}.mcp_servers[${i}]`, `${u.why}, so hydra cannot tell whether it declares an MCP server named ${name} (Claude Code's own text says a managed MCP config's servers are admitted without listing them (not shown live)): fix or remove the file`)
           // `tools` limits nothing at this level; `deny_tools` is what denies a tool here (a `mcp__<server>__<tool>` rule in the launch settings).
           if (server.tools.length) warn(`${path}.mcp_servers[${i}]`, `[mcp_servers.${name}] lists tools, which limit nothing at this level: every tool of the server is callable here except those in deny_tools (only a restricted specialist is held to the tools list)`)
           for (const v of server.tokenEnv) if (!env.envFileHas(v)) warn(`${path}.mcp_servers[${i}]`, `[mcp_servers.${name}] needs ${v}, and ${join(env.stateDir, '.env')} does not set it, so no session of this specialist can start until it does: add ${v}=<value> there and restart the daemon`)
@@ -1040,7 +1059,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     unknownKeys(vt, ['overload_load_per_core', 'overload_idle_pct', 'swap_used_pct', 'ticks', 'resume_settle', 'memory_cooldown'], 'vitals')
     const d = VITALS_DEFAULTS
     vitals = {
-      overloadLoadPerCore: positiveUpTo100(vt, 'overload_load_per_core', 'vitals') ?? d.overloadLoadPerCore,
+      overloadLoadPerCore: positiveFinite(vt, 'overload_load_per_core', 'vitals') ?? d.overloadLoadPerCore,
       overloadIdlePct: positiveUpTo100(vt, 'overload_idle_pct', 'vitals') ?? d.overloadIdlePct,
       swapUsedPct: positiveUpTo100(vt, 'swap_used_pct', 'vitals') ?? d.swapUsedPct,
       ticks: positiveInt(vt, 'ticks', 'vitals') ?? d.ticks,
@@ -1048,12 +1067,21 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       memoryCooldownMs: duration(vt, 'memory_cooldown', 'vitals', 7 * MAX_DAY_MS) ?? d.memoryCooldownMs,
     }
   }
-  // A percentage, or a load per core (past 100 is no threshold at all).
+  // A percentage (past 100 is no threshold at all).
   function positiveUpTo100(t: Table, k: string, path: string): number | undefined {
     const v = t[k]
     if (v === undefined) return undefined
     if (typeof v === 'number' && v > 0 && v <= 100) return v
     error(join2(path, k), 'must be a number above 0, at most 100')
+    return undefined
+  }
+
+  // A ratio, like the load per core: no ceiling, only 0 and the values that are no number (`inf`, `nan`) mean nothing.
+  function positiveFinite(t: Table, k: string, path: string): number | undefined {
+    const v = t[k]
+    if (v === undefined) return undefined
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) return v
+    error(join2(path, k), 'must be a finite number above 0')
     return undefined
   }
 
@@ -1196,7 +1224,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   }
 
   if (errors.length) return { ok: false, errors, warnings }
-  return { ok: true, config: { ...(operator && { operator }), ...(main && { main }), connectors, gateways, slackApps, people, specialists, places, schedules, rules, ...(Object.keys(mcpServers).length && { mcpServers }), ...(offLimits.length && { offLimits }), ...(allowUnprovenMacos && { allowUnprovenMacos }), ...(guard && { guard }), ...(vitals && { vitals }) }, warnings }
+  return { ok: true, config: { ...(operator && { operator }), ...(main && { main }), connectors, gateways, slackApps, people, specialists, places, schedules, rules, ...(Object.keys(mcpServers).length && { mcpServers }), ...(offLimits.length && { offLimits }), ...(allowUnprovenMacos && { allowUnprovenMacos }), ...(allowThreadDestroy && { allowThreadDestroy }), ...(guard && { guard }), ...(vitals && { vitals }) }, warnings }
 }
 
 /** The program a `sh -c` command runs: past any leading VAR=value, with one level of quotes removed. */

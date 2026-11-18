@@ -41,6 +41,8 @@ export class BridgeTransport {
   private readonly maxQueueSize = 50
   private readonly queueFile: string
   private readonly queueFullLogged = new Set<string>()
+  /** Sessions that registered a bridge shortly after their start and whose Claude Code has not yet gone idle: their notifications wait in the queue. */
+  private readonly settling = new Map<string, ReturnType<typeof setInterval>>()
   constructor() {
     this.queueFile = join(STATE_DIR, 'message-queue.json')
     this.loadPersistedQueues()
@@ -75,11 +77,15 @@ export class BridgeTransport {
   }
 
   delete(sessionId: string): void {
+    const t = this.settling.get(sessionId)
+    if (t !== undefined) { clearInterval(t); this.settling.delete(sessionId) }
     this.bridges.delete(sessionId)
     this.queueFullLogged.delete(sessionId)
   }
 
   clear(): void {
+    for (const t of this.settling.values()) clearInterval(t)
+    this.settling.clear()
     this.bridges.clear()
     this.controlBridges.clear()
   }
@@ -174,11 +180,39 @@ export class BridgeTransport {
   /** Write to the session bridge, else enqueue (persisted). Synchronous; the Claude adapter's delivery. */
   writeOrQueue(sessionId: string, msg: Record<string, unknown>): 'written' | 'queued' | 'write-failed' {
     const bridge = this.bridges.get(sessionId)
-    if (!bridge) { this.enqueue(sessionId, msg); return 'queued' }
+    if (!bridge || (this.settling.has(sessionId) && msg.type === 'notification')) { this.enqueue(sessionId, msg); return 'queued' }
     return this.sendToBridge(bridge, msg) ? 'written' : 'write-failed' // sendToBridge re-queues on failure
   }
 
+  /**
+   * A freshly started session's bridge registers while Claude Code is still starting (its channel handler is not up yet, and its kickoff turn
+   * is running); a notification pushed then is dropped by Claude Code with nothing logged. So the flush waits for the session's first idle
+   * (`ready`), and a notification arriving meanwhile queues behind it. After `capMs` it flushes anyway: a session that never reports idle
+   * must not hold its messages forever.
+   */
+  settleThenFlush(sessionId: string, ready: () => boolean, capMs = 30_000, pollMs = 250): void {
+    const done = (): void => {
+      const t = this.settling.get(sessionId)
+      if (t === undefined) return
+      clearInterval(t)
+      this.settling.delete(sessionId)
+      this.flushQueue(sessionId)
+    }
+    const earlier = this.settling.get(sessionId)
+    if (earlier !== undefined) { clearInterval(earlier); this.settling.delete(sessionId) }
+    let idle = false
+    try { idle = ready() } catch {}
+    if (idle) { this.flushQueue(sessionId); return }
+    const startedAt = Date.now()
+    this.settling.set(sessionId, setInterval(() => {
+      let nowIdle = false
+      try { nowIdle = ready() } catch {}
+      if (nowIdle || Date.now() - startedAt >= capMs || !this.bridges.has(sessionId)) done()
+    }, pollMs))
+  }
+
   flushQueue(sessionId: string): void {
+    if (this.settling.has(sessionId)) return // held until the session's first idle (settleThenFlush)
     const queue = this.messageQueues.get(sessionId)
     if (!queue || queue.length === 0) return
     const bridge = this.bridges.get(sessionId)
@@ -201,6 +235,8 @@ export class BridgeTransport {
   }
 
   disconnect(sessionId: string): void {
+    const settling = this.settling.get(sessionId)
+    if (settling !== undefined) { clearInterval(settling); this.settling.delete(sessionId) }
     const bridge = this.bridges.get(sessionId)
     if (bridge) {
       try { bridge.socket.end() } catch {}

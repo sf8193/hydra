@@ -1,6 +1,6 @@
 // What a specialist's session may reach, decided once when the session is born and stored on its record.
 //
-// A LaunchPolicy is that decision: whether it is restricted (the stored `access`: `workdir` or `operator`), and for `restricted = true` the one folder it runs in, its
+// A LaunchPolicy is that decision: whether it is restricted (the stored boolean `restricted`), and for `restricted = true` the one folder it runs in, its
 // built-in tools and its MCP servers. It is made here from hydra.toml, at birth (a fresh start, a respawn, a handoff
 // successor) and kept on `SessionInfo.policy`. The folder, argv, env and generated files of a launch come from it in
 // `launch()` alone; birth (doSpawnSession) decides it and re-checks the folder; delivery compares it. A resume or fork
@@ -21,6 +21,7 @@ import { readDenyRoots } from '../config/write-confinement.js'
 import { macosGateIssue, unprovenMacos } from '../config/server-sandbox.js'
 import { hydraLoadEnv, onHydraConfigLoad } from './hydra-config.js'
 import type { SessionInfo } from './sessions.js'
+import { isRestricted, isRestrictedPolicy } from './policy-record.js'
 import { refusalNoticeKey, threadNotices } from './notice-limit.js'
 import { setFlushGate } from './bridge-transport.js'
 import { safeSend } from './util.js'
@@ -32,31 +33,29 @@ export type ConfinementServer = { name: string; command: string; tokenEnv: strin
 
 /**
  * `can_only_write_to = "workdir"`: the operator's account and tools, with Bash and Edit/Write writes confined to `workdir` (daemon/write-confinement.ts).
- * It sits on an `operator` policy: the account is the operator's, which is what the stored `access` says.
+ * It sits on a policy that is not restricted: the account is the operator's.
  */
 export type ConfinementPolicy = { specialist: string; workdir: string; denyCommands: string[]; /** Every place Claude Code's tools and shell may not read, as worked out at birth (config/write-confinement.ts `readDenyRoots`). */ cannotRead: string[]; /** The built-in tools it may use (`--tools`); absent: all, as for any unrestricted session. */ tools?: string[]; /** The folder its listed servers get as `{profile_dir}`, resolved and inside `workdir`; absent: `<workdir>/.browser/profile`. */ browserProfile?: string; servers: ConfinementServer[] }
-
-/** Stored in a session record, so the values stay: `workdir` is a restricted specialist, `operator` the operator's account. */
-export type PolicyAccess = 'operator' | 'workdir'
 
 export type LaunchPolicy = {
   /** The specialist's id when the session was born. */
   specialist: string
-  access: PolicyAccess
+  /** `true`: a restricted specialist; `false`: the operator's account. */
+  restricted: boolean
   /** `restricted = true`: the only folder the session runs in. */
   workdir?: string
   /** `restricted = true`: built-in tools, `--tools`. */
   tools?: string[]
   /** `restricted = true`: the MCP servers it may use, each with the tools it may call. */
   servers?: PolicyServer[]
-  /** `can_only_write_to`: present on an `operator` policy whose writes are confined; absent: writes anywhere. */
+  /** `can_only_write_to`: present on a policy that is not restricted, whose writes are confined; absent: writes anywhere. */
   canOnlyWriteTo?: Omit<ConfinementPolicy, 'specialist'>
-  /** Changes whenever the access, workdir, a tool or a server (or its tools) does, and with nothing else. */
+  /** Changes whenever `restricted`, the workdir, a tool or a server (or its tools) does, and with nothing else. */
   id: string
 }
 
 /** A policy that confines: its workdir, tools and servers are all there (checked, never assumed). */
-export type ConfinedPolicy = LaunchPolicy & { access: 'workdir'; workdir: string; tools: string[]; servers: PolicyServer[] }
+export type ConfinedPolicy = LaunchPolicy & { restricted: true; workdir: string; tools: string[]; servers: PolicyServer[] }
 
 /** The id a write-confining policy's facts give: changes whenever the folder, a deny pattern or a server (command, token variables, profile declaration) does, and with nothing else. */
 export function confinementIdFor(w: Omit<ConfinementPolicy, 'specialist'>): string {
@@ -95,8 +94,8 @@ export const endVerifying = (sessionId: string): void => { verifying.delete(sess
 export const isVerifying = (sessionId: string): boolean => verifying.has(sessionId)
 
 /** A confined session whose start has not passed verification: the one that takes no message. Operator access and non-specialist sessions are never this. */
-export const unverified = (info: Pick<SessionInfo, 'sessionType' | 'policy' | 'verified'>): boolean =>
-  (info.sessionType === 'scoped' || info.policy?.access === 'workdir' || !!info.policy?.canOnlyWriteTo) && !info.verified
+export const unverified = (info: Pick<SessionInfo, 'policy' | 'verified'>): boolean =>
+  (isRestricted(info) || !!info.policy?.canOnlyWriteTo) && !info.verified
 
 /** The text of a start that verification stopped: the session is gone, its launch prompt had reached it, and hydra.toml is not the usual cause. */
 export const verifyRefusal = (specialist: string, sessionName: string, why: string): string =>
@@ -111,7 +110,7 @@ export function policyProblem(p: unknown): string | undefined {
   if (typeof p !== 'object' || p === null) return 'it is not an object'
   const q = p as Partial<LaunchPolicy>
   if (typeof q.specialist !== 'string' || typeof q.id !== 'string') return 'it names no specialist or no id'
-  if (q.access === 'operator' && q.canOnlyWriteTo !== undefined) {
+  if (q.restricted === false && q.canOnlyWriteTo !== undefined) {
     const w = q.canOnlyWriteTo as Partial<NonNullable<LaunchPolicy['canOnlyWriteTo']>>
     if (typeof w.workdir !== 'string' || !isAbsolute(w.workdir)) return 'its can_only_write_to has no workdir (the one folder its writes are confined to)'
     if (!Array.isArray(w.denyCommands) || !w.denyCommands.every(c => typeof c === 'string')) return 'its can_only_write_to has no readable deny list'
@@ -121,8 +120,8 @@ export function policyProblem(p: unknown): string | undefined {
     if (!Array.isArray(w.servers) || !w.servers.every(x => x && typeof x.name === 'string' && typeof x.command === 'string' && Array.isArray(x.tokenEnv) && Array.isArray(x.profileArgs) && typeof x.profileEnv === 'object' && x.profileEnv !== null && (x.denyTools === undefined || (Array.isArray(x.denyTools) && x.denyTools.every(n => typeof n === 'string'))))) return 'its can_only_write_to has no readable server list'
     return q.id === confinementIdFor(w as Omit<ConfinementPolicy, 'specialist'>) ? undefined : 'its id does not match its folder, deny lists and servers'
   }
-  if (q.access === 'operator') return q.id === OPERATOR_POLICY_ID ? undefined : 'its id does not match its access (an operator policy has the operator id)'
-  if (q.access !== 'workdir') return `its access is ${JSON.stringify(q.access)}`
+  if (q.restricted === false) return q.id === OPERATOR_POLICY_ID ? undefined : 'its id does not match its access (an unrestricted policy has the operator id)'
+  if (q.restricted !== true) return `its restricted is ${JSON.stringify(q.restricted)}`
   if (typeof q.workdir !== 'string' || !isAbsolute(q.workdir)) return 'it has no workdir (a confined session runs in its workdir and nowhere else)'
   if (!Array.isArray(q.tools) || !q.tools.every(t => typeof t === 'string')) return 'it has no tool list'
   if (!Array.isArray(q.servers) || !q.servers.every(s => s && typeof s.name === 'string' && typeof s.command === 'string' && Array.isArray(s.tokenEnv) && Array.isArray(s.tools))) return 'it has no readable server list'
@@ -132,7 +131,7 @@ export function policyProblem(p: unknown): string | undefined {
 
 /** The confining policy, or undefined for operator access. Throws on a confining policy that cannot be read. */
 export function confined(p: LaunchPolicy | undefined, sessionName: string): ConfinedPolicy | undefined {
-  if (!p || p.access !== 'workdir') return undefined
+  if (!isRestrictedPolicy(p)) return undefined
   const why = policyProblem(p)
   if (why) throw new PolicyRefusal(`specialist ${p.specialist}: its launch policy cannot be read (${why}), so no session starts under it. ${remedy(sessionName)}`)
   return p as ConfinedPolicy
@@ -158,9 +157,9 @@ export function bornPolicy(specialistId: string | undefined, h: HydraConfig = cu
     const env = hydraLoadEnv()
     const others = Object.values(h.specialists).filter(x => x.id !== declared.id).map(x => x.workdir)
     const canOnlyWriteTo = { workdir: declared.workdir, denyCommands: [...(declared.denyCommands ?? [])], ...(declared.tools && { tools: [...declared.tools] }), ...(declared.browserProfile && { browserProfile: declared.browserProfile }), cannotRead: readDenyRoots(env, declared.workdir, others, declared.cannotRead ?? []), servers }
-    return { specialist: declared.id, access: 'operator', canOnlyWriteTo, id: confinementIdFor(canOnlyWriteTo) }
+    return { specialist: declared.id, restricted: false, canOnlyWriteTo, id: confinementIdFor(canOnlyWriteTo) }
   }
-  if (!declared.restricted) return { specialist: declared.id, access: 'operator', id: OPERATOR_POLICY_ID }
+  if (!declared.restricted) return { specialist: declared.id, restricted: false, id: OPERATOR_POLICY_ID }
   const servers = (declared.mcpServerNames ?? []).map((name): PolicyServer => {
     const s = h.mcpServers?.[name]
     // Checked at load; a config that got here without it must not start the specialist with fewer servers than it lists.
@@ -169,7 +168,7 @@ export function bornPolicy(specialistId: string | undefined, h: HydraConfig = cu
   })
   // A workdir specialist without a tools list (a config that skipped the loader) gets the narrowest set, not every tool.
   const tools = [...(declared.tools ?? WORKDIR_TOOLS)]
-  return { specialist: declared.id, access: 'workdir', workdir: declared.workdir, tools, servers, id: policyIdFor(declared.workdir, tools, servers) }
+  return { specialist: declared.id, restricted: true, workdir: declared.workdir, tools, servers, id: policyIdFor(declared.workdir, tools, servers) }
 }
 
 /**
@@ -213,7 +212,7 @@ export const sandboxInputs = (h: HydraConfig = currentHydraConfig()): SandboxInp
  * without servers has no sandbox to prove, so it is not asked.
  */
 export function macosRefusal(p: LaunchPolicy | undefined, sessionName: string, env: Pick<LoadEnv, 'macosVersion'> = hydraLoadEnv(), h: HydraConfig = currentHydraConfig()): string | undefined {
-  if (p?.access !== 'workdir' || !p.servers?.length) return undefined
+  if (!isRestrictedPolicy(p) || !p?.servers?.length) return undefined
   // With the opt-in the text is only a warning (`hydra config check`, `hydra health`), not a reason to refuse.
   const why = h.allowUnprovenMacos ? undefined : macosGateIssue(env.macosVersion, false)
   return why ? `specialist ${p.specialist}: ${why}. ${remedy(sessionName)}` : undefined
@@ -229,8 +228,8 @@ export function macosGateHealth(h: HydraConfig = currentHydraConfig(), env: Pick
 
 /** What a policy says in words, for a log line or a message (the id is a hash). */
 export function describePolicy(p: LaunchPolicy | undefined): string {
-  if (p?.access === 'operator' && p.canOnlyWriteTo) return `restricted = false, can_only_write_to = "workdir" (folder ${p.canOnlyWriteTo.workdir}; tools ${p.canOnlyWriteTo.tools ? p.canOnlyWriteTo.tools.join(',') : 'all'}; cannot_read ${p.canOnlyWriteTo.cannotRead.length} places; mcp_servers ${p.canOnlyWriteTo.servers.map(s => s.name).join(',') || 'none'}; deny_commands ${p.canOnlyWriteTo.denyCommands.join(' | ') || 'none'})`
-  if (!p || p.access !== 'workdir') return 'restricted = false'
+  if (p?.restricted === false && p.canOnlyWriteTo) return `restricted = false, can_only_write_to = "workdir" (folder ${p.canOnlyWriteTo.workdir}; tools ${p.canOnlyWriteTo.tools ? p.canOnlyWriteTo.tools.join(',') : 'all'}; cannot_read ${p.canOnlyWriteTo.cannotRead.length} places; mcp_servers ${p.canOnlyWriteTo.servers.map(s => s.name).join(',') || 'none'}; deny_commands ${p.canOnlyWriteTo.denyCommands.join(' | ') || 'none'})`
+  if (!isRestrictedPolicy(p)) return 'restricted = false'
   return `restricted = true (folder ${p.workdir ?? '?'}; tools ${(p.tools ?? []).join(',') || 'none'}; mcp_servers ${(p.servers ?? []).map(s => s.name).join(',') || 'none'})`
 }
 
@@ -266,8 +265,8 @@ function confinementDrifted(stored: LaunchPolicy | undefined, current: LaunchPol
  * continued when it differs), by delivery (not delivered when it differs) and in both messages.
  */
 export function policyDrifted(stored: LaunchPolicy | undefined, current: LaunchPolicy | undefined): string[] {
-  const was = stored?.access === 'workdir'
-  const now = current?.access === 'workdir'
+  const was = isRestrictedPolicy(stored)
+  const now = isRestrictedPolicy(current)
   if (was !== now) return [`restricted: ${was} -> ${now}`]
   if (!was) return confinementDrifted(stored, current)
   if (!stored || !current) return []
@@ -322,7 +321,7 @@ export function resolvePolicy(from: {
   }
   const specialistId = from.named ?? stored?.specialist ?? (from.sits ? specialistOf(from.sits, h) : undefined)
   const current = bornPolicy(specialistId, h, sessionName)
-  if (specialistId !== undefined && !current && stored?.access === 'workdir') {
+  if (specialistId !== undefined && !current && isRestrictedPolicy(stored)) {
     throw new PolicyRefusal(`specialist ${specialistId} ran with ${describePolicy(stored)} and hydra.toml no longer declares it: restore [specialists.${specialistId}] (restricted = true). ${remedy(sessionName)}`)
   }
   return { specialistId, stored, current, drift: specialistId !== undefined ? policyDrifted(stored, current) : [] }

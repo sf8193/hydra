@@ -2,7 +2,8 @@ import { registry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { computeToolsForSession, type SessionTool } from './bridge-tools.js'
 import { CONFINED_TOOLS as TYPED_CONFINED_TOOLS, BASE_TOOLS as TYPED_BASE_TOOLS, ALL_CAPABILITY_TOOLS as TYPED_ALL_CAPABILITY_TOOLS } from '../shared/constants.js'
-import type { SessionType, Capability, DerivedCapability } from '../shared/constants.js'
+import type { ToolBase, Capability, DerivedCapability } from '../shared/constants.js'
+import { isRestricted } from './policy-record.js'
 import type { SessionInfo } from './sessions.js'
 import { resolveEngine } from './engines/instances.js'
 import { specialistOf, boundAs, sendsToOf } from '../specialists/specialists.js'
@@ -10,7 +11,7 @@ import { currentHydraConfig } from './hydra-config.js'
 import { slackConfigured } from '../config/types.js'
 
 // Widened views: isToolAllowed checks arbitrary wire names, not just known ToolNames.
-const BASE_TOOLS: Readonly<Record<SessionType, ReadonlySet<string>>> = TYPED_BASE_TOOLS
+const BASE_TOOLS: Readonly<Record<ToolBase, ReadonlySet<string>>> = TYPED_BASE_TOOLS
 const CONFINED_TOOLS: ReadonlySet<string> = TYPED_CONFINED_TOOLS
 const ALL_CAPABILITY_TOOLS: Readonly<Record<Capability | DerivedCapability, ReadonlySet<string>>> = TYPED_ALL_CAPABILITY_TOOLS
 
@@ -43,14 +44,15 @@ export function sessionCapabilities(info: Pick<SessionInfo, 'capabilities' | 'en
 }
 
 /**
- * Session ids whose bridge declared `scoped` when it registered (HYDRA_SESSION_TYPE, set by the launch). A bridge can only
- * narrow itself this way: a declaration of `scoped` is believed whether or not the registry knows the id, and never undone.
+ * Session ids whose bridge declared itself restricted when it registered (HYDRA_RESTRICTED=1, set by the launch). A bridge can only
+ * narrow itself this way: a declaration is believed whether or not the registry knows the id, and never undone.
  */
 const declaredRestricted = new Set<string>()
 
-/** Records what a registering bridge says it is. Only `scoped` matters: the one declaration that takes tools away. */
-export function noteDeclaredSessionType(sessionId: string, declared: unknown, writeConfined?: unknown): void {
-  if (declared === 'scoped' && sessionId !== 'main') declaredRestricted.add(sessionId)
+/** Records what a registering bridge says it is. Only a restriction matters: the declaration that takes tools away. */
+export function noteDeclaredRestrictions(sessionId: string, declared: { restricted?: unknown; writeConfined?: unknown }): void {
+  const { restricted, writeConfined } = declared
+  if (restricted === true && sessionId !== 'main') declaredRestricted.add(sessionId)
   if (writeConfined === true && sessionId !== 'main') declaredConfined.add(sessionId)
 }
 
@@ -58,7 +60,11 @@ export function noteDeclaredSessionType(sessionId: string, declared: unknown, wr
 const declaredConfined = new Set<string>()
 
 /** Whether this session runs as a restricted specialist: its record says so, or its bridge declared it (an unregistered id never falls back to a wider surface). */
-export const isRestrictedSession = (sessionId: string): boolean => declaredRestricted.has(sessionId) || registry.get(sessionId)?.sessionType === 'scoped'
+export const isRestrictedSession = (sessionId: string): boolean => {
+  if (declaredRestricted.has(sessionId)) return true
+  // isRestricted fails closed (policy-record.ts): a policy not exactly `restricted: false` holds the restricted tools, never a wider set.
+  return isRestricted(registry.get(sessionId))
+}
 
 /** Whether this session's record says its writes are confined (`can_only_write_to`), or its bridge declared it: it holds CONFINED_TOOLS and nothing a capability would add. */
 export const isWriteConfinedSession = (sessionId: string): boolean => sessionId !== 'main' && (declaredConfined.has(sessionId) || !!registry.get(sessionId)?.policy?.canOnlyWriteTo)
@@ -70,7 +76,7 @@ export function getToolsForSession(sessionId: string): SessionTool[] {
   const info = registry.get(sessionId)
   if (isWriteConfinedSession(sessionId)) return computeToolsForSession(info?.sessionType ?? 'thread_owner', new Set(), { descriptions: info?.toolDescriptions, inputSchemas: info?.toolInputSchemas }).filter(t => CONFINED_TOOLS.has(t.name))
   if (isRestrictedSession(sessionId)) {
-    const tools = computeToolsForSession('scoped', new Set(), { descriptions: info?.toolDescriptions, inputSchemas: info?.toolInputSchemas })
+    const tools = computeToolsForSession('restricted', new Set(), { descriptions: info?.toolDescriptions, inputSchemas: info?.toolInputSchemas })
     // send_to_thread is advertised only to a specialist with someone to send to; the call is held to the list at the gate either way.
     return sendsToOf(info).length ? tools : tools.filter(t => t.name !== 'send_to_thread')
   }
@@ -94,7 +100,7 @@ export function isToolAllowed(sessionId: string, toolName: string): boolean {
     return BASE_TOOLS.master_orchestrator.has(toolName) || ALL_CAPABILITY_TOOLS.main_handoff.has(toolName)
   }
   // Before the registry lookup: a restricted caller whose record is missing must not be handed thread_owner's tools.
-  if (isRestrictedSession(sessionId)) return BASE_TOOLS.scoped.has(toolName)
+  if (isRestrictedSession(sessionId)) return BASE_TOOLS.restricted.has(toolName)
   if (isWriteConfinedSession(sessionId)) return CONFINED_TOOLS.has(toolName)
   const info = registry.get(sessionId)
   if (!info) return BASE_TOOLS.thread_owner.has(toolName)
@@ -110,7 +116,7 @@ export function refusalText(sessionId: string, name: string): string {
   const hasSendsTo = sendsToOf(registry.get(sessionId)).length > 0
   if (isWriteConfinedSession(sessionId)) return `${name} is not available to a write-confined session: it runs on the operator's account, so it has no tool that starts, lists, reads, messages or ends another session. It has ${[...CONFINED_TOOLS].join(', ')}, each only in its own conversation (set_description on itself)`
   return isRestrictedSession(sessionId)
-    ? `${name} is not available to a restricted session: it has set_description (on itself) and, each only in its own conversation, ${[...BASE_TOOLS.scoped].filter(t => t !== 'set_description' && (hasSendsTo || t !== 'send_to_thread')).join(', ')}`
+    ? `${name} is not available to a restricted session: it has set_description (on itself) and, each only in its own conversation, ${[...BASE_TOOLS.restricted].filter(t => t !== 'set_description' && (hasSendsTo || t !== 'send_to_thread')).join(', ')}`
     : `${name} is not available to this session`
 }
 

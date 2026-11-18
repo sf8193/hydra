@@ -71,6 +71,11 @@ export async function readReplies(read: (token: string) => Promise<Page>, tokens
   }
 }
 
+/** Whose a message is, to one app: its own bot's, the operator's, or someone else's. */
+export type MessageAuthor = 'app' | 'operator' | 'other'
+/** Whose token rewrites a message: the app's bot, or the operator. */
+export type Writer = Exclude<MessageAuthor, 'other'>
+
 /** One post's deadline. Past it the post's outcome is unknown: it may have landed. */
 export const POST_TIMEOUT_MS = 30_000
 export const CATCH_UP_INTERVAL_MS = 10 * 60_000
@@ -117,6 +122,12 @@ export type SlackAppLike = {
   userName(userId: string): Promise<string | undefined>
   /** A message in a channel, or in a thread when `threadTs` is set. Resolves to its ts. */
   post(channel: string, threadTs: string | undefined, text: string, opts?: PostOptions): Promise<string>
+  /** Rewrites a message (chat.update), as its bot or as the operator (user token, scope chat:write). Absent: not offered. */
+  edit?(channel: string, ts: string, text: string, as: Writer): Promise<void>
+  /** Deletes a message (chat.delete), as its bot or as the operator. Absent: not offered. */
+  remove?(channel: string, ts: string, as: Writer): Promise<void>
+  /** The operator's own user id (auth.test with the user token); undefined with no user token. */
+  operatorUserId?(): Promise<string | undefined>
   /** Reactions (the ack, and 🚫). */
   react(channel: string, ts: string, name: string): Promise<void>
   /** A file's bytes, to `dest` at mode 0600 (its directory 0700). Throws past `maxBytes`. */
@@ -378,6 +389,39 @@ export class SlackListener {
     // The same predicate the gateway asks (shared/link-previews.ts), with this app's own view of hydra.toml and channel names.
     const unfurl = linkPreviewsOff('slack', [channel], { config: this.d.hydra(), slackName: id => this.directory.nameOf(id), app: this.id }) ? { unfurl: false as const } : undefined
     return this.app.post(channel, threadTs, text, unfurl)
+  }
+
+  private live(): SlackAppLike {
+    if (!this.app || !this.sup?.state.connected) throw new Error(`Slack is not connected${this.appSuffix()}; try again once it is (hydra health shows the slack connector)`)
+    return this.app
+  }
+
+  /** Whose a message is: this app's bot's, the operator's (known only with the operator's token), or someone else's. Read from Slack, never assumed. */
+  async author(channel: string, ts: string, threadTs: string | undefined): Promise<MessageAuthor> {
+    const app = this.live()
+    // Slack puts a thread's first message ahead of the page, so the one asked for may be the second: two are read, and it is found by ts.
+    const page = await app.api.replies({ channel, ts: threadTs ?? ts, oldest: ts, inclusive: true, limit: 2 })
+    const m = page.messages.find(x => x.ts === ts)
+    if (!m) throw new Error(`message ${ts} was not found in ${channel}`)
+    // A conversation with no thread ts is the top level: a message inside one of its threads is that thread's conversation, not this one.
+    if (threadTs === undefined && m.thread_ts && m.thread_ts !== m.ts) throw new Error(`message ${ts} is a reply inside the thread ${m.thread_ts}: name that thread's conversation (slack:…:${channel}:${m.thread_ts}) instead`)
+    if (this.identity && (m.user === this.identity.botUserId || (!!m.bot_id && m.bot_id === this.identity.botId))) return 'app'
+    const operator = await app.operatorUserId?.()
+    return operator && m.user === operator ? 'operator' : 'other'
+  }
+
+  /** Rewrites a message as its bot or as the operator. Slack's refusal is thrown as it came. */
+  async edit(channel: string, ts: string, text: string, as: Writer): Promise<void> {
+    const app = this.live()
+    if (!app.edit) throw new Error('this Slack client cannot edit messages')
+    await app.edit(channel, ts, text, as)
+  }
+
+  /** Deletes a message as its bot or as the operator. Slack's refusal is thrown as it came. */
+  async remove(channel: string, ts: string, as: Writer): Promise<void> {
+    const app = this.live()
+    if (!app.remove) throw new Error('this Slack client cannot delete messages')
+    await app.remove(channel, ts, as)
   }
 
   /** Channel names, read again. A failure keeps the last list; the missing scope is said once. */
@@ -817,6 +861,10 @@ export function boltApp(tokens: { app: string; bot: string; user?: string }): Sl
   // Posting never retries behind the caller's back, and gives up at a hard deadline: a retry landing after the caller
   // was told "unknown" would post twice. Reading keeps the SDK's patient retries.
   const poster = new WebClient(tokens.bot, { retryConfig: { retries: 0 }, timeout: POST_TIMEOUT_MS, logLevel: LogLevel.ERROR })
+  // The operator writes (edit, delete) only through this one: reading with the user token stays in `readReplies`, and nothing posts with it.
+  const operator = tokens.user ? new WebClient(tokens.user, { retryConfig: { retries: 0 }, timeout: POST_TIMEOUT_MS, logLevel: LogLevel.ERROR }) : undefined
+  const writer = (as: Writer): WebClient => { const w = as === 'operator' ? operator : poster; if (!w) throw new Error('this app has no operator token (operator_token_env)'); return w }
+  let operatorId: Promise<string | undefined> | undefined
   let renamed: (id: string, name: string) => void = () => {}
   let reacted: (r: SlackReactionEvent) => void = () => {}
   app.event('reaction_added', async ({ event }) => {
@@ -866,6 +914,13 @@ export function boltApp(tokens: { app: string; bot: string; user?: string }): Sl
       const r = await client.auth.test({ token: tokens.bot })
       const scopes = (r as { response_metadata?: { scopes?: string[] } }).response_metadata?.scopes
       return { ...parseAuth(r), ...(scopes && { scopes }) }
+    },
+    edit: async (channel, ts, text, as) => { await writer(as).chat.update({ channel, ts, text }).catch(e => { throw explainSlackError(e) }) },
+    remove: async (channel, ts, as) => { await writer(as).chat.delete({ channel, ts }).catch(e => { throw explainSlackError(e) }) },
+    operatorUserId: () => {
+      if (!operator) return Promise.resolve(undefined)
+      // Kept once known; a failed read is asked again next time.
+      return operatorId ??= operator.auth.test().then(r => r.user_id, e => { operatorId = undefined; throw explainSlackError(e) })
     },
     react: async (channel, ts, name) => { await client.reactions.add({ token: tokens.bot, channel, timestamp: ts, name }) },
     post: async (channel, threadTs, text, opts) => {

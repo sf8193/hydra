@@ -16,7 +16,7 @@ import { transport } from '../bridge-transport.js'
 import { confinementIdFor } from '../restricted.js'
 import { buildNotificationPayload } from '../router.js'
 import { executeTool } from '../bridge-dispatch.js'
-import { noteDeclaredSessionType } from '../tool-surface.js'
+import { noteDeclaredRestrictions } from '../tool-surface.js'
 
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), 'ib-routing-')))
 const WORK = join(ROOT, 'work'), OTHER = join(ROOT, 'other'), OUT = join(ROOT, 'outside')
@@ -24,7 +24,7 @@ for (const d of [WORK, OTHER, OUT]) mkdirSync(d, { recursive: true })
 writeFileSync(join(OUT, 'victim'), 'keep')
 afterAll(() => rmSync(ROOT, { recursive: true, force: true }))
 
-const policy = (workdir = WORK) => { const w = { workdir, denyCommands: [], cannotRead: [STATE_DIR, OTHER], servers: [] }; return { specialist: 'ops', access: 'operator', canOnlyWriteTo: w, id: confinementIdFor(w) } }
+const policy = (workdir = WORK) => { const w = { workdir, denyCommands: [], cannotRead: [STATE_DIR, OTHER], servers: [] }; return { specialist: 'ops', restricted: false, canOnlyWriteTo: w, id: confinementIdFor(w) } }
 const mk = (id: string, extra: Record<string, unknown> = {}) => registry.set(id, {
   sessionId: id, tmuxName: id, topic: '', threadId: `${id}-thread`, createdAt: Date.now(), lastActive: Date.now(), listening: false, engine: 'claude',
   adapter: { stop: async () => {}, isAlive: () => true, isConnected: () => false }, sessionType: 'thread_owner', specialist: 'ops', ...extra,
@@ -115,7 +115,7 @@ describe('a message with an attachment arrives for a write-confined session', ()
     expect(readdirSync(inboxOf()).length).toBe(INBOX_LIMITS.maxFiles)
   })
   test('a session its bridge declared write-confined with no record of a policy gets the same answer here as from download_attachment: nothing is saved, and it is told why', async () => {
-    noteDeclaredSessionType('ib-stray', 'thread_owner', true)
+    noteDeclaredRestrictions('ib-stray', { writeConfined: true })
     mk('ib-stray')
     const { meta } = await buildNotificationPayload(inbound(), 'ib-stray-thread', 'ib-stray')
     expect(calls).toEqual([])
@@ -152,7 +152,7 @@ describe('download_attachment', () => {
     expect(readdirSync(OUT)).toEqual(['victim'])
   })
   test('a session its bridge declared write-confined but the daemon has no record of saves nothing', async () => {
-    noteDeclaredSessionType('ib-stray', 'thread_owner', true)
+    noteDeclaredRestrictions('ib-stray', { writeConfined: true })
     mk('ib-stray')   // a record without a policy
     const r = await dl('ib-stray')
     expect(r.isError).toBe(true)

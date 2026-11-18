@@ -1,8 +1,8 @@
-import { registry } from './sessions.js'
+import { registry, threadRegistry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { doSpawnSession, killSession, refusedLaunches } from './session-lifecycle.js'
 import { macosGateHealth } from './restricted.js'
-import { callerRefusal, destroyDeclinedText, killThenDestroy } from './destroy.js'
+import { callerRefusal, destroyDeclinedText, destroyThreadById, killThenDestroy } from './destroy.js'
 import { fallbackDescription, formatDuration } from './util.js'
 import { tmuxServerState, tmuxSessionState } from './tmux.js'
 import { parseIdempotencyTtl, parseIdleTtl } from '../shared/constants.js'
@@ -210,12 +210,28 @@ function handleStatus(req: CLIRequest): CLIResponse {
   })
 }
 
+/** The thread `hydra kill <name> --destroy` means when no live session holds the name: a thread id as written, or the thread whose last session had that name (a name is recycled: more than one is ambiguous). */
+function endedThreadsOf(name: string): string[] {
+  if (/^\d+$/.test(name)) return registry.getByThread(name) ? [] : [name]
+  return [...threadRegistry.threads.values()].filter(t => t.sessionHistory.at(-1)?.tmuxName === name && !registry.getByThread(t.threadId)).map(t => t.threadId)
+}
+
 async function handleKill(req: CLIRequest): Promise<CLIResponse> {
   const { name, destroy, callerSessionId } = req.params as { name?: string; destroy?: boolean; callerSessionId?: string }
   if (!name) return respond(req, false, 'name is required')
 
   const info = sessionByName(name)
-  if (!info) return respond(req, false, `session "${name}" not found`)
+  if (!info) {
+    // `--destroy` is about the thread, which outlives its session. With no session left, it is a destroy by thread id, behind `[threads] allow_destroy`.
+    const threads = destroy === true ? endedThreadsOf(name) : []
+    if (!threads.length) return respond(req, false, `session "${name}" not found`)
+    if (threads.length > 1) return respond(req, false, `"${name}" was the last session in ${threads.length} threads (${threads.join(', ')}): nothing was deleted. Name the one to destroy by its thread id.`)
+    const [thread] = threads
+    // Only the operator's shell or main: a session's right to destroy is having spawned the session, and an ended one keeps no such record.
+    if (callerSessionId && callerSessionId !== 'main') return respond(req, false, `cannot destroy ${name} — its session has ended, and a session may destroy only a session it spawned. Ask the operator to run \`hydra kill ${thread} --destroy\`.`)
+    const out = await destroyThreadById(thread, 'CLI')
+    return out.ok ? respond(req, true, { destroyed: thread }) : respond(req, false, out.text)
+  }
 
   // Capture key before kill — getBySessionId only finds spawned/pending,
   // and the death handler will set it to completed during killSession

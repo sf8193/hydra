@@ -9,11 +9,12 @@ import { CLAUDE_CONFIG, STATE_DIR } from '../config.js'
 import { PolicyRefusal, bornPolicy, describePolicy, policyDrifted, policyProblem, confinementIdFor, type LaunchPolicy } from '../restricted.js'
 import { removeRestrictedFiles, restrictedDir } from '../restricted-files.js'
 import { confinementShortfall, confinementSurplus, readLoaded, verifyConfinement, verifyDeps } from '../engines/claude-verify.js'
-import { bridgeServerCommands, claudeSettingsProblems, MIN_CLAUDE_VERSION, claudeVersion, claudeVersionRefusal, confinementRules, confinementSettings } from '../write-confinement.js'
+import { bridgeServerCommands, claudeSettingsProblems, MIN_CLAUDE_VERSION, claudeVersion, claudeVersionRefusal, confinementMcp, confinementRules, confinementSettings } from '../write-confinement.js'
 import { EMPTY_CONFIG } from '../../config/load.js'
 import { readDenyRoots } from '../../config/write-confinement.js'
 import { hydraLoadEnv } from '../hydra-config.js'
 import type { HydraConfig } from '../../config/types.js'
+import { _resetSourcedEnvNamesForTesting, sourceEnvFiles } from '../../shared/env-parse.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 
 process.stderr.write = (() => true) as any
@@ -43,7 +44,7 @@ afterEach(() => {
 const server = { name: 'browser', command: '/usr/local/bin/browser-mcp', tokenEnv: ['BR_TOKEN'], profileArgs: ['--user-data-dir', '{profile_dir}', '--downloads={download_dir}'], profileEnv: { BROWSER_HOME: '{profile_dir}' } }
 const policyOf = (over: Partial<NonNullable<LaunchPolicy['canOnlyWriteTo']>> = {}): LaunchPolicy => {
   const canOnlyWriteTo = { workdir: work, denyCommands: ['rm -rf *'], cannotRead: ['/home/op/.ssh', '/home/op/other'], servers: [server], ...over }
-  return { specialist: 'gem', access: 'operator', canOnlyWriteTo, id: confinementIdFor(canOnlyWriteTo) }
+  return { specialist: 'gem', restricted: false, canOnlyWriteTo, id: confinementIdFor(canOnlyWriteTo) }
 }
 const bridgeCmd = (real = false) => ['bun', 'run', '--cwd', join(real ? realpathSync(CLAUDE_CONFIG) : CLAUDE_CONFIG, 'plugins', 'cache', 'claude-plugins-official', 'discord', '0.0.4'), '--shell=bun', '--silent', 'start']
 const id = '22222222-2222-4222-8222-222222222222'
@@ -68,7 +69,7 @@ describe('every way a session starts gets the settings', () => {
     const cmd = await launch(extra)
     expect(cmd).toContain(`&& cd '${work}' &&`)
     expect(cmd).toContain('--dangerously-skip-permissions')
-    expect(cmd).toContain(` --settings '<state>/scoped/sc-w-<uuid>.settings.json' --mcp-config '<state>/scoped/sc-w-<uuid>.mcp.json'`)
+    expect(cmd).toContain(` --settings '<state>/restricted/sc-w-<uuid>.settings.json' --mcp-config '<state>/restricted/sc-w-<uuid>.mcp.json'`)
     expect(cmd).not.toContain('--restricted')
     expect(cmd).not.toContain('--strict-mcp-config')
     expect(cmd).not.toContain('--tools ')
@@ -103,13 +104,28 @@ describe('every way a session starts gets the settings', () => {
     expect(await launch({}, null)).not.toContain('HYDRA_WRITE_CONFINED')
   })
 
+  test('a write-confined session keeps only the allowlisted part of the state .env: every other name it sets is unset, on every shape; no other launch has the line', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'confined-env-'))
+    writeFileSync(join(dir, '.env'), 'FAKE_SERVER_KEY=1\nHYDRA_MODEL=m\nCHAT_PLATFORM=discord\n')
+    const was = process.env.FAKE_SERVER_KEY
+    try {
+      sourceEnvFiles([join(dir, '.env')])
+      for (const extra of [{}, { resumeFrom: 'C-old' }, { forkFrom: { claudeSessionId: 'C-parent' } }]) expect(await launch(extra)).toContain('unset FAKE_SERVER_KEY && ')
+      expect(await launch({}, null)).not.toContain('unset FAKE_SERVER_KEY')
+    } finally {
+      if (was === undefined) delete process.env.FAKE_SERVER_KEY; else process.env.FAKE_SERVER_KEY = was
+      _resetSourcedEnvNamesForTesting()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   test('no servers listed: no --mcp-config', async () => {
     expect(await launch({}, policyOf({ servers: [] }))).not.toContain('--mcp-config')
   })
 
   test('a policy without canOnlyWriteTo launches byte for byte as before (the golden shapes do not move)', async () => {
     const plain = await launch({}, null)
-    expect(await launch({}, { specialist: 'gem', access: 'operator', id: 'operator' })).toBe(plain)
+    expect(await launch({}, { specialist: 'gem', restricted: false, id: 'operator' })).toBe(plain)
     expect(plain).not.toContain('--settings')
   })
 
@@ -125,7 +141,7 @@ describe('the settings', () => {
   test('pinned exactly: the sandbox on, no unsandboxed retry, no unsandboxed commands, the write block, the deny list', async () => {
     await launch()
     expect(readJson(settingsFile())).toEqual({
-      allowedMcpServers: [{ serverName: 'browser' }, ...[...new Map([bridgeCmd(), bridgeCmd(true)].map(c => [c.join('\0'), { serverCommand: c }])).values()]],
+      allowedMcpServers: [{ serverCommand: ['/usr/local/bin/browser-mcp', '--user-data-dir', join(work, '.browser', 'profile'), `--downloads=${join(work, '.browser', 'downloads')}`] }, ...[...new Map([bridgeCmd(), bridgeCmd(true)].map(c => [c.join('\0'), { serverCommand: c }])).values()]],
       disableClaudeAiConnectors: true,
       sandbox: { enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, excludedCommands: [], filesystem: { disabled: false, denyRead: ['/home/op/.ssh', '/home/op/other'] }, enableWeakerNestedSandbox: false, autoAllowBashIfSandboxed: true },
       permissions: { blockWritesOutsideWorkingDirectories: true, allow: ['WebFetch(domain:*)'], deny: ['Read(//home/op/.ssh/**)', 'Read(//home/op/other/**)', 'Bash(rm -rf *)'] },
@@ -144,12 +160,22 @@ describe('the settings', () => {
     expect(pick(confinementSettings({ denyCommands: [], cannotRead: [] }))).toEqual(want)
   })
 
-  test('the allowlist is the listed servers by name and the bridge by the exact command it runs (never a `plugin:` key: Claude Code rejects a colon in a serverName and stops at a dialog)', () => {
+  test('the allowlist is each listed server and the bridge by the exact command it runs (never a `serverName`, never a `plugin:` key)', () => {
     const cmd = ['bun', 'run', '--cwd', '/cfg/plugins/cache/claude-plugins-official/discord/0.0.4', '--shell=bun', '--silent', 'start']
-    const s: any = confinementSettings({ denyCommands: [], cannotRead: [], servers: [server], bridgeCommands: [cmd] })
-    expect(s.allowedMcpServers).toEqual([{ serverName: 'browser' }, { serverCommand: cmd }])
+    const s: any = confinementSettings({ denyCommands: [], cannotRead: [], workdir: '/w', servers: [server], bridgeCommands: [cmd] })
+    expect(s.allowedMcpServers).toEqual([{ serverCommand: ['/usr/local/bin/browser-mcp', '--user-data-dir', '/w/.browser/profile', '--downloads=/w/.browser/downloads'] }, { serverCommand: cmd }])
     expect(claudeSettingsProblems(s)).toEqual([])
     expect(s.disableClaudeAiConnectors).toBe(true)
+  })
+
+  // Claude Code 2.1.326 matches a stdio server by its full command once any serverCommand entry (the bridge's) exists: a name no longer admits it. See #772.
+  test('the allowlist admits the MCP config it ships with: every server\'s command, as the config runs it, is an entry', () => {
+    const policy = { specialist: 's', workdir: '/w', denyCommands: [], cannotRead: [], servers: [server, { ...server, name: 'second', command: 'npx', profileArgs: ['-y', 'pkg', '--out', '{download_dir}'] }], browserProfile: '/w/p1' }
+    const mcp: any = confinementMcp(policy, 's', { BR_TOKEN: 't' }, {}, '/env')
+    const entries = new Set(((confinementSettings({ ...policy, bridgeCommands: [['bun', 'run', 'x']] }) as any).allowedMcpServers as any[]).map(e => JSON.stringify(e.serverCommand)))
+    expect(Object.keys(mcp.mcpServers)).toEqual(['browser', 'second'])
+    for (const [name, c] of Object.entries<any>(mcp.mcpServers)) expect([name, entries.has(JSON.stringify([c.command, ...c.args]))]).toEqual([name, true])
+    expect(entries.has(JSON.stringify(['/usr/local/bin/browser-mcp', '--user-data-dir', '/w/p1', '--downloads=/w/p1-downloads']))).toBe(true)
   })
 
   test('with no servers listed the allowlist is the bridge alone', () => {
@@ -201,15 +227,10 @@ describe('the settings', () => {
     expect(existsSync(settingsFile())).toBe(false)
   })
 
-  test('settings Claude Code would reject refuse the launch before anything is written (a server name with a colon is the regression)', async () => {
-    await expect(launch({}, policyOf({ servers: [{ ...server, name: 'bad:name' }] }))).rejects.toThrow(/would reject \(allowedMcpServers\[0\]: server name "bad:name" can only contain letters/)
-    expect(existsSync(settingsFile())).toBe(false)
-  })
-
   test('the written settings carry the bridge command for each synced folder', async () => {
     await launch()
     const got = readJson(settingsFile()).allowedMcpServers
-    expect(got[0]).toEqual({ serverName: 'browser' })
+    expect(got[0]).toEqual({ serverCommand: ['/usr/local/bin/browser-mcp', '--user-data-dir', join(work, '.browser', 'profile'), `--downloads=${join(work, '.browser', 'downloads')}`] })
     expect(got.slice(1).every((e: any) => e.serverCommand[0] === 'bun' && e.serverCommand[3].includes('/plugins/cache/claude-plugins-official/discord/0.0.4'))).toBe(true)
   })
 
@@ -317,7 +338,7 @@ describe('the stored policy', () => {
 
   test('born from hydra.toml: an operator policy carrying canOnlyWriteTo, with its servers\' profile declaration and its own id', () => {
     const p = bornPolicy('gem', cfg({ canOnlyWriteTo: 'workdir', cannotRead: ['/home/op/notes'], denyCommands: ['rm -rf *'], mcpServerNames: ['browser'] }))!
-    expect(p.access).toBe('operator')
+    expect(p.restricted).toBe(false)
     const roots = readDenyRoots(hydraLoadEnv(), work, ['/srv/other-specialist'], ['/home/op/notes'])
     expect(p.canOnlyWriteTo).toEqual({ workdir: work, denyCommands: ['rm -rf *'], cannotRead: roots, servers: [server] })
     // the built-in credential places, hydra's token file, the operator's additions and the other specialists' workdirs, and not this one's own
@@ -332,7 +353,7 @@ describe('the stored policy', () => {
   })
 
   test('without can_only_write_to it is the plain operator policy', () => {
-    expect(bornPolicy('gem', cfg({}))).toEqual({ specialist: 'gem', access: 'operator', id: 'operator' })
+    expect(bornPolicy('gem', cfg({}))).toEqual({ specialist: 'gem', restricted: false, id: 'operator' })
   })
 
   test('the id changes with the folder, a deny pattern, a server\'s command, token variable or profile declaration, and with nothing else', () => {
@@ -352,14 +373,14 @@ describe('the stored policy', () => {
     // the identity as it was written before `tools` was a field (same keys, same order)
     const old = `writes:${createHash('sha256').update(JSON.stringify({ workdir: a.workdir, deny: [...a.denyCommands].sort(), noRead: [...a.cannotRead].sort(), servers: a.servers.map(s => ({ name: s.name, command: s.command, tokenEnv: [...s.tokenEnv].sort(), args: s.profileArgs, env: Object.entries(s.profileEnv).sort(([x], [y]) => x.localeCompare(y)) })) })).digest('hex').slice(0, 12)}`
     expect(confinementIdFor(a)).toBe(old)
-    expect(policyProblem({ specialist: 'gem', access: 'operator', canOnlyWriteTo: a, id: old })).toBeUndefined()
+    expect(policyProblem({ specialist: 'gem', restricted: false, canOnlyWriteTo: a, id: old })).toBeUndefined()
     expect(confinementIdFor({ ...a, tools: ['Read'] })).not.toBe(old)
     expect(confinementIdFor({ ...a, browserProfile: '/w/chrome' })).not.toBe(old)
     expect(policyProblem({ ...policyOf(), canOnlyWriteTo: { ...a, browserProfile: 'relative' } })).toMatch(/no readable browser profile/)
   })
 
   test('a change of can_only_write_to is noticed: set, removed, a new folder, deny list or server', () => {
-    const none: LaunchPolicy = { specialist: 'gem', access: 'operator', id: 'operator' }
+    const none: LaunchPolicy = { specialist: 'gem', restricted: false, id: 'operator' }
     const w = policyOf()
     expect(policyDrifted(none, w)).toEqual(['can_only_write_to: none -> "workdir"'])
     expect(policyDrifted(w, none)).toEqual(['can_only_write_to: "workdir" -> none'])
@@ -377,13 +398,13 @@ describe('the stored policy', () => {
   })
 
   test('it is not confused with restricted: restricted -> can_only_write_to is a change of restricted', () => {
-    const restricted = { specialist: 'gem', access: 'workdir', workdir: '/w', tools: ['Read'], servers: [], id: 'x' } as LaunchPolicy
+    const restricted = { specialist: 'gem', restricted: true, workdir: '/w', tools: ['Read'], servers: [], id: 'x' } as LaunchPolicy
     expect(policyDrifted(restricted, policyOf())).toEqual(['restricted: true -> false'])
   })
 
   test('described in words for a log line and the thread', () => {
     expect(describePolicy(policyOf())).toBe(`restricted = false, can_only_write_to = "workdir" (folder ${work}; tools all; cannot_read 2 places; mcp_servers browser; deny_commands rm -rf *)`)
-    expect(describePolicy({ specialist: 'gem', access: 'operator', id: 'operator' })).toBe('restricted = false')
+    expect(describePolicy({ specialist: 'gem', restricted: false, id: 'operator' })).toBe('restricted = false')
   })
 })
 
@@ -527,16 +548,16 @@ describe('a listed server\'s deny_tools', () => {
     expect(confinementIdFor({ ...a, servers: [{ ...server, denyTools: [] }] } as any)).toBe(confinementIdFor({ ...a, servers: [server] } as any))
   })
   test('a stored denyTools that is not a list of strings is not a readable policy (it would otherwise be silently dropped)', () => {
-    const mk = (denyTools: unknown) => { const w = { ...a, servers: [{ ...server, denyTools }] } as any; return { specialist: 'gem', access: 'operator', canOnlyWriteTo: w, id: confinementIdFor({ ...a, servers: [server] } as any) } as any }
+    const mk = (denyTools: unknown) => { const w = { ...a, servers: [{ ...server, denyTools }] } as any; return { specialist: 'gem', restricted: false, canOnlyWriteTo: w, id: confinementIdFor({ ...a, servers: [server] } as any) } as any }
     expect(policyProblem(mk([1]))).toBe('its can_only_write_to has no readable server list')
     expect(policyProblem(mk('x'))).toBe('its can_only_write_to has no readable server list')
   })
   test('the drift check ignores the order of deny_tools', () => {
-    const p = (denyTools: string[]) => { const w = { ...a, servers: [{ ...server, denyTools }] } as any; return { specialist: 'gem', access: 'operator', canOnlyWriteTo: w, id: confinementIdFor(w) } as any }
+    const p = (denyTools: string[]) => { const w = { ...a, servers: [{ ...server, denyTools }] } as any; return { specialist: 'gem', restricted: false, canOnlyWriteTo: w, id: confinementIdFor(w) } as any }
     expect(policyDrifted(p(['a', 'b']), p(['b', 'a']))).toEqual([])
   })
   test('a stored policy from before the key (no denyTools on its servers) is still read, and a changed list is a drift', () => {
-    const old = { specialist: 'gem', access: 'operator', canOnlyWriteTo: { ...a, servers: [server] }, id: '' } as any
+    const old = { specialist: 'gem', restricted: false, canOnlyWriteTo: { ...a, servers: [server] }, id: '' } as any
     old.id = confinementIdFor(old.canOnlyWriteTo)
     expect(policyProblem(old)).toBeUndefined()
     const changed = { ...old, canOnlyWriteTo: { ...a, servers: [{ ...server, denyTools: ['x'] }] } } as any

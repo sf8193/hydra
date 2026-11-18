@@ -86,6 +86,59 @@ describe.skipIf(!LIVE)('the server allowlist of a write-confined session, agains
     expect(readLoaded(no.log).connected.join()).not.toContain('probebridge')
   }, 120_000)
 
+  // #772: once any serverCommand entry exists (the bridge's), a stdio server is matched by its full command and a serverName entry no longer admits it.
+  test('beside a serverCommand entry, a stdio server is admitted by its own command and not by its name', async () => {
+    const p = plugin('probebridge3')
+    const mcp = { alpha: { type: 'stdio', command: BUN, args: [serverJs] } }
+    const byName = await run([{ serverName: 'alpha' }, { serverCommand: p.command }], { plugin: p, mcp })
+    say('serverName alpha + the bridge by command', byName)
+    const byCommand = await run([{ serverCommand: [BUN, serverJs] }, { serverCommand: p.command }], { plugin: p, mcp })
+    say('serverCommand for alpha + the bridge by command', byCommand)
+    expect(readLoaded(byName.log).connected).not.toContain('alpha')
+    expect(readLoaded(byName.log).connected.join()).toContain('probebridge3')
+    expect(readLoaded(byCommand.log).connected).toContain('alpha')
+    expect(readLoaded(byCommand.log).connected.join()).toContain('probebridge3')
+  }, 120_000)
+
+  // #774: an operator's own server of the listed name but another command is not admitted by the listed command's entry, and does not take the listed one's place, whichever
+  // file declares it. The two servers tell themselves apart by the name they report on initialize ("tiny" is hydra's, "operator-tiny" the operator's).
+  test('an operator server of the same name and another command does not start or take the place of the listed one; with the same command it is the same server', async () => {
+    const operatorJs = join(fake, 'operator-tiny-mcp.js')
+    writeFileSync(operatorJs, SERVER.replace("name:'tiny'", "name:'operator-tiny'"))
+    const listed = { type: 'stdio', command: BUN, args: [serverJs] }
+    const theirs = { type: 'stdio', command: BUN, args: [operatorJs] }
+    const who = (log: string) => ['"name":"tiny"', '"name":"operator-tiny"'].filter(n => log.includes(n)).map(n => n.slice(8, -1))
+    const declare = (where: 'user' | 'project' | 'local', server: object) => {
+      for (const f of [join(home, '.claude.json'), join(configDir, '.claude.json')]) rmSync(f, { force: true })
+      rmSync(join(workdir, '.mcp.json'), { force: true })
+      const cj: any = { hasCompletedOnboarding: true, projects: { [workdir]: { hasTrustDialogAccepted: true, enabledMcpjsonServers: ['alpha'], ...(where === 'local' ? { mcpServers: { alpha: server } } : {}) } } }
+      if (where === 'user') cj.mcpServers = { alpha: server }
+      for (const f of [join(home, '.claude.json'), join(configDir, '.claude.json')]) writeFileSync(f, JSON.stringify(cj))
+      if (where === 'project') writeFileSync(join(workdir, '.mcp.json'), JSON.stringify({ mcpServers: { alpha: server } }))
+    }
+    const results: Record<string, string[]> = {}
+    for (const where of ['user', 'project', 'local'] as const) {
+      declare(where, theirs)
+      const r = await run([{ serverCommand: [BUN, serverJs] }], { mcp: { alpha: listed } })
+      say(`${where}-scope alpha with another command; hydra's allowlist = the listed command; hydra's alpha by --mcp-config`, r)
+      results[where] = who(r.log)
+      expect(readLoaded(r.log).connected).toEqual(['alpha'])
+    }
+    // control: the operator's own command allowed (and not the listed one's): the operator's runs, so the first results are the allowlist's doing and the declaration is read
+    declare('user', theirs)
+    const control = await run([{ serverCommand: [BUN, operatorJs] }], { mcp: { alpha: listed } })
+    say('control: allowlist = the operator\'s command only', control)
+    // the same command in both: one server, the listed one's command
+    declare('user', listed)
+    const same = await run([{ serverCommand: [BUN, serverJs] }], { mcp: { alpha: listed } })
+    say('the operator declares the same command', same)
+    process.stdout.write(`\n  RESULT ${JSON.stringify({ ...results, control: who(control.log), same: who(same.log), sameConnected: readLoaded(same.log).connected })}\n`)
+    expect(results).toEqual({ user: ['tiny'], project: ['tiny'], local: ['tiny'] })
+    expect(who(control.log)).toEqual(['operator-tiny'])
+    expect(who(same.log)).toEqual(['tiny'])
+    expect(readLoaded(same.log).connected).toEqual(['alpha'])
+  }, 300_000)
+
   test('the `${CLAUDE_PLUGIN_ROOT}` form of the entry (what the manifest literally holds)', async () => {
     const p = plugin('probebridge2')
     const literal = [BUN, serverJs.replace(fake, '${CLAUDE_PLUGIN_ROOT}/..')]

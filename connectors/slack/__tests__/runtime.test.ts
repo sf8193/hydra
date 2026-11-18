@@ -15,7 +15,7 @@ import { transport } from '../../../daemon/bridge-transport.js'
 import { handleCLIRequest, type CLIRequest } from '../../../daemon/cli-handler.js'
 import { executeTool } from '../../../daemon/bridge-dispatch.js'
 import { alsoHeard, BASE, hydra, view } from './slack-config.js'
-import { slackEnvNames } from '../../../config/token-vars.js'
+import { tokenEnvNames } from '../../../config/token-vars.js'
 import { defaultSlackApp } from '../../../config/types.js'
 import { registerSpawnVars } from '../../../shared/spawn-env.js'
 import { fakeAdapter } from '../../../daemon/__tests__/test-harness.js'
@@ -291,6 +291,19 @@ describe('any session listens to a Slack thread: bound to its own thread', () =>
         await new Promise(r => setTimeout(r, 10))
         expect(getConversationTable().get('C9', '9.000001')?.specialist).toBe(OTHER)      // unconfirmed: kept
       } finally { (gateway as any).threadExists = real; process.stderr.write = realWrite }
+    })
+
+    test('a thread destroyed with no session in it lets its conversations go at once, and another thread keeps its own', async () => {
+      const real = gateway.threadExists
+      try {
+        await bindConversation({ threadId: MINE }, 'slack:C9:12.000001')
+        await bindConversation({ threadId: OTHER }, 'slack:C9:13.000001')
+        ;(gateway as any).threadExists = async (t: string) => t !== MINE
+        emit('thread:destroyed', { threadId: MINE })
+        await new Promise(r => setTimeout(r, 10))
+        expect(getConversationTable().get('C9', '12.000001')).toBeUndefined()
+        expect(getConversationTable().get('C9', '13.000001')?.specialist).toBe(OTHER)
+      } finally { (gateway as any).threadExists = real }
     })
 
     test('a thread deleted while the daemon was down is found at start, not an hour later', async () => {
@@ -854,15 +867,15 @@ describe('tokens', () => {
     const env = { SLOPBOT_SLACK_BOT_TOKEN: 'xoxb-1', SLOPBOT_SLACK_APP_TOKEN: 'xapp-1' }
     expect(slackTokens(appOf(TOML), env)).toEqual({ bot: 'xoxb-1', app: 'xapp-1' })
     const warned: string[] = []
-    const leaky = appOf(TOML.replace('bot_token_env = "SLOPBOT_SLACK_BOT_TOKEN"', 'bot_token_env = "SLACK_BOT_TOKEN"'))
-    expect(slackTokens(leaky, { ...env, SLACK_BOT_TOKEN: 'xoxb-leak' }, l => warned.push(l))).toEqual({ bot: undefined, app: 'xapp-1' })
-    expect(warned[0]).toContain('refusing to read the token in SLACK_BOT_TOKEN, the `bot_token_env` of hydra (`[slack.apps.default]`)')
+    const leaky = appOf(TOML.replace('bot_token_env = "SLOPBOT_SLACK_BOT_TOKEN"', 'bot_token_env = "UNLISTED_BOT_TOKEN"'))
+    expect(slackTokens(leaky, { ...env, UNLISTED_BOT_TOKEN: 'xoxb-leak' }, l => warned.push(l))).toEqual({ bot: undefined, app: 'xapp-1' })
+    expect(warned[0]).toContain('refusing to read the token in UNLISTED_BOT_TOKEN, the `bot_token_env` of hydra (`[slack.apps.default]`)')
     expect(warned[0]).not.toContain('xoxb')
     // With a display_name the name leads, and the table to edit is still named once.
     const named: string[] = []
-    const krust = appOf(TOML.replace('bot_token_env = "SLOPBOT_SLACK_BOT_TOKEN"', 'bot_token_env = "SLACK_BOT_TOKEN"\ndisplay_name = "Acme helper"'))
-    slackTokens(krust, { ...env, SLACK_BOT_TOKEN: 'xoxb-leak' }, l => named.push(l))
-    expect(named[0]).toContain('refusing to read the token in SLACK_BOT_TOKEN, the `bot_token_env` of Acme helper (`[slack.apps.default]`):')
+    const krust = appOf(TOML.replace('bot_token_env = "SLOPBOT_SLACK_BOT_TOKEN"', 'bot_token_env = "UNLISTED_BOT_TOKEN"\ndisplay_name = "Acme helper"'))
+    slackTokens(krust, { ...env, UNLISTED_BOT_TOKEN: 'xoxb-leak' }, l => named.push(l))
+    expect(named[0]).toContain('refusing to read the token in UNLISTED_BOT_TOKEN, the `bot_token_env` of Acme helper (`[slack.apps.default]`):')
   })
 })
 
@@ -873,7 +886,7 @@ describe('tokens: any variable the config names', () => {
     const warned: string[] = []
     expect(slackTokens(appOf(toml), env, l => warned.push(l))).toEqual({ bot: undefined, app: undefined })
     expect(warned).toHaveLength(2)
-    registerSpawnVars(slackEnvNames(hydra(toml)), {})
+    registerSpawnVars(tokenEnvNames(hydra(toml)), {})
     expect(slackTokens(appOf(toml), env)).toEqual({ bot: 'xoxb-s', app: 'xapp-s' })
   })
   test('a name sessions need, like PATH, is refused, saying which key and why (the loader rejects it first; this is the backstop)', () => {

@@ -21,7 +21,7 @@ const configure = (over: Partial<Specialist> = {}): void => _setHydraConfigForTe
   people: { op: { id: 'op', addresses: ['discord:100000000000000001'], roles: [], name: 'op' } },
   specialists: { ops: spec(over) },
 } as HydraConfig)
-const operatorPolicy: LaunchPolicy = { specialist: 'ops', access: 'operator', id: 'operator' }
+const operatorPolicy: LaunchPolicy = { specialist: 'ops', restricted: false, id: 'operator' }
 // The session was born as the operator's; hydra.toml now confines the specialist.
 const drift = () => configure({ restricted: true, tools: ['Read'], mcpServerNames: [] })
 const REMEDY = (name: string) => `hydra kill ${name}`
@@ -58,7 +58,7 @@ describe('the sender is told when the gate refused the message', () => {
   }
   const senders: [string, () => string][] = [
     ['a spawned session', () => session('s1', { tmuxName: 'spawned', threadId: 'th-s1', policy: undefined }).sessionId],
-    ['a specialist session', () => session('s2', { tmuxName: 'ops2', threadId: 'th-s2', policy: { specialist: 'ops', access: 'operator', id: 'operator' } }).sessionId],
+    ['a specialist session', () => session('s2', { tmuxName: 'ops2', threadId: 'th-s2', policy: { specialist: 'ops', restricted: false, id: 'operator' } }).sessionId],
     ['main', () => 'main'],
   ]
   for (const [who, make] of senders) {
@@ -78,7 +78,7 @@ describe('the sender is told when the gate refused the message', () => {
 
   test('a start that has not been verified is a refusal too: the sender hears it, with its own cause', async () => {
     drift(); watch()
-    const target = session('t2', { sessionType: 'scoped', policy: { specialist: 'ops', access: 'workdir', workdir: '/srv/ops', tools: ['Read'], servers: [], id: policyIdFor('/srv/ops', ['Read'], []) } }); startVerifying('t2')
+    const target = session('t2', { sessionType: 'thread_owner', policy: { specialist: 'ops', restricted: true, workdir: '/srv/ops', tools: ['Read'], servers: [], id: policyIdFor('/srv/ops', ['Read'], []) } }); startVerifying('t2')
     const r = await executeTool('send_to_thread', { target: target.tmuxName, type: 'result', text: 'hello' }, session('s3', { tmuxName: 'spawned3', policy: undefined }).sessionId)
     expect(r.isError).toBe(true)
     expect(textOf(r)).toContain('still being checked against its policy')
