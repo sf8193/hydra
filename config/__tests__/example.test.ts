@@ -28,7 +28,7 @@ describe('hydra.example.toml', () => {
     expect(r.config.specialists.assistant).toMatchObject({ restricted: false, canOnlyWriteTo: 'workdir', cannotRead: ['/home/op/notes'], denyCommands: ['rm -rf *'], tools: ['Bash', 'Edit', 'Write', 'Read', 'Grep', 'Glob'], browserProfile: '/home/op/agents/assistant/chrome-profile', mcpServerNames: ['browser'] })
     expect(r.config.specialists.deals.pinnedTo).toEqual(['sales'])
     expect(r.config.places['slack:#help'].defaultApp).toBe('default')
-    // The confined specialist, its server and its place.
+    // The restricted specialist, its server and its place.
     expect(r.config.specialists.helpdesk).toMatchObject({ restricted: true, tools: ['Read', 'Grep', 'Glob'], mcpServerNames: ['datadog'], sendsTo: ['triage'] })
     expect(r.config.specialists.triage).toMatchObject({ restricted: true, sendsTo: ['helpdesk'] })
     expect(answeredKeys(r.config, 'triage')).toEqual([])

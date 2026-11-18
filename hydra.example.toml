@@ -146,7 +146,7 @@ mcp_servers = ["browser"]              # servers started for it with its OWN bro
 # PR reviews on one repo.
 [specialists.reviewer]
 workdir = "~/code/widget"
-engine = "claude"                     # which agent program runs its fresh sessions: claude | codex (a Codex model alias in `model` picks it too; naming both so they disagree is an error). An existing conversation keeps the engine it already ran on. omp is refused: it cannot confine a session's tools. restricted = true needs claude
+engine = "claude"                     # which agent program runs its fresh sessions: claude | codex (a Codex model alias in `model` picks it too; naming both so they disagree is an error). An existing conversation keeps the engine it already ran on. omp is refused: it cannot restrict a session's tools. restricted = true needs claude
 env_file = ".env.reviewer"            # extra environment for its sessions; relative to workdir
 
 # --- restricted: folders no restricted specialist's workdir may be, hold or sit inside, beyond the built-in ones. This table is not a specialist's `restricted = true` (the switch) ---

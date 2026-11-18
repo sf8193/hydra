@@ -26,7 +26,7 @@ import { bornPolicy, deliveryRefusal, isVerifying, verifyBackoff, OPERATOR_POLIC
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import { debugLogFor, verifyLaunchesAgainst } from './verified-launch.js'
 import { verifyDeps, verifyLaunch as verifyLoaded } from '../engines/claude-verify.js'
-import type { HydraConfig, Specialist } from '../../config/types.js'
+import type { HydraConfig, RestrictedSpecialist, Specialist } from '../../config/types.js'
 
 process.stderr.write = (() => true) as any
 
@@ -37,14 +37,14 @@ afterAll(() => rmSync(workdir, { recursive: true, force: true }))
 
 const spec = (id: string, over: Partial<Specialist> = {}): Specialist => ({
   id, workdir, reachableBy: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false, ...over,
-})
+}) as Specialist
 const configWith = (specialists: Specialist[]): HydraConfig => ({
   operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
   people: { op: { id: 'op', addresses: ['discord:100000000000000001'], roles: [], name: 'op' } },
   specialists: Object.fromEntries(specialists.map(s => [s.id, s])),
   mcpServers: { datadog: { name: 'datadog', command: '/usr/local/bin/datadog-mcp', tokenEnv: ['DD_API_KEY'], tools: ['search_logs'] } },
 })
-const OPS = spec('ops', { restricted: true, tools: ['Read', 'Grep'], mcpServerNames: ['datadog'] })
+const OPS = spec('ops', { restricted: true, tools: ['Read', 'Grep'], mcpServerNames: ['datadog'] }) as RestrictedSpecialist
 const DESK = spec('desk')
 const CRM = spec('crm', { restricted: true, tools: ['Read', 'Grep', 'Glob'], mcpServerNames: [], sessions: 'per-conversation' })
 const use = (...s: Specialist[]) => _setHydraConfigForTesting(configWith(s))
@@ -56,7 +56,7 @@ const launches: LaunchInput[] = []
 const stops: string[] = []
 const orig: Record<string, any> = {}
 const fakeClaude = {
-  provider: 'claude', channel: 'bridge', confinesAccess: true,
+  provider: 'claude', channel: 'bridge', limitsAccess: true,
   launch: async (input: LaunchInput) => {
     launches.push(input)
     if (input.resumeFrom && failResume) throw new Error('resume failed')
@@ -148,7 +148,7 @@ describe('the launch policy of a specialist', () => {
     use({ ...OPS, id: 'ops2', renamedFrom: ['ops'] })
     expect(bornPolicy('ops')?.specialist).toBe('ops2')
   })
-  test('a confined specialist no longer declared refuses instead of reading as the operator', () => {
+  test('a restricted specialist no longer declared refuses instead of reading as the operator', () => {
     const stored = opsPolicy()
     use(DESK)
     expect(() => resolvePolicy({ named: 'ops', records: [{ policy: stored }] })).toThrow(/no longer declares it/)
@@ -295,7 +295,7 @@ describe('a policy change starts fresh', () => {
   })
   test('a specialist flipped from workdir back to operator is not resumed either', async () => {
     seedDead({ policy: opsPolicy() })
-    use({ ...OPS, restricted: false, tools: undefined, mcpServerNames: undefined })
+    use(spec('ops'))
     expect(await revive()).toMatchObject({ ok: true, method: 'respawned' })
     expect(launches[0].policy?.restricted === true).toBe(false)
   })
@@ -606,7 +606,7 @@ describe('a launch path that passes nothing for a specialist session: restricted
   }
   const bare = (extra: Record<string, unknown> = {}) => doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, ...extra })
 
-  test('nothing but the thread: the dead record in it holds the policy, and the session launches confined in its workdir', async () => {
+  test('nothing but the thread: the dead record in it holds the policy, and the session launches restricted to its workdir', async () => {
     seedDead({ policy: opsPolicy() })
     await bare()
     expect(launches).toHaveLength(1)
@@ -625,7 +625,7 @@ describe('a launch path that passes nothing for a specialist session: restricted
     expect(launches[0]).toMatchObject({ forkFrom: { claudeSessionId: 'C-parent' }, cwd: workdir, policy: { id: opsLabel() } })
     never()
   })
-  test('no record at all, nothing named: the thread is the specialist\'s by its pointer, so the session is born confined from hydra.toml', async () => {
+  test('no record at all, nothing named: the thread is the specialist\'s by its pointer, so the session is born restricted from hydra.toml', async () => {
     setSpecialistThread('ops', THREAD)
     try {
       await bare()
@@ -641,7 +641,7 @@ describe('a launch path that passes nothing for a specialist session: restricted
     expect(told.join('\n')).toMatch(/launch policy stored with its session cannot be read \(it has no workdir.*Run `hydra kill sldead\d+`; the next message to the specialist starts a new session that re-reads hydra\.toml\./s)
     expect(told.join('\n')).not.toContain('session record')
   })
-  test('a confined specialist hydra.toml no longer declares: nothing launches, the thread is told to restore it', async () => {
+  test('a restricted specialist hydra.toml no longer declares: nothing launches, the thread is told to restore it', async () => {
     seedDead({ policy: opsPolicy() })
     use(DESK)
     await expect(bare()).rejects.toThrow(/no longer declares it/)
@@ -672,7 +672,7 @@ describe('a launch path that passes nothing for a specialist session: restricted
     expect(err).toContain('tools: Read,Grep -> Read')
     expect(err).toMatch(/Run `hydra kill sldead\d+`; the next message to the specialist starts a new session that re-reads hydra\.toml\./)
   })
-  describe('a confined thread whose record a kill deleted: the history entry still holds the policy, and a revive reads it', () => {
+  describe('a restricted thread whose record a kill deleted: the history entry still holds the policy, and a revive reads it', () => {
     /** Only the thread's history entry is left: no registry record (hydra kill deleted it), the policy as it was born. */
     function killed(policy: LaunchPolicy | undefined = opsPolicy()) {
       threadRegistry.recordSpawn(THREAD, { topic: 'topic', respawnCount: 0, sessionId: 'sl-gone', tmuxName: 'slgone', originType: 'spawn', model: 'm', claudeSessionId: 'C-gone', label: undefined, policy })
@@ -701,12 +701,12 @@ describe('a launch path that passes nothing for a specialist session: restricted
         })
       }
     }
-    test('the specialist still declared with the same policy: the revive resumes under the stored policy, confined in its workdir', async () => {
+    test('the specialist still declared with the same policy: the revive resumes under the stored policy, restricted to its workdir', async () => {
       killed()
       expect(await revive()).toMatchObject({ ok: true, method: 'resumed' })
       expect(launches[0]).toMatchObject({ resumeFrom: 'C-gone', cwd: workdir, sessionType: 'thread_owner', policy: { id: opsLabel() } })
     })
-    test('the specialist still declared with a different policy: the old conversation is not resumed, a new birth is confined by the new one', async () => {
+    test('the specialist still declared with a different policy: the old conversation is not resumed, a new birth is restricted by the new one', async () => {
       killed()
       use({ ...OPS, tools: ['Read'] })
       expect(await revive()).toMatchObject({ ok: true, method: 'respawned' })
@@ -714,7 +714,7 @@ describe('a launch path that passes nothing for a specialist session: restricted
       expect(launches[0]).toMatchObject({ cwd: workdir, policy: { tools: ['Read'] } })
       expect(launches[0].resumeFrom).toBeUndefined()
     })
-    test('an operator-access conversation whose specialist is gone continues as it always did (nothing was confined)', async () => {
+    test('an operator-access conversation whose specialist is gone continues as it always did (nothing was restricted)', async () => {
       killed(operatorPolicy())
       removed()
       expect(await revive()).toMatchObject({ ok: true })
@@ -931,7 +931,7 @@ describe('every start is verified from its own debug file (hydra#608)', () => {
     ;(fakeClaude as any).launch = async (i: LaunchInput) => { const r = await was(i); delete (r as any).debugLogPath; return r }
     try { await expect(start()).rejects.toThrow(/wrote no debug file/) } finally { (fakeClaude as any).launch = was }
   })
-  test('an engine that cannot say what it loaded cannot run a confined session: the start is refused, not trusted', async () => {
+  test('an engine that cannot say what it loaded cannot run a restricted session: the start is refused, not trusted', async () => {
     seedDead()
     const was = (fakeClaude as any).verifyLaunch
     delete (fakeClaude as any).verifyLaunch

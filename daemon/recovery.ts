@@ -128,7 +128,7 @@ export async function reviveThread(req: ReviveRequest): Promise<ReviveOutcome> {
   // The `respawn` command is a fresh start: it carries no restrictions, parent or launch dir from the dead session.
   const carried = dead && !req.respawnOnly ? carryOver(dead) : undefined
   // What the launch policy is read from when no record is left (a kill deleted it): the history entry's. Carried even by `respawn`,
-  // which carries no restrictions: a confined thread whose specialist can no longer be resolved refuses, whichever way it is revived.
+  // which carries no restrictions: a restricted or write-confined thread whose specialist can no longer be resolved refuses, whichever way it is revived.
   const carriedPolicy = dead?.policy ?? entry?.policy
   // The kickoff the conversation was born under, from its record or (a kill deleted that) its history entry. Carried by a resume or fork.
   const bornKickoff = dead?.kickoffHash ?? entry?.kickoffHash

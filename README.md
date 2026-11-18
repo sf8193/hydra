@@ -60,8 +60,8 @@ Twenty names carry the design. Each answers one question.
 | Rule | Which inbound goes to which target? | `place`, `person`, then `target`; the first match wins. |
 | Target | Who receives it? | main (the operator's harness), a specialist, a session's thread, a conversation's own session, or a new session started from a recipe. A target value says its kind: `main`, `specialist:<name>`, `thread:<id>`. |
 | Specialist | Who answers a place? | A named session that hydra refills when it ends. Reached by places, rules, schedules and deliveries. |
-| Restricted specialist | What may it know? | A specialist that may know only what its audience can already see (`restricted = true`). A property of a specialist, not a kind of target. Its listed servers run under a sandbox proven only on the macOS versions hydra names: on any other, a restricted specialist that lists servers is refused at launch unless `[restricted] allow_unproven_macos = true`. |
-| Write-confined specialist | Where may it write? | A specialist on the operator's account and tools whose Bash and Edit/Write writes are confined to its `workdir` (`can_only_write_to = "workdir"`; absent: writes anywhere). Claude Code's tools and shell are also denied the operator's credential places (below). The network, the browser's and MCP servers' own reads and writes, and anything not on that list stay open. A property of a specialist, like restricted, and never both. |
+| Restricted specialist | What may it know? | A specialist that may know only what its audience can already see (`restricted = true`). A property of a specialist, not a kind of target, and never also write-confined. Its listed servers run under a sandbox proven only on the macOS versions hydra names: on any other, a restricted specialist that lists servers is refused at launch unless `[restricted] allow_unproven_macos = true`. |
+| Write-confined specialist | Where may it write? | A specialist on the operator's account and tools whose Bash and Edit/Write writes are confined to its `workdir` (`can_only_write_to = "workdir"`; absent: writes anywhere). Claude Code's tools and shell are also denied the operator's credential places (below). The network, the browser's and MCP servers' own reads and writes, and anything not on that list stay open. A property of a specialist, like restricted, and never both: `Specialist` is restricted, write-confined or neither, and a hydra.toml table that sets both `restricted = true` and `can_only_write_to` does not load. |
 | `cannot_read` | What more may it not read? | Paths added to the credential places a write-confined specialist's Claude Code tools and shell are always denied (`~/.ssh`, `~/.aws`, `~/.config/gh`, the keychain, browser profiles, hydra's state folder, other specialists' workdirs). Valid only with `can_only_write_to`; it extends, never replaces, the built-in places. Binds Claude Code's tools and shell, not the browser or MCP servers. |
 | `handoff_at` | At what context is its idle session asked to hand off? | A specialist's context percent (1–99): an idle session of it at that line gets the full handoff, whatever the environment says. Read on each health poll, so an edit reaches running sessions; not part of the launch policy, so a change never counts as drift. Refused on a restricted or write-confined specialist: their sessions have no handoff tool. |
 | Address | Who or where, on which platform? | `platform:thing`, like `slack:U0ALICE` or `slack:#ops`. A Person holds addresses; a Place is one. |
@@ -87,10 +87,11 @@ flowchart LR
   CN -. "GitHub watch, clock job:<br/>target named at creation" .-> TG
   TG --> SP["<b>Specialist</b><br/>a named session,<br/>refilled when it ends"]
   SP -.-> RS["<b>Restricted specialist</b><br/>knows only what its<br/>audience can already see"]
+  SP -.-> WC["<b>Write-confined specialist</b><br/>the operator's account,<br/>writes only in its workdir"]
   classDef core fill:#ecfdf5,stroke:#10b981,color:#1f2937
   classDef step fill:#eef2ff,stroke:#6366f1,color:#1f2937
   classDef gate fill:#fff7ed,stroke:#f97316,color:#1f2937
-  class TG,SP,RS,MN core
+  class TG,SP,RS,WC,MN core
   class GW,AP,CN,IN,PE,PL,TR,CV step
   class RU gate
 ```

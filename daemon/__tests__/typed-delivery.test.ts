@@ -256,24 +256,24 @@ describe('typed text', () => {
   })
 })
 
-describe('a confined session is not typed into until its start is verified', () => {
+describe('a restricted session is not typed into until its start is verified', () => {
   // A specialist that hydra.toml declares with the policy the session was born under, so the drift check passes and only the marker decides.
-  const confine = (over: Partial<SessionInfo> = {}): SessionInfo => {
+  const restrictedSession = (over: Partial<SessionInfo> = {}): SessionInfo => {
     _setHydraConfigForTesting({
       operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
       people: { op: { id: 'op', addresses: ['discord:1'], roles: [], name: 'op' } },
-      specialists: { ops: { id: 'ops', workdir: '/srv/ops', reachableBy: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: true, tools: ['Read'], mcpServers: [] } },
+      specialists: { ops: { id: 'ops', workdir: '/srv/ops', reachableBy: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: true, tools: ['Read'], mcpServerNames: [] } },
     } as any)
     return session({ sessionType: 'thread_owner', policy: bornPolicy('ops'), threadId: 'th', ...over })
   }
   afterEach(() => _setHydraConfigForTesting(undefined))
   test('unverified: the message takes the channel path (the gate refuses it), and nothing is pasted', async () => {
-    sess = confine()
+    sess = restrictedSession()
     expect(await send('u1')).toEqual({ by: 'channel' })
     expect(pasted).toHaveLength(0)
   })
   test('verified, same policy, same config: the same message is pasted (so the marker is what decided)', async () => {
-    sess = confine({ verified: true })
+    sess = restrictedSession({ verified: true })
     expect(await send('u2')).toEqual({ by: 'paste' })
     expect(pasted).toHaveLength(1)
   })

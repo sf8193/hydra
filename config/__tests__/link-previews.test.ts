@@ -1,4 +1,4 @@
-// `[places]` `link_previews`: the option, its default, and the load warning for a confined specialist anyone can talk to.
+// `[places]` `link_previews`: the option, its default, and the load warning for a restricted specialist anyone can talk to.
 import { describe, expect, test } from 'bun:test'
 import { loadHydraConfig } from '../load.js'
 import type { HydraConfig } from '../types.js'
@@ -53,7 +53,7 @@ describe('link_previews', () => {
 
 describe('the load warning', () => {
   const warn = (w: string[]) => w.filter(x => x.includes('link_previews'))
-  test('a confined specialist anyone can talk to, on a place with previews on, warns and names the place and the fix', () => {
+  test('a restricted specialist anyone can talk to, on a place with previews on, warns and names the place and the fix', () => {
     const { warnings } = ok(specialist('true', '"role:anyone"'))
     expect(warn(warnings)).toEqual(['specialists.ops: anyone can reach it in slack:#ops, where a link in its answer unfurls a preview that can show readers content they could not open themselves; set link_previews = false in [places."slack:#ops"]'])
   })

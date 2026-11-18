@@ -11,9 +11,10 @@ flowchart LR
   CN -. "GitHub watch, clock job:<br/>target named at creation" .-> TG
   TG --> SP["<b>Specialist</b><br/>a named session,<br/>refilled when it ends"]
   SP -.-> RS["<b>Restricted specialist</b><br/>knows only what its<br/>audience can already see"]
+  SP -.-> WC["<b>Write-confined specialist</b><br/>the operator's account,<br/>writes only in its workdir"]
   classDef core fill:#ecfdf5,stroke:#10b981,color:#1f2937
   classDef step fill:#eef2ff,stroke:#6366f1,color:#1f2937
   classDef gate fill:#fff7ed,stroke:#f97316,color:#1f2937
-  class TG,SP,RS,MN core
+  class TG,SP,RS,WC,MN core
   class GW,AP,CN,IN,PE,PL,TR,CV step
   class RU gate

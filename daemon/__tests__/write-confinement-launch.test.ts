@@ -331,9 +331,9 @@ describe('the stored policy', () => {
   })
 
   test('born from hydra.toml: a listed server\'s deny_tools reach the policy (and none, no key)', () => {
-    const withDeny = cfg({ canOnlyWriteTo: 'workdir', mcpServerNames: ['browser'] }, { mcpServers: { browser: { name: 'browser', command: server.command, tokenEnv: server.tokenEnv, tools: [], profileArgs: server.profileArgs, profileEnv: server.profileEnv, denyTools: ['browser_run_code_unsafe'] } } })
+    const withDeny = cfg({ canOnlyWriteTo: 'workdir', cannotRead: [], mcpServerNames: ['browser'] }, { mcpServers: { browser: { name: 'browser', command: server.command, tokenEnv: server.tokenEnv, tools: [], profileArgs: server.profileArgs, profileEnv: server.profileEnv, denyTools: ['browser_run_code_unsafe'] } } })
     expect(bornPolicy('gem', withDeny)!.canOnlyWriteTo!.servers[0].denyTools).toEqual(['browser_run_code_unsafe'])
-    expect('denyTools' in bornPolicy('gem', cfg({ canOnlyWriteTo: 'workdir', mcpServerNames: ['browser'] }))!.canOnlyWriteTo!.servers[0]).toBe(false)
+    expect('denyTools' in bornPolicy('gem', cfg({ canOnlyWriteTo: 'workdir', cannotRead: [], mcpServerNames: ['browser'] }))!.canOnlyWriteTo!.servers[0]).toBe(false)
   })
 
   test('born from hydra.toml: an operator policy carrying canOnlyWriteTo, with its servers\' profile declaration and its own id', () => {

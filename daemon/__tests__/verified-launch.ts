@@ -1,4 +1,4 @@
-// For tests that start a confined session through a fake engine: a debug file, as Claude Code writes it, for exactly the policy the
+// For tests that start a restricted session through a fake engine: a debug file, as Claude Code writes it, for exactly the policy the
 // launch was given, so the start's own check (engines/claude-verify.ts) passes, and a way to make it see something else.
 import { BRIDGE_MCP_SERVER_KEY } from '../plugin-manifest.js'
 import { expectedLoad, verifyDeps } from '../engines/claude-verify.js'

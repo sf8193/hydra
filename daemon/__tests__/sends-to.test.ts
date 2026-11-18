@@ -373,7 +373,7 @@ describe('a landing on the real session', () => {
 })
 
 describe('the one delivery gate holds for a sends_to like any other delivery', () => {
-  test('a confined target whose start has not been verified takes nothing, and the sender is told it could not be reached', async () => {
+  test('a restricted target whose start has not been verified takes nothing, and the sender is told it could not be reached', async () => {
     Object.assign(sendDeps, real)
     sendDeps.linkOf = async () => undefined
     const written: unknown[] = []
@@ -399,7 +399,7 @@ describe('a refusal does not offer what the session does not have', () => {
 })
 
 describe('the older route (an ordinary session sending into a restricted one) meets the same delivery gate', () => {
-  test('into a confined target that has not been verified, nothing is written to its bridge', async () => {
+  test('into a restricted target that has not been verified, nothing is written to its bridge', async () => {
     const realG = { send: gateway.send, url: gateway.getThreadUrl }
     ;(gateway as any).send = async () => ({ id: 'm1' })
     ;(gateway as any).getThreadUrl = async () => ''

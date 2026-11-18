@@ -1,4 +1,4 @@
-// A confined session is unreachable until its start has been verified (hydra#619.1, .2): the one delivery gate (the Claude adapter's
+// A restricted or write-confined session is unreachable until its start has been verified (hydra#619.1, .2): the one delivery gate (the Claude adapter's
 // `deliver`, and the queue flush behind it) refuses a restricted session that carries no `verified` marker, whichever route a message took:
 // by id, by name, send_to_thread, a second conversation's message, a typed paste. The marker is persisted, so a record restored at boot
 // without it (a crash inside the wait, or a session started before hydra verified starts) is not delivered to and is not killed.
@@ -16,13 +16,13 @@ import type { HydraConfig, Specialist } from '../../config/types.js'
 
 process.stderr.write = (() => true) as any
 
-const spec = (over: Partial<Specialist> = {}): Specialist => ({ id: 'ops', workdir: '/srv/ops', reachableBy: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: true, tools: ['Read'], mcpServerNames: [], ...over })
+const spec = (over: Partial<Specialist> = {}): Specialist => ({ id: 'ops', workdir: '/srv/ops', reachableBy: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: true, tools: ['Read'], mcpServerNames: [], ...over }) as Specialist
 const configure = (): void => _setHydraConfigForTesting({
   operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
   people: { op: { id: 'op', addresses: ['discord:100000000000000001'], roles: [], name: 'op' } },
   specialists: { ops: spec() },
 } as HydraConfig)
-const confinedPolicy = (): LaunchPolicy => ({ specialist: 'ops', restricted: true, workdir: '/srv/ops', tools: ['Read'], servers: [], id: policyIdFor('/srv/ops', ['Read'], []) })
+const restrictedPolicy = (): LaunchPolicy => ({ specialist: 'ops', restricted: true, workdir: '/srv/ops', tools: ['Read'], servers: [], id: policyIdFor('/srv/ops', ['Read'], []) })
 const operatorPolicy: LaunchPolicy = { specialist: 'ops', restricted: false, id: 'operator' }
 
 const ids: string[] = []
@@ -30,7 +30,7 @@ function session(id: string, over: Record<string, unknown> = {}) {
   ids.push(id)
   registry.set(id, {
     sessionId: id, tmuxName: `${id}-tmux`, topic: 't', threadId: `th-${id}`, createdAt: Date.now(), lastActive: Date.now(), listening: false,
-    engine: 'claude', policy: confinedPolicy(), sessionType: 'thread_owner', adapter: Object.assign(Object.create(engines.claude), { isAlive: () => true }), ...over,
+    engine: 'claude', policy: restrictedPolicy(), sessionType: 'thread_owner', adapter: Object.assign(Object.create(engines.claude), { isAlive: () => true }), ...over,
   } as any)
   return registry.get(id)!
 }
@@ -83,7 +83,7 @@ describe('while the start is being verified, nothing reaches the session', () =>
 })
 
 describe('the marker', () => {
-  test('a confined session without it is unverified; with it, not; operator and non-specialist sessions never are', () => {
+  test('a restricted session without it is unverified; with it, not; operator and non-specialist sessions never are', () => {
     configure()
     expect(unverified(session('m1'))).toBe(true)
     expect(unverified(session('m2', { verified: true }))).toBe(false)

@@ -295,11 +295,11 @@ describe('[mcp_servers.*]', () => {
 
 describe('engine', () => {
   test('codex is refused with restricted = true', () => {
-    expect(errorsOf(spec('restricted = true\nengine = "codex"'))).toEqual([`specialists.ops.engine: codex can't run a restricted specialist: that engine cannot confine its tools; use claude (engine = "claude", or a Claude model), or set restricted = false`])
+    expect(errorsOf(spec('restricted = true\nengine = "codex"'))).toEqual([`specialists.ops.engine: codex can't run a restricted specialist: that engine cannot restrict its tools; use claude (engine = "claude", or a Claude model), or set restricted = false`])
   })
   test('omp is refused for a specialist, restricted or not, with its own one message', () => {
     for (const body of ['restricted = true\nengine = "omp"', 'engine = "omp"']) {
-      expect(errorsOf(spec(body))).toEqual([`specialists.ops.engine: omp cannot confine a session's tools, so a specialist cannot use it; use claude or codex`])
+      expect(errorsOf(spec(body))).toEqual([`specialists.ops.engine: omp cannot restrict a session's tools, so a specialist cannot use it; use claude or codex`])
     }
   })
   test('claude, or no engine, loads', () => {

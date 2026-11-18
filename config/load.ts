@@ -10,7 +10,7 @@ import { DISCORD_GATEWAY_TOKEN_ENV, engineOfModel, parseIdleTtl, SLACK_GATEWAY_T
 import { ENV_NAME_RE, tokenVarRefusal } from '../shared/spawn-env.js'
 import { offLimitRoots, workdirRestrictionIssues } from './restricted-workdir.js'
 import { ALLOW_UNPROVEN_MACOS, macosGateIssue, sandboxIssues, unquotablePath } from './server-sandbox.js'
-import { engineConfinesAccess } from '../shared/engine-capabilities.js'
+import { engineLimitsAccess } from '../shared/engine-capabilities.js'
 import { CAN_ONLY_WRITE_TO_VALUES, KNOWN_BUILTIN_TOOLS, browserDownloadDir, browserProfileDir, browserProfileProblem, browserProfilesOverlap, canonicalFolder, confinementWarning, hasPlaceholder, managedMcpNameClashes, readDenyRoots, unknownPlaceholders, unreadableWorkdir } from './write-confinement.js'
 import { noSuchApp, pinnersOf, speaksAsOf, whyNotServed } from './pins.js'
 import { SLACK_APP_DEFAULTS } from '../connectors/slack/app.js'
@@ -670,16 +670,16 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     const emojiWhy = t.emoji === undefined ? undefined : emojiProblem(t.emoji)
     if (emojiWhy) error(at('emoji'), emojiWhy)
     const engine = oneOf(t, 'engine', path, ENGINES)
-    // One rule for the engine a specialist runs on: its `engine`, else the one its model alias names. omp can't be confined or
+    // One rule for the engine a specialist runs on: its `engine`, else the one its model alias names. omp can't be restricted or
     // pinned to a thread's tools, so no specialist runs on it; an `engine` and a model that name two engines is a mistake.
     const aliased = model === undefined ? undefined : engineOfModel(model)
     const runsOn = engine ?? aliased
-    if (runsOn === 'omp') error(engine === 'omp' ? at('engine') : at('model'), `omp cannot confine a session's tools, so a specialist cannot use it; use claude or codex`)
+    if (runsOn === 'omp') error(engine === 'omp' ? at('engine') : at('model'), `omp cannot restrict a session's tools, so a specialist cannot use it; use claude or codex`)
 
     // `restricted`: its session runs in its folder, with only what it lists. Everything below refuses what would let a restricted session reach past its folder.
     const restricted = bool(t, 'restricted', path) ?? false
     // Two engines named: said once. Not when the restricted refusal below already stands for the same specialist (it names the engine to leave).
-    if (engine !== undefined && aliased !== undefined && aliased !== engine && !(restricted && !engineConfinesAccess(engine))) error(at('model'), `"${model}" is a ${aliased} model, but engine = "${engine}": set engine = "${aliased}", or use a model for ${engine}`)
+    if (engine !== undefined && aliased !== undefined && aliased !== engine && !(restricted && !engineLimitsAccess(engine))) error(at('model'), `"${model}" is a ${aliased} model, but engine = "${engine}": set engine = "${aliased}", or use a model for ${engine}`)
     const toolsRaw = strList(t, 'tools', path)
     const mcpServerNamesRaw = strList(t, 'mcp_servers', path)
     const sendsToRaw = strList(t, 'sends_to', path)
@@ -698,11 +698,11 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     const cannotReadRaw = strList(t, 'cannot_read', path)
     const denyCommandsRaw = strList(t, 'deny_commands', path)
     const keyed = t.can_only_write_to !== undefined
-    if (restricted && keyed) error(`${path}.can_only_write_to`, 'restricted = true already confines writes and reads (and more); set restricted, or can_only_write_to, not both')
+    if (restricted && keyed) error(`${path}.can_only_write_to`, 'a specialist is restricted or write-confined, never both: restricted = true already limits its writes and reads (and more); remove can_only_write_to, or set restricted = false')
     const confinesWrites = keyed && !restricted
     for (const k of ['cannot_read', 'deny_commands', 'browser_profile'] as const) {
       if (t[k] === undefined || confinesWrites) continue
-      error(`${path}.${k}`, restricted ? 'restricted = true already confines reads and commands (and more); remove it, or set restricted = false and can_only_write_to' : `has no effect without can_only_write_to = "workdir"; it ${k === 'cannot_read' ? 'adds to the places that layer denies reading' : k === 'browser_profile' ? 'names the folder that layer gives its listed servers as their browser profile' : 'adds to the commands that layer denies'}`)
+      error(`${path}.${k}`, restricted ? `belongs to can_only_write_to, and restricted = true already limits its reads and commands (and more); remove ${k}, or set restricted = false and can_only_write_to` : `has no effect without can_only_write_to = "workdir"; it ${k === 'cannot_read' ? 'adds to the places that layer denies reading' : k === 'browser_profile' ? 'names the folder that layer gives its listed servers as their browser profile' : 'adds to the commands that layer denies'}`)
     }
     const cannotRead: string[] = []
     if (confinesWrites) for (const [i, raw] of (cannotReadRaw ?? []).entries()) {
@@ -800,10 +800,10 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
         if (unproven) warn(`${path}.mcp_servers`, unproven)
       }
       // The engine actually used comes from thread history and `handoff <model>` can switch it, so launch checks it again.
-      if (runsOn !== undefined && runsOn !== 'omp' && !engineConfinesAccess(runsOn)) error(engine !== undefined ? at('engine') : at('model'), `${runsOn} can't run a restricted specialist: that engine cannot confine its tools; use claude (engine = "claude", or a Claude model), or set restricted = false`)
+      if (runsOn !== undefined && runsOn !== 'omp' && !engineLimitsAccess(runsOn)) error(engine !== undefined ? at('engine') : at('model'), `${runsOn} can't run a restricted specialist: that engine cannot restrict its tools; use claude (engine = "claude", or a Claude model), or set restricted = false`)
       if (workdirRaw !== undefined && isAbsolute(workdir) && env.isDir(workdir)) checkWorkdirRestriction(at('workdir'), workdir)
     }
-    specialists[id] = {
+    const base = {
       id, workdir, reachableBy,
       ...(pinnedTo && { pinnedTo }),
       ...(speaksAs !== undefined && Object.hasOwn(slackApps, speaksAs) && { speaksAs }),
@@ -813,20 +813,24 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       ...(kickoff !== undefined && { kickoff }),
       ...(kickoffFile !== undefined && { kickoffFile }),
       ...(idleMs !== undefined && { idleMs }),
-      ...(handoffAt !== undefined && { handoffAt }),
       ...(homePlace !== undefined && { homePlace: homeParsed?.ok ? placeKey(homeParsed.place) : homePlace }),
       ...(model !== undefined && { model }),
       ...(t.emoji !== undefined && !emojiWhy && { emoji: t.emoji as string }),
       ...(engine !== undefined && { engine }),
-      restricted,
-      ...(confinesWrites && { canOnlyWriteTo: 'workdir' as const, cannotRead }),
-      ...(confinesWrites && denyCommands.length && { denyCommands }),
-      ...(browserProfile !== undefined && { browserProfile }),
-      ...(tools && { tools }),
-      ...(mcpServerNames && { mcpServerNames }),
-      ...(sendsToRaw && restricted && { sendsTo: [...new Set(sendsToRaw)] }),
       ...(envFile !== undefined && { envFile: underWorkdir(envFile) }),
     }
+    // One of the three, never a mix: a table that sets both restricted and can_only_write_to is refused above, by name, and loads nothing.
+    specialists[id] = restricted
+      ? { ...base, restricted, tools: tools!, mcpServerNames: mcpServerNames!, ...(sendsToRaw && { sendsTo: [...new Set(sendsToRaw)] }) }
+      : confinesWrites
+        ? {
+            ...base, restricted, canOnlyWriteTo: 'workdir', cannotRead,
+            ...(denyCommands.length && { denyCommands }),
+            ...(browserProfile !== undefined && { browserProfile }),
+            ...(tools && { tools }),
+            mcpServerNames: mcpServerNames!,
+          }
+        : { ...base, restricted, ...(handoffAt !== undefined && { handoffAt }) }
   }
   // A target value says its kind: `main` (the built-in specialist: never declared) or `specialist:<name>` (declared here).
   // Read by `readTarget`, as delivery and the CLI read it; the loaded config holds the bare form (`main`, a specialist's id), which is what routing and the schedules compare against.

@@ -5,7 +5,7 @@ import { NoticeLimiter } from '../notice-limit.js'
 import { OPERATOR_POLICY_ID, policyDrifted, policyIdFor, policyProblem, remedy, type LaunchPolicy, type PolicyServer, type RestrictedPolicy } from '../restricted.js'
 
 const server = (over: Partial<PolicyServer> = {}) => ({ name: 'datadog', command: '/usr/local/bin/datadog-mcp', tokenEnv: ['DD_API_KEY'], tools: ['a'], ...over })
-const confinedPolicy = (over: Partial<RestrictedPolicy> = {}): RestrictedPolicy => {
+const restrictedPolicy = (over: Partial<RestrictedPolicy> = {}): RestrictedPolicy => {
   const base = { specialist: 'ops', restricted: true as const, workdir: '/w/ops', tools: ['Read', 'Grep'], servers: [server()], ...over }
   return { ...base, id: policyIdFor(base.workdir, base.tools, base.servers) }
 }
@@ -13,55 +13,55 @@ const operatorPolicy: LaunchPolicy = { specialist: 'ops', restricted: false, id:
 
 describe('policyDrifted says what differs, field by field', () => {
   test('nothing differs: empty', () => {
-    expect(policyDrifted(confinedPolicy(), confinedPolicy())).toEqual([])
+    expect(policyDrifted(restrictedPolicy(), restrictedPolicy())).toEqual([])
     expect(policyDrifted(operatorPolicy, operatorPolicy)).toEqual([])
     expect(policyDrifted(undefined, operatorPolicy)).toEqual([])   // a record from before policies counts as the operator's
   })
   test('adding a tool to a listed server is named, with both lists (the case a names-only message could not tell apart)', () => {
-    const diff = policyDrifted(confinedPolicy(), confinedPolicy({ servers: [server({ tools: ['a', 'b'] })] }))
+    const diff = policyDrifted(restrictedPolicy(), restrictedPolicy({ servers: [server({ tools: ['a', 'b'] })] }))
     expect(diff).toEqual(['mcp datadog tools: a -> a,b'])
   })
   test.each([
-    ['restricted', operatorPolicy, confinedPolicy(), ['restricted: false -> true']],
-    ['restricted back', confinedPolicy(), operatorPolicy, ['restricted: true -> false']],
-    ['folder', confinedPolicy(), confinedPolicy({ workdir: '/w/other' }), ['folder: /w/ops -> /w/other']],
-    ['tools', confinedPolicy(), confinedPolicy({ tools: ['Read'] }), ['tools: Read,Grep -> Read']],
-    ['a server command', confinedPolicy(), confinedPolicy({ servers: [server({ command: '/opt/dd' })] }), ['mcp datadog command: /usr/local/bin/datadog-mcp -> /opt/dd']],
-    ['a server token variable', confinedPolicy(), confinedPolicy({ servers: [server({ tokenEnv: ['DD_API_KEY', 'DD_APP_KEY'] })] }), ['mcp datadog token_env: DD_API_KEY -> DD_API_KEY,DD_APP_KEY']],
-    ['a server listed', confinedPolicy(), confinedPolicy({ servers: [server(), server({ name: 'loki', tools: ['q'] })] }), ['mcp loki: not listed -> listed (tools q)']],
-    ['a server unlisted', confinedPolicy({ servers: [server(), server({ name: 'loki', tools: ['q'] })] }), confinedPolicy(), ['mcp loki: listed (tools q) -> not listed']],
-    ['two at once', confinedPolicy(), confinedPolicy({ tools: ['Read'], workdir: '/w/x' }), ['folder: /w/ops -> /w/x', 'tools: Read,Grep -> Read']],
+    ['restricted', operatorPolicy, restrictedPolicy(), ['restricted: false -> true']],
+    ['restricted back', restrictedPolicy(), operatorPolicy, ['restricted: true -> false']],
+    ['folder', restrictedPolicy(), restrictedPolicy({ workdir: '/w/other' }), ['folder: /w/ops -> /w/other']],
+    ['tools', restrictedPolicy(), restrictedPolicy({ tools: ['Read'] }), ['tools: Read,Grep -> Read']],
+    ['a server command', restrictedPolicy(), restrictedPolicy({ servers: [server({ command: '/opt/dd' })] }), ['mcp datadog command: /usr/local/bin/datadog-mcp -> /opt/dd']],
+    ['a server token variable', restrictedPolicy(), restrictedPolicy({ servers: [server({ tokenEnv: ['DD_API_KEY', 'DD_APP_KEY'] })] }), ['mcp datadog token_env: DD_API_KEY -> DD_API_KEY,DD_APP_KEY']],
+    ['a server listed', restrictedPolicy(), restrictedPolicy({ servers: [server(), server({ name: 'loki', tools: ['q'] })] }), ['mcp loki: not listed -> listed (tools q)']],
+    ['a server unlisted', restrictedPolicy({ servers: [server(), server({ name: 'loki', tools: ['q'] })] }), restrictedPolicy(), ['mcp loki: listed (tools q) -> not listed']],
+    ['two at once', restrictedPolicy(), restrictedPolicy({ tools: ['Read'], workdir: '/w/x' }), ['folder: /w/ops -> /w/x', 'tools: Read,Grep -> Read']],
   ])('%s', (_what, a, b, expected) => {
     expect(policyDrifted(a, b)).toEqual(expected)
   })
   test('order of tools or servers is not a difference', () => {
-    expect(policyDrifted(confinedPolicy({ tools: ['Read', 'Grep'] }), confinedPolicy({ tools: ['Grep', 'Read'] }))).toEqual([])
+    expect(policyDrifted(restrictedPolicy({ tools: ['Read', 'Grep'] }), restrictedPolicy({ tools: ['Grep', 'Read'] }))).toEqual([])
   })
   test('every difference the id sees is one the diff names (the two never disagree)', () => {
-    const cases = [confinedPolicy({ workdir: '/w/z' }), confinedPolicy({ tools: ['Glob'] }), confinedPolicy({ servers: [] }), confinedPolicy({ servers: [server({ tools: ['b'] })] })]
+    const cases = [restrictedPolicy({ workdir: '/w/z' }), restrictedPolicy({ tools: ['Glob'] }), restrictedPolicy({ servers: [] }), restrictedPolicy({ servers: [server({ tools: ['b'] })] })]
     for (const c of cases) {
-      expect(c.id).not.toBe(confinedPolicy().id)
-      expect(policyDrifted(confinedPolicy(), c).length).toBeGreaterThan(0)
+      expect(c.id).not.toBe(restrictedPolicy().id)
+      expect(policyDrifted(restrictedPolicy(), c).length).toBeGreaterThan(0)
     }
   })
 })
 
 describe('a stored policy is believed only if its id matches its facts', () => {
   test('a policy built from facts is readable', () => {
-    expect(policyProblem(confinedPolicy())).toBeUndefined()
+    expect(policyProblem(restrictedPolicy())).toBeUndefined()
     expect(policyProblem(operatorPolicy)).toBeUndefined()
   })
   test('an id that is not the facts\' own is not (a hand-edited sessions.json, a half-written record)', () => {
-    expect(policyProblem({ ...confinedPolicy(), id: 'workdir:000000000000' })).toMatch(/does not match/)
-    expect(policyProblem({ ...confinedPolicy(), tools: ['Read', 'Bash'] })).toMatch(/does not match/)
-    expect(policyProblem({ ...confinedPolicy(), canOnlyWriteTo: { workdir: '/w', denyCommands: [], cannotRead: [], servers: [] } })).toMatch(/has no can_only_write_to/)
-    expect(policyProblem({ ...confinedPolicy(), workdir: '/somewhere/else' })).toMatch(/does not match/)
+    expect(policyProblem({ ...restrictedPolicy(), id: 'workdir:000000000000' })).toMatch(/does not match/)
+    expect(policyProblem({ ...restrictedPolicy(), tools: ['Read', 'Bash'] })).toMatch(/does not match/)
+    expect(policyProblem({ ...restrictedPolicy(), canOnlyWriteTo: { workdir: '/w', denyCommands: [], cannotRead: [], servers: [] } })).toMatch(/has no can_only_write_to/)
+    expect(policyProblem({ ...restrictedPolicy(), workdir: '/somewhere/else' })).toMatch(/does not match/)
   })
   test('an operator policy has the operator id and nothing else', () => {
     expect(policyProblem({ ...operatorPolicy, id: 'workdir:abc' })).toMatch(/does not match/)
   })
   test('a policy names no engine: the engine is the start\'s, not the record\'s', () => {
-    expect('engine' in confinedPolicy()).toBe(false)
+    expect('engine' in restrictedPolicy()).toBe(false)
   })
 })
 

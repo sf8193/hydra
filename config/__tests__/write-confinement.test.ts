@@ -51,8 +51,8 @@ describe('can_only_write_to', () => {
     expect(errorsOf(spec('can_only_write_to = "home"'))).toEqual(['specialists.ops.can_only_write_to: must be "workdir" (or a list holding only "workdir")'])
   })
 
-  test('with restricted = true it is a load error: restricted already confines writes', () => {
-    expect(errorsOf(spec('restricted = true\ncan_only_write_to = "workdir"'))).toEqual(['specialists.ops.can_only_write_to: restricted = true already confines writes and reads (and more); set restricted, or can_only_write_to, not both'])
+  test('with restricted = true it is a load error: a specialist is restricted or write-confined, never both', () => {
+    expect(errorsOf(spec('restricted = true\ncan_only_write_to = "workdir"'))).toEqual(['specialists.ops.can_only_write_to: a specialist is restricted or write-confined, never both: restricted = true already limits its writes and reads (and more); remove can_only_write_to, or set restricted = false'])
   })
 
   test('sends_to still belongs to restricted = true alone', () => {
@@ -327,9 +327,9 @@ describe('cannot_read', () => {
     expect(errorsOf(spec('can_only_write_to = []'))).toEqual(['specialists.ops.can_only_write_to: must be "workdir" (or a list holding only "workdir")'])
   })
   test('with restricted = true, can_only_write_to is a load error, and so are cannot_read and deny_commands (restricted already covers them)', () => {
-    expect(errorsOf(spec('restricted = true\ncan_only_write_to = "workdir"'))).toEqual(['specialists.ops.can_only_write_to: restricted = true already confines writes and reads (and more); set restricted, or can_only_write_to, not both'])
-    expect(errorsOf(spec('restricted = true\ncannot_read = []'))[0]).toContain('specialists.ops.cannot_read: restricted = true already confines reads and commands')
-    expect(errorsOf(spec('restricted = true\ndeny_commands = ["x"]'))[0]).toContain('specialists.ops.deny_commands: restricted = true already confines reads and commands')
+    expect(errorsOf(spec('restricted = true\ncan_only_write_to = "workdir"'))).toEqual(['specialists.ops.can_only_write_to: a specialist is restricted or write-confined, never both: restricted = true already limits its writes and reads (and more); remove can_only_write_to, or set restricted = false'])
+    expect(errorsOf(spec('restricted = true\ncannot_read = []'))[0]).toContain('specialists.ops.cannot_read: belongs to can_only_write_to, and restricted = true already limits its reads and commands')
+    expect(errorsOf(spec('restricted = true\ndeny_commands = ["x"]'))[0]).toContain('specialists.ops.deny_commands: belongs to can_only_write_to, and restricted = true already limits its reads and commands')
   })
   test('a relative path is an error naming it', () => {
     expect(errorsOf(spec('can_only_write_to = "workdir"\ncannot_read = ["notes"]'))).toEqual(['specialists.ops.cannot_read[0]: "notes" must be an absolute path or start with ~'])

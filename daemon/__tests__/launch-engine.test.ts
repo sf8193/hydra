@@ -40,7 +40,7 @@ let fake: FakeTmux
 const launches: (LaunchInput & { provider: ProviderId })[] = []
 const orig: Record<string, any> = {}
 const fakeEngine = (provider: ProviderId) => ({
-  provider, channel: 'bridge', confinesAccess: provider === 'claude',
+  provider, channel: 'bridge', limitsAccess: provider === 'claude',
   launch: async (input: LaunchInput) => {
     launches.push({ ...input, provider })
     return { provider, model: input.model, identity: {} }
@@ -256,10 +256,10 @@ describe('every other launch path', () => {
 describe('omp and main', () => {
   test('a specialist cannot use omp: engine or an omp- alias, restricted or not, one message each', () => {
     const one = (body: string) => { const e = install(specialistToml(body)); expect(e).toHaveLength(1); return e[0] }
-    expect(one('engine = "omp"')).toContain("omp cannot confine a session's tools, so a specialist cannot use it; use claude or codex")
+    expect(one('engine = "omp"')).toContain("omp cannot restrict a session's tools, so a specialist cannot use it; use claude or codex")
     expect(one('model = "omp-sonnet"')).toContain('specialists.helper.model')
-    expect(one('engine = "omp"\nrestricted = true')).toContain('omp cannot confine')
-    expect(one('model = "omp-luna"\nrestricted = true')).toContain('omp cannot confine')
+    expect(one('engine = "omp"\nrestricted = true')).toContain('omp cannot restrict')
+    expect(one('model = "omp-luna"\nrestricted = true')).toContain('omp cannot restrict')
   })
   test('restricted with a Codex engine or alias keeps its one refusal', () => {
     for (const body of ['engine = "codex"\nrestricted = true', 'model = "astra"\nrestricted = true']) {

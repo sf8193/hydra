@@ -1,7 +1,7 @@
 // `sends_to`: how a restricted session speaks to another session, and how any session's words are shown to a restricted one.
 // A send is one message a session sends another, as `send_to_thread` and `sends_to` say: a question or a result (`SendType`).
 //
-// A confined specialist answers only the conversation it was asked in. Where hydra.toml gives it `sends_to = ["ops-deep"]`, it
+// A restricted specialist answers only the conversation it was asked in. Where hydra.toml gives it `sends_to = ["ops-deep"]`, it
 // also keeps send_to_thread, to those specialists and no one else (never `main`, byte or a session by name). The gate is
 // `sendsToRefusal`, called from bridge-dispatch `restrictedRefusal`: the one place a restricted call is judged, before any handler runs.
 //

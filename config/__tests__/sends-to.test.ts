@@ -33,7 +33,7 @@ const ok = (t: string, e = env) => {
 }
 
 describe('sends_to', () => {
-  test('a confined specialist lists the specialists it may send to; none by default; repeats are one', () => {
+  test('a restricted specialist lists the specialists it may send to; none by default; repeats are one', () => {
     expect(ok(text(ops(), deep())).config.specialists.ops.sendsTo).toEqual(['deep'])
     expect(ok(text(ops('sends_to = ["deep", "deep"]'), deep())).config.specialists.ops.sendsTo).toEqual(['deep'])
     expect(ok(text(ops(''), deep())).config.specialists.ops.sendsTo).toBeUndefined()
@@ -83,7 +83,7 @@ describe('sends_to', () => {
     expect(ok(text(ops(), deep())).warnings).toEqual([])
     expect(ok(text(ops(''), deep())).warnings.some(w => w.includes('nobody can reach it'))).toBe(true)
   })
-  test('a confined specialist with no home_place loads clean: home_place is only where it posts first, so no warning', () => {
+  test('a restricted specialist with no home_place loads clean: home_place is only where it posts first, so no warning', () => {
     expect(ok(text(ops(''))).warnings).toEqual([])
     expect(ok(text(ops('home_place = "slack:C0HOME"'))).config.specialists.ops.homePlace).toBe('slack:C0HOME')   // `home_place` is still where it posts first
   })

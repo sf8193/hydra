@@ -15,7 +15,7 @@ import { confinementRules, confinementServers } from '../write-confinement.js'
 import { verifyConfinement, verifyDeps } from '../engines/claude-verify.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import { macLike } from './sandbox-host.js'
-import type { HydraConfig, Specialist } from '../../config/types.js'
+import type { HydraConfig, Specialist, WriteConfinedSpecialist } from '../../config/types.js'
 
 process.stderr.write = (() => true) as any
 
@@ -25,14 +25,14 @@ const workdir = mkdtempSync(join(tmpdir(), 'confinement-'))
 const SPAWN = mkdtempSync(join(tmpdir(), 'confinement-spawn-'))
 afterAll(() => { rmSync(workdir, { recursive: true, force: true }); rmSync(SPAWN, { recursive: true, force: true }) })
 
-const spec = (id: string, over: Partial<Specialist> = {}): Specialist => ({ id, workdir, reachableBy: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false, ...over })
+const spec = (id: string, over: Partial<Specialist> = {}): Specialist => ({ id, workdir, reachableBy: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false, ...over }) as Specialist
 const configWith = (specialists: Specialist[]): HydraConfig => ({
   operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
   people: { op: { id: 'op', addresses: ['discord:100000000000000001'], roles: [], name: 'op' } },
   specialists: Object.fromEntries(specialists.map(s => [s.id, s])),
   mcpServers: { browser: { name: 'browser', command: '/usr/local/bin/browser-mcp', tokenEnv: ['BR_TOKEN'], tools: [], profileArgs: ['--dir={profile_dir}'] } },
 })
-const GEM = spec('gem', { canOnlyWriteTo: 'workdir', cannotRead: [], mcpServerNames: ['browser'] })
+const GEM = spec('gem', { canOnlyWriteTo: 'workdir', cannotRead: [], mcpServerNames: ['browser'] }) as WriteConfinedSpecialist
 const use = (...s: Specialist[]) => _setHydraConfigForTesting(configWith(s))
 
 let fake: FakeTmux
@@ -43,7 +43,7 @@ const told: string[] = []
 let launchError: Error | undefined
 const orig: Record<string, any> = {}
 const fakeClaude = {
-  provider: 'claude', channel: 'bridge', confinesAccess: true,
+  provider: 'claude', channel: 'bridge', limitsAccess: true,
   launch: async (input: LaunchInput) => {
     launches.push(input)
     if (launchError) throw launchError

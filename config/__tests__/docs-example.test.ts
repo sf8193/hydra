@@ -1,4 +1,4 @@
-// The worked example in docs/slack.md ("A worked example: an ops specialist in #ops") is what an operator copies to set up a confined
+// The worked example in docs/slack.md ("A worked example: an ops specialist in #ops") is what an operator copies to set up a restricted
 // specialist, so it must load through the real loader, clean: no error and no warning. Extracted from the doc, not copied here.
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'fs'
@@ -27,7 +27,7 @@ describe('docs/slack.md: the ops specialist example', () => {
     if (!r.ok) throw new Error(formatIssues(r.errors))
     expect(formatIssues(r.warnings)).toBe('')
   })
-  test('is the confined specialist, its server, its place, and the specialist it hands off to', () => {
+  test('is the restricted specialist, its server, its place, and the specialist it hands off to', () => {
     const r = loadHydraConfig(text, env)
     if (!r.ok) throw new Error(formatIssues(r.errors))
     expect(r.config.specialists.ops).toMatchObject({ restricted: true, tools: ['Read', 'Grep', 'Glob'], mcpServerNames: ['datadog'], reachableBy: ['staff'], sendsTo: ['ops-deep'], workdir: '/home/op/specialists/ops' })

@@ -32,11 +32,11 @@ export const UNTRUSTED_NOTE = 'this profile folder is writable by the specialist
 export function planBrowser(config: HydraConfig, id: string, opts: { server?: string; trustExisting?: boolean; dryRun?: boolean }, probes: BrowserProbes): BrowserPlan {
   const fail = (error: string): BrowserPlan => ({ ok: false, error })
   if (probes.isSession && !opts.dryRun) return fail('hydra specialist browser is for the operator at their own terminal; it is not run from a hydra session')
-  const qualifies = Object.values(config.specialists).filter(s => s.canOnlyWriteTo && (s.mcpServerNames ?? []).some(n => config.mcpServers?.[n]?.loginCommand)).map(s => s.id)
+  const qualifies = Object.values(config.specialists).filter(s => s.canOnlyWriteTo && s.mcpServerNames.some(n => config.mcpServers?.[n]?.loginCommand)).map(s => s.id)
   const s = Object.hasOwn(config.specialists, id) ? config.specialists[id] : undefined
   if (!s) return fail(`no specialist ${id} in hydra.toml (write-confined ones with a browser: ${qualifies.join(', ') || 'none'})`)
   if (!s.canOnlyWriteTo) return fail(`specialist ${id} has no can_only_write_to: its browser profile is the one that level gives it; without it the browser is the operator's own`)
-  const candidates = (s.mcpServerNames ?? []).filter(n => config.mcpServers?.[n]?.loginCommand)
+  const candidates = s.mcpServerNames.filter(n => config.mcpServers?.[n]?.loginCommand)
   if (candidates.length === 0) return fail(`specialist ${id} lists no server that declares login_command in [mcp_servers.<name>]: declare how to open its browser there`)
   let name = opts.server
   if (name !== undefined && !candidates.includes(name)) return fail(`specialist ${id} has no listed server ${name} that declares login_command (${candidates.join(', ')})`)

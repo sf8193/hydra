@@ -97,7 +97,7 @@ export type SessionInfo = {
   policy?: LaunchPolicy
   /** The hash of the specialist's kickoff this conversation was born under (specialists.ts `kickoffHash`). Absent: born before it was stored, or not from a kickoff. */
   kickoffHash?: string
-  /** A confined session's start was checked against its policy (engines/claude-verify.ts) and passed. Persisted. Without it a confined session takes no message (restricted.ts `unverified`). */
+  /** A restricted or write-confined session's start was checked against its policy (engines/claude-verify.ts) and passed. Persisted. Without it such a session takes no message (restricted.ts `unverified`). */
   verified?: true
   label?: SessionLabel
   capabilities?: Capability[]

@@ -6,8 +6,8 @@ import { dirname, join } from 'path'
 import { _resetSourcedEnvNamesForTesting, parseEnvLine, sourceEnvFiles } from '../env-parse.js'
 import { scrubTokenVarsNamedIn } from '../../config/token-vars.js'
 import {
-  CONFINED_ENV_KEEP, CONFINED_ENV_KEEP_PREFIXES, NEW_SESSION_TIMEOUT_MS, SCRUBBED_SPAWN_VARS, TMUX_PANE_FD_LIMIT, NEVER_SCRUBBED, NEVER_SCRUBBED_PREFIXES,
-  _resetScrubbedForTesting, capturedSpawnVars, confinedEnvUnsets, captureSpawnVars, codexSpawnEnv, registerSpawnVars, scrubbedSpawnEnv, scrubbedSpawnVars, tmuxNewSession, tokenVarRefusal, withRaisedFdLimit,
+  STATE_ENV_KEEP, STATE_ENV_KEEP_PREFIXES, NEW_SESSION_TIMEOUT_MS, SCRUBBED_SPAWN_VARS, TMUX_PANE_FD_LIMIT, NEVER_SCRUBBED, NEVER_SCRUBBED_PREFIXES,
+  _resetScrubbedForTesting, capturedSpawnVars, stateEnvUnsets, captureSpawnVars, codexSpawnEnv, registerSpawnVars, scrubbedSpawnEnv, scrubbedSpawnVars, tmuxNewSession, tokenVarRefusal, withRaisedFdLimit,
 } from '../spawn-env.js'
 
 function withEnv(vars: Record<string, string | undefined>, fn: () => void): void {
@@ -540,28 +540,28 @@ token_env = ["GH_PAT", "GH_TOKEN"]
 describe('what a restricted or write-confined session keeps of the state .env', () => {
   test('hydra\'s own control settings, Claude\'s, and the engine\'s key stay; every other name is unset', () => {
     const names = ['DD_API_KEY', 'GITHUB_TOKEN', 'SPAWN_CWD', 'DEFAULT_SESSION_CHANNEL', 'npm_token', 'HYDRA_MODEL', 'HYDRA_IDLE_REAP_DAYS', 'CHAT_PLATFORM', 'DISCORD_STATE_DIR', 'CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', '9BAD', 'DD_API_KEY']
-    expect(confinedEnvUnsets(names)).toEqual(['DEFAULT_SESSION_CHANNEL', 'DD_API_KEY', 'GITHUB_TOKEN', 'SPAWN_CWD', 'npm_token'].sort())
+    expect(stateEnvUnsets(names)).toEqual(['DEFAULT_SESSION_CHANNEL', 'DD_API_KEY', 'GITHUB_TOKEN', 'SPAWN_CWD', 'npm_token'].sort())
   })
   test('what a shell, tmux and Claude need is never unset (a .env that sets PATH must not stop the session starting); the two credentials among them are', () => {
-    expect(confinedEnvUnsets(['PATH', 'HOME', 'USER', 'TMPDIR', 'TERM', 'SHELL', 'LANG', 'LC_ALL', 'XDG_CONFIG_HOME', 'TMUX', 'PWD', 'LOGNAME'])).toEqual([])
-    expect(confinedEnvUnsets(['GH_TOKEN', 'SSH_AUTH_SOCK'])).toEqual(['GH_TOKEN', 'SSH_AUTH_SOCK'])
+    expect(stateEnvUnsets(['PATH', 'HOME', 'USER', 'TMPDIR', 'TERM', 'SHELL', 'LANG', 'LC_ALL', 'XDG_CONFIG_HOME', 'TMUX', 'PWD', 'LOGNAME'])).toEqual([])
+    expect(stateEnvUnsets(['GH_TOKEN', 'SSH_AUTH_SOCK'])).toEqual(['GH_TOKEN', 'SSH_AUTH_SOCK'])
     // A name a shell will not let a script unset would abort the launch's && chain.
-    expect(confinedEnvUnsets(['PPID', 'UID', 'EUID'])).toEqual([])
-    expect(confinedEnvUnsets([])).toEqual([])
+    expect(stateEnvUnsets(['PPID', 'UID', 'EUID'])).toEqual([])
+    expect(stateEnvUnsets([])).toEqual([])
   })
   test('a name added to the .env tomorrow is out until it is on the allowlist', () => {
-    expect(confinedEnvUnsets(['TOMORROWS_KEY'])).toEqual(['TOMORROWS_KEY'])
-    expect([...CONFINED_ENV_KEEP].sort()).toEqual([...NEVER_SCRUBBED].filter(n => n !== 'GH_TOKEN' && n !== 'SSH_AUTH_SOCK').concat('CHAT_PLATFORM', 'DISCORD_STATE_DIR').sort())
-    expect(CONFINED_ENV_KEEP_PREFIXES).toEqual(NEVER_SCRUBBED_PREFIXES)
+    expect(stateEnvUnsets(['TOMORROWS_KEY'])).toEqual(['TOMORROWS_KEY'])
+    expect([...STATE_ENV_KEEP].sort()).toEqual([...NEVER_SCRUBBED].filter(n => n !== 'GH_TOKEN' && n !== 'SSH_AUTH_SOCK').concat('CHAT_PLATFORM', 'DISCORD_STATE_DIR').sort())
+    expect(STATE_ENV_KEEP_PREFIXES).toEqual(NEVER_SCRUBBED_PREFIXES)
   })
   test('the names come from the .env files the daemon sources', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'confined-env-'))
+    const dir = mkdtempSync(join(tmpdir(), 'state-env-'))
     const file = join(dir, '.env')
     writeFileSync(file, '# c\nFAKE_SERVER_KEY=x\nexport HYDRA_MODEL=m\nFAKE_BLANK=\n')
     const saved = { FAKE_SERVER_KEY: process.env.FAKE_SERVER_KEY, FAKE_BLANK: process.env.FAKE_BLANK, HYDRA_MODEL: process.env.HYDRA_MODEL }
     try {
       sourceEnvFiles([file])
-      expect(confinedEnvUnsets()).toEqual(['FAKE_BLANK', 'FAKE_SERVER_KEY'])
+      expect(stateEnvUnsets()).toEqual(['FAKE_BLANK', 'FAKE_SERVER_KEY'])
     } finally {
       for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
       _resetSourcedEnvNamesForTesting()

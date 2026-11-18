@@ -26,7 +26,7 @@ import { readClaudeStatus } from './claude-status.js'
 import { defaultTurnSources } from './codex-observation.js'
 import { CLAUDE_CONFIG, ENV_FILE, SOCK_PATH, PLATFORM, STATE_DIR } from '../config.js'
 import { gateway } from '../config.js'
-import { SESSION_IDENTITY_VARS, capturedSpawnVars, confinedEnvUnsets, scrubbedSpawnEnv, withRaisedFdLimit } from '../../shared/spawn-env.js'
+import { SESSION_IDENTITY_VARS, capturedSpawnVars, stateEnvUnsets, scrubbedSpawnEnv, withRaisedFdLimit } from '../../shared/spawn-env.js'
 import { modsExport } from '../../shared/mods.js'
 import { BRIDGE_CHANNEL_FLAG, BRIDGE_MCP_SERVER_KEY, BRIDGE_PLUGIN_ID, BRIDGE_TOOLS_PERMISSION, BUILTIN_TOOL_PLUGIN_IDS } from '../plugin-manifest.js'
 import { deliveryRefusal, type LaunchPolicy, missingTokenRefusal, PolicyRefusal, remedy, RESTRICTED_MODS, RESTRICTED_PREAMBLE, sandboxInputs, serverToolRule, type RestrictedPolicy } from '../restricted.js'
@@ -144,10 +144,10 @@ function writeConfinementConfig(w: NonNullable<LaunchPolicy['canOnlyWriteTo']>, 
 //   override:     session-specific identity (thread and type as hookEnv gives them: '' when unknown)
 //   strip:        byte-only (HYDRA_ROLE), kept from leaking into sessions
 //   lineage:      the Claude session a fork continues, for hooks keyed on Claude's session_id (fresh: unset)
-//   unset:        a restricted or write-confined launch keeps only the allowlisted part of the state .env (confinedEnvUnsets)
+//   unset:        a restricted or write-confined launch keeps only the allowlisted part of the state .env (stateEnvUnsets)
 function buildSpawnEnv(input: LaunchInput): string[] {
   const forkedFromClaudeSessionId = input.forkFrom?.claudeSessionId
-  const dropped = isRestrictedPolicy(input.policy) || input.policy?.canOnlyWriteTo ? confinedEnvUnsets() : []
+  const dropped = isRestrictedPolicy(input.policy) || input.policy?.canOnlyWriteTo ? stateEnvUnsets() : []
   return [
     ...(dropped.length ? [`unset ${dropped.join(' ')}`] : []),
     `export HYDRA_SESSION_ID=${shq(input.sessionId)}`,
@@ -289,7 +289,7 @@ export const CLAUDE_WORKING_SILENCE_S = 10 * 60
 export class ClaudeEngine implements EngineAdapter {
   readonly provider = 'claude' as const
   readonly channel = 'bridge' as const
-  readonly confinesAccess = ENGINE_CAPABILITIES.claude.confinesAccess
+  readonly limitsAccess = ENGINE_CAPABILITIES.claude.limitsAccess
   constructor(private readonly transport: BridgeTransport) {}
 
   // Resume relaunches with --resume and is confirmed when the bridge registers.
@@ -335,7 +335,7 @@ export class ClaudeEngine implements EngineAdapter {
 
   async start(_records: readonly SessionInfo[]): Promise<void> {}
 
-  /** What a confined launch loaded, from its own debug file, against the policy (claude-verify.ts). */
+  /** What a restricted launch loaded, from its own debug file, against the policy (claude-verify.ts). */
   verifyLaunch(policy: RestrictedPolicy, launched: LaunchResult): Promise<Verdict> { return verifyLoaded(policy, launched.debugLogPath) }
 
   /** What a write-confined launch applied, from its own debug file, against its policy (claude-verify.ts `verifyConfinement`). */
@@ -348,7 +348,7 @@ export class ClaudeEngine implements EngineAdapter {
     try {
       return await this.launchSession(input)
     } catch (err) {
-      // A confined launch writes a file holding token values before it starts anything; one that fails then has no session record
+      // A restricted or write-confined launch writes a file holding token values before it starts anything; one that fails then has no session record
       // whose kill or death would remove it, so it is removed here.
       removeSpawnPrompt(input)
       if (isRestricted(input) || input.policy?.canOnlyWriteTo) removeRestrictedFiles({ tmuxName: input.tmuxName, sessionId: input.sessionId })
@@ -402,14 +402,14 @@ export class ClaudeEngine implements EngineAdapter {
       // A specialist with restricted = true: no --dangerously-skip-permissions (--permission-mode dontAsk instead), the
       // prompt positional before the variadic flags, and the generated settings and MCP config (see restrictedConfig).
       const files = writeRestrictedConfig(restricted, tmuxName, sessionId)
-      const confinement = ` --restricted --tools ${shq(restricted.tools.join(','))} --settings ${shq(files.settings)} --mcp-config ${shq(files.mcp)} --permission-mode dontAsk`
+      const restrictedFlags = ` --restricted --tools ${shq(restricted.tools.join(','))} --settings ${shq(files.settings)} --mcp-config ${shq(files.mcp)} --permission-mode dontAsk`
       if (isFork) {
-        claudeArgs = `claude --resume ${shq(input.forkFrom!.claudeSessionId!)} --fork-session --model ${shq(model)} ${promptFile!.ref} --channels ${shq(channelFlag)}${confinement}${disallowed}`
+        claudeArgs = `claude --resume ${shq(input.forkFrom!.claudeSessionId!)} --fork-session --model ${shq(model)} ${promptFile!.ref} --channels ${shq(channelFlag)}${restrictedFlags}${disallowed}`
       } else if (isResume) {
-        claudeArgs = `claude --resume ${shq(input.resumeFrom!)} --model ${shq(model)} --channels ${shq(channelFlag)}${confinement}${disallowed}`
+        claudeArgs = `claude --resume ${shq(input.resumeFrom!)} --model ${shq(model)} --channels ${shq(channelFlag)}${restrictedFlags}${disallowed}`
       } else {
         assignedClaudeSessionId = randomUUID()
-        claudeArgs = `claude --session-id ${shq(assignedClaudeSessionId)} --model ${shq(model)} ${promptFile!.ref} --channels ${shq(channelFlag)}${confinement}${disallowed}`
+        claudeArgs = `claude --session-id ${shq(assignedClaudeSessionId)} --model ${shq(model)} ${promptFile!.ref} --channels ${shq(channelFlag)}${restrictedFlags}${disallowed}`
       }
     } else if (isFork) {
       claudeArgs = [

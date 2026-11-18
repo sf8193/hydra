@@ -16,10 +16,10 @@ process.stderr.write = (() => true) as any
 
 const SID = '11111111-1111-4111-8111-111111111111'
 const servers = [{ name: 'datadog', command: '/usr/local/bin/datadog-mcp', tokenEnv: ['DD_API_KEY'], tools: ['search_logs'] }]
-const confinedId = policyIdFor('/work/ops', ['Read', 'Grep'], servers)
+const restrictedId = policyIdFor('/work/ops', ['Read', 'Grep'], servers)
 const writes = { workdir: '/work/gem', denyCommands: ['rm'], cannotRead: ['/secret'], servers: [] }
 
-const restrictedPolicy = (): LaunchPolicy => ({ specialist: 'ops', restricted: true, workdir: '/work/ops', tools: ['Read', 'Grep'], servers, id: confinedId })
+const restrictedPolicy = (): LaunchPolicy => ({ specialist: 'ops', restricted: true, workdir: '/work/ops', tools: ['Read', 'Grep'], servers, id: restrictedId })
 const operatorPolicy = (): LaunchPolicy => ({ specialist: 'desk', restricted: false, id: OPERATOR_POLICY_ID })
 const writeConfinedPolicy = (): LaunchPolicy => ({ specialist: 'gem', restricted: false, canOnlyWriteTo: writes, id: confinementIdFor(writes) })
 
@@ -61,7 +61,7 @@ describe('records on disk hold the boolean and nothing older', () => {
   })
 
   test('the old forms are no longer read: a record holding `access` and no `restricted` is a policy that cannot be read, and fails closed', () => {
-    const old = { specialist: 'ops', access: 'workdir', workdir: '/work/ops', tools: ['Read', 'Grep'], servers, id: confinedId }
+    const old = { specialist: 'ops', access: 'workdir', workdir: '/work/ops', tools: ['Read', 'Grep'], servers, id: restrictedId }
     expect(isRestricted({ policy: old as {} })).toBe(true)
     expect(policyProblem(old)).toBe('its restricted is undefined')
   })
@@ -70,7 +70,7 @@ describe('records on disk hold the boolean and nothing older', () => {
   test('an old operator record, verified: delivery refuses it with its description, never throws', () => {
     writeFileSync(sessionsFile, JSON.stringify([rec('old-op', { specialist: 'ops', access: 'operator', id: OPERATOR_POLICY_ID }, { verified: true })]))
     _setHydraConfigForTesting({ connectors: {}, gateways: {}, slackApps: {}, people: {}, places: {}, schedules: {}, rules: [],
-      specialists: { ops: { id: 'ops', workdir: '/work/ops', reachableBy: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: true, tools: ['Read'] } } })
+      specialists: { ops: { id: 'ops', workdir: '/work/ops', reachableBy: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: true, tools: ['Read'], mcpServerNames: [] } } })
     try {
       expect(deliveryRefusal(new SessionRegistry().get('old-op')!)).toContain('restricted = true (folder ?')
     } finally { _setHydraConfigForTesting(undefined) }

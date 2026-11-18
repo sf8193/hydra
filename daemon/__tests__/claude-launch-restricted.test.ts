@@ -151,7 +151,7 @@ describe("in launch(), the folder, the flags and the env come from the launch po
     for (const extra of [{ cwd: '/operator/spawn', originalCwd: '/operator/spawn' }, { cwd: '/wt/x', originalCwd: '/operator/spawn', worktreePath: '/wt/x', forkFromOriginalCwd: true }, { cwd: '', originalCwd: '' }]) {
       expect(claudeCd(await launch(extra))).toBe('/work/ops')
     }
-    // A fork that asked for a worktree starts where the caller's spawn dir is: for a confined session that is its workdir too.
+    // A fork that asked for a worktree starts where the caller's spawn dir is: for a restricted session that is its workdir too.
     expect(claudeCd(await launch({ cwd: '/wt/x', originalCwd: '/operator/spawn', worktreePath: '/wt/x', forkFromOriginalCwd: true, forkFrom: { claudeSessionId: 'C-parent' } }))).toBe('/work/ops')
     expect(claudeCd(await launch({ cwd: '/operator/spawn', originalCwd: '/operator/spawn', resumeFrom: 'C-old' }))).toBe('/work/ops')
     expect(claudeCd(await launch({ cwd: '/operator/spawn', originalCwd: '/operator/spawn', forkFrom: { claudeSessionId: 'C-parent' } }))).toBe('/work/ops')
