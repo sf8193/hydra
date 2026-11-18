@@ -238,7 +238,7 @@ describe('T0.7 engine events', () => {
     ].join('; ')
     const dir = mkdtempSync(join(tmpdir(), 'hydra-test-t07fail-'))
     try {
-      const r = Bun.spawnSync(['bun', '-e', code], { cwd: join(import.meta.dir, '..', '..'), env: { ...process.env, HYDRA_STATE_DIR: dir, DISCORD_STATE_DIR: dir } })
+      const r = Bun.spawnSync(['bun', '-e', code], { cwd: join(import.meta.dir, '..', '..'), env: { ...process.env, HYDRA_STATE_DIR: dir, DISCORD_STATE_DIR: dir, DISCORD_BOT_TOKEN: 'test-token' } })
       const sent = JSON.parse(r.stdout.toString().trim().split('\n').at(-1)!)
       expect(sent).toEqual([
         ['th-t07-fail', '⚠️ Codex delivery was rejected (message m-1): busy'],

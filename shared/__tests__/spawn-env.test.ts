@@ -1,12 +1,13 @@
-import { test, expect } from 'bun:test'
+import { describe, test, expect } from 'bun:test'
 import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { homedir, tmpdir } from 'os'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
-import { parseEnvLine } from '../env-parse.js'
+import { _resetSourcedEnvNamesForTesting, parseEnvLine, sourceEnvFiles } from '../env-parse.js'
+import { scrubTokenVarsNamedIn } from '../../config/token-vars.js'
 import {
-  NEW_SESSION_TIMEOUT_MS, SCRUBBED_SPAWN_VARS, TMUX_PANE_FD_LIMIT, NEVER_SCRUBBED, NEVER_SCRUBBED_PREFIXES,
-  _resetScrubbedForTesting, capturedSpawnVars, captureSpawnVars, codexSpawnEnv, registerSpawnVars, scrubbedSpawnEnv, scrubbedSpawnVars, tmuxNewSession, tokenVarRefusal, withRaisedFdLimit,
+  CONFINED_ENV_KEEP, CONFINED_ENV_KEEP_PREFIXES, NEW_SESSION_TIMEOUT_MS, SCRUBBED_SPAWN_VARS, TMUX_PANE_FD_LIMIT, NEVER_SCRUBBED, NEVER_SCRUBBED_PREFIXES,
+  _resetScrubbedForTesting, capturedSpawnVars, confinedEnvUnsets, captureSpawnVars, codexSpawnEnv, registerSpawnVars, scrubbedSpawnEnv, scrubbedSpawnVars, tmuxNewSession, tokenVarRefusal, withRaisedFdLimit,
 } from '../spawn-env.js'
 
 function withEnv(vars: Record<string, string | undefined>, fn: () => void): void {
@@ -78,10 +79,10 @@ test('the fd-limit prefix runs before the command and tolerates a shell that rej
   expect(TMUX_PANE_FD_LIMIT).toBeGreaterThan(256)
 })
 
-test('the scrubbed set is exactly these nine', () => {
+test('the scrubbed set is exactly these twelve: Raindrop\'s, the Slack connector\'s defaults and the chat gateway\'s own tokens', () => {
   expect([...SCRUBBED_SPAWN_VARS]).toEqual(
     ['RAINDROP_WRITE_KEY', 'RAINDROP_MODE', 'RAINDROP_USER_ID', 'RAINDROP_OMIT_REPO', 'SLOPBOT_SLACK_APP_TOKEN', 'SLOPBOT_SLACK_BOT_TOKEN',
-     'HYDRA_SLACK_APP_TOKEN', 'HYDRA_SLACK_BOT_TOKEN', 'HYDRA_SLACK_USER_TOKEN'],
+     'HYDRA_SLACK_APP_TOKEN', 'HYDRA_SLACK_BOT_TOKEN', 'HYDRA_SLACK_USER_TOKEN', 'DISCORD_BOT_TOKEN', 'SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN'],
   )
 })
 
@@ -105,6 +106,9 @@ test('tmuxNewSession sweeps every var in one call, before it creates the session
     ';', 'set-environment', '-gr', 'HYDRA_SLACK_APP_TOKEN',
     ';', 'set-environment', '-gr', 'HYDRA_SLACK_BOT_TOKEN',
     ';', 'set-environment', '-gr', 'HYDRA_SLACK_USER_TOKEN',
+    ';', 'set-environment', '-gr', 'DISCORD_BOT_TOKEN',
+    ';', 'set-environment', '-gr', 'SLACK_BOT_TOKEN',
+    ';', 'set-environment', '-gr', 'SLACK_APP_TOKEN',
   ])
   expect(calls[1].argv).toEqual(['new-session', '-d', '-s', 'probe'])
 })
@@ -497,6 +501,73 @@ test('names a config declares are scrubbed too: a SLOPBOT_ one and a custom one,
     const fixed = SCRUBBED_SPAWN_VARS.flatMap((v, i) => (i === 0 ? [] : [';']).concat('set-environment', '-gr', v))
     expect(calls[0].argv).toEqual([...fixed, ';', 'set-environment', '-gr', 'SLOPBOT_SLACK_SALES_TOKEN', ';', 'set-environment', '-gr', 'ACME_PRIVATE_BOT'])
   } finally { _resetScrubbedForTesting() }
+})
+
+// The done-when: with fake values, a new session holds no gateway token and no token_env value, and the daemon still has them for their consumers.
+test('a new session\'s environment has no gateway token and no [mcp_servers.*] token_env value; the daemon keeps every one for its consumer', () => {
+  _resetScrubbedForTesting()
+  const named = { DD_API_KEY: 'fake-dd', GH_PAT: 'fake-gh', DISC_CUSTOM: 'fake-disc' }
+  const gateway = { DISCORD_BOT_TOKEN: 'fake-bot', SLACK_BOT_TOKEN: 'fake-sbot', SLACK_APP_TOKEN: 'fake-sapp' }
+  const saved = Object.fromEntries([...Object.keys(named), ...Object.keys(gateway), 'KEEP_ME'].map(k => [k, process.env[k]]))
+  try {
+    Object.assign(process.env, named, gateway, { KEEP_ME: 'k' })
+    const refused = scrubTokenVarsNamedIn(`
+[gateways.discord]
+bot_token_env = "DISC_CUSTOM"
+[mcp_servers.datadog]
+command = "/bin/dd"
+token_env = ["DD_API_KEY"]
+[mcp_servers.github]
+command = "/bin/gh"
+token_env = ["GH_PAT", "GH_TOKEN"]
+`)
+    captureSpawnVars()
+    expect(refused).toEqual([{ name: 'GH_TOKEN', reason: 'is a variable sessions need' }])   // a variable sessions need stays: the loader warns
+    const { calls, exec } = capture()
+    tmuxNewSession(['-d', '-s', 'probe'], {}, exec)
+    const env = calls.at(-1)!.opts.env as NodeJS.ProcessEnv
+    for (const v of [...Object.keys(named), ...Object.keys(gateway)]) expect(env[v], v).toBeUndefined()
+    expect(env.KEEP_ME).toBe('k')
+    expect(calls[0].argv).toEqual(expect.arrayContaining(['DISCORD_BOT_TOKEN', 'SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN', 'DD_API_KEY', 'GH_PAT', 'DISC_CUSTOM']))
+    for (const v of Object.keys(named)) expect(codexSpawnEnv()[v], v).toBeUndefined()
+    expect(capturedSpawnVars()).toMatchObject({ ...named, ...gateway })
+  } finally {
+    for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
+    _resetScrubbedForTesting()
+  }
+})
+
+describe('what a restricted or write-confined session keeps of the state .env', () => {
+  test('hydra\'s own control settings, Claude\'s, and the engine\'s key stay; every other name is unset', () => {
+    const names = ['DD_API_KEY', 'GITHUB_TOKEN', 'SPAWN_CWD', 'DEFAULT_SESSION_CHANNEL', 'npm_token', 'HYDRA_MODEL', 'HYDRA_IDLE_REAP_DAYS', 'CHAT_PLATFORM', 'DISCORD_STATE_DIR', 'CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', '9BAD', 'DD_API_KEY']
+    expect(confinedEnvUnsets(names)).toEqual(['DEFAULT_SESSION_CHANNEL', 'DD_API_KEY', 'GITHUB_TOKEN', 'SPAWN_CWD', 'npm_token'].sort())
+  })
+  test('what a shell, tmux and Claude need is never unset (a .env that sets PATH must not stop the session starting); the two credentials among them are', () => {
+    expect(confinedEnvUnsets(['PATH', 'HOME', 'USER', 'TMPDIR', 'TERM', 'SHELL', 'LANG', 'LC_ALL', 'XDG_CONFIG_HOME', 'TMUX', 'PWD', 'LOGNAME'])).toEqual([])
+    expect(confinedEnvUnsets(['GH_TOKEN', 'SSH_AUTH_SOCK'])).toEqual(['GH_TOKEN', 'SSH_AUTH_SOCK'])
+    // A name a shell will not let a script unset would abort the launch's && chain.
+    expect(confinedEnvUnsets(['PPID', 'UID', 'EUID'])).toEqual([])
+    expect(confinedEnvUnsets([])).toEqual([])
+  })
+  test('a name added to the .env tomorrow is out until it is on the allowlist', () => {
+    expect(confinedEnvUnsets(['TOMORROWS_KEY'])).toEqual(['TOMORROWS_KEY'])
+    expect([...CONFINED_ENV_KEEP].sort()).toEqual([...NEVER_SCRUBBED].filter(n => n !== 'GH_TOKEN' && n !== 'SSH_AUTH_SOCK').concat('CHAT_PLATFORM', 'DISCORD_STATE_DIR').sort())
+    expect(CONFINED_ENV_KEEP_PREFIXES).toEqual(NEVER_SCRUBBED_PREFIXES)
+  })
+  test('the names come from the .env files the daemon sources', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'confined-env-'))
+    const file = join(dir, '.env')
+    writeFileSync(file, '# c\nFAKE_SERVER_KEY=x\nexport HYDRA_MODEL=m\nFAKE_BLANK=\n')
+    const saved = { FAKE_SERVER_KEY: process.env.FAKE_SERVER_KEY, FAKE_BLANK: process.env.FAKE_BLANK, HYDRA_MODEL: process.env.HYDRA_MODEL }
+    try {
+      sourceEnvFiles([file])
+      expect(confinedEnvUnsets()).toEqual(['FAKE_BLANK', 'FAKE_SERVER_KEY'])
+    } finally {
+      for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
+      _resetSourcedEnvNamesForTesting()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
 })
 
 test('a variable sessions need is never a token variable; the names hydra has always scrubbed still are', () => {

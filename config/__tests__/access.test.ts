@@ -258,6 +258,20 @@ describe('a listed server whose token variable the state .env does not set (a wa
   })
 })
 
+describe('a server\'s token_env and the variables hydra keeps from sessions', () => {
+  const server = (name: string) => `${BASE}\n[mcp_servers.x]\ncommand = "bun"\ntoken_env = ["${name}"]\n`
+  test('a server never gets the chat gateway\'s own token, on either platform', () => {
+    for (const v of ['DISCORD_BOT_TOKEN', 'SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN']) expect(errorsOf(server(v)).join('\n'), v).toMatch(new RegExp(`mcp_servers\\.x\\.token_env\\[0\\]: "${v}" is the token variable of .*: a server never gets hydra's own tokens`))
+  })
+  test('a variable sessions need loads with a warning: the server gets it and so does every session', () => {
+    const r = ok(server('GH_TOKEN'))
+    expect(r.warnings).toContain('mcp_servers.x.token_env[0]: "GH_TOKEN" is a variable sessions need, so hydra cannot keep it from sessions: [mcp_servers.x] gets it, and so does every session')
+  })
+  test('an ordinary server key warns about nothing', () => {
+    expect(ok(server('DD_API_KEY')).warnings.filter(w => w.includes('token_env'))).toEqual([])
+  })
+})
+
 describe('[mcp_servers.*]', () => {
   test('is parsed into the config: command, token_env names, tools', () => {
     expect(ok(spec('')).config.mcpServers!.datadog).toEqual({ name: 'datadog', command: '/usr/local/bin/datadog-mcp', tokenEnv: ['DD_API_KEY'], tools: ['search_logs', 'get_monitor'] })

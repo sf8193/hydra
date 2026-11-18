@@ -19,6 +19,19 @@ export function parseEnvLine(line: string): [string, string] | null {
   return [m[1], val]
 }
 
+// Every name a sourced .env file set, whether or not the process already had it: what the files contribute to a session's environment.
+const sourced = new Set<string>()
+
+/** The names the .env files given to sourceEnvFiles hold, in this process. */
+export function sourcedEnvNames(): string[] {
+  return [...sourced]
+}
+
+/** Empties sourcedEnvNames. For tests only. */
+export function _resetSourcedEnvNamesForTesting(): void {
+  sourced.clear()
+}
+
 /** Backfill process.env from .env files. A var already set to blank or
  *  whitespace counts as absent, so a blank inherited value self-heals. */
 export function sourceEnvFiles(paths: string[]): void {
@@ -31,6 +44,7 @@ export function sourceEnvFiles(paths: string[]): void {
     }
     for (const line of body.split('\n')) {
       const parsed = parseEnvLine(line)
+      if (parsed) sourced.add(parsed[0])
       if (parsed && (process.env[parsed[0]] ?? '').trim() === '') process.env[parsed[0]] = parsed[1]
     }
   }
