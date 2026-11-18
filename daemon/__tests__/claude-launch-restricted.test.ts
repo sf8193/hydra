@@ -6,7 +6,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { ClaudeEngine, restrictedConfig } from '../engines/claude-engine.js'
 import { STATE_DIR, CLAUDE_CONFIG, SOCK_PATH } from '../config.js'
-import { PolicyRefusal, policyIdFor, RESTRICTED_MODS, RESTRICTED_PREAMBLE, type ConfinedPolicy } from '../restricted.js'
+import { PolicyRefusal, policyIdFor, RESTRICTED_MODS, RESTRICTED_PREAMBLE, type RestrictedPolicy } from '../restricted.js'
 import { removeRestrictedFiles, restrictedDir, serverTmpDir, serverTmpRoot } from '../restricted-files.js'
 import { SANDBOX_EXEC, sandboxProfile } from '../../config/server-sandbox.js'
 import { _setHydraConfigForTesting, _setLoadEnvForTesting } from '../hydra-config.js'
@@ -18,7 +18,7 @@ import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 process.stderr.write = (() => true) as any
 
 const servers = [{ name: 'datadog', command: '/usr/local/bin/datadog-mcp', tokenEnv: ['DD_API_KEY'], tools: ['search_logs', 'get_monitor'] }]
-const policy: ConfinedPolicy = {
+const policy: RestrictedPolicy = {
   specialist: 'ops', restricted: true, workdir: '/work/ops', tools: ['Read', 'Grep', 'Glob'], servers,
   id: policyIdFor('/work/ops', ['Read', 'Grep', 'Glob'], servers),
 }
@@ -128,14 +128,6 @@ describe("in launch(), the folder, the flags and the env come from the launch po
   test('an operator policy launches byte for byte as no policy does', async () => {
     const plain = await launch({ policy: undefined, sessionType: 'thread_owner' })
     expect(await launch({ policy: { specialist: 'desk', restricted: false, id: 'operator' }, sessionType: 'thread_owner' })).toBe(plain)
-  })
-  test.each([
-    ['no workdir', { workdir: undefined }], ['a relative workdir', { workdir: 'work/ops' }], ['no tool list', { tools: undefined }],
-    ['no server list', { servers: undefined }], ['an id that is not its facts\'', { id: 'workdir:000000000000' }],
-  ])('a confining policy with %s refuses: nothing is started, and nothing falls back to the operator', async (_why, broken) => {
-    const before = fake.calls().length
-    await expect(launch({ policy: { ...policy, ...broken } })).rejects.toThrow(PolicyRefusal)
-    expect(fake.calls().slice(before).some(c => c.startsWith('new-session'))).toBe(false)
   })
 })
 

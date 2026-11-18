@@ -7,12 +7,12 @@ import { join } from 'path'
 import { expectedLoad, mismatches, readLoaded, surplus, verifyDeps, verifyLaunch } from '../engines/claude-verify.js'
 import { BRIDGE_MCP_SERVER_KEY } from '../plugin-manifest.js'
 import { serverToolRule } from '../restricted.js'
-import type { ConfinedPolicy } from '../restricted.js'
+import type { RestrictedPolicy } from '../restricted.js'
 
 // The live launch's lines (restricted-debug-live.txt: three live launches, claude 2.1.3xx, in the order they came) and the earlier recording, which lacks the bridge's `plugin.register` line.
 const REAL = readFileSync(join(import.meta.dir, 'fixtures', 'restricted-debug-live.txt'), 'utf8')
 const RECORDED = readFileSync(join(import.meta.dir, 'fixtures', 'restricted-debug.txt'), 'utf8')
-const policy = { servers: [{ name: 'stub', command: '/bin/stub', tokenEnv: ['STUB_KEY'], tools: ['search_logs'] }] } as Pick<ConfinedPolicy, 'servers'>
+const policy = { servers: [{ name: 'stub', command: '/bin/stub', tokenEnv: ['STUB_KEY'], tools: ['search_logs'] }] } as Pick<RestrictedPolicy, 'servers'>
 const t = (n: number) => `2026-11-13T04:34:${String(n).padStart(2, '0')}.000Z [DEBUG] `
 const withLines = (...lines: string[]) => REAL + lines.map(l => `${t(30)}${l}\n`).join('')
 const without = (needle: string) => REAL.split('\n').filter(l => !l.includes(needle)).join('\n')

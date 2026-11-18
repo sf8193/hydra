@@ -29,7 +29,7 @@ import { gateway } from '../config.js'
 import { SESSION_IDENTITY_VARS, capturedSpawnVars, scrubbedSpawnEnv, withRaisedFdLimit } from '../../shared/spawn-env.js'
 import { modsExport } from '../../shared/mods.js'
 import { BRIDGE_CHANNEL_FLAG, BRIDGE_MCP_SERVER_KEY, BRIDGE_PLUGIN_ID, BRIDGE_TOOLS_PERMISSION } from '../plugin-manifest.js'
-import { confined, deliveryRefusal, type LaunchPolicy, missingTokenRefusal, PolicyRefusal, remedy, RESTRICTED_MODS, RESTRICTED_PREAMBLE, sandboxInputs, serverToolRule, type ConfinedPolicy } from '../restricted.js'
+import { deliveryRefusal, type LaunchPolicy, missingTokenRefusal, PolicyRefusal, remedy, RESTRICTED_MODS, RESTRICTED_PREAMBLE, sandboxInputs, serverToolRule, type RestrictedPolicy } from '../restricted.js'
 import { verifyConfinement as verifyConfinementLoaded, verifyLaunch as verifyLoaded, type Verdict } from './claude-verify.js'
 import { ENGINE_CAPABILITIES } from '../../shared/engine-capabilities.js'
 import { removeSpawnPrompt, writeSpawnPrompt } from '../launch-files.js'
@@ -39,7 +39,7 @@ import type { PrivateRoot } from '../../config/restricted-workdir.js'
 import type { LoadEnv } from '../../config/types.js'
 import { bridgeServerCommands, claudeSettingsProblems, claudeVersionRefusal, confinementRules, confinementServers, makeBrowserDirs, confinementLogLine, confinementMcp, confinementSettings } from '../write-confinement.js'
 import { clearNeedsAuthEntry, describeSetAt, NEEDS_AUTH_CLEARED_NOTE } from './claude-needs-auth.js'
-import { isRestricted } from '../policy-record.js'
+import { isRestricted, isRestrictedPolicy } from '../policy-record.js'
 
 // What the pane-and-transcript methods read. The byte (main) has no SessionInfo, so these take only this.
 export type ClaudeSubject = Pick<SessionInfo, 'tmuxName'> & Partial<Pick<SessionInfo, 'claudeSessionId'>>
@@ -54,7 +54,7 @@ const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
  * else of the daemon's environment). Written by restricted-files.ts: mode 0600, since the MCP config holds secrets.
  */
 export type RestrictedConfigInput = {
-  policy: Pick<ConfinedPolicy, 'specialist' | 'servers' | 'tools'>
+  policy: Pick<RestrictedPolicy, 'specialist' | 'servers' | 'tools'>
   /** The variables a server's `token_env` may take (the daemon's environment) and the ones its scrub held back. */
   env: NodeJS.ProcessEnv
   held: Readonly<Record<string, string>>
@@ -87,7 +87,7 @@ export function restrictedConfig({ policy, env, held, sessionName, load, roots, 
         env: {
           ...Object.fromEntries(s.tokenEnv.map(v => {
             const value = env[v] ?? held[v]
-            if (value === undefined) throw new PolicyRefusal(missingTokenRefusal({ specialist: policy.specialist, servers: [s] } as ConfinedPolicy, ENV_FILE, sessionName, env, held)!)
+            if (value === undefined) throw new PolicyRefusal(missingTokenRefusal({ specialist: policy.specialist, servers: [s] }, ENV_FILE, sessionName, env, held)!)
             return [v, value]
           })),
           // The one place the server may write is its own folder: npm's cache and the temp dir are put in it, never in ~/.npm (which a server could poison for the operator's other npx runs).
@@ -100,7 +100,7 @@ export function restrictedConfig({ policy, env, held, sessionName, load, roots, 
 }
 
 /** Writes this launch's settings and MCP config (restricted-files.ts); returns their paths. */
-function writeRestrictedConfig(policy: ConfinedPolicy, tmuxName: string, sessionId: string): { settings: string; mcp: string } {
+function writeRestrictedConfig(policy: RestrictedPolicy, tmuxName: string, sessionId: string): { settings: string; mcp: string } {
   // Made first: Seatbelt matches resolved paths, which the profile can only name once the folders exist.
   try { makeServerTmpDirs(tmuxName, sessionId, policy.servers.map(s => s.name)) } catch (err) {
     throw new PolicyRefusal(`specialist ${policy.specialist}: ${err instanceof Error ? err.message : String(err)}. No session starts until that is fixed; after you fix it, ${remedy(tmuxName)}`)
@@ -153,14 +153,14 @@ function buildSpawnEnv(input: LaunchInput): string[] {
     // A restricted launch says so to its bridge, which declares it at registration (tool-surface noteDeclaredRestrictions).
     ...(isRestricted(input) ? ['export HYDRA_RESTRICTED=1'] : []),
     // A write-confined launch says so to its bridge, which declares it at registration (tool-surface noteDeclaredRestrictions): a record that is gone must not widen it.
-    ...(input.policy?.canOnlyWriteTo && !confined(input.policy, input.tmuxName) ? ['export HYDRA_WRITE_CONFINED=1'] : []),
+    ...(input.policy?.canOnlyWriteTo ? ['export HYDRA_WRITE_CONFINED=1'] : []),
     ...(forkedFromClaudeSessionId ? [`export HYDRA_FORKED_FROM_CLAUDE_SESSION_ID=${shq(forkedFromClaudeSessionId)}`] : []),
     `export DAEMON_SOCK=${shq(SOCK_PATH)}`,
     `export CLAUDE_CONFIG_DIR=${shq(CLAUDE_CONFIG)}`,
     `export CHAT_PLATFORM=${shq(PLATFORM)}`,
-    modsExport(STATE_DIR, confined(input.policy, input.tmuxName) ? RESTRICTED_MODS : undefined),
+    modsExport(STATE_DIR, isRestricted(input) ? RESTRICTED_MODS : undefined),
     // Enabling the bridge plugin by settings would also bring back the account's claude.ai connectors: this keeps them off.
-    ...(confined(input.policy, input.tmuxName) || input.policy?.canOnlyWriteTo ? [`export ENABLE_CLAUDEAI_MCP_SERVERS=false`] : []),
+    ...(isRestricted(input) || input.policy?.canOnlyWriteTo ? [`export ENABLE_CLAUDEAI_MCP_SERVERS=false`] : []),
     `unset HYDRA_ROLE`,
   ]
 }
@@ -332,7 +332,7 @@ export class ClaudeEngine implements EngineAdapter {
   async start(_records: readonly SessionInfo[]): Promise<void> {}
 
   /** What a confined launch loaded, from its own debug file, against the policy (claude-verify.ts). */
-  verifyLaunch(policy: ConfinedPolicy, launched: LaunchResult): Promise<Verdict> { return verifyLoaded(policy, launched.debugLogPath) }
+  verifyLaunch(policy: RestrictedPolicy, launched: LaunchResult): Promise<Verdict> { return verifyLoaded(policy, launched.debugLogPath) }
 
   /** What a write-confined launch applied, from its own debug file, against its policy (claude-verify.ts `verifyConfinement`). */
   verifyConfinement(policy: LaunchPolicy, launched: LaunchResult): Promise<Verdict> {
@@ -355,11 +355,10 @@ export class ClaudeEngine implements EngineAdapter {
   private async launchSession(input: LaunchInput): Promise<LaunchResult> {
     const { sessionId, tmuxName, model } = input
     if (!model) throw new Error('claude engine: launched without a model')   // doSpawnSession always gives Claude one
-    // The folder, flags, env and files of a launch come from the launch policy here, whatever cwd the caller passed. A policy that
-    // cannot be read refuses (never the operator's account).
-    const restricted = confined(input.policy, tmuxName)
+    // The folder, flags, env and files of a launch come from the launch policy here, whatever cwd the caller passed.
+    const restricted = isRestrictedPolicy(input.policy) ? input.policy : undefined
     // `can_only_write_to`: the operator's tools, started in the folder its writes are confined to, with the settings below (every start passes here).
-    const writes = !restricted ? input.policy?.canOnlyWriteTo : undefined
+    const writes = input.policy?.canOnlyWriteTo
     const effectiveCwd = restricted ? restricted.workdir : writes ? writes.workdir : input.cwd
     const spawnCwd = restricted ? restricted.workdir : writes ? writes.workdir : input.originalCwd
     const worktreePath = input.worktreePath
