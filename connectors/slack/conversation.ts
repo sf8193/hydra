@@ -33,10 +33,7 @@ export function unscopeKey(key: string): { app?: string; rest: string } {
 export const conversationId = (e: ConversationRef): string =>
   `slack:${appPrefix(e.app, ':')}${e.channel}${e.threadTs === TOP_LEVEL ? '' : `:${e.threadTs}`}`
 
-/** A Slack channel id: a channel (C), a private group (G) or a DM (D). */
-const CHANNEL_ID = '[CGD][A-Z0-9]+'
-
-const CONVERSATION_RE = new RegExp(`^slack:(?:([a-z][a-z0-9_-]{0,34}):)?(${CHANNEL_ID})(?::(\\d{1,12}\\.\\d{1,6}))?$`)
+const CONVERSATION_RE = /^slack:(?:([a-z][a-z0-9_-]{0,34}):)?([CGD][A-Z0-9]+)(?::(\d{1,12}\.\d{1,6}))?$/
 
 export const CONVERSATION_FORMAT = 'slack:<channel id>[:<thread ts>], with the app first outside `default` (slack:<app>:<channel id>[:<thread ts>]), e.g. slack:C0ABC:1793732224.093059 or slack:sales:C0ABC:1793732224.093059'
 
@@ -52,18 +49,12 @@ export function parseConversation(raw: unknown): { app?: string; channel: string
   return { ...(app && app !== DEFAULT_SLACK_APP && { app }), channel, threadTs: ts ? ts.replace(/\.(\d+)$/, (_, f: string) => `.${f.padEnd(6, '0')}`) : TOP_LEVEL }
 }
 
-/**
- * A Slack archive link: the channel; with `ts`, that message (its ts without the dot); with `threadTs`, the message
- * opened in its thread (Slack needs both `thread_ts` and `cid`, or it opens the channel at the message).
- */
+/** A Slack archive link: the channel; with `ts`, that message; with `threadTs`, opened in that thread. */
 export const archiveUrl = (base: string, channel: string, ts?: string, threadTs?: string): string =>
-  `${base}/archives/${channel}${ts ? `/p${ts.replace('.', '')}` : ''}${threadTs ? `?thread_ts=${threadTs}&cid=${channel}` : ''}`
+  `${base}/archives/${channel}${ts === undefined ? '' : `/p${ts.replace('.', '')}`}${threadTs === undefined ? '' : `?thread_ts=${threadTs}`}`
 
-const ARCHIVE_RE = new RegExp(`slack\\.com/archives/(${CHANNEL_ID})(?:/p(\\d+))?`)
-
-/** `archiveUrl` read back: the channel, and the message's ts when the link names one (a dot before the last six digits). */
-export function parseArchiveUrl(url: string): { channel: string; ts?: string } | undefined {
-  const m = url.match(ARCHIVE_RE)
-  if (!m) return undefined
-  return { channel: m[1], ...(m[2] && { ts: m[2].replace(/^(\d{10})(\d+)$/, '$1.$2') }) }
+/** An archive link read back: its channel, or with `message` only a message link's channel and ts (a dot before the last six digits). */
+export function parseArchiveUrl(url: string, message?: boolean): { channel: string; ts?: string } | undefined {
+  const m = url.match(message ? /slack\.com\/archives\/([A-Z0-9]+)\/p(\d+)/ : /slack\.com\/archives\/([A-Z0-9]+)/)
+  return m ? { channel: m[1], ...(m[2] && { ts: m[2].replace(/^(\d{10})(\d+)$/, '$1.$2') }) } : undefined
 }

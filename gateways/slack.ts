@@ -986,7 +986,7 @@ export class SlackGateway implements ChatGateway {
   }
 
   private buildMessageUrl(channelId: string, ts: string, threadTs?: string): string {
-    return archiveUrl(`https://${this._teamDomain ?? 'app'}.slack.com`, channelId, ts, threadTs)
+    return archiveUrl(`https://${this._teamDomain ?? 'app'}.slack.com`, channelId, ts, threadTs || undefined) + (threadTs ? `&cid=${channelId}` : '')
   }
 
   private emojiToSlackName(emoji: string): string {

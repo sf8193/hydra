@@ -263,8 +263,8 @@ function stripMrkdwn(text: string): string {
 }
 
 export async function fetchSlackThreadSummary(url: string): Promise<string | null> {
-  const parsed = parseArchiveUrl(url)
-  if (!parsed?.ts) return null
+  const parsed = parseArchiveUrl(url, true)
+  if (!parsed) return null
   try {
     const msgs = await gateway.fetchMessages(`${parsed.channel}:${parsed.ts}`, 1)
     if (!msgs.length) return null

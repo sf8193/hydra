@@ -118,8 +118,8 @@ export function renderContextLink(link: string): string {
     return `• 🔗 <#${channelMatch[1]}|${channelMatch[2]}>`
   }
   // Slack thread/message — use thread root summary if available, else channel name
-  const archive = parseArchiveUrl(link)
-  if (archive?.ts) {
+  const archive = parseArchiveUrl(link, true)
+  if (archive) {
     const summary = slackThreadSummaries.get(link)
     if (summary) return `• 🔗 <${link}|${summary}>`
     const channelName = slackChannelNames.get(archive.channel)
