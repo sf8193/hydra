@@ -271,7 +271,7 @@ export class BridgeTransport {
         }
       }
       if (total > 0) process.stderr.write(`daemon: restored ${total} queued message(s)\n`)
-      try { unlinkSync(this.queueFile) } catch {}
+      this.persistQueues()
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
         process.stderr.write(`daemon: failed to load queued messages: ${err}\n`)
