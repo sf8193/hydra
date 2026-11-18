@@ -62,7 +62,7 @@ export function resumeHomeOwner(records: Iterable<SessionInfo>, resumeCodex: { h
 export const codexLaunchProcess = { registerMcp: registerCodexMcp, start: startCodexAppServer, stop: stopCodexAppServer }
 
 export class CodexEngineAdapter implements EngineAdapter {
-  readonly confinesAccess = ENGINE_CAPABILITIES.codex.confinesAccess
+  readonly limitsAccess = ENGINE_CAPABILITIES.codex.limitsAccess
   // Tests shorten these; production uses the defaults.
   static COMPOSER_DEADLINE_MS = 5000
   static COMPOSER_POLL_MS = 100
@@ -147,7 +147,7 @@ export class CodexEngineAdapter implements EngineAdapter {
   }
 
   async launch(input: LaunchInput): Promise<LaunchResult> {
-    // This engine cannot confine a session (confinesAccess); it would run one as the operator.
+    // This engine cannot limit a session's access (limitsAccess); it would run one as the operator.
     if (isRestrictedPolicy(input.policy)) throw new Error(`specialist ${input.policy.specialist} has restricted = true, which this engine cannot give: set engine = "claude", or set restricted = false`)
     if (input.policy?.canOnlyWriteTo) throw new Error(`specialist ${input.policy.specialist} has can_only_write_to = "workdir", which this engine cannot give: set engine = "claude", or remove can_only_write_to`)
     const { sessionId, tmuxName, model, prompt, resumeCodex } = input

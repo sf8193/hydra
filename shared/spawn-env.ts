@@ -129,18 +129,18 @@ export function scrubbedSpawnEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.
  * unset in that session's shell. An allowlist: a name added to the `.env` tomorrow is out until it is listed. It covers what the
  * `.env` sets, not what the daemon's own shell or a frozen tmux server carry; `HYDRA_SLACK_*` are tokens, scrubbed from every session first.
  */
-const CONFINED_DROPS = new Set(['GH_TOKEN', 'SSH_AUTH_SOCK'])
-export const CONFINED_ENV_KEEP: ReadonlySet<string> = new Set([
-  ...[...NEVER_SCRUBBED].filter(n => !CONFINED_DROPS.has(n)), 'CHAT_PLATFORM', 'DISCORD_STATE_DIR',
+const NEVER_SCRUBBED_CREDENTIALS = new Set(['GH_TOKEN', 'SSH_AUTH_SOCK'])
+export const STATE_ENV_KEEP: ReadonlySet<string> = new Set([
+  ...[...NEVER_SCRUBBED].filter(n => !NEVER_SCRUBBED_CREDENTIALS.has(n)), 'CHAT_PLATFORM', 'DISCORD_STATE_DIR',
 ])
-export const CONFINED_ENV_KEEP_PREFIXES: readonly string[] = NEVER_SCRUBBED_PREFIXES
+export const STATE_ENV_KEEP_PREFIXES: readonly string[] = NEVER_SCRUBBED_PREFIXES
 // Shell variables a shell will not let a script unset: an `unset` of one fails and would abort the launch's `&&` chain.
 const SHELL_READONLY = new Set(['PPID', 'UID', 'EUID', 'GID', 'EGID', 'SHELLOPTS', 'BASHOPTS', 'BASH_VERSINFO'])
 
-/** The names the state `.env` sets that a confined session does not keep: the daemon reads the file at boot, so this is final per boot. */
-export function confinedEnvUnsets(names: Iterable<string> = sourcedEnvNames()): string[] {
+/** The names the state `.env` sets that a restricted or write-confined session does not keep: the daemon reads the file at boot, so this is final per boot. */
+export function stateEnvUnsets(names: Iterable<string> = sourcedEnvNames()): string[] {
   return [...new Set(names)]
-    .filter(n => /^[A-Za-z_][A-Za-z0-9_]*$/.test(n) && !SHELL_READONLY.has(n) && !CONFINED_ENV_KEEP.has(n) && !CONFINED_ENV_KEEP_PREFIXES.some(p => n.startsWith(p)))
+    .filter(n => /^[A-Za-z_][A-Za-z0-9_]*$/.test(n) && !SHELL_READONLY.has(n) && !STATE_ENV_KEEP.has(n) && !STATE_ENV_KEEP_PREFIXES.some(p => n.startsWith(p)))
     .sort()
 }
 

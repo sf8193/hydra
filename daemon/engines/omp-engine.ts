@@ -28,7 +28,7 @@ const OMP_CONFIG = join(import.meta.dir, '..', '..', 'omp', 'hydra-omp.yml')
 const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
 
 export class OmpEngine implements EngineAdapter {
-  readonly confinesAccess = ENGINE_CAPABILITIES.omp.confinesAccess
+  readonly limitsAccess = ENGINE_CAPABILITIES.omp.limitsAccess
   readonly provider = 'omp' as const
   readonly channel = 'bridge' as const
   constructor(private readonly claude: ClaudeEngine) {}
@@ -36,7 +36,7 @@ export class OmpEngine implements EngineAdapter {
   async start(_records: readonly SessionInfo[]): Promise<void> {}
 
   async launch(input: LaunchInput): Promise<LaunchResult> {
-    // This engine cannot confine a session (confinesAccess); it would run one as the operator.
+    // This engine cannot limit a session's access (limitsAccess); it would run one as the operator.
     if (isRestrictedPolicy(input.policy)) throw new Error(`specialist ${input.policy.specialist} has restricted = true, which this engine cannot give: set engine = "claude", or set restricted = false`)
     if (input.policy?.canOnlyWriteTo) throw new Error(`specialist ${input.policy.specialist} has can_only_write_to = "workdir", which this engine cannot give: set engine = "claude", or remove can_only_write_to`)
     const { sessionId, tmuxName, model } = input

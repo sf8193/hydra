@@ -490,7 +490,7 @@ describe('specialists', () => {
 
   test('specialist list shows each hydra.toml specialist\'s sessions mode, and max when it is per-conversation', async () => {
     const [a, b] = [`t-specialist-${++n}`, `t-specialist-${++n}`]
-    const base = { workdir: '/srv/x', kickoff: 'k', homePlace: '555', reachableBy: ['people'], renamedFrom: [], restricted: false }
+    const base = { workdir: '/srv/x', kickoff: 'k', homePlace: '555', reachableBy: ['people'], renamedFrom: [], restricted: false as const }
     _setHydraConfigForTesting({
       operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
       people: { op: { id: 'op', addresses: ['discord:100000000000000001'], roles: [], name: 'op' } },

@@ -8,7 +8,7 @@ import { EMPTY_CONFIG } from '../../config/load.js'
 import type { HydraConfig, Specialist } from '../../config/types.js'
 
 const WORK = '/home/op/agents/gem'
-const spec = (over: Partial<Specialist> = {}): Specialist => ({ id: 'gem', workdir: WORK, reachableBy: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false, canOnlyWriteTo: 'workdir', cannotRead: [], mcpServerNames: ['browser'], ...over })
+const spec = (over: Partial<Specialist> = {}): Specialist => ({ id: 'gem', workdir: WORK, reachableBy: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false, canOnlyWriteTo: 'workdir', cannotRead: [], mcpServerNames: ['browser'], ...over }) as Specialist
 const server = (over: object = {}) => ({ name: 'browser', command: '/bin/b-mcp', tokenEnv: [], tools: [], profileArgs: ['--dir={profile_dir}'], loginCommand: ['/opt/b/browser', '--user-data-dir={profile_dir}', '--no-first-run'], profileLocks: ['SingletonLock', 'lockfile'], ...over })
 const cfg = (s: Specialist = spec(), servers: Record<string, any> = { browser: server() }, extra: Specialist[] = []): HydraConfig => ({ ...EMPTY_CONFIG, specialists: Object.fromEntries([s, ...extra].map(x => [x.id, x])), mcpServers: servers })
 const probes = (over: Partial<BrowserProbes> = {}): BrowserProbes => ({ present: () => false, isSession: false, ...over })

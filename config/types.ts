@@ -205,7 +205,8 @@ export type McpServer = {
   denyTools?: string[]
 }
 
-export type Specialist = {
+/** What every specialist has, whatever it may reach. */
+type SpecialistBase = {
   id: string
   /** The folder it runs in, `~` expanded. Its knowledge and tools live there. */
   workdir: string
@@ -228,42 +229,78 @@ export type Specialist = {
   maxSessions: number
   /** End a session after this long without activity, and resume on the next message. Absent: never. */
   idleMs?: number
-  /**
-   * `handoff_at`: the context percent (1-99) at which its idle sessions are asked to hand off (daemon/auto-handoff.ts), whatever
-   * AUTO_HANDOFF_FULL and AUTO_HANDOFF_FULL_PCT say. Read on each health poll, so a change reaches running sessions; not part of the
-   * launch policy. Never on a specialist whose sessions have no handoff tool (restricted, write-confined). Absent: the env vars decide.
-   */
-  handoffAt?: number
   /** The Place it posts to when nobody wrote to it first (a new thread), and where replies with no conversation go: a place or a channel id. toml key `home_place`. Absent: the operator's channel. */
   homePlace?: string
   model?: string
   /** Shown in its sessions' thread names in place of the default session emoji: one emoji character. Absent: the default. */
   emoji?: string
   engine?: 'claude' | 'codex' | 'omp'
-  /**
-   * `true`: its session runs in its folder with only the tools and servers it lists, and it can answer only its own conversation.
-   * `false` (default): the operator's account, with all their tools, servers and files.
-   */
-  restricted: boolean
-  /** `can_only_write_to = "workdir"` (not with `restricted`): the operator's account and tools, with Bash and Edit/Write writes confined to `workdir` and its own browser profile in it. Absent: writes anywhere. */
-  canOnlyWriteTo?: 'workdir'
-  /** `can_only_write_to` or `cannot_read` set: paths Claude Code's tools and shell may not read, added to the built-in credential places (those, and the other specialists' workdirs, are worked out at launch). */
-  cannotRead?: string[]
-  /** `can_only_write_to` only: the folder (inside `workdir`, `~` expanded, relative to `workdir`) given to its listed servers as `{profile_dir}`; its downloads go beside it as `<folder>-downloads`. Absent: `<workdir>/.browser/profile` and `.../downloads`. Names the folder; does not confine the browser process. */
-  browserProfile?: string
-  /** The layer's: Bash command patterns it may not run, on top of the confinement. */
-  denyCommands?: string[]
-  /** `restricted` only: the built-in tools it may use (default Read, Grep, Glob). */
-  tools?: string[]
-  /** `restricted`: the `[mcp_servers.<name>]` servers it may use (default none). `can_only_write_to`: the servers started for it with its own browser profile. */
-  mcpServerNames?: string[]
-  /** `restricted` only: the specialists its session may send to with `send_to_thread` (default none). Shared-session specialists; never `main`. */
-  sendsTo?: string[]
   /** `~` expanded; a relative path is under `workdir`. */
   envFile?: string
   /** Old ids, so a rename keeps its thread, session and owed messages. */
   renamedFrom: string[]
 }
+
+/** The write-confined layer's keys: only a write-confined specialist has them. */
+type WriteConfinedKeys = 'canOnlyWriteTo' | 'cannotRead' | 'browserProfile' | 'denyCommands'
+
+/**
+ * `restricted = true`: its session runs in its folder with only the tools and servers it lists, and it can answer only its own conversation.
+ * Never write-confined: restricted already limits its writes and reads (and more).
+ */
+export type RestrictedSpecialist = SpecialistBase & {
+  restricted: true
+  /** The built-in tools it may use (default Read, Grep, Glob). */
+  tools: string[]
+  /** The `[mcp_servers.<name>]` servers it may use (default none). */
+  mcpServerNames: string[]
+  /** The specialists its session may send to with `send_to_thread` (default none). Shared-session specialists; never `main`. */
+  sendsTo?: string[]
+  /** Never: a restricted session has no handoff tool. */
+  handoffAt?: never
+} & { [K in WriteConfinedKeys]?: never }
+
+/**
+ * `restricted = false` with `can_only_write_to = "workdir"`: the operator's account and tools, with Bash and Edit/Write writes confined to `workdir`
+ * and its own browser profile in it. Never restricted.
+ */
+export type WriteConfinedSpecialist = SpecialistBase & {
+  restricted: false
+  canOnlyWriteTo: 'workdir'
+  /** Paths Claude Code's tools and shell may not read, added to the built-in credential places (those, and the other specialists' workdirs, are worked out at launch). */
+  cannotRead: string[]
+  /** The folder (inside `workdir`, `~` expanded, relative to `workdir`) given to its listed servers as `{profile_dir}`; its downloads go beside it as `<folder>-downloads`. Absent: `<workdir>/.browser/profile` and `.../downloads`. Names the folder; does not confine the browser process. */
+  browserProfile?: string
+  /** Bash command patterns it may not run, on top of the confinement. */
+  denyCommands?: string[]
+  /** Its built-in tools. Absent: all, as for any unrestricted session. */
+  tools?: string[]
+  /** The servers started for it, each with its own browser profile if it declares one. */
+  mcpServerNames: string[]
+  sendsTo?: never
+  /** Never: a write-confined session has no handoff tool. */
+  handoffAt?: never
+}
+
+/** `restricted = false` with no `can_only_write_to`: operator access, the operator's whole account, with all their tools, servers and files (its policy id is `operator`). */
+export type OperatorSpecialist = SpecialistBase & {
+  restricted: false
+  /**
+   * `handoff_at`: the context percent (1-99) at which its idle sessions are asked to hand off (daemon/auto-handoff.ts), whatever
+   * AUTO_HANDOFF_FULL and AUTO_HANDOFF_FULL_PCT say. Read on each health poll, so a change reaches running sessions; not part of the
+   * launch policy. Absent: the env vars decide.
+   */
+  handoffAt?: number
+  tools?: never
+  mcpServerNames?: never
+  sendsTo?: never
+} & { [K in WriteConfinedKeys]?: never }
+
+/**
+ * A specialist is restricted, write-confined, or neither: never restricted and write-confined at once. `restricted` tells the
+ * restricted one apart; `canOnlyWriteTo` tells the write-confined one from the one with operator access.
+ */
+export type Specialist = RestrictedSpecialist | WriteConfinedSpecialist | OperatorSpecialist
 
 /**
  * One Slack app this hydra runs as, declared `[slack.apps.<id>]`.

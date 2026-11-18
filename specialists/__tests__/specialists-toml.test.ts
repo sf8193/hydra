@@ -11,7 +11,7 @@ const threads = join(STATE_DIR, 'specialist-threads.json')
 const legacy = join(STATE_DIR, 'specialists.json')
 
 const declared = (id: string, extra: Partial<Declared> = {}): Declared =>
-  ({ id, workdir: `/srv/${id}`, reachableBy: ['people'], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false, ...extra })
+  ({ id, workdir: `/srv/${id}`, reachableBy: ['people'], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false, ...extra }) as Declared
 const config = (...specialists: Declared[]): HydraConfig => ({
   operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
   people: { op: { id: 'op', addresses: ['discord:100000000000000001'], roles: [], name: 'op' } },

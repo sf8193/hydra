@@ -15,14 +15,14 @@ import '../engines/codex-runtime.js'
 
 process.stderr.write = (() => true) as any
 
-const spec = (over: Partial<Specialist> = {}): Specialist => ({ id: 'ops', workdir: '/srv/ops', reachableBy: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false, ...over })
+const spec = (over: Partial<Specialist> = {}): Specialist => ({ id: 'ops', workdir: '/srv/ops', reachableBy: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false, ...over }) as Specialist
 const configure = (over: Partial<Specialist> = {}): void => _setHydraConfigForTesting({
   operator: 'op', connectors: {}, gateways: {}, slackApps: {}, places: {}, schedules: {}, rules: [],
   people: { op: { id: 'op', addresses: ['discord:100000000000000001'], roles: [], name: 'op' } },
   specialists: { ops: spec(over) },
 } as HydraConfig)
 const operatorPolicy: LaunchPolicy = { specialist: 'ops', restricted: false, id: 'operator' }
-// The session was born as the operator's; hydra.toml now confines the specialist.
+// The session was born as the operator's; hydra.toml now restricts the specialist.
 const drift = () => configure({ restricted: true, tools: ['Read'], mcpServerNames: [] })
 const REMEDY = (name: string) => `hydra kill ${name}`
 
