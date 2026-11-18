@@ -1086,6 +1086,10 @@
     ],
     [
       "daemon_auto-handoff",
+      "daemon_tool-surface"
+    ],
+    [
+      "daemon_auto-handoff",
       "daemon_config"
     ],
     [

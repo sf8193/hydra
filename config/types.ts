@@ -228,6 +228,12 @@ export type Specialist = {
   maxSessions: number
   /** End a session after this long without activity, and resume on the next message. Absent: never. */
   idleMs?: number
+  /**
+   * `handoff_at`: the context percent (1-99) at which its idle sessions are asked to hand off (daemon/auto-handoff.ts), whatever
+   * AUTO_HANDOFF_FULL and AUTO_HANDOFF_FULL_PCT say. Read on each health poll, so a change reaches running sessions; not part of the
+   * launch policy. Never on a specialist whose sessions have no handoff tool (restricted, write-confined). Absent: the env vars decide.
+   */
+  handoffAt?: number
   /** The Place it posts to when nobody wrote to it first (a new thread), and where replies with no conversation go: a place or a channel id. toml key `home_place`. Absent: the operator's channel. */
   homePlace?: string
   model?: string
@@ -275,6 +281,11 @@ export type SlackApp = {
   displayName: string
   /** What the manifest says the app does: as set, else a default (which mentions the operator token when there is one). */
   description: string
+}
+
+/** The specialist declared under this id now, or under an old one (`renamed_from`): undefined when none is. */
+export function declaredSpecialist(config: Pick<HydraConfig, 'specialists'>, id: string): Specialist | undefined {
+  return (Object.hasOwn(config.specialists, id) ? config.specialists[id] : undefined) ?? Object.values(config.specialists).find(s => s.renamedFrom.includes(id))
 }
 
 /** The app named `default`, used where nothing names an app. */

@@ -22,6 +22,9 @@ import { requestHandoff } from '../session-lifecycle.js'
 import { pendingPermissions } from '../permission.js'
 import { HANDOFF_TEMPLATE_DIR } from '../handoff-templates.js'
 import { fakeAdapter } from './test-harness.js'
+import { _setHydraConfigForTesting } from '../hydra-config.js'
+import { bornPolicy, policyDrifted } from '../restricted.js'
+import type { HydraConfig, Specialist } from '../../config/types.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 
 const SID = '66666666-7777-4888-8999-aaaaaaaaaaaa'
@@ -486,11 +489,14 @@ describe('auto handoff', () => {
     delete process.env.AUTO_HANDOFF_FULL_PCT
     delete process.env.AUTO_CONVERGE_PCT
     pendingPermissions.clear()
+    _setHydraConfigForTesting(undefined)
   })
 
   const MIN = 60_000
-  const session = (o: { pct?: () => number; live?: string; engine?: 'claude' | 'codex'; lastActive?: number; type?: SessionInfo['sessionType']; bridge?: boolean } = {}) => {
+  const session = (o: { pct?: () => number; live?: string; engine?: 'claude' | 'codex'; lastActive?: number; type?: SessionInfo['sessionType']; bridge?: boolean; policy?: SessionInfo['policy']; tmuxName?: string } = {}) => {
     const info = seed({
+      ...(o.policy && { policy: o.policy }),
+      ...(o.tmuxName && { tmuxName: o.tmuxName }),
       ageMs: OLD, lastActive: o.lastActive ?? NOW - 120 * MIN, engine: o.engine ?? 'claude', sessionType: o.type ?? 'thread_owner',
       adapter: fakeAdapter({
         usage: () => ({ usedTokens: 0, contextWindow: 0, percent: (o.pct ?? (() => 60))() }),
@@ -780,6 +786,114 @@ describe('auto handoff', () => {
     session({ pct: () => 80, lastActive: LATER - MIN })
     pollAt(LATER)
     expect(asked).toEqual([])
+  })
+
+  test('a write-confined session is neither asked nor nudged under AUTO_HANDOFF_FULL=1, AUTO_HANDOFF_CACHE=1 and AUTO_CONVERGE_PCT: it has no handoff tool', () => {
+    process.env.AUTO_CONVERGE_PCT = '50'
+    const confined = { specialist: 'docs', restricted: false, id: 'writes:x', canOnlyWriteTo: { workdir: '/w', denyCommands: [], cannotRead: [], servers: [] } } as SessionInfo['policy']
+    session({ pct: () => 90, policy: confined })
+    const plain = session({ pct: () => 90 })
+    pollAt(LATER)
+    expect(asked).toEqual([plain.sessionId])
+  })
+
+  describe('a specialist\'s handoff_at', () => {
+    // hydra.toml as the poll reads it: only the specialists matter here.
+    const withSpecialists = (...s: Array<Partial<Specialist> & { id: string }>) =>
+      _setHydraConfigForTesting({ specialists: Object.fromEntries(s.map(x => [x.id, { workdir: '/w', reachableBy: [], sessions: 'shared', maxSessions: 20, restricted: false, renamedFrom: [], ...x }])) } as unknown as HydraConfig)
+    const of = (specialist: string): SessionInfo['policy'] => ({ specialist, restricted: false, id: 'operator' })
+    beforeEach(() => { delete process.env.AUTO_HANDOFF_CACHE; delete process.env.AUTO_HANDOFF_FULL })
+
+    test('handoff_at = 30 asks an idle session at 30% with AUTO_HANDOFF_FULL unset, and not at 29%', () => {
+      withSpecialists({ id: 'ops', handoffAt: 30 })
+      let pct = 29
+      const info = session({ pct: () => pct, policy: of('ops'), lastActive: LATER - MIN })
+      pollAt(LATER)
+      expect(asked).toEqual([])
+      pct = 30; pollAt(LATER + MIN)
+      expect(asked).toEqual([info.sessionId])
+      expect(stderr.join('')).toContain(`full handoff: ${info.tmuxName} at 30%`)
+    })
+
+    test('a specialist without it is not asked (AUTO_HANDOFF_FULL unset), and a plain session is not either', () => {
+      withSpecialists({ id: 'ops', handoffAt: 30 }, { id: 'docs' })
+      session({ pct: () => 90, policy: of('docs'), lastActive: LATER - MIN })
+      session({ pct: () => 90, lastActive: LATER - MIN })
+      pollAt(LATER)
+      expect(asked).toEqual([])
+    })
+
+    test('a specialist without it keeps the env line: AUTO_HANDOFF_FULL=1 asks it at 85%, not at 30%', () => {
+      process.env.AUTO_HANDOFF_FULL = '1'
+      withSpecialists({ id: 'docs' })
+      const at85 = session({ pct: () => 85, policy: of('docs'), lastActive: LATER - MIN })
+      session({ pct: () => 30, policy: of('docs'), lastActive: LATER - MIN })
+      pollAt(LATER)
+      expect(asked).toEqual([at85.sessionId])
+    })
+
+    test('it wins over the env line both ways: AUTO_HANDOFF_FULL=0, and AUTO_HANDOFF_FULL_PCT=20 does not ask at 25%', () => {
+      process.env.AUTO_HANDOFF_FULL = '0'
+      withSpecialists({ id: 'ops', handoffAt: 30 })
+      const at30 = session({ pct: () => 30, policy: of('ops'), lastActive: LATER - MIN })
+      process.env.AUTO_HANDOFF_FULL_PCT = '20'
+      session({ pct: () => 25, policy: of('ops'), lastActive: LATER - MIN })
+      pollAt(LATER)
+      expect(asked).toEqual([at30.sessionId])
+    })
+
+    test('the same idle rule: a working session at its line is not asked', () => {
+      withSpecialists({ id: 'ops', handoffAt: 30 })
+      session({ pct: () => 50, policy: of('ops'), live: 'working', lastActive: LATER - MIN })
+      pollAt(LATER)
+      expect(asked).toEqual([])
+    })
+
+    test('a session born under an old id finds its specialist through renamed_from', () => {
+      withSpecialists({ id: 'ops', handoffAt: 30, renamedFrom: ['operations'] })
+      const info = session({ pct: () => 40, policy: of('operations'), lastActive: LATER - MIN })
+      pollAt(LATER)
+      expect(asked).toEqual([info.sessionId])
+    })
+
+    test('a session with no stored policy finds its specialist as every other setting does (here: a per-conversation session by its name)', () => {
+      withSpecialists({ id: 'crm', handoffAt: 30, sessions: 'per-conversation' })
+      const info = session({ pct: () => 40, tmuxName: 'crm_c0abc-1-2', lastActive: LATER - MIN })
+      pollAt(LATER)
+      expect(asked).toEqual([info.sessionId])
+    })
+
+    test('a session born write-confined is never asked by it, even after hydra.toml drops can_only_write_to and adds handoff_at: it has no handoff tool', () => {
+      withSpecialists({ id: 'ops', handoffAt: 30 })
+      const confined = { specialist: 'ops', restricted: false, id: 'writes:x', canOnlyWriteTo: { workdir: '/w', denyCommands: [], cannotRead: [], servers: [] } } as SessionInfo['policy']
+      session({ pct: () => 40, policy: confined, lastActive: LATER - MIN })
+      pollAt(LATER)
+      expect(asked).toEqual([])
+    })
+
+    test('a change to handoff_at reaches a running session on the next poll', () => {
+      withSpecialists({ id: 'ops', handoffAt: 50 })
+      const info = session({ pct: () => 40, policy: of('ops'), lastActive: LATER - MIN })
+      pollAt(LATER)
+      expect(asked).toEqual([])
+      withSpecialists({ id: 'ops', handoffAt: 30 })
+      pollSessionsOnce(LATER + MIN)
+      expect(asked).toEqual([info.sessionId])
+    })
+
+    test('it is not part of the launch policy: adding or changing it drifts nothing', () => {
+      const policyWith = (handoffAt?: number) => { withSpecialists({ id: 'ops', ...(handoffAt !== undefined && { handoffAt }) }); return bornPolicy('ops') }
+      expect(policyDrifted(policyWith(undefined), policyWith(30))).toEqual([])
+      expect(policyDrifted(policyWith(30), policyWith(60))).toEqual([])
+    })
+
+    test('the converge nudge names the specialist\'s line', () => {
+      process.env.AUTO_CONVERGE_PCT = '20'
+      withSpecialists({ id: 'ops', handoffAt: 30 })
+      session({ pct: () => 25, policy: of('ops'), lastActive: LATER - MIN })
+      pollAt(LATER)
+      expect(requests.filter(r => r.includes('converg'))).toEqual([expect.stringContaining('At 30% hydra asks you to hand off.')])
+    })
   })
 
   describe('converge nudge', () => {
