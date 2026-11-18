@@ -52,6 +52,8 @@ display_name = "Acme helper"          # the Slack app's name: `hydra slack manif
 description = "Answers Acme's Slack threads it is tagged in."  # what the app says it does there (at most 140)
 operator_token_env = "CONNECTOR_SLACK_USER_TOKEN"   # optional: hear the channels, DMs and group DMs the operator is in, as the operator; never posts (a DM or group DM is delivered only where a place names it).
                                       # What it hears arrives through this app: see the `slack:person-dm:alice` rule
+router = "main"                       # optional: where a tag of this app goes in a thread no conversation binds and no rule takes. "main" (only the operator's tag) or "specialist:<name>" (the router: it hears
+                                      # whoever its own `reachable_by` lets in, and may bind the thread to another session; never restricted or write-confined). docs/slack.md, "The app's router"
 
 [slack.apps.sales]                    # another app: its own tokens, named by its id when it sets no display_name
 bot_token_env = "SALES_SLACK_BOT_TOKEN"
@@ -253,7 +255,7 @@ message = "Morning brief."
 runner = "daemon"                     # required with `timezone`: a launchd entry fires in the host's zone
 timezone = "Asia/Dubai"               # an IANA zone name
 
-# --- rules: who hears what. Each names a place, an app, or both, and the target that answers; first match in file order wins, except that a catch-all (no `place`, target main) is tried after every other rule. This is the one home of where a specialist is heard. ---
+# --- rules: who hears what. Each names a place, an app, or both, and the target that answers; first match in file order wins. A conversation bound to a session goes to it before any rule; a tag no rule takes goes to the app's `router`. This is the one home of where a specialist is heard. ---
 # An absent `place` matches every place and an absent `app` every app. `person` only narrows: a rule needs place or app.
 # A place is slack:#name, slack:C0ID, slack:person-dm:<person>, slack:app-dm:<app>, slack:group-dm:<G id>, discord:#name, discord:<id>, discord:app-dm:*, github:owner/repo or cli.
 # person-dm, app-dm and group-dm also take * for every one of that kind: slack:app-dm:* is every Slack app's DMs, slack:group-dm:* every group DM. An entry for one (slack:app-dm:sales) wins over the * entry in [places].
@@ -299,14 +301,6 @@ target = "specialist:assistant"
 [[rules]]
 place = "github:acme/widget"
 target = "specialist:reviewer"
-
-# The operator tags their own app (the one holding operator_token_env) in any thread they are in: main gets it. No place, so a catch-all:
-# it takes only what nothing above or a binding holds, and someone else's tag of the app stays unrouted. Main answers, or binds the thread
-# to a session with `hydra conversations bind <conversation> thread:<id> --why "<reason>"`, which says so in the thread.
-[[rules]]
-app = "app:default"
-person = "person:op"
-target = "main"
 
 # --- guard: the operator's hook, run after routing and the `reachable_by` check for anyone but the operator ---
 

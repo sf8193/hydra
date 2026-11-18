@@ -6,7 +6,7 @@ flowchart LR
   PL["<b>Place</b><br/>where it happened"] --> IN
   TR["<b>Trigger</b><br/>why it counts"] --> IN
   CV["<b>Conversation</b><br/>which exchange"] -.-> TR
-  IN --> RU{{"<b>Rule</b><br/>place, person, target:<br/>first match wins;<br/>a catch-all last"}}
+  IN --> RU{{"<b>Rule</b><br/>place, person, target:<br/>first match wins"}}
   RU --> TG(["<b>Target</b><br/>who receives it"])
   CN -. "GitHub watch, clock job:<br/>target named at creation" .-> TG
   TG --> SP["<b>Specialist</b><br/>a named session,<br/>refilled when it ends"]

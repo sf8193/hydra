@@ -10,11 +10,12 @@ flowchart TD
   n2["addressed: a DM or group DM, a tag,<br/>or an open conversation with no target yet"]
   g3{"3. the first <b>Rule</b><br/>that matches?"}
   n3["a rule matches when each key it sets fits:<br/>place: a name of this place<br/>app: this app<br/>person: the sender, or a role they hold<br/>and this app <b>serves</b> its target"]
-  g4{"4. the <b>Operator</b>,<br/>in the bot's DM?"}
+  g3b{"4. a tag in a channel thread,<br/>and this app names a <b>router</b>?"}
+  g4{"5. the <b>Operator</b>,<br/>in the bot's DM?"}
   main["main"]
-  g5{"5. <b>Reach</b>: may the<br/>sender reach it?"}
-  n5["first, this app must serve it; then:<br/>the operator: every target<br/>main: the operator only<br/>a session's own thread: anyone<br/>a specialist: a role in its reachable_by"]
-  del(["deliver<br/>after 3 or 4, bind the conversation to it"])
+  g5{"6. <b>Reach</b>: may the<br/>sender reach it?"}
+  n5["first, this app must serve it; then:<br/>the operator: every target<br/>main: the operator only<br/>a session's own thread: anyone<br/>a specialist, a router too: a role in its reachable_by"]
+  del(["deliver<br/>after 3, 4 or 5, bind the conversation to it"])
   ref(["refused"])
   unr(["unrouted"])
   ign(["ignored: not for hydra"])
@@ -28,7 +29,9 @@ flowchart TD
   g2 -->|yes| g3
   g3 -.- n3
   g3 -->|a rule| g5
-  g3 -->|none| g4
+  g3 -->|none| g3b
+  g3b -->|yes| g5
+  g3b -->|no| g4
   g4 -->|yes| main --> g5
   g4 -->|no| unr
   g5 -.- n5
@@ -39,7 +42,7 @@ flowchart TD
   classDef stop fill:#fef2f2,stroke:#ef4444,color:#1f2937
   classDef done fill:#ecfdf5,stroke:#10b981,color:#1f2937
   classDef note fill:#f9fafb,stroke:#d1d5db,color:#4b5563
-  class g1,g2,g3,g4,g5 gate
+  class g1,g2,g3,g3b,g4,g5 gate
   class ref,unr stop
   class del done
   class n2,n3,n5 note

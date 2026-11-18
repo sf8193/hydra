@@ -485,6 +485,7 @@ export function printResponse(response: Record<string, unknown>, json: boolean):
       const items = data as any[]
       if (items.length === 0) { console.log('(none)'); return }
       for (const item of items) {
+        if (item.status === 'ended') { console.log(`✕ ${item.name}  ${item.description ?? ''}  (ended ${item.ended_ago} ago · thread ${item.thread_id})`); continue }
         const status = item.status === 'connected' ? '●' : '○'
         const ctx = item.context ? ` [${item.context}]` : ''
         const cpu = item.cpu ? ` · ${item.cpu}` : ''

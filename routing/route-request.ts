@@ -69,7 +69,7 @@ export function routeFor(h: HydraConfig, p: RouteParams, aliases: (place: Place,
   for (const [flag, id] of named) {
     if (!Object.hasOwn(h.slackApps, id)) return { ok: false, error: `${flag}: ${noSuchApp(id, Object.keys(h.slackApps))}` }
   }
-  const d = route(h, { ...(from && { from }), at, addressed: true, ...(p.bound && { bound: p.bound }), ...(slack && { app, ...(heardBy && { heardBy }), ...(mentioned && { mentioned }), ...(p.boundApp && { boundApp: p.boundApp }) }) })
+  const d = route(h, { ...(from && { from }), at, addressed: true, tagged: true, ...(p.bound && { bound: p.bound }), ...(slack && { app, ...(heardBy && { heardBy }), ...(mentioned && { mentioned }), ...(p.boundApp && { boundApp: p.boundApp }) }) })
   const note = p.app && !slack ? `(\`--app\` ignored: ${p.place} is not a Slack place)\n` : ''
   return { ok: true, fate: d.fate, ...('to' in d && { to: d.to }), report: note + explain(d, h.guard?.command) + (Object.keys(h.specialists).length ? `\n${answersLines(h).join('\n')}` : '') }
 }

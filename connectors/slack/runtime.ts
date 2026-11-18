@@ -3,6 +3,7 @@ import { archiveUrl, parseConversation, THREAD_TS } from './conversation.js'
 import { ConnectedApps, type AppIdentity } from './apps.js'
 import { getSpecialist, conversationSpecialistOf, specialistOf, boundAs } from '../../specialists/specialists.js'
 import { registry } from '../../daemon/sessions.js'
+import { occupancy, occupied } from '../../daemon/session-reachability.js'
 import type { SessionInfo } from '../../daemon/sessions.js'
 import { deliverToTarget, conversationSessionName, conversationSessionRunning, placesFree, type Target } from '../../specialists/targets.js'
 import { on } from '../../daemon/event-bus.js'
@@ -20,7 +21,7 @@ import { isRestricted } from '../../daemon/policy-record.js'
 import { isRestrictedSession, isWriteConfinedSession } from '../../daemon/tool-surface.js'
 import { MAIN, currentId, isSessionThread, slackSpecialistsOf } from '../../routing/route.js'
 import { chunk } from '../../daemon/util.js'
-import { DEFAULT_SLACK_APP, coversAny, homePlaceOf, isChannelName, placeKey, placeOf, placesAnsweredBy, samePlace, slackConfigured, type Place, type HydraConfig, type SlackApp } from '../../config/types.js'
+import { DEFAULT_SLACK_APP, coversAny, homePlaceOf, isChannelName, isRouter, routerOf, placeKey, placeOf, placesAnsweredBy, samePlace, slackConfigured, type Place, type HydraConfig, type SlackApp } from '../../config/types.js'
 import { speaksAsOf, noSuchApp } from '../../config/pins.js'
 import { notServedBy } from '../../routing/route.js'
 import { NO_SLACK_APP, SLACK_APP_NEEDS, appKey, appName, notConnected } from './app.js'
@@ -394,7 +395,8 @@ export const TOOL_BIND_MAX = 10
  * at a place it hears; any other session to its own thread, wherever the bot, or the operator, can read. It may bind
  * one that is unbound or already its own. Moving another's conversation is the operator's (`hydra conversations bind`).
  */
-export async function bindConversation(caller: Partial<Pick<SessionInfo, 'threadId' | 'tmuxName' | 'sessionType'>> | undefined, conversation: unknown): Promise<string> {
+export async function bindConversation(caller: Partial<Pick<SessionInfo, 'threadId' | 'tmuxName' | 'sessionType'>> | undefined, conversation: unknown, to?: { target?: unknown; why?: unknown; callerSessionId?: string }): Promise<string> {
+  if (to?.target !== undefined || to?.why !== undefined) return bindToSession(caller, conversation, to.target, to.why, to.callerSessionId === 'main')
   const c = parseConversation(conversation)
   const app = appOfEntry(c)
   const v = offlineView(app)
@@ -435,6 +437,35 @@ export async function bindConversation(caller: Partial<Pick<SessionInfo, 'thread
     : "not checked: Slack isn't connected"
   if (isSessionThread(me)) return `${conversationId(c)} is bound to this session (${how}): each new message in it is delivered here until it has been idle a week, saying whether ${appName(v.hydra.slackApps, app)} was tagged and by whom. Answer in it with reply (chat_id ${conversationId(c)}) when the operator or an approved person (declared in [people]) tags ${appName(v.hydra.slackApps, app)} and asks you something; otherwise listen${via === 'user' ? `. While the bot isn't in ${place}, a reply goes to the operator's DM with a link to the thread` : ''}`
   return `${conversationId(c)} is bound to ${me} (${how})`
+}
+
+/**
+ * `bind_conversation` with a `target`: the power of main and of the router (the specialist an app's `router` names, `isRouter`): hand a
+ * conversation delivered to it on to another session, with the reason. It is `hydra conversations bind <conversation> thread:<id> --why`,
+ * notice in the Slack thread included, and only for a conversation bound to the caller: it hands on what it was given, never what is
+ * another's. The router's own session is never the target: a conversation handed to it would be the router's again.
+ */
+async function bindToSession(caller: Partial<Pick<SessionInfo, 'threadId' | 'tmuxName' | 'sessionType'>> | undefined, conversation: unknown, target: unknown, why: unknown, isMain: boolean): Promise<string> {
+  const h = hydraConfig()
+  const me = isMain ? MAIN : boundAs(caller, h)
+  if (!me || (me !== MAIN && !isRouter(h, me))) throw new Error("only main and the router (the specialist an app's `router` in hydra.toml names) may bind a conversation to another session; bind_conversation without a target binds it to you")
+  if (typeof target !== 'string' || !target.trim()) throw new Error('target must name a session: its name (list_sessions) or thread:<thread id>')
+  if (typeof why !== 'string' || !why.trim()) throw new Error('why is required: one line saying why this session, posted in the Slack thread')
+  const name = target.trim().replace(/^thread:/, '')
+  const session = [...registry.values()].filter(s => s.deadAt === undefined && (s.threadId === name || s.tmuxName === name)).sort((a, b) => Number(a.sessionType === 'thread_guest') - Number(b.sessionType === 'thread_guest'))[0]
+  if (!session?.threadId || !occupied(occupancy(session))) throw new Error(`no live session "${name}": name one from list_sessions, or spawn one for this thread`)
+  const fills = specialistOf(session, h)
+  // A session whose reach is cut down, or that sits in another's thread, is no place to send a stranger's thread: `reachable_by` is not asked of a session's own thread.
+  if (session.sessionType === 'thread_guest' || isRestricted(session) || (fills !== undefined && (h.specialists[fills]?.restricted || h.specialists[fills]?.canOnlyWriteTo))) throw new Error(`${session.tmuxName} is a restricted, write-confined or guest session: name another session, or spawn one`)
+  if (session.threadId === caller?.threadId || (fills !== undefined && isRouter(h, fills))) throw new Error(`${session.tmuxName} is the router: a conversation bound to it comes back to it. Name another session, or spawn one`)
+  const c = parseConversation(conversation)
+  // A DM, or a place's top level, is routing's to hand out: a tool never moves one, least of all the operator's DM from main.
+  if (isDm(c.channel) || c.threadTs === TOP_LEVEL) throw new Error(`${conversationId(c)} is not a thread in a channel: only a thread can be handed on`)
+  // A router hands on only what its own app's tag brought it.
+  if (me !== MAIN && routerOf(h, appOfEntry(c)) !== me) throw new Error(`${conversationId(c)} is through ${appOfEntry(c)}, whose router is not ${me}: a router hands on only conversations of the app that names it`)
+  const boundTo = getConversationTable().get(c.channel, c.threadTs, appOfEntry(c))?.specialist
+  if (!boundTo || currentId(h, boundTo) !== me) throw new Error(`${conversationId(c)} is ${boundTo ? `bound to ${boundTo}` : 'not an open conversation'}, not to ${me}: ${me} hands on only a conversation delivered to it`)
+  return operatorBind(conversationId(c), `thread:${session.threadId}`, why)
 }
 
 /** `unbind_conversation`: a session lets go of one of its own conversations. */

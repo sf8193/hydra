@@ -48,12 +48,13 @@ Talk to many Claude Code (or Codex) sessions from Slack or Discord. Each session
 
 ## Core abstractions
 
-Twenty-one names carry the design. Each answers one question.
+Twenty-two names carry the design. Each answers one question.
 
 | Name | Question | Sentence |
 |---|---|---|
 | Gateway | How does the operator talk to hydra? | A chat platform (Discord or Slack) that carries the operator's messages and commands. One identity: its bot. |
 | App | Who hears, who speaks? | A Slack app. Its bot hears where it is a member and is the only one that speaks. The operator's token, if given, hears every channel, DM and group DM the operator is in and never speaks; nothing it hears is delivered unless a place names it. A value that names one says its kind: `app:sales`. |
+| App › router | Where does a tag go that nothing else takes? | `router = "main"` or `"specialist:<name>"` on a Slack app: a tag of the app in a channel thread that no binding and no rule takes goes to it, third in order. A specialist so named, the router, hears whoever its own `reachable_by` lets in, may bind the thread to another session, and is never restricted or write-confined. |
 | Connector | Where do events from outside come from? | A source of events: Slack, GitHub, a clock. |
 | Inbound | What arrived? | One event as routing sees it: who sent it, where, why it counts. |
 | Place | Where did it happen? | A channel, a DM or a repository, named `slack:#ops`, `github:owner/repo`. |
@@ -61,7 +62,7 @@ Twenty-one names carry the design. Each answers one question.
 | Conversation | Which exchange? | An app, a channel and a thread; what a binding attaches to. |
 | Trigger | Why does it count? | The reason an inbound is heard: addressed (a tag or a DM), `messages = "all"`, or bound. |
 | Reaction | A person's emoji on a message. | Heard only where the place says `reactions = "bot-messages"` or `"all"` (default `"off"`): then it is delivered, once, to the session that owns the conversation it is in, from a person the rules admit as for a message. |
-| Rule | Which inbound goes to which target? | `place`, `person`, then `target`; the first match wins. A catch-all (no `place`, to `main`) is tried after every other rule. |
+| Rule | Which inbound goes to which target? | `place`, `person`, then `target`; the first match wins. |
 | Target | Who receives it? | main (the operator's harness), a specialist, a session's thread, a conversation's own session, or a new session started from a recipe. A target value says its kind: `main`, `specialist:<name>`, `thread:<id>`. |
 | Specialist | Who answers a place? | A named session that hydra refills when it ends. Reached by places, rules, schedules and deliveries. |
 | Restricted specialist | What may it know? | A specialist that may know only what its audience can already see (`restricted = true`). A property of a specialist, not a kind of target, and never also write-confined. Its listed servers run under a sandbox proven only on the macOS versions hydra names: on any other, a restricted specialist that lists servers is refused at launch unless `[restricted] allow_unproven_macos = true`. |
@@ -87,7 +88,7 @@ flowchart LR
   PL["<b>Place</b><br/>where it happened"] --> IN
   TR["<b>Trigger</b><br/>why it counts"] --> IN
   CV["<b>Conversation</b><br/>which exchange"] -.-> TR
-  IN --> RU{{"<b>Rule</b><br/>place, person, target:<br/>first match wins;<br/>a catch-all last"}}
+  IN --> RU{{"<b>Rule</b><br/>place, person, target:<br/>first match wins"}}
   RU --> TG(["<b>Target</b><br/>who receives it"])
   CN -. "GitHub watch, clock job:<br/>target named at creation" .-> TG
   TG --> SP["<b>Specialist</b><br/>a named session,<br/>refilled when it ends"]
