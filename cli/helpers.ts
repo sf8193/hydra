@@ -175,31 +175,6 @@ export function byteModel(cfg: Pick<HydraConfig, 'stateDir' | 'platform' | 'conf
 }
 
 // ---------------------------------------------------------------------------
-// Plugin version discovery
-// ---------------------------------------------------------------------------
-
-// Locate the installed bridge-plugin version dir, e.g. `.../discord/0.0.5`.
-// Avoids hardcoding a version that breaks on the next plugin release. Prefers a
-// dir that already holds server.ts; otherwise the newest by numeric sort.
-export function pluginVersionDir(configDir: string, plugin = 'discord'): string | null {
-  const base = join(configDir, 'plugins', 'cache', 'claude-plugins-official', plugin)
-  try {
-    const versions = readdirSync(base).filter(v => {
-      try { return statSync(join(base, v)).isDirectory() } catch { return false }
-    })
-    if (versions.length === 0) return null
-    versions.sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))
-    const withServer = versions.find(v => existsSync(join(base, v, 'server.ts')))
-    return join(base, withServer ?? versions[0])
-  } catch (err: unknown) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      process.stderr.write(`pluginVersionDir: ${err}\n`)
-    }
-    return null
-  }
-}
-
-// ---------------------------------------------------------------------------
 // tmux helpers
 // ---------------------------------------------------------------------------
 

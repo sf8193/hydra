@@ -9,7 +9,7 @@
  */
 
 import { join } from 'path'
-import { readFileSync, writeFileSync, readdirSync, unlinkSync, mkdirSync, existsSync, lstatSync, readlinkSync, symlinkSync } from 'fs'
+import { readFileSync, writeFileSync, unlinkSync, existsSync } from 'fs'
 import { connect } from 'net'
 import { bootRefusal, BOOT_REFUSED_FILE } from './config/migrate.js'
 
@@ -53,7 +53,7 @@ try {
 // DEFAULT_SESSION_CHANNEL is a live binding: resolveDefaultChannel fills it after boot.
 import { gateway, TOKEN, PLATFORM, STATE_DIR, CLAUDE_CONFIG, SOCK_PATH, heartbeatPath, DEFAULT_SESSION_CHANNEL } from './daemon/config.js'
 import { syncMods } from './shared/mods.js'
-import { PLUGIN_MANIFEST, MCP_CONFIG, ensureBridgeReady } from './daemon/plugin-manifest.js'
+import { syncDaemonBridge } from './daemon/bridge-sync.js'
 import { registry, threadRegistry, reattachAdapters } from './daemon/sessions.js'
 import { isPlainWorker } from './daemon/policy-record.js'
 import { emojiOfName } from './daemon/anchor-state.js'
@@ -304,32 +304,9 @@ process.stderr.write(`daemon: synced mods into ${STATE_DIR}/mods: ${syncMods(imp
 // ---------------------------------------------------------------------------
 
 try {
-  const bridgeSrc = join(import.meta.dir, 'bridge.ts')
-  const discordCache = join(CLAUDE_CONFIG, 'plugins', 'cache', 'claude-plugins-official', 'discord')
-  const daemonConfig = JSON.stringify({ socket: SOCK_PATH, platform: PLATFORM })
-  const versionDirs = readdirSync(discordCache, { withFileTypes: true }).filter(d => d.isDirectory())
-  for (const d of versionDirs) {
-    const targetDir = join(discordCache, d.name)
-    // A symlink, never a copy: bridge.ts imports ./shared/*, which a copy in the cache cannot find (every new session's bridge then dies).
-    // A plugin update can leave a plain file here; replace whatever is there unless it already points at this bridge.
-    const serverTs = join(targetDir, 'server.ts')
-    let current: string | undefined
-    try { current = lstatSync(serverTs).isSymbolicLink() ? readlinkSync(serverTs) : undefined } catch {}
-    if (current !== bridgeSrc) {
-      try { unlinkSync(serverTs) } catch {}
-      symlinkSync(bridgeSrc, serverTs)
-    }
-    writeFileSync(join(targetDir, `daemon-${PLATFORM}.json`), daemonConfig)
-    writeFileSync(join(targetDir, '.mcp.json'), MCP_CONFIG)
-    mkdirSync(join(targetDir, '.claude-plugin'), { recursive: true })
-    writeFileSync(join(targetDir, '.claude-plugin', 'plugin.json'), PLUGIN_MANIFEST)
-    // Not awaited: boot never waits on the registry. Each dir succeeds or fails alone.
-    void ensureBridgeReady(targetDir).then(
-      installed => { if (installed) process.stderr.write(`daemon: installed bridge deps + lifted start script in ${targetDir}\n`) },
-      err => process.stderr.write(`daemon: bridge deps install failed in ${targetDir} (spawns keep installing): ${err instanceof Error ? err.message : String(err)}\n`),
-    )
-  }
-  process.stderr.write(`daemon: synced bridge.ts + daemon-${PLATFORM}.json + .mcp.json into ${discordCache}/*/\n`)
+  // Not awaiting `ready`: boot never waits on the registry. A spawn awaits it (claude-engine.ts).
+  const { dirs, relinked } = syncDaemonBridge()
+  process.stderr.write(`daemon: synced the bridge plugin in ${dirs.length} version dir(s)${relinked.length ? `; relinked server.ts in ${relinked.join(', ')}` : ''}\n`)
 } catch (err) {
   process.stderr.write(`daemon: bridge sync skipped (non-fatal): ${err instanceof Error ? err.message : String(err)}\n`)
 }

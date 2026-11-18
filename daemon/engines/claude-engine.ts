@@ -38,6 +38,7 @@ import { sandboxedServer, sandboxIssues } from '../../config/server-sandbox.js'
 import type { PrivateRoot } from '../../config/restricted-workdir.js'
 import type { LoadEnv } from '../../config/types.js'
 import { bridgeServerCommands, claudeSettingsProblems, claudeVersionRefusal, confinementRules, confinementServers, makeBrowserDirs, confinementLogLine, confinementMcp, confinementSettings } from '../write-confinement.js'
+import { syncDaemonBridge } from '../bridge-sync.js'
 import { clearNeedsAuthEntry, describeSetAt, NEEDS_AUTH_CLEARED_NOTE } from './claude-needs-auth.js'
 import { isRestricted, isRestrictedPolicy } from '../policy-record.js'
 
@@ -462,6 +463,16 @@ export class ClaudeEngine implements EngineAdapter {
       ...(promptFile ? [promptFile.load] : []),
       `${claudeArgs} 2>>${shq(stderrLog)}`,
     ].join(' && ')
+
+    // Claude Code may have added or refilled a plugin version dir since boot (auto-update): link its server.ts,
+    // and wait for its dependency install, before the session that loads it starts.
+    try {
+      const sync = syncDaemonBridge()
+      if (sync.relinked.length) process.stderr.write(`daemon: spawn ${tmuxName}: relinked bridge server.ts in ${sync.relinked.join(', ')}\n`)
+      await sync.ready
+    } catch (err) {
+      process.stderr.write(`daemon: spawn ${tmuxName}: bridge sync skipped (non-fatal): ${err instanceof Error ? err.message : String(err)}\n`)
+    }
 
     // A needs-auth entry for the bridge would make this process skip it silently (claude-needs-auth.ts).
     const cleared = await clearNeedsAuthEntry(BRIDGE_MCP_SERVER_KEY)

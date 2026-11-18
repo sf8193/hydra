@@ -1,4 +1,4 @@
-import { existsSync, statSync, lstatSync, unlinkSync, readFileSync, symlinkSync, writeFileSync, readdirSync, mkdirSync, rmSync } from 'fs'
+import { existsSync, statSync, lstatSync, unlinkSync, readFileSync, writeFileSync, readdirSync, mkdirSync, rmSync } from 'fs'
 import { join, dirname } from 'path'
 import { homedir, tmpdir } from 'os'
 import { execSync, execFileSync } from 'child_process'
@@ -7,7 +7,7 @@ import type { ByteModel, HydraConfig } from './helpers.js'
 import {
   resolveConfig, tmuxExists, tmuxKill, tmuxSpawn, tmuxSessionAge,
   compileCheck, killOrphanBytes, hasOrphanBytes, appendLog, shq,
-  waitForSocket, buildDaemonEnvs, pinnedBun, pinnedBunVersion, requireSpawnCwd, pluginVersionDir, probeDaemonHealth, byteModel,
+  waitForSocket, buildDaemonEnvs, pinnedBun, pinnedBunVersion, requireSpawnCwd, probeDaemonHealth, byteModel,
 } from './helpers.js'
 import { isKnownModel, SPIN_CPU_PERCENT } from '../shared/constants.js'
 import { modsExport, syncMods } from '../shared/mods.js'
@@ -16,6 +16,7 @@ import { noteRestart } from './watchdog-restarts.js'
 import { bootRefusal } from '../config/migrate.js'
 import { noteBootRefusal } from './boot-refusal.js'
 import { clearMainRecord, writeMainRecord } from '../shared/main-record.js'
+import { bridgePluginCache, isLinkedTo, syncHydraBridge, type BridgeSyncResult } from '../daemon/plugin-manifest.js'
 
 // ---------------------------------------------------------------------------
 // Start byte (replaces start-byte.sh)
@@ -33,22 +34,24 @@ export async function startByte(cfg: HydraConfig): Promise<void> {
   await Bun.sleep(2000)
   killOrphanBytes(cfg.sockPath, cfg.byteLog, '-9')
 
-  // Symlink bridge.ts into plugin cache
+  // Link bridge.ts into every plugin version dir and write the daemon config there — the same sync the daemon
+  // runs at boot and before each spawn, so a plugin update that lands before a byte restart cannot leave it bridgeless.
   const bridgeSrc = join(cfg.hydraDir, 'bridge.ts')
   if (!existsSync(bridgeSrc)) {
     console.error(`error: bridge.ts missing at ${bridgeSrc}`)
     process.exit(1)
   }
-  const pluginDir = pluginVersionDir(cfg.configDir)
-  if (!pluginDir) {
+  let sync: BridgeSyncResult
+  try {
+    sync = syncHydraBridge({ claudeConfig: cfg.configDir, hydraDir: cfg.hydraDir, platform: cfg.platform, sockPath: cfg.sockPath, log: line => appendLog(cfg.byteLog, line) })
+  } catch { sync = { dirs: [], relinked: [], failed: [], ready: Promise.resolve() } }
+  if (sync.dirs.length === sync.failed.length) {
     console.error(`error: discord bridge plugin not found under ${cfg.configDir}`)
     console.error(`Install it: claude plugin install discord@claude-plugins-official`)
     process.exit(1)
   }
-  const bridgeDest = join(pluginDir, 'server.ts')
-  try { unlinkSync(bridgeDest) } catch {}
-  symlinkSync(bridgeSrc, bridgeDest)
-  appendLog(cfg.byteLog, 'symlinked bridge.ts into plugin cache')
+  await sync.ready
+  appendLog(cfg.byteLog, `synced the bridge plugin in ${sync.dirs.length} version dir(s)${sync.relinked.length ? `; relinked server.ts in ${sync.relinked.join(', ')}` : ''}`)
 
   // Build prompt
   let prompt: string
@@ -558,11 +561,18 @@ export async function lifecyclePreflight(platform: string): Promise<void> {
     wrn(`access.json missing — no users are allowlisted yet (${join(cfg.stateDir, 'access.json')})`)
   }
 
-  const bridgeDir = join(cfg.configDir, 'plugins', 'cache', 'claude-plugins-official', 'discord')
+  const bridgeDir = bridgePluginCache(cfg.configDir)
+  const bridgeSrc = join(cfg.hydraDir, 'bridge.ts')
   try {
-    const versions = readdirSync(bridgeDir)
-    const hasServer = versions.some(v => existsSync(join(bridgeDir, v, 'server.ts')))
-    if (hasServer) ok('bridge plugin present in config dir'); else bad(`bridge plugin NOT in ${cfg.configDir}`)
+    const versions = readdirSync(bridgeDir).filter(v => { try { return statSync(join(bridgeDir, v)).isDirectory() } catch { return false } })
+    if (versions.length === 0) throw new Error('no version dirs')
+    ok('bridge plugin present in config dir')
+    // A copy of bridge.ts cannot find ./shared/*: every bridge started from it dies at load.
+    for (const v of versions) {
+      const serverTs = join(bridgeDir, v, 'server.ts')
+      if (isLinkedTo(serverTs, bridgeSrc)) ok(`${v}/server.ts links to bridge.ts`)
+      else bad(`${serverTs} is not a link to ${bridgeSrc} (a copy breaks every new bridge). Fix: ln -sfn ${shq(bridgeSrc)} ${shq(serverTs)}, or restart the daemon`)
+    }
   } catch {
     bad(`bridge plugin NOT in ${cfg.configDir} — sessions can't reach the daemon. Install: claude plugin install discord@claude-plugins-official`)
   }
