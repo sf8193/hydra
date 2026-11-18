@@ -4,7 +4,7 @@
 /**
  * Whether this stored policy is a restricted specialist's. Fails closed: a policy is restricted unless its `restricted` is exactly `false`, so a
  * missing, garbled or unknown value (`access: 'root'` read as nothing) holds the restricted tools, and a start under it is refused by `policyProblem`.
- * No policy at all is not a specialist's: a plain session. The one predicate: the tool gate, `confined`, `unverified` and `isPlainWorker` all read it.
+ * No policy at all is not a specialist's: a plain session. The one predicate: the tool gate, `unverified` and `isPlainWorker` all read it.
  */
 export const isRestrictedPolicy = <P extends { restricted?: unknown }>(p: P | undefined): p is P & { restricted: true } => p !== undefined && p.restricted !== false
 
