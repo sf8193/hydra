@@ -28,7 +28,7 @@ import { CLAUDE_CONFIG, ENV_FILE, SOCK_PATH, PLATFORM, STATE_DIR } from '../conf
 import { gateway } from '../config.js'
 import { SESSION_IDENTITY_VARS, capturedSpawnVars, confinedEnvUnsets, scrubbedSpawnEnv, withRaisedFdLimit } from '../../shared/spawn-env.js'
 import { modsExport } from '../../shared/mods.js'
-import { BRIDGE_CHANNEL_FLAG, BRIDGE_MCP_SERVER_KEY, BRIDGE_PLUGIN_ID, BRIDGE_TOOLS_PERMISSION } from '../plugin-manifest.js'
+import { BRIDGE_CHANNEL_FLAG, BRIDGE_MCP_SERVER_KEY, BRIDGE_PLUGIN_ID, BRIDGE_TOOLS_PERMISSION, BUILTIN_TOOL_PLUGIN_IDS } from '../plugin-manifest.js'
 import { confined, deliveryRefusal, type LaunchPolicy, missingTokenRefusal, PolicyRefusal, remedy, RESTRICTED_MODS, RESTRICTED_PREAMBLE, sandboxInputs, serverToolRule, type ConfinedPolicy } from '../restricted.js'
 import { verifyConfinement as verifyConfinementLoaded, verifyLaunch as verifyLoaded, type Verdict } from './claude-verify.js'
 import { ENGINE_CAPABILITIES } from '../../shared/engine-capabilities.js'
@@ -78,7 +78,7 @@ export function restrictedConfig({ policy, env, held, sessionName, load, roots, 
   }
   return {
     settings: {
-      enabledPlugins: { [BRIDGE_PLUGIN_ID]: true },
+      enabledPlugins: { [BRIDGE_PLUGIN_ID]: true, ...Object.fromEntries(BUILTIN_TOOL_PLUGIN_IDS.map(id => [id, false])) },
       permissions: { allow: [BRIDGE_TOOLS_PERMISSION, ...policy.servers.flatMap(s => s.tools.map(t => serverToolRule(s.name, t)))] },
     },
     mcp: {

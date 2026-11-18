@@ -178,10 +178,10 @@ describe('generated settings and mcp-config', () => {
   const files = () => readdirSync(join(STATE_DIR, 'restricted')).sort()
   const read = (name: string) => JSON.parse(readFileSync(join(STATE_DIR, 'restricted', name), 'utf8'))
 
-  test('the settings enable the bridge plugin and allow exactly the bridge and the listed server tools', async () => {
+  test('the settings enable the bridge plugin, turn off the built-ins that serve tools, and allow exactly the bridge and the listed server tools', async () => {
     await launch()
     expect(read('sc-t-11111111-1111-4111-8111-111111111111.settings.json')).toEqual({
-      enabledPlugins: { 'discord@claude-plugins-official': true },
+      enabledPlugins: { 'discord@claude-plugins-official': true, 'cc-plugin-easel@builtin': false },
       permissions: { allow: ['mcp__plugin_discord_discord__*', 'mcp__datadog__search_logs', 'mcp__datadog__get_monitor'] },
     })
   })
