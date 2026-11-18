@@ -1,4 +1,6 @@
-// What a specialist's session may reach, decided once when the session is born and stored on its record.
+// What a specialist's session may reach, decided once when the session is born and stored on its record. The one exception is whom
+// it may send to: `sends_to` is not on the record. It is read from hydra.toml as it is now, the gate (sends-to.ts) judges each send
+// against it, and a reload pushes the changed tool list to the running session (tool-surface.ts).
 //
 // A LaunchPolicy is that decision: whether it is restricted (the stored boolean `restricted`), and for `restricted = true` the one folder it runs in, its
 // built-in tools and its MCP servers. It is made here from hydra.toml, at birth (a fresh start, a respawn, a handoff

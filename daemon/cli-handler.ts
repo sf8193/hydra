@@ -1,4 +1,5 @@
 import { registry, threadRegistry } from './sessions.js'
+import { pushChangedToolSurfaces } from './tool-surface.js'
 import { transport } from './bridge-transport.js'
 import { doSpawnSession, killSession, refusedLaunches } from './session-lifecycle.js'
 import { macosGateHealth } from './restricted.js'
@@ -12,7 +13,7 @@ import { existsSync } from 'fs'
 import { checkIdempotency, registerIdempotency, updateIdempotency, getBySessionId, clearIdempotency, listIdempotencyEntries } from './idempotency.js'
 import { spawnSpecialist, specialistStatus, SpecialistError } from '../specialists/specialist-deliver.js'
 import { declaredInToml, getSpecialist, listSpecialists, removeSpecialist, setSpecialist, setSpecialistThread, withTargetLock, type Specialist } from '../specialists/specialists.js'
-import { slackConversationHealth, refreshSlackSpecialistSurface, formatConversations, operatorBind, operatorUnbind, placeAliases } from '../connectors/slack/runtime.js'
+import { slackConversationHealth, formatConversations, operatorBind, operatorUnbind, placeAliases } from '../connectors/slack/runtime.js'
 import { currentHydraConfig } from './hydra-config.js'
 import { routeFor, type RouteParams } from '../routing/route-request.js'
 import { deliverToTarget, deliverVia, sessionByName, toSession, toThread, type DeliverOutcome } from '../specialists/targets.js'
@@ -423,7 +424,7 @@ async function handleSpecialist(req: CLIRequest): Promise<CLIResponse> {
       // Under the specialist's lock: a removal never lands in the middle of its refill.
       if (name && declaredInToml()) return respond(req, false, `specialists are declared in hydra.toml: remove [specialists.${name}] there`)
       if (!name || !(await withTargetLock(name, async () => removeSpecialist(name)))) return respond(req, false, `specialist "${name ?? ''}" not found`)
-      refreshSlackSpecialistSurface() // its occupant loses the conversation tools
+      pushChangedToolSurfaces() // its occupant loses the conversation tools
       return respond(req, true, { removed: name })
     }
     case 'set': {
@@ -454,7 +455,7 @@ function setSpecialistUnderLock(
     if (!p.thread) return respond(req, false, '--thread is required')
     try {
       const specialist = setSpecialistThread(name, p.thread)
-      refreshSlackSpecialistSurface()
+      pushChangedToolSurfaces()
       return respond(req, true, view(name, specialist))
     } catch (err) {
       return respond(req, false, err instanceof Error ? err.message : String(err))
@@ -476,7 +477,7 @@ function setSpecialistUnderLock(
       ...(p.model && { model: p.model }),
       ...(p.idle && { idle: p.idle }),
     })
-    refreshSlackSpecialistSurface() // the specialist's occupant may have just gained or lost the conversation tools
+    pushChangedToolSurfaces() // the specialist's occupant may have just gained or lost the conversation tools
     return respond(req, true, view(name, specialist))
   } catch (err) {
     return respond(req, false, err instanceof Error ? err.message : String(err))

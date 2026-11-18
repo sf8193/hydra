@@ -11,7 +11,7 @@ import { discoverClaudeSessionId, killSession } from './session-lifecycle.js'
 import { loadAccess, operatorIds } from './access.js'
 import { dispatchReconnect, dispatchSessionReply, dispatchDisconnect } from './protocol-registry.js'
 import './restricted.js'   // registers the queue-flush gate on the transport
-import { getToolsForSession, isToolAllowed, noteDeclaredRestrictions, refusalText } from './tool-surface.js'
+import { advertiseTools, isToolAllowed, noteDeclaredRestrictions, refusalText } from './tool-surface.js'
 import { getProtocolContext } from './protocol-runner.js'
 import { maybeNudgeMissingAdvance } from './advance-nudge.js'
 import { clearPendingReply, settlePendingOnReact, notePendingFromQueue } from './reply-guard.js'
@@ -202,7 +202,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       // session bridge or emit session disconnect/death events when they exit.
       if (conn.connectionRole === 'control') {
         transport.addControl(sessionId, conn)
-        const tools = getToolsForSession(sessionId)
+        const tools = advertiseTools(sessionId)
         transport.sendToBridge(conn, {
           type: 'registered', sessionId, tools, platform: PLATFORM,
           sessionMetadata: info?.sessionMetadata ?? {
@@ -271,7 +271,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       // Only a registration that was accepted may declare: a refused newcomer must not narrow the session it was refused for.
       noteDeclaredRestrictions(sessionId, msg)
       transport.set(sessionId, conn)
-      const tools = getToolsForSession(sessionId)
+      const tools = advertiseTools(sessionId)
       transport.sendToBridge(conn, {
         type: 'registered',
         sessionId,
@@ -391,7 +391,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
 
     case 'tools_request': {
       const { id } = msg as { id: string }
-      transport.sendToBridge(conn, { type: 'tools_result', id, tools: getToolsForSession(conn.sessionId ?? '') })
+      transport.sendToBridge(conn, { type: 'tools_result', id, tools: advertiseTools(conn.sessionId ?? '') })
       break
     }
 
@@ -439,7 +439,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
           break
         }
         conn.lastToolsPushAt = now
-        const tools = getToolsForSession(conn.sessionId)
+        const tools = advertiseTools(conn.sessionId)
         transport.sendToBridge(conn, { type: 'tools_update', tools })
       }
       break
