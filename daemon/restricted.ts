@@ -116,6 +116,7 @@ export function policyProblem(p: unknown): string | undefined {
   }
   if (q.restricted === false) return q.id === OPERATOR_POLICY_ID ? undefined : 'its id does not match its access (an unrestricted policy has the operator id)'
   if (q.restricted !== true) return `its restricted is ${JSON.stringify(q.restricted)}`
+  if (q.canOnlyWriteTo !== undefined) return 'a restricted policy has no can_only_write_to (that is the operator account\'s)'
   if (typeof q.workdir !== 'string' || !isAbsolute(q.workdir)) return 'it has no workdir (a confined session runs in its workdir and nowhere else)'
   if (!Array.isArray(q.tools) || !q.tools.every(t => typeof t === 'string')) return 'it has no tool list'
   if (!Array.isArray(q.servers) || !q.servers.every(s => s && typeof s.name === 'string' && typeof s.command === 'string' && Array.isArray(s.tokenEnv) && Array.isArray(s.tools))) return 'it has no readable server list'

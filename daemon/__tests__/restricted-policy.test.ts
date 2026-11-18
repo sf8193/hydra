@@ -54,6 +54,7 @@ describe('a stored policy is believed only if its id matches its facts', () => {
   test('an id that is not the facts\' own is not (a hand-edited sessions.json, a half-written record)', () => {
     expect(policyProblem({ ...confinedPolicy(), id: 'workdir:000000000000' })).toMatch(/does not match/)
     expect(policyProblem({ ...confinedPolicy(), tools: ['Read', 'Bash'] })).toMatch(/does not match/)
+    expect(policyProblem({ ...confinedPolicy(), canOnlyWriteTo: { workdir: '/w', denyCommands: [], cannotRead: [], servers: [] } })).toMatch(/has no can_only_write_to/)
     expect(policyProblem({ ...confinedPolicy(), workdir: '/somewhere/else' })).toMatch(/does not match/)
   })
   test('an operator policy has the operator id and nothing else', () => {
