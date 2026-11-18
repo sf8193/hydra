@@ -429,6 +429,8 @@ export type HydraConfig = {
   offLimits?: string[]
   /** `[restricted] allow_unproven_macos = true`: restricted specialists that list servers may launch on a macOS version the sandbox is not proven on. Absent: they are refused there. */
   allowUnprovenMacos?: boolean
+  /** `[threads] allow_destroy = true`: `hydra kill <name or thread id> --destroy` and main's `kill_session` may delete a thread whose session record is gone (a killed session, or none ever). Absent: they refuse and name the key. */
+  allowThreadDestroy?: boolean
   guard?: Guard
   /** Absent: `VITALS_DEFAULTS`. */
   vitals?: Vitals

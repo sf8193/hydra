@@ -23,6 +23,11 @@ operator = "op"
 [main]
 model = "claude-opus-5-5[1m]"         # the model main starts with: a Claude alias (opus, sonnet, ...) or a full ID; main runs on Claude, so a Codex or omp alias is a load error (default: HYDRA_MODEL in .env, else hydra's default)
 
+# --- threads: what may be done to a thread. Read at each use, so an edit applies at once. ---
+
+[threads]
+allow_destroy = false                 # true: `hydra kill <name or thread id> --destroy` (and main's kill_session with thread_id and destroy) may also delete a thread whose session record is gone (a killed session, or none ever lived there), permanently, and its starting message where hydra posted it; never a channel, a DM or a specialist's home thread (default false: it refuses and names this key; destroying a live session's thread works either way)
+
 # --- gateways: how you talk to hydra. Discord is a gateway only if it has a table here. Tokens stay in .env. ---
 # (Slack's gateway reads SLACK_BOT_TOKEN and SLACK_APP_TOKEN from .env and has no table.)
 

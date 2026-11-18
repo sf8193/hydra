@@ -12,13 +12,16 @@ import { isProtocolParticipant } from './protocol-registry.js'
 import { emitSessionDeath, killSession } from './session-lifecycle.js'
 import { debouncedRefreshListDisplay } from './commands/status.js'
 import { isThreadOccupied } from './protocol-registry.js'
-import { unwatchBySession } from '../connectors/github/pr-watch.js'
+import { unwatchThread } from '../connectors/github/pr-watch.js'
+import { emit } from './event-bus.js'
+import { currentHydraConfig } from './hydra-config.js'
+import { listSpecialists } from '../specialists/specialists.js'
 import { occupancy } from './session-reachability.js'
 import { removeLaunchFiles } from './launch-files.js'
 
 export type DestroyOutcome =
   | { ok: true }
-  | { ok: false; kind: 'unsupported' | 'protocol-running' | 'alive' | 'delete-failed'; text: string; parentChannelId?: string }
+  | { ok: false; kind: 'unsupported' | 'protocol-running' | 'alive' | 'delete-failed' | 'disabled' | 'not-a-thread' | 'specialist-thread'; text: string; parentChannelId?: string }
 
 /**
  * Delete `threadId` and its anchor, then forget its session record.
@@ -32,7 +35,7 @@ export function destroyRefusal(threadId: string): Extract<DestroyOutcome, { ok: 
   return undefined
 }
 
-export async function destroyThread(threadId: string, by: string, onProceed?: () => void): Promise<DestroyOutcome> {
+export async function destroyThread(threadId: string, by: string, onProceed?: () => void, opts?: { keepAnchor?: boolean }): Promise<DestroyOutcome> {
   const refused = destroyRefusal(threadId)
   if (refused) return refused
 
@@ -40,7 +43,7 @@ export async function destroyThread(threadId: string, by: string, onProceed?: ()
   const info = sessionId ? registry.get(sessionId) : undefined
 
   if (info && occupancy(info) !== 'dead') {
-    return { ok: false, kind: 'alive', text: `Session **${info.tmuxName}** is still alive. Kill it first with \`kill\`.` }
+    return { ok: false, kind: 'alive', text: `Session **${info.tmuxName}** is still alive. Kill it first with \`kill\`, or use \`kill +d\`.` }
   }
 
   onProceed?.()
@@ -81,13 +84,17 @@ export async function destroyThread(threadId: string, by: string, onProceed?: ()
     registry.delete(sessionId)
     registry.deleteThread(threadId)
     registry.persist()
-    unwatchBySession(info)
     removeLaunchFiles(info)
     emitSessionDeath(info, true)
   }
   threadRegistry.delete(threadId)
+  // What hangs on the thread goes with it, whether or not a session was in it: its PR watches and its bound conversations.
+  unwatchThread(threadId)
+  emit('thread:destroyed', { threadId })
 
-  if (parentChannelId && anchorMessageId) {
+  if (opts?.keepAnchor) {
+    process.stderr.write(`daemon: destroy: kept the anchor message (hydra did not make this thread)\n`)
+  } else if (parentChannelId && anchorMessageId) {
     try {
       await gateway.delete(parentChannelId, anchorMessageId)
       process.stderr.write(`daemon: destroy: deleted anchor message ${anchorMessageId} in ${parentChannelId}\n`)
@@ -100,6 +107,29 @@ export async function destroyThread(threadId: string, by: string, onProceed?: ()
 
   debouncedRefreshListDisplay()
   return { ok: true }
+}
+
+/**
+ * Delete a thread by its id, whether or not a session ever lived in it or has ended: `hydra kill <name|thread id> --destroy`
+ * and main's `kill_session {thread_id, destroy}`, when no session record answers. The one rule is hydra.toml's `[threads] allow_destroy`; off, it refuses and names the key.
+ * Who may ask is the caller's to decide (the operator's shell, main). Then three guards, each a thing that must not be
+ * deleted from under hydra: a channel or DM (main lives there, never in a thread), a specialist's home thread (hydra
+ * refills it), and a thread a live session is in (`destroyThread`: kill it first). The deletion and the clearing of the
+ * thread's records are `destroyThread`'s: the same steps `kill +d` runs.
+ */
+export async function destroyThreadById(threadId: string, by: string): Promise<DestroyOutcome> {
+  if (currentHydraConfig().allowThreadDestroy !== true) {
+    return { ok: false, kind: 'disabled', text: 'Destroying a thread by id is off. Set `[threads] allow_destroy = true` in hydra.toml to turn it on.' }
+  }
+  const refused = destroyRefusal(threadId)
+  if (refused) return refused
+  let isThread = false
+  try { isThread = (await gateway.fetchChannel(threadId)).isThread } catch {}
+  if (!isThread) return { ok: false, kind: 'not-a-thread', text: `${threadId} is not a thread hydra can see (a channel or DM is never destroyed here: main lives in those).` }
+  const owner = listSpecialists().find(([, s]) => s.threadId === threadId)
+  if (owner) return { ok: false, kind: 'specialist-thread', text: `${threadId} is specialist **${owner[0]}**'s home thread, which hydra refills.` }
+  // The anchor message is deleted only where hydra posted it: in a thread it did not make, it may be a person's own message.
+  return destroyThread(threadId, by, undefined, { keepAnchor: threadRegistry.get(threadId)?.hydraMade !== true })
 }
 
 /**
