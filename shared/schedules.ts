@@ -6,12 +6,9 @@
 
 import { existsSync, readFileSync, statSync } from 'fs'
 import { join } from 'path'
-import { launchdCalendar } from './jobs-launchd.js'
-import { jobsToml, readDaemonState, type DaemonState, type Job } from './jobs.js'
+import { jobRunner, jobsToml, readDaemonState, type DaemonState, type Job } from './jobs.js'
 import { formatIssues, loadHydraConfig, systemEnv } from '../config/load.js'
-import type { ChatPlatform, HydraConfig } from '../config/types.js'
-
-const DEFAULT_ALERT_AFTER_MS = 24 * 60 * 60_000
+import { DEFAULT_ALERT_AFTER_MS, type ChatPlatform, type HydraConfig } from '../config/types.js'
 
 /** Where `hydra migrate` leaves jobs.toml once its jobs are [schedules]. */
 export const migratedJobsToml = (stateDir: string) => `${jobsToml(stateDir)}.migrated`
@@ -29,16 +26,7 @@ export function schedulesAreSource(stateDir: string, state: DaemonState): boolea
 
 export function jobsFromSchedules(cfg: Pick<HydraConfig, 'schedules' | 'specialists'>): Job[] {
   return Object.values(cfg.schedules).map(s => {
-    let runner = s.runner
-    let runnerFrom: Job['runnerFrom'] = 'job'
-    const notes: string[] = []
-    if (runner === 'launchd') {
-      // As in jobs.toml: a schedule launchd can't hold runs on the daemon, and says why.
-      try { launchdCalendar(s.cron) } catch (e) {
-        runner = 'daemon'; runnerFrom = 'schedule'
-        notes.push(`${(e as Error).message}, so the daemon runs it; set runner = "daemon" to say so`)
-      }
-    }
+    const { runner, runnerFrom, alertAfterMs, notes } = jobRunner(s.cron, s.runner, 'job', s.alertAfterMs ?? DEFAULT_ALERT_AFTER_MS)
     const to = s.target || undefined
     const perConversation = to !== undefined && cfg.specialists[to]?.sessions === 'per-conversation'
     return {
@@ -55,7 +43,7 @@ export function jobsFromSchedules(cfg: Pick<HydraConfig, 'schedules' | 'speciali
       ...(s.workdir !== undefined && { cwd: s.workdir }),
       ...(s.envFile !== undefined && { envFile: s.envFile }),
       ...(s.needs?.length && { needs: s.needs }),
-      alertAfterMs: runner === 'launchd' ? 0 : s.alertAfterMs ?? DEFAULT_ALERT_AFTER_MS,
+      alertAfterMs,
       ...(notes.length && { notes }),
     } satisfies Job
   })

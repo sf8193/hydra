@@ -1,5 +1,5 @@
 import { ConversationTable, namedChannels, cantRead, cmpTs, slackWatchesPath, unresolvedPlaces, conversationId, placeName, isDm, appOfEntry, TOP_LEVEL, NO_DIRECTORY, SLACK_LIMITS, type ConversationConfig, type ConversationEntry, type ConversationStats, type LateOwed } from './watch.js'
-import { parseConversation, THREAD_TS } from './conversation.js'
+import { archiveUrl, parseConversation, THREAD_TS } from './conversation.js'
 import { ConnectedApps, type AppIdentity } from './apps.js'
 import { getSpecialist, conversationSpecialistOf, specialistOf, boundAs } from '../../specialists/specialists.js'
 import { registry } from '../../daemon/sessions.js'
@@ -679,7 +679,7 @@ export function slackConversationLink(conversation: string): string | undefined 
     const c = parseConversation(conversation)
     const url = config(appOfEntry(c))?.workspaceUrl
     if (!url) return undefined
-    return `${url}/archives/${c.channel}${c.threadTs === TOP_LEVEL ? '' : `/p${c.threadTs.replace('.', '')}`}`
+    return archiveUrl(url, c.channel, c.threadTs === TOP_LEVEL ? undefined : c.threadTs)
   } catch { return undefined }
 }
 

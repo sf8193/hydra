@@ -6,7 +6,7 @@ import { atomicWriteFileSync } from '../../daemon/util.js'
 import { DEFAULT_SLACK_APP, isChannelName, isDmPlace, optionsAt, optionsOf, placeCovers, placeKey, placeOf, type Address, type HydraConfig, type Place, type PlaceOptions, type SlackApp } from '../../config/types.js'
 import { appKey, appName, type Apps } from './app.js'
 import { attr, fence, oneLine, quoteBody, UNTRUSTED_TEXT_MAX_CHARS } from '../../shared/untrusted-text.js'
-import { conversationId, appOfEntry, appPrefix, scopeKey, unscopeKey, TOP_LEVEL } from './conversation.js'
+import { archiveUrl, conversationId, appOfEntry, appPrefix, scopeKey, unscopeKey, TOP_LEVEL } from './conversation.js'
 import { reachableBy, route, owningApp, refusal, notServedBy, identify, currentId, isLive, isSessionThread, MAIN } from '../../routing/route.js'
 
 export { conversationId, appOfEntry, TOP_LEVEL }
@@ -519,7 +519,7 @@ export function formatDelivery(
   nonce: string = randomBytes(6).toString('hex'),
 ): string {
   const dm = isDm(entry.channel)
-  const link = where.workspaceUrl ? `${where.workspaceUrl}/archives/${entry.channel}${dm || entry.threadTs === TOP_LEVEL ? '' : `/p${entry.threadTs.replace('.', '')}`}` : undefined
+  const link = where.workspaceUrl ? archiveUrl(where.workspaceUrl, entry.channel, dm || entry.threadTs === TOP_LEVEL ? undefined : entry.threadTs) : undefined
   const attrs = [`place=${attr(where.place)}`, `conversation=${attr(conversationId(entry))}`, ...(link ? [`link=${attr(link)}`] : [])]
   return fence('SLACK-UNTRUSTED', nonce, attrs, [items.map(renderItem).join('\n\n')])
 }
@@ -988,7 +988,7 @@ export class ConversationTable {
     recent.push(now)
     entry.reacted = [...(entry.reacted ?? []), mark].slice(-REACTED_KEEP)
     this.persist()
-    const link = cfg.workspaceUrl ? `${cfg.workspaceUrl}/archives/${ev.channel}/p${ev.itemTs.replace('.', '')}${entry.threadTs !== TOP_LEVEL && entry.threadTs !== ev.itemTs ? `?thread_ts=${entry.threadTs}` : ''}` : `message ${ev.itemTs} in ${placeName(cfg, ev.channel)}`
+    const link = cfg.workspaceUrl ? archiveUrl(cfg.workspaceUrl, ev.channel, ev.itemTs, entry.threadTs !== TOP_LEVEL && entry.threadTs !== ev.itemTs ? entry.threadTs : undefined) : `message ${ev.itemTs} in ${placeName(cfg, ev.channel)}`
     const [emoji, tone] = ev.reaction.split('::skin-tone-')
     const item: Item = { ts: ev.eventTs, user: ev.user, kind: 'reaction', text: `reacted :${emoji}:${tone ? ` (skin tone ${tone})` : ''} to ${link}` }
     const key = keyOf(entry)

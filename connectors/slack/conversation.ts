@@ -48,3 +48,15 @@ export function parseConversation(raw: unknown): { app?: string; channel: string
   if (ts && !THREAD_TS.test(ts)) throw new Error('thread ts must look like 1793732224.093059')
   return { ...(app && app !== DEFAULT_SLACK_APP && { app }), channel, threadTs: ts ? ts.replace(/\.(\d+)$/, (_, f: string) => `.${f.padEnd(6, '0')}`) : TOP_LEVEL }
 }
+
+/** A Slack archive link: the channel; with `ts`, that message; with `threadTs`, opened in that thread. */
+export const archiveUrl = (base: string, channel: string, ts?: string, threadTs?: string): string =>
+  `${base}/archives/${channel}${ts === undefined ? '' : `/p${ts.replace('.', '')}`}${threadTs === undefined ? '' : `?thread_ts=${threadTs}`}`
+
+/** An archive link read back: its channel; as a message link (`message`), also its ts (a dot after the first ten digits). */
+export function parseArchiveUrl(url: string, message: true): { channel: string; ts: string } | undefined
+export function parseArchiveUrl(url: string, message?: false): { channel: string } | undefined
+export function parseArchiveUrl(url: string, message?: boolean): { channel: string; ts?: string } | undefined {
+  const m = url.match(message ? /slack\.com\/archives\/([A-Z0-9]+)\/p(\d+)/ : /slack\.com\/archives\/([A-Z0-9]+)/)
+  return m ? { channel: m[1], ...(m[2] && { ts: m[2].replace(/^(\d{10})(\d+)$/, '$1.$2') }) } : undefined
+}

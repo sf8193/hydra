@@ -9,6 +9,8 @@
  * from inbound messages routed to it (see router.ts).
  */
 
+import { parseArchiveUrl } from '../connectors/slack/conversation.js'
+
 export const MAX_ARTIFACTS = 10
 
 // Cache capacity — 2K entries per cache keeps peak RSS negligible even on
@@ -116,11 +118,11 @@ export function renderContextLink(link: string): string {
     return `• 🔗 <#${channelMatch[1]}|${channelMatch[2]}>`
   }
   // Slack thread/message — use thread root summary if available, else channel name
-  const archiveMatch = link.match(/slack\.com\/archives\/([A-Z0-9]+)\/p(\d+)/)
-  if (archiveMatch) {
+  const archive = parseArchiveUrl(link, true)
+  if (archive) {
     const summary = slackThreadSummaries.get(link)
     if (summary) return `• 🔗 <${link}|${summary}>`
-    const channelName = slackChannelNames.get(archiveMatch[1])
+    const channelName = slackChannelNames.get(archive.channel)
     const label = channelName ? `thread in #${channelName}` : 'Slack thread'
     return `• 🔗 <${link}|${label}>`
   }

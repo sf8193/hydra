@@ -19,7 +19,7 @@ import { nextSlot } from '../shared/cron-local.js'
 import { DEFAULT_IDLE_TTL_MS } from '../shared/constants.js'
 import { invalidSpecialistName, isSessionThread } from '../shared/specialist-name.js'
 import { readTarget, spelled, spelledTo } from '../shared/target-kind.js'
-import type { Runner } from './types.js'
+import { DEFAULT_ALERT_AFTER_MS, type Runner } from './types.js'
 import type { MigrateStep } from './migrate.js'
 
 export type ScheduleTable = {
@@ -54,7 +54,6 @@ export type JobsMigrationOpts = {
   sessionNames: readonly string[]
 }
 
-const DEFAULT_ALERT_AFTER_MS = 24 * 3_600_000
 /** What a spawned run's session got when its spawn named no idle (the daemon's default), so it still frees. */
 const SPAWN_IDLE = duration(DEFAULT_IDLE_TTL_MS)
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
