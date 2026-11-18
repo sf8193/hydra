@@ -1,4 +1,3 @@
-import { readStoredPolicy, readStoredSession, storedPolicy, storedSession } from './policy-record.js'
 import { randomBytes } from 'crypto'
 import { readFileSync } from 'fs'
 import { occupancy, occupied } from './session-reachability.js'
@@ -395,7 +394,7 @@ export class SessionRegistry {
 
   persist(): void {
     try {
-      const data = [...this.sessions.values()].map(({ adapter, ...rest }) => storedSession(rest))
+      const data = [...this.sessions.values()].map(({ adapter, ...rest }) => rest)
       atomicWriteFileSync(this.sessionsFile, JSON.stringify(data, null, 2) + '\n')
     } catch (err) {
       process.stderr.write(`daemon: failed to persist sessions: ${err}\n`)
@@ -500,9 +499,6 @@ export class SessionRegistry {
           raw.toolDescriptions = raw.toolDescriptionOverrides
           delete raw.toolDescriptionOverrides
         }
-
-        // Written before the boolean `restricted`: the type `scoped` and the policy's `access` are read as it (policy-record.ts).
-        readStoredSession(raw)
 
         // Backfill explicit engine for pre-adapter sessions
         if (!raw.engine) raw.engine = 'claude'
@@ -690,7 +686,7 @@ export class ThreadRegistry {
 
   persist(): void {
     try {
-      const data = [...this.threads.values()].map(t => ({ ...t, sessionHistory: t.sessionHistory.map(e => e.policy === undefined ? e : { ...e, policy: storedPolicy(e.policy) }) }))
+      const data = [...this.threads.values()]
       atomicWriteFileSync(this.threadsFile, JSON.stringify(data, null, 2) + '\n')
     } catch (err) {
       process.stderr.write(`daemon: failed to persist threads: ${err}\n`)
@@ -702,7 +698,6 @@ export class ThreadRegistry {
       const raw = readFileSync(this.threadsFile, 'utf8')
       const data = JSON.parse(raw) as ThreadMetadata[]
       for (const info of data) {
-        for (const entry of info.sessionHistory ?? []) readStoredPolicy(entry.policy)
         this.threads.set(info.threadId, info)
       }
       if (data.length > 0) {

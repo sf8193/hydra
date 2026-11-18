@@ -149,9 +149,8 @@ function buildSpawnEnv(input: LaunchInput): string[] {
     `export HYDRA_SESSION_ID=${shq(input.sessionId)}`,
     `export HYDRA_SESSION_NAME=${shq(input.tmuxName)}`,
     `export HYDRA_THREAD_ID=${shq(input.threadId ?? '')}`,
-    // Historical, dropped in a follow-up: a restricted launch still says `scoped` here, which a build from before the boolean reads when a session's record is gone.
-    `export HYDRA_SESSION_TYPE=${shq(isRestricted(input) ? 'scoped' : input.sessionType ?? '')}`,
-    // A restricted launch says so to its bridge the same way (HYDRA_RESTRICTED); it still also says HYDRA_SESSION_TYPE=scoped above.
+    `export HYDRA_SESSION_TYPE=${shq(input.sessionType ?? '')}`,
+    // A restricted launch says so to its bridge, which declares it at registration (tool-surface noteDeclaredRestrictions).
     ...(isRestricted(input) ? ['export HYDRA_RESTRICTED=1'] : []),
     // A write-confined launch says so to its bridge, which declares it at registration (tool-surface noteDeclaredRestrictions): a record that is gone must not widen it.
     ...(input.policy?.canOnlyWriteTo && !confined(input.policy, input.tmuxName) ? ['export HYDRA_WRITE_CONFINED=1'] : []),

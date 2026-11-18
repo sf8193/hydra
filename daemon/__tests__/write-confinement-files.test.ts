@@ -159,7 +159,7 @@ describe('a swap between the check and the send', () => {
 
 describe('a write-confined session known only by its bridge', () => {
   test('a bridge that declared write confinement, whose record is gone, attaches nothing and holds no orchestration tool', async () => {
-    noteDeclaredRestrictions('wc-stray', { sessionType: 'thread_owner', writeConfined: true })
+    noteDeclaredRestrictions('wc-stray', { writeConfined: true })
     for (const t of ['spawn_session', 'kill_session', 'peek_session', 'send_to_thread', 'handoff', 'list_sessions']) {
       const r = await executeTool(t, { target: 'x', type: 'result', text: 't', chat_id: 'c', topic: 't' }, 'wc-stray')
       expect(r.isError).toBe(true)

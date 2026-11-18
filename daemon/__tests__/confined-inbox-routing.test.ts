@@ -115,7 +115,7 @@ describe('a message with an attachment arrives for a write-confined session', ()
     expect(readdirSync(inboxOf()).length).toBe(INBOX_LIMITS.maxFiles)
   })
   test('a session its bridge declared write-confined with no record of a policy gets the same answer here as from download_attachment: nothing is saved, and it is told why', async () => {
-    noteDeclaredRestrictions('ib-stray', { sessionType: 'thread_owner', writeConfined: true })
+    noteDeclaredRestrictions('ib-stray', { writeConfined: true })
     mk('ib-stray')
     const { meta } = await buildNotificationPayload(inbound(), 'ib-stray-thread', 'ib-stray')
     expect(calls).toEqual([])
@@ -152,7 +152,7 @@ describe('download_attachment', () => {
     expect(readdirSync(OUT)).toEqual(['victim'])
   })
   test('a session its bridge declared write-confined but the daemon has no record of saves nothing', async () => {
-    noteDeclaredRestrictions('ib-stray', { sessionType: 'thread_owner', writeConfined: true })
+    noteDeclaredRestrictions('ib-stray', { writeConfined: true })
     mk('ib-stray')   // a record without a policy
     const r = await dl('ib-stray')
     expect(r.isError).toBe(true)

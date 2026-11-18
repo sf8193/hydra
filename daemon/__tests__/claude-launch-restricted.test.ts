@@ -95,7 +95,7 @@ describe('argv', () => {
     expect(cmd).toContain(`export ENABLE_CLAUDEAI_MCP_SERVERS='false'`.replace("'false'", 'false'))
     expect(cmd).toContain("export CLAUDE_CODE_PLUGIN_DIRS='<state>/mods/hydra' ")
     expect(cmd).not.toContain('personal')
-    expect(cmd).toContain("export HYDRA_SESSION_TYPE='scoped'")   // historical, beside the boolean
+    expect(cmd).toContain("export HYDRA_SESSION_TYPE='thread_owner'")   // a restricted specialist is an owner; HYDRA_RESTRICTED says the rest
     expect(cmd).toContain('export HYDRA_RESTRICTED=1')
     expect([...RESTRICTED_MODS]).toEqual(['hydra'])
   })

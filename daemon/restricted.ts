@@ -40,7 +40,7 @@ export type ConfinementPolicy = { specialist: string; workdir: string; denyComma
 export type LaunchPolicy = {
   /** The specialist's id when the session was born. */
   specialist: string
-  /** `true`: a restricted specialist; `false`: the operator's account. Records from before this stored `access: 'workdir' | 'operator'` (policy-record.ts reads that). */
+  /** `true`: a restricted specialist; `false`: the operator's account. */
   restricted: boolean
   /** `restricted = true`: the only folder the session runs in. */
   workdir?: string

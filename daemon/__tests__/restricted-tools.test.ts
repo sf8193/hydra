@@ -75,7 +75,7 @@ describe('an unknown or unregistered caller is never handed thread_owner tools w
     expect(isToolAllowed(id, 'spawn_session')).toBe(false)
   })
   test('declaring any other type changes nothing', () => {
-    noteDeclaredRestrictions('ghost-owner', { sessionType: 'thread_owner' })
+    noteDeclaredRestrictions('ghost-owner', {})
     expect(isToolAllowed('ghost-owner', 'spawn_session')).toBe(true)   // today's behaviour for an unregistered id, unchanged
   })
   test('an unregistered declared-restricted caller reaches no conversation at all', async () => {

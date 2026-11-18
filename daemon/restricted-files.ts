@@ -1,4 +1,4 @@
-// The settings and MCP config a restricted launch generates (claude-engine.ts restrictedConfig), kept under <state>/restricted (before the boolean `restricted` it was <state>/scoped: a session launched then still has its files there, and they are removed from both).
+// The settings and MCP config a restricted launch generates (claude-engine.ts restrictedConfig), kept under <state>/restricted.
 // Each file is named `<session name>-<session id>.<kind>.json`, so one session's files are found by the pair and never by
 // a prefix: specialist ids may contain dashes, and `ops` is a prefix of `ops-eu`. They are mode 0600 (the MCP config holds
 // token values) and are removed when the session ends, by kill or by death.
@@ -9,8 +9,6 @@ import { join } from 'path'
 import { STATE_DIR, STATE_WRITABLE } from './config.js'
 
 export const restrictedDir = () => join(STATE_DIR, 'restricted')
-/** Where a session launched before the boolean `restricted` has its files. Read (to remove them), never written. */
-export const legacyRestrictedDir = () => join(STATE_DIR, 'scoped')
 
 /**
  * Where a restricted session's listed servers may write, and nowhere else (config/server-sandbox.ts): one folder per server,
@@ -18,8 +16,6 @@ export const legacyRestrictedDir = () => join(STATE_DIR, 'scoped')
  * them new, and the session's end removes them (removeRestrictedFiles), so a server's leftovers never outlive the session that ran it.
  */
 export const serverTmpRoot = () => join(tmpdir(), 'hydra-restricted')
-/** A server launched before the boolean `restricted` holds this path in its sandbox profile. Read (to remove its folders), never written. */
-export const legacyServerTmpRoot = () => join(tmpdir(), 'hydra-scoped')
 export const serverTmpDir = (tmuxName: string, sessionId: string, server: string) => join(serverTmpRoot(), `${tmuxName}-${sessionId}`, server)
 
 /** Makes this launch's server folders (mode 0700), after removing the earlier ones of this exact session name. */
@@ -33,7 +29,7 @@ export function makeServerTmpDirs(tmuxName: string, sessionId: string, servers: 
   if (root.uid !== process.getuid!()) throw new Error(`${parent} belongs to another user, so the sandboxed servers' folders cannot go there: remove it`)
   if ((root.mode & 0o077) !== 0) chmodSync(parent, 0o700)
   const earlier = new RegExp(`^${escapeRe(tmuxName)}-${UUID}$`)
-  for (const root of [serverTmpRoot(), legacyServerTmpRoot()]) for (const f of namesIn(root)) if (earlier.test(f)) rmSync(join(root, f), { recursive: true, force: true })
+  for (const f of namesIn(serverTmpRoot())) if (earlier.test(f)) rmSync(join(serverTmpRoot(), f), { recursive: true, force: true })
   for (const name of servers) mkdirSync(serverTmpDir(tmuxName, sessionId, name), { recursive: true, mode: 0o700 })
 }
 
@@ -49,7 +45,7 @@ const namesIn = (dir: string): string[] => { try { return readdirSync(dir) } cat
 export function writeRestrictedFiles(tmuxName: string, sessionId: string, bodies: Record<Kind, object>): Record<Kind, string> {
   mkdirSync(restrictedDir(), { recursive: true, mode: 0o700 })
   const earlier = new RegExp(`^${escapeRe(tmuxName)}-${UUID}\\.(settings|mcp)\\.json$`)
-  for (const dir of [restrictedDir(), legacyRestrictedDir()]) for (const f of namesIn(dir)) if (earlier.test(f)) rmSync(join(dir, f), { force: true })
+  for (const f of namesIn(restrictedDir())) if (earlier.test(f)) rmSync(join(restrictedDir(), f), { force: true })
   const out = {} as Record<Kind, string>
   for (const kind of KINDS) {
     const path = pathIn(restrictedDir(), tmuxName, sessionId, kind)
@@ -66,6 +62,6 @@ export function writeRestrictedFiles(tmuxName: string, sessionId: string, bodies
  */
 export function removeRestrictedFiles(session: { tmuxName: string; sessionId: string }, writable: boolean = STATE_WRITABLE): void {
   if (!writable) return
-  for (const dir of [restrictedDir(), legacyRestrictedDir()]) for (const kind of KINDS) rmSync(pathIn(dir, session.tmuxName, session.sessionId, kind), { force: true })
-  for (const root of [serverTmpRoot(), legacyServerTmpRoot()]) rmSync(join(root, `${session.tmuxName}-${session.sessionId}`), { recursive: true, force: true })
+  for (const kind of KINDS) rmSync(pathIn(restrictedDir(), session.tmuxName, session.sessionId, kind), { force: true })
+  rmSync(join(serverTmpRoot(), `${session.tmuxName}-${session.sessionId}`), { recursive: true, force: true })
 }

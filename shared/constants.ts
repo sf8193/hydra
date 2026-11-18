@@ -249,8 +249,7 @@ export type { ToolName }
 
 /**
  * What a session is in its thread. Whether it is a restricted specialist is not a type: it is the boolean `restricted` on its launch
- * policy (daemon/restricted.ts), so a restricted session is stored as the owner it is. Records written before this stored the type
- * `scoped` (and `access: workdir` on the policy); daemon/sessions.ts reads both as `restricted: true`.
+ * policy (daemon/restricted.ts), so a restricted session is stored as the owner it is.
  */
 export type SessionType = 'master_orchestrator' | 'thread_owner' | 'thread_guest'
 
