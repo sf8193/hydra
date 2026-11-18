@@ -7,7 +7,7 @@ import { DEFAULT_SLACK_APP, isChannelName, isDmPlace, optionsAt, optionsOf, plac
 import { appKey, appName, type Apps } from './app.js'
 import { attr, fence, oneLine, quoteBody, UNTRUSTED_TEXT_MAX_CHARS } from '../../shared/untrusted-text.js'
 import { archiveUrl, conversationId, appOfEntry, appPrefix, scopeKey, unscopeKey, TOP_LEVEL } from './conversation.js'
-import { reachableBy, route, owningApp, refusal, notServedBy, identify, currentId, isLive, isSessionThread, isCatchAll, MAIN } from '../../routing/route.js'
+import { reachableBy, route, owningApp, refusal, notServedBy, identify, currentId, isLive, isSessionThread, withoutFallbacks, routerOf, MAIN } from '../../routing/route.js'
 
 export { conversationId, appOfEntry, TOP_LEVEL }
 
@@ -226,6 +226,8 @@ export type ConversationStats = { refused: number; refusedBy: Record<string, num
 
 /** The reaction on a refused or unrouted mention or DM. Hydra's notices are reactions, never prose. */
 export const REFUSED_REACTION = 'no_entry_sign'
+/** The reaction on a tag that reaches the router: seen at once, before the router (a session that may have to start) has read it. */
+export const ROUTED_REACTION = 'eyes'
 
 // ---------------------------------------------------------------------------
 // Places
@@ -1185,9 +1187,9 @@ export class ConversationTable {
     const addressed = dm || tagged || (!!existing && !existing.specialist)
     if (existing?.delivered?.includes(ev.ts)) return skip(() => `it was already delivered`)
     // A tag in a thread bound to a session is for whoever answers a fresh one here, when someone does: they take the thread, and the session is told.
-    // A catch-all (`isCatchAll`) takes only what nothing holds, so it never takes a thread from a session: the fresh route is read without catch-alls.
+    // A catch-all and a router take only what nothing is bound to, so neither takes a thread from a session: the fresh route is read without them.
     if (tagged && existing?.specialist && isSessionThread(existing.specialist)) {
-      const fresh = route({ ...cfg.hydra, rules: cfg.hydra.rules.filter(r => !isCatchAll(r)) }, { from: addressOf(ev.user), at, addressed: true, app })
+      const fresh = route(withoutFallbacks(cfg.hydra), { from: addressOf(ev.user), at, addressed: true, app })
       if (fresh.fate === 'deliver') {
         const from = existing.specialist
         existing.specialist = fresh.to
@@ -1203,7 +1205,7 @@ export class ConversationTable {
     // Standing down for a tagged app that was only guessed to hear it: if its bot is not in the channel, nobody answers. Said once per app and channel.
     if (owning !== app && guessed.includes(owning) && this.firstTime(this.noted.guessed, `${scoped(owning, ev.channel)}`)) this.deps.log(`daemon: slack connector: a tag of ${this.appName(owning)} in ${ev.channel} is left to it, but whether its bot is in the channel could not be read; if it is not, nobody answers. Add channels:read and groups:read to that app and reinstall it\n`)
     if (owning !== app) return skip(() => `another app is the owning app`)
-    const d = route(cfg.hydra, { from: addressOf(ev.user), at, addressed, app, ...(existing?.specialist && { bound: existing.specialist }) })
+    const d = route(cfg.hydra, { from: addressOf(ev.user), at, addressed, ...(tagged && !dm && { tagged }), app, ...(existing?.specialist && { bound: existing.specialist }) })
     if (d.fate === 'ignored') {
       // A tag of an app that can't hear it, with nothing here to answer it instead: counted, logged and reacted to, never silent.
       if (unheard.length) this.refuse({ ...ev, app }, threadTs, `it tags ${unheard.map(a => this.appName(a)).join(', ')}, whose bot is not in this channel and which has no operator token, so no app can take it: invite that bot to the channel`, 'unrouted', true)
@@ -1242,6 +1244,13 @@ export class ConversationTable {
     if ((d.bind || d.via === 'binding') && entry.specialist !== d.to) { this.setBinding(entry, d.to); this.persist() }
     entry.lastEventAt = this.deps.now()
     const kind = dm ? 'dm' : tagged ? 'mention' : 'follow-up'
+    // A tag the app's router takes is answered at once with a 👀 from the app that heard it, whatever the place's `ack` says: the router (a session
+    // that may have to start) takes a while. Also a tag in a thread still bound to a router specialist; `main` is not told apart from main.
+    if (d.via === 'router') this.deps.log(`daemon: slack connector: → router ${spelledBare(d.to)} for ${keyOf(entry)} (ts ${ev.ts})\n`)
+    if (kind === 'mention' && (d.via === 'router' || (d.to !== MAIN && d.to === routerOf(cfg.hydra, app)))) {
+      const slack = this.actions.get(appOfEntry(entry))
+      if (slack) this.reactAs(slack, entry.app, entry.channel, ev.ts, ROUTED_REACTION)
+    }
     this.enqueue(entry, { ts: ev.ts, user: ev.user, kind, text: ev.text ?? '', ...(ev.files?.length && { files: ev.files }) }, cfg)
     return kind
   }

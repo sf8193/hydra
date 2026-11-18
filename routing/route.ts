@@ -6,6 +6,7 @@
 //      (it is pinned elsewhere, or this app serves only specialists pinned to it): then the message is routed anew, and counts as unbound for "is it addressed" (a gone specialist's thread stays addressed).
 //   2. Otherwise the first matching [[rules]] entry: its place, app and sender all match (an absent `place` or `app` matches every one). An old `listens` was read as rules at load, after the explicit ones.
 //      A catch-all (`isCatchAll`: no place, to main) is tried only after every other rule, wherever it is written.
+//      Then the app's `router` (`routerOf`), for a tag (`tagged`) in a channel thread: it never sees a bound thread, nor a message a rule matched.
 //   3. Otherwise, the operator's DM goes to `main`; anything else is unrouted.
 // A specialist answers where a rule sends a place to it: nothing else says where.
 // Every candidate above must be served by the app the message came through (`notServedBy`, config/pins.ts): a specialist pinned to apps
@@ -13,11 +14,11 @@
 // Then `reachable_by`: the operator is always allowed, `anyone` admits strangers, `people` admits the roster, a role admits who holds it.
 
 import { whyNotServed } from '../config/pins.js'
-import { DEFAULT_SLACK_APP, coversAny, declaredSpecialist, isCatchAll, isDmPlace, optionsOf, placeKey, type Address, type HydraConfig, type Person, type Place, type Rule, type Specialist } from '../config/types.js'
+import { DEFAULT_SLACK_APP, coversAny, declaredSpecialist, isCatchAll, isDmPlace, optionsOf, placeKey, routerOf, type Address, type HydraConfig, type Person, type Place, type Rule, type Specialist } from '../config/types.js'
 import { isSessionThread } from '../shared/specialist-name.js'
 import { spelledBare } from '../shared/target-kind.js'
 import { spelledApp, spelledPerson, spelledRole, whoSpelled } from '../shared/value-kind.js'
-export { isSessionThread, isCatchAll }
+export { isSessionThread, isCatchAll, routerOf }
 
 /** Who sent a message, as hydra knows them. `roles` includes the built-in ones they hold. */
 export type Sender = {
@@ -31,6 +32,8 @@ export type Inbound = {
   from?: Address
   /** Every concrete place this message happened at, most specific first: `slack:C0ABC`, then `slack:#help`. A place written with `*` names every one of its kind (`coversAny`). */
   at: Place[]
+  /** The message tags the app that heard it: the one thing the app's `router` reads (not a DM, nor an untagged message in a conversation that is open). */
+  tagged?: boolean
   /** A DM, or a message that tags the bot: either may open a conversation. Ambient chatter may only where `messages = "all"`. */
   addressed: boolean
   /** The conversation's binding, if it has one. A bound conversation is addressed while its binding holds: everything in it is for its specialist. A binding skipped because this app cannot be served by its specialist does not count. */
@@ -51,7 +54,7 @@ export type Inbound = {
 /** One candidate considered, in order, and what became of it. What `hydra route` prints. */
 export type Step = { via: Via; to: string; matched: boolean; why: string }
 /** `owning-app` is the one step whose `to` is an app id, not a specialist: the app that answers the message. `trigger` is the step where nothing makes the message count: not addressed, and no place here lets everything in. */
-export type Via = 'owning-app' | 'binding' | 'trigger' | 'rule' | 'operator-dm'
+export type Via = 'owning-app' | 'binding' | 'trigger' | 'rule' | 'router' | 'operator-dm'
 
 /** On every decision: the app that heard the message, and (when it was not alone in the channel) the owning app. */
 type Heard = { app?: string; owningApp?: string }
@@ -156,8 +159,14 @@ export function reachableBy(cfg: HydraConfig, app?: string): { specialists: Spec
 /** The specialists (and `main`, as a rule's target) that hear Slack through `app`: a Slack rule for the app sends to them. Whom an alert about the app concerns. */
 export function slackSpecialistsOf(cfg: HydraConfig, app?: string): string[] {
   const r = reachableBy(cfg, app)
-  // a rule with only an app is a Slack rule
-  return [...new Set(r.rules.filter(x => x.place === undefined || isSlackPlace(x.place)).map(x => x.target))]
+  // a rule with only an app is a Slack rule; an app's router hears through it too
+  const routers = Object.values(cfg.slackApps).filter(a => app === undefined || a.id === app).flatMap(a => a.router && (a.router === MAIN || !notServedBy(cfg, a.router, a.id)) ? [a.router] : [])
+  return [...new Set([...r.rules.filter(x => x.place === undefined || isSlackPlace(x.place)).map(x => x.target), ...routers])]
+}
+
+/** `cfg` without what only fills an empty seat: no catch-all rule and no router. A tag takes a thread from a session that merely listens to it only through a rule, never through a catch-all or a router. */
+export function withoutFallbacks(cfg: HydraConfig): HydraConfig {
+  return { ...cfg, rules: cfg.rules.filter(r => !isCatchAll(r)), slackApps: Object.fromEntries(Object.entries(cfg.slackApps).map(([id, a]) => [id, { ...a, router: undefined }])) as HydraConfig['slackApps'] }
 }
 
 
@@ -252,6 +261,14 @@ export function route(cfg: HydraConfig, msg: Inbound): Decision {
     if (matched) winner = { to: r.target, via: 'rule' }
   }
 
+  // Last of the three: a tag in a thread no conversation binds (that went to its binding above) that no rule took goes to the app's router.
+  // Only a tag in a channel (not a DM, which is the bot's own place), and never a message a rule matched.
+  const router = app === undefined ? undefined : routerOf(cfg, app)
+  if (!winner && router !== undefined && msg.tagged && !msg.at.some(isDmPlace)) {
+    trace.push({ via: 'router', to: router, matched: true, why: `no conversation binds this thread and no rule takes it: ${spelledApp(app!)}'s router` })
+    winner = { to: router, via: 'router' }
+  }
+
   if (!winner && sender.operator && msg.at.some(isDmPlace)) {
     trace.push({ via: 'operator-dm', to: MAIN, matched: true, why: 'the operator\'s DM, and no rule sends it elsewhere' })
     winner = { to: MAIN, via: 'operator-dm' }
@@ -267,7 +284,10 @@ export function route(cfg: HydraConfig, msg: Inbound): Decision {
  */
 export function answersLines(cfg: HydraConfig): string[] {
   return Object.keys(cfg.specialists).map(id => {
-    const heard = cfg.rules.filter(r => r.target === id).map(r => `${r.place ? placeKey(r.place) : 'every place'}${r.app ? ` via ${spelledApp(r.app)}` : ''}${r.person ? ` for ${whoSpelled(cfg.people, r.person)}` : ''}`)
+    const heard = [
+      ...cfg.rules.filter(r => r.target === id).map(r => `${r.place ? placeKey(r.place) : 'every place'}${r.app ? ` via ${spelledApp(r.app)}` : ''}${r.person ? ` for ${whoSpelled(cfg.people, r.person)}` : ''}`),
+      ...Object.values(cfg.slackApps).filter(a => a.router === id).map(a => `a tag of ${spelledApp(a.id)} that no binding and no rule takes (its router)`),
+    ]
     return `${id} answers: ${heard.length ? heard.join(', ') : 'no place (only a conversation bound to it)'}`
   })
 }

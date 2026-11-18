@@ -69,7 +69,7 @@ function withoutTool(h: { handoffAtPct?: number; handoffProtocol?: HandoffProtoc
   return h.handoffProtocol === 'letter' ? { handoffProtocol: 'letter' } : {}
 }
 /** A Slack app's keys, as `[slack.apps.<id>]` spells them. */
-const SLACK_APP_KEYS = ['bot_token_env', 'socket_token_env', 'operator_token_env', 'display_name', 'description']
+const SLACK_APP_KEYS = ['bot_token_env', 'socket_token_env', 'operator_token_env', 'display_name', 'description', 'router']
 /** Keys only a hand edit of one specialist's own table sets: a default would reach every specialist, a fragment's table is someone else's. */
 export const RESTRICTION_KEYS = ['restricted', 'can_only_write_to', 'cannot_read', 'deny_commands', 'browser_profile', 'tools', 'mcp_servers', 'sends_to'] as const
 
@@ -321,6 +321,10 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   // Slack: any number of apps, `[slack.apps.<id>]`.
   // No prototype: an id like `constructor` is a valid name.
   const slackApps: Record<string, SlackApp> = Object.create(null)
+  /** The rules with no place that send to main (the old shape of `router = "main"`), warned about once the routers are read. */
+  const legacyCatchAlls: { path: string; app?: string }[] = []
+  /** Each app's `router` as written, resolved once the specialists are read. */
+  const routerAt = new Map<string, { raw: string; path: string }>()
   /** One Slack app from its table. */
   const slackApp = (id: string, t: Table, path: string): SlackApp | undefined => {
     unknownKeys(t, SLACK_APP_KEYS, path)
@@ -343,6 +347,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       error(join2(path, k), `is ${n} characters; Slack allows at most ${max}`)
       return undefined
     }
+    const routerRaw = str(t, 'router', path)
+    if (routerRaw !== undefined) routerAt.set(id, { raw: routerRaw, path: join2(path, 'router') })
     const displayName = capped('display_name', 35) ?? (id === DEFAULT_SLACK_APP ? SLACK_APP_DEFAULTS.name : id)
     const description = capped('description', 140) ?? SLACK_APP_DEFAULTS.description + (operatorTokenEnv ? SLACK_APP_DEFAULTS.operatorTokenNote : '')
     if (!botTokenEnv) return undefined
@@ -847,10 +853,10 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   }
   // A target value says its kind: `main` (the built-in specialist: never declared) or `specialist:<name>` (declared here).
   // Read by `readTarget`, as delivery and the CLI read it; the loaded config holds the bare form (`main`, a specialist's id), which is what routing and the schedules compare against.
-  const targetOf = (raw: string, path: string, owner: 'rule' | 'schedule'): string | undefined => {
+  const targetOf = (raw: string, path: string, owner: 'rule' | 'schedule' | 'router'): string | undefined => {
     const r = readTarget(raw, id => has(specialists, id))
     if (!r.ok) { error(path, r.error ?? `no specialist "${r.undeclared}": declare [specialists.${r.undeclared}], or use main`); return undefined }
-    if (r.ref.kind === 'thread') { error(path, `"${raw}" is a thread, and a ${owner}'s target is main or a declared specialist: declare a specialist for that thread, and write specialist:<name>`); return undefined }
+    if (r.ref.kind === 'thread') { error(path, `"${raw}" is a thread, and ${owner === 'router' ? "an app's router" : `a ${owner}'s target`} is main or a declared specialist: declare a specialist for that thread, and write specialist:<name>`); return undefined }
     return bareOf(r.ref)
   }
 
@@ -974,12 +980,28 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if ((rulePlace || app) && ruleTarget) {
       ruleAt.push(path)
       rules.push({ target: ruleTarget, ...(rulePlace && { place: rulePlace }), ...(app && { app }), ...(person !== undefined && { person }) })
+      if (isCatchAll({ place: rulePlace, target: ruleTarget })) legacyCatchAlls.push({ path, ...(app && { app }) })
     }
   }
   if (doc.rules !== undefined && !(Array.isArray(doc.rules) && doc.rules.every(isTable))) error('rules', 'must be [[rules]] tables')
   else for (const [i, t0] of ((doc.rules ?? []) as Table[]).entries()) {
     const path = `rules[${i}]`
     readRule(t0, path, k => join2(path, k))
+  }
+  // Each app's `router`: where a tag goes that no conversation binds and no rule takes. It binds conversations to other sessions, so it is main or a specialist whose reach is not cut down.
+  for (const [id, { raw, path }] of routerAt) {
+    const to = slackApps[id] ? targetOf(raw, path, 'router') : undefined
+    if (to === undefined) continue
+    const s = to === MAIN_TARGET ? undefined : specialists[to]
+    if (s?.restricted) error(path, `${to} is restricted, and a router binds conversations to other sessions, which a restricted specialist cannot do. Set \`restricted = false\` on it, or name another specialist or main`)
+    else if (s?.canOnlyWriteTo) error(path, `${to} is write-confined (\`can_only_write_to\`), and a router spawns and binds sessions beyond its folder. Remove \`can_only_write_to\` from it, or name another specialist or main`)
+    else if (s?.pinnedTo && !s.pinnedTo.includes(id)) error(path, `${to} is pinned to ${appList(s.pinnedTo)}, so ${spelledApp(id)} can never deliver to it: add ${spelledApp(id)} to ${to}'s \`pinned_to\`, or name another router`)
+    else if (s && !s.pinnedTo && pinnersOf(specialists, id).length) error(path, `${spelledApp(id)} serves only specialists pinned to it (${pinnersOf(specialists, id).join(', ')}), and ${to} is not pinned to it: add ${spelledApp(id)} to ${to}'s \`pinned_to\`, or name another router`)
+    else slackApps[id] = { ...slackApps[id], router: to }
+  }
+  for (const { path, app } of legacyCatchAlls) {
+    const shadowed = Object.values(slackApps).filter(a => a.router !== undefined && (app === undefined || a.id === app))
+    warn(path, `a rule with no place that sends to main still works as a catch-all, but a later release will not read it: set \`router = "main"\` on ${app ? `[slack.apps.${app}]` : 'each Slack app it should serve'} and remove this rule${shadowed.length ? `. Until then it takes every tag first, so the router of ${shadowed.map(a => spelledApp(a.id)).join(', ')} is never reached` : ''}`)
   }
   // A DM with one app's bot is heard through that app only, so a rule at `slack:app-dm:sales` is a rule for `sales` whether or not it says `app`.
   const impliedApp = (r: Rule): string | undefined => r.place?.platform === 'slack' && r.place.kind === 'app-dm' && !isEvery(r.place) ? r.place.ref : undefined
@@ -1203,7 +1225,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (browserProfilesOverlap(profile, o.workdir, env.realpath) && canonicalFolder(profile, env.realpath).startsWith(canonicalFolder(o.workdir, env.realpath) + '/')) error(`specialists.${a.id}.${a.browserProfile !== undefined ? 'browser_profile' : 'workdir'}`, `its browser profile folder ${profile} is inside the workdir ${o.workdir} of specialists.${o.id}: that specialist's own tools could read its logins`)
   }
 
-  const ruleOrSendsToTargets = new Set([...rules.map(r => r.target), ...Object.values(specialists).flatMap(s => s.sendsTo ?? [])])
+  const ruleOrSendsToTargets = new Set([...rules.map(r => r.target), ...Object.values(slackApps).flatMap(a => a.router ? [a.router] : []), ...Object.values(specialists).flatMap(s => s.sendsTo ?? [])])
   const scheduleTargets = new Set(Object.values(schedules).map(s => s.target))
   for (const s of Object.values(specialists)) {
     const path = `specialists.${s.id}`
@@ -1213,7 +1235,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (!s.restricted) {
       const who = reachedBy(s)
       // At its own level: a write-confined specialist is still the operator's account, and the warning says what is and is not confined.
-      if (who.length) warn(path, s.canOnlyWriteTo ? `${listJoin(who)} ${confinementWarning(s.workdir)}` : `${listJoin(who)} can reach the operator's account through it; set restricted = true`)
+      if (who.length) warn(path, s.canOnlyWriteTo ? `${listJoin(who)} ${confinementWarning(s.workdir)}` : `${listJoin(who)} can reach the operator's account through it; ${Object.values(slackApps).some(a => a.router === s.id) ? 'it is a router, so it cannot be restricted: narrow reachable_by to who may have a thread routed' : 'set restricted = true'}`)
     }
     // A restricted specialist's answer can carry a link; where previews are on, the preview shows readers content they could not open themselves.
     // Previews can be switched off in a Slack channel (by id or name) and a Discord channel by id; a Discord channel given by name is not one hydra can match.

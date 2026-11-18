@@ -330,6 +330,8 @@ export type SlackApp = {
   displayName: string
   /** What the manifest says the app does: as set, else a default (which mentions the operator token when there is one). */
   description: string
+  /** `router`: where a tag of this app goes when no conversation binds the thread and no rule takes it. `main`, or a declared specialist that is neither restricted nor write-confined (bare id). */
+  router?: string
 }
 
 /** The specialist declared under this id now, or under an old one (`renamed_from`): undefined when none is. */
@@ -438,8 +440,15 @@ export type Rule = {
  * A rule that sends every place to `main` (no `place`): a catch-all. It takes what nothing else holds or claims, and claims no place itself:
  * routing tries it after every other rule wherever it is written, it never makes its app the owning app of a channel's untagged messages,
  * and it never takes back a thread a session holds (connectors/slack/watch.ts). The loader reads rule order the same way.
+ * Read for one release more: `router = "main"` on the app (`routerOf`) says the same, and the loader names it.
  */
 export const isCatchAll = (r: Pick<Rule, 'place' | 'target'>): boolean => r.place === undefined && r.target === 'main'
+
+/** Where `app` sends a tag that no conversation binds and no rule takes: `main`, or a specialist (the router). Absent: nowhere (it is unrouted). */
+export const routerOf = (cfg: Pick<HydraConfig, 'slackApps'>, app: string | undefined): string | undefined => cfg.slackApps[app ?? DEFAULT_SLACK_APP]?.router
+
+/** Whether specialist `id` is a router: some app's `router` names it. Its power to hand a conversation on comes from that, not from anything on the specialist. */
+export const isRouter = (cfg: Pick<HydraConfig, 'slackApps'>, id: string): boolean => id !== 'main' && Object.values(cfg.slackApps).some(a => a.router === id)
 
 /**
  * The places where specialist `id` answers every message: the `place` of its `[[rules]]` that name no `person` (or `anyone`), in file order.

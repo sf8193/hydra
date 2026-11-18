@@ -8,6 +8,7 @@ import { fallbackDescription, formatDuration } from './util.js'
 import { tmuxServerState, tmuxSessionState } from './tmux.js'
 import { parseIdempotencyTtl, parseIdleTtl } from '../shared/constants.js'
 import { occupancy, occupied } from './session-reachability.js'
+import { endedSessions, endedWithinDays } from './ended-sessions.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
 import { existsSync } from 'fs'
 import { checkIdempotency, registerIdempotency, updateIdempotency, getBySessionId, clearIdempotency, listIdempotencyEntries } from './idempotency.js'
@@ -170,6 +171,11 @@ function cpuField(sessionId: string): { cpu?: string } {
 }
 
 function handleList(req: CLIRequest): CLIResponse {
+  const { ended: withEnded, withinDays } = req.params as { ended?: unknown; withinDays?: unknown }
+  let ended: ReturnType<typeof endedSessions> = []
+  if (withEnded === true) {
+    try { ended = endedSessions(endedWithinDays(withinDays)) } catch (err) { return respond(req, false, err instanceof Error ? err.message : String(err)) }
+  }
   const sorted = [...registry.values()].sort((a, b) => b.lastActive - a.lastActive)
   const list = sorted.map(s => ({
     name: s.tmuxName,
@@ -183,7 +189,8 @@ function handleList(req: CLIRequest): CLIResponse {
     ...cpuField(s.sessionId),
     ...(s.initiator && { initiator: s.initiator }),
   }))
-  return respond(req, true, list)
+  // A dead record still in the registry is already listed above.
+  return respond(req, true, [...list, ...ended.filter(e => !list.some(l => l.threadId === e.thread_id))])
 }
 
 function handleStatus(req: CLIRequest): CLIResponse {

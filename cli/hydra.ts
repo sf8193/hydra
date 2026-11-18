@@ -61,7 +61,8 @@ Session management:
   hydra spawn [options] -- <prompt>    Everything after -- is the prompt, even text starting with "-"
   hydra spawn --specialist <name> --initiator <who> --idempotency-key <key>
                                        Spawn the session for a declared specialist (its kickoff, which it must have, is the prompt; refuses if it is already filled)
-  hydra list                           List active sessions
+  hydra list [--ended [--within <days>]]  List active sessions; --ended adds the sessions that ended (the latest of each thread nobody is in now,
+                                       newest first, within 14 days or --within 1-90 days, at most 50: name, thread id, description, when)
   hydra status <name>                  Session details
   hydra kill <name|thread id> [--destroy]  Kill a session; --destroy (or +d) then deletes its Discord thread, permanently; with [threads] allow_destroy it also deletes the thread of a session that has ended
   hydra peek [name]                    Read-only view of live sessions
@@ -401,8 +402,17 @@ async function main(): Promise<void> {
     }
 
     case 'list': {
+      const rest = filtered.slice(1)
+      const ended = rest.includes('--ended')
+      const w = rest.indexOf('--within')
+      const within = w >= 0 ? Number(rest[w + 1]) : undefined
+      const stray = rest.filter((a, i) => a !== '--ended' && a !== '--within' && !(w >= 0 && i === w + 1))
+      if (stray.length || (w >= 0 && (!ended || !Number.isInteger(within)))) {
+        console.error('error: usage: hydra list [--ended [--within <days>]]')
+        process.exit(1)
+      }
       const response = await sendRequest(socketPath(), {
-        type: 'cli', command: 'list', id: randomUUID(), params: {},
+        type: 'cli', command: 'list', id: randomUUID(), params: { ...(ended && { ended: true }), ...(within !== undefined && { withinDays: within }) },
       })
       printResponse(response, json)
       break

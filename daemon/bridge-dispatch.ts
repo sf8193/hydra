@@ -14,6 +14,7 @@ import { READ_ONLY_DISALLOWED_TOOLS, claudeLaunchCwd, doSpawnSession, handOff, h
 import { fallbackDescription, formatDuration, chunk, assertSendable, parseDuration, withOutbound } from './util.js'
 import { tmuxHasSession } from './tmux.js'
 import { occupancy, occupied } from './session-reachability.js'
+import { endedSessions, endedWithinDays } from './ended-sessions.js'
 import { formatContextPercent, type DeliveryResult } from './engines/engine-adapter.js'
 import { resolveEngine } from './engines/instances.js'
 import { dispatchAdvance, finishPrivateProtocolChildLaunch, isProtocolParticipant, markPrivateProtocolChildLaunching, protocolChildRequiresPrivate, protocolSpawnRequiresPrivate, registerProtocolChild, registerProtocolChildResult } from './protocol-registry.js'
@@ -571,7 +572,9 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
             origin_from: s.originFrom ?? null,
           }
         })
-        return { content: [{ type: 'text', text: JSON.stringify(list, null, 2) }] }
+        // Ended sessions, read off the thread history (a restricted session never gets this far: list_sessions is not its tool).
+        const ended = args.include_ended === true ? endedSessions(endedWithinDays(args.ended_within_days)) : []
+        return { content: [{ type: 'text', text: JSON.stringify([...list, ...ended], null, 2) }] }
       }
 
       case 'handoff': {
@@ -729,7 +732,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
 
       case 'bind_conversation': {
         const caller = callerSessionId ? registry.get(callerSessionId) : undefined
-        return { content: [{ type: 'text', text: await bindConversation(caller, args.conversation) }] }
+        return { content: [{ type: 'text', text: await bindConversation(caller, args.conversation, { target: args.target, why: args.why, callerSessionId }) }] }
       }
 
       case 'unbind_conversation': {

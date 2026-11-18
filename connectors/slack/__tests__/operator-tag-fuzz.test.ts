@@ -84,20 +84,25 @@ function run(toml: string, app: string, members: Record<string, string[]>, msgs:
   return { outcomes, to }
 }
 
+/** Which of the two apps are in each channel. */
+const genMembers = (r: R): Record<string, string[]> => Object.fromEntries(CHANNELS.map(c => [c, ['default', 'sales'].filter(() => chance(r, 0.5))]))
+/** 40 messages: tagged or not, top level or replies, in channels and DMs, some in threads already bound. */
+const genMsgs = (r: R): Msg[] => Array.from({ length: 40 }, (_, j) => {
+  const where = pick(r, [...CHANNELS, ...CHANNELS, 'D0BOT0001', 'D0ALICE01'])
+  const ts = `${2000 + j}.000001`
+  const reply = chance(r, 0.4)
+  const tags = pick(r, ['', `<@${BOT}> `, `<@${SALES_BOT}> `, `<@${SALES_BOT}> <@${BOT}> `, `<@${BOT}> `])
+  const bound = !where.startsWith('D') && chance(r, 0.25) ? pick(r, ['desk', 'deals', 'main', SESSION]) : undefined
+  return { channel: where, ts: reply ? `${2000 + j}.000002` : ts, ...(reply && { threadTs: ts }), user: pick(r, USERS), text: `${tags}hello`, ...(bound && { bound, boundApp: pick(r, ['default', 'sales']) }) }
+})
+
 describe("differential fuzz: the operator's rule against the same hydra.toml without it", () => {
   test('both connections agree on every message, but for the operator tagging their own app where nothing holds the thread', async () => {
     const r = rng(20261118)
     for (let i = 0; i < 300; i++) {
       const base = genToml(r)
-      const members: Record<string, string[]> = Object.fromEntries(CHANNELS.map(c => [c, ['default', 'sales'].filter(() => chance(r, 0.5))]))
-      const msgs: Msg[] = Array.from({ length: 40 }, (_, j) => {
-        const where = pick(r, [...CHANNELS, ...CHANNELS, 'D0BOT0001', 'D0ALICE01'])
-        const ts = `${2000 + j}.000001`
-        const reply = chance(r, 0.4)
-        const tags = pick(r, ['', `<@${BOT}> `, `<@${SALES_BOT}> `, `<@${SALES_BOT}> <@${BOT}> `, `<@${BOT}> `])
-        const bound = !where.startsWith('D') && chance(r, 0.25) ? pick(r, ['desk', 'deals', 'main', SESSION]) : undefined
-        return { channel: where, ts: reply ? `${2000 + j}.000002` : ts, ...(reply && { threadTs: ts }), user: pick(r, USERS), text: `${tags}hello`, ...(bound && { bound, boundApp: pick(r, ['default', 'sales']) }) }
-      })
+      const members = genMembers(r)
+      const msgs = genMsgs(r)
       const sides = ['default', 'sales'].map(app => [run(base, app, members, msgs), run(base + OPERATOR_RULE, app, members, msgs)] as const)
       if (sides.some(([a, b]) => !a || !b)) { counts.skippedConfigs++; continue }
       counts.configs++
@@ -128,5 +133,65 @@ describe("differential fuzz: the operator's rule against the same hydra.toml wit
 
   test('the counts', () => {
     process.stdout.write(`operator-tag fuzz: ${JSON.stringify(counts)}\n`)
+  })
+})
+
+// --- the app's `router` -------------------------------------------------------------------------------------------------------------------
+// `router = "main"` against the old shape (the rule above): the same decisions, but for what the router means to change. And a specialist
+// router against none: the same decisions, but for a tag that nothing bound and no rule took, which now reaches the router (or is refused by it).
+/** The operator's app (the one with the token) names a router. */
+const withRouter = (toml: string, router: string) => toml.replace('operator_token_env = "A_USER"', `operator_token_env = "A_USER"\nrouter = "${router}"`)
+const rcounts = { configs: 0, messages: 0, oldVsNewAgree: 0, oldVsNewDiffer: 0, oldUntaggedOnly: 0, noneVsRouterAgree: 0, noneVsRouterDiffer: 0, tagsToRouter: 0, tagsRefusedByRouter: 0 }
+const delivered = (o: { outcome: HandleOutcome; to: string[] }) => o.to
+const taken = (o: { outcome: HandleOutcome }) => o.outcome === 'mention' || o.outcome === 'dm' || o.outcome === 'follow-up'
+
+describe("differential fuzz: the app's router", () => {
+  test('`router = "main"` routes as the old shape does, but for the operator\'s untagged messages, which only the old shape reads; a specialist router changes only tags nothing else took', async () => {
+    const r = rng(20261119)
+    for (let i = 0; i < 300; i++) {
+      const base = genToml(r)
+      const members = genMembers(r)
+      const msgs = genMsgs(r)
+      const files = { old: base + OPERATOR_RULE, main: withRouter(base, 'main'), desk: withRouter(base, 'specialist:desk') }
+      const runs = (['default', 'sales'] as const).map(app => ({ none: run(base, app, members, msgs), old: run(files.old, app, members, msgs), main: run(files.main, app, members, msgs), desk: run(files.desk, app, members, msgs) }))
+      if (runs.some(x => !x.none || !x.old || !x.main || !x.desk)) { rcounts.configs += 0; counts.skippedConfigs++; continue }
+      rcounts.configs++
+      for (const [k, app] of (['default', 'sales'] as const).entries()) {
+        await Bun.sleep(5)
+        const side = runs[k]
+        for (const [j, m] of msgs.entries()) {
+          rcounts.messages += app === 'default' ? 1 : 0
+          const conv = `slack:${app === 'default' ? '' : `${app}:`}${m.channel}:${m.channel.startsWith('D') && !m.threadTs ? 'top' : m.threadTs ?? m.ts}`
+          const at = (x: NonNullable<typeof side.none>) => ({ outcome: x.outcomes[j], to: x.to.get(conv) ?? [] })
+          const [none, old, main, desk] = [at(side.none!), at(side.old!), at(side.main!), at(side.desk!)]
+          const why = (a: unknown, b: unknown) => `config #${i}\n${base}\nmessage ${JSON.stringify(m)} through ${app}: ${JSON.stringify(a)} → ${JSON.stringify(b)}`
+          // The old shape and `router = "main"`: what reaches a session is the same; a refusal and "unrouted" are both nothing delivered.
+          if (JSON.stringify(delivered(old)) === JSON.stringify(delivered(main)) && taken(old) === taken(main)) rcounts.oldVsNewAgree++
+          else {
+            rcounts.oldVsNewDiffer++
+            // The one meant difference: the old shape also took the operator's untagged messages where a place hears every one; a router takes only a tag.
+            expect(app === 'default' && m.user === 'UOP' && !m.text.includes(`<@${BOT}>`) && old.to.every(t => t === 'main') && main.to.length === 0, why(old, main)).toBe(true)
+            rcounts.oldUntaggedOnly++
+          }
+          // A specialist router against none: nothing else changes.
+          if (JSON.stringify(none) === JSON.stringify(desk)) { rcounts.noneVsRouterAgree++; continue }
+          rcounts.noneVsRouterDiffer++
+          const tag = m.text.includes(`<@${BOT}>`) && !m.channel.startsWith('D')
+          const nothingTookIt = !taken(none) && none.to.length === 0
+          const reached = desk.to.length > 0 && desk.to.every(t => t === 'desk')
+          const refused = desk.outcome === 'refused' && desk.to.length === 0
+          expect(app === 'default' && tag && nothingTookIt && (reached || refused), why(none, desk)).toBe(true)
+          if (reached) rcounts.tagsToRouter++
+          else rcounts.tagsRefusedByRouter++
+        }
+      }
+    }
+    expect(rcounts.tagsToRouter).toBeGreaterThan(0)
+    expect(rcounts.oldVsNewAgree).toBeGreaterThan(1000)
+    expect(rcounts.configs).toBeGreaterThan(200)
+  }, 120_000)
+
+  test('the counts', () => {
+    process.stdout.write(`router fuzz: ${JSON.stringify(rcounts)}\n`)
   })
 })
