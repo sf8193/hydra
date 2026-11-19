@@ -174,7 +174,7 @@ describe('a start of a write-confined specialist', () => {
     try {
       await expect(start()).rejects.toThrow(PolicyRefusal)
       expect(launches).toHaveLength(0)
-      expect(told.join('\n')).toMatch(/\[mcp_servers\.browser\] needs BR_TOKEN, which is not set: add BR_TOKEN=<value> to .*\.env, then restart the daemon/)
+      expect(told.join('\n')).toMatch(/\[mcp_servers\.browser\] needs BR_TOKEN, which is not set: add BR_TOKEN=<value> to .*\.env, and the next start picks it up/)
     } finally { process.env.BR_TOKEN = saved }
   })
 

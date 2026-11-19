@@ -159,11 +159,12 @@ export function bornPolicy(specialistId: string | undefined, h: HydraConfig = cu
 
 /**
  * The first token variable a restricted or write-confined policy's servers need that is not set, as a refusal's text (cause and fix), or undefined.
- * `held` is what the daemon's scrub took out of the environment (a variable may be set there and absent from `env`).
+ * `held` is what the daemon's scrub took out of the environment (a variable may be set there and absent from `env`). A start asks
+ * through tokenRefusalAtStart (session-lifecycle.ts), which re-reads the state `.env` once before refusing.
  */
 export function missingTokenRefusal(p: { specialist: string; servers: ReadonlyArray<{ name: string; tokenEnv: readonly string[] }> }, envFile: string, sessionName: string, env: NodeJS.ProcessEnv = process.env, held: Readonly<Record<string, string>> = {}): string | undefined {
   for (const s of p.servers) for (const v of s.tokenEnv) {
-    if (env[v] === undefined && held[v] === undefined) return `specialist ${p.specialist}: [mcp_servers.${s.name}] needs ${v}, which is not set: add ${v}=<value> to ${envFile}, then restart the daemon (it reads that file only at start). No session starts without it. ${remedy(sessionName)}`
+    if (env[v] === undefined && held[v] === undefined) return `specialist ${p.specialist}: [mcp_servers.${s.name}] needs ${v}, which is not set: add ${v}=<value> to ${envFile}, and the next start picks it up: a start re-reads that file for names newly added to it (a value already loaded changes only with a daemon restart). No session starts without it. ${remedy(sessionName)}`
   }
   return undefined
 }

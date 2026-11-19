@@ -4,7 +4,7 @@ import { oneLine } from '../shared/untrusted-text.js'
 import { mkdirSync, writeFileSync, readFileSync, existsSync, openSync, readSync, closeSync, accessSync, realpathSync, constants as fsConstants } from 'fs'
 import { basename, dirname, join, resolve as resolvePath } from 'path'
 import { homedir, tmpdir } from 'os'
-import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, ENV_FILE, STATE_DIR } from './config.js'
+import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, ENV_FILE, STATE_DIR, pickUpNewEnvNames } from './config.js'
 import { safeSend, formatSpawnLine, atomicWriteFileSync } from './util.js'
 import { tmuxHasSession, tmuxSync, tmuxTimedOut } from './tmux.js'
 import { nameHeldByAnother, occupancy, occupied } from './session-reachability.js'
@@ -786,6 +786,17 @@ export const _refusalsKept = (): number => verifyRefused.size
 /** Test seam: forget which refusals a thread was told. */
 export function _resetRefusalNotices(): void { threadNotices.clear() }
 
+/**
+ * The token-variable refusal for a start, or undefined. A variable missing from what the daemon loaded may have been added to the
+ * state `.env` since boot: the file is re-read once (only names not loaded are picked up) and the check runs again. Without this a
+ * key added for one specialist meant a daemon restart, which interrupts every session.
+ */
+function tokenRefusalAtStart(p: Parameters<typeof missingTokenRefusal>[0], sessionName: string): string | undefined {
+  const first = missingTokenRefusal(p, ENV_FILE, sessionName, process.env, capturedSpawnVars())
+  if (!first || !pickUpNewEnvNames().length) return first
+  return missingTokenRefusal(p, ENV_FILE, sessionName, process.env, capturedSpawnVars())
+}
+
 export async function doSpawnSession(topic: string, chatId?: string, messageId?: string, opts?: SpawnOpts): Promise<SpawnResult> {
   // Before a thread is opened: a working dir that has gone away fails the spawn without leaving an empty thread.
   if (opts?.cwd && !existsSync(opts.cwd)) throw new Error(`working directory ${opts.cwd} does not exist`)
@@ -1083,7 +1094,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     const why = workdirRestrictionIssues(hydraLoadEnv(), restrictedPolicy.workdir, currentHydraConfig().offLimits ?? [])
     if (why.length) await refuse(`specialist ${restrictedPolicy.specialist}: its workdir no longer passes the checks hydra.toml was loaded with, so no restricted session starts: ${why.join('; ')}. ${remedy(sessionName)}`)
     // A listed server's token variable must be set: checked here, with the other refusals, so the thread hears it.
-    const noToken = missingTokenRefusal(restrictedPolicy, ENV_FILE, sessionName, process.env, capturedSpawnVars())
+    const noToken = tokenRefusalAtStart(restrictedPolicy, sessionName)
     if (noToken) await refuse(noToken)
     launchCwd = restrictedPolicy.workdir
     // The operator declared this folder in hydra.toml; without this a first launch there waits on Claude's trust dialog (as for any specialist workdir).
@@ -1109,7 +1120,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     const profileWhy = w.browserProfile === undefined ? undefined : browserProfileProblem(w.workdir, w.browserProfile, hydraLoadEnv().realpath, w.cannotRead)
     if (profileWhy) await refuse(`specialist ${writeConfinedPolicy.specialist}: ${profileWhy}, so no session starts. ${remedy(sessionName)}`)
     // A listed server's token variable must be set: checked here, with the other refusals, so the thread hears it.
-    const noToken = missingTokenRefusal({ specialist: writeConfinedPolicy.specialist, servers: w.servers }, ENV_FILE, sessionName, process.env, capturedSpawnVars())
+    const noToken = tokenRefusalAtStart({ specialist: writeConfinedPolicy.specialist, servers: w.servers }, sessionName)
     if (noToken) await refuse(noToken)
     launchCwd = w.workdir
     preApproveClaudeTrust([w.workdir], `workdir ${w.workdir}`)

@@ -3,10 +3,11 @@
 // at launch. Through the real spawn and recovery paths: fake engine, fake tmux, no daemon I/O.
 import { macLike } from './sandbox-host.js'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { gateway, STATE_DIR } from '../config.js'
+import { ENV_FILE, gateway, pickUpNewEnvNames, STATE_DIR } from '../config.js'
+import { capturedSpawnVars, registerSpawnVars, stateEnvUnsets } from '../../shared/spawn-env.js'
 import { setSpecialistThread, _reloadSpecialists, kickoffHash } from '../../specialists/specialists.js'
 import { specialistDeps } from '../../specialists/specialist-deliver.js'
 import { specialistThreadDeps } from '../specialist-thread.js'
@@ -655,15 +656,76 @@ describe('a launch path that passes nothing for a specialist session: restricted
     expect(launches).toHaveLength(0)
     expect(told.join('\n')).toMatch(/create it .*Run `hydra kill sldead\d+`/s)
   })
-  test('a listed server whose token variable is not set: refused before anything starts, and the thread is told which variable, which file, and to restart', async () => {
+  test('a listed server whose token variable is not set: refused before anything starts, and the thread is told which variable, which file, and that the next start picks it up', async () => {
     seedDead({ policy: opsPolicy() })
     const saved = process.env.DD_API_KEY
     delete process.env.DD_API_KEY
     try {
       await expect(bare()).rejects.toThrow(PolicyRefusal)
       expect(launches).toHaveLength(0)
-      expect(told.join('\n')).toMatch(/\[mcp_servers\.datadog\] needs DD_API_KEY, which is not set: add DD_API_KEY=<value> to .*\.env, then restart the daemon/)
+      expect(told.join('\n')).toMatch(/\[mcp_servers\.datadog\] needs DD_API_KEY, which is not set: add DD_API_KEY=<value> to .*\.env, and the next start picks it up: a start re-reads that file.*Run `hydra kill sldead\d+`/s)
+      expect(told.join('\n')).not.toContain('restart the daemon (')
     } finally { process.env.DD_API_KEY = saved }
+  })
+  describe('a token variable added to the state .env after boot (19 Nov: a key added for one specialist meant restarting the daemon and every session)', () => {
+    let before: string | undefined
+    let savedDd: string | undefined
+    const logged: string[] = []
+    const quiet = process.stderr.write
+    beforeEach(() => {
+      before = existsSync(ENV_FILE) ? readFileSync(ENV_FILE, 'utf8') : undefined
+      savedDd = process.env.DD_API_KEY
+      logged.length = 0
+      process.stderr.write = ((t: string) => { logged.push(String(t)); return true }) as any
+    })
+    afterEach(() => {
+      process.stderr.write = quiet
+      if (before === undefined) rmSync(ENV_FILE, { force: true }); else writeFileSync(ENV_FILE, before)
+      for (const k of ['ACME_AFTER_BOOT', 'CLAUDE_AFTER_BOOT']) delete process.env[k]
+      process.env.DD_API_KEY = savedDd
+    })
+    const held = (v: string) => process.env[v] ?? capturedSpawnVars()[v]
+
+    test('the repro: missing key -> refused; append it to the .env; kill -> the next start launches, with no daemon restart', async () => {
+      delete process.env.DD_API_KEY
+      seedDead({ policy: opsPolicy() })
+      await expect(bare()).rejects.toThrow(/needs DD_API_KEY, which is not set/)
+      expect(launches).toHaveLength(0)
+      appendFileSync(ENV_FILE, '\nDD_API_KEY=dd-added-after-boot\n')
+      seedDead({ policy: opsPolicy() })                      // what \`hydra kill\` leaves: a dead record the next message starts from
+      await bare()
+      expect(launches).toHaveLength(1)
+      expect(held('DD_API_KEY')).toBe('dd-added-after-boot')
+      expect(logged.join('')).toContain(`picked up a name newly added to ${ENV_FILE} for a session start: DD_API_KEY`)
+    })
+
+    test('a value already loaded is not changed by an edit: the start keeps the boot value and logs nothing', async () => {
+      process.env.DD_API_KEY = 'dd-boot'
+      writeFileSync(ENV_FILE, 'DD_API_KEY=dd-edited\n')
+      expect(pickUpNewEnvNames()).toEqual([])
+      seedDead({ policy: opsPolicy() })
+      await bare()
+      expect(held('DD_API_KEY')).toBe('dd-boot')
+      expect(logged.join('')).not.toContain('picked up')
+    })
+
+    test('names refused at boot stay refused: a new name is unset in a restricted session, and a name sessions need is never made a token', () => {
+      expect(registerSpawnVars(['CLAUDE_AFTER_BOOT']).refused).toEqual([{ name: 'CLAUDE_AFTER_BOOT', reason: 'is a variable sessions need' }])
+      writeFileSync(ENV_FILE, 'ACME_AFTER_BOOT=a\nCLAUDE_AFTER_BOOT=c\n')
+      expect(pickUpNewEnvNames().sort()).toEqual(['ACME_AFTER_BOOT', 'CLAUDE_AFTER_BOOT'])
+      expect(stateEnvUnsets()).toContain('ACME_AFTER_BOOT')                  // as for a name read at boot
+      expect(stateEnvUnsets()).not.toContain('CLAUDE_AFTER_BOOT')            // CLAUDE_* is kept, as at boot
+      expect(capturedSpawnVars().CLAUDE_AFTER_BOOT).toBeUndefined()          // still not a token: not taken from the environment
+    })
+
+    test('values never appear in the log, only names', () => {
+      delete process.env.DD_API_KEY
+      writeFileSync(ENV_FILE, 'DD_API_KEY=dd-secret-value-xyz\nACME_AFTER_BOOT=acme-secret-value-xyz\n')
+      expect(pickUpNewEnvNames().sort()).toEqual(['ACME_AFTER_BOOT', 'DD_API_KEY'])
+      const log = logged.join('')
+      expect(log).toContain('DD_API_KEY')
+      expect(log).not.toContain('secret-value')
+    })
   })
   test('a refusal for a stored policy that differs says what differs, and the one remedy', async () => {
     seedDead({ policy: opsPolicy() })

@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { parseEnvLine, sourceEnvFiles } from '../env-parse.js'
+import { parseEnvLine, sourceEnvFiles, sourceNewEnvNames, sourcedEnvNames } from '../env-parse.js'
 import { mkdtempSync, writeFileSync, rmSync, chmodSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -143,5 +143,52 @@ describe('sourceEnvFiles', () => {
     writeFileSync(join(dir, 'two.env'), 'PROBE_A=second\n')
     sourceEnvFiles([join(dir, 'one.env'), join(dir, 'two.env')])
     expect(process.env.PROBE_A).toBe('first')
+  })
+})
+
+// A file edited after boot (a key added for a specialist's server): the boot loader again, for names not loaded only.
+describe('sourceNewEnvNames', () => {
+  let saved: NodeJS.ProcessEnv
+  let dir: string
+  beforeEach(() => {
+    saved = { ...process.env }
+    for (const k of ['PROBE_A', 'PROBE_B', 'PROBE_HELD']) delete process.env[k]
+    dir = mkdtempSync(join(tmpdir(), 'env-new-'))
+  })
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+    for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k]
+    for (const [k, v] of Object.entries(saved)) if (process.env[k] !== v) process.env[k] = v as string
+  })
+  const none = () => false
+
+  test('a name added to the file after boot is set, and returned', () => {
+    writeFileSync(join(dir, '.env'), 'PROBE_A=boot\n')
+    sourceEnvFiles([join(dir, '.env')])
+    writeFileSync(join(dir, '.env'), 'PROBE_A=boot\nPROBE_B=added\n')
+    expect(sourceNewEnvNames([join(dir, '.env')], none)).toEqual(['PROBE_B'])
+    expect(process.env.PROBE_B).toBe('added')
+    expect(sourcedEnvNames()).toContain('PROBE_B')
+  })
+
+  test('a value already loaded is never changed: not one in the environment (even blank), not one the caller holds', () => {
+    process.env.PROBE_A = 'boot'
+    process.env.PROBE_B = ''
+    writeFileSync(join(dir, '.env'), 'PROBE_A=edited\nPROBE_B=edited\nPROBE_HELD=edited\n')
+    expect(sourceNewEnvNames([join(dir, '.env')], n => n === 'PROBE_HELD')).toEqual([])
+    expect(process.env.PROBE_A).toBe('boot')
+    expect(process.env.PROBE_B).toBe('')
+    expect(process.env.PROBE_HELD).toBeUndefined()
+  })
+
+  test('nothing is unset: a name removed from the file stays', () => {
+    process.env.PROBE_A = 'boot'
+    writeFileSync(join(dir, '.env'), '')
+    expect(sourceNewEnvNames([join(dir, '.env')], none)).toEqual([])
+    expect(process.env.PROBE_A).toBe('boot')
+  })
+
+  test('a missing file adds nothing', () => {
+    expect(sourceNewEnvNames([join(dir, 'gone.env')], none)).toEqual([])
   })
 })

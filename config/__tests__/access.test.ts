@@ -242,9 +242,9 @@ describe('a path the sandbox profile cannot hold (a control character), refused 
 
 describe('a listed server whose token variable the state .env does not set (a warning: .env can change, the launch is the hard check)', () => {
   const noDdKey = testLoadEnv({ ...env, envFileHas: n => n !== 'DD_API_KEY' })
-  test('a workdir specialist listing it warns, naming the variable, the file and the restart', () => {
+  test('a workdir specialist listing it warns, naming the variable and the file', () => {
     const r = ok(spec('restricted = true\nmcp_servers = ["datadog"]'), noDdKey)
-    expect(r.warnings).toEqual([`specialists.ops.mcp_servers[0]: [mcp_servers.datadog] needs DD_API_KEY, and ${STATE}/.env does not set it, so no session of this specialist can start until it does: add DD_API_KEY=<value> there and restart the daemon`])
+    expect(r.warnings).toEqual([`specialists.ops.mcp_servers[0]: [mcp_servers.datadog] needs DD_API_KEY, and ${STATE}/.env does not set it, so no session of this specialist can start until it does: add DD_API_KEY=<value> there (the next start picks up a name newly added; no daemon restart)`])
   })
   test('it loads (a warning, not an error)', () => {
     expect(ok(spec('restricted = true\nmcp_servers = ["datadog"]'), noDdKey).config.specialists.ops.mcpServerNames).toEqual(['datadog'])

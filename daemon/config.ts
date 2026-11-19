@@ -3,7 +3,7 @@ import { homedir } from 'os'
 import { basename, join } from 'path'
 
 import type { ChatGateway } from '../gateways/gateway.js'
-import { sourceEnvFiles } from '../shared/env-parse.js'
+import { sourceEnvFiles, sourceNewEnvNames } from '../shared/env-parse.js'
 import { captureSpawnVars, capturedSpawnVars } from '../shared/spawn-env.js'
 import { scrubTokenVarsInFile } from '../config/token-vars.js'
 import { claudeConfigDir, DISCORD_GATEWAY_TOKEN_ENV, platformStateDir, SLACK_GATEWAY_TOKEN_ENVS } from '../shared/constants.js'
@@ -48,6 +48,22 @@ scrubTokenVarsInFile(join(STATE_DIR, 'hydra.toml'))
 // What is scrubbed from the environment is kept for the daemon's own use (capturedSpawnVars): Raindrop's settings, the gateway's tokens and every token hydra.toml names.
 captureSpawnVars()
 const held = capturedSpawnVars()
+
+/**
+ * Re-reads the state `.env` for a session start that found a variable it needs unset (a key added after boot): sets only names the
+ * daemon has not loaded (not in its environment, not among the values the scrub holds), so a value already loaded is never changed
+ * and nothing is unset. The same rules as at boot follow: a name hydra.toml declares as a token is taken out of the environment at
+ * once (captureSpawnVars), and a restricted session unsets the new names as it does the boot ones (stateEnvUnsets). Logs the names
+ * it picked up, never their values. Returns them.
+ */
+export function pickUpNewEnvNames(file: string = ENV_FILE): string[] {
+  const loaded = capturedSpawnVars()
+  const added = sourceNewEnvNames([file], n => loaded[n] !== undefined)
+  if (!added.length) return added
+  captureSpawnVars()
+  process.stderr.write(`daemon: picked up ${added.length === 1 ? 'a name' : `${added.length} names`} newly added to ${file} for a session start: ${added.join(', ')}\n`)
+  return added
+}
 
 export const CLAUDE_CONFIG = claudeConfigDir()
 

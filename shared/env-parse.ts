@@ -32,20 +32,37 @@ export function _resetSourcedEnvNamesForTesting(): void {
   sourced.clear()
 }
 
+// The KEY=VALUE pairs of one .env file, in order, or undefined when it cannot be read (said on stderr, unless it does not exist).
+function readEnvFile(path: string): Array<[string, string]> | undefined {
+  let body: string
+  try { body = readFileSync(path, 'utf8') } catch (err) {
+    const code = (err as { code?: string }).code
+    if (code !== 'ENOENT') process.stderr.write(`hydra: cannot read ${path} (${code}) — falling back to defaults\n`)
+    return undefined
+  }
+  return body.split('\n').map(parseEnvLine).filter((p): p is [string, string] => p !== null)
+}
+
 /** Backfill process.env from .env files. A var already set to blank or
  *  whitespace counts as absent, so a blank inherited value self-heals. */
 export function sourceEnvFiles(paths: string[]): void {
-  for (const path of paths) {
-    let body: string
-    try { body = readFileSync(path, 'utf8') } catch (err) {
-      const code = (err as { code?: string }).code
-      if (code !== 'ENOENT') process.stderr.write(`hydra: cannot read ${path} (${code}) — falling back to defaults\n`)
-      continue
-    }
-    for (const line of body.split('\n')) {
-      const parsed = parseEnvLine(line)
-      if (parsed) sourced.add(parsed[0])
-      if (parsed && (process.env[parsed[0]] ?? '').trim() === '') process.env[parsed[0]] = parsed[1]
-    }
+  for (const path of paths) for (const [k, v] of readEnvFile(path) ?? []) {
+    sourced.add(k)
+    if ((process.env[k] ?? '').trim() === '') process.env[k] = v
   }
+}
+
+/**
+ * The boot loader again, for a file edited after boot: sets only the names this process has not loaded (`loaded` says which it has,
+ * besides process.env), so a value already loaded is never changed and nothing is unset. Returns the names it set; never their values.
+ */
+export function sourceNewEnvNames(paths: string[], loaded: (name: string) => boolean): string[] {
+  const added: string[] = []
+  for (const path of paths) for (const [k, v] of readEnvFile(path) ?? []) {
+    if (process.env[k] !== undefined || loaded(k) || added.includes(k)) continue
+    process.env[k] = v
+    sourced.add(k)
+    added.push(k)
+  }
+  return added
 }

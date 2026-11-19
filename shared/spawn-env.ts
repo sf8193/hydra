@@ -137,7 +137,7 @@ export const STATE_ENV_KEEP_PREFIXES: readonly string[] = NEVER_SCRUBBED_PREFIXE
 // Shell variables a shell will not let a script unset: an `unset` of one fails and would abort the launch's `&&` chain.
 const SHELL_READONLY = new Set(['PPID', 'UID', 'EUID', 'GID', 'EGID', 'SHELLOPTS', 'BASHOPTS', 'BASH_VERSINFO'])
 
-/** The names the state `.env` sets that a restricted or write-confined session does not keep: the daemon reads the file at boot, so this is final per boot. */
+/** The names the state `.env` sets that a restricted or write-confined session does not keep: those read at boot, and any a session start picked up since (pickUpNewEnvNames). */
 export function stateEnvUnsets(names: Iterable<string> = sourcedEnvNames()): string[] {
   return [...new Set(names)]
     .filter(n => /^[A-Za-z_][A-Za-z0-9_]*$/.test(n) && !SHELL_READONLY.has(n) && !STATE_ENV_KEEP.has(n) && !STATE_ENV_KEEP_PREFIXES.some(p => n.startsWith(p)))
