@@ -337,6 +337,13 @@ describe('posting where link previews are off', () => {
     await t.listener.post(CH, undefined, 'x')
     expect(t.apps[0].apiCalls.filter(c => c.startsWith('post:'))).toEqual([`post:${CH}:-:x:{"unfurl":false}`])
   })
+  test('a connected app\'s post where link_previews = "single": one link posts as before, two ask for no unfurl', async () => {
+    const t = setup({ toml: oneListener(CH) + `[places."slack:${CH}"]\nlink_previews = "single"\n` })
+    await t.listener.start()
+    await t.listener.post(CH, undefined, 'see https://example.com')
+    await t.listener.post(CH, undefined, 'see https://example.com and <https://example.org|this>')
+    expect(t.apps[0].apiCalls.filter(c => c.startsWith('post:'))).toEqual([`post:${CH}:-:see https://example.com`, `post:${CH}:-:see https://example.com and <https://example.org|this>:{"unfurl":false}`])
+  })
   test('the Slack arguments: unfurl_links and unfurl_media false with the option, and exactly today\'s arguments without it', () => {
     expect(postPayload('C1', '1.0', 'hi', { unfurl: false })).toEqual({ channel: 'C1', text: 'hi', thread_ts: '1.0', unfurl_links: false, unfurl_media: false })
     expect(postPayload('C1', undefined, 'hi')).toEqual({ channel: 'C1', text: 'hi' })

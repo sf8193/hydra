@@ -103,7 +103,7 @@ export const EVENTS_OFF_AFTER_PASSES = 3
 export const MEMBERSHIP_WAIT_MS = 5_000
 
 /** What the Slack SDK offers the listener, narrowed so the rest is testable without it. */
-/** `unfurl: false` posts without link previews (a place's `link_previews = false`); absent, Slack's own default. */
+/** `unfurl: false` posts without link previews (a place's `link_previews = false`, or `"single"` and 2+ links); absent, Slack's own default. */
 export type PostOptions = { unfurl?: false }
 
 /** The chat.postMessage arguments for one reply: the thread when there is one, and unfurling off exactly when asked. */
@@ -403,7 +403,7 @@ export class SlackListener {
   async post(channel: string, threadTs: string | undefined, text: string): Promise<string> {
     if (!this.app || !this.sup?.state.connected) throw new Error(`Slack is not connected${this.appSuffix()}; try again once it is (hydra health shows the slack connector)`)
     // The same predicate the gateway asks (shared/link-previews.ts), with this app's own view of hydra.toml and channel names.
-    const unfurl = linkPreviewsOff('slack', [channel], { config: this.d.hydra(), slackName: id => this.directory.nameOf(id), app: this.id }) ? { unfurl: false as const } : undefined
+    const unfurl = linkPreviewsOff('slack', [channel], { config: this.d.hydra(), slackName: id => this.directory.nameOf(id), app: this.id }, text) ? { unfurl: false as const } : undefined
     return this.app.post(channel, threadTs, text, unfurl)
   }
 

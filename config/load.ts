@@ -232,6 +232,13 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     error(join2(path, k), 'must be true or false')
     return undefined
   }
+  // true, false, or "single" (at most one preview per post).
+  const linkPreviews = (t: Table, path: string): boolean | 'single' | undefined => {
+    const v = t.link_previews
+    if (v === undefined || typeof v === 'boolean' || v === 'single') return v
+    error(join2(path, 'link_previews'), `must be true, false or "single" (at most one preview per post), not ${JSON.stringify(v)}`)
+    return undefined
+  }
   const oneOf = <T extends string>(t: Table, k: string, path: string, options: readonly T[]): T | undefined => {
     const v = t[k]
     if (v === undefined) return undefined
@@ -884,7 +891,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (Object.hasOwn(t, 'reactions') && p.platform !== 'slack') error(`${path}.reactions`, `${placeKey(p)} is not a Slack place: \`reactions\` is heard only from Slack`)
     // Hydra reads a Discord channel by id: a place named `discord:#name` can never be matched to a channel, so previews could not be switched off there.
     if (namesDmWithOthers(p)) for (const key of ['link_previews', 'messages', 'bots', 'reactions']) if (Object.hasOwn(t, key)) error(`${path}.${key}`, `${key} does not apply to ${placeKey(p)}: only ack and files do. Remove it.`)
-    if (p.platform === 'discord' && p.kind === 'channel' && p.ref.startsWith('#') && t.link_previews === false) error(`${path}.link_previews`, 'cannot be set on a Discord channel by name: hydra reads a Discord channel by id, so name it discord:<channel id>')
+    if (p.platform === 'discord' && p.kind === 'channel' && p.ref.startsWith('#') && (t.link_previews === false || t.link_previews === 'single')) error(`${path}.link_previews`, 'cannot be set on a Discord channel by name: hydra reads a Discord channel by id, so name it discord:<channel id>')
     places[placeKey(p)] = {
       ...(ack !== undefined && !ackWhy && { ack }),
       ...(defaultApp !== undefined && { defaultApp }),
@@ -892,7 +899,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       messages: oneOf(t, 'messages', path, ['addressed', 'all'] as const) ?? 'addressed',
       bots: bool(t, 'bots', path) ?? false,
       reactions: oneOf(t, 'reactions', path, ['off', 'bot-messages', 'all'] as const) ?? 'off',
-      linkPreviews: bool(t, 'link_previews', path) ?? true,
+      linkPreviews: linkPreviews(t, path) ?? true,
     }
   }
 

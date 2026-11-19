@@ -46,7 +46,17 @@ describe('link_previews', () => {
     expect(config.places['slack:#ops'].linkPreviews).toBe(false)
     expect(config.places['slack:#faq'].linkPreviews).toBe(true)
   })
-  test('is a boolean', () => {
+  test('"single" loads as single; another string is refused, naming the three values', () => {
+    expect(ok(`[places."slack:#ops"]\nlink_previews = "single"\n`).config.places['slack:#ops'].linkPreviews).toBe('single')
+    expect(errors(`[places."slack:#ops"]\nlink_previews = "multi"\n`)).toEqual(['places."slack:#ops".link_previews: must be true, false or "single" (at most one preview per post), not "multi"'])
+  })
+  test('"single" on a Discord channel by name is refused like false', () => {
+    expect(errors(`[places."discord:#general"]\nlink_previews = "single"\n`)).toEqual([expect.stringContaining('cannot be set on a Discord channel by name')])
+  })
+  test('a restricted specialist anyone can talk to still warns where previews are "single" (one preview still shows)', () => {
+    expect(ok(specialist('true', '"role:anyone"', '[places."slack:#ops"]\nlink_previews = "single"\n')).warnings.filter(x => x.includes('link_previews'))).toHaveLength(1)
+  })
+  test('is true, false or "single": anything else is refused', () => {
     expect(errors(`[places."slack:#ops"]\nlink_previews = "no"\n`)).toEqual([expect.stringContaining('places."slack:#ops".link_previews')])
   })
 })
