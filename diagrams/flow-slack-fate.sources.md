@@ -22,6 +22,8 @@ Checked against code at 42721c5. Bold names are README's core abstractions or th
 | at most 25 opened by untagged chatter | `connectors/slack/watch.ts:854-855` | `!existing && !tagged && !dm`: `floor(50 / 2)` |
 | an open one, or one-off chatter: no slot needed | `connectors/slack/watch.ts:552-556`, `:330`, `:559` | an existing entry skips the cap; `oneOff` is not counted |
 | no → dropped: table-full | `connectors/slack/watch.ts:856`, `:861` | `drop('table-full', …)` |
+| full: the one quiet the longest is let go, if quiet an hour with nothing owed | `connectors/slack/watch.ts:740`, `:753-768`, `:378` | `evict`: no owed, no pending batch or in flight, no `waitingSince`, `EVICT_QUIET_MS = 1 h`; oldest `lastEventAt` first |
+| 🚫, once per message (tag-cap, table-full) | `connectors/slack/watch.ts:1261`, `:1267`, `:1354`, `:1415` | `drop` returns false for a replay; `turnedAway` is the refusal's per-sender capped `no_entry_sign`; none in a DM with a person or a group DM |
 | Binding set, if new, renamed or gone | `connectors/slack/watch.ts:859`, `:866`; `routing/route.ts:224-232` | a new entry is bound to `d.to`; `(d.bind \|\| via binding) && specialist !== d.to` rebinds |
 | the message Owed, saved | `connectors/slack/watch.ts:923-927` | `insertTs(owed, ts, OWED_KEEP)`, persisted before anything is sent |
 | over 200 owed here → an older owed message cut: dropped: owed-full | `connectors/slack/watch.ts:331`, `:937-940` | `OWED_KEEP = 200`; a cut ts not in the window or in flight → `drop('owed-full')` |

@@ -374,6 +374,8 @@ const REACTION_NAME = /^[A-Za-z0-9_+'-]{1,100}(::skin-tone-[2-6])?$/
 const REACTED_KEEP = 300
 const OURS_KEEP = 300
 const AMBIENT_IDLE_MS = 86_400_000
+/** How long a conversation must be quiet before a full table lets it go for a new one. */
+const EVICT_QUIET_MS = 3600_000
 /** The time of a tag in a store that kept none: older than any. */
 const UNKNOWN_TS = '0.000000'
 /** How many channels no rule names catch-up reads for an app, the ones it was tagged in most recently: the bound on the extra history reads. */
@@ -734,12 +736,34 @@ export class ConversationTable {
       return existing
     }
     const cap = this.deps.config(app)?.maxConversations ?? SLACK_LIMITS.maxConversations
-    if (this.list().filter(e => !oneOff(e)).length >= cap) return undefined
+    const held = this.list().filter(e => !oneOff(e))
+    if (held.length >= cap && !this.evict(held, held.length - cap + 1, cap, now, conversationId({ app, channel, threadTs }))) return undefined
     const entry: ConversationEntry = { ...(appOfEntry({ app }) !== DEFAULT_SLACK_APP && { app }), channel, threadTs, specialist, ...(mentionedBy && { mentionedBy }), createdAt: now, lastEventAt: now }
     this.entries.set(keyOf(entry), entry)
     this.persist()
     this.tellSessionsTaken(entry)
     return entry
+  }
+
+  /**
+   * A full table makes room for a new conversation by letting go of the `n` quiet the longest, as idle expiry would (a session thread is told).
+   * Only one with nothing owed, nothing waiting in the window or in flight, no wait for a session, and quiet `EVICT_QUIET_MS`: a session handed
+   * its last message may still be answering, and its reply needs the binding. False, and nothing let go, when fewer than `n` qualify.
+   */
+  private evict(held: ConversationEntry[], n: number, cap: number, now: number, opening: string): boolean {
+    const victims = held.filter(e => {
+      const key = keyOf(e)
+      return !e.owed?.length && e.waitingSince === undefined && !this.pending.has(key) && !this.inflight.get(key)?.size && now - e.lastEventAt >= EVICT_QUIET_MS
+    }).sort((a, b) => a.lastEventAt - b.lastEventAt).slice(0, n)
+    if (victims.length < n) return false
+    for (const e of victims) {
+      this.entries.delete(keyOf(e))
+      const quiet = spanText(now - e.lastEventAt)
+      this.deps.log(`daemon: slack connector: the conversation table is full (${cap}), so ${conversationId(e)}${e.specialist ? ` (bound to ${spelledBare(e.specialist)})` : ''}, quiet the longest (${quiet}), was let go to open ${opening}\n`)
+      if (e.specialist && isSessionThread(e.specialist)) this.deps.alert?.(`ℹ️ The conversation table was full, so hydra let go of ${conversationId(e)}, the one quiet the longest (no message for ${quiet}). Bind again with \`bind_conversation\` to listen.`, e.specialist, appOfEntry(e))
+    }
+    this.persist()
+    return true
   }
 
   /**
@@ -1234,12 +1258,13 @@ export class ConversationTable {
     // A conversation opened by untagged chatter may take only half the table: the rest stays free for mentions and DMs.
     const ambient = !existing && !tagged && !dm
     if (ambient && this.list().filter(e => e.ambient && !oneOff(e)).length >= Math.floor(cfg.maxConversations / 2)) {
-      this.drop('table-full', { app, channel: ev.channel, threadTs, specialist: d.to }, [ev.ts], `conversations opened by untagged chatter already hold half the conversation table (${Math.floor(cfg.maxConversations / 2)} of ${cfg.maxConversations}); a tag still opens one`)
+      if (this.drop('table-full', { app, channel: ev.channel, threadTs, specialist: d.to }, [ev.ts], `conversations opened by untagged chatter already hold half the conversation table (${Math.floor(cfg.maxConversations / 2)} of ${cfg.maxConversations}); a tag still opens one`)) this.turnedAway({ ...ev, app })
       return 'ignored'
     }
     const entry = existing ?? this.watch(ev.channel, threadTs, d.to, ev.user, app)
     if (!entry) {
-      this.drop('table-full', { app, channel: ev.channel, threadTs, specialist: d.to }, [ev.ts], `the conversation table is full (${cfg.maxConversations}); unbind a conversation`)
+      // Its sender sees the 🚫, as a refused tag's does; a DM with a person or a group DM is not the bot's to react in.
+      if (this.drop('table-full', { app, channel: ev.channel, threadTs, specialist: d.to }, [ev.ts], `the conversation table is full (${cfg.maxConversations}) and none in it has been quiet an hour with nothing owed; unbind a conversation`) && !inNoBotDm) this.turnedAway({ ...ev, app })
       return 'ignored'
     }
     if (ambient) { entry.ambient = true; this.persist() }
@@ -1326,7 +1351,7 @@ export class ConversationTable {
     const recent = (this.mentionTimes.get(user) ?? []).filter(t => now - t < MENTION_WINDOW_MS)
     if (recent.length >= cfg.maxMentionsPer10Min) {
       this.mentionTimes.set(user, recent)
-      this.drop('tag-cap', { app: ev.app, channel: ev.channel, threadTs, specialist: to }, [ev.ts], `${user} tagged the bot ${recent.length} times in 10 minutes outside watched threads (maxMentionsPer10Min)`)
+      if (this.drop('tag-cap', { app: ev.app, channel: ev.channel, threadTs, specialist: to }, [ev.ts], `${user} tagged the bot ${recent.length} times in 10 minutes outside watched threads (maxMentionsPer10Min)`)) this.turnedAway(ev)
       return false
     }
     recent.push(now)
@@ -1380,19 +1405,25 @@ export class ConversationTable {
     if (fate === 'unrouted') this.stats_.unrouted++
     else { this.stats_.refused++; this.stats_.refusedBy[who] = (this.stats_.refusedBy[who] ?? 0) + 1 }
     this.deps.log(`daemon: slack connector: ${fate} ${who} in ${watchKey(ev.app, ev.channel, threadTs)} (ts ${ev.ts}): ${why}\n`)
-    // The 🚫 is capped per sender like tags are: past the window, a refusal is logged and counted only.
+    if (react) this.turnedAway(ev)
+  }
+
+  /**
+   * The 🚫 on a message hydra will not take (refused, unrouted, or dropped by the tag cap or a full table), so its sender sees it went nowhere.
+   * Capped per sender like tags are: past the window, it is logged and counted only. Callers react once per message (a replay is not new).
+   */
+  private turnedAway(ev: Pick<SlackMessageEvent, 'app' | 'channel' | 'ts' | 'user' | 'botId'>): void {
     const sender = ev.user ?? ev.botId
-    if (react && sender) {
+    if (sender) {
       const now = this.deps.now()
       const recent = (this.refusalTimes.get(sender) ?? []).filter(t => now - t < MENTION_WINDOW_MS)
-      if (recent.length >= (this.deps.config(ev.app)?.maxMentionsPer10Min ?? SLACK_LIMITS.maxMentionsPer10Min)) react = false
-      else recent.push(now)
+      const over = recent.length >= (this.deps.config(ev.app)?.maxMentionsPer10Min ?? SLACK_LIMITS.maxMentionsPer10Min)
+      if (!over) recent.push(now)
       this.refusalTimes.set(sender, recent)
+      if (over) return
     }
     const slack = this.actions.get(appOfEntry(ev))
-    if (react && slack) {
-      this.reactAs(slack, ev.app, ev.channel, ev.ts, REFUSED_REACTION)
-    }
+    if (slack) this.reactAs(slack, ev.app, ev.channel, ev.ts, REFUSED_REACTION)
   }
 
   /** A bot joined (or left) a channel: its reactions there are tried again at the next message, whoever it was. */
@@ -1421,10 +1452,10 @@ export class ConversationTable {
     })
   }
 
-  /** A message that will never be delivered: logged every time, counted, and alerted once per episode of its kind. */
-  private drop(kind: DropKind, where: Pick<ConversationEntry, 'app' | 'channel' | 'threadTs' | 'specialist'>, ts: string[], why: string, alert = true): void {
+  /** A message that will never be delivered: logged every time, counted, and alerted once per episode of its kind. False for a replay already dropped. */
+  private drop(kind: DropKind, where: Pick<ConversationEntry, 'app' | 'channel' | 'threadTs' | 'specialist'>, ts: string[], why: string, alert = true): boolean {
     const fresh = ts.filter(t => this.firstTime(this.noted.dropped, `${scoped(where.app, where.channel)}:${t}`))
-    if (!fresh.length) return
+    if (!fresh.length) return false
     this.stats_.dropped[kind] = (this.stats_.dropped[kind] ?? 0) + fresh.length
     // A session thread's owed messages go undelivered when no session is in it: say what to do.
     const vacantAdvice = where.specialist && isSessionThread(where.specialist) && (kind === 'expired' || kind === 'owed-full') ? '. These never reached a session: if none is running in this thread, resume one; or `unbind_conversation` to let the conversation go' : ''
@@ -1433,6 +1464,7 @@ export class ConversationTable {
     // Keyed by kind and by who hears it: one specialist's trouble does not silence another's.
     const to = where.specialist ?? listenerOf(this.deps.config(where.app), where.channel)
     if (alert) this.alertOnce(`${kind}:${to ?? '-'}`, to, `⚠️ ${line[0].toUpperCase()}${line.slice(1)}. Further ${kind} drops within the hour are logged, not alerted; \`hydra conversations\` counts them.`, appOfEntry(where))
+    return true
   }
 
   /**

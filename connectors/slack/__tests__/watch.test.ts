@@ -514,6 +514,88 @@ describe('limits', () => {
     expect(logs.join()).toContain('the conversation table is full')
   })
 
+  test('a full table lets go of the conversation quiet the longest for a new one, logged; the new one is delivered', async () => {
+    const { w, sent, logs, tick } = setup({ maxConversations: 2 })
+    w.handle(ev({ ts: '1.000001', text: mention }))
+    tick(60_000)
+    w.handle(ev({ ts: '2.000001', text: mention }))
+    await w.flush()
+    tick(2 * 3600_000)
+    expect(w.handle(ev({ ts: '3.000001', text: mention }))).toBe('mention')
+    await w.flush()
+    expect(w.list().map(e => e.threadTs).sort()).toEqual(['2.000001', '3.000001'])
+    expect(sent.at(-1)!.msg).toContain('spin up a cart')
+    expect(logs.join()).toContain(`the conversation table is full (2), so slack:${CH}:1.000001 (bound to specialist:helper), quiet the longest (2 hours), was let go to open slack:${CH}:3.000001`)
+    expect(w.stats().dropped).toEqual({})
+  })
+
+  test('nothing is let go that is owed, waiting in the window, or quiet under an hour: the new one is dropped then', async () => {
+    let up = false
+    const owed = setup({ maxConversations: 1 }, () => up ? { ok: true } : { ok: false, error: 'down' })
+    owed.w.handle(ev({ ts: '1.000001', text: mention }))
+    await owed.w.flush()
+    owed.tick(2 * 3600_000)
+    expect(owed.w.handle(ev({ ts: '2.000001', text: mention }))).toBe('ignored')   // still owed
+    expect(owed.w.get(CH, '1.000001')).toBeDefined()
+    expect(owed.w.stats().dropped).toEqual({ 'table-full': 1 })
+    up = true
+
+    const windowed = setup({ maxConversations: 1, coalesceMs: 60_000 })
+    windowed.w.handle(ev({ ts: '1.000001', text: mention }))
+    windowed.tick(2 * 3600_000)
+    expect(windowed.w.handle(ev({ ts: '2.000001', text: mention }))).toBe('ignored')   // its batch has not gone out yet
+
+    const recent = setup({ maxConversations: 1 })
+    recent.w.handle(ev({ ts: '1.000001', text: mention }))
+    await recent.w.flush()
+    recent.tick(59 * 60_000)                                                         // its session may still be answering
+    expect(recent.w.handle(ev({ ts: '2.000001', text: mention }))).toBe('ignored')
+    recent.tick(60_000)
+    expect(recent.w.handle(ev({ ts: '3.000001', text: mention }))).toBe('mention')
+    await recent.w.flush()
+  })
+
+  test("a session thread whose conversation a full table lets go is told, as at idle expiry", async () => {
+    const SESSION = '1552619225032425525'
+    const { w, alerts, alertTo, tick } = setup({ maxConversations: 1 })
+    w.bind('C0OTHER', '2000.000001', SESSION, 'tool')
+    tick(2 * 3600_000)
+    expect(w.handle(ev({ ts: '3.000001', text: mention }))).toBe('mention')
+    await w.flush()
+    expect(w.get('C0OTHER', '2000.000001')).toBeUndefined()
+    expect(alertTo).toEqual([SESSION])
+    expect(alerts[0]).toContain('The conversation table was full, so hydra let go of slack:C0OTHER:2000.000001')
+  })
+
+  test('a tag a full table or the tag cap drops gets the 🚫, once per message; the bot\'s own post does not', () => {
+    const full = setup({ maxConversations: 1 })
+    const f = actions()
+    full.w.setSlackActions(f.a)
+    full.w.handle(ev({ ts: '1.000001', text: mention }))
+    full.w.handle(ev({ ts: '2.000001', text: mention }))
+    full.w.handle(ev({ ts: '2.000001', text: mention }))                              // a replay
+    full.w.handle(ev({ ts: '3.000001', user: BOT, text: 'posted' }))
+    expect(f.reactions).toEqual([`${CH}:2.000001:${REFUSED_REACTION}`])
+
+    const capped = setup({ maxMentionsPer10Min: 1 })
+    const c = actions()
+    capped.w.setSlackActions(c.a)
+    capped.w.handle(ev({ ts: '1.000001', text: mention }))
+    capped.w.handle(ev({ ts: '2.000001', text: mention }))
+    capped.w.handle(ev({ ts: '2.000001', text: mention }))                            // a replay
+    expect(c.reactions).toEqual([`${CH}:2.000001:${REFUSED_REACTION}`])
+    expect(capped.w.stats().dropped).toEqual({ 'tag-cap': 1 })
+  })
+
+  test('the 🚫 on dropped tags is capped per sender, like a refusal\'s', () => {
+    const s = setup({ maxMentionsPer10Min: 2 })
+    const { a, reactions } = actions()
+    s.w.setSlackActions(a)
+    for (let i = 1; i <= 8; i++) s.w.handle(ev({ ts: `${i}.000001`, text: mention }))
+    expect(reactions).toEqual([`${CH}:3.000001:${REFUSED_REACTION}`, `${CH}:4.000001:${REFUSED_REACTION}`])
+    expect(s.w.stats().dropped).toEqual({ 'tag-cap': 6 })
+  })
+
   test('one person tagging in a loop is cut off; others and later windows are fine', () => {
     const { w, tick } = setup({ maxMentionsPer10Min: 3 })
     const tag = (n: number, user = 'UALICE') => w.handle(ev({ ts: `${n}.000001`, user, text: mention }))

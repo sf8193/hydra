@@ -13,10 +13,10 @@ flowchart TD
   react(["🚫, logged, counted"])
   quiet(["logged, counted"])
   g4{"4. a tag opening a conversation:<br/>its sender under 10 in 10 min?"}
-  tdrop(["dropped: tag-cap"])
+  tdrop(["dropped: tag-cap<br/>🚫, once per message"])
   g5{"5. room in the<br/>conversation table?"}
-  n5["at most 50, shared by every app<br/>at most 25 opened by untagged chatter<br/>an open one, or one-off chatter: no slot needed"]
-  fdrop(["dropped: table-full"])
+  n5["at most 50, shared by every app<br/>at most 25 opened by untagged chatter<br/>an open one, or one-off chatter: no slot needed<br/>full: the one quiet the longest is let go,<br/>if quiet an hour with nothing owed"]
+  fdrop(["dropped: table-full<br/>🚫, once per message"])
   owe["<b>Binding</b> set, if new, renamed or gone;<br/>the message <b>Owed</b>, saved"]
   cut(["an older owed message cut:<br/>dropped: owed-full"])
   q(["queued; flushed after 4 s:<br/>flow-slack-deliver"])
