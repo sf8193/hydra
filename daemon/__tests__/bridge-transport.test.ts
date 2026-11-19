@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { BridgeTransport } from '../bridge-transport.js'
+import { BridgeTransport, DEPARTING_NOTICE, setFlushGate } from '../bridge-transport.js'
 import { registry } from '../sessions.js'
 import { STATE_DIR } from '../config.js'
 import { on } from '../event-bus.js'
@@ -499,6 +499,70 @@ describe('delivery paths (adapter-policy T7)', () => {
     expect(written).toEqual([])
     expect(t.messageQueues.get('t7-c8')).toEqual(msgs)
     expect(JSON.parse(readFileSync(queueFile(), 'utf8'))['t7-c8']).toEqual(msgs)
+  })
+
+  test('a write that throws mid-flush stops the flush: nothing overtakes it, the rest stays queued in order, and a later flush delivers them in order', () => {
+    claude('t7-c9')
+    const msgs = [0, 1, 2].map(i => ({ type: 'notification', content: `m${i}` }))
+    for (const m of msgs) t.sendOrQueue('t7-c9', m)
+    let broken = true
+    const { written } = socketOn(t, 't7-c9', () => true)
+    const sock = t.get('t7-c9')!.socket as any
+    const realWrite = sock.write
+    sock.write = (d: string) => { if (broken && d.includes('"m0"')) throw new Error('EPIPE'); return realWrite(d) } // only m0's write throws
+    t.flushQueue('t7-c9')
+    expect(written).toEqual([]) // m1 and m2 did not go out ahead of m0
+    expect(t.messageQueues.get('t7-c9')).toEqual(msgs)
+    expect(JSON.parse(readFileSync(queueFile(), 'utf8'))['t7-c9']).toEqual(msgs)
+    broken = false
+    t.flushQueue('t7-c9')
+    expect(written.map(w => JSON.parse(w).content)).toEqual(['m0', 'm1', 'm2'])
+    expect(t.messageQueues.has('t7-c9')).toBe(false)
+  })
+
+  test('the flush gate and a failed write together: refused notifications are dropped, the rest keep their order', () => {
+    claude('t7-c10')
+    const a = { type: 'tools_update', n: 'a' }, x = { type: 'notification', content: 'x' }, b = { type: 'tools_update', n: 'b' }, c = { type: 'tools_update', n: 'c' }
+    for (const m of [a, x, b, c]) t.sendOrQueue('t7-c10', m)
+    setFlushGate(() => 'drifted from hydra.toml')
+    try {
+      const { socket } = socketOn(t, 't7-c10')
+      const realWrite = socket.write
+      let broken = true
+      socket.write = (d: string) => { if (broken && d.includes('"a"')) throw new Error('EPIPE'); return realWrite(d) }
+      t.flushQueue('t7-c10')
+      expect(t.messageQueues.get('t7-c10')).toEqual([a, b, c]) // x refused and gone; a failed; b and c wait behind it
+      expect(logged.filter(l => l.includes('dropped 1 queued message(s) for t7-c10'))).toHaveLength(1)
+      broken = false
+      const out: string[] = []
+      socket.write = (d: string) => { out.push(d); return true }
+      t.flushQueue('t7-c10')
+      expect(out.map(o => JSON.parse(o).n)).toEqual(['a', 'b', 'c'])
+    } finally { setFlushGate(undefined) }
+  })
+
+  test("main: a departing notice queued before a restart is dropped at restore; the successor prompt and an ordinary message queued with it are kept, in order", () => {
+    const notice = { type: 'notification', content: 'write the letter', [DEPARTING_NOTICE]: true }
+    const successor = { type: 'notification', content: 'continue from the letter' }
+    t.sendOrQueue('main', envelope)
+    t.sendOrQueue('main', notice)
+    t.sendOrQueue('main', successor)
+    t.sendOrQueue('main', { ...envelope, content: 'later' })
+    const t2 = new BridgeTransport()
+    t2.restorePersistedQueues()
+    const kept = [envelope, successor, { ...envelope, content: 'later' }]
+    expect(t2.messageQueues.get('main')).toEqual(kept)
+    expect(logged.filter(l => l.includes('dropped 1 queued departing notice(s) for main'))).toHaveLength(1)
+    expect(JSON.parse(readFileSync(queueFile(), 'utf8')).main).toEqual(kept)
+    t2.messageQueues.delete('main'); t2.persistQueues()
+  })
+
+  test('main: a queue holding only a departing notice restores to nothing, and the file goes', () => {
+    t.sendOrQueue('main', { type: 'notification', content: 'write the letter', [DEPARTING_NOTICE]: true })
+    const t2 = new BridgeTransport()
+    t2.restorePersistedQueues()
+    expect(t2.messageQueues.has('main')).toBe(false)
+    expect(existsSync(queueFile())).toBe(false)
   })
 
   test('claude, capacity: the 51st message is dropped and logged once', () => {

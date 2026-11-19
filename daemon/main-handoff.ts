@@ -1,7 +1,7 @@
 import { mkdirSync } from 'fs'
 import { join } from 'path'
 import { gateway, STATE_DIR } from './config.js'
-import { transport } from './bridge-transport.js'
+import { transport, DEPARTING_NOTICE } from './bridge-transport.js'
 import { readHandoffTemplate } from './handoff-templates.js'
 import { claudeEngine } from './engines/instances.js'
 import { readClaudeStatus } from './engines/claude-status.js'
@@ -39,6 +39,7 @@ export async function handleMainHandoffIntercept(msg: InboundMessage, cmd: { mod
   transport.sendOrQueue('main', {
     type: 'notification',
     content: readHandoffTemplate('departing', vars) ?? handoffRequest(artifact, requester, note),
+    [DEPARTING_NOTICE]: true,
     meta: { chat_id: msg.channelId, message_id: msg.id, user: 'system', user_id: 'system', ts: new Date().toISOString() },
   })
   void gateway.react(msg.channelId, msg.id, '🤝').catch(() => {})

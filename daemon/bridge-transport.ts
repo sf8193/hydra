@@ -34,6 +34,9 @@ export type BridgeConn = {
 let flushGate: ((info: SessionInfo) => string | undefined) | undefined
 export function setFlushGate(gate: ((info: SessionInfo) => string | undefined) | undefined): void { flushGate = gate }
 
+/** Set (`true`) on the message that asks main to write a handoff letter: it means something only to the daemon run that asked, which holds the request's state. */
+export const DEPARTING_NOTICE = 'departingNotice'
+
 export class BridgeTransport {
   readonly bridges = new Map<string, BridgeConn>()
   readonly controlBridges = new Map<string, Set<BridgeConn>>()
@@ -228,8 +231,12 @@ export class BridgeTransport {
     // Taken off before sending: a send that fails re-queues into a fresh queue, which survives this flush.
     this.messageQueues.delete(sessionId)
     this.queueFullLogged.delete(sessionId)
-    for (const msg of sendable) {
-      this.sendToBridge(bridge, msg)
+    // The first failed write stops the flush: sendToBridge has re-queued that message, and the rest follow it, so a later message
+    // never overtakes an earlier one (a write that throws mid-flush used to let the next message through ahead of it).
+    for (let i = 0; i < sendable.length; i++) {
+      if (this.sendToBridge(bridge, sendable[i]!)) continue
+      for (const rest of sendable.slice(i + 1)) this.enqueue(sessionId, rest)
+      break
     }
     this.persistQueues()
   }
@@ -269,8 +276,14 @@ export class BridgeTransport {
         if (msgs.length === 0) continue
         // Main has no registry record but has a bridge and a queue (main-handoff); a session with no record is gone.
         if (sid === 'main' || registry.has(sid)) {
-          this.messageQueues.set(sid, msgs)
-          total += msgs.length
+          // A departing notice asks for a letter the old daemon was tracking; the restart lost that request (the letter, the note to pass on),
+          // so replaying it would ask main for a letter nobody wants. The successor prompt is kept: main cleared and needs its pointer.
+          // Ordinary messages to main are kept.
+          const kept = sid === 'main' ? msgs.filter(m => m[DEPARTING_NOTICE] !== true) : msgs
+          if (kept.length < msgs.length) process.stderr.write(`daemon: dropped ${msgs.length - kept.length} queued departing notice(s) for ${sid}: the handoff they asked for was from before the restart\n`)
+          if (kept.length === 0) continue
+          this.messageQueues.set(sid, kept)
+          total += kept.length
         } else {
           process.stderr.write(`daemon: dropped ${msgs.length} queued message(s) for ${sid}: no such session\n`)
         }
