@@ -304,3 +304,79 @@ describe('bind and unbind: recorded by every path that makes one', () => {
     expect(events()).toEqual([])
   })
 })
+
+// A route event with no `to` says an ask nobody took. An ask is a tag, or a DM with the bot (route treats a DM as addressed to the bot, and the 🚫 goes to both).
+// Chatter nobody takes, and a DM the bot is not part of, are never recorded.
+describe('route: a message that asks the bot and finds no one', () => {
+  const CH = 'C0FOOD'
+  const DM_ALICE = 'D0ALICE01'
+  const DM_BOB = 'D0BOB00001'
+  const PERSON_DM = 'D0PERSON01'
+  const GROUP = 'G0GROUP001'
+  const ASSISTANT = '[specialists.assistant]\nworkdir = "/w/assistant"\nreachable_by = ["role:staff"]\n[[rules]]\nplace = "slack:app-dm:*"\ntarget = "specialist:assistant"\n'
+  const OPEN = '[specialists.assistant]\nworkdir = "/w/assistant"\nreachable_by = ["role:anyone"]\n[[rules]]\nplace = "slack:app-dm:*"\ntarget = "specialist:assistant"\n[specialists.food]\nworkdir = "/w/food"\nreachable_by = ["role:anyone"]\n[[rules]]\nplace = "slack:C0FOOD"\ntarget = "specialist:food"\n'
+  const people = `[people.alice]\naddresses = ["slack:UALICE"]\nroles = ["staff"]\n[people.bob]\naddresses = ["slack:UBOB"]\n`
+  const make = (toml: string, over: Parameters<typeof view>[1] = {}) => {
+    const dir = mkdtempSync(join(tmpdir(), 'events-'))
+    dirs.push(dir)
+    const config: ConversationConfig = view(toml, { coalesceMs: 1, dms: { [DM_ALICE]: 'bot', [DM_BOB]: 'bot', [PERSON_DM]: 'UBOB' }, groupDms: [GROUP], ...over })
+    return new ConversationTable({ now: () => 1e12, file: join(dir, 'w.json'), log: () => {}, config: () => config, alert: () => {}, deliver: async (): Promise<DeliverResult> => ({ ok: true }) })
+  }
+  const dm = (over: Partial<SlackMessageEvent> = {}): SlackMessageEvent => ({ channel: DM_ALICE, ts: '1.000001', user: 'UALICE', text: 'can you check the invoice', ...over })
+  const routes = () => events().filter(e => e.kind === 'route')
+
+  test('a DM with the bot that its sender may not reach is recorded with via none, as a tag nobody took is', () => {
+    const w = make(`${BASE}${people}${ASSISTANT}`)
+    expect(w.handle(dm({ channel: DM_BOB, user: 'UBOB' }))).toBe('refused')
+    expect(routes()).toMatchObject([{ app: 'default', conversation: `slack:${DM_BOB}`, by: 'slack:UBOB', tagged: false, via: 'none' }])
+    expect(routes()[0]).not.toHaveProperty('to')
+  })
+
+  test('a DM with the bot no place hears is recorded with via none', () => {
+    const w = make(`${BASE}${people}`)
+    expect(w.handle(dm())).toBe('unrouted')
+    expect(routes()).toMatchObject([{ conversation: `slack:${DM_ALICE}`, tagged: false, via: 'none' }])
+  })
+
+  test('a DM with the bot turned away for a full table is recorded with via table-full; so is a tag, with tagged true', async () => {
+    const w = make(`${BASE}${people}${OPEN}`, { maxConversations: 1 })
+    w.handle(dm())
+    await w.flush()
+    expect(w.handle(dm({ channel: DM_BOB, user: 'UBOB' }))).toBe('ignored')
+    w.handle({ channel: CH, ts: '9.000001', user: 'UBOB', text: tag })
+    expect(routes().map(e => e.kind === 'route' && [e.via, e.tagged, e.conversation, e.to])).toEqual([
+      ['rule', false, `slack:${DM_ALICE}`, 'assistant'],
+      ['table-full', false, `slack:${DM_BOB}`, undefined],
+      ['table-full', true, `slack:${CH}:9.000001`, undefined],
+    ])
+  })
+
+  test('chatter nobody takes, and a DM the bot is not part of, are not recorded', async () => {
+    const HEARD = `${OPEN}[[rules]]\nplace = "slack:person-dm:bob"\ntarget = "specialist:food"\n[[rules]]\nplace = "slack:group-dm:*"\ntarget = "specialist:food"\n[[rules]]\nplace = "slack:C0FOOD"\ntarget = "specialist:food"\n`
+    const w = make(`${BASE}${people}${HEARD}`, { maxConversations: 1 })
+    w.handle(dm())
+    await w.flush()
+    clearEvents()
+    expect(w.handle({ channel: CH, ts: '2.000001', user: 'UBOB', text: 'anyone seen the invoice' })).toBe('ignored')   // untagged chatter
+    expect(w.handle({ channel: PERSON_DM, ts: '3.000001', user: 'UBOB', text: 'hi' })).toBe('ignored')                                        // a DM with a person
+    expect(w.handle({ channel: GROUP, ts: '4.000001', user: 'UBOB', text: 'hi all' })).toBe('ignored')                                        // a group DM
+    expect(w.stats().dropped).toEqual({ 'table-full': 2 })   // both DMs were turned away for the full table; neither was recorded
+    expect(routes()).toEqual([])
+  })
+
+  test('a refusal in a DM the bot is not part of is not recorded as an ask nobody took', () => {
+    const STAFF = '[specialists.staff]\nworkdir = "/w/staff"\nreachable_by = ["role:staff"]\n[[rules]]\nplace = "slack:person-dm:bob"\ntarget = "specialist:staff"\n[[rules]]\nplace = "slack:group-dm:*"\ntarget = "specialist:staff"\n'
+    const w = make(`${BASE}${people}${STAFF}`)
+    expect(w.handle({ channel: PERSON_DM, ts: '3.000001', user: 'UBOB', text: 'hi' })).toBe('refused')
+    expect(w.handle({ channel: GROUP, ts: '4.000001', user: 'UBOB', text: 'hi all' })).toBe('refused')
+    expect(w.handle({ channel: GROUP, ts: '5.000001', user: 'UBOB', text: tag })).toBe('refused')   // even tagging the bot there
+    expect(routes()).toEqual([])
+  })
+
+  test('a replay of a turned-away DM is one event', () => {
+    const w = make(`${BASE}${people}${ASSISTANT}`)
+    w.handle(dm({ channel: DM_BOB, user: 'UBOB' }))
+    w.handle(dm({ channel: DM_BOB, user: 'UBOB' }))
+    expect(routes()).toHaveLength(1)
+  })
+})
