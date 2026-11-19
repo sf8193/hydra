@@ -53,10 +53,15 @@ export function parseConversation(raw: unknown): { app?: string; channel: string
 export const archiveUrl = (base: string, channel: string, ts?: string, threadTs?: string): string =>
   `${base}/archives/${channel}${ts === undefined ? '' : `/p${ts.replace('.', '')}`}${threadTs === undefined ? '' : `?thread_ts=${threadTs}`}`
 
-/** An archive link read back: its channel; as a message link (`message`), also its ts (a dot after the first ten digits). */
+/**
+ * An archive link read back: its channel; as a message link (`message`), also its ts. A link is what Slack writes: `https`, a slack.com host
+ * (Enterprise Grid's `<org>.enterprise.slack.com` included), `/archives/<channel>`, and for a message `/p` + the ts's ten and six digits with
+ * the dot dropped, then an optional query or fragment. A message link is read whole: anything else, a link inside another URL included, is none.
+ * A channel link is read by its start (`https://<host>.slack.com/archives/<channel>`) and ignores what follows.
+ */
 export function parseArchiveUrl(url: string, message: true): { channel: string; ts: string } | undefined
 export function parseArchiveUrl(url: string, message?: false): { channel: string } | undefined
 export function parseArchiveUrl(url: string, message?: boolean): { channel: string; ts?: string } | undefined {
-  const m = url.match(message ? /slack\.com\/archives\/([A-Z0-9]+)\/p(\d+)/ : /slack\.com\/archives\/([A-Z0-9]+)/)
-  return m ? { channel: m[1], ...(m[2] && { ts: m[2].replace(/^(\d{10})(\d+)$/, '$1.$2') }) } : undefined
+  const m = url.trim().match(message ? /^https:\/\/[\w.-]+\.slack\.com\/archives\/([A-Z0-9]+)\/p(\d{10})(\d{6})(?:[?#].*)?$/ : /^https:\/\/[\w.-]+\.slack\.com\/archives\/([A-Z0-9]+)/)
+  return m ? { channel: m[1], ...(m[2] && { ts: `${m[2]}.${m[3]}` }) } : undefined
 }

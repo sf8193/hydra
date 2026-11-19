@@ -239,6 +239,10 @@ describe('renderContextLink', () => {
     cacheSlackChannel('C0FOOD', 'food')
     expect(renderContextLink('https://acme.slack.com/archives/C0FOOD')).toBe('• 🔗 <https://acme.slack.com/archives/C0FOOD|Slack thread>')
   })
+
+  test('a link that is no archive link (a lowercase channel id) is labelled by its host, as parseArchiveUrl reads links everywhere', () => {
+    expect(renderContextLink('https://acme.slack.com/archives/c0food')).toBe('• 🔗 <https://acme.slack.com/archives/c0food|acme.slack.com>')
+  })
 })
 
 // ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 import { gateway, PERMISSION_REPLY_RE } from './config.js'
 import { attachmentTarget, tellsSaveFailure } from './attachment-target.js'
 import { reserveUserIngress } from './user-ingress.js'
-import { cacheSlackChannel, cacheSlackThread } from './artifacts.js'
+import { cacheSlackChannel, cacheSlackThread, cachedSlackChannel } from './artifacts.js'
 import { parseArchiveUrl } from '../connectors/slack/conversation.js'
 import { refreshDashboard } from './dashboard.js'
 import { registry, threadRegistry } from './sessions.js'
@@ -276,14 +276,32 @@ export async function fetchSlackThreadSummary(url: string): Promise<string | nul
   } catch { return null }
 }
 
-function extractContextLinks(text: string): string[] {
+/**
+ * Learn what a Slack context link will be shown as: its channel's name (asked of Slack once per channel), and the text of the message it
+ * names (a channel link names none). Returns how many names it learned; a link that is no Slack archive link, or whose lookups fail, teaches nothing.
+ */
+export async function warmContextLink(url: string): Promise<number> {
+  const channel = parseArchiveUrl(url)?.channel
+  if (!channel) return 0
+  try {
+    const [name, summary] = await Promise.all([
+      cachedSlackChannel(channel) ? undefined : gateway.fetchChannel(channel).then(ch => ch.name, () => undefined),
+      fetchSlackThreadSummary(url),
+    ])
+    if (name) cacheSlackChannel(channel, name)
+    if (summary) cacheSlackThread(url, summary)
+    return Number(!!name) + Number(!!summary)
+  } catch { return 0 }
+}
+
+export function extractContextLinks(text: string): string[] {
   const links: string[] = []
 
   // Match URLs from Slack mrkdwn: <https://...|label> or bare https://...
   const urlRe = /https?:\/\/[^\s|>)]+/g
   let m: RegExpExecArray | null
   while ((m = urlRe.exec(text)) !== null) {
-    const url = m[0].replace(/[.,;:!?)]+$/, '')
+    const url = m[0].replace(/[.,;:!?)\]*_~`"']+$/, '')
     if (CONTEXT_LINK_DOMAINS.test(url)) links.push(url)
   }
 
@@ -319,16 +337,7 @@ async function deliverToSession(msg: InboundMessage, targetSessionId: string, ac
       for (const url of links) existing.add(url)
       sessionInfo.contextLinks = [...existing].slice(-MAX_CONTEXT_LINKS)
       registry.debouncedPersist()
-      for (const url of links) {
-        const channel = parseArchiveUrl(url)?.channel
-        if (!channel) continue
-        gateway.fetchChannel(channel).then(ch => {
-          if (ch.name) cacheSlackChannel(channel, ch.name)
-        }).catch(() => {})
-        fetchSlackThreadSummary(url).then(summary => {
-          if (summary) { cacheSlackThread(url, summary); refreshDashboard() }
-        }).catch(() => {})
-      }
+      for (const url of links) void warmContextLink(url).then(n => { if (n) refreshDashboard() })
     }
   }
   const chatId = sessionInfo?.threadId ?? msg.channelId

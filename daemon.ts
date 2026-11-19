@@ -141,7 +141,7 @@ startVitalsSnapshots((id) => transport.has(id), { alert: notifyOperator })
 
 import { refreshDashboard, refreshDashboardNow } from './daemon/dashboard.js'
 import { debouncedRefreshListDisplay } from './daemon/commands/status.js'
-import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle, cacheSlackChannel, cacheSlackThread } from './daemon/artifacts.js'
+import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './daemon/artifacts.js'
 import type { ProviderId } from './daemon/engines/engine-adapter.js'
 registry.onPersist = refreshDashboard
 
@@ -247,11 +247,10 @@ if ('homeSpawnHandler' in gateway) {
 }
 
 // Importing router wires up gateway.onMessage / onThreadDelete / onMessageDelete
-import { fetchSlackThreadSummary } from './daemon/router.js'
+import { warmContextLink } from './daemon/router.js'
 import { restoreHeld } from './daemon/specialist-thread.js'
 import { startPrWatcher, backfillTitles, fetchPrTitle, parsePrUrl } from './connectors/github/pr-watch.js'
 import { startConversationTable, stopConversationTable, startSlackListener } from './connectors/slack/runtime.js'
-import { parseArchiveUrl } from './connectors/slack/conversation.js'
 import { pruneEvents } from './daemon/events.js'
 import { startHydraConfig, stopHydraConfig, retryHydraConfigAlert, currentHydraConfig, onHydraConfigLoad, reloadHydraConfig, hydraConfigLoadedOk } from './daemon/hydra-config.js'
 import { jobsFromSchedules, schedulesAreSource } from './shared/schedules.js'
@@ -474,27 +473,8 @@ void (async () => {
 
 // Backfill Slack channel names + thread summaries for context links (non-blocking)
 void (async () => {
-  const channelIds = new Set<string>()
-  const threadUrls: string[] = []
-  for (const s of registry.values()) {
-    for (const url of s.contextLinks ?? []) {
-      const channel = parseArchiveUrl(url)?.channel
-      if (channel) { channelIds.add(channel); threadUrls.push(url) }
-    }
-  }
   let filled = 0
-  for (const id of channelIds) {
-    try {
-      const ch = await gateway.fetchChannel(id)
-      if (ch.name) { cacheSlackChannel(id, ch.name); filled++ }
-    } catch {}
-  }
-  for (const url of threadUrls) {
-    try {
-      const summary = await fetchSlackThreadSummary(url)
-      if (summary) { cacheSlackThread(url, summary); filled++ }
-    } catch {}
-  }
+  for (const s of registry.values()) for (const url of s.contextLinks ?? []) filled += await warmContextLink(url)
   if (filled > 0) {
     refreshDashboardNow()
     process.stderr.write(`daemon: backfilled ${filled} Slack context link(s)\n`)

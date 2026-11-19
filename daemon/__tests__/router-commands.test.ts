@@ -1,10 +1,11 @@
 import { describe, test, expect, spyOn } from 'bun:test'
 import { PERMISSION_REPLY_RE, gateway } from '../config.js'
+import { renderContextLink } from '../artifacts.js'
 import { listModifierKeys } from '../modifiers.js'
 import {
   SPAWN_RE, SPAWN_WT_RE, KILL_RE, LIST_RE, RESTART_RE, HEALTH_RE, RECONNECT_RE, COMMANDS_RE,
   THREAD_KILL_RE, DESTROY_RE, USAGE_RE, LISTEN_RE, PAUSE_RE, FORK_RE, FORKS_RE, REVIEW_RE, BUILD_RE, misplacedModelHint,
-  KEYS_RE, resolveTmuxKey, fetchSlackThreadSummary, SPAWN_OMP_ALIAS_RE, SPAWN_WT_OMP_MODEL_RE, BARE_OMP_ALIAS_RE,
+  KEYS_RE, resolveTmuxKey, fetchSlackThreadSummary, warmContextLink, extractContextLinks, SPAWN_OMP_ALIAS_RE, SPAWN_WT_OMP_MODEL_RE, BARE_OMP_ALIAS_RE,
 } from '../router.js'
 
 // Suppress stderr
@@ -536,3 +537,77 @@ describe('fetchSlackThreadSummary', () => {
     } finally { fetched.mockRestore() }
   })
 })
+
+describe('warmContextLink: what a context link is shown as', () => {
+  const stub = (channelName: string | undefined, text = 'dinner plans') => {
+    const channel = spyOn(gateway, 'fetchChannel').mockImplementation((async () => ({ name: channelName })) as any)
+    const messages = spyOn(gateway, 'fetchMessages').mockImplementation((async () => [{ content: text }]) as any)
+    return { channel, messages, restore: () => { channel.mockRestore(); messages.mockRestore() } }
+  }
+
+  test('a channel link names its channel, and no message is fetched', async () => {
+    const s = stub('lunch')
+    try {
+      const url = 'https://acme.slack.com/archives/C0LUNCH'
+      expect(await warmContextLink(url)).toBe(1)
+      expect(s.channel).toHaveBeenCalledWith('C0LUNCH')
+      expect(s.messages).not.toHaveBeenCalled()
+    } finally { s.restore() }
+  })
+
+  test('a message link names its channel and fetches the message at its ts', async () => {
+    const s = stub('dinner')
+    try {
+      const url = 'https://acme.slack.com/archives/C0DINNER/p1793732224093059'
+      expect(await warmContextLink(url)).toBe(2)
+      expect(s.channel).toHaveBeenCalledWith('C0DINNER')
+      expect(s.messages).toHaveBeenCalledWith('C0DINNER:1793732224.093059', 1)
+      expect(renderContextLink(url)).toBe(`• 🔗 <${url}|dinner plans>`)
+    } finally { s.restore() }
+  })
+
+  test('a link that is no Slack archive link asks Slack nothing', async () => {
+    const s = stub('x')
+    try {
+      expect(await warmContextLink('https://linear.app/x/issue/BANK-1')).toBe(0)
+      expect(await warmContextLink('https://acme.slack.com/archives/c0food')).toBe(0)
+      expect(s.channel).not.toHaveBeenCalled()
+      expect(s.messages).not.toHaveBeenCalled()
+    } finally { s.restore() }
+  })
+
+  test('a failing lookup caches nothing and does not throw', async () => {
+    const channel = spyOn(gateway, 'fetchChannel').mockImplementation((async () => { throw new Error('no') }) as any)
+    const messages = spyOn(gateway, 'fetchMessages').mockImplementation((async () => { throw new Error('no') }) as any)
+    try { expect(await warmContextLink('https://acme.slack.com/archives/C0FAIL/p1793732224093059')).toBe(0) } finally { channel.mockRestore(); messages.mockRestore() }
+  })
+})
+
+describe('warmContextLink: the channel is asked of Slack once, and nothing it meets escapes', () => {
+  test('a channel already named is not asked for again, and the name reaches the rendered link', async () => {
+    const channel = spyOn(gateway, 'fetchChannel').mockImplementation((async () => ({ name: 'brunch' })) as any)
+    const messages = spyOn(gateway, 'fetchMessages').mockImplementation((async () => []) as any)
+    try {
+      const url = 'https://acme.slack.com/archives/C0BRUNCH/p1793732224093059'
+      expect(await warmContextLink(url)).toBe(1)
+      expect(renderContextLink(url)).toBe(`• 🔗 <${url}|thread in #brunch>`)
+      expect(await warmContextLink('https://acme.slack.com/archives/C0BRUNCH/p1793732225000001')).toBe(0)
+      expect(channel).toHaveBeenCalledTimes(1)
+    } finally { channel.mockRestore(); messages.mockRestore() }
+  })
+
+  test('a gateway that answers with nothing teaches nothing and does not throw', async () => {
+    const channel = spyOn(gateway, 'fetchChannel').mockImplementation((async () => null) as any)
+    const messages = spyOn(gateway, 'fetchMessages').mockImplementation((async () => []) as any)
+    try { expect(await warmContextLink('https://acme.slack.com/archives/C0NOTHING/p1793732224093059')).toBe(0) } finally { channel.mockRestore(); messages.mockRestore() }
+  })
+})
+
+describe('extractContextLinks', () => {
+  test('a link wrapped in Discord markdown or punctuation is read without the wrapper', () => {
+    const url = 'https://acme.slack.com/archives/C0FOOD/p1793732224093059'
+    for (const wrapped of [`**${url}**`, `_${url}_`, `~~${url}~~`, `\`${url}\``, `(see ${url}).`, `"${url}"`, `[${url}]`, url])
+      expect(extractContextLinks(wrapped)).toEqual([url])
+  })
+})
+
