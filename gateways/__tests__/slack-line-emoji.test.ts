@@ -5,6 +5,7 @@ import { DiscordGateway } from '../discord'
 import { SlackGateway } from '../slack'
 import { loadHydraConfig } from '../../config/load'
 import { testLoadEnv } from '../../config/__tests__/load-env'
+import { registerPreviewConfig } from '../../shared/link-previews'
 import { BASE } from '../../connectors/slack/__tests__/slack-config'
 
 const CUSTOM = '<:slack:1573045794259603566>'
@@ -44,6 +45,22 @@ describe('Discord send with unfurl: false', () => {
     await gw.send('100', 'plain', { subtext: true })
     expect(sent[0].flags).toBe(MessageFlags.SuppressEmbeds)
     expect(sent[1].flags).toBeUndefined()
+  })
+})
+
+describe('Discord send: unfurl: false beside link_previews = "single"', () => {
+  test('an explicit unfurl: false suppresses even a one-link post the place would let preview; the place alone still lets it', async () => {
+    registerPreviewConfig(() => ({ places: { 'discord:100': { files: false, messages: 'addressed', bots: false, linkPreviews: 'single' } } }) as any)
+    const sent: any[] = []
+    const gw = Object.create(DiscordGateway.prototype) as DiscordGateway
+    const ch = { id: '100', isTextBased: () => true, isThread: () => false, parentId: null, send: async (p: any) => { sent.push(p); return { id: 'm1', channelId: '100' } } }
+    ;(gw as any).client = { channels: { fetch: async () => ch } }
+    ;(gw as any).noteSent = () => {}
+    await gw.send('100', 'one https://example.com/a', { unfurl: false })
+    await gw.send('100', 'one https://example.com/a')
+    await gw.send('100', 'two https://example.com/a https://example.com/b')
+    registerPreviewConfig(() => undefined)
+    expect(sent.map(p => p.flags)).toEqual([MessageFlags.SuppressEmbeds, undefined, MessageFlags.SuppressEmbeds])
   })
 })
 
