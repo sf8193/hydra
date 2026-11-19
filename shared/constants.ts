@@ -201,7 +201,7 @@ export function isKnownModel(id: string): boolean {
 }
 
 /** Context window of a launch model: `[1m]` = 1M, any other known model = 200k, unknown or missing = null.
- *  ponytail: a mid-session /model switch is not seen; the context-% disagreement log would show it. */
+ *  A mid-session /model switch is read from the pane, not this (see transcriptContext in daemon/usage.ts). */
 export function contextWindowOf(model: string | undefined): number | null {
   if (!model || !isKnownModel(model)) return null
   return model.endsWith('[1m]') ? 1_000_000 : 200_000
