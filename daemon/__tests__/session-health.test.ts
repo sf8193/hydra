@@ -401,8 +401,28 @@ describe('context alert', () => {
     pollSessionsOnce(NOW + 1000)
 
     expect(to(hot, 'context')).toHaveLength(1)
-    expect(to(hot, 'context')[0].text).toBe(`**${hot.tmuxName}** is at **70%** context. Consider a \`handoff\` to a fresh session (\`handoff: <note>\` passes a note to it).`)
+    expect(to(hot, 'context')[0].text).toBe(`**${hot.tmuxName}** is at **70%** context, at its 70% alert line. Consider a \`handoff\` to a fresh session (\`handoff: <note>\` passes a note to it).`)
     expect(to(cool, 'context')).toHaveLength(0)
+  })
+
+  test('the alert says what hydra does on its own at the full line, when that is on', () => {
+    process.env.AUTO_HANDOFF_FULL = '1'; process.env.AUTO_HANDOFF_FULL_PCT = '90'
+    try {
+      const info = seed({ ageMs: 1000, adapter: fakeAdapter({ usage: () => ({ usedTokens: 0, contextWindow: 0, percent: 72 }) }) })
+      tmux.alive(info.tmuxName)
+      pollSessionsOnce(NOW)
+      expect(to(info, 'context')[0].text).toBe(`**${info.tmuxName}** is at **72%** context, at its 70% alert line. At 90% hydra asks it to hand off once it is idle. Consider a \`handoff\` to a fresh session (\`handoff: <note>\` passes a note to it).`)
+    } finally { delete process.env.AUTO_HANDOFF_FULL; delete process.env.AUTO_HANDOFF_FULL_PCT }
+  })
+
+  test('a session that cannot be handed off is not promised an automatic handoff', () => {
+    process.env.AUTO_HANDOFF_FULL = '1'
+    try {
+      const guest = seed({ ageMs: 1000, sessionType: 'thread_guest', adapter: fakeAdapter({ usage: () => ({ usedTokens: 0, contextWindow: 0, percent: 72 }) }) })
+      tmux.alive(guest.tmuxName)
+      pollSessionsOnce(NOW)
+      expect(to(guest, 'context')[0].text).toBe(`**${guest.tmuxName}** is at **72%** context, at its 70% alert line. Consider a \`handoff\` to a fresh session (\`handoff: <note>\` passes a note to it).`)
+    } finally { delete process.env.AUTO_HANDOFF_FULL }
   })
 
   test('50% then 70% each fire once; a jump past both fires once', () => {
@@ -414,7 +434,7 @@ describe('context alert', () => {
     pollSessionsOnce(NOW)
     pollSessionsOnce(NOW + 1000)
     expect(to(climbing, 'context')).toHaveLength(1)
-    expect(to(climbing, 'context')[0].text).toBe(`**${climbing.tmuxName}** is at **50%** context. Consider a \`handoff\` to a fresh session (\`handoff: <note>\` passes a note to it).`)
+    expect(to(climbing, 'context')[0].text).toBe(`**${climbing.tmuxName}** is at **50%** context, at its 50% alert line. Consider a \`handoff\` to a fresh session (\`handoff: <note>\` passes a note to it).`)
     pct = 70
     pollSessionsOnce(NOW + 2000)
     pollSessionsOnce(NOW + 3000)

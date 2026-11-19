@@ -59,8 +59,8 @@ export function formatDuration(ms: number): string {
 // by `N%` (an operator's own statusline). A bare `N%` is not enough — Claude Code's own "Context left until
 // auto-compact: N%" shares the footer and reports REMAINING, not used.
 const INPUT_RULE_RE = /^\s*─{8,}\s*$/
-const CTX_LABEL_RE = /\bctx:\s*(\d+)%/
-const CTX_BAR_RE = /[█░]+\s*(\d+)%/
+const CTX_LABEL_RE = /\bctx:\s*(\d+(?:\.\d+)?)%/
+const CTX_BAR_RE = /[█░]+\s*(\d+(?:\.\d+)?)%/
 
 // Which footer form matched: 'ctx' (a `ctx: N%` label) or 'bar' (a progress bar then N%); 'ctx' wins when both render.
 export type ContextFooter = { percent: number; shape: 'ctx' | 'bar' }
@@ -74,9 +74,9 @@ export function parseContextFooter(pane: string): ContextFooter | null {
   if (rule === -1) return null
   const footer = lines.slice(rule + 1).join('\n')
   const label = footer.match(CTX_LABEL_RE)
-  if (label) return { percent: parseInt(label[1], 10), shape: 'ctx' }
+  if (label) return { percent: Math.round(parseFloat(label[1])), shape: 'ctx' }
   const bar = footer.match(CTX_BAR_RE)
-  return bar ? { percent: parseInt(bar[1], 10), shape: 'bar' } : null
+  return bar ? { percent: Math.round(parseFloat(bar[1])), shape: 'bar' } : null
 }
 
 export const parseContextPercent = (pane: string): number | null => parseContextFooter(pane)?.percent ?? null

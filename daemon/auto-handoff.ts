@@ -13,10 +13,10 @@ import { declaredSpecialist, handoffProtocolOf, type HandoffProtocol } from '../
 import { specialistOf } from '../specialists/specialists.js'
 import { killAndRespawn, NotReplaced } from '../specialists/specialist-deliver.js'
 import { safeSend } from './util.js'
+import { CACHE_HANDOFF_LINE, FULL_HANDOFF_DEFAULT_LINE } from './context-lines.js'
 
 // Cache handoff, opt-in with AUTO_HANDOFF_CACHE=1: a Claude session at 50%+ context that nobody has touched for 50 minutes
 // hands off while its 1-hour prompt cache is still warm (the 5-minute poll lands the request 50-55 minutes after the last touch).
-const CACHE_HANDOFF_PCT = 50
 const CACHE_HANDOFF_IDLE_MS = 50 * 60_000
 // An automatic request is repeated once if, this long after, the session is still the same one, has written no letter and is idle again.
 const HANDOFF_RETRY_MS = 3 * 60_000
@@ -52,7 +52,17 @@ function declaredOf(info: SessionInfo) {
  */
 function fullHandoffLine(info: SessionInfo): { pct: number; on: boolean } {
   const own = declaredOf(info)?.handoffAtPct
-  return own !== undefined ? { pct: own, on: true } : { pct: envPercent('AUTO_HANDOFF_FULL_PCT', 85), on: autoHandoffOn('FULL') }
+  return own !== undefined ? { pct: own, on: true } : { pct: envPercent('AUTO_HANDOFF_FULL_PCT', FULL_HANDOFF_DEFAULT_LINE), on: autoHandoffOn('FULL') }
+}
+
+/** For the context alert: what hydra will do on its own for this session, as one sentence, or '' when nothing automatic is on. */
+export function automaticHandoffSentence(info: SessionInfo): string {
+  const line = fullHandoffLine(info)
+  const protocol = handoffProtocolFor(info)
+  if (!line.on || !canBeReplaced(info, protocol)) return ''
+  return protocol === 'kill_and_respawn'
+    ? `At ${line.pct}% hydra restarts it fresh once it is idle (no letter, the conversation is not continued).`
+    : `At ${line.pct}% hydra asks it to hand off once it is idle.`
 }
 
 /** What replaces this session at its line: its specialist's `handoff_protocol` (hydra.toml as loaded now), else a letter. */
@@ -123,7 +133,7 @@ function replace(info: SessionInfo, protocol: HandoffProtocol, pct: number, line
 function cacheHandoff(info: SessionInfo, pct: number, now: number): void {
   if (!autoHandoffOn('CACHE') || Number.isNaN(pct)) return
   // Below the threshold, re-arm: a later climb past it asks again.
-  if (pct < CACHE_HANDOFF_PCT) { cacheHandoffAsked.delete(info.sessionId); idleSince.delete(info.sessionId); return }
+  if (pct < CACHE_HANDOFF_LINE) { cacheHandoffAsked.delete(info.sessionId); idleSince.delete(info.sessionId); return }
   if (cacheHandoffAsked.has(info.sessionId) || info.engine !== 'claude') return
   if (isSessionWorking(info)) { idleSince.delete(info.sessionId); return }
   const since = idleSince.get(info.sessionId) ?? idleSince.set(info.sessionId, now).get(info.sessionId)!

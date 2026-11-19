@@ -20,7 +20,7 @@ import type { BridgeTransport } from '../bridge-transport.js'
 import { parseContextFooter, type ContextFooter } from '../util.js'
 import { tmuxCreateSession, tmuxHasSession, tmuxSessionState, tmuxSync, tmuxTimedOut, tmuxWindowActivity } from '../tmux.js'
 import { claudeConfigDir, contextWindowOf, isKnownModel } from '../../shared/constants.js'
-import { drainSession, lastContextTokens, newSessionCursor, projectDirName, projectsRoot, transcriptPathFor, type SessionCursor } from '../usage.js'
+import { drainSession, newSessionCursor, projectDirName, projectsRoot, transcriptContext, transcriptPathFor, type SessionCursor } from '../usage.js'
 import { claudeTurnOutcome } from './claude-transcript.js'
 import { readClaudeStatus } from './claude-status.js'
 import { defaultTurnSources } from './codex-observation.js'
@@ -563,25 +563,29 @@ export class ClaudeEngine implements EngineAdapter {
   // from the status file (a /clear starts a new transcript; the stored id goes stale). The pane's footer number is
   // the fallback (no or unknown launch model; no transcript yet). Only a `ctx:` footer is cross-checked,
   // at most every CONTEXT_CHECK_EVERY_MS: hydra's mod (mod/hooks/register.ts) prints Claude Code's used percentage as is,
-  // while an operator's own statusline bar may be rescaled (one that reads 100% at auto-compact).
+  // while an operator's own statusline bar may be rescaled (one that reads 100% at auto-compact). A session whose window the
+  // transcript cannot give (a `/model` switch, see transcriptContext) reads its `ctx:` footer on every call instead: it is the reading.
   usage(info: ClaudeSubject): ContextUsage | null {
-    const window = contextWindowOf(info.sessionMetadata?.model)
-    const path = window ? transcriptPathFor(readClaudeStatus(info.tmuxName)?.sessionId ?? info.claudeSessionId) : undefined
-    const used = path ? lastContextTokens(path) : null
-    if (!window || used === null) {
+    const launch = info.sessionMetadata?.model
+    const path = contextWindowOf(launch) ? transcriptPathFor(readClaudeStatus(info.tmuxName)?.sessionId ?? info.claudeSessionId) : undefined
+    const t = path ? transcriptContext(path, launch) : null
+    if (!t) {
       const pane = this.paneFooter(info)
       return pane === null ? null : { usedTokens: 0, contextWindow: 0, percent: pane.percent }
     }
-    const percent = Math.min(100, Math.round(used * 100 / window))
     const now = Date.now()
-    if (now - (lastContextCheckAt.get(info.tmuxName) ?? 0) >= CONTEXT_CHECK_EVERY_MS) {
-      lastContextCheckAt.set(info.tmuxName, now)
-      const pane = this.paneFooter(info)
-      if (pane?.shape === 'ctx' && Math.abs(pane.percent - percent) >= 2) {
-        process.stderr.write(`daemon: context %: ${info.tmuxName} transcript says ${percent}% (${used}/${window}), pane says ${pane.percent}%\n`)
-      }
+    const due = now - (lastContextCheckAt.get(info.tmuxName) ?? 0) >= CONTEXT_CHECK_EVERY_MS
+    // After a `/model` switch the transcript cannot name the window; Claude Code's own `ctx: N%` can, so it is the reading.
+    const pane = t.switched || due ? this.paneFooter(info) : null
+    if (due) lastContextCheckAt.set(info.tmuxName, now)
+    if (t.switched && pane?.shape === 'ctx') {
+      if (due) process.stderr.write(`daemon: context %: ${info.tmuxName} switched model (launched ${launch}); reading the pane's ctx ${pane.percent}% (transcript floor ${t.percent}%)\n`)
+      return { usedTokens: 0, contextWindow: 0, percent: pane.percent }
     }
-    return { usedTokens: used, contextWindow: window, percent }
+    if (due && pane?.shape === 'ctx' && Math.abs(pane.percent - t.percent) >= 2) {
+      process.stderr.write(`daemon: context %: ${info.tmuxName} transcript says ${t.percent}% (${t.usedTokens}/${t.contextWindow}), pane says ${pane.percent}%\n`)
+    }
+    return { usedTokens: t.usedTokens, contextWindow: t.contextWindow, percent: t.percent }
   }
 
   private paneFooter(info: ClaudeSubject): ContextFooter | null {

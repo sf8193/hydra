@@ -7,11 +7,11 @@ import { refreshSessionVisual } from './anchor-state.js'
 import { bridgeWaitMs, occupancy } from './session-reachability.js'
 import { notifyOperator } from './access.js'
 import type { SessionInfo } from './sessions.js'
-import { autoHandoff } from './auto-handoff.js'
+import { automaticHandoffSentence, autoHandoff } from './auto-handoff.js'
+import { CONTEXT_ALERT_LINES } from './context-lines.js'
 import { timed } from '../shared/loop-watch.js'
 
 const SESSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
-const CONTEXT_ALERT_THRESHOLDS = [50, 70]
 
 const contextAlerted = new Set<string>()
 const crashAlerted = new Set<string>()
@@ -64,7 +64,7 @@ export function pollSessionsOnce(now: number): void {
     }
 
     const pct = formatContextPercent(info.adapter, info)
-    alertContext(info.sessionId, info.tmuxName, pct, info.threadId)
+    alertContext(info.sessionId, info.tmuxName, pct, info.threadId, info)
     // A failure here (disk, template) must not skip the other sessions' crash and orphan checks.
     try { autoHandoff(info, parseInt(pct), now) } catch (err) { process.stderr.write(`daemon: auto-handoff failed for ${info.tmuxName}: ${err}\n`) }
   }
@@ -76,18 +76,19 @@ export function pollSessionsOnce(now: number): void {
   alertOrphans(newOrphans, now)
 }
 
-function alertContext(id: string, name: string, pct: string, channel: string): void {
+function alertContext(id: string, name: string, pct: string, channel: string, info?: SessionInfo): void {
   if (pct === '?') return
   const num = parseInt(pct)
   // A drop (/clear, /compact) re-arms the thresholds it fell below; the main session keeps its id across a /clear.
-  for (const t of CONTEXT_ALERT_THRESHOLDS) if (num < t) contextAlerted.delete(`${id}:${t}`)
+  for (const t of CONTEXT_ALERT_LINES) if (num < t) contextAlerted.delete(`${id}:${t}`)
   // Highest crossed threshold not yet alerted; a jump past both fires once.
-  const threshold = CONTEXT_ALERT_THRESHOLDS.findLast(t => num >= t)
+  const threshold = CONTEXT_ALERT_LINES.findLast(t => num >= t)
   const key = `${id}:${threshold}`
   if (threshold !== undefined && !contextAlerted.has(key)) {
-    for (const t of CONTEXT_ALERT_THRESHOLDS) if (t <= threshold) contextAlerted.add(`${id}:${t}`)
+    for (const t of CONTEXT_ALERT_LINES) if (t <= threshold) contextAlerted.add(`${id}:${t}`)
     process.stderr.write(`daemon: context alert: ${name} at ${pct}\n`)
-    void gateway.send(channel, `**${name}** is at **${pct}** context. Consider a \`handoff\` to a fresh session (\`handoff: <note>\` passes a note to it).`).catch(() => {})
+    const auto = info ? automaticHandoffSentence(info) : ''
+    void gateway.send(channel, `**${name}** is at **${pct}** context, at its ${threshold}% alert line.${auto ? ` ${auto}` : ''} Consider a \`handoff\` to a fresh session (\`handoff: <note>\` passes a note to it).`).catch(() => {})
   }
 }
 

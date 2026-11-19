@@ -36,6 +36,19 @@ Four optional files in the state dir customize what each side is told. All are r
 
 `from_session` is the predecessor's Claude session id and `from_transcript` its transcript path. Each is empty when unknown, and always for a Codex predecessor. `note` is empty when the command had none. Unknown placeholders are left as written. A missing file uses the built-in text. An empty or unreadable one does too, and the daemon logs a one-time warning.
 
+## Context lines
+
+Every percent below is a share of the session's context window, read one way everywhere (from the transcript; after a `/model` switch, from Claude Code's own `ctx: N%` footer, since the transcript cannot name the new window): the latest turn's input plus cache-creation plus cache-read tokens over the window of the model the session launched with (1M for a `[1m]` model, else 200k), as `usage` and `hydra list` show it. The README's `ctx: N%` footer is the same figure while the session runs on its launch model; `88%` in its examples is only the shape of the footer, not a recommended line.
+
+| Line | Default | What happens | Set by |
+|---|---|---|---|
+| Alert | 50% and 70% | The operator is told once per climb: `X is at N% context, at its L% alert line.` The message adds what hydra will do on its own at the full line, when that is on. | fixed |
+| Converge nudge | off | The session is told to start converging toward a handoff. | `AUTO_CONVERGE_PCT` |
+| Cache handoff | off; 50%, idle 50 min | An idle Claude session is asked to hand off while its prompt cache is warm. | `AUTO_HANDOFF_CACHE=1` |
+| Full handoff | off; 85% | An idle session is asked to hand off (or restarted fresh, per its `handoff_protocol`). | `AUTO_HANDOFF_FULL=1`, `AUTO_HANDOFF_FULL_PCT`, a specialist's `handoff_at_pct` |
+
+The lines live in `daemon/context-lines.ts`.
+
 ## Automatic handoff
 
 Off by default. Each is set in the state dir's `.env`, which the daemon reads at startup, so a change takes a restart; the 5-minute health poll notices a session crossing a line within 5 minutes. A percent is a whole number 1–99; anything else turns the converge nudge off and keeps the full handoff at 85.
