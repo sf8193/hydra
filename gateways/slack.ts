@@ -51,6 +51,18 @@ function applyMessageBody(payload: Record<string, unknown>, text: string, hasBut
   else payload.markdown_text = text
 }
 
+/** The text a chat.postMessage payload shows, for counting its links: `text`, `markdown_text`, and every `text` inside its blocks. */
+function slackPostText(payload: Record<string, unknown>): string {
+  const out: string[] = []
+  const walk = (v: unknown): void => {
+    if (Array.isArray(v)) v.forEach(walk)
+    else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) { if (k === 'text' && typeof x === 'string') out.push(x); else walk(x) }
+  }
+  for (const k of ['text', 'markdown_text'] as const) if (typeof payload[k] === 'string') out.push(payload[k] as string)
+  walk(payload.blocks)
+  return out.join('\n')
+}
+
 /**
  * Slack has no `-#`; its small grey text is a context block, which reads classic mrkdwn only.
  * Markdown links to web URLs become `<url|label>`; everything else is escaped so `<!channel>` and the like stay inert.
@@ -529,11 +541,12 @@ export class SlackGateway implements ChatGateway {
 
   /**
    * The one place this gateway posts a message to Slack (every send, thread anchor, first reply and DM goes through it): a place that sets
-   * `link_previews = false` gets `unfurl_links` and `unfurl_media` false. `chat.update` takes no such argument, so an edit is not covered.
+   * `link_previews = false` gets `unfurl_links` and `unfurl_media` false, and so does a post with 2+ links to one that sets `"single"`.
+   * `chat.update` takes no such argument, so an edit is not covered.
    */
   private postMessage(payload: Record<string, unknown>) {
     // No `app`: the gateway's bot is its own Slack app, never one of hydra.toml's `[slack.apps]` (the loader refuses one app on both), so a DM it sends is `slack:app-dm:*` and no `slack:app-dm:<app>`.
-    if (typeof payload.channel === 'string') Object.assign(payload, unfurlFields(linkPreviewsOff('slack', [payload.channel])))
+    if (typeof payload.channel === 'string') Object.assign(payload, unfurlFields(linkPreviewsOff('slack', [payload.channel], {}, slackPostText(payload))))
     return this.app!.client.chat.postMessage(payload as any)
   }
 

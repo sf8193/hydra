@@ -1,4 +1,4 @@
-// Whether hydra.toml turns link previews off where a message is going (`[places]` `link_previews = false`).
+// Whether hydra.toml turns link previews off where a message is going (`[places]` `link_previews = false`, or `"single"` and the post has 2+ links).
 //
 // Each gateway asks this at its one point of sending (Slack: `postMessage`; Discord: `previewPolicy`), and the Slack connector asks it
 // the same way with its own view, so what a place says is decided by this one function. A leaf module: the gateways cannot import hydra.toml's loader (config.ts builds the
@@ -36,9 +36,26 @@ export function placesFor(platform: ChatPlatform, ids: readonly string[], slackN
   return at
 }
 
-/** True when a place any of these channels goes by sets `link_previews = false`. Anything not declared keeps previews on. */
-export function linkPreviewsOff(platform: ChatPlatform, ids: readonly string[], from: PreviewSources = {}): boolean {
+/**
+ * True when this post goes out without previews: a place any of these channels goes by sets `link_previews = false`, or one sets
+ * `link_previews = "single"` and `text` carries two or more links the platform would preview (`linksPreviewed`). Anything not declared keeps previews on.
+ */
+export function linkPreviewsOff(platform: ChatPlatform, ids: readonly string[], from: PreviewSources = {}, text?: string): boolean {
   const places = (from.config ?? source.config())?.places
   if (!places) return false
-  return placesFor(platform, ids, from.slackName ?? source.slackName, from.app).some(p => optionsOf(places, p)?.linkPreviews === false)
+  const said = placesFor(platform, ids, from.slackName ?? source.slackName, from.app).map(p => optionsOf(places, p)?.linkPreviews)
+  if (said.includes(false)) return true
+  return said.includes('single') && text !== undefined && linksPreviewed(platform, text) >= 2
+}
+
+/**
+ * How many different links in `text` the platform would preview. Code (fenced or inline) previews nothing on either. Slack previews
+ * `<url>` and `<url|label>` and a bare URL it links itself; Discord previews a bare URL (a markdown link's too) but not one wrapped in `<…>`.
+ */
+export function linksPreviewed(platform: ChatPlatform, text: string): number {
+  const urls = new Set<string>()
+  let rest = text.replace(/```[\s\S]*?```/g, ' ').replace(/`[^`\n]*`/g, ' ')
+  rest = rest.replace(/<(https?:\/\/[^\s<>|]+)(?:\|[^>]*)?>/gi, (_m, url: string) => { if (platform === 'slack') urls.add(url); return ' ' })
+  for (const m of rest.matchAll(/https?:\/\/[^\s<>|"]+/gi)) urls.add(m[0].replace(/[.,;:!?)\]'*_~]+$/, ''))
+  return urls.size
 }

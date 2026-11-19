@@ -5,9 +5,9 @@ import { MessageFlags } from 'discord.js'
 import { DiscordGateway } from '../discord'
 import { SlackGateway } from '../slack'
 import { placeKey } from '../../config/types'
-import { linkPreviewsOff, placesFor, registerPreviewConfig, registerSlackChannelNames } from '../../shared/link-previews'
+import { linkPreviewsOff, linksPreviewed, placesFor, registerPreviewConfig, registerSlackChannelNames } from '../../shared/link-previews'
 
-const places = (p: Record<string, boolean>) => ({ places: Object.fromEntries(Object.entries(p).map(([k, linkPreviews]) => [k, { files: false, messages: 'addressed', bots: false, linkPreviews }])) }) as any
+const places = (p: Record<string, boolean | 'single'>) => ({ places: Object.fromEntries(Object.entries(p).map(([k, linkPreviews]) => [k, { files: false, messages: 'addressed', bots: false, linkPreviews }])) }) as any
 afterEach(() => { registerPreviewConfig(() => undefined); registerSlackChannelNames(() => undefined) })
 
 describe('which places turn previews off', () => {
@@ -213,5 +213,61 @@ describe('a Discord button click edits or answers through the same seam', () => 
     ;(gw as any).handleInteraction(click('999'))
     await handler[1].respond('t'); await handler[1].clearButtons('t')
     expect(calls.map(([, p]) => Object.keys(p).includes('flags'))).toEqual([false, false])
+  })
+})
+
+describe('link_previews = "single": at most one preview per post', () => {
+  function slack() {
+    const calls: any[] = []
+    const gw = Object.create(SlackGateway.prototype) as SlackGateway
+    ;(gw as any).app = { client: { chat: { postMessage: async (a: any) => { calls.push(a); return { ts: '1.1' } } } } }
+    ;(gw as any)._sendChain = Promise.resolve()
+    ;(gw as any)._lastSendAt = 0
+    ;(gw as any).noteSent = () => {}
+    return { gw, calls }
+  }
+  function discord() {
+    const sent: any[] = []
+    const edits: any[] = []
+    const gw = Object.create(DiscordGateway.prototype) as DiscordGateway
+    const ch = {
+      id: '100', isTextBased: () => true, isThread: () => false, parentId: null,
+      send: async (p: any) => { sent.push(p); return { id: 'm1', channelId: '100' } },
+      messages: { fetch: async () => ({ edit: async (p: any) => { edits.push(p); return { id: 'm1' } } }) },
+    }
+    ;(gw as any).client = { channels: { fetch: async () => ch } }
+    ;(gw as any).noteSent = () => {}
+    return { gw, sent, edits }
+  }
+  test('Slack: one link unfurls as Slack would (neither key sent); two links go out with unfurl_links and unfurl_media false', async () => {
+    registerPreviewConfig(() => places({ 'slack:C0OPS': 'single' }))
+    const { gw, calls } = slack()
+    await gw.send('C0OPS', 'see https://example.com')
+    await gw.send('C0OPS', 'see https://example.com and https://example.org')
+    await gw.send('C0OPS', 'see <https://a.example|a> and <https://b.example>')
+    expect(Object.keys(calls[0])).not.toContain('unfurl_links')
+    expect(Object.keys(calls[0])).not.toContain('unfurl_media')
+    expect([calls[1].unfurl_links, calls[1].unfurl_media]).toEqual([false, false])
+    expect([calls[2].unfurl_links, calls[2].unfurl_media]).toEqual([false, false])
+  })
+  test('Discord: two bare URLs carry the suppress-embeds flag; one, or <url>-wrapped ones, do not', async () => {
+    registerPreviewConfig(() => places({ 'discord:100': 'single' }))
+    const { gw, sent, edits } = discord()
+    await gw.send('100', 'see https://example.com and https://example.org')
+    await gw.send('100', 'see https://example.com')
+    await gw.send('100', 'see <https://example.com> and <https://example.org> and https://example.net')
+    expect(sent.map(p => p.flags)).toEqual([MessageFlags.SuppressEmbeds, undefined, undefined])
+    await gw.edit('100', 'm1', 'now https://example.com and https://example.org')
+    expect(edits[0]).toEqual({ content: 'now https://example.com and https://example.org', flags: MessageFlags.SuppressEmbeds })
+  })
+  test('the count: distinct URLs, code previews nothing, Slack counts <url|label> and Discord does not count <url>', () => {
+    expect(linksPreviewed('slack', '<https://a.example|a> and https://b.example.')).toBe(2)
+    expect(linksPreviewed('discord', '<https://a.example> and https://b.example.')).toBe(1)
+    expect(linksPreviewed('discord', 'https://a.example twice https://a.example')).toBe(1)
+    expect(linksPreviewed('discord', '[a](https://a.example) `https://b.example` ```\nhttps://c.example\n```')).toBe(1)
+  })
+  test('false still wins over "single" (a thread whose channel turns previews off)', () => {
+    registerPreviewConfig(() => places({ 'discord:555': 'single', 'discord:100': false }))
+    expect(linkPreviewsOff('discord', ['555', '100'], {}, 'one https://example.com')).toBe(true)
   })
 })
