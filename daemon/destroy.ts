@@ -133,6 +133,22 @@ export async function destroyThreadById(threadId: string, by: string): Promise<D
 }
 
 /**
+ * Why `callerSessionId` may not destroy the thread of a session that has ended, or undefined if it may.
+ * The operator's shell and main (no id, or 'main') may. A session may if it owns the thread of the session that spawned the ended one: the
+ * spawner, or its handoff successor (the thread's owner after it), as it could while the child lived. Owner, not merely in the thread: a
+ * protocol participant joins the owner's thread as a guest and must not inherit the owner's authority, and a protocol participant is
+ * refused as the live rule refuses it. Like the live destroy, only a thread hydra made.
+ * The one rule for `hydra kill --destroy` and the `kill_session` tool; `destroyThreadById` still gates on `[threads] allow_destroy`.
+ */
+export function endedDestroyRefusal(callerSessionId: string | undefined, threadId: string, name: string): string | undefined {
+  if (!callerSessionId || callerSessionId === 'main') return undefined
+  const thread = threadRegistry.get(threadId)
+  const spawner = thread?.sessionHistory.at(-1)?.spawnerThreadId
+  if (thread?.hydraMade && spawner && registry.getByThread(spawner) === callerSessionId && !isProtocolParticipant(callerSessionId)) return undefined
+  return `cannot destroy ${name} — its session has ended, and only the session that spawned it (or its handoff successor), the operator's shell or main may destroy its thread. Ask one of them to run \`hydra kill ${threadId} --destroy\`.`
+}
+
+/**
  * Kill a session, then destroy its thread: what the tool and the CLI mean by "destroy".
  * A refusal the thread already shows (not Discord, a protocol in flight) is returned
  * before the kill, so nothing happens. After the kill, a declined destroy leaves the

@@ -3,7 +3,7 @@ import { isAbsolute, join, resolve as resolvePath } from 'path'
 import { gateway, STATE_DIR } from './config.js'
 import { isParentOf, parentSessionOf, registry, resolveSendTarget, threadRegistry, type Predecessor, type SessionInfo, type ThreadSessionEntry } from './sessions.js'
 import { transport } from './bridge-transport.js'
-import { callerRefusal, destroyDeclinedText, destroyThreadById, killThenDestroy } from './destroy.js'
+import { callerRefusal, endedDestroyRefusal, destroyDeclinedText, destroyThreadById, killThenDestroy } from './destroy.js'
 import { loadAccess, operatorIds, maxChunkLimit, channelPolicy, MAX_ATTACHMENT_BYTES } from './access.js'
 import { partyLink, quietSend, shouldQuiet } from './quiet-send.js'
 import { beginMainHandoff } from './main-handoff.js'
@@ -666,9 +666,11 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
 
         if (!targetId || !registry.has(targetId)) {
           // A thread id with no live session in it, and destroy: with no session left, a destroy by thread id (`[threads] allow_destroy`).
-          // Main's alone: a session's right to destroy is having spawned the session, and an ended one keeps no such record.
-          if (!sessionId && threadId && args.destroy === true && (!callerSessionId || callerSessionId === 'main')) {
-            const out = await destroyThreadById(threadId, 'main')
+          // Main, or the session that spawned the ended one (endedDestroyRefusal): the ended session's history names its spawner's thread.
+          if (!sessionId && threadId && args.destroy === true) {
+            const refusal = endedDestroyRefusal(callerSessionId, threadId, threadRegistry.get(threadId)?.sessionHistory.at(-1)?.tmuxName ?? threadId)
+            if (refusal) throw new Error(refusal)
+            const out = await destroyThreadById(threadId, callerSessionId && callerSessionId !== 'main' ? (registry.get(callerSessionId)?.tmuxName ?? 'agent') : 'main')
             if (!out.ok) return { content: [{ type: 'text', text: out.text }], isError: true }
             return { content: [{ type: 'text', text: `deleted thread ${threadId}` }] }
           }

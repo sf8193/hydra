@@ -1348,6 +1348,13 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   registry.persist()
 
   if (!isJoin) {
+    // Who spawned it, by thread: the spawner's session may be gone by the time anyone asks, and a handoff successor shares its thread.
+    // A start that continues the thread's session (handoff, resurrect) whose spawner's record is gone keeps what the thread already says.
+    const continues = originType === 'handoff' || originType === 'resurrect'
+    // A guest in a thread has no thread of its own to answer from (its record's threadId is its host's): its children name none.
+    const spawner = carriedParentId ? registry.get(carriedParentId) : undefined
+    const spawnerThread = (spawner && spawner.sessionType !== 'thread_guest' ? spawner.threadId : undefined)
+      ?? (continues ? threadRegistry.get(threadId!)?.sessionHistory.findLast(h => h.spawnerThreadId)?.spawnerThreadId : undefined)
     threadRegistry.recordSpawn(threadId!, {
       anchorMessageId, anchorChannelId, threadUrl: url || undefined, topic, respawnCount,
       sessionId, tmuxName, originType, originFrom, model: launched.model, parentChannelId,
@@ -1356,6 +1363,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       ...(policy && { policy }),
       ...(kickoffHash !== undefined && { kickoffHash }),
       ...(hydraMadeThread && { hydraMade: true }),
+      ...(spawnerThread && { spawnerThreadId: spawnerThread }),
     })
   }
 

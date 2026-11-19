@@ -223,6 +223,9 @@ export type ThreadSessionEntry = {
   /** Its specialist's kill_and_respawn replaced it with a fresh session: written before the kill, so no revive (a refill, `resume`, boot
    *  recovery, one after a daemon restart mid-swap) ever resumes or forks this conversation (read by reviveThread). */
   restartedFresh?: true
+  /** The thread of the session that spawned this one (not its session id: a handoff keeps the thread). Lets that thread's sessions destroy this
+   *  one's thread after it ends (read by endedDestroyRefusal). Absent on a record from before it was kept, or a spawn nobody made: refused as before. */
+  spawnerThreadId?: string
 }
 
 export type ThreadMetadata = {
@@ -628,7 +631,7 @@ export class ThreadRegistry {
     respawnCount: number, sessionId: string, tmuxName: string,
     originType: 'spawn' | 'fork' | 'handoff' | 'resurrect', originFrom?: string,
     model?: string, parentChannelId?: string, claudeSessionId?: string,
-    label: SessionLabel | undefined, policy?: LaunchPolicy, kickoffHash?: string, hydraMade?: boolean,
+    label: SessionLabel | undefined, policy?: LaunchPolicy, kickoffHash?: string, hydraMade?: boolean, spawnerThreadId?: string,
   }): void {
     const now = Date.now()
     let thread = this.threads.get(threadId)
@@ -666,6 +669,7 @@ export class ThreadRegistry {
       label: opts.label,
       ...(opts.policy !== undefined && { policy: opts.policy }),
       ...(opts.kickoffHash !== undefined && { kickoffHash: opts.kickoffHash }),
+      ...(opts.spawnerThreadId && { spawnerThreadId: opts.spawnerThreadId }),
     })
     this.persist()
   }

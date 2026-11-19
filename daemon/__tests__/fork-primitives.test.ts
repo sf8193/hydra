@@ -216,6 +216,18 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
     expect(threadRegistry.get(THREAD)?.hydraMade).toBeUndefined()
   })
 
+  test.each([
+    ['an owner', 'thread_owner', 'owner-thread'],
+    ['a guest in a thread (its record carries its host\'s thread: it names none)', 'thread_guest', undefined],
+  ] as const)('spawnerThreadId: a child of %s', async (_label, sessionType, expected) => {
+    mk('sp-parent', 'spparent', { sessionType, threadId: 'owner-thread', adapter: fakeClaude } as any)
+    try {
+      seedDead()
+      await doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, parentId: 'sp-parent' })
+      expect(threadRegistry.get(live().threadId)?.sessionHistory.at(-1)?.spawnerThreadId).toBe(expected)
+    } finally { registry.delete('sp-parent') }
+  })
+
   test('opts.predecessor lands on the new record', async () => {
     seedDead()
     await doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, predecessor: pred })
@@ -376,6 +388,8 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
       expect(succ.initiator).toBe('auparent')
       expect(child.parentId).toBe(succ.sessionId)
       expect(legacy.parentId).toBe(succ.sessionId)
+      // The history entry names the spawner by its thread (which a handoff keeps), for the ended-thread destroy.
+      expect(threadRegistry.get(succ.threadId)?.sessionHistory.at(-1)?.spawnerThreadId).toBe('au-parent-thread')
 
       // A new, unrelated session reusing the dead predecessor's name holds no authority.
       mk('au-recycled', pred.tmuxName, { createdAt: Date.now() + 1000, adapter: fakeClaude } as any)

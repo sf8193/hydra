@@ -3,7 +3,7 @@ import { pushChangedToolSurfaces } from './tool-surface.js'
 import { transport } from './bridge-transport.js'
 import { doSpawnSession, killSession, refusedLaunches } from './session-lifecycle.js'
 import { macosGateHealth } from './restricted.js'
-import { callerRefusal, destroyDeclinedText, destroyThreadById, killThenDestroy } from './destroy.js'
+import { callerRefusal, endedDestroyRefusal, destroyDeclinedText, destroyThreadById, killThenDestroy } from './destroy.js'
 import { fallbackDescription, formatDuration } from './util.js'
 import { tmuxServerState, tmuxSessionState } from './tmux.js'
 import { parseIdempotencyTtl, parseIdleTtl } from '../shared/constants.js'
@@ -235,8 +235,8 @@ async function handleKill(req: CLIRequest): Promise<CLIResponse> {
     if (!threads.length) return respond(req, false, `session "${name}" not found`)
     if (threads.length > 1) return respond(req, false, `"${name}" was the last session in ${threads.length} threads (${threads.join(', ')}): nothing was deleted. Name the one to destroy by its thread id.`)
     const [thread] = threads
-    // Only the operator's shell or main: a session's right to destroy is having spawned the session, and an ended one keeps no such record.
-    if (callerSessionId && callerSessionId !== 'main') return respond(req, false, `cannot destroy ${name} — its session has ended, and a session may destroy only a session it spawned. Ask the operator to run \`hydra kill ${thread} --destroy\`.`)
+    const refusal = endedDestroyRefusal(callerSessionId, thread, name)
+    if (refusal) return respond(req, false, refusal)
     const out = await destroyThreadById(thread, 'CLI')
     return out.ok ? respond(req, true, { destroyed: thread }) : respond(req, false, out.text)
   }
