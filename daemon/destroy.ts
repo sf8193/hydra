@@ -16,6 +16,7 @@ import { unwatchThread } from '../connectors/github/pr-watch.js'
 import { emit } from './event-bus.js'
 import { currentHydraConfig } from './hydra-config.js'
 import { listSpecialists } from '../specialists/specialists.js'
+import { ownsLineage } from './lineage.js'
 import { occupancy } from './session-reachability.js'
 import { removeLaunchFiles } from './launch-files.js'
 
@@ -134,17 +135,14 @@ export async function destroyThreadById(threadId: string, by: string): Promise<D
 
 /**
  * Why `callerSessionId` may not destroy the thread of a session that has ended, or undefined if it may.
- * The operator's shell and main (no id, or 'main') may. A session may if it owns the thread of the session that spawned the ended one: the
- * spawner, or its handoff successor (the thread's owner after it), as it could while the child lived. Owner, not merely in the thread: a
- * protocol participant joins the owner's thread as a guest and must not inherit the owner's authority, and a protocol participant is
- * refused as the live rule refuses it. Like the live destroy, only a thread hydra made.
+ * The operator's shell and main (no id, or 'main') may. A session may if it owns the ended thread's lineage (ownsLineage: the spawner, or
+ * its handoff successor), as it could while the child lived. Like the live destroy, only a thread hydra made for that lineage (madeFor): a
+ * session spawned into an existing thread does not make it destroyable.
  * The one rule for `hydra kill --destroy` and the `kill_session` tool; `destroyThreadById` still gates on `[threads] allow_destroy`.
  */
 export function endedDestroyRefusal(callerSessionId: string | undefined, threadId: string, name: string): string | undefined {
   if (!callerSessionId || callerSessionId === 'main') return undefined
-  const thread = threadRegistry.get(threadId)
-  const spawner = thread?.sessionHistory.at(-1)?.spawnerThreadId
-  if (thread?.hydraMade && spawner && registry.getByThread(spawner) === callerSessionId && !isProtocolParticipant(callerSessionId)) return undefined
+  if (threadRegistry.madeFor(threadId) && ownsLineage(callerSessionId, threadId)) return undefined
   return `cannot destroy ${name} — its session has ended, and only the session that spawned it (or its handoff successor), the operator's shell or main may destroy its thread. Ask one of them to run \`hydra kill ${threadId} --destroy\`.`
 }
 
@@ -185,7 +183,7 @@ export function callerRefusal(caller: SessionInfo | undefined, info: SessionInfo
   // A protocol-managed participant (e.g. the review Critic) belongs to the protocol, not to whoever happened to spawn it.
   if (isProtocolParticipant(info.sessionId)) return `cannot ${verb} ${info.tmuxName} — it is a protocol participant`
   if (verb === 'kill') return undefined
-  if (!threadRegistry.get(info.threadId)?.hydraMade) {
+  if (!threadRegistry.madeFor(info.threadId, info.sessionId)) {
     return `cannot destroy ${info.tmuxName} — its thread was not created for it by hydra (it was spawned into an existing thread or message, or predates this check); nothing was killed. Kill it without destroy; the operator can delete the thread.`
   }
   const sharer = [...registry.values()].find(s => s.sessionId !== info.sessionId && s.threadId === info.threadId)

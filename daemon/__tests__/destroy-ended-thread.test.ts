@@ -20,6 +20,7 @@ import { gateway } from '../config.js'
 import { registerProtocol } from '../protocol-registry.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import { seedPrWatch } from './test-harness.js'
+import { sessionTokenHash } from '../cli-caller.js'
 
 const PARENT_CH = 'parent-channel-det'
 const base = { connectors: {}, gateways: {}, slackApps: {}, people: {}, specialists: {}, places: {}, schedules: {}, rules: [] } as unknown as HydraConfig
@@ -92,6 +93,7 @@ function live(name: string, threadId: string): SessionInfo {
     tmuxName: name, listening: false, engine: 'claude', adapter: engines.claude, sessionType: 'thread_owner',
     anchorChannelId: PARENT_CH, anchorMessageId: 'anchor',
   } as SessionInfo
+  info.sessionTokenHash = sessionTokenHash(`tok-${info.sessionId}`)
   registry.set(info.sessionId, info)
   registry.setThread(threadId, info.sessionId)
   seeded.add(info.sessionId)
@@ -101,7 +103,9 @@ function live(name: string, threadId: string): SessionInfo {
   return info
 }
 
-const cli = (params: Record<string, unknown>) => handleCLIRequest({ type: 'cli' as const, command: 'kill', id: `det-${++seq}`, params })
+const cli = (params: Record<string, unknown>, caller?: unknown) => handleCLIRequest({ type: 'cli' as const, command: 'kill', id: `det-${++seq}`, params, ...(caller !== undefined && { caller }) })
+/** The CLI in a session's shell presents its session's token (shared/caller.ts). */
+const token = (sessionId: string) => ({ token: `tok-${sessionId}` })
 const text = (r: { content: Array<{ text: string }> }) => r.content[0].text
 
 describe('off (the default): it refuses, names the key, and deletes nothing', () => {
@@ -224,7 +228,7 @@ describe('on, and a guard refuses', () => {
   test('a session cannot destroy by thread id: only the operator\'s shell or main', async () => {
     const pm = live('pm', '9204')
     ended('old', '9205')
-    const res = await cli({ name: 'old', destroy: true, callerSessionId: pm.sessionId })
+    const res = await cli({ name: 'old', destroy: true }, token(pm.sessionId))
     expect(res.ok).toBe(false)
     expect(deleted).toEqual([])
     const r = await executeTool('kill_session', { thread_id: '9205', destroy: true }, pm.sessionId)
@@ -245,7 +249,7 @@ describe('a live session\'s destroy is untouched by the setting (off, as today)'
 describe('on: the session that spawned an ended session may destroy its thread', () => {
   beforeEach(on_)
   const asTool = (callerId: string, thread: string) => executeTool('kill_session', { thread_id: thread, destroy: true }, callerId)
-  const asCli = (callerId: string, thread: string) => cli({ name: thread, destroy: true, callerSessionId: callerId })
+  const asCli = (callerId: string, thread: string) => cli({ name: thread, destroy: true }, token(callerId))
 
   test('the spawner, by tool and by CLI', async () => {
     const pm = live('pm', '9501')
@@ -259,6 +263,7 @@ describe('on: the session that spawned an ended session may destroy its thread',
   test('its handoff successor: another session in the same thread', async () => {
     const pm = live('pm', '9511')
     const successor = { ...pm, sessionId: `sess-det-${++seq}`, createdAt: Date.now() + 1 } as SessionInfo
+    successor.sessionTokenHash = sessionTokenHash(`tok-${successor.sessionId}`)
     registry.set(successor.sessionId, successor); seeded.add(successor.sessionId)
     registry.setThread('9511', successor.sessionId)   // a handoff makes the successor the thread's owner
     ended('kid', '9512', '9511')
@@ -268,6 +273,7 @@ describe('on: the session that spawned an ended session may destroy its thread',
   test('a protocol guest in the spawner\'s thread (the review Critic) is refused: in the thread is not owning it', async () => {
     const pm = live('pm', '9571')
     const critic = { ...pm, sessionId: `sess-det-${++seq}`, tmuxName: 'critic', sessionType: 'thread_guest' } as SessionInfo
+    critic.sessionTokenHash = sessionTokenHash(`tok-${critic.sessionId}`)
     registry.set(critic.sessionId, critic); seeded.add(critic.sessionId)   // a guest: never setThread'd, the owner stays pm
     ended('kid', '9572', '9571')
     const r = await asTool(critic.sessionId, '9572')

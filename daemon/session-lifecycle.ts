@@ -18,6 +18,8 @@ import { workdirRestrictionIssues } from '../config/restricted-workdir.js'
 import { removeLaunchFiles } from './launch-files.js'
 import { capturedSpawnVars } from '../shared/spawn-env.js'
 import { authorityId, markDead, parentSessionOf, registry, repointChildren, threadRegistry } from './sessions.js'
+import { ownsLineage, spawnIntoRefusal } from './lineage.js'
+import { issueSessionToken } from './cli-caller.js'
 import type { Predecessor, SessionInfo, SessionMetadata, SpawnOpts, SpawnResult } from './sessions.js'
 import { notePendingReply } from './reply-guard.js'
 import { transport } from './bridge-transport.js'
@@ -799,6 +801,19 @@ async function refuseMadeThread(id: string, anchor?: { channelId: string; messag
   throw new Error(notAThreadId(id))
 }
 
+/**
+ * A spawn into a thread that already exists, by its id or by the message it hangs on: when a session asked (`askedBy`) and the thread's
+ * session has ended, only that thread's lineage may start a new one there (spawnIntoRefusal). Throws before anything is replaced.
+ * True when the asker owns the thread's lineage: its new session continues that lineage, and keeps what the thread was made for.
+ */
+function refuseSpawnInto(threadId: string, opts: SpawnOpts | undefined): boolean {
+  if (opts?.askedBy === undefined) return false
+  const inThread = registry.get(registry.getByThread(threadId) ?? '')
+  const refusal = spawnIntoRefusal(opts.askedBy, threadId, !!inThread && occupied(occupancy(inThread)))
+  if (refusal) throw new Error(refusal)
+  return ownsLineage(opts.askedBy, threadId)
+}
+
 export async function doSpawnSession(topic: string, chatId?: string, messageId?: string, opts?: SpawnOpts): Promise<SpawnResult> {
   // Before a thread is opened: a working dir that has gone away fails the spawn without leaving an empty thread.
   if (opts?.cwd && !existsSync(opts.cwd)) throw new Error(`working directory ${opts.cwd} does not exist`)
@@ -809,6 +824,8 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   let threadId: string | undefined
   let anchorMessageId: string | undefined
   let hydraMadeThread = false
+  // The asker of a spawn into an ended thread owns that thread's lineage (refuseSpawnInto): its session continues the lineage.
+  let ownerSpawnsInto = false
   let anchorChannelId: string | undefined
 
   // Lossless respawn: deliverables/description re-applied after the new record is
@@ -911,6 +928,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     if (resolved.threadId) threadId = resolved.threadId
     if (threadId && !gateway.isThreadId(threadId)) throw new Error(notAThreadId(threadId))
     if (resolved.warning) process.stderr.write(`daemon: WARNING: ${resolved.warning}\n`)
+    if (threadId) ownerSpawnsInto = refuseSpawnInto(threadId, opts)
 
     // Clean up dead session in this thread before spawning
     if (threadId) {
@@ -956,6 +974,9 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
           }
         }
         if (threadId) await refuseMadeThread(threadId)
+        // A thread on that message may already be one an ended session left (Discord says so by refusing to make another; Slack names the
+        // same id it would make): checked here, once the id is known, before anything replaces its dead record.
+        if (threadId) ownerSpawnsInto ||= refuseSpawnInto(threadId, opts)
       }
 
       if (!threadId) {
@@ -1236,8 +1257,10 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   }
   const adapter = resolveEngine(engine)
   const spawnType: SessionType = restrictedPolicy ? 'thread_owner' : opts?.sessionType ?? (isJoin ? 'thread_guest' : 'thread_owner')
+  // Its token for the hydra CLI (cli-caller.ts): the session gets the token, its record only the hash.
+  const issued = issueSessionToken()
   const launched = await adapter.launch({
-    sessionId, tmuxName, cwd: effectiveCwd, originalCwd: spawnCwd, model, prompt,
+    sessionId, tmuxName, cwd: effectiveCwd, originalCwd: spawnCwd, model, prompt, sessionToken: issued.token,
     worktreePath, forkFromOriginalCwd: !!worktreeTarget,
     tools: opts?.tools, disallowedTools,
     forkFrom: opts?.forkFrom, resumeFrom: opts?.resumeFrom, resumeCodex: opts?.resumeCodex, resumeOmp: opts?.resumeOmp,
@@ -1279,6 +1302,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     ...(launched.channelNote ? { channelNote: launched.channelNote } : {}),
     ...(engine === 'claude' ? { spawnPrompt: prompt } : {}),
     initiator: carriedInitiator,
+    sessionTokenHash: issued.hash,
     parentId: carriedParentId ?? null,
     ephemeral: opts?.ephemeral,
     ...(opts?.ephemeral && opts.idleTtlMs ? { idleTtlMs: opts.idleTtlMs } : {}),
@@ -1394,6 +1418,9 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       ...(kickoffHash !== undefined && { kickoffHash }),
       ...(hydraMadeThread && { hydraMade: true }),
       ...(spawnerThread && { spawnerThreadId: spawnerThread }),
+      // Sitting in the thread again (resume, respawn, revive, handoff) continues its session, as does a spawn into it by the owner of
+      // its lineage (who could destroy it anyway); a spawn into it by anyone else (main, the operator) does not.
+      continuesThread: (!!opts?.existingThreadId && !rehomedFrom) || ownerSpawnsInto,
     })
   }
 

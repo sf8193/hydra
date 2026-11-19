@@ -14,6 +14,9 @@ import { registry, threadRegistry } from '../sessions.js'
 import type { SessionInfo } from '../sessions.js'
 import { gateway } from '../config.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
+import { sessionTokenHash } from '../cli-caller.js'
+import { rmSync } from 'fs'
+import { join } from 'path'
 
 const PARENT_CH = 'parent-channel-ksd'
 let deleted: string[] = []
@@ -69,6 +72,7 @@ function seed(name: string, threadId: string, extra: Partial<SessionInfo> = {}, 
     tmuxName: name, listening: false, engine: 'claude', adapter: engines.claude, sessionType: 'thread_owner',
     anchorChannelId: PARENT_CH, anchorMessageId: 'anchor', ...extra,
   } as SessionInfo
+  info.sessionTokenHash = sessionTokenHash(`tok-${info.sessionId}`)
   registry.set(info.sessionId, info)
   registry.setThread(threadId, info.sessionId)
   seeded.add(info.sessionId)
@@ -179,7 +183,9 @@ describe('kill_session destroy', () => {
 })
 
 describe('hydra kill --destroy', () => {
-  const req = (params: Record<string, unknown>) => ({ type: 'cli' as const, command: 'kill', id: `ksd-${++seq}`, params })
+  // The CLI run in a session's shell presents its token (shared/caller.ts); with no claim it is the operator's shell.
+  const req = (params: Record<string, unknown>, caller?: unknown) => ({ type: 'cli' as const, command: 'kill', id: `ksd-${++seq}`, params, ...(caller !== undefined && { caller }) })
+  const as = (s: SessionInfo) => ({ token: `tok-${s.sessionId}` })
 
   test('kills then deletes the thread', async () => {
     seed('kid-cli', 'th-cli')
@@ -204,10 +210,10 @@ describe('hydra kill --destroy', () => {
     expect(JSON.stringify(res)).toContain('killed kid-cli3, but its thread was NOT deleted')
   })
 
-  test('run from inside a session (callerSessionId) a destroy answers to the tool\'s rules: a stranger is refused, nothing killed', async () => {
+  test('run from inside a session (its token) a destroy answers to the tool\'s rules: a stranger is refused, nothing killed', async () => {
     const pm = seed('pm-c', 'th-pm-c')
     seed('kid-cli4', 'th-cli4', { parentId: 'someone-else' })
-    const res = await handleCLIRequest(req({ name: 'kid-cli4', destroy: true, callerSessionId: pm.sessionId }))
+    const res = await handleCLIRequest(req({ name: 'kid-cli4', destroy: true }, as(pm)))
     expect(res.ok).toBe(false)
     expect(JSON.stringify(res)).toContain('you can only destroy sessions you spawned')
     expect(deleted).toEqual([])
@@ -217,20 +223,57 @@ describe('hydra kill --destroy', () => {
   test('...a thread hydra did not make is refused, and a spawner\'s own hydra-made child is destroyed', async () => {
     const pm = seed('pm-c2', 'th-pm-c2')
     seed('kid-cli5', 'th-human5', { parentId: pm.sessionId }, false)
-    const refused = await handleCLIRequest(req({ name: 'kid-cli5', destroy: true, callerSessionId: pm.sessionId }))
+    const refused = await handleCLIRequest(req({ name: 'kid-cli5', destroy: true }, as(pm)))
     expect(refused.ok).toBe(false)
     expect(deleted).toEqual([])
 
     seed('kid-cli6', 'th-cli6', { parentId: pm.sessionId })
-    const ok = await handleCLIRequest(req({ name: 'kid-cli6', destroy: true, callerSessionId: pm.sessionId }))
+    const ok = await handleCLIRequest(req({ name: 'kid-cli6', destroy: true }, as(pm)))
     expect(ok.ok).toBe(true)
     expect(deleted).toEqual(['th-cli6'])
   })
 
-  test('the operator\'s shell (no callerSessionId) and main keep their reach', async () => {
+  test('the operator\'s shell (no caller claim; main\'s shell is one) keeps its reach', async () => {
     seed('kid-cli7', 'th-human7', { parentId: 'x' }, false)
-    const res = await handleCLIRequest(req({ name: 'kid-cli7', destroy: true, callerSessionId: 'main' }))
+    const res = await handleCLIRequest(req({ name: 'kid-cli7', destroy: true }))
     expect(res.ok).toBe(true)
     expect(deleted).toEqual(['th-human7'])
+  })
+
+  // A caller that is in a session but cannot show which is refused, never promoted to the operator; nothing is killed.
+  for (const [what, caller, params] of [
+    ['a session\'s environment without a token', { inSession: true }, {}],
+    ['a token no session holds', { token: 'forged' }, {}],
+    ['an older CLI\'s self-reported callerSessionId, even "main"', undefined, { callerSessionId: 'main' }],
+  ] as const) {
+    test(`unverified: ${what}`, async () => {
+      seed('kid-cli8', 'th-human8', { parentId: 'x' }, false)
+      const res = await handleCLIRequest(req({ name: 'kid-cli8', destroy: true, ...params }, caller))
+      expect(res.ok).toBe(false)
+      expect(JSON.stringify(res)).toContain('Nothing was killed')
+      expect(deleted).toEqual([])
+      expect(registry.getByThread('th-human8')).toBeDefined()
+    })
+  }
+
+  test('the token of a session that has ended (a crash left its record) is unverified: nothing is killed', async () => {
+    const pm = seed('pm-c10', 'th-pm-c10')
+    seed('kid-cli10', 'th-cli10', { parentId: pm.sessionId })
+    pm.deadAt = Date.now(); rmSync(join(tmux.dir, 'alive-pm-c10'))   // its pane is gone
+    const res = await handleCLIRequest(req({ name: 'kid-cli10', destroy: true }, as(pm)))
+    expect(res.ok).toBe(false)
+    expect(JSON.stringify(res)).toContain('which has ended')
+    expect(deleted).toEqual([])
+    expect(registry.getByThread('th-cli10')).toBeDefined()
+  })
+
+  test('a session\'s token is the session, whatever else the request names', async () => {
+    const pm = seed('pm-c9', 'th-pm-c9')
+    seed('kid-cli9', 'th-cli9', { parentId: 'someone-else' })
+    // A token wins over a self-reported id: the request cannot claim to be main.
+    const res = await handleCLIRequest(req({ name: 'kid-cli9', destroy: true, callerSessionId: 'main' }, as(pm)))
+    expect(res.ok).toBe(false)
+    expect(JSON.stringify(res)).toContain('you can only destroy sessions you spawned')
+    expect(deleted).toEqual([])
   })
 })

@@ -1,5 +1,6 @@
 import { spawn, execFileSync } from 'child_process'
 import { codexSpawnEnv } from '../shared/spawn-env.js'
+import { SESSION_TOKEN_VAR } from '../shared/caller.js'
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
 import { dirname, join } from 'path'
@@ -22,6 +23,8 @@ export type StartCodexAppServerOptions = {
   cwd: string
   logPath: string
   model?: string
+  /** The session's token (cli-caller.ts), in its environment: codexSpawnEnv drops any inherited identity, so this is the session's own. */
+  sessionToken?: string
 }
 
 /** Start an app-server independently of tmux so the presentation surface is disposable. */
@@ -44,7 +47,8 @@ export function startCodexAppServer(options: StartCodexAppServerOptions): number
   try {
     const child = spawn('codex', args, {
       cwd: options.cwd,
-      env: codexSpawnEnv({ CODEX_HOME: home }),
+      // Every command the session runs inherits this: no identity the daemon had, and the session's own token.
+      env: codexSpawnEnv({ CODEX_HOME: home }, options.sessionToken ? { [SESSION_TOKEN_VAR]: options.sessionToken } : {}),
       detached: true,
       stdio: ['ignore', logFd, logFd],
     })

@@ -142,7 +142,8 @@ export class CodexEngineAdapter implements EngineAdapter {
     // would act as the dead session. A restart reloads the thread from its rollout
     // with the sidecar just registered above.
     process.stderr.write(`daemon: codex spawning durable app-server for ${tmuxName} (home ${codexHomeName})\n`)
-    this.proc.start({ homeName: codexHomeName, cwd: effectiveCwd, logPath: spawnLogPath, model })
+    // The token goes in the app-server's environment, which every command the session runs inherits: no file, no command line.
+    this.proc.start({ homeName: codexHomeName, cwd: effectiveCwd, logPath: spawnLogPath, model, ...(input.sessionToken && { sessionToken: input.sessionToken }) })
     return spawnLogPath
   }
 

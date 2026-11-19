@@ -532,6 +532,8 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           trigger: 'spawn_session',
           initiator: spawnerName,
           ...(callerSessionId && registry.has(callerSessionId) ? { parentId: callerSessionId } : {}),
+          // Any session, registered or not (only main is exempt): a spawn into an ended thread answers to its lineage.
+          ...(callerSessionId && callerSessionId !== 'main' ? { askedBy: callerSessionId } : {}),
           })
         } catch (err) {
           if (allocatedSessionId) finishPrivateProtocolChildLaunch(allocatedSessionId)
