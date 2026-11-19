@@ -49,13 +49,15 @@ export function linkPreviewsOff(platform: ChatPlatform, ids: readonly string[], 
 }
 
 /**
- * How many different links in `text` the platform would preview. Code (fenced or inline) previews nothing on either. Slack previews
+ * How many different links in `text` the platform would preview. Code (fenced or inline) previews nothing on either. A markdown link counts on Slack, and on Discord unless its URL is wrapped in `<…>`. Slack previews
  * `<url>` and `<url|label>` and a bare URL it links itself; Discord previews a bare URL (a markdown link's too) but not one wrapped in `<…>`.
  */
 export function linksPreviewed(platform: ChatPlatform, text: string): number {
   const urls = new Set<string>()
   let rest = text.replace(/```[\s\S]*?```/g, ' ').replace(/`[^`\n]*`/g, ' ')
+  // A markdown link first, so two that touch are two and its `)` does not run into the next URL.
+  rest = rest.replace(/\[[^\]]*\]\((<)?(https?:\/\/[^\s)>]+)>?\)/g, (_m, wrapped: string | undefined, url: string) => { if (platform === 'slack' || !wrapped) urls.add(url); return ' ' })
   rest = rest.replace(/<(https?:\/\/[^\s<>|]+)(?:\|[^>]*)?>/gi, (_m, url: string) => { if (platform === 'slack') urls.add(url); return ' ' })
-  for (const m of rest.matchAll(/https?:\/\/[^\s<>|"]+/gi)) urls.add(m[0].replace(/[.,;:!?)\]'*_~]+$/, ''))
+  for (const m of rest.matchAll(/https?:\/\/[^\s<>|",[\]]+/gi)) urls.add(m[0].replace(/[.;:!?)'*_~]+$/, ''))
   return urls.size
 }

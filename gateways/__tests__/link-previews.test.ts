@@ -277,6 +277,17 @@ describe('link_previews = "single": at most one preview per post', () => {
     expect(linksPreviewed('discord', 'https://a.example twice https://a.example')).toBe(1)
     expect(linksPreviewed('discord', '[a](https://a.example) `https://b.example` ```\nhttps://c.example\n```')).toBe(1)
   })
+  test('links that touch are still separate links: side-by-side markdown links, comma-joined URLs, a `)` inside a URL', () => {
+    for (const platform of ['slack', 'discord'] as const) {
+      expect(linksPreviewed(platform, '[a](https://a.example/x)[b](https://b.example/y)')).toBe(2)
+      expect(linksPreviewed(platform, 'https://a.example,https://b.example')).toBe(2)
+      expect(linksPreviewed(platform, '[a](https://a.example) and [b](https://b.example)')).toBe(2)
+      expect(linksPreviewed(platform, '[a](https://a.example/x)https://b.example/y')).toBe(2)
+    }
+    expect(linksPreviewed('discord', '[a](<https://a.example>)[b](https://b.example)')).toBe(1)
+    expect(linksPreviewed('slack', '[a](<https://a.example>)[b](https://b.example)')).toBe(2)
+    expect(linksPreviewed('discord', '[w](https://en.wikipedia.org/wiki/Foo_(bar))')).toBe(1)
+  })
   test('false still wins over "single" (a thread whose channel turns previews off)', () => {
     registerPreviewConfig(() => places({ 'discord:555': 'single', 'discord:100': false }))
     expect(linkPreviewsOff('discord', ['555', '100'], {}, 'one https://example.com')).toBe(true)
