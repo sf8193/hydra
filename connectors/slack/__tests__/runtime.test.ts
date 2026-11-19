@@ -10,6 +10,7 @@ import {
   getConversationTable, TOOL_BIND_MAX, bindConversation, unbindConversation, formatConversations, formatConversationsFor, operatorBind, slackConversationHealth, slackTokens, slackRuntimeDeps, placeFileFor, parseConversation, replyInConversation, targetFor, startConversationTable, stopConversationTable,
 } from '../runtime.js'
 import { heldBySession } from '../watch.js'
+import { readEvents } from '../../../cli/events.js'
 import { sessionCapabilities, isSpecialistOccupant, isToolAllowed, advertiseTools } from '../../../daemon/tool-surface.js'
 import { emit } from '../../../daemon/event-bus.js'
 import { transport } from '../../../daemon/bridge-transport.js'
@@ -245,6 +246,7 @@ describe('any session listens to a Slack thread: bound to its own thread', () =>
         expect(getConversationTable().get('C9', '12.000001')).toBeUndefined()
         expect(getConversationTable().get('C9', '13.000001')).toBeUndefined()
         expect(getConversationTable().get('C9', '14.000001')?.specialist).toBe(OTHER)
+        expect(readEvents(STATE_DIR, { by: 'hydra' }).filter(e => e.kind === 'unbind' && e.conversation === 'slack:C9:12.000001').map(e => e.kind === 'unbind' && [e.from, e.reason])).toContainEqual([MINE, 'killed'])
         const said = out.filter(([c]) => c === MINE).map(([, t]) => t)
         expect(said).toHaveLength(1)                                           // one notice, not one per conversation, and not a second for the owed drop
         expect(said[0]).toContain('This session was killed')
@@ -287,6 +289,7 @@ describe('any session listens to a Slack thread: bound to its own thread', () =>
         await new Promise(r => setTimeout(r, 10))
         expect(getConversationTable().get('C9', '8.000001')).toBeUndefined()
         expect(logged.join('')).toContain(`unbound slack:C9:8.000001: its session thread ${MINE} was deleted`)   // said, though nothing was owed
+        expect(readEvents(STATE_DIR, { by: 'hydra' }).filter(e => e.kind === 'unbind' && e.conversation === 'slack:C9:8.000001').map(e => e.kind === 'unbind' && [e.from, e.reason])).toContainEqual([MINE, 'thread-gone'])
         ;(gateway as any).threadExists = async () => { throw new Error('platform unreachable') }
         emit('session:death', { sessionId: 'gone-c', threadId: OTHER, wasOwner: true, tmuxName: 'gone-c' })
         await new Promise(r => setTimeout(r, 10))

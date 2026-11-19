@@ -14,7 +14,7 @@ import { ENV_NAME_RE, capturedSpawnVars, scrubbedSpawnVars, tokenVarRefusal } fr
 import { join } from 'path'
 import { existsSync, readFileSync } from 'fs'
 import { safeSend, atomicWriteFileSync } from '../../daemon/util.js'
-import { recordEvent } from '../../daemon/events.js'
+import { HYDRA_ACTOR, BIND_WHY_MAX } from '../../shared/events.js'
 import { mainChannel } from '../../daemon/main-session.js'
 import { gateway } from '../../daemon/config.js'
 import { currentHydraConfig, onHydraConfigLoad } from '../../daemon/hydra-config.js'
@@ -324,7 +324,7 @@ function unbindOnKill(threadId: string | undefined): void {
   const bound = getConversationTable().list().filter(e => e.specialist === threadId)
   if (!bound.length) return
   const owed = bound.reduce((n, e) => n + (e.owed?.length ?? 0), 0)
-  for (const e of bound) getConversationTable().unwatch(e.channel, e.threadTs, e.app, true)
+  for (const e of bound) getConversationTable().unwatch(e.channel, e.threadTs, e.app, true, { by: HYDRA_ACTOR, reason: 'killed' })
   alert(`ℹ️ This session was killed, so it stopped listening to ${bound.map(conversationId).join(', ')}${owed ? ` (${owed} owed dropped)` : ''}. Bind again with \`bind_conversation\` to resume.`, threadId)
 }
 
@@ -349,7 +349,7 @@ async function unbindIfThreadDeleted(threadId: string | undefined): Promise<void
   if (await gateway.threadExists(threadId).catch(() => true)) return
   for (const e of getConversationTable().list().filter(e => e.specialist === threadId)) {
     log(`daemon: slack connector: unbound ${conversationId(e)}: its session thread ${threadId} was deleted\n`)
-    getConversationTable().unwatch(e.channel, e.threadTs, e.app)
+    getConversationTable().unwatch(e.channel, e.threadTs, e.app, false, { by: HYDRA_ACTOR, reason: 'thread-gone' })
   }
 }
 
@@ -433,8 +433,7 @@ export async function bindConversation(caller: Partial<Pick<SessionInfo, 'thread
   if (!counted && w.list().filter(e => heldBySession(e) && e.specialist && currentId(v.hydra, e.specialist) === me).length >= TOOL_BIND_MAX) {
     throw new Error(`${me} already holds ${TOOL_BIND_MAX} conversations it opened itself; unbind one first`)
   }
-  if (!w.bind(c.channel, c.threadTs, me, 'tool', app)) throw new Error(`the conversation table is full (${SLACK_LIMITS.maxConversations}); unbind one first`)
-  if (bound !== me) recordEvent({ kind: 'bind', conversation: conversationId(c), ...(bound && { from: bound }), to: me, by: me })
+  if (!w.bind(c.channel, c.threadTs, me, 'tool', app, { by: me })) throw new Error(`the conversation table is full (${SLACK_LIMITS.maxConversations}); unbind one first`)
   if (via) w.setVia(c.channel, c.threadTs, via, app)
   if (takeover) alert(`ℹ️ ${conversationId(c)} was bound to this session to listen; ${me} took it, since it answers there. This session no longer hears it.`, bound!)
   const place = placeName(v, c.channel)
@@ -490,8 +489,7 @@ export function unbindConversation(caller: Partial<Pick<SessionInfo, 'threadId' 
   const owed = e.owed?.length ?? 0
   // A session that unbinds learns of its drop from this result; a specialist's drop is alerted in its thread.
   const own = isSessionThread(me)
-  getConversationTable().unwatch(c.channel, c.threadTs, appOfEntry(c), own)
-  recordEvent({ kind: 'unbind', conversation: conversationId(c), from: e.specialist, by: me })
+  getConversationTable().unwatch(c.channel, c.threadTs, appOfEntry(c), own, { by: me })
   return `${conversationId(c)} is unbound${owed ? `; ${owed} message${owed === 1 ? '' : 's'} it still owed were dropped${own ? '' : ' (and alerted)'}` : ''}`
 }
 
@@ -846,7 +844,6 @@ async function postParts(app: string, channel: string, thread: string | undefine
 }
 
 /** How long a bind's reason may be: one line in the notice. */
-const BIND_WHY_MAX = 300
 
 /**
  * `hydra conversations bind`: the operator (or main, for them) binds or moves a conversation to any declared specialist, main, or a
@@ -869,9 +866,7 @@ export async function operatorBind(conversation: string, target: string, why?: s
   // A channel has no top-level conversation: every one is a thread (a DM's top level is one, and may be moved).
   if (!isDm(c.channel) && c.threadTs === TOP_LEVEL) throw new Error(`${conversationId(c)} names a channel, not a conversation: add the thread's ts`)
   if (ref.ref.kind === 'thread' && registry.getByThread(`${c.channel}:${c.threadTs}`)) throw new Error(`${conversationId(c)} is a hydra session's own thread: another session can't listen to it`)
-  const from = getConversationTable().get(c.channel, c.threadTs, app)?.specialist
-  if (!getConversationTable().bind(c.channel, c.threadTs, to, hand, app)) throw new Error('the conversation table is full')
-  if (from !== to) recordEvent({ kind: 'bind', conversation: conversationId(c), ...(from && { from }), to, ...(why?.trim() && { why: oneLine(why, BIND_WHY_MAX) }), by })
+  if (!getConversationTable().bind(c.channel, c.threadTs, to, hand, app, { by, ...(why?.trim() && { why: why.trim() }) })) throw new Error('the conversation table is full')
   const bound = `${conversationId(c)} → ${to}`
   if (ref.ref.kind !== 'thread') return bound
   return `${bound}; ${await bindNotice(c, to, why)}`
@@ -907,9 +902,7 @@ async function bindNotice(c: ReturnType<typeof parseConversation>, threadId: str
 export function operatorUnbind(conversation: string): string {
   const c = parseConversation(conversation)
   const owed = getConversationTable().get(c.channel, c.threadTs, appOfEntry(c))?.owed?.length ?? 0
-  const from = getConversationTable().get(c.channel, c.threadTs, appOfEntry(c))?.specialist
-  if (!getConversationTable().unwatch(c.channel, c.threadTs, appOfEntry(c))) return `${conversationId(c)} was not bound`
-  recordEvent({ kind: 'unbind', conversation: conversationId(c), ...(from && { from }), by: 'operator' })
+  if (!getConversationTable().unwatch(c.channel, c.threadTs, appOfEntry(c), false, { by: 'operator' })) return `${conversationId(c)} was not bound`
   return `${conversationId(c)} is unbound${owed ? `; ${owed} message${owed === 1 ? '' : 's'} it still owed were dropped (and alerted)` : ''}`
 }
 
