@@ -408,6 +408,14 @@ describe('bind_conversation / unbind_conversation', () => {
     expect(await bindConversation(food, 'slack:C1:3.000001')).toContain('is bound to') // one it holds already is fine
   })
 
+  test("a conversation the operator moves counts for no session: the cap follows the latest binder", async () => {
+    configure(TOML, { maxConversations: 50 })
+    for (let i = 1; i <= 10; i++) await bindConversation(food, `slack:C1:${i}.000001`)
+    getConversationTable().bind('C1', '1.000001', OPS, 'cli')                       // the operator moves one away, and back
+    getConversationTable().bind('C1', '1.000001', FOOD, 'cli')
+    expect(await bindConversation(food, 'slack:C1:11.000001')).toContain('is bound to')   // FOOD holds 9 of its own now
+  })
+
   test('a rename through `renamed_from` keeps a specialist\'s hold on its conversations', async () => {
     getConversationTable().bind('C1', '7.000001', 'old-food')
     configure(TOML.replace(`[specialists.${FOOD}]`, `[specialists.${FOOD}]\nrenamed_from = ["old-food"]`))

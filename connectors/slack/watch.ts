@@ -128,8 +128,8 @@ export type ConversationEntry = {
   owed?: string[]
   /** Opened by untagged chatter where `messages = "all"`: while owed or answered, such conversations take at most half the table; they idle out in a day. */
   ambient?: true
-  /** Who bound it by hand (`BOUND_BY`: a session's tool, a reply's thread, the operator's CLI) after routing opened it; `mentionedBy` keeps the opener.
-   *  Keeps it from eviction, and a session's (`tool`, `home`) counts toward its `TOOL_BIND_MAX` (`heldBySession`). */
+  /** Who bound it by hand last (`BOUND_BY`: a session's tool, a reply's thread, the operator's CLI); `mentionedBy` keeps the opener. Each bind
+   *  by hand overwrites it. Keeps it from eviction, and a session's (`tool`, `home`) counts toward its `TOOL_BIND_MAX` (`heldBySession`). */
   boundBy?: string
   /** When the guard first said deferred (exit 75) to an owed ts: `owed_max` counts from here. */
   deferredSince?: Record<string, number>
@@ -382,7 +382,7 @@ const EVICT_QUIET_MS = 3600_000
 /** `mentionedBy` of a conversation bound by hand (a session's tool, a reply's thread, the operator's CLI), not by routing: never evicted. */
 const BOUND_BY: ReadonlySet<string> = new Set(['tool', 'home', 'cli'])
 /** A conversation a session holds by its own hand, opened or bound by it: what `TOOL_BIND_MAX` counts. */
-export const heldBySession = (e: ConversationEntry): boolean => e.mentionedBy === 'tool' || e.mentionedBy === 'home' || e.boundBy === 'tool' || e.boundBy === 'home'
+export const heldBySession = (e: ConversationEntry): boolean => { const by = e.boundBy ?? e.mentionedBy; return by === 'tool' || by === 'home' }   // the last binder by hand, else the opener
 /** The time of a tag in a store that kept none: older than any. */
 const UNKNOWN_TS = '0.000000'
 /** How many channels no rule names catch-up reads for an app, the ones it was tagged in most recently: the bound on the extra history reads. */
@@ -817,7 +817,7 @@ export class ConversationTable {
     const seenParent = !this.get(channel, threadTs, app) && (by === 'tool' || by === 'home')
     const entry = this.watch(channel, threadTs, specialist, by, app)
     if (!entry) return undefined
-    if (by && BOUND_BY.has(by) && !entry.boundBy && entry.mentionedBy !== by) { entry.boundBy = by; this.persist() }
+    if (by && BOUND_BY.has(by) && entry.boundBy !== by && !(entry.boundBy === undefined && entry.mentionedBy === by)) { entry.boundBy = by; this.persist() }   // the latest binder by hand: a move by the operator is the operator's, not the session's it came from
     if (seenParent && threadTs !== TOP_LEVEL) { entry.delivered = insertTs(entry.delivered, threadTs, DELIVERED_KEEP); this.persist() }
     if (entry.specialist !== specialist) {
       this.deps.log(`daemon: slack connector: ${conversationId(entry)} moved from ${entry.specialist} to ${specialist}\n`)
