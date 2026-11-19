@@ -131,7 +131,8 @@ Routing (hydra.toml):
   hydra conversations bind <conversation> <target> [--why <reason>]
                                        Bind or move a conversation to main, specialist:<name> or thread:<id>, named as list prints it
                                        (slack:<channel id>:<thread ts>; slack:<app>:… through an app other than default).
-                                       To thread:<id>, the app posts in the Slack thread which session took it, its link and the reason
+                                       To thread:<id>, the notice (session, its link, the reason, the conversation's permalink) goes to that
+                                       session's own thread; nothing is posted in the Slack thread
   hydra conversations unbind <conversation>
   hydra [--state-dir <dir>] events [--kind route|bind|unbind] [--since <dur>] [--conversation <id>] [--by <actor>] [--limit <n>] [--json]
                                        What the daemon decided, from its event stream (<state dir>/events/<day>.jsonl): routes (what took
@@ -608,7 +609,7 @@ async function main(): Promise<void> {
     }
 
     case 'conversations': {
-      // `--why <text>`: on a bind, the reason the notice in the Slack thread gives.
+      // `--why <text>`: on a bind, the reason the notice in the bound session's own thread gives (never posted in the Slack thread).
       const w = filtered.indexOf('--why')
       const why = w > 0 ? filtered[w + 1] : undefined
       const positional = w > 0 ? [...filtered.slice(0, w), ...filtered.slice(w + 2)] : filtered

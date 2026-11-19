@@ -547,6 +547,12 @@ export function renderItem(i: Item): string {
 const formatBytes = (n: number): string => n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`
 
 /**
+ * hydra's line in every delivery from a Slack conversation: its audience is outside hydra, so what a session says there is about their ask and
+ * nothing of hydra's own. Fixed text: no sender line can change or imitate it (it sits outside the quoted words).
+ */
+export const EXTERNAL_AUDIENCE_NOTE = "hydra: this conversation's audience is outside hydra. Reply only about their ask, and never post links to Discord, hydra or private Slack conversations, or internal session names."
+
+/**
  * What the specialist's occupant reads. The Slack text is other people's words, so it sits inside the untrusted
  * envelope: markers carrying a one-off nonce the text cannot forge. Where it was said rides on the opening marker.
  */
@@ -560,16 +566,16 @@ export function formatDelivery(
   const link = where.workspaceUrl ? archiveUrl(where.workspaceUrl, entry.channel, dm || entry.threadTs === TOP_LEVEL ? undefined : entry.threadTs) : undefined
   const attrs = [`place=${attr(where.place)}`, `conversation=${attr(conversationId(entry))}`, ...(link ? [`link=${attr(link)}`] : [])]
   // hydra's own line, unquoted, ahead of the items: every line of a sender's words is quoted, so none can pose as it.
-  return fence('SLACK-UNTRUSTED', nonce, attrs, [...(where.note ? [where.note] : []), items.map(renderItem).join('\n\n')])
+  return fence('SLACK-UNTRUSTED', nonce, attrs, [EXTERNAL_AUDIENCE_NOTE, ...(where.note ? [where.note] : []), items.map(renderItem).join('\n\n')])
 }
 
 /**
- * What main is told with the first messages of a channel thread new to it: main answers it, or hands it to a session and says so in the thread.
- * The bind posts the notice, so attaching and telling the people in the thread are one step.
+ * What main is told with the first messages of a channel thread new to it: main answers it, or hands it to a session. The bind sends
+ * the notice to that session's own thread, never into the Slack thread.
  */
 export const NEW_TO_MAIN_NOTE = 'hydra: this Slack thread is new to main. Answer it (reply with the conversation above as chat_id), or hand it to a session: '
   + 'one already on this work, or one you spawn for it, with `hydra conversations bind <conversation> thread:<thread id> --why "<one line>"`. '
-  + 'The bind posts in the Slack thread which session took it, a link to that session\'s thread, and the reason; later messages in the thread go to that session.'
+  + 'The bind posts nothing in the Slack thread: the notice (which session took it, a link to its thread, and the reason) goes to that session\'s own thread. Later messages in the Slack thread go to that session, which answers there about the ask.'
 
 /**
  * A delivery's items as the session the conversation is bound to reads them: whether the app that heard the thread was tagged in each (the connector's
@@ -583,7 +589,7 @@ export const asksBoundSession = (i: Item): boolean => i.tagged === true && (i.fr
 /** How many asking messages the line names; past that it counts them, so the line stays within the room packing leaves for it. */
 const ASKED_NAMED_MAX = 5
 /** Room a delivery to a session's thread keeps for the line and the facts it adds beyond what `packItems` counts. */
-const BOUND_NOTE_ROOM = 700
+const BOUND_NOTE_ROOM = 700 + EXTERNAL_AUDIENCE_NOTE.length
 
 /**
  * The hydra line the session a conversation is bound to reads with each delivery: the default its items' facts suggest, which the session applies with
@@ -1797,7 +1803,7 @@ export class ConversationTable {
   private async deliverGroup(key: string, entry: ConversationEntry, target: RouteTarget, items: Item[], cfg: ConversationConfig, fallback?: string): Promise<void> {
     // To a session's thread, each message says whether the app was tagged and by whom: added before packing, with room kept for the line, so no batch outgrows the cap.
     const toSession = isSessionThread(target.to)
-    for (const batch of toSession ? packItems(boundSessionFacts(items), BATCH_MAX_BYTES - BOUND_NOTE_ROOM) : packItems(items)) {
+    for (const batch of toSession ? packItems(boundSessionFacts(items), BATCH_MAX_BYTES - BOUND_NOTE_ROOM) : packItems(items, BATCH_MAX_BYTES - EXTERNAL_AUDIENCE_NOTE.length)) {
       const first = batch[0].ts
       const last = batch[batch.length - 1].ts
       const result = await this.post(entry, target, batch, cfg)

@@ -850,15 +850,15 @@ const BIND_WHY_MAX = 300
 
 /**
  * `hydra conversations bind`: the operator (or main, for them) binds or moves a conversation to any declared specialist, main, or a
- * session's thread (a plain session there answers in it). To a session's thread, the app also posts in the Slack conversation which session took it, a link
- * to that session's thread, and `why` when given: binding and telling the people there are one step. The bind holds if the notice fails; the result says so.
+ * session's thread (a plain session there answers in it). To a session's thread, the notice (which session, a link to its thread, `why` when given, and the
+ * conversation's permalink) goes to that thread, privately: nothing is posted in the Slack conversation, whose audience is outside hydra. The bind holds if the notice fails; the result says so.
  */
 export async function operatorBind(conversation: string, target: string, why?: string, by = 'operator', hand: BoundBy = 'cli'): Promise<string> {
   const h = hydraConfig()
   // The target must say its kind (a bare `ops` is an error); a binding stores the bare form.
   const ref = readTarget(target, id => Object.hasOwn(h.specialists, id))
   if (!ref.ok) throw new Error(ref.error ?? `no specialist "${ref.undeclared}" in hydra.toml (or a session's thread id)`)
-  if (why !== undefined && ref.ref.kind !== 'thread') throw new Error(`--why gives the reason in the notice that a bind to a session's thread (thread:<id>) posts; a bind to ${target} posts no notice`)
+  if (why !== undefined && ref.ref.kind !== 'thread') throw new Error(`--why gives the reason in the notice that a bind to a session's thread (thread:<id>) posts in that thread; a bind to ${target} posts no notice`)
   const to = bareOf(ref.ref)
   const c = parseConversation(conversation)
   const app = appOfEntry(c)
@@ -877,7 +877,12 @@ export async function operatorBind(conversation: string, target: string, why?: s
   return `${bound}; ${await bindNotice(c, to, why)}`
 }
 
-/** The notice a bind to a session's thread posts in the Slack conversation: `→ <session> <link>: <why>`. Never throws: it says what became of the notice. */
+/**
+ * The notice a bind to a session's thread posts: in that session's own thread, never in the Slack conversation (whose audience is outside hydra: a
+ * Discord link or an internal session name has no place there; the app's 👀 on the tag is the people's acknowledgement). It says which session took the
+ * conversation, a link to the session's thread, `why`, and the conversation's permalink. Where that thread cannot be posted in, the operator's DM with
+ * the app gets it instead, which is private. Never throws, and logs every outcome: a notice never fails silently.
+ */
 async function bindNotice(c: ReturnType<typeof parseConversation>, threadId: string, why: string | undefined): Promise<string> {
   const app = appOfEntry(c)
   const id = conversationId(c)
@@ -885,17 +890,17 @@ async function bindNotice(c: ReturnType<typeof parseConversation>, threadId: str
   let url = session?.threadUrl
   if (!url) { try { url = await gateway.getThreadUrl(threadId) } catch { url = undefined } }
   const reason = why ? oneLine(why, BIND_WHY_MAX) : ''
-  const text = `→ ${session?.tmuxName ?? `thread ${threadId}`}${url ? ` ${url}` : ''}${reason ? `: ${reason}` : ''}`
+  const text = `→ ${session?.tmuxName ?? `thread ${threadId}`}${url ? ` ${url}` : ''}${reason ? `: ${reason}` : ''}\nSlack conversation: ${slackConversationLink(id) ?? id}`
+  const note = (outcome: string): string => { log(`daemon: slack connector: bind notice for ${id} → ${threadId}: ${outcome}\n`); return outcome }
   // Posted only while the conversation is still bound to that thread.
   const stillThere = () => getConversationTable().get(c.channel, c.threadTs, app)?.specialist === threadId
+  if (!stillThere()) return note('not posted: the conversation was moved before the notice went out')
   try {
-    await postParts(app, c.channel, c.threadTs === TOP_LEVEL ? undefined : c.threadTs, text, id, false, stillThere)
-    return `posted in ${id}: ${text}`
+    await gateway.send(threadId, text, { unfurl: false })
+    return note(`posted in the session's thread ${threadId}: ${text}`)
   } catch (err) {
-    if (err instanceof NotInChannel) {
-      try { return `${await toOperatorDm(app, id, err.message, text, stillThere, 'The bind notice')} (the bind notice)` } catch (dmErr) { return `the notice was not posted: ${errText(dmErr)}` }
-    }
-    return `the notice was not posted: ${errText(err)}`
+    const failure = errText(err)
+    try { return note(`${await toOperatorDm(app, id, `the session's thread ${threadId} could not be posted in (${failure})`, text, stillThere, 'The bind notice')} (the bind notice)`) } catch (dmErr) { return note(`not posted: ${failure}; the operator's DM did not take it either: ${errText(dmErr)}`) }
   }
 }
 
