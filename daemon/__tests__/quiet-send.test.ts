@@ -2,7 +2,7 @@ import { test, expect } from 'bun:test'
 import { mkdtempSync, readFileSync, readdirSync, writeFileSync, utimesSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { oneLine, quietSend, shouldQuiet, spillIfLong, noteLine, SPILL_THRESHOLD } from '../quiet-send.js'
+import { oneLine, partyLink, quietSend, shouldQuiet, spillIfLong, noteLine, SPILL_THRESHOLD } from '../quiet-send.js'
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'quiet-'))
 const big = () => Array.from({ length: 1000 }, (_, i) => `line ${i}`).join('\n')
@@ -143,4 +143,24 @@ test('shouldQuiet: quiet unless a protocol participant or the send carries files
   expect(shouldQuiet({ protocolParticipant: false, hasFiles: false })).toBe(true)
   expect(shouldQuiet({ protocolParticipant: true, hasFiles: false })).toBe(false)
   expect(shouldQuiet({ protocolParticipant: false, hasFiles: true })).toBe(false)
+})
+
+test('a party whose record holds a URL is linked with it, and no lookup is made', async () => {
+  const logs: string[] = []
+  expect(await partyLink({ tmuxName: 'a', threadId: '1', threadUrl: 'https://x/1' }, async () => { throw new Error('no lookup') }, m => logs.push(m))).toBe('https://x/1')
+  expect(logs).toEqual([])
+})
+
+test('a party with no URL on record is linked by the lookup', async () => {
+  expect(await partyLink({ tmuxName: 'a', threadId: '1' }, async id => `https://x/${id}`, () => {})).toBe('https://x/1')
+})
+
+test('a party that cannot be linked stays plain and the log says which and why: an empty lookup, or a lookup that throws', async () => {
+  const logs: string[] = []
+  expect(await partyLink({ tmuxName: 'lark', threadId: '472d35be-061a-43d8-bd50-eba33b094694' }, async () => '', m => logs.push(m))).toBeUndefined()
+  expect(await partyLink({ tmuxName: 'moss', threadId: '2' }, async () => { throw new Error('Missing Access') }, m => logs.push(m))).toBeUndefined()
+  expect(logs).toEqual([
+    'quiet-send: no link for lark (thread 472d35be-061a-43d8-bd50-eba33b094694): the platform has no such thread; its name is plain in the line',
+    'quiet-send: no link for moss (thread 2): Missing Access; its name is plain in the line',
+  ])
 })

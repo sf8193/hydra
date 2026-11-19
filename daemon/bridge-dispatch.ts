@@ -5,7 +5,7 @@ import { isParentOf, parentSessionOf, registry, resolveSendTarget, threadRegistr
 import { transport } from './bridge-transport.js'
 import { callerRefusal, destroyDeclinedText, destroyThreadById, killThenDestroy } from './destroy.js'
 import { loadAccess, operatorIds, maxChunkLimit, channelPolicy, MAX_ATTACHMENT_BYTES } from './access.js'
-import { quietSend, shouldQuiet } from './quiet-send.js'
+import { partyLink, quietSend, shouldQuiet } from './quiet-send.js'
 import { beginMainHandoff } from './main-handoff.js'
 import { getSpecialist } from '../specialists/specialists.js'
 import { ensureSpecialist } from '../specialists/specialist-deliver.js'
@@ -831,7 +831,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const party = async (s: SessionInfo) => ({
           name: s.tmuxName,
           emoji: emojiOf(s),
-          url: s.threadUrl || await gateway.getThreadUrl(s.threadId).catch(() => '') || undefined,
+          url: await partyLink(s, id => gateway.getThreadUrl(id), m => process.stderr.write(`daemon: ${m}\n`)),
         })
         const echoThread = caller?.threadId && caller.threadId !== threadId ? caller.threadId : undefined
         const quietOutcome = wantsQuiet

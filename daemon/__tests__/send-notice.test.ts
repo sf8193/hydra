@@ -70,6 +70,22 @@ test('a thread URL lookup that throws still delivers, with the name unlinked', a
   } finally { (gateway as any).getThreadUrl = saved }
 })
 
+test('a party with no URL on record is linked by a lookup; one with no thread to link is plain and the daemon log says so', async () => {
+  mk('sn-a', 'snalpha', { threadUrl: undefined })
+  mk('sn-b', 'snbeta', { threadId: '472d35be-061a-43d8-bd50-eba33b094694', threadUrl: undefined })
+  const saved = { url: gateway.getThreadUrl, write: process.stderr.write }
+  const logged: string[] = []
+  ;(gateway as any).getThreadUrl = async (id: string) => (id === 'sn-a-thread' ? 'https://x/looked-up' : '')
+  process.stderr.write = ((c: any) => { logged.push(String(c)); return true }) as any
+  try {
+    await executeTool('send_to_thread', { target: 'snbeta', type: 'progress', text: 'x' }, 'sn-a')
+  } finally { (gateway as any).getThreadUrl = saved.url; process.stderr.write = saved.write }
+  expect(posts[0].text).toMatch(/^📨 from \S+ \[snalpha\]\(<https:\/\/x\/looked-up>\) → x$/)
+  expect(posts[1].text).toMatch(/^📤 to \S+ snbeta → x$/)
+  expect(logged.join('')).toContain('no link for snbeta (thread 472d35be-061a-43d8-bd50-eba33b094694)')
+  expect(logged.join('')).not.toContain('no link for snalpha')
+})
+
 test('the tool result claims an echo only when one posted', async () => {
   mk('sn-a', 'snalpha')
   mk('sn-b', 'snbeta')
