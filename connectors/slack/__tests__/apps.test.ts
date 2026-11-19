@@ -1,4 +1,4 @@
-import { describe, test, expect, afterEach } from 'bun:test'
+import { describe, test, expect, afterEach, beforeEach } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -12,6 +12,9 @@ import type { SlackApi, RawMessage } from '../catchup.js'
 import type { SocketEmitter } from '../../../shared/socket-supervisor.js'
 import { hydra as load, sharedChannel, BOT, SALES_BOT, TWO_APPS } from './slack-config.js'
 import { SLACK_APP_NEEDS } from '../app.js'
+import { STATE_DIR } from '../../../daemon/config.js'
+import { eventsDir } from '../../../shared/events.js'
+import { readEvents } from '../../../cli/events.js'
 
 const CH = 'C0FOOD'
 const OTHER = 'C0OTHER'
@@ -25,6 +28,9 @@ class FakeClient implements SocketEmitter {
 
 const dirs: string[] = []
 const listeners: SlackListener[] = []
+const clearEvents = () => rmSync(eventsDir(STATE_DIR), { recursive: true, force: true })
+beforeEach(clearEvents)
+afterEach(clearEvents)
 afterEach(() => { for (const l of listeners.splice(0)) l.stop(); for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
 
 type Sent = { to: string; conversation?: string; key: string; msg: string }
@@ -263,6 +269,17 @@ describe('two apps in one channel: exactly one answers', () => {
     expect(t.watcher.stats()).toMatchObject({ unrouted: 1 })
     expect(t.logs.join()).toContain('whose bot is not in this channel and which has no operator token')
     expect(t.fakes.default.calls.some(c => c.startsWith(`react:${CH}:1200.000001:`))).toBe(true)
+  })
+
+  test('a tag of an app that cannot hear it is a route event with via none, under the app that heard it: no `to`, once however often it is replayed', async () => {
+    const t = setup(sharedChannel(CH), { members: { default: [CH], [SALES]: [] } })
+    await t.start()
+    t.say({ ts: '1200.000001', text: `<@${SALES_BOT}> a quote` }, ['default'])
+    await t.settle()
+    t.say({ ts: '1200.000001', text: `<@${SALES_BOT}> a quote` }, ['default'])   // a replay of the same message
+    await t.settle()
+    expect(readEvents(STATE_DIR, {})).toMatchObject([{ kind: 'route', app: 'default', conversation: `slack:${CH}:1200.000001`, tagged: true, via: 'none' }])
+    expect(readEvents(STATE_DIR, {}).every(e => e.kind === 'route' && e.to === undefined)).toBe(true)
   })
 
   test('a guess never outranks a known hearer: with two apps tagged, the first an unreadable app and the second the app that heard it, the second answers', async () => {
