@@ -578,6 +578,37 @@ describe('limits', () => {
     }
   })
 
+  test('a conversation routing opened and then bound by hand is never evicted: the bind, not the opener, decides', async () => {
+    for (const by of ['tool', 'home', 'cli'] as const) {
+      const { w, tick } = setup({ maxConversations: 1 })
+      w.handle(ev({ ts: '1.000001', text: mention }))                                // routing opens it: mentionedBy is the tagger
+      await w.flush()
+      expect(w.bind(CH, '1.000001', 'helper', by)).toBeDefined()                     // then bound by hand
+      tick(2 * 3600_000)
+      expect(w.handle(ev({ ts: '2.000001', text: mention }))).toBe('ignored')
+      expect(w.get(CH, '1.000001')).toBeDefined()
+      expect(w.stats().dropped).toEqual({ 'table-full': 1 })
+    }
+  })
+
+  test('untagged chatter never lets go of a conversation a tag or DM opened: only one chatter opened; a tag still can', async () => {
+    const s = setup({ toml: oneListener(CH, 'helper', '["role:anyone"]', `[places."slack:${CH}"]\nmessages = "all"\n`), maxConversations: 2 })
+    const { a, reactions } = actions()
+    s.w.setSlackActions(a)
+    s.w.handle(ev({ ts: '1.000001', text: mention }))
+    s.tick(60_000)
+    s.w.handle(ev({ ts: '2.000001', text: mention }))
+    await s.w.flush()
+    s.tick(2 * 3600_000)                                                             // both quiet, nothing owed
+    expect(s.w.handle(ev({ ts: '3.000001', text: 'chatter' }))).toBe('ignored')      // nothing chatter opened to let go
+    expect(s.w.list().map(e => e.threadTs).sort()).toEqual(['1.000001', '2.000001'])
+    expect(s.w.stats().dropped).toEqual({ 'table-full': 1 })
+    expect(s.w.handle(ev({ ts: '4.000001', text: mention }))).toBe('mention')        // a tag lets go of the quietest
+    expect(s.w.list().map(e => e.threadTs).sort()).toEqual(['2.000001', '4.000001'])
+    await Bun.sleep(1)
+    expect(reactions).toEqual([])
+  })
+
   test("eviction alerts the evicted conversation's specialist once per episode: a stream of new tags into a full table does not spam", async () => {
     const { w, alerts, alertTo, logs, tick } = setup({ maxConversations: 3 })
     for (let i = 1; i <= 3; i++) { w.handle(ev({ ts: `${i}.000001`, user: `U${i}`, text: mention })); await w.flush(); tick(60_000) }
