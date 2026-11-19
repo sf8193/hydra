@@ -12,7 +12,7 @@ import { _setHydraConfigForTesting } from '../../../daemon/hydra-config.js'
 import { executeTool } from '../../../daemon/bridge-dispatch.js'
 import { setSpecialistThread, _reloadSpecialists } from '../../../specialists/specialists.js'
 import { ConversationTable, ROUTED_REACTION, type ConversationConfig, type DeliverResult, type SlackActions, type SlackMessageEvent } from '../watch.js'
-import { bindConversation, getConversationTable, slackRuntimeDeps } from '../runtime.js'
+import { bindConversation, getConversationTable, slackRuntimeDeps, ROUTER_BIND_MAX } from '../runtime.js'
 import { BASE, BOT, TWO_APPS, hydra, view } from './slack-config.js'
 import { loadHydraConfig } from '../../../config/load.js'
 import { isRouter, routerOf, placeOf } from '../../../config/types.js'
@@ -269,6 +269,26 @@ describe('the power: bind a conversation it was handed to another session, with 
     expect(out).toStartWith(`${CONV} → ${CANDIDATE_THREAD}; posted in ${CONV}`)
     expect(posts).toEqual([`${ELSEWHERE}|1000.000001|→ sw-ledger https://chat.example/t/${CANDIDATE_THREAD}: it owns the ledger work`])
     expect(heldBy()).toBe(CANDIDATE_THREAD)
+  })
+
+  test('a hand-off is the router\'s hold, capped: the table can\'t be filled through it; an operator bind is the operator\'s', async () => {
+    await bindConversation(routerSession, CONV, { target: 'sw-ledger', why: 'fits' })
+    expect(getConversationTable().get(ELSEWHERE, '1000.000001')).toMatchObject({ boundBy: 'router', specialist: CANDIDATE_THREAD })
+    for (let i = 2; i <= ROUTER_BIND_MAX; i++) {
+      getConversationTable().bind(ELSEWHERE, `${i}000.000001`, 'slack-router', 'cli')
+      await bindConversation(routerSession, `slack:${ELSEWHERE}:${i}000.000001`, { target: 'sw-ledger', why: 'fits' })
+    }
+    getConversationTable().bind(ELSEWHERE, '9999.000001', 'slack-router', 'cli')
+    await expect(bindConversation(routerSession, `slack:${ELSEWHERE}:9999.000001`, { target: 'sw-ledger', why: 'x' })).rejects.toThrow(`already holds ${ROUTER_BIND_MAX} conversations it handed on`)
+    expect(getConversationTable().get(ELSEWHERE, '9999.000001')?.specialist).toBe('slack-router')
+    // main speaks for the operator: not counted against the router.
+    getConversationTable().bind(ELSEWHERE, '9999.000001', 'main', 'cli')
+    await bindConversation(undefined, `slack:${ELSEWHERE}:9999.000001`, { target: 'sw-ledger', why: 'fits', callerSessionId: 'main' })
+    expect(getConversationTable().get(ELSEWHERE, '9999.000001')).toMatchObject({ boundBy: 'cli' })
+    // Letting one go frees a place.
+    getConversationTable().unwatch(ELSEWHERE, '1000.000001')
+    getConversationTable().bind(ELSEWHERE, '9998.000001', 'slack-router', 'cli')
+    await bindConversation(routerSession, `slack:${ELSEWHERE}:9998.000001`, { target: 'sw-ledger', why: 'fits' })
   })
 
   test('by thread id too, and through the bridge tool', async () => {

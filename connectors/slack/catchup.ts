@@ -1,6 +1,6 @@
 import { route } from '../../routing/route.js'
 import { DEFAULT_SLACK_APP, placeOf } from '../../config/types.js'
-import { cmpTs, tagRe, routedChannels, hearsDms, addressOf, TOP_LEVEL, OPERATOR_TOKEN_REFUSED, NOT_A_MEMBER, type SlackFile, type SlackMessageEvent, type ConversationConfig, type CatchUpConversations } from './watch.js'
+import { cmpTs, tagRe, openedByBind, routedChannels, hearsDms, addressOf, TOP_LEVEL, OPERATOR_TOKEN_REFUSED, NOT_A_MEMBER, type SlackFile, type SlackMessageEvent, type ConversationConfig, type CatchUpConversations } from './watch.js'
 
 /** Slack's clock and ours differ a little: a thread is read from this long before its bind, so a reply just after it is not passed over. */
 export const BIND_SKEW_S = 10
@@ -203,7 +203,7 @@ export async function catchUp(watcher: CatchUpConversations, api: SlackApi, cfg:
         const held = watcher.channelCursor(e.channel)
         // A conversation opened by a bind starts at the bind: an older channel cursor must not bring back what was posted before it.
         // One opened by a message starts at that message, which the channel cursor already covers.
-        const bound = e.mentionedBy === 'tool' || e.mentionedBy === 'cli' || e.mentionedBy === 'home'
+        const bound = openedByBind(e)
         const cursor = held && !(bound && cmpTs(held, own) < 0) ? held : own
         want(e.channel, e.threadTs, cursor)
       }

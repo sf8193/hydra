@@ -1,0 +1,21 @@
+stateDiagram-v2
+    direction LR
+    [*] --> Routed: a tag, a DM or chatter opens it<br/>(mentionedBy = the sender)
+    [*] --> Held: a bind opens it<br/>(mentionedBy = boundBy = the binder)
+
+    Routed --> Held: any bind by hand<br/>(boundBy = tool, home, cli or router)
+    Held --> Held: another bind by hand<br/>(boundBy = the latest binder)
+    Held --> Routed: a tag takes the thread from a session<br/>or its specialist is gone and routing rebinds it<br/>(boundBy cleared)
+
+    Routed --> [*]: evicted (table full, quiet an hour, nothing owed)<br/>or idle a week
+    Held --> [*]: unbound, idle a week,<br/>or its session thread stays vacant
+
+    note right of Held
+        Never evicted.
+        tool and home count toward TOOL_BIND_MAX.
+        router hand-offs count toward ROUTER_BIND_MAX.
+    end note
+    note left of Routed
+        boundBy absent.
+        Eviction is exactly: not held.
+    end note

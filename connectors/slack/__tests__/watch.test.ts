@@ -5,7 +5,7 @@ import { tmpdir } from 'os'
 import { join, dirname } from 'path'
 import {
   ConversationTable, formatDelivery, renderItem, packItems, cmpTs, placesOf, routedChannels, hearsDms, unresolvedPlaces,
-  ITEM_TEXT_MAX_CHARS, BATCH_MAX_BYTES, REFUSED_REACTION,
+  ITEM_TEXT_MAX_CHARS, BATCH_MAX_BYTES, REFUSED_REACTION, heldBySession,
   type ConversationConfig, type SlackMessageEvent, type DeliverResult, type Item, type ConversationDeps, type SlackActions, type SlackFile,
 } from '../watch.js'
 import type { GuardInput, GuardVerdict } from '../../../routing/guard.js'
@@ -567,7 +567,7 @@ describe('limits', () => {
 
   test('a conversation bound by hand (a session, the operator, a reply) or to a session thread is never evicted, however quiet', async () => {
     const SESSION = '1552619225032425525'
-    for (const [by, to] of [['tool', 'helper'], ['home', 'helper'], ['cli', 'helper'], [undefined, SESSION]] as const) {
+    for (const [by, to] of [['tool', 'helper'], ['home', 'helper'], ['cli', 'helper'], ['router', 'helper'], ['tool', SESSION]] as const) {
       const { w, tick, alerts } = setup({ maxConversations: 1 })
       expect(w.bind(CH, '2000.000001', to, by)).toBeDefined()
       tick(2 * 3600_000)
@@ -589,6 +589,57 @@ describe('limits', () => {
       expect(w.get(CH, '1.000001')).toBeDefined()
       expect(w.stats().dropped).toEqual({ 'table-full': 1 })
     }
+  })
+
+  test("a tag that takes a thread from a session takes its hold too: the specialist's binds don't count it and it can be let go", async () => {
+    const SESSION = '1552619225032425525'
+    const { w, tick } = setup({ maxConversations: 1 })
+    w.bind(CH, '4000.000001', SESSION, 'tool')
+    expect(w.get(CH, '4000.000001')).toMatchObject({ boundBy: 'tool' })
+    expect(w.handle(ev({ ts: '4001.000001', threadTs: '4000.000001', text: mention }))).toBe('mention')
+    await w.flush()
+    const taken = w.get(CH, '4000.000001')!
+    expect(taken.specialist).toBe('helper')
+    expect(taken.boundBy).toBeUndefined()
+    expect(heldBySession(taken)).toBe(false)
+    tick(2 * 3600_000)
+    expect(w.handle(ev({ ts: '5.000001', text: mention }))).toBe('mention')            // quiet, routing's: the quietest goes
+    expect(w.get(CH, '4000.000001')).toBeUndefined()
+  })
+
+  test('a bind by hand always holds, whoever opened it or bound it last; a move by routing does not', () => {
+    const { w } = setup()
+    w.watch(CH, '1.000001', 'helper', 'UALICE')                                      // opened by a tag
+    expect(w.get(CH, '1.000001')!.boundBy).toBeUndefined()
+    for (const by of ['tool', 'home', 'cli', 'router'] as const) {
+      w.bind(CH, '1.000001', 'helper', by)
+      expect(w.get(CH, '1.000001')).toMatchObject({ boundBy: by, mentionedBy: 'UALICE' })   // the opener is never overwritten
+    }
+    w.bind(CH, '2.000001', 'helper', 'router')
+    expect(w.get(CH, '2.000001')).toMatchObject({ boundBy: 'router', mentionedBy: 'router' })
+  })
+
+  test('a store written before `boundBy` was the one record: a bind that opened a conversation, or a session thread, is held; a tagger\'s is not; the marker is written once', async () => {
+    const SESSION = '1552619225032425525'
+    const s = setup({ maxConversations: 10 })
+    const old = (e: object) => ({ channel: CH, createdAt: 1, lastEventAt: 1, specialist: 'helper', ...e })
+    writeFileSync(s.file, JSON.stringify({ entries: [
+      old({ threadTs: '1.000001', mentionedBy: 'tool' }), old({ threadTs: '2.000001', mentionedBy: 'home' }), old({ threadTs: '3.000001', mentionedBy: 'cli' }),
+      old({ threadTs: '4.000001', mentionedBy: 'UALICE' }), old({ threadTs: '5.000001', mentionedBy: 'UALICE', boundBy: 'cli' }), old({ threadTs: '6.000001', specialist: SESSION }),
+      old({ threadTs: '7.000001' }),
+    ], channelCursors: {} }))
+    const w = s.make()
+    expect(Object.fromEntries(w.list().map(e => [e.threadTs, e.boundBy ?? null]))).toEqual({ '1.000001': 'tool', '2.000001': 'home', '3.000001': 'cli', '4.000001': null, '5.000001': 'cli', '6.000001': 'tool', '7.000001': null })
+    w.bind(CH, '1.000001', 'helper', 'cli')
+    await w.flush()
+    expect(JSON.parse(readFileSync(s.file, 'utf8')).holds).toBe(true)
+    // A hold released since (a tag took the thread) is not given back by the opener on the next load.
+    const w2 = s.make()
+    w2.bind(CH, '8.000001', SESSION, 'tool')
+    w2.handle(ev({ ts: '8.000002', threadTs: '8.000001', text: mention }))
+    await w2.flush()
+    expect(w2.get(CH, '8.000001')).toMatchObject({ mentionedBy: 'tool', specialist: 'helper' })
+    expect(s.make().get(CH, '8.000001')!.boundBy).toBeUndefined()
   })
 
   test('untagged chatter never lets go of a conversation a tag or DM opened: only one chatter opened; a tag still can', async () => {
@@ -1383,6 +1434,21 @@ target = "specialist:assistant"
     s.setConfig(cfg({ toml: renamedOps() }))
     s.w.handle(ev({ channel: CH2, ts: '11.000001', threadTs: '10.000001', user: 'UOWNER', text: 'again' }))
     expect(s.w.get(CH2, '10.000001')!.specialist).toBe('desk')
+  })
+
+  test("a hold by hand survives a rename of its specialist, and goes when the specialist is gone and routing binds the conversation anew", async () => {
+    const renamed = setup({ toml: TWO() })
+    renamed.w.bind(CH2, '10.000001', 'ops', 'cli')
+    renamed.setConfig(cfg({ toml: renamedOps() }))
+    renamed.w.handle(ev({ channel: CH2, ts: '11.000001', threadTs: '10.000001', user: 'UOWNER', text: 'again' }))
+    expect(renamed.w.get(CH2, '10.000001')).toMatchObject({ specialist: 'desk', boundBy: 'cli' })
+    const gone = setup({ toml: TWO() })
+    gone.w.bind(CH2, '10.000001', 'ops', 'cli')
+    const noOps = TWO().replace(/\[specialists\.ops\][^]*?(?=\[specialists\.integrator\])/, '').replace('place = "slack:C0INT"', `place = "slack:${CH2}"`)
+    gone.setConfig(cfg({ toml: noOps }))
+    gone.w.handle(ev({ channel: CH2, ts: '11.000001', threadTs: '10.000001', user: 'UOWNER', text: 'still there?' }))
+    expect(gone.w.get(CH2, '10.000001')).toMatchObject({ specialist: 'integrator' })
+    expect(gone.w.get(CH2, '10.000001')!.boundBy).toBeUndefined()
   })
 
   test('a rename through `renamed_from` keeps the conversation', async () => {

@@ -1,4 +1,4 @@
-import { ConversationTable, namedChannels, cantRead, NOT_A_MEMBER, cmpTs, slackWatchesPath, unresolvedPlaces, conversationId, placeName, isDm, appOfEntry, TOP_LEVEL, NO_DIRECTORY, SLACK_LIMITS, heldBySession, type ConversationConfig, type ConversationEntry, type ConversationStats, type LateOwed } from './watch.js'
+import { ConversationTable, namedChannels, cantRead, NOT_A_MEMBER, cmpTs, slackWatchesPath, unresolvedPlaces, conversationId, placeName, isDm, appOfEntry, TOP_LEVEL, NO_DIRECTORY, SLACK_LIMITS, heldBySession, type BoundBy, type ConversationConfig, type ConversationEntry, type ConversationStats, type LateOwed } from './watch.js'
 import { archiveUrl, parseConversation, THREAD_TS } from './conversation.js'
 import { ConnectedApps, type AppIdentity } from './apps.js'
 import { getSpecialist, conversationSpecialistOf, specialistOf, boundAs } from '../../specialists/specialists.js'
@@ -390,6 +390,8 @@ function answersIn(v: Pick<ConversationConfig, 'hydra' | 'directory'>, to: strin
 
 /** Conversations one specialist may hold by its own hand at once: the tool must not be a way to fill the table. */
 export const TOOL_BIND_MAX = 10
+/** Conversations a router may hand on at once, per app: a stranger who can reach the router must not be able to fill the table through it. */
+export const ROUTER_BIND_MAX = 10
 
 /**
  * `bind_conversation`: a session binds a Slack thread to itself (boundAs): a specialist's session to the specialist,
@@ -470,7 +472,11 @@ async function bindToSession(caller: Partial<Pick<SessionInfo, 'threadId' | 'tmu
   if (me !== MAIN && routerOf(h, appOfEntry(c)) !== me) throw new Error(`${conversationId(c)} is through ${appOfEntry(c)}, whose router is not ${me}: a router hands on only conversations of the app that names it`)
   const boundTo = getConversationTable().get(c.channel, c.threadTs, appOfEntry(c))?.specialist
   if (!boundTo || currentId(h, boundTo) !== me) throw new Error(`${conversationId(c)} is ${boundTo ? `bound to ${boundTo}` : 'not an open conversation'}, not to ${me}: ${me} hands on only a conversation delivered to it`)
-  return operatorBind(conversationId(c), `thread:${session.threadId}`, why, me)
+  // main speaks for the operator (the CLI's hand); a router's hand-offs are counted and capped like a session's own binds.
+  if (me === MAIN) return operatorBind(conversationId(c), `thread:${session.threadId}`, why, me)
+  const handed = getConversationTable().list().filter(e => e.boundBy === 'router' && appOfEntry(e) === appOfEntry(c) && conversationId(e) !== conversationId(c)).length
+  if (handed >= ROUTER_BIND_MAX) throw new Error(`${me} already holds ${ROUTER_BIND_MAX} conversations it handed on; none is its to unbind now, so wait for a session to let one go, or ask the operator to unbind one (hydra conversations unbind)`)
+  return operatorBind(conversationId(c), `thread:${session.threadId}`, why, me, 'router')
 }
 
 /** `unbind_conversation`: a session lets go of one of its own conversations. */
@@ -738,10 +744,11 @@ export async function replyInConversation(callerSessionId: string | undefined, c
 function bindOpenedThread(h: HydraConfig, me: string, channel: string, ts: string, app: string, what: string, by: 'home' | 'tool'): string | undefined {
   const w = getConversationTable()
   // A thread the person answered into while the first part was posting may already be bound by the rules: never taken from whoever holds it.
-  const now = w.get(channel, ts, app)?.specialist
-  if (now) return currentId(h, now) === me ? undefined : `it is already bound to ${now}`
+  const open = w.get(channel, ts, app)
+  if (open?.specialist && currentId(h, open.specialist) !== me) return `it is already bound to ${open.specialist}`
+  // The bot's own post may have opened it first (routing's, evictable): binding it makes it this session's by hand, counted like any other.
   const held = w.list().filter(e => heldBySession(e) && e.specialist && currentId(h, e.specialist) === me).length
-  if (held < TOOL_BIND_MAX && w.bind(channel, ts, me, by, app)) return undefined
+  if ((held < TOOL_BIND_MAX || (!!open && heldBySession(open))) && w.bind(channel, ts, me, by, app)) return undefined
   const why = held >= TOOL_BIND_MAX ? `${me} already holds ${TOOL_BIND_MAX} conversations it opened itself` : 'the conversation table is full'
   alert(`⚠️ ${me}'s ${what} opened no conversation (${why}): replies under it go to whoever hears there, not back to ${me}.`, me)
   return why
@@ -846,7 +853,7 @@ const BIND_WHY_MAX = 300
  * session's thread (a plain session there answers in it). To a session's thread, the app also posts in the Slack conversation which session took it, a link
  * to that session's thread, and `why` when given: binding and telling the people there are one step. The bind holds if the notice fails; the result says so.
  */
-export async function operatorBind(conversation: string, target: string, why?: string, by = 'operator'): Promise<string> {
+export async function operatorBind(conversation: string, target: string, why?: string, by = 'operator', hand: BoundBy = 'cli'): Promise<string> {
   const h = hydraConfig()
   // The target must say its kind (a bare `ops` is an error); a binding stores the bare form.
   const ref = readTarget(target, id => Object.hasOwn(h.specialists, id))
@@ -863,7 +870,7 @@ export async function operatorBind(conversation: string, target: string, why?: s
   if (!isDm(c.channel) && c.threadTs === TOP_LEVEL) throw new Error(`${conversationId(c)} names a channel, not a conversation: add the thread's ts`)
   if (ref.ref.kind === 'thread' && registry.getByThread(`${c.channel}:${c.threadTs}`)) throw new Error(`${conversationId(c)} is a hydra session's own thread: another session can't listen to it`)
   const from = getConversationTable().get(c.channel, c.threadTs, app)?.specialist
-  if (!getConversationTable().bind(c.channel, c.threadTs, to, 'cli', app)) throw new Error('the conversation table is full')
+  if (!getConversationTable().bind(c.channel, c.threadTs, to, hand, app)) throw new Error('the conversation table is full')
   if (from !== to) recordEvent({ kind: 'bind', conversation: conversationId(c), ...(from && { from }), to, ...(why?.trim() && { why: oneLine(why, BIND_WHY_MAX) }), by })
   const bound = `${conversationId(c)} → ${to}`
   if (ref.ref.kind !== 'thread') return bound

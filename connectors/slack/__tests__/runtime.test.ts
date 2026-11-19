@@ -7,8 +7,9 @@ import { registry } from '../../../daemon/sessions.js'
 import { setSpecialistThread, _reloadSpecialists } from '../../../specialists/specialists.js'
 import { _setHydraConfigForTesting } from '../../../daemon/hydra-config.js'
 import {
-  getConversationTable, bindConversation, unbindConversation, formatConversations, formatConversationsFor, operatorBind, slackConversationHealth, slackTokens, slackRuntimeDeps, placeFileFor, parseConversation, replyInConversation, targetFor, startConversationTable, stopConversationTable,
+  getConversationTable, TOOL_BIND_MAX, bindConversation, unbindConversation, formatConversations, formatConversationsFor, operatorBind, slackConversationHealth, slackTokens, slackRuntimeDeps, placeFileFor, parseConversation, replyInConversation, targetFor, startConversationTable, stopConversationTable,
 } from '../runtime.js'
+import { heldBySession } from '../watch.js'
 import { sessionCapabilities, isSpecialistOccupant, isToolAllowed, advertiseTools } from '../../../daemon/tool-surface.js'
 import { emit } from '../../../daemon/event-bus.js'
 import { transport } from '../../../daemon/bridge-transport.js'
@@ -534,6 +535,21 @@ describe('replies: posted only into the conversation they answer', () => {
     slackRuntimeDeps.post = async () => { if (++n === 2) throw new Error('An API error occurred: ratelimited'); return '300.000001' }
     await expect(replyInConversation('r-food', 'slack:C7', 'para one\n\n'.repeat(800))).rejects.toThrow('reply failed after 1 of 3')
     expect(getConversationTable().get('C7', '300.000001')).toMatchObject({ specialist: FOOD, mentionedBy: 'home' })
+  })
+
+  test("a home_place thread the bot's own post already opened is still bound by hand, and counted: event order does not decide whether it is held", async () => {
+    session('r-food', FOOD_THREAD)
+    configure(TOML.replace(`workdir = "/w/food"`, `workdir = "/w/food"\nhome_place = "slack:C7"`), { maxConversations: 50 })
+    slackRuntimeDeps.post = async () => { getConversationTable().watch('C7', '300.000001', FOOD, undefined, undefined, 'ambient'); return '300.000001' }   // the post's own event wins the race
+    await replyInConversation('r-food', 'slack:C7', 'hello')
+    const e = getConversationTable().get('C7', '300.000001')!
+    expect(e).toMatchObject({ specialist: FOOD, boundBy: 'home' })
+    expect(heldBySession(e)).toBe(true)
+    // ...and not past the cap: ten held already, so the raced thread stays routing's (evictable), as an unraced one is refused.
+    for (let i = 1; i < TOOL_BIND_MAX; i++) getConversationTable().bind('C1', `${i}.000001`, FOOD, 'tool')
+    slackRuntimeDeps.post = async () => { getConversationTable().watch('C7', '301.000001', FOOD, undefined, undefined, 'ambient'); return '301.000001' }
+    await replyInConversation('r-food', 'slack:C7', 'again')
+    expect(getConversationTable().get('C7', '301.000001')!.boundBy).toBeUndefined()
   })
 
   test('a conversation moved away mid-reply gets no more of it', async () => {
