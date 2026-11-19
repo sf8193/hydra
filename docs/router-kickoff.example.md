@@ -8,7 +8,7 @@ Each delivery is a `SLACK-UNTRUSTED` envelope: the `conversation` (a `slack:<cha
 
 ## Before each thread
 
-1. Read your history: `hydra events --kind bind --since 14d`. Hydra records every bind with who made it (`by`) and the reason (`why`); yours are the lines `by slack-router`. A later bind of the same conversation by anyone else that moves it off where you put it is a correction: let it change this decision. For this thread's own history, `hydra events --conversation <conversation>`.
+1. Read your history: `hydra events --kind bind --since 14d --limit 40` (the newest 40, oldest first, so the read stays the same size as the stream grows). Hydra records every bind with who made it (`by`) and the reason (`why`); yours are the lines `by slack-router`. A later bind of the same conversation by anyone else that moves it off where you put it is a correction: let it change this decision. For this thread's own history, `hydra events --conversation <conversation>`.
 2. Read the whole thread: `fetch_messages(channel="<conversation>")`. Hydra has already put a 👀 on the tag.
 3. Say in one line to yourself what the thread is about and what kind of work it asks for.
 

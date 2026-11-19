@@ -1,4 +1,4 @@
-// `hydra events [--kind route|bind|unbind] [--since <dur>] [--conversation <id>] [--json]`: what the daemon decided, from the event
+// `hydra events [--kind route|bind|unbind] [--since <dur>] [--conversation <id>] [--by <actor>] [--limit <n>] [--json]`: what the daemon decided, from the event
 // stream it writes (daemon/events.ts). Reads the day files directly, so it works with the daemon down. One line each, oldest first.
 
 import { existsSync, readFileSync, readdirSync } from 'fs'
@@ -7,16 +7,17 @@ import { resolveConfig } from './helpers.js'
 import { dayOf, dayOfFile, eventsDir, EVENT_KINDS, matches, parseEvent, type EventKind, type EventQuery, type RecordedEvent } from '../shared/events.js'
 import { parseDuration } from '../shared/constants.js'
 
-export const EVENTS_USAGE = 'hydra [--state-dir <dir>] events [--kind route|bind|unbind] [--since <duration, e.g. 90m, 12h, 7d>] [--conversation <id>] [--json]'
+export const EVENTS_USAGE = 'hydra [--state-dir <dir>] events [--kind route|bind|unbind] [--since <duration, e.g. 90m, 12h, 7d>] [--conversation <id>] [--by <actor>] [--limit <n>] [--json]'
 
-/** The events that answer `q`, oldest first. Only the day files that can hold a match are read. */
+/** The events that answer `q`, oldest first; with `q.limit`, the newest that many. Only the day files that can hold a match are read. */
 export function readEvents(stateDir: string, q: EventQuery): RecordedEvent[] {
   const dir = eventsDir(stateDir)
   if (!existsSync(dir)) return []
   const from = q.sinceMs === undefined ? '' : dayOf(q.sinceMs)
-  return readdirSync(dir).flatMap(f => ({ f, day: dayOfFile(f) })).filter(x => x.day !== undefined && x.day >= from)
+  const all = readdirSync(dir).flatMap(f => ({ f, day: dayOfFile(f) })).filter(x => x.day !== undefined && x.day >= from)
     .sort((a, b) => a.day! < b.day! ? -1 : 1)
     .flatMap(x => readFileSync(join(dir, x.f), 'utf8').split('\n').flatMap(l => parseEvent(l) ?? []).filter(e => matches(e, q)))
+  return q.limit === undefined ? all : all.slice(-q.limit)
 }
 
 const detail = (e: RecordedEvent): string => {
@@ -37,6 +38,11 @@ export function eventsCommand(args: string[], stateDirOpt: string | undefined, j
       q.sinceMs = Date.now() - ms; i++
     }
     else if (a === '--conversation' && v) { q.conversation = v; i++ }
+    else if (a === '--by' && v) { q.by = v; i++ }
+    else if (a === '--limit' && v !== undefined) {
+      if (!/^[1-9][0-9]*$/.test(v)) { console.error(`error: --limit ${v}: use a positive whole number`); return 1 }
+      q.limit = Number(v); i++
+    }
     else { console.error(`error: ${a}${a.startsWith('--') && !v ? ' needs a value' : ' is not an option'}${a === '--kind' && v ? ` (kinds: ${EVENT_KINDS.join(', ')})` : ''}\nusage: ${EVENTS_USAGE}`); return 1 }
   }
   const events = readEvents(stateDirOpt ?? resolveConfig().stateDir, q)

@@ -286,11 +286,12 @@ The first tag binds the thread to the router, so later messages in it go to the 
 | `unbind` | A conversation is let go by `unbind_conversation` or `hydra conversations unbind`. Not recorded: hydra letting one go itself (idle, a killed session, a deleted thread) | `conversation`, `from`, `by` |
 
 ```sh
-hydra events --kind bind --since 14d             # a table: time, kind, conversation, what happened
+hydra events --kind bind --since 14d --limit 40  # a table: time, kind, conversation, what happened; the newest 40
+hydra events --kind bind --by slack-router       # only what one actor did (`by`: a person address, `operator`, `main`, a session or specialist)
 hydra events --conversation slack:C0ABC:1793732224.093059 --json   # one JSON event per line
 ```
 
-`--since` takes `90m`, `12h` or `7d`. Day files older than `[events] keep_days` days (default 30, at most 3650) are deleted when the daemon starts (once hydra.toml has loaded) and when the UTC day turns.
+`--since` takes `90m`, `12h` or `7d`. `--by` keeps the events whose `by` is exactly that actor. `--limit <n>` keeps the newest n that remain after the other filters, still oldest first, so a reader's cost does not grow with the stream. Day files older than `[events] keep_days` days (default 30, at most 3650) are deleted when the daemon starts (once hydra.toml has loaded) and when the UTC day turns.
 
 Where the bot is not in the channel, main's answer, the bound session's and the bind's notice go to the operator's DM with the app, under a line naming who wrote it and linking the thread (a restricted specialist's answer never does: it fails as before). The bot never joins a channel; invite it wherever answers should go in the thread. No Slack app change is needed.
 
