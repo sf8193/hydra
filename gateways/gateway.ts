@@ -218,6 +218,12 @@ export interface ChatGateway {
   // Users
   sendDM(userId: string, text: string, buttons?: ButtonDef[]): Promise<void>
 
+  /**
+   * Whether a message this gateway sends shows `emoji` as a picture: a unicode emoji always; a custom one (`<:name:id>`) only where this platform
+   * has it, which is one server (Discord: the bot sees it in a guild's cache). False shows as raw text, so the caller picks another.
+   */
+  canRenderEmoji(emoji: string): boolean
+
   // Mention detection
   isMentioned(msg: InboundMessage, extraPatterns?: string[]): Promise<boolean>
 

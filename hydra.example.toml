@@ -45,6 +45,10 @@ poll = "3m"                           # how often it looks (default 3m)
 # Each app is health-checked and alerted on its own (`hydra health` has a line per app): its scopes are checked against what it does, and its alerts go to the specialists it can reach (pinned to it, or unpinned where none is pinned to it), else main.
 # Each token needs its own variable, one the daemon alone needs (not PATH, HOME, HYDRA_*, ...).
 
+[slack]
+line_emoji = "<:slack:123456789012345678>"   # optional (default "💬"): what stands for Slack in the lines a session's own thread shows about its Slack traffic. A unicode emoji, or a Discord custom emoji as a message holds it
+                                      # (it exists in one server only: where the gateway cannot render it, the line shows 💬). docs/slack.md, "Slack lines in a session's thread"
+
 [slack.apps.default]
 bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"   # required
 socket_token_env = "CONNECTOR_SLACK_APP_TOKEN"   # the Socket Mode token (xapp-): required for Slack to connect, not for `hydra slack manifest`

@@ -14,8 +14,7 @@ const KEYCAP = /^[0-9#*]️⃣$/u
 const regionOf = (flag: string) => [...flag].map(c => String.fromCharCode(c.codePointAt(0)! - 0x1F1E6 + 65)).join('')
 
 /** Why `raw` is not one emoji (what to write instead), or undefined when it is. The value is printed JSON-quoted, so a control character cannot reach a log as itself. */
-export function emojiProblem(raw: unknown): string | undefined {
-  const hint = 'write the one emoji character itself, like emoji = "🔐"'
+export function emojiProblem(raw: unknown, hint = 'write the one emoji character itself, like emoji = "🔐"'): string | undefined {
   if (typeof raw !== 'string') return `must be a string: ${hint}`
   const shown = JSON.stringify(raw)
   if (raw === '') return `is empty: ${hint}, or leave \`emoji\` out to keep the default`

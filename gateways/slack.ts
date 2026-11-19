@@ -9,6 +9,7 @@
 import { App, webApi, type MessageEvent, type GenericMessageEvent, type BotMessageEvent } from '@slack/bolt'
 import { readFileSync, writeFileSync } from 'fs'
 import { discardInboxFiles, writeInboxFile } from '../shared/confined-inbox.js'
+import { customEmojiId } from '../shared/slack-lines.js'
 import type { InboxLimits } from '../config/write-confinement.js'
 import { SocketSupervisor } from '../shared/socket-supervisor.js'
 import { ThrottledQueue } from '../throttled-queue.js'
@@ -607,6 +608,11 @@ export class SlackGateway implements ChatGateway {
 
   isThreadId(id: string): boolean {
     return isSlackThreadId(id)
+  }
+
+  /** A custom emoji in Discord's form is one Discord server's: Slack shows it as the raw `<:name:id>`. */
+  canRenderEmoji(emoji: string): boolean {
+    return customEmojiId(emoji) === undefined
   }
 
   async threadExists(threadId: string): Promise<boolean> {

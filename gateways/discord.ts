@@ -26,6 +26,7 @@ import type { InboxLimits } from '../config/write-confinement.js'
 import { GatewayHealth } from '../daemon/gateway-health.js'
 import { planReactionReconciliation } from '../shared/reaction-reconcile.js'
 import { linkPreviewsOff } from '../shared/link-previews.js'
+import { customEmojiId } from '../shared/slack-lines.js'
 import type {
   ChatGateway,
   InboundMessage,
@@ -318,10 +319,16 @@ export class DiscordGateway implements ChatGateway {
     this.reactionHandler = handler
   }
 
+  canRenderEmoji(emoji: string): boolean {
+    const id = customEmojiId(emoji)
+    return id === undefined || this.client.emojis.cache.has(id)
+  }
+
   async send(channelId: string, text: string, opts?: {
     replyTo?: string
     files?: string[]
     buttons?: ButtonDef[]
+    unfurl?: boolean
     subtext?: boolean
   }): Promise<SentMessage> {
     const ch = await this.fetchTextChannel(channelId)
@@ -361,7 +368,7 @@ export class DiscordGateway implements ChatGateway {
       payload.components = [row]
     }
 
-    const sent = await ch.send(this.previewPolicy(payload, this.previewIds(ch), content))
+    const sent = await ch.send(this.previewPolicy(payload, this.previewIds(ch), content, opts?.unfurl === false))
     this.noteSent(sent.id)
     return { id: sent.id, channelId: sent.channelId }
   }
@@ -800,11 +807,11 @@ export class DiscordGateway implements ChatGateway {
 
   /**
    * The one point where this gateway decides how a message is sent (send, a new thread's first message, a DM): a place that sets
-   * `link_previews = false` gets the suppress-embeds flag, and so does a post with 2+ links to one that sets `"single"`. `unfurl: false`
-   * from a caller is still not read here, as before.
+   * `link_previews = false` gets the suppress-embeds flag, and so does a post with 2+ links to one that sets `"single"`. A caller's own `unfurl: false` always
+   * suppresses (`send` only: the other sends do not take it).
    */
-  private previewPolicy<T extends Record<string, unknown>>(payload: T, ids: string[], text: string): T {
-    return linkPreviewsOff('discord', ids, {}, text) ? { ...payload, flags: MessageFlags.SuppressEmbeds } : payload
+  private previewPolicy<T extends Record<string, unknown>>(payload: T, ids: string[], text: string, callerOff = false): T {
+    return callerOff || linkPreviewsOff('discord', ids, {}, text) ? { ...payload, flags: MessageFlags.SuppressEmbeds } : payload
   }
 
   private async fetchTextChannel(id: string) {
