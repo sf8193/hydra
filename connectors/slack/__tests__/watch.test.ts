@@ -520,6 +520,7 @@ describe('limits', () => {
     tick(60_000)
     w.handle(ev({ ts: '2.000001', text: mention }))
     await w.flush()
+    w.touch(CH, '1.000001'); w.touch(CH, '2.000001')                                  // both answered
     tick(2 * 3600_000)
     expect(w.handle(ev({ ts: '3.000001', text: mention }))).toBe('mention')
     await w.flush()
@@ -548,6 +549,7 @@ describe('limits', () => {
     const recent = setup({ maxConversations: 1 })
     recent.w.handle(ev({ ts: '1.000001', text: mention }))
     await recent.w.flush()
+    recent.w.touch(CH, '1.000001')                                                   // answered
     recent.tick(59 * 60_000)                                                         // its session may still be answering
     expect(recent.w.handle(ev({ ts: '2.000001', text: mention }))).toBe('ignored')
     recent.tick(60_000)
@@ -598,6 +600,7 @@ describe('limits', () => {
     expect(w.get(CH, '4000.000001')).toMatchObject({ boundBy: 'tool' })
     expect(w.handle(ev({ ts: '4001.000001', threadTs: '4000.000001', text: mention }))).toBe('mention')
     await w.flush()
+    w.touch(CH, '4000.000001')                                                       // the specialist answered
     const taken = w.get(CH, '4000.000001')!
     expect(taken.specialist).toBe('helper')
     expect(taken.boundBy).toBeUndefined()
@@ -650,7 +653,8 @@ describe('limits', () => {
     s.tick(60_000)
     s.w.handle(ev({ ts: '2.000001', text: mention }))
     await s.w.flush()
-    s.tick(2 * 3600_000)                                                             // both quiet, nothing owed
+    s.w.touch(CH, '1.000001'); s.w.touch(CH, '2.000001')
+    s.tick(2 * 3600_000)                                                             // both answered and quiet, nothing owed
     expect(s.w.handle(ev({ ts: '3.000001', text: 'chatter' }))).toBe('ignored')      // nothing chatter opened to let go
     expect(s.w.list().map(e => e.threadTs).sort()).toEqual(['1.000001', '2.000001'])
     expect(s.w.stats().dropped).toEqual({ 'table-full': 1 })
@@ -658,6 +662,62 @@ describe('limits', () => {
     expect(s.w.list().map(e => e.threadTs).sort()).toEqual(['2.000001', '4.000001'])
     await Bun.sleep(1)
     expect(reactions).toEqual([])
+  })
+
+  test('a message delivered and not yet answered keeps its conversation busy, not quiet: a session still working an hour on is not let go, until a day', async () => {
+    const { w, tick, alerts } = setup({ maxConversations: 1 })
+    w.handle(ev({ ts: '1.000001', text: mention }))
+    await w.flush()                                                                  // delivered, no reply
+    tick(2 * 3600_000)
+    expect(w.handle(ev({ ts: '2.000001', text: mention }))).toBe('ignored')          // its session may still be answering
+    expect(w.get(CH, '1.000001')).toBeDefined()
+    expect(alerts.join()).not.toContain('let go')
+    tick(23 * 3600_000)                                                              // past a day since the delivery: a specialist that never answers does not hold a place
+    expect(w.handle(ev({ ts: '3.000001', text: mention }))).toBe('mention')
+    expect(w.get(CH, '1.000001')).toBeUndefined()
+    await w.flush()
+    w.touch(CH, '3.000001')                                                          // answered: quiet an hour is enough again
+    expect(w.get(CH, '3.000001')!.unansweredAt).toBeUndefined()
+    tick(61 * 60_000)
+    expect(w.handle(ev({ ts: '4.000001', text: mention }))).toBe('mention')
+    expect(w.get(CH, '3.000001')).toBeUndefined()
+  })
+
+  test('a delivery the specialist already had (a replay after a crash) does not start the unanswered clock', async () => {
+    const { w } = setup({ maxConversations: 2 }, () => ({ ok: true, duplicate: true }))
+    w.handle(ev({ ts: '1.000001', text: mention }))
+    await w.flush()
+    expect(w.get(CH, '1.000001')!.delivered).toEqual(['1.000001'])
+    expect(w.get(CH, '1.000001')!.unansweredAt).toBeUndefined()
+  })
+
+  test('delivered chatter nobody answers is not busy: a specialist may rightly stay silent, so it can be let go after an hour; and what one specialist was sent is not the next one\'s to answer', async () => {
+    const s = setup({ toml: oneListener(CH, 'helper', '["role:anyone"]', `[places."slack:${CH}"]\nmessages = "all"\n`), maxConversations: 2 })
+    s.w.handle(ev({ ts: '1.000001', text: 'chatter' })); s.w.handle(ev({ ts: '1.000002', threadTs: '1.000001', text: 'more' }))
+    await s.w.flush()
+    expect(s.w.get(CH, '1.000001')!.unansweredAt).toBeUndefined()
+    s.w.handle(ev({ ts: '2.000001', text: mention }))                                // a tag: addressed, so unanswered is busy
+    await s.w.flush()
+    expect(s.w.get(CH, '2.000001')!.unansweredAt).toBeDefined()
+    s.w.bind(CH, '2.000001', 'other', 'cli')                                         // moved to another specialist: its clock starts clean
+    expect(s.w.get(CH, '2.000001')!.unansweredAt).toBeUndefined()
+  })
+
+  test('chatter at its half of the table lets go of the chatter quiet the longest, as the full table does, and never of a tag\'s or a DM\'s', async () => {
+    const s = setup({ toml: oneListener(CH, 'helper', '["role:anyone"]', `[places."slack:${CH}"]\nmessages = "all"\n`), maxConversations: 4 })
+    s.w.handle(ev({ ts: '1.000001', text: mention }))                                // a tag's: not chatter
+    for (const t of ['2.000001', '3.000001']) {                                      // two chatter threads, each followed up: they hold places
+      s.w.handle(ev({ ts: t, text: 'chatter' })); s.tick(60_000)
+      s.w.handle(ev({ ts: `${t.slice(0, 1)}.000002`, threadTs: t, text: 'more' }))
+    }
+    await s.w.flush()
+    for (const t of ['1.000001', '2.000001', '3.000001']) s.w.touch(CH, t)
+    s.tick(2 * 3600_000)
+    expect(s.w.list().filter(e => e.ambient)).toHaveLength(2)                        // half of 4
+    expect(s.w.handle(ev({ ts: '4.000001', text: 'new chatter' }))).not.toBe('ignored')
+    expect(s.w.list().map(e => e.threadTs).sort()).toEqual(['1.000001', '3.000001', '4.000001'])   // the quietest chatter went; the tag's stayed
+    expect(s.w.stats().dropped).toEqual({})
+    expect(s.logs.join()).toContain(`conversations opened by untagged chatter already hold half the conversation table (2 of 4), so slack:${CH}:2.000001`)
   })
 
   test("the specialist's reply restarts a conversation's quiet clock: one it answered in under an hour ago is not let go", async () => {
@@ -683,11 +743,12 @@ describe('limits', () => {
 
   test("eviction alerts the evicted conversation's specialist once per episode: a stream of new tags into a full table does not spam", async () => {
     const { w, alerts, alertTo, logs, tick } = setup({ maxConversations: 3 })
-    for (let i = 1; i <= 3; i++) { w.handle(ev({ ts: `${i}.000001`, user: `U${i}`, text: mention })); await w.flush(); tick(60_000) }
+    for (let i = 1; i <= 3; i++) { w.handle(ev({ ts: `${i}.000001`, user: `U${i}`, text: mention })); await w.flush(); w.touch(CH, `${i}.000001`); tick(60_000) }
     tick(2 * 3600_000)
     for (let i = 4; i <= 6; i++) {                                                   // three new tags in three minutes, each evicting one
       expect(w.handle(ev({ ts: `${i}.000001`, user: `U${i}`, text: mention }))).toBe('mention')
       await w.flush()
+      w.touch(CH, `${i}.000001`)
       tick(60_000)
     }
     expect(logs.filter(l => l.includes('was let go'))).toHaveLength(3)
