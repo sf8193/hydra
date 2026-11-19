@@ -17,6 +17,7 @@ import type { HydraConfig } from '../../config/types.js'
 import { listWatches } from '../../connectors/github/pr-watch.js'
 import { setSpecialist, removeSpecialist } from '../../specialists/specialists.js'
 import { gateway } from '../config.js'
+import { registerProtocol } from '../protocol-registry.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import { seedPrWatch } from './test-harness.js'
 
@@ -80,9 +81,9 @@ afterEach(() => {
 })
 
 /** A thread whose session ended: its record lists the session, none is in the registry. */
-function ended(name: string, threadId: string): void {
-  threadRegistry.threads.set(threadId, { threadId, topic: 't', respawnCount: 0, createdAt: 1, lastActive: 1, totalMessages: 0, hydraMade: true,
-    sessionHistory: [{ sessionId: `gone-${name}`, tmuxName: name, originType: 'spawn', startedAt: 1, endedAt: 2, messageCount: 0 }] })
+function ended(name: string, threadId: string, spawnerThreadId?: string, hydraMade = true): void {
+  threadRegistry.threads.set(threadId, { threadId, topic: 't', respawnCount: 0, createdAt: 1, lastActive: 1, totalMessages: 0, ...(hydraMade && { hydraMade }),
+    sessionHistory: [{ sessionId: `gone-${name}`, tmuxName: name, originType: 'spawn', startedAt: 1, endedAt: 2, messageCount: 0, ...(spawnerThreadId && { spawnerThreadId }) }] })
   threadsSeeded.add(threadId)
 }
 function live(name: string, threadId: string): SessionInfo {
@@ -238,5 +239,104 @@ describe('a live session\'s destroy is untouched by the setting (off, as today)'
     const res = await cli({ name: 'kid', destroy: true })
     expect(res.ok).toBe(true)
     expect(deleted).toEqual(['9301'])
+  })
+})
+
+describe('on: the session that spawned an ended session may destroy its thread', () => {
+  beforeEach(on_)
+  const asTool = (callerId: string, thread: string) => executeTool('kill_session', { thread_id: thread, destroy: true }, callerId)
+  const asCli = (callerId: string, thread: string) => cli({ name: thread, destroy: true, callerSessionId: callerId })
+
+  test('the spawner, by tool and by CLI', async () => {
+    const pm = live('pm', '9501')
+    ended('kid', '9502', '9501'); ended('kid2', '9503', '9501')
+    const r = await asTool(pm.sessionId, '9502')
+    expect(r.isError).toBeFalsy()
+    expect((await asCli(pm.sessionId, '9503')).ok).toBe(true)
+    expect(deleted).toEqual(['9502', '9503'])
+    expect(threadRegistry.get('9502')).toBeUndefined()
+  })
+  test('its handoff successor: another session in the same thread', async () => {
+    const pm = live('pm', '9511')
+    const successor = { ...pm, sessionId: `sess-det-${++seq}`, createdAt: Date.now() + 1 } as SessionInfo
+    registry.set(successor.sessionId, successor); seeded.add(successor.sessionId)
+    registry.setThread('9511', successor.sessionId)   // a handoff makes the successor the thread's owner
+    ended('kid', '9512', '9511')
+    expect((await asTool(successor.sessionId, '9512')).isError).toBeFalsy()
+    expect(deleted).toEqual(['9512'])
+  })
+  test('a protocol guest in the spawner\'s thread (the review Critic) is refused: in the thread is not owning it', async () => {
+    const pm = live('pm', '9571')
+    const critic = { ...pm, sessionId: `sess-det-${++seq}`, tmuxName: 'critic', sessionType: 'thread_guest' } as SessionInfo
+    registry.set(critic.sessionId, critic); seeded.add(critic.sessionId)   // a guest: never setThread'd, the owner stays pm
+    ended('kid', '9572', '9571')
+    const r = await asTool(critic.sessionId, '9572')
+    expect(r.isError).toBe(true)
+    expect((await asCli(critic.sessionId, '9572')).ok).toBe(false)
+    expect(deleted).toEqual([])
+    expect((await asTool(pm.sessionId, '9572')).isError).toBeFalsy()   // the owner still may
+  })
+  test('a protocol participant that owns the spawner\'s thread is refused, as the live destroy refuses it', async () => {
+    const pm = live('pm', '9581')
+    registerProtocol('ended-destroy-test', { getByThread: () => false, isParticipant: id => id === pm.sessionId, onReply: () => {}, onDisconnect: () => {}, onReconnect: () => {} })
+    try {
+      ended('kid', '9582', '9581')
+      expect((await asTool(pm.sessionId, '9582')).isError).toBe(true)
+      expect(deleted).toEqual([])
+    } finally { (await import('../protocol-registry.js'))._resetForTesting() }
+  })
+  test('a sibling, the child itself and a stranger are refused, and the refusal names who may', async () => {
+    const pm = live('pm', '9521')
+    const sibling = live('sib', '9522')
+    const stranger = live('str', '9523')
+    ended('kid', '9524', '9521')
+    for (const c of [sibling, stranger]) {
+      const r = await asTool(c.sessionId, '9524')
+      expect(r.isError).toBe(true)
+      expect(text(r)).toContain('spawned it')
+      expect(text(r)).toContain('handoff successor')
+      expect((await asCli(c.sessionId, '9524')).ok).toBe(false)
+    }
+    // The child itself: a session answering in its own thread (the thread it was spawned into is the spawner's, not its own).
+    const child = live('kidlive', '9524')
+    expect((await asTool(child.sessionId, '9524')).isError).toBe(true)
+    expect(deleted).toEqual([])
+    void pm
+  })
+  test('an old entry without the field is refused as before', async () => {
+    const pm = live('pm', '9531')
+    ended('kid', '9532')
+    expect((await asTool(pm.sessionId, '9532')).isError).toBe(true)
+    expect((await asCli(pm.sessionId, '9532')).ok).toBe(false)
+    expect(deleted).toEqual([])
+  })
+  test('a caller with no record, against an entry without the field, is refused (no thread on either side must not match)', async () => {
+    ended('kid', '9536')
+    expect((await asTool('no-such-session', '9536')).isError).toBe(true)
+    expect((await asCli('no-such-session', '9536')).ok).toBe(false)
+    expect(deleted).toEqual([])
+  })
+  test('a thread hydra did not make is refused, as the live destroy refuses it', async () => {
+    const pm = live('pm', '9541')
+    ended('kid', '9542', '9541', false)
+    expect((await asTool(pm.sessionId, '9542')).isError).toBe(true)
+    expect(deleted).toEqual([])
+  })
+  test('allow_destroy = false refuses the spawner too, and names the key', async () => {
+    const pm = live('pm', '9551')
+    ended('kid', '9552', '9551')
+    off()
+    const r = await asTool(pm.sessionId, '9552')
+    expect(r.isError).toBe(true)
+    expect(text(r)).toContain('[threads] allow_destroy = true')
+    expect(JSON.stringify(await asCli(pm.sessionId, '9552'))).toContain('allow_destroy')
+    expect(deleted).toEqual([])
+  })
+  test('the spawner is recorded at spawn: its thread id, kept across a handoff', async () => {
+    const { recordSpawnFor } = { recordSpawnFor: (t: string, sp?: string) => threadRegistry.recordSpawn(t, { topic: 't', respawnCount: 0, sessionId: `s-${t}`, tmuxName: 'k', originType: 'spawn', label: undefined, ...(sp && { spawnerThreadId: sp }) }) }
+    recordSpawnFor('9561', '9560'); threadsSeeded.add('9561')
+    expect(threadRegistry.get('9561')!.sessionHistory.at(-1)!.spawnerThreadId).toBe('9560')
+    recordSpawnFor('9562'); threadsSeeded.add('9562')
+    expect('spawnerThreadId' in threadRegistry.get('9562')!.sessionHistory.at(-1)!).toBe(false)
   })
 })
