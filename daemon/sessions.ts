@@ -446,13 +446,19 @@ export class SessionRegistry {
     return used
   }
 
-  /** `reuse`: a recovered session's old name, kept unless something other than the record it replaces holds it. */
-  pickSessionName(reuse?: { name: string; replacing: string }): string {
+  /**
+   * The catalog name no live session holds that was used least recently: a name never used comes first (catalog order), then the name whose
+   * last session ended longest ago (`lastUsed`, from the thread history, which the registry cannot see). `reuse`: a recovered session's old
+   * name, kept unless something other than the record it replaces holds it. Only when every catalog name is held is the name `session-<hex>`.
+   */
+  pickSessionName(reuse?: { name: string; replacing: string }, lastUsed: ReadonlyMap<string, number> = new Map()): string {
     const used = this.usedNames(reuse?.replacing, reuse?.name)
     if (reuse && !used.has(reuse.name)) return reuse.name
-    for (const name of SESSION_NAMES) {
-      if (!used.has(name)) return name
-    }
+    const free = SESSION_NAMES.filter(name => !used.has(name))
+    // A stable sort: names with the same last use (or none) stay in catalog order.
+    const next = free.sort((a, b) => (lastUsed.get(a) ?? 0) - (lastUsed.get(b) ?? 0))[0]
+    if (next) return next
+    process.stderr.write(`daemon: every session name is held by a live session; naming this one session-<hex>\n`)
     return `session-${randomBytes(3).toString('hex')}`
   }
 
@@ -634,6 +640,13 @@ export class ThreadRegistry {
   }
 
   get size(): number { return this.threads.size }
+
+  /** When each session name was last used: the end of its latest session in the history, or, for an entry with no end recorded, its start. */
+  lastUsedByName(): Map<string, number> {
+    const last = new Map<string, number>()
+    for (const thread of this.threads.values()) for (const h of thread.sessionHistory) last.set(h.tmuxName, Math.max(last.get(h.tmuxName) ?? 0, h.endedAt ?? h.startedAt))
+    return last
+  }
 
   recordSpawn(threadId: string, opts: {
     anchorMessageId?: string, anchorChannelId?: string, threadUrl?: string, topic: string,

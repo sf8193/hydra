@@ -28,7 +28,7 @@ export function atomicWriteFileSync(filePath: string, data: string, mode?: numbe
 // Load-bearing: pickSessionName reserves this token and createWorktree's stale
 // `branch -D wt/<name>` targets it, so recoverOne's name reservation must derive it identically.
 // INVARIANT: session names must be hyphen-free (they come from SESSION_CATALOG, all single
-// words). The `split('-')[0]` peels only the `-<suffix>` — a hyphenated name (e.g. `my-feature`)
+// words; the one exception, `session-<hex>`, is given only when every catalog name is held live, and its random suffix makes a collision with a kept branch negligible). The `split('-')[0]` peels only the `-<suffix>` — a hyphenated name (e.g. `my-feature`)
 // would be truncated to `my`, reserving the wrong token and exposing the preserved branch to a
 // stray `branch -D`. A unit test asserts the catalog stays hyphen-free so this can't regress.
 // Callers must first confirm the branch starts with `wt/`.

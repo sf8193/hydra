@@ -6,7 +6,7 @@ Talk to many Claude Code (or Codex) sessions from Slack or Discord. Each session
 
 **Why not sub-agents?** A sub-agent hides inside one session. Here every session has a thread you can read, interrupt and steer, and sessions message each other.
 
-- Commands: `spawn:`, `kill:`, `review <PR>` (a builder and an adversarial reviewer talk in a thread), `help` lists the rest. Session names are just unique IDs.
+- Commands: `spawn:`, `kill:`, `review <PR>` (a builder and an adversarial reviewer talk in a thread), `help` lists the rest. Session names are just unique IDs: a new session gets the catalog name used least recently (one never used first), and `session-<hex>` only when every name is held by a live session.
 - Setup: see [Quick Start](#quick-start), then [Discord](docs/discord.md) or [Slack](docs/slack.md).
 
 ## Architecture

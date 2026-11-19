@@ -4,7 +4,7 @@ import { homedir, tmpdir } from 'os'
 import { join } from 'path'
 import { gateway, STATE_DIR, CLAUDE_CONFIG } from '../config.js'
 import { doSpawnSession, handOff, handoffIO, predecessorOf } from '../session-lifecycle.js'
-import { isParentOf, registry, SessionRegistry, threadRegistry } from '../sessions.js'
+import { isParentOf, registry, SESSION_NAMES, SessionRegistry, threadRegistry } from '../sessions.js'
 import type { SessionInfo, ThreadSessionEntry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { engines } from '../engines/instances.js'
@@ -208,6 +208,43 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
       ;(gateway as any).createThread = origCreate
       ;(gateway as any).fetchChannel = origFetch
     }
+  })
+
+  describe('a new session is given the least recently used name', () => {
+    const NAME_THREAD = 'name-lru-thread'
+    const NOW = Date.now()
+    /** A closed history entry for `name`, ended `endedAgo` ms ago. */
+    const ended = (name: string, endedAgo: number) => {
+      threadRegistry.recordSpawn(NAME_THREAD, { topic: 'old', respawnCount: 0, sessionId: `lru-${name}`, tmuxName: name, originType: 'spawn', model: 'm', label: undefined })
+      const e = threadRegistry.get(NAME_THREAD)!.sessionHistory.find(h => h.tmuxName === name)!
+      e.startedAt = NOW - endedAgo - 1000; e.endedAt = NOW - endedAgo
+    }
+    const clearSpawned = () => { registry.deleteThread(THREAD); for (const s of [...registry.values()]) if (s.threadId === THREAD) registry.delete(s.sessionId) }
+    const spawnNew = async (opts?: any) => {
+      const origCreate = gateway.createThread
+      const origFetch = gateway.fetchChannel
+      ;(gateway as any).createThread = async () => ({ id: THREAD })
+      ;(gateway as any).fetchChannel = async () => ({ isThread: false, isDM: false, parentId: null })
+      try { return (await doSpawnSession('t', 'some-channel', undefined, opts)).name } finally {
+        ;(gateway as any).createThread = origCreate
+        ;(gateway as any).fetchChannel = origFetch
+        clearSpawned()
+      }
+    }
+    afterEach(() => { threadRegistry.threads.delete(NAME_THREAD) })
+
+    test('a name used a minute ago goes after one never used, and the name ended longest ago goes first once all are used', async () => {
+      ended(SESSION_NAMES[0], 60_000)
+      expect(await spawnNew()).toBe(SESSION_NAMES[1])
+      SESSION_NAMES.slice(1).forEach((n, i) => ended(n, 3_600_000 * (i + 2)))
+      // Every name is used now: the last in the catalog ended longest ago.
+      expect(await spawnNew()).toBe(SESSION_NAMES[SESSION_NAMES.length - 1])
+    })
+
+    test('a handoff keeps its predecessor\'s name, a name just used or not', async () => {
+      ended(SESSION_NAMES[0], 1000)
+      expect(await spawnNew({ handedOffFrom: SESSION_NAMES[0] })).toBe(SESSION_NAMES[0])
+    })
   })
 
   test('hydraMade: absent when a spawn joins a thread that already existed', async () => {
