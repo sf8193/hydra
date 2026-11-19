@@ -59,7 +59,7 @@ afterAll(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true 
 type Msg = { channel: string; ts: string; threadTs?: string; user: string; text: string; bound?: string; boundApp?: string }
 
 /** One app's connection, under one file: what it does with each message, and where each thread's deliveries went. */
-function run(toml: string, app: string, members: Record<string, string[]>, msgs: Msg[]): { outcomes: HandleOutcome[]; to: Map<string, string[]> } | null {
+async function run(toml: string, app: string, members: Record<string, string[]>, msgs: Msg[]): Promise<{ outcomes: HandleOutcome[]; to: Map<string, string[]> } | null> {
   const loaded = loadHydraConfig(toml, env)
   if (!loaded.ok) return null
   if (!loaded.config.slackApps[app]) return { outcomes: msgs.map(() => 'ignored'), to: new Map() }
@@ -81,6 +81,7 @@ function run(toml: string, app: string, members: Record<string, string[]>, msgs:
     if (m.bound && (m.boundApp ?? 'default') === app) w.bind(m.channel, m.threadTs ?? m.ts, m.bound, 'cli', app === 'default' ? undefined : app)
     return w.handle({ channel: m.channel, ts: m.ts, ...(m.threadTs && { threadTs: m.threadTs }), user: m.user, text: m.text, app: app === 'default' ? undefined : app })
   })
+  await w.flush()   // deliver what the messages queued, now: never wait out the coalesce timer
   return { outcomes, to }
 }
 
@@ -103,11 +104,10 @@ describe("differential fuzz: the operator's rule against the same hydra.toml wit
       const base = genToml(r)
       const members = genMembers(r)
       const msgs = genMsgs(r)
-      const sides = ['default', 'sales'].map(app => [run(base, app, members, msgs), run(base + OPERATOR_RULE, app, members, msgs)] as const)
+      const sides = await Promise.all(['default', 'sales'].map(async app => [await run(base, app, members, msgs), await run(base + OPERATOR_RULE, app, members, msgs)] as const))
       if (sides.some(([a, b]) => !a || !b)) { counts.skippedConfigs++; continue }
       counts.configs++
       for (const [app, [a, b]] of [['default', sides[0]], ['sales', sides[1]]] as const) {
-        await Bun.sleep(5)
         for (const [j, m] of msgs.entries()) {
           counts.messages += app === 'default' ? 1 : 0
           counts.handled++
@@ -129,7 +129,7 @@ describe("differential fuzz: the operator's rule against the same hydra.toml wit
     }
     expect(counts.differOperatorTag).toBeGreaterThan(0)
     expect(counts.configs).toBeGreaterThan(200)
-  })
+  }, 30_000)   // 24000 handled messages, about 2 s of work alone: CPU-bound, so it grows with a busy runner (it waits on nothing)
 
   test('the counts', () => {
     process.stdout.write(`operator-tag fuzz: ${JSON.stringify(counts)}\n`)
@@ -153,11 +153,10 @@ describe("differential fuzz: the app's router", () => {
       const members = genMembers(r)
       const msgs = genMsgs(r)
       const files = { old: base + OPERATOR_RULE, main: withRouter(base, 'main'), desk: withRouter(base, 'specialist:desk') }
-      const runs = (['default', 'sales'] as const).map(app => ({ none: run(base, app, members, msgs), old: run(files.old, app, members, msgs), main: run(files.main, app, members, msgs), desk: run(files.desk, app, members, msgs) }))
+      const runs = await Promise.all((['default', 'sales'] as const).map(async app => ({ none: await run(base, app, members, msgs), old: await run(files.old, app, members, msgs), main: await run(files.main, app, members, msgs), desk: await run(files.desk, app, members, msgs) })))
       if (runs.some(x => !x.none || !x.old || !x.main || !x.desk)) { rcounts.configs += 0; counts.skippedConfigs++; continue }
       rcounts.configs++
       for (const [k, app] of (['default', 'sales'] as const).entries()) {
-        await Bun.sleep(5)
         const side = runs[k]
         for (const [j, m] of msgs.entries()) {
           rcounts.messages += app === 'default' ? 1 : 0
