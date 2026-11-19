@@ -134,7 +134,7 @@ describe('a session edits and deletes the messages its own app posted', () => {
     slackRuntimeDeps.author = async () => { getConversationTable().unwatch('C1', '6.000001', undefined); return 'app' }
     await expect(editInConversation('crm-session', 'slack:C1:6.000001', '8.000001', 'x')).rejects.toThrow('is no longer an open conversation: nothing was edited')
     getConversationTable().bind('C1', '6.000001', CRM, 'tool')
-    slackRuntimeDeps.author = async () => { getConversationTable().bind('C1', '6.000001', DEALS, 'operator'); return 'app' }
+    slackRuntimeDeps.author = async () => { getConversationTable().bind('C1', '6.000001', DEALS, 'cli'); return 'app' }
     await expect(deleteInConversation('crm-session', 'slack:C1:6.000001', '8.000001')).rejects.toThrow(`is bound to ${DEALS}, not ${CRM}`)
     expect(calls).toEqual([])
   })

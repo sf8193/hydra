@@ -118,6 +118,7 @@ export type ConversationEntry = {
   threadTs: string
   /** Where this conversation is bound: a specialist, main, or a session's own thread id. Absent only in a store written before bindings: its next message binds it. */
   specialist?: string
+  /** Who opened it: the tagger's user id, `tool`, `home`, `cli` or `router` when a bind opened it, nothing for the bot's own post. Never changes. */
   mentionedBy?: string
   createdAt: number
   /** Last matching event, delivered or not: the idle clock. */
@@ -128,9 +129,10 @@ export type ConversationEntry = {
   owed?: string[]
   /** Opened by untagged chatter where `messages = "all"`: while owed or answered, such conversations take at most half the table; they idle out in a day. */
   ambient?: true
-  /** Who bound it by hand last (`BOUND_BY`: a session's tool, a reply's thread, the operator's CLI); `mentionedBy` keeps the opener. Each bind
-   *  by hand overwrites it. Keeps it from eviction, and a session's (`tool`, `home`) counts toward its `TOOL_BIND_MAX` (`heldBySession`). */
-  boundBy?: string
+  /** Who holds it by hand (`BOUND_BY`): a session's tool, a reply's thread, the operator's CLI, a router's hand-off. Every bind by hand
+   *  overwrites it; a binding moved by routing (a tag taking a thread from a session) clears it. Absent: routing's alone. Held: never evicted,
+   *  and a session's (`tool`, `home`) counts toward its `TOOL_BIND_MAX` (`heldBySession`). */
+  boundBy?: BoundBy
   /** When the guard first said deferred (exit 75) to an owed ts: `owed_max` counts from here. */
   deferredSince?: Record<string, number>
   /** `deferredSince`'s two older names, in a store written before the rename: read by `readOldNames`, never written. */
@@ -379,10 +381,14 @@ const OURS_KEEP = 300
 const AMBIENT_IDLE_MS = 86_400_000
 /** How long a conversation must be quiet before a full table lets it go for a new one. */
 const EVICT_QUIET_MS = 3600_000
-/** `mentionedBy` of a conversation bound by hand (a session's tool, a reply's thread, the operator's CLI), not by routing: never evicted. */
-const BOUND_BY: ReadonlySet<string> = new Set(['tool', 'home', 'cli'])
-/** A conversation a session holds by its own hand, opened or bound by it: what `TOOL_BIND_MAX` counts. */
-export const heldBySession = (e: ConversationEntry): boolean => { const by = e.boundBy ?? e.mentionedBy; return by === 'tool' || by === 'home' }   // the last binder by hand, else the opener
+/** Who binds by hand, not by routing: a session's tool, a reply's thread (`home`: a post to its `home_place`), the operator's CLI, a router's hand-off. */
+export const BOUND_BY = ['tool', 'home', 'cli', 'router'] as const
+export type BoundBy = typeof BOUND_BY[number]
+const isBoundBy = (x: unknown): x is BoundBy => (BOUND_BY as readonly unknown[]).includes(x)
+/** Opened by a bind (`mentionedBy` names who), not by a message: its history starts at the bind. */
+export const openedByBind = (e: ConversationEntry): boolean => isBoundBy(e.mentionedBy)
+/** A conversation a session holds by its own hand: what `TOOL_BIND_MAX` counts. */
+export const heldBySession = (e: ConversationEntry): boolean => e.boundBy === 'tool' || e.boundBy === 'home'
 /** The time of a tag in a store that kept none: older than any. */
 const UNKNOWN_TS = '0.000000'
 /** How many channels no rule names catch-up reads for an app, the ones it was tagged in most recently: the bound on the extra history reads. */
@@ -437,6 +443,13 @@ const OWED_FULL_WHY = `more than ${OWED_KEEP} messages were owed in one thread, 
 /** A conversation's key in memory, and a channel's in a cursor, a hold or a noted fact: as they always were for `default`, the app first for any other. */
 const watchKey = (app: string | undefined, channel: string, threadTs: string) => scopeKey(app, channel, threadTs)
 const keyOf = (e: Pick<ConversationEntry, 'app' | 'channel' | 'threadTs'>) => watchKey(e.app, e.channel, e.threadTs)
+
+/** A store written before `boundBy` was the one record of who holds a conversation: a conversation opened by a bind, or bound to a session's thread, is held by the opener. Once: the marker (`Store.holds`) is written with the next save, so a hold released since is not given back. */
+function holdsFromOpener(e: ConversationEntry): void {
+  if (e.boundBy !== undefined) return
+  if (isBoundBy(e.mentionedBy)) e.boundBy = e.mentionedBy
+  else if (e.specialist && isSessionThread(e.specialist)) e.boundBy = 'tool'
+}
 
 /** A store written under an older name of `deferredSince` (`heldSince`, then `notNowSince`) loads under the new name, so a message held by the guard keeps its `owed_max` clock. The next write carries only the new name.
  *  More than one name can be present when a build that predates a rename wrote the store after one that did not: each ts then takes the latest of them. */
@@ -607,8 +620,11 @@ export function packItems(items: Item[], maxBytes: number = BATCH_MAX_BYTES): It
 // The watcher
 // ---------------------------------------------------------------------------
 
-/** `taggedIn`: the scoped keys (as `channelCursors`) of channels where an app was tagged, each with the ts of the last tag. An older store wrote the keys alone, as an array: their time is unknown. */
-type Store = { entries: ConversationEntry[]; channelCursors: Record<string, string>; taggedIn?: Record<string, string> | string[] }
+/**
+ * `taggedIn`: the scoped keys (as `channelCursors`) of channels where an app was tagged, each with the ts of the last tag. An older store wrote the keys alone, as an array: their time is unknown.
+ * `holds`: the store's entries carry `boundBy` as the one record of who holds a conversation. A store without it is read once under the older shape (`holdsFromOpener`).
+ */
+type Store = { entries: ConversationEntry[]; channelCursors: Record<string, string>; taggedIn?: Record<string, string> | string[]; holds?: true }
 
 export class ConversationTable {
   private readonly entries = new Map<string, ConversationEntry>()
@@ -657,7 +673,8 @@ export class ConversationTable {
       if (!existsSync(this.deps.file)) return
       const raw = JSON.parse(readFileSync(this.deps.file, 'utf8')) as Store
       // An entry with no `app` is the app named `default`'s: every store written before apps existed loads as it is, and is not rewritten.
-      for (const e of raw.entries ?? []) { readOldNames(e); this.entries.set(keyOf(e), e) }
+      for (const e of raw.entries ?? []) { readOldNames(e); if (!raw.holds) holdsFromOpener(e); this.entries.set(keyOf(e), e) }
+      if (!raw.holds && this.entries.size) this.dirty = true
       this.channelCursors = raw.channelCursors ?? {}
       // A store from before the times were kept holds keys alone; a damaged one holds neither shape: what cannot be read is left out, the rest loads.
       const t: unknown = raw.taggedIn
@@ -681,7 +698,7 @@ export class ConversationTable {
     if (!this.dirty) return
     this.dirty = false
     try {
-      const store: Store = { entries: [...this.entries.values()], channelCursors: this.channelCursors, taggedIn: Object.fromEntries(this.taggedIn) }
+      const store: Store = { entries: [...this.entries.values()], channelCursors: this.channelCursors, taggedIn: Object.fromEntries(this.taggedIn), holds: true }
       atomicWriteFileSync(this.deps.file, JSON.stringify(store, null, 2) + '\n')
     } catch (err) {
       this.dirty = true
@@ -740,7 +757,7 @@ export class ConversationTable {
     const existing = this.get(channel, threadTs, app)
     if (existing) {
       existing.lastEventAt = now
-      if (!existing.specialist) this.setBinding(existing, specialist) // a store written before bindings: its first message since binds it
+      if (!existing.specialist) this.setBinding(existing, specialist, undefined) // a store written before bindings: its first message since binds it
       this.persist()
       return existing
     }
@@ -756,8 +773,7 @@ export class ConversationTable {
 
   /**
    * A full table makes room for a new conversation by letting go of the `n` quiet the longest, as idle expiry would. Only one routing opened:
-   * never one a session, the operator or a reply bound (`BOUND_BY`, or `boundBy` when bound after routing opened it), nor one bound to a
-   * session's thread; for an opener of untagged chatter or the bot's own post (`onlyAmbient`), only one chatter opened.
+   * never one held by hand (`boundBy`: a session, the operator, a reply or a router bound it, whoever opened it); for an opener of untagged chatter or the bot's own post (`onlyAmbient`), only one chatter opened.
    * Quiet counts from the last message in or the specialist's last reply (`touch`): a session still working on a message an hour after it
    * arrived, with nothing else owed, can lose the binding to a new tag, and its reply is then refused. Once let go, only a tag or a DM there
    * (or any message, where the place hears every message) opens it again: an untagged reply is not heard. And only with nothing owed, nothing
@@ -768,7 +784,7 @@ export class ConversationTable {
   private evict(held: ConversationEntry[], n: number, cap: number, now: number, opening: string, onlyAmbient: boolean): boolean {
     const victims = held.filter(e => {
       const key = keyOf(e)
-      return !BOUND_BY.has(e.mentionedBy ?? '') && !e.boundBy && !(e.specialist && isSessionThread(e.specialist)) && (!onlyAmbient || !!e.ambient)
+      return !e.boundBy && (!onlyAmbient || !!e.ambient)
         && !e.owed?.length && e.waitingSince === undefined && !this.pending.has(key) && !this.inflight.get(key)?.size && now - e.lastEventAt >= EVICT_QUIET_MS
     }).sort((a, b) => a.lastEventAt - b.lastEventAt).slice(0, n)
     if (victims.length < n) return false
@@ -785,10 +801,11 @@ export class ConversationTable {
 
   /**
    * The one place a conversation's binding changes to a specialist (it opens bound, is first bound, or is moved): a session listening to
-   * the same thread through another app is told then.
+   * the same thread through another app is told then. `hand` is who holds it by hand after the change: the binder, or nothing when routing moved it.
    */
-  private setBinding(entry: ConversationEntry, to: string): void {
+  private setBinding(entry: ConversationEntry, to: string, hand: BoundBy | undefined): void {
     entry.specialist = to
+    if (hand) entry.boundBy = hand; else delete entry.boundBy
     delete entry.vacantSince   // a vacancy belongs to the thread the conversation was bound to; the next reconcile starts the new one's
     this.tellSessionsTaken(entry)
   }
@@ -813,17 +830,16 @@ export class ConversationTable {
    * the parent as seen: Slack returns it with every thread read, and it would be delivered as a follow-up. The operator's CLI
    * has not necessarily seen it, so it stays undelivered: a request the live stream missed is still delivered.
    */
-  bind(channel: string, threadTs: string, specialist: string, by?: string, app?: string): ConversationEntry | undefined {
+  bind(channel: string, threadTs: string, specialist: string, by: BoundBy = 'cli', app?: string): ConversationEntry | undefined {
     const seenParent = !this.get(channel, threadTs, app) && (by === 'tool' || by === 'home')
     const entry = this.watch(channel, threadTs, specialist, by, app)
     if (!entry) return undefined
-    if (by && BOUND_BY.has(by) && entry.boundBy !== by && !(entry.boundBy === undefined && entry.mentionedBy === by)) { entry.boundBy = by; this.persist() }   // the latest binder by hand: a move by the operator is the operator's, not the session's it came from
     if (seenParent && threadTs !== TOP_LEVEL) { entry.delivered = insertTs(entry.delivered, threadTs, DELIVERED_KEEP); this.persist() }
     if (entry.specialist !== specialist) {
       this.deps.log(`daemon: slack connector: ${conversationId(entry)} moved from ${entry.specialist} to ${specialist}\n`)
-      this.setBinding(entry, specialist)
-      this.persist()
-    }
+      this.setBinding(entry, specialist, by)
+    } else entry.boundBy = by   // the latest binder holds it: a move by the operator is the operator's, not the session's it came from
+    this.persist()
     return entry
   }
 
@@ -1243,7 +1259,7 @@ export class ConversationTable {
       const fresh = route(withoutFallbacks(cfg.hydra), { from: addressOf(ev.user), at, addressed: true, app })
       if (fresh.fate === 'deliver') {
         const from = existing.specialist
-        existing.specialist = fresh.to
+        this.setBinding(existing, fresh.to, undefined)   // the session's hold goes with its binding: the specialist's own binds count it, and it can be let go
         this.persist()
         this.deps.log(`daemon: slack connector: ${conversationId(existing)} was tagged; ${fresh.to} answers here, so it takes the thread from the session listening in ${from}\n`)
         this.deps.alert?.(`ℹ️ Someone tagged the bot in ${conversationId(existing)}, so ${fresh.to} took it, since it answers there. This session no longer hears it.`, from)
@@ -1295,7 +1311,8 @@ export class ConversationTable {
     }
     if (ambient) { entry.ambient = true; this.persist() }
     // A new conversation, one whose specialist is gone (routed anew), or a rename through `renamed_from`: the binding takes the current id.
-    if ((d.bind || d.via === 'binding') && entry.specialist !== d.to) { this.setBinding(entry, d.to); this.persist() }
+    // A rename keeps whoever holds it by hand; a specialist that is gone took its hold with it.
+    if ((d.bind || d.via === 'binding') && entry.specialist !== d.to) { this.setBinding(entry, d.to, d.bind ? undefined : entry.boundBy); this.persist() }
     entry.lastEventAt = this.deps.now()
     const kind = dm ? 'dm' : tagged ? 'mention' : 'follow-up'
     // A tag the app's router takes is answered at once with a 👀 from the app that heard it, whatever the place's `ack` says: the router (a session

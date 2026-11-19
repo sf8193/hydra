@@ -353,7 +353,7 @@ test("a thread Slack says isn't there (a made-up ts) is skipped and logged; the 
   const logs: string[] = []
   w.handle({ channel: CH, ts: '1000.000001', user: 'UA', text: 'chat' })
   w.bind(CH, '1.000001', 'helper', 'tool') // made up
-  w.bind(CH, '1001.000001', 'helper')
+  w.watch(CH, '1001.000001', 'helper')
   const api: SlackApi = {
     history: async () => ({ messages: [] }),
     replies: async a => { if (a.ts === '1.000001') throw new Error('An API error occurred: thread_not_found'); return { messages: [{ ts: '1002.000001', thread_ts: '1001.000001', user: 'UA', text: 'missed reply' }] } },

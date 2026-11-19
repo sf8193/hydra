@@ -145,8 +145,8 @@ describe('fetch_messages on a Slack conversation reads it through the app that h
 describe('a session held to its own conversations reads only them', () => {
   const OTHERS = '7.000001'   // a top-level message in C1 tagged for DEALS: its thread is DEALS's
   beforeEach(() => {
-    getConversationTable().bind('C1', TOP_LEVEL, CRM, 'chatter')   // C1's untagged top level (messages = "all") is CRM's
-    getConversationTable().bind('C1', OTHERS, DEALS, 'mention', 'sales')
+    getConversationTable().watch('C1', TOP_LEVEL, CRM, 'chatter')   // C1's untagged top level (messages = "all") is CRM's
+    getConversationTable().watch('C1', OTHERS, DEALS, 'mention', 'sales')
     session('crm-confined', 'crm-thread-1', false, { canOnlyWriteTo: ['/w/crm'] })
   })
 
@@ -170,7 +170,7 @@ describe('a session held to its own conversations reads only them', () => {
   })
 
   test('its own thread and a DM’s top level stay readable; a session not held reads a channel’s top level', async () => {
-    getConversationTable().bind('D1', TOP_LEVEL, CRM, 'dm')
+    getConversationTable().watch('D1', TOP_LEVEL, CRM, 'dm')
     for (const who of ['crm-session', 'crm-confined']) {
       expect((await executeTool('fetch_messages', { channel: 'slack:C1:6.000001' }, who)).isError).toBeUndefined()
       expect((await executeTool('fetch_messages', { channel: 'slack:D1' }, who)).isError).toBeUndefined()
