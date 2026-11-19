@@ -97,6 +97,11 @@ export function slackSessionTitles(opts: SessionVisualOpts): string[] {
   return [...new Set([cap(`${icon} ${text}`), text, name])].filter(Boolean)
 }
 
+/** A Slack conversation is a channel id (C, D or G), alone or with a thread's ts: `C0B6KKFNH4N:1779979488.572029`. */
+export function isSlackThreadId(id: string): boolean {
+  return /^[CDG][A-Z0-9]+(:\d+\.\d+)?$/.test(id)
+}
+
 export class SlackGateway implements ChatGateway {
   readonly platform = 'slack' as const
   readonly canThreadInDM = true
@@ -587,7 +592,12 @@ export class SlackGateway implements ChatGateway {
     }
   }
 
+  isThreadId(id: string): boolean {
+    return isSlackThreadId(id)
+  }
+
   async threadExists(threadId: string): Promise<boolean> {
+    if (!this.isThreadId(threadId)) return false
     if (!this.app) return true
     const { channel, threadTs } = this.parseChannelId(threadId)
     try {

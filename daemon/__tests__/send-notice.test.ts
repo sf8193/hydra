@@ -80,8 +80,9 @@ test('a party with no URL on record is linked by a lookup; one with no thread to
   try {
     await executeTool('send_to_thread', { target: 'snbeta', type: 'progress', text: 'x' }, 'sn-a')
   } finally { (gateway as any).getThreadUrl = saved.url; process.stderr.write = saved.write }
-  expect(posts[0].text).toMatch(/^📨 from \S+ \[snalpha\]\(<https:\/\/x\/looked-up>\) → x$/)
-  expect(posts[1].text).toMatch(/^📤 to \S+ snbeta → x$/)
+  // snbeta's stored thread is not one the gateway can address, so nothing is posted there: only the sender's echo, with snbeta's name plain.
+  expect(posts).toHaveLength(1)
+  expect(posts[0].text).toMatch(/^📤 to \S+ snbeta → x$/)
   expect(logged.join('')).toContain('no link for snbeta (thread 472d35be-061a-43d8-bd50-eba33b094694)')
   expect(logged.join('')).not.toContain('no link for snalpha')
 })
@@ -114,4 +115,30 @@ test('Slack subtext is a context block: markdown links become mrkdwn links, the 
   expect(slackSubtextBlocks('📨 from 💥 [nova](<https://s/1>) → a < b & `c`')).toEqual([
     { type: 'context', elements: [{ type: 'mrkdwn', text: '📨 from 💥 <https://s/1|nova> → a &lt; b &amp; `c`' }] },
   ])
+})
+
+const SID = '472d35be-061a-43d8-bd50-eba33b094694'
+
+test('a recipient whose thread is not one the gateway can address gets its line in the thread it reports to, linked there', async () => {
+  const parent = mk('sn-p', 'snparent', { threadId: '1567260167517503609', threadUrl: undefined })
+  mk('sn-a', 'snalpha')
+  mk('sn-b', 'snbeta', { threadId: SID, threadUrl: undefined, parentId: parent.sessionId })
+  const saved = gateway.getThreadUrl
+  ;(gateway as any).getThreadUrl = async (id: string) => `https://x/${id}`
+  try {
+    await executeTool('send_to_thread', { target: 'snbeta', type: 'result', text: 'body', summary: 'PR up' }, 'sn-a')
+    expect(posts[0].channel).toBe('1567260167517503609')
+    expect(posts.map(p => p.channel)).not.toContain(SID)
+    expect(posts[1].text).toContain('(<https://x/1567260167517503609>)')
+    expect(delivered).toHaveLength(1)
+  } finally { (gateway as any).getThreadUrl = saved }
+})
+
+test('a recipient with no addressable thread and no parent is still delivered to; nothing is posted to its thread id', async () => {
+  mk('sn-a', 'snalpha')
+  mk('sn-b', 'snbeta', { threadId: SID, threadUrl: undefined, parentId: null })
+  const res = await executeTool('send_to_thread', { target: 'snbeta', type: 'result', text: 'body', summary: 'PR up' }, 'sn-a')
+  expect(res.isError).toBeFalsy()
+  expect(posts.map(p => p.channel)).not.toContain(SID)
+  expect(delivered).toHaveLength(1)
 })

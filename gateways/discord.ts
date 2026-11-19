@@ -118,6 +118,11 @@ export function discordSubtext(text: string): string {
   return text.split('\n').map(l => `-# ${l}`).join('\n')
 }
 
+/** A Discord channel or thread id is a snowflake. */
+export function isDiscordThreadId(id: string): boolean {
+  return /^\d{17,20}$/.test(id)
+}
+
 export class DiscordGateway implements ChatGateway {
   readonly platform = 'discord' as const
   readonly canThreadInDM = false
@@ -413,6 +418,10 @@ export class DiscordGateway implements ChatGateway {
     }
   }
 
+  isThreadId(id: string): boolean {
+    return isDiscordThreadId(id)
+  }
+
   async fetchChannel(id: string): Promise<ChannelInfo> {
     let ch = await this.client.channels.fetch(id)
     // A cached DM can lack its recipient; the reply allowlist keys on it, so refetch rather than reject.
@@ -431,6 +440,7 @@ export class DiscordGateway implements ChatGateway {
   }
 
   async threadExists(threadId: string): Promise<boolean> {
+    if (!this.isThreadId(threadId)) return false
     try {
       await this.fetchChannel(threadId)
       return true

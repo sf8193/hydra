@@ -173,3 +173,11 @@ if (!explicit) {
   process.on('exit', () => { killPrivateTmux(dir); try { rmSync(dir, { recursive: true, force: true }) } catch {} })
   sweepStaleTestDirs(tmpdir(), Date.now(), 24 * 60 * 60 * 1000)
 }
+
+// Fixtures name threads 'thread-1' or '1'; the real shapes are tested where they are the point (isDiscordThreadId, isSlackThreadId).
+// What the guards exist to refuse is a session id or a name where a thread id belongs, so a uuid stays refused here too.
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const fixtureThreadId = (id: string): boolean => typeof id === 'string' && id !== '' && !UUID.test(id)
+const [{ DiscordGateway }, { SlackGateway }] = await Promise.all([import('./gateways/discord.js'), import('./gateways/slack.js')])
+DiscordGateway.prototype.isThreadId = fixtureThreadId
+SlackGateway.prototype.isThreadId = fixtureThreadId

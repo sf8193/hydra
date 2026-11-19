@@ -91,6 +91,8 @@ export function emojiOfName(name: string): string {
 
 export function refreshSessionVisual(threadId: string, opts?: { state?: AnchorState, badge?: string }): void {
   if (!gateway.updateSessionVisual) return
+  // A thread the gateway cannot address has no anchor to repaint; it is named once at boot (reportUnaddressableThreads), never retried.
+  if (!gateway.isThreadId(threadId)) return
   const sessionId = registry.getByThread(threadId)
   if (!sessionId) return
   const info = registry.get(sessionId)
