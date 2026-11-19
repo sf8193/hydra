@@ -503,6 +503,8 @@ export type HydraConfig = {
   gateways: Gateways
   /** Every Slack app, by id (no prototype: look one up with Object.hasOwn). */
   slackApps: Record<string, SlackApp>
+  /** `[slack] line_emoji`: what stands for Slack in the lines a session's thread shows about its Slack traffic. Absent: `DEFAULT_LINE_EMOJI`. A custom emoji exists in one Discord server only: the line falls back when the gateway cannot render it. */
+  slackLineEmoji?: string
   people: Record<string, Person>
   specialists: Record<string, Specialist>
   /** Per-place options, keyed by `placeKey`: read through `optionsOf` / `optionsAt`, which put a specific entry before a wildcard one. */

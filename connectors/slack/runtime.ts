@@ -22,6 +22,8 @@ import { isRestricted } from '../../daemon/policy-record.js'
 import { isRestrictedSession, isWriteConfinedSession } from '../../daemon/tool-surface.js'
 import { MAIN, currentId, isSessionThread, slackSpecialistsOf } from '../../routing/route.js'
 import { chunk } from '../../daemon/util.js'
+import { resolveLineEmoji, postedLine } from './lines.js'
+import { routeThreadId } from '../../daemon/thread-route.js'
 import { DEFAULT_SLACK_APP, coversAny, homePlaceOf, isChannelName, isRouter, routerOf, placeKey, placeOf, placesAnsweredBy, samePlace, slackConfigured, type Place, type HydraConfig, type SlackApp } from '../../config/types.js'
 import { speaksAsOf, noSuchApp } from '../../config/pins.js'
 import { notServedBy } from '../../routing/route.js'
@@ -168,6 +170,7 @@ export function getConversationTable(): ConversationTable {
     apps: () => hydraConfig().slackApps,
     alert,
     hosted: threadId => !!registry.getByThread(threadId),
+    line: (threadId, make) => showLine(threadId, make),
     speaksIn: threadId => { const id = registry.getByThread(threadId); return isPlainSession(id, id ? registry.get(id) : undefined) },
     deliver: async (target, message, idempotencyKey) => {
       const t = targetFor(target.to, target.conversation)
@@ -186,6 +189,16 @@ export function getConversationTable(): ConversationTable {
       return { ok: false, error: r.reason, exit: r.exit, ...(r.permanent && { permanent: true }), ...(r.malformed && { malformed: true }) }
     },
   })
+}
+
+/**
+ * A line in a session's own thread about its Slack traffic (lines.ts): subtext, no link preview, never into Slack. The emoji is picked here, where the
+ * gateway is known; a line that cannot be posted is logged and dropped, since it is a notice and never the delivery or the reply it describes.
+ */
+export function showLine(threadId: string, make: (emoji: string) => string): void {
+  if (!gateway.isThreadId(threadId)) return
+  const line = make(resolveLineEmoji(hydraConfig().slackLineEmoji, gateway))
+  gateway.send(threadId, line, { subtext: true, unfurl: false }).catch(err => log(`daemon: slack connector: line for thread ${threadId} not posted: ${errText(err)}\n`))
 }
 
 /** A per-conversation specialist gives the conversation its own session (targets.ts counts `max_sessions`); any other is one target. */
@@ -730,7 +743,13 @@ export async function replyInConversation(callerSessionId: string | undefined, c
     if (!(err instanceof NotInChannel) || (me !== MAIN && h.specialists[me ?? '']?.restricted)) throw err
     return toOperatorDm(app, id, err.message, text, stillMine, `From ${me === MAIN ? 'main' : me && isSessionThread(me) ? sessionNameIn(me) ?? `the session in thread ${me}` : me ?? 'a session'}`)
   }
-  if (posted) getConversationTable().touch(c.channel, c.threadTs, app)
+  if (posted) {
+    getConversationTable().touch(c.channel, c.threadTs, app)
+    // 📤 in the replier's own thread, where 📨 is shown: a conversation bound to a plain session's own thread (a specialist's conversation gets neither).
+    const own = plain && bound && isSessionThread(bound) && caller ? routeThreadId(caller) : undefined
+    const link = slackConversationLink(id)
+    if (own) showLine(own, emoji => postedLine(emoji, link, text))
+  }
   const said = `posted ${posted} message${posted === 1 ? '' : 's'} to ${id}${how}`
   return opened ? (unbound ? `${said}; its thread is not bound to ${me}: ${unbound}, so replies in it go to whoever the rules name here` : `${said}; replies in it come back to ${me}`) : said
 }

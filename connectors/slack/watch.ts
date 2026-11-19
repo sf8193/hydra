@@ -18,6 +18,7 @@ export type RouteTarget = { to: string; conversation?: string }
 import { runGuard, type GuardInput, type GuardVerdict } from '../../routing/guard.js'
 import type { Guard } from '../../config/types.js'
 import { spelledBare } from '../../shared/target-kind.js'
+import { receivedLine, type LinePoster } from './lines.js'
 
 /**
  * Slack conversations: the Slack connector's side of routing (routing/route.ts).
@@ -220,6 +221,8 @@ export type ConversationDeps = {
   hosted?: (threadId: string) => boolean
   /** Whether the session in this thread may speak in a conversation bound to it (a plain session). Absent, or no session there: it only listens. */
   speaksIn?: (threadId: string) => boolean
+  /** Shows a line in a session's own thread (connectors/slack/lines.ts). Absent: no lines. Given the thread of a session that hosts the conversation. */
+  line?: LinePoster
 }
 
 /** `refused`: `reachable_by` does not admit the sender. `unrouted`: a mention or DM no specialist hears. */
@@ -1870,16 +1873,33 @@ export class ConversationTable {
         // Every landed delivery names its target, whoever it is (main, a specialist, a thread).
         this.deps.log(`daemon: slack connector: delivered ${key} (${first}..${last}) to ${spelledBare(target.to)}${result.duplicate ? ' (already delivered)' : ''}\n`)
         this.ack(entry, batch, cfg)
-        if (!result.duplicate) this.recordRoutes(entry, batch, target.to)   // a duplicate is a replay of a delivery whose event was written when it first landed
+        if (!result.duplicate) this.recordRoutes(entry, batch, target.to, cfg)   // a duplicate is a replay of a delivery whose event was written when it first landed
         if (!entry.ambient && !result.duplicate) entry.unansweredAt = this.deps.now()
       }
       this.settle(key, entry, batch.map(i => i.ts))
     }
   }
 
-  /** Where each message went, written when its delivery settles (after the guard may have redirected it), once per message: a replay of one already delivered does not reach here. */
-  private recordRoutes(entry: ConversationEntry, batch: Item[], to: string): void {
-    for (const i of batch) if (i.routed) recordEvent({ kind: 'route', app: appOfEntry(entry), conversation: conversationId(entry), by: addressOf(i.user), tagged: i.routed.tagged, via: i.routed.via, to })
+  /**
+   * Where each message went, written when its delivery settles (after the guard may have redirected it), once per message: a replay of one already delivered does not reach here.
+   * The same point shows the session's own thread a line for each tag by someone in [people], so the line and the event cannot disagree about what was delivered.
+   */
+  private recordRoutes(entry: ConversationEntry, batch: Item[], to: string, cfg: ConversationConfig): void {
+    for (const i of batch) {
+      if (!i.routed) continue
+      recordEvent({ kind: 'route', app: appOfEntry(entry), conversation: conversationId(entry), by: addressOf(i.user), tagged: i.routed.tagged, via: i.routed.via, to })
+      this.showReceived(entry, i, to, cfg)
+    }
+  }
+
+  /** 📨 in the thread of the session a message was delivered to: only a tag (untagged chatter would bury the thread), only by someone in [people] (a stranger's tag is the router's to refuse, not the session's to be shown). */
+  private showReceived(entry: ConversationEntry, i: Item, to: string, cfg: ConversationConfig): void {
+    if (!i.routed?.tagged || !i.user || !isSessionThread(to)) return
+    const person = Object.values(cfg.hydra.people).find(p => p.addresses.includes(`slack:${i.user}`))
+    if (!person) return
+    const inThread = entry.threadTs !== TOP_LEVEL && entry.threadTs !== i.ts
+    const link = cfg.workspaceUrl ? archiveUrl(cfg.workspaceUrl, entry.channel, i.ts, inThread ? entry.threadTs : undefined) : undefined
+    this.deps.line?.(to, emoji => receivedLine(emoji, person.name ?? person.id, link, i.text))
   }
 
   /** The sender sees the message was picked up: the place's `ack` reaction on each delivered message. Best effort, never retried. */

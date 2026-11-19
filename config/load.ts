@@ -16,6 +16,7 @@ import { CAN_ONLY_WRITE_TO_VALUES, KNOWN_BUILTIN_TOOLS, browserDownloadDir, brow
 import { noSuchApp, pinnersOf, speaksAsOf, whyNotServed } from './pins.js'
 import { SLACK_APP_DEFAULTS } from '../connectors/slack/app.js'
 import { emojiProblem, reactionNameProblem } from '../shared/emoji.js'
+import { lineEmojiProblem } from '../shared/slack-lines.js'
 import { invalidSpecialistName } from '../shared/specialist-name.js'
 import { bareOf, readTarget, spelled } from '../shared/target-kind.js'
 import { readValue, spelledApp, spelledPerson, spelledRole, whoSpelled } from '../shared/value-kind.js'
@@ -363,7 +364,11 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     return { id, botTokenEnv, ...(socketTokenEnv && { socketTokenEnv }), ...(operatorTokenEnv && { operatorTokenEnv }), displayName, description }
   }
   const slackTable = table(doc.slack, 'slack') ?? {}
-  unknownKeys(slackTable, ['apps'], 'slack')
+  unknownKeys(slackTable, ['apps', 'line_emoji'], 'slack')
+  const lineEmojiRaw = str(slackTable, 'line_emoji', 'slack')
+  const lineEmojiIssue = lineEmojiRaw === undefined ? undefined : lineEmojiProblem(lineEmojiRaw)
+  if (lineEmojiIssue) error('slack.line_emoji', lineEmojiIssue)
+  const slackLineEmoji = lineEmojiIssue ? undefined : lineEmojiRaw
   for (const [id, raw] of Object.entries(table(slackTable.apps, 'slack.apps') ?? {})) {
     const path = `slack.apps.${id}`
     if (!SLACK_APP_ID_RE.test(id)) { error(path, `"${id}" is not a valid app name: lowercase letters, digits, "-" and "_", starting with a letter, at most 35 characters`); continue }
@@ -1293,7 +1298,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   }
 
   if (errors.length) return { ok: false, errors, warnings }
-  return { ok: true, config: { ...(operator && { operator }), ...(main && { main }), connectors, gateways, slackApps, people, specialists, places, schedules, rules, ...(Object.keys(mcpServers).length && { mcpServers }), ...(offLimits.length && { offLimits }), ...(allowUnprovenMacos && { allowUnprovenMacos }), ...(allowThreadDestroy && { allowThreadDestroy }), ...(guard && { guard }), ...(vitals && { vitals }), ...(events && { events }) }, warnings }
+  return { ok: true, config: { ...(operator && { operator }), ...(main && { main }), connectors, gateways, slackApps, ...(slackLineEmoji && { slackLineEmoji }), people, specialists, places, schedules, rules, ...(Object.keys(mcpServers).length && { mcpServers }), ...(offLimits.length && { offLimits }), ...(allowUnprovenMacos && { allowUnprovenMacos }), ...(allowThreadDestroy && { allowThreadDestroy }), ...(guard && { guard }), ...(vitals && { vitals }), ...(events && { events }) }, warnings }
 }
 
 /** The program a `sh -c` command runs: past any leading VAR=value, with one level of quotes removed. */
