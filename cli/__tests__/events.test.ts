@@ -43,6 +43,34 @@ describe('hydra events', () => {
     expect(readEvents(dir, { conversation: A }).map(e => e.kind)).toEqual(['route', 'bind'])
     expect(readEvents(dir, { conversation: A, kind: 'bind' })).toHaveLength(1)
   })
+  test('--limit keeps the newest N, still oldest first, after the other filters', () => {
+    expect(readEvents(dir, { limit: 2 }).map(e => e.kind)).toEqual(['route', 'unbind'])
+    expect(readEvents(dir, { limit: 99 })).toHaveLength(4)
+    expect(readEvents(dir, { kind: 'route', limit: 1 }).map(e => e.conversation)).toEqual([B])
+    expect(readEvents(dir, { conversation: A, limit: 1 }).map(e => e.kind)).toEqual(['bind'])
+    expect(readEvents(dir, { sinceMs: NOW - 40 * HOUR, limit: 2 }).map(e => e.kind)).toEqual(['route', 'unbind'])
+    expect(readEvents(dir, { sinceMs: NOW - 40 * HOUR, limit: 3 }).map(e => e.kind)).toEqual(['bind', 'route', 'unbind'])
+    expect(out(['--limit', '1'], true).lines.map(l => JSON.parse(l).kind)).toEqual(['unbind'])
+    expect(out(['--limit', '2']).lines).toHaveLength(2)
+  })
+  test('--limit must be a positive whole number', () => {
+    const real = console.error
+    const errs: string[] = []
+    console.error = (s: string) => { errs.push(s) }
+    try {
+      for (const bad of ['0', '-1', '2.5', 'ten', '']) expect(eventsCommand(['--limit', bad], dir, false)).toBe(1)
+      expect(eventsCommand(['--limit'], dir, false)).toBe(1)
+    } finally { console.error = real }
+    expect(errs.every(e => e.includes('--limit'))).toBe(true)
+  })
+  test('--by keeps exactly the events that actor made', () => {
+    expect(readEvents(dir, { by: 'slack-router' }).map(e => e.kind)).toEqual(['bind'])
+    expect(readEvents(dir, { by: 'slack:U2' }).map(e => e.kind)).toEqual(['route'])
+    expect(readEvents(dir, { by: 'operator' }).map(e => e.kind)).toEqual(['unbind'])
+    expect(readEvents(dir, { by: 'slack' })).toEqual([])
+    expect(readEvents(dir, { by: 'slack-router', kind: 'route' })).toEqual([])
+    expect(out(['--by', 'slack:U1'], true).lines.map(l => JSON.parse(l).via)).toEqual(['router'])
+  })
   test('--json prints one event per line', () => {
     const { code, lines } = out(['--kind', 'bind'], true)
     expect(code).toBe(0)

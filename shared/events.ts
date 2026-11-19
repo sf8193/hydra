@@ -49,13 +49,15 @@ export const dayFile = (stateDir: string, ms: number): string => join(eventsDir(
 /** The day a file name stands for, or undefined for a file that is not a day file. */
 export const dayOfFile = (name: string): string | undefined => DAY_FILE.exec(name)?.[1]
 
-export type EventQuery = { kind?: EventKind; sinceMs?: number; conversation?: string }
+/** `by` is matched exactly against the line's `by` (a route's sender address, or a bind's `operator`, `main`, session or specialist). `limit` keeps the newest N matches; the reader applies it, `matches` does not. */
+export type EventQuery = { kind?: EventKind; sinceMs?: number; conversation?: string; by?: string; limit?: number }
 
 /** Whether `e` answers the query. */
 export const matches = (e: RecordedEvent, q: EventQuery): boolean =>
   (!q.kind || e.kind === q.kind)
   && (q.sinceMs === undefined || Date.parse(e.ts) >= q.sinceMs)
   && (!q.conversation || e.conversation === q.conversation)
+  && (!q.by || e.by === q.by)
 
 /** Parses one line; a line that is not an event (a torn write, a stranger's edit) is skipped, not fatal. */
 export function parseEvent(line: string): RecordedEvent | undefined {

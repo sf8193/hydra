@@ -133,10 +133,11 @@ Routing (hydra.toml):
                                        (slack:<channel id>:<thread ts>; slack:<app>:… through an app other than default).
                                        To thread:<id>, the app posts in the Slack thread which session took it, its link and the reason
   hydra conversations unbind <conversation>
-  hydra [--state-dir <dir>] events [--kind route|bind|unbind] [--since <dur>] [--conversation <id>] [--json]
+  hydra [--state-dir <dir>] events [--kind route|bind|unbind] [--since <dur>] [--conversation <id>] [--by <actor>] [--limit <n>] [--json]
                                        What the daemon decided, from its event stream (<state dir>/events/<day>.jsonl): routes (what took
                                        a message, or that a tag found no one), binds and unbinds with their reasons. Never message text.
-                                       --since takes 90m, 12h or 7d. --json prints one JSON event per line
+                                       --since takes 90m, 12h or 7d. --by keeps the events one actor made.
+                                       --limit keeps the newest n, still oldest first. --json prints one JSON event per line
 
 Platform: slack | discord (required for lifecycle commands)
 
