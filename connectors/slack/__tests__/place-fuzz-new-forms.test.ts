@@ -188,17 +188,17 @@ describe('differential fuzz in the new forms: typed Place against its parent, af
           counts.connectorChecks++
           // a bot posts into its own DM (D1) and into channels; a DM with a person is never one it sends to
           if (channel === 'D2' || channel === 'D3') continue
-          expect(linkPreviewsOff('slack', [channel], { config: cfg, slackName: directory.nameOf, app: app ?? appId }), `previews ${channel} via ${app}`)
+          expect(linkPreviewsOff('slack', [channel], { config: cfg, slackName: directory.nameOf, app: app ?? appId }, ''), `previews ${channel} via ${app}`)
             .toBe(before.linkPreviewsOff('slack', [channel], lowered.places, directory.nameOf))
           counts.previews++
         }
         // the gateway's own bot names no [slack.apps] app: its DM is only ever slack:app-dm:*
         const gatewayDm = lowerFor(cfg, { at: [mustParsePlace('slack:app-dm:*')], old: ['slack:dm'], addressed: true })
-        expect(linkPreviewsOff('slack', ['D1'], { config: cfg }), 'gateway DM').toBe(before.linkPreviewsOff('slack', ['D1'], gatewayDm.places, () => undefined))
+        expect(linkPreviewsOff('slack', ['D1'], { config: cfg }, ''), 'gateway DM').toBe(before.linkPreviewsOff('slack', ['D1'], gatewayDm.places, () => undefined))
         for (const ids of [['dm'], ['100'], ['100', '555'], ['200']]) {
           const at = ids.map(id => id === 'dm' ? mustParsePlace('discord:app-dm:*') : mustParsePlace(`discord:${id}`))
           const low = lowerFor(cfg, { at, old: ids.map(id => id === 'dm' ? 'discord:dm' : `discord:${id}`), addressed: true })
-          expect(linkPreviewsOff('discord', ids, { config: cfg })).toBe(before.linkPreviewsOff('discord', ids, low.places, () => undefined))
+          expect(linkPreviewsOff('discord', ids, { config: cfg }, '')).toBe(before.linkPreviewsOff('discord', ids, low.places, () => undefined))
           counts.previews++
         }
         // what a config names, as the old code read it once each rule is lowered for this app's view

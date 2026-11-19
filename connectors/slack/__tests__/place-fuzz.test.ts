@@ -175,14 +175,14 @@ describe('differential fuzz: typed Place against its parent', () => {
           counts.settings++
           for (const pick_ of [undefined, app]) expect(namedPlace(newView, now, pick_)).toBe(before.namedPlace(oldView, old, pick_))
           for (const platform of ['slack'] as const) {
-            expect(linkPreviewsOff(platform, [channel], { config: newCfg, slackName: directory.nameOf, app: appId }), `previews ${channel}`)
+            expect(linkPreviewsOff(platform, [channel], { config: newCfg, slackName: directory.nameOf, app: appId }, ''), `previews ${channel}`)
               .toBe(before.linkPreviewsOff(platform, [channel], oldCfg.places, directory.nameOf))
             counts.previews++
           }
         }
         for (const platform of ['discord'] as const) {
           for (const ids of [['dm'], ['100'], ['100', '555'], ['200']]) {
-            expect(linkPreviewsOff(platform, ids, { config: newCfg })).toBe(before.linkPreviewsOff(platform, ids, oldCfg.places, () => undefined))
+            expect(linkPreviewsOff(platform, ids, { config: newCfg }, '')).toBe(before.linkPreviewsOff(platform, ids, oldCfg.places, () => undefined))
             counts.previews++
           }
         }

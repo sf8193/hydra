@@ -38,14 +38,14 @@ export function placesFor(platform: ChatPlatform, ids: readonly string[], slackN
 
 /**
  * True when this post goes out without previews: a place any of these channels goes by sets `link_previews = false`, or one sets
- * `link_previews = "single"` and `text` carries two or more links the platform would preview (`linksPreviewed`). Anything not declared keeps previews on.
+ * `link_previews = "single"` and `text` (what the post shows) carries two or more links the platform would preview (`linksPreviewed`). Anything not declared keeps previews on.
  */
-export function linkPreviewsOff(platform: ChatPlatform, ids: readonly string[], from: PreviewSources = {}, text?: string): boolean {
+export function linkPreviewsOff(platform: ChatPlatform, ids: readonly string[], from: PreviewSources, text: string): boolean {
   const places = (from.config ?? source.config())?.places
   if (!places) return false
   const said = placesFor(platform, ids, from.slackName ?? source.slackName, from.app).map(p => optionsOf(places, p)?.linkPreviews)
   if (said.includes(false)) return true
-  return said.includes('single') && text !== undefined && linksPreviewed(platform, text) >= 2
+  return said.includes('single') && linksPreviewed(platform, text) >= 2
 }
 
 /**

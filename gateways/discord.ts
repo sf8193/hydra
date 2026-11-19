@@ -323,7 +323,8 @@ export class DiscordGateway implements ChatGateway {
     if (!('send' in ch)) throw new Error('channel is not sendable')
 
     // A message that is only attachments (a reply that was only a table) carries no content: Discord takes files alone.
-    const payload: Record<string, unknown> = text || !opts?.files?.length ? { content: opts?.subtext ? discordSubtext(text) : text } : {}
+    const content = opts?.subtext ? discordSubtext(text) : text
+    const payload: Record<string, unknown> = text || !opts?.files?.length ? { content } : {}
     if (opts?.files?.length) {
       for (const f of opts.files) {
         const st = statSync(f)
@@ -355,7 +356,7 @@ export class DiscordGateway implements ChatGateway {
       payload.components = [row]
     }
 
-    const sent = await ch.send(this.previewPolicy(payload, this.previewIds(ch)))
+    const sent = await ch.send(this.previewPolicy(payload, this.previewIds(ch), content))
     this.noteSent(sent.id)
     return { id: sent.id, channelId: sent.channelId }
   }
@@ -485,7 +486,7 @@ export class DiscordGateway implements ChatGateway {
       const sent = await thread.send(this.previewPolicy({
         content: opts.text,
         ...(opts?.files?.length ? { files: opts.files } : {}),
-      }, [thread.id, ...this.previewIds(ch)]))
+      }, [thread.id, ...this.previewIds(ch)], opts.text))
       this.noteSent(sent.id)
       messageId = sent.id
     }
@@ -549,7 +550,7 @@ export class DiscordGateway implements ChatGateway {
       )
       payload.components = [row]
     }
-    await user.send(this.previewPolicy(payload, ['dm']))
+    await user.send(this.previewPolicy(payload, ['dm'], text))
   }
 
   async isMentioned(msg: InboundMessage, extraPatterns?: string[]): Promise<boolean> {
@@ -771,13 +772,13 @@ export class DiscordGateway implements ChatGateway {
               return btn
             }),
           )
-          await interaction.update(this.previewPolicy({ content: text, components: [row] }, ids)).catch(() => {})
+          await interaction.update(this.previewPolicy({ content: text, components: [row] }, ids, text)).catch(() => {})
         } else {
-          await interaction.reply(this.previewPolicy({ content: text, ephemeral: true }, ids)).catch(() => {})
+          await interaction.reply(this.previewPolicy({ content: text, ephemeral: true }, ids, text)).catch(() => {})
         }
       },
       clearButtons: async (text) => {
-        await interaction.update(this.previewPolicy({ content: text, components: [] }, ids)).catch(() => {})
+        await interaction.update(this.previewPolicy({ content: text, components: [] }, ids, text)).catch(() => {})
       },
     })
   }
@@ -792,8 +793,8 @@ export class DiscordGateway implements ChatGateway {
    * `link_previews = false` gets the suppress-embeds flag, and so does a post with 2+ links to one that sets `"single"`. `unfurl: false`
    * from a caller is still not read here, as before.
    */
-  private previewPolicy<T extends Record<string, unknown>>(payload: T, ids: string[]): T {
-    return linkPreviewsOff('discord', ids, {}, typeof payload.content === 'string' ? payload.content : '') ? { ...payload, flags: MessageFlags.SuppressEmbeds } : payload
+  private previewPolicy<T extends Record<string, unknown>>(payload: T, ids: string[], text: string): T {
+    return linkPreviewsOff('discord', ids, {}, text) ? { ...payload, flags: MessageFlags.SuppressEmbeds } : payload
   }
 
   private async fetchTextChannel(id: string) {

@@ -56,7 +56,7 @@ describe('link_previews', () => {
   test('a restricted specialist anyone can talk to still warns where previews are "single" (one preview still shows)', () => {
     expect(ok(specialist('true', '"role:anyone"', '[places."slack:#ops"]\nlink_previews = "single"\n')).warnings.filter(x => x.includes('link_previews'))).toHaveLength(1)
   })
-  test('is a boolean', () => {
+  test('is true, false or "single": anything else is refused', () => {
     expect(errors(`[places."slack:#ops"]\nlink_previews = "no"\n`)).toEqual([expect.stringContaining('places."slack:#ops".link_previews')])
   })
 })
