@@ -871,7 +871,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   const replacing = opts?.existingThreadId ? registry.getByThread(opts.existingThreadId) : undefined
   const tmuxName = opts?.handedOffFrom ?? (opts?.name
     ? registry.claimSessionName(opts.name, replacing, s => occupancy(s) === 'dead')
-    : registry.pickSessionName(opts?.reuseName && replacing ? { name: opts.reuseName, replacing } : undefined))
+    : registry.pickSessionName(opts?.reuseName && replacing ? { name: opts.reuseName, replacing } : undefined, threadRegistry.lastUsedByName()))
   // NOTE: the freshly-picked name is intentionally NOT held in registry.reservedNames.
   // The pick→registry.set window is short (recoverOne resolves slow worktree ops up front,
   // so nothing lengthy runs here) and shorter than the recovery wave's STAGGER, so same-wave

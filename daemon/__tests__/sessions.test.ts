@@ -2,7 +2,7 @@ import { describe, test, expect } from 'bun:test'
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { STATE_DIR } from '../config.js'
-import { SessionRegistry, ThreadRegistry, sessionEmoji, ensureSessionType, type SessionInfo, type ThreadMetadata } from '../sessions.js'
+import { SessionRegistry, ThreadRegistry, SESSION_NAMES, sessionEmoji, ensureSessionType, type SessionInfo, type ThreadMetadata } from '../sessions.js'
 import { _setTmuxForTesting } from '../tmux.js'
 
 // Suppress stderr
@@ -142,6 +142,57 @@ describe('SessionRegistry.pickSessionName reuse', () => {
 
     reg.set('sid-thief', makeInfo({ sessionId: 'sid-thief', tmuxName: 'reuse-me' }))
     expect(reg.pickSessionName(reuse)).not.toBe('reuse-me')
+  })
+})
+
+describe('a new session gets the least recently used name', () => {
+  const entry = (tmuxName: string, startedAt: number, endedAt?: number) => ({ sessionId: `sid-${tmuxName}-${startedAt}`, tmuxName, originType: 'spawn' as const, startedAt, messageCount: 0, ...(endedAt !== undefined && { endedAt }) })
+
+  test('lastUsedByName: the latest end of a name across threads; an entry with no end counts from its start', () => {
+    const tr = new ThreadRegistry()
+    tr.threads.set('t1', makeThread({ threadId: 't1', sessionHistory: [entry('a', 100, 500), entry('b', 200), entry('a', 50, 300)] }))
+    tr.threads.set('t2', makeThread({ threadId: 't2', sessionHistory: [entry('a', 350, 400), entry('c', 10, 20)] }))
+    expect([...tr.lastUsedByName()].sort()).toEqual([['a', 500], ['b', 200], ['c', 20]])
+  })
+
+  test('a name never used comes first, in catalog order, whatever the others\' last use', () => {
+    const reg = new SessionRegistry()
+    const used = new Map(SESSION_NAMES.slice(0, 3).map((n, i) => [n, 1000 + i]))
+    expect(reg.pickSessionName(undefined, used)).toBe(SESSION_NAMES[3])
+    expect(reg.pickSessionName(undefined, new Map())).toBe(SESSION_NAMES[0])
+  })
+
+  test('with every name used, the one whose last session ended longest ago', () => {
+    const reg = new SessionRegistry()
+    const last = new Map(SESSION_NAMES.map((n, i) => [n, 10_000 + i * 10]))
+    last.set(SESSION_NAMES[7], 5)
+    expect(reg.pickSessionName(undefined, last)).toBe(SESSION_NAMES[7])
+    last.set(SESSION_NAMES[7], 99_999)
+    expect(reg.pickSessionName(undefined, last)).toBe(SESSION_NAMES[0])
+  })
+
+  test('a name a live session holds is skipped, however long ago it was last used', () => {
+    const reg = new SessionRegistry()
+    const last = new Map(SESSION_NAMES.map((n, i) => [n, 10_000 + i]))
+    last.set(SESSION_NAMES[4], 1)
+    reg.set('sid-live', makeInfo({ sessionId: 'sid-live', tmuxName: SESSION_NAMES[4] }))
+    expect(reg.pickSessionName(undefined, last)).toBe(SESSION_NAMES[0])
+  })
+
+  test('a recovered session still gets its old name back, however recently it was used', () => {
+    const reg = new SessionRegistry()
+    reg.set('sid-dead', makeInfo({ sessionId: 'sid-dead', tmuxName: 'reuse-me', deadAt: 1 }))
+    expect(reg.pickSessionName({ name: 'reuse-me', replacing: 'sid-dead' }, new Map([['reuse-me', Date.now()]]))).toBe('reuse-me')
+  })
+
+  test('only when every catalog name is held live is the name session-<hex>', () => {
+    const reg = new SessionRegistry()
+    SESSION_NAMES.forEach((n, i) => reg.set(`sid-${i}`, makeInfo({ sessionId: `sid-${i}`, tmuxName: n, threadId: `th-${i}` })))
+    const name = reg.pickSessionName(undefined, new Map())
+    expect(name).toMatch(/^session-[0-9a-f]{6}$/)
+    expect(SESSION_NAMES).not.toContain(name)
+    reg.delete('sid-5')
+    expect(reg.pickSessionName(undefined, new Map())).toBe(SESSION_NAMES[5])
   })
 })
 
