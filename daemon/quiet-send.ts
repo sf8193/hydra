@@ -119,3 +119,21 @@ export async function quietSend(
   ])
   return { delivered, posted, echoed, headline: oneLine(o.text, o.summary, o.from.name) }
 }
+
+/**
+ * The link a relay line gives a party: the thread URL its record holds, else one looked up now. A line is a nicety and never blocks delivery, so
+ * no link leaves the name plain, and says why in the log: the lookup failed, or the thread is not a chat thread at all (a record whose threadId is
+ * not an id the platform knows has nothing to link to).
+ */
+export async function partyLink(
+  s: { tmuxName: string; threadId: string; threadUrl?: string },
+  lookup: (threadId: string) => Promise<string>,
+  log: (msg: string) => void,
+): Promise<string | undefined> {
+  if (s.threadUrl) return s.threadUrl
+  let url = ''
+  let failure = 'the platform has no such thread'
+  try { url = await lookup(s.threadId) } catch (err) { failure = err instanceof Error ? err.message : String(err) }
+  if (!url) log(`quiet-send: no link for ${s.tmuxName} (thread ${s.threadId}): ${failure}; its name is plain in the line`)
+  return url || undefined
+}

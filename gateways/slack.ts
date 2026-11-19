@@ -509,8 +509,8 @@ export class SlackGateway implements ChatGateway {
       }
     }
 
-    // The caller asked, or the place says so (`[places]` `link_previews = false`).
-    Object.assign(payload, unfurlFields(opts?.unfurl === false))
+    // The caller asked, the line is hydra's own subtext (a link in it only previews an old message: noise), or the place says so (`[places]` `link_previews = false`).
+    Object.assign(payload, unfurlFields(opts?.unfurl === false || !!opts?.subtext))
 
     const result = await this.throttledSend(() => this.postMessage(payload))
     const sentId = result.ts!

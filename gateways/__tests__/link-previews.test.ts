@@ -83,6 +83,30 @@ describe('Slack', () => {
   })
 })
 
+describe('Slack: hydra\'s own subtext lines', () => {
+  function slack() {
+    const calls: any[] = []
+    const gw = Object.create(SlackGateway.prototype) as SlackGateway
+    ;(gw as any).app = { client: { chat: { postMessage: async (args: any) => { calls.push(args); return { ts: '1.1' } } } } }
+    ;(gw as any)._sendChain = Promise.resolve()
+    ;(gw as any)._lastSendAt = 0
+    ;(gw as any).noteSent = () => {}
+    return { gw, calls }
+  }
+  const permalink = 'https://acme.slack.com/archives/C0MAIN/p1700000000000100?thread_ts=1700000000.000100&cid=C0MAIN'
+  test('a relay line with a Slack permalink, in a place that says nothing about previews, is posted with unfurl_links and unfurl_media false', async () => {
+    const { gw, calls } = slack()
+    await gw.send('C0OTHER:1700.1', `📨 from ⚡ [nova](<${permalink}>) → hi`, { subtext: true })
+    expect([calls[0].unfurl_links, calls[0].unfurl_media]).toEqual([false, false])
+  })
+  test('a session reply (not subtext) keeps today\'s call: neither key', async () => {
+    const { gw, calls } = slack()
+    await gw.send('C0OTHER:1700.1', `see ${permalink}`)
+    expect(Object.keys(calls[0])).not.toContain('unfurl_links')
+    expect(Object.keys(calls[0])).not.toContain('unfurl_media')
+  })
+})
+
 describe('Discord', () => {
   function discord(channel: Record<string, unknown>) {
     const sent: any[] = []
