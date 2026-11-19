@@ -358,12 +358,28 @@ console.log('own=' + own + ' other=' + other)`
       Bun.spawnSync(['codesign', '-s', '-', '--force', app])
       return app
     }
+    // Each test below waits on a process LaunchServices starts, up to 10 s for one that must run, so the default 5 s could not hold it even when idle; the work itself is about a second.
+    const LS_TIMEOUT = 60_000
     const lsopen = join(dir, 'lsopen')
     const haveClang = !!Bun.which('clang')
     async function waitFor(path: string, ms: number): Promise<string | undefined> {
       for (const end = Date.now() + ms; Date.now() < end; await Bun.sleep(200)) if (existsSync(path)) { await Bun.sleep(200); return readFileSync(path, 'utf8') }
       return undefined
     }
+    /**
+     * How long a helper LaunchServices does start takes to run its script, after the launching call has returned (about 0.2 s idle; more when
+     * the machine is busy). A refused launch is shown by its status; the wait for a marker that must never appear is then 8 of these (1 to 10 s,
+     * the most a helper is given elsewhere), not a fixed count of seconds. Measured afresh for each wait, so it follows the load at that moment.
+     */
+    const startLatency = async (): Promise<number> => {
+      const n = `latency-${Date.now()}`
+      const app = makeApp(n)
+      await run(['/usr/bin/open', '-g', '-j', '-n', app], false)
+      const t0 = Date.now()
+      if (await waitFor(marker(n), 10_000) === undefined) throw new Error('an unsandboxed helper never ran: no latency to measure')
+      return Math.max(Date.now() - t0 - 200, 100)   // waitFor adds its 200 ms settle after the marker appears
+    }
+    const quietWindow = async () => Math.min(Math.max(8 * await startLatency(), 1_000), 10_000)
     beforeAll(() => {
       if (!haveClang) return
       writeFileSync(join(dir, 'lsopen.c'), `#include <CoreServices/CoreServices.h>\n#include <stdio.h>\nint main(int argc, char **argv) {\n  CFStringRef p = CFStringCreateWithCString(NULL, argv[1], kCFStringEncodingUTF8);\n  CFURLRef u = CFURLCreateWithFileSystemPath(NULL, p, kCFURLPOSIXPathStyle, true);\n  LSLaunchURLSpec spec = {0}; spec.appURL = u; spec.launchFlags = kLSLaunchDontSwitch | kLSLaunchNewInstance;\n  OSStatus s = LSOpenFromURLSpec(&spec, NULL);\n  printf("status=%d\\n", (int)s);\n  return 0;\n}\n`)
@@ -389,25 +405,27 @@ console.log('own=' + own + ' other=' + other)`
       expect(m).toContain('toml=[specialists')
       expect(m).toContain('sock=connected')
       expect(accepted).toBe(before + 1)
-    })
+    }, LS_TIMEOUT)
     test('under the profile `open -g -j -n` starts no helper that reads hydra.toml or reaches the socket', async () => {
+      const window = await quietWindow()
       const app = makeApp('open')
       const before = accepted
-      await run(['/usr/bin/open', '-g', '-j', '-n', app])
-      expect(await waitFor(marker('open'), 4_000)).toBeUndefined()
+      expect((await run(['/usr/bin/open', '-g', '-j', '-n', app])).code).not.toBe(0)   // LaunchServices refused the launch: said, not inferred from silence
+      expect(await waitFor(marker('open'), window)).toBeUndefined()
       expect(accepted).toBe(before)
       for (const pid of helperPids().filter(pid => Bun.spawnSync(['ps', '-o', 'command=', '-p', String(pid)]).stdout.toString().includes('/open.app/'))) expect(stateOf(pid)).toMatch(/^T/)   // a suspended spawn that never ran its script
-    })
+    }, LS_TIMEOUT)
     test.skipIf(!haveClang)('under the profile a direct LaunchServices call (LSOpenFromURLSpec) starts none either', async () => {
       const app = makeApp('direct')
       const control = makeApp('direct-control')
       await run([lsopen, control], false)
       expect(await waitFor(marker('direct-control'), 10_000)).toContain('sock=connected')   // the call works when not sandboxed
+      const window = await quietWindow()
       const before = accepted
-      await run([lsopen, app])
-      expect(await waitFor(marker('direct'), 4_000)).toBeUndefined()
+      expect((await run([lsopen, app])).out).toMatch(/status=-\d+/)   // the call returned a refusal status (not success, not a crash)
+      expect(await waitFor(marker('direct'), window)).toBeUndefined()
       expect(accepted).toBe(before)
-    })
+    }, LS_TIMEOUT)
   })
 
   describe('reading the environment of processes that are not its own', () => {
