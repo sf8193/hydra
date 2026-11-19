@@ -705,8 +705,9 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
 
     // `restricted`: its session runs in its folder, with only what it lists. Everything below refuses what would let a restricted session reach past its folder.
     const restricted = bool(t, 'restricted', path) ?? false
-    // Two engines named: said once. Not when the restricted refusal below already stands for the same specialist (it names the engine to leave).
-    if (engine !== undefined && aliased !== undefined && aliased !== engine && !(restricted && !engineLimitsAccess(engine))) error(at('model'), `"${model}" is a ${aliased} model, but engine = "${engine}": set engine = "${aliased}", or use a model for ${engine}`)
+    const keyed = t.can_only_write_to !== undefined   // asks to be write-confined (the value is checked below)
+    // Two engines named: said once. Not when the restricted or write-confined refusal below already stands for the same specialist (it names the engine to leave).
+    if (engine !== undefined && aliased !== undefined && aliased !== engine && !((restricted || keyed) && !engineLimitsAccess(engine))) error(at('model'), `"${model}" is a ${aliased} model, but engine = "${engine}": set engine = "${aliased}", or use a model for ${engine}`)
     const toolsRaw = strList(t, 'tools', path)
     const mcpServerNamesRaw = strList(t, 'mcp_servers', path)
     const sendsToRaw = strList(t, 'sends_to', path)
@@ -724,7 +725,6 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     }
     const cannotReadRaw = strList(t, 'cannot_read', path)
     const denyCommandsRaw = strList(t, 'deny_commands', path)
-    const keyed = t.can_only_write_to !== undefined
     if (restricted && keyed) error(`${path}.can_only_write_to`, 'a specialist is restricted or write-confined, never both: restricted = true already limits its writes and reads (and more); remove can_only_write_to, or set restricted = false')
     const confinesWrites = keyed && !restricted
     for (const k of ['cannot_read', 'deny_commands', 'browser_profile'] as const) {
@@ -766,7 +766,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       else handoffAtPct = v
     }
     const handoff = { ...(handoffAtPct !== undefined && { handoffAtPct }), ...(handoffProtocol !== undefined && { handoffProtocol }) }
-    if (confinesWrites && engine !== undefined && engine !== 'claude') error(`${path}.engine`, `${engine} can't run a write-confined specialist: only Claude Code's own sandbox does the confining; set engine = "claude", or remove can_only_write_to`)
+    // The engine actually used comes from thread history and `handoff <model>` can switch it, so launch checks it again (as it does a restricted one).
+    if (confinesWrites && runsOn !== undefined && runsOn !== 'omp' && !engineLimitsAccess(runsOn)) error(engine !== undefined ? at('engine') : at('model'), `${runsOn} can't run a write-confined specialist: only Claude Code's own sandbox does the confining; use claude (engine = "claude", or a Claude model), or remove can_only_write_to`)
     // A folder the layer would deny reading is no folder for the specialist: it could not read its own workdir.
     if (confinesWrites && workdirRaw !== undefined && isAbsolute(workdir)) {
       const inside = unreadableWorkdir(workdir, readDenyRoots(env, workdir, [], cannotRead), env.realpath)

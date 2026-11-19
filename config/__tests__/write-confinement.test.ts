@@ -61,8 +61,35 @@ describe('can_only_write_to', () => {
     ])
   })
 
-  test('only the claude engine can run it', () => {
-    expect(errorsOf(spec('can_only_write_to = "workdir"\nengine = "codex"'))).toEqual(['specialists.ops.engine: codex can\'t run a write-confined specialist: only Claude Code\'s own sandbox does the confining; set engine = "claude", or remove can_only_write_to'])
+  // The engine a specialist runs on is its `engine`, else the one its model names (a Codex alias, a `gpt-` id): the launch refuses a
+  // write-confined session on any engine but claude, so the load refuses what the launch always would, whichever way the engine is named.
+  const REFUSED = (engine: string, key: 'engine' | 'model') => [`specialists.ops.${key}: ${engine} can't run a write-confined specialist: only Claude Code's own sandbox does the confining; use claude (engine = "claude", or a Claude model), or remove can_only_write_to`]
+  test('only the claude engine can run it: a named engine, or a model that names one', () => {
+    expect(errorsOf(spec('can_only_write_to = "workdir"\nengine = "codex"'))).toEqual(REFUSED('codex', 'engine'))
+    for (const model of ['sol', 'astra', 'terra', 'luna', 'gpt-5.6-terra']) {
+      expect(errorsOf(spec(`can_only_write_to = "workdir"\nmodel = "${model}"`))).toEqual(REFUSED('codex', 'model'))
+    }
+  })
+  test('an engine and a model that name two engines is said once, at the engine that cannot confine', () => {
+    expect(errorsOf(spec('can_only_write_to = "workdir"\nengine = "codex"\nmodel = "opus"'))).toEqual(REFUSED('codex', 'engine'))
+    expect(errorsOf(spec('can_only_write_to = "workdir"\nengine = "claude"\nmodel = "sol"'))).toEqual([`specialists.ops.model: "sol" is a codex model, but engine = "claude": set engine = "codex", or use a model for claude`])
+  })
+  test('omp is refused with its own one message, not a second one for write confinement', () => {
+    const omp = `specialists.ops.engine: omp cannot restrict a session's tools, so a specialist cannot use it; use claude or codex`
+    expect(errorsOf(spec('can_only_write_to = "workdir"\nengine = "omp"'))).toEqual([omp])
+    expect(errorsOf(spec('can_only_write_to = "workdir"\nmodel = "omp-sol"'))).toEqual([omp.replace('.engine:', '.model:')])
+  })
+  test('claude, a Claude model, or no engine and no model loads', () => {
+    for (const body of ['', 'engine = "claude"', 'model = "opus"', 'engine = "claude"\nmodel = "opus"']) {
+      expect(ok(spec(`can_only_write_to = "workdir"\n${body}`)).config.specialists.ops.canOnlyWriteTo).toBe('workdir')
+    }
+  })
+  test('a model that comes from [defaults.specialist] is refused the same, and says where it came from', () => {
+    const text = spec('can_only_write_to = "workdir"').replace('[specialists.ops]', '[defaults.specialist]\nmodel = "sol"\n[specialists.ops]')
+    expect(errorsOf(text)).toEqual([`specialists.ops.model (from defaults.specialist): codex can't run a write-confined specialist: only Claude Code's own sandbox does the confining; use claude (engine = "claude", or a Claude model), or remove can_only_write_to`])
+  })
+  test('a Codex model with no can_only_write_to still loads: the refusal is for write confinement alone', () => {
+    expect(ok(spec('model = "sol"')).config.specialists.ops.canOnlyWriteTo).toBeUndefined()
   })
 })
 
