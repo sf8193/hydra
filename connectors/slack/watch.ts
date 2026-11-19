@@ -1261,7 +1261,7 @@ export class ConversationTable {
     }
 
     // The cap guards against tagging open conversations in a loop. In one already open, the same words untagged would be delivered anyway.
-    if (!existing && tagged && !this.allowMention({ ...ev, app }, threadTs, d.to, cfg)) return 'ignored'
+    if (!existing && tagged && !this.allowMention({ ...ev, app }, threadTs, d.to, cfg, !inNoBotDm)) return 'ignored'
     // A conversation opened by untagged chatter may take only half the table: the rest stays free for mentions and DMs.
     const ambient = !existing && !tagged && !dm
     if (ambient && this.list().filter(e => e.ambient && !oneOff(e)).length >= Math.floor(cfg.maxConversations / 2)) {
@@ -1350,15 +1350,16 @@ export class ConversationTable {
     }
   }
 
-  /** One person tagging in a loop must not be able to keep opening watches and filling the specialist. */
-  private allowMention(ev: SlackMessageEvent, threadTs: string, to: string, cfg: ConversationConfig): boolean {
+  /** One person tagging in a loop must not be able to keep opening watches and filling the specialist. `react`: false in a DM with a
+   *  person or a group DM, where the bot is not part of it and a dropped tag is logged and counted, never reacted to. */
+  private allowMention(ev: SlackMessageEvent, threadTs: string, to: string, cfg: ConversationConfig, react: boolean): boolean {
     const user = ev.user
     if (!user) return true
     const now = this.deps.now()
     const recent = (this.mentionTimes.get(user) ?? []).filter(t => now - t < MENTION_WINDOW_MS)
     if (recent.length >= cfg.maxMentionsPer10Min) {
       this.mentionTimes.set(user, recent)
-      if (this.drop('tag-cap', { app: ev.app, channel: ev.channel, threadTs, specialist: to }, [ev.ts], `${user} tagged the bot ${recent.length} times in 10 minutes outside watched threads (maxMentionsPer10Min)`)) this.turnedAway(ev)
+      if (this.drop('tag-cap', { app: ev.app, channel: ev.channel, threadTs, specialist: to }, [ev.ts], `${user} tagged the bot ${recent.length} times in 10 minutes outside watched threads (maxMentionsPer10Min)`) && react) this.turnedAway(ev)
       return false
     }
     recent.push(now)
