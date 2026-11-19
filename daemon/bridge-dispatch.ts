@@ -6,6 +6,7 @@ import { transport } from './bridge-transport.js'
 import { callerRefusal, endedDestroyRefusal, destroyDeclinedText, destroyThreadById, killThenDestroy } from './destroy.js'
 import { loadAccess, operatorIds, maxChunkLimit, channelPolicy, MAX_ATTACHMENT_BYTES } from './access.js'
 import { partyLink, quietSend, shouldQuiet } from './quiet-send.js'
+import { routeThreadId } from './thread-route.js'
 import { beginMainHandoff } from './main-handoff.js'
 import { getSpecialist } from '../specialists/specialists.js'
 import { ensureSpecialist } from '../specialists/specialist-deliver.js'
@@ -776,6 +777,8 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         }
         const targetSession = resolved.session
         const threadId = targetSession.threadId
+        // Where the relay line and the message are posted: the target's thread, or the one it reports to when it has none the gateway can address.
+        const postThread = routeThreadId(targetSession)
         // The delivery gate speaks before anything is posted or recorded: a refused message is neither shown in the thread nor counted as a protocol result.
         const refusal = deliveryRefusal(targetSession)
         if (refusal) throw new Error(`send_to_thread failed: nothing was posted or sent. ${refusal}`)
@@ -833,7 +836,8 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const party = async (s: SessionInfo) => ({
           name: s.tmuxName,
           emoji: emojiOf(s),
-          url: await partyLink(s, id => gateway.getThreadUrl(id), m => process.stderr.write(`daemon: ${m}\n`)),
+          // The link is to the thread the session is reached through: its own, or the one it reports to when it has none the gateway can address.
+          url: await partyLink({ ...s, threadId: routeThreadId(s) ?? s.threadId }, id => gateway.getThreadUrl(id), m => process.stderr.write(`daemon: ${m}\n`)),
         })
         const echoThread = caller?.threadId && caller.threadId !== threadId ? caller.threadId : undefined
         const quietOutcome = wantsQuiet
@@ -841,7 +845,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
             .then(([from, to]) => quietSend(
               { from, to, type: msgType as SendType, text, summary, dir: join(STATE_DIR, 'messages') },
               {
-                postLine: line => retrySend(() => gateway.send(threadId, line, { subtext: true })),
+                postLine: line => postThread ? retrySend(() => gateway.send(postThread, line, { subtext: true })) : Promise.reject(new Error(`${targetSession.tmuxName} has no thread the gateway can address`)),
                 ...(echoThread ? { postEcho: (line: string) => retrySend(() => gateway.send(echoThread, line, { subtext: true })) } : {}),
                 log: m => process.stderr.write(`daemon: ${m}\n`),
               },
@@ -850,11 +854,12 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const quiet = wantsQuiet
         const sentIds: string[] = []
         if (!quiet) await withOutbound(text, gateway.maxAttachments - files.length, async out => {
+          if (!postThread) throw new Error(`send failed: ${targetSession.tmuxName} has no thread the gateway can address, and reports to none`)
           const all = [...files, ...out.files]
           const chunks = chunk(out.text, sendLimit, access.chunkMode ?? 'markdown')
           try {
             for (let i = 0; i < chunks.length; i++) {
-              const sent = await retrySend(() => gateway.send(threadId, chunks[i], {
+              const sent = await retrySend(() => gateway.send(postThread, chunks[i], {
                 ...(i === 0 && all.length > 0 ? { files: all } : {}),
               }))
               sentIds.push(sent.id)

@@ -194,8 +194,10 @@ export interface ChatGateway {
   typing(channelId: string): Promise<void>
 
   // Channels & threads
+  /** Whether `id` has the shape of a channel or thread this platform can address. Shape only: a session id, a name or a stub is not. */
+  isThreadId(id: string): boolean
   fetchChannel(id: string): Promise<ChannelInfo>
-  /** False only when the platform says the thread is gone; any other failure counts as present. Never throws. */
+  /** False when the platform says the thread is gone, or `id` cannot be one (`isThreadId`); any other failure counts as present. Never throws. */
   threadExists(threadId: string): Promise<boolean>
   fetchMessages(channelId: string, limit: number): Promise<FetchedMessage[]>
   createThread(channelId: string, name: string, opts?: {

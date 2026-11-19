@@ -338,7 +338,11 @@ export function reviveThreadForDelivery(threadId: string, initiator?: string, wa
     if (occupied(occ)) return { ok: true, revived: false }
     const refusal = backoffRefusal(threadId)
     if (refusal) return { ok: false, exitCode: 6, reason: refusal.reason }
-    if (!(await reviveDeps.threadExists(threadId))) return { ok: false, exitCode: 3, reason: `thread ${threadId} is gone` }
+    // An id the platform cannot address is no deleted thread. A record that stored one (a session id where a thread id belongs) is revived into
+    // a fresh thread (doSpawnSession rehomes it); an id nobody stored has nothing to revive.
+    if (!gateway.isThreadId(threadId)) {
+      if (!home && !threadRegistry.has(threadId)) return { ok: false, exitCode: 3, reason: `"${threadId}" is not a ${gateway.platform} thread id, and no session sits in it` }
+    } else if (!(await reviveDeps.threadExists(threadId))) return { ok: false, exitCode: 3, reason: `thread ${threadId} is gone` }
     if (wanted && !wanted()) return { ok: false, exitCode: 3, reason: 'withdrawn by its sender' }
     const thread = threadRegistry.get(threadId) ?? threadStub(threadId, 'Continue the work in this thread.')
     const outcome = await reviveThread({ thread, backoffKey: threadId, ...(initiator && { initiator }), trigger: 'deliver --revive' })

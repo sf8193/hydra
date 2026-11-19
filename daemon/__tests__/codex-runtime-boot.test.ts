@@ -230,7 +230,7 @@ describe('T0.7 engine events', () => {
       "await import('./daemon/delivery-notice.ts')",
       "const { emit } = await import('./daemon/event-bus.ts')",
       "const sent = []; gateway.send = async (c, text) => { sent.push([c, text]); return { id: 'x', channelId: c } }",
-      "registry.set('t07-fail', { sessionId: 't07-fail', threadId: 'th-t07-fail', tmuxName: 't07-fail', engine: 'codex' })",
+      "registry.set('t07-fail', { sessionId: 't07-fail', threadId: '1573000000000000001', tmuxName: 't07-fail', engine: 'codex' })",
       "emit('delivery:failed', { sessionId: 't07-fail', status: 'rejected', reason: 'busy', messageId: 'm-1' })",
       "emit('delivery:failed', { sessionId: 't07-fail', status: 'unknown', reason: 'lost ack' })",
       "emit('delivery:failed', { sessionId: 't07-nobody', status: 'rejected', reason: 'no record' })",
@@ -241,8 +241,8 @@ describe('T0.7 engine events', () => {
       const r = Bun.spawnSync(['bun', '-e', code], { cwd: join(import.meta.dir, '..', '..'), env: { ...process.env, HYDRA_STATE_DIR: dir, DISCORD_STATE_DIR: dir, DISCORD_BOT_TOKEN: 'test-token' } })
       const sent = JSON.parse(r.stdout.toString().trim().split('\n').at(-1)!)
       expect(sent).toEqual([
-        ['th-t07-fail', '⚠️ Codex delivery was rejected (message m-1): busy'],
-        ['th-t07-fail', '⚠️ Codex delivery is uncertain; no automatic replay: lost ack'],
+        ['1573000000000000001', '⚠️ Codex delivery was rejected (message m-1): busy'],
+        ['1573000000000000001', '⚠️ Codex delivery is uncertain; no automatic replay: lost ack'],
       ])
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })

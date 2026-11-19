@@ -159,3 +159,31 @@ describe('deliver --thread <id> --revive', () => {
       .toMatchObject({ ok: false, error: expect.stringContaining('--revive takes --to or --thread') })
   })
 })
+
+describe('deliver --thread <id> --revive: an id the platform cannot address', () => {
+  const SID = '472d35be-061a-43d8-bd50-eba33b094694'
+  const seedBadRecord = () => {
+    const sessionId = `dr-bad-${++n}`
+    threadRegistry.threads.set(SID, { threadId: SID, topic: 'nightly', respawnCount: 0, createdAt: 1, lastActive: 1, totalMessages: 0,
+      sessionHistory: [{ sessionId, tmuxName: `dr-old-${n}`, originType: 'spawn', startedAt: 1, endedAt: 2, messageCount: 0 }] } as any)
+    registry.set(sessionId, { sessionId, tmuxName: `dr-old-${n}`, topic: 'nightly', threadId: SID, createdAt: Date.now() - 600_000, lastActive: 1,
+      listening: false, engine: 'claude', sessionType: 'thread_owner', adapter: fakeAdapter({ isAlive: () => false }) } as unknown as SessionInfo)
+    registry.setThread(SID, sessionId)
+    sessions.push(sessionId); threads.push(SID)
+  }
+
+  test('a record that stored one is revived (its replacement gets a fresh thread), not reported gone; the platform is not asked', async () => {
+    seedBadRecord()
+    reviveDeps.threadExists = async () => { throw new Error('asked the platform about an id that cannot be a thread') }
+    const res = await deliver(SID)
+    expect(res).toMatchObject({ ok: true, data: { revived: true } })
+    expect(spawns).toHaveLength(1)
+    expect(spawns[0][3]).toMatchObject({ existingThreadId: SID })
+  })
+
+  test('an id no record stores is not a thread and has nothing to revive: exit 3, named', async () => {
+    reviveDeps.threadExists = async () => { throw new Error('asked the platform') }
+    expect(await deliver(SID)).toMatchObject({ ok: false, exitCode: 3, error: expect.stringContaining(`"${SID}" is not a discord thread id`) })
+    expect(spawns).toHaveLength(0)
+  })
+})

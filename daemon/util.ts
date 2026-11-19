@@ -367,9 +367,23 @@ export async function safeEdit(
   })
 }
 
+const toldOnce = new Set<string>()
+/** Logs `line` the first time `key` is seen in this process; true when it did. For a fault that repeats on every post. */
+export function tellOnce(key: string, line: string): boolean {
+  if (toldOnce.has(key)) return false
+  toldOnce.add(key)
+  process.stderr.write(`daemon: ${line}\n`)
+  return true
+}
+
 export async function safeSend(
   channelId: string, text: string, opts?: { replyTo?: string; unfurl?: boolean },
 ): Promise<string[]> {
+  // A thread the gateway cannot address (a record that stored a session id as its thread) fails every post forever: dropped, and told once.
+  if (!gateway.isThreadId(channelId)) {
+    tellOnce(`post:${channelId}`, `safeSend: "${channelId}" is not a ${gateway.platform} thread; posts to it are dropped`)
+    return []
+  }
   return withOutbound(text, gateway.maxAttachments, async ({ text: formatted, files }) => {
     const chunks = chunk(formatted, gateway.maxMessageLength, 'markdown')
     const sentIds: string[] = []

@@ -12,6 +12,7 @@ import { withThreadLock } from '../specialists/specialists.js'
 import { browserProfileProblem, managedMcpNameClashes, unreadableWorkdir } from '../config/write-confinement.js'
 import { confinementRefusal, endVerifying, startVerifying, verifyBackoff, verifyRefusal, describePolicy, macosRefusal, missingTokenRefusal, PolicyRefusal, remedy, resolvePolicy, type LaunchPolicy } from './restricted.js'
 import { refusalNoticeKey, threadNotices } from './notice-limit.js'
+import { reportUnaddressableThreads } from './thread-route.js'
 import { hydraLoadEnv, currentHydraConfig } from './hydra-config.js'
 import { workdirRestrictionIssues } from '../config/restricted-workdir.js'
 import { removeLaunchFiles } from './launch-files.js'
@@ -96,7 +97,8 @@ export async function resolveSpawnChannel(
 // ---------------------------------------------------------------------------
 
 export async function backfillAnchorChannelIds(): Promise<void> {
-  const missing = [...registry.values()].filter(s => !s.anchorChannelId && s.threadId)
+  reportUnaddressableThreads()
+  const missing = [...registry.values()].filter(s => !s.anchorChannelId && s.threadId && gateway.isThreadId(s.threadId))
   if (missing.length === 0) return
 
   process.stderr.write(`daemon: backfill: ${missing.length} session(s) missing anchorChannelId\n`)
@@ -786,6 +788,17 @@ export const _refusalsKept = (): number => verifyRefused.size
 /** Test seam: forget which refusals a thread was told. */
 export function _resetRefusalNotices(): void { threadNotices.clear() }
 
+const notAThreadId = (id: string): string =>
+  `"${id}" is not a ${gateway.platform} thread id, so no session can sit in it (a session id or a name was passed where a thread id belongs)`
+
+/** A thread the gateway made and then cannot address is no thread: what was made is removed, best effort, and the start fails. */
+async function refuseMadeThread(id: string, anchor?: { channelId: string; messageId: string }): Promise<void> {
+  if (gateway.isThreadId(id)) return
+  try { await gateway.deleteThread?.(id) } catch {}
+  if (anchor) try { await gateway.delete(anchor.channelId, anchor.messageId) } catch {}
+  throw new Error(notAThreadId(id))
+}
+
 export async function doSpawnSession(topic: string, chatId?: string, messageId?: string, opts?: SpawnOpts): Promise<SpawnResult> {
   // Before a thread is opened: a working dir that has gone away fails the spawn without leaving an empty thread.
   if (opts?.cwd && !existsSync(opts.cwd)) throw new Error(`working directory ${opts.cwd} does not exist`)
@@ -858,8 +871,13 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   const originType: 'spawn' | 'fork' | 'handoff' | 'resurrect' = isFork ? 'fork' : isHandoff ? 'handoff' : isResurrect ? 'resurrect' : 'spawn'
   const originFrom = opts?.forkFrom?.parentName ?? opts?.handedOffFrom ?? opts?.resurrectFrom
 
+  // A thread to sit in again (resume, respawn, handoff, revive). A record that stored an id the gateway cannot address (a session id where a
+  // thread id belongs) has no thread to go back to: its replacement gets a fresh one, under its parent's channel. Never a refusal: by now the
+  // predecessor may already be killed, and a refusal would lose the session.
+  let rehomedFrom: string | undefined
   if (opts?.existingThreadId) {
-    threadId = opts.existingThreadId
+    if (gateway.isThreadId(opts.existingThreadId)) threadId = opts.existingThreadId
+    else rehomedFrom = opts.existingThreadId
   }
 
   // Join an existing thread as a member (skip thread creation entirely)
@@ -868,7 +886,15 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   let resumeCount = 0
   if (isResume) resumeCount = nextResumeCount(registry.values(), opts!.resumeFrom!)
   if (isJoin) {
+    // Nothing is made yet, and nothing can be: a guest cannot join a thread the gateway cannot address.
+    if (!gateway.isThreadId(opts!.joinThread!)) throw new Error(notAThreadId(opts!.joinThread!))
     threadId = opts!.joinThread!
+  }
+
+  if (rehomedFrom) {
+    process.stderr.write(`daemon: spawn ${tmuxName}: "${rehomedFrom}" is not a ${gateway.platform} thread id; a fresh thread replaces it\n`)
+    // Under the channel its parent's thread is in, else the default one (resolveSpawnChannel).
+    chatId ??= (carriedParentId ? registry.get(carriedParentId)?.anchorChannelId : undefined)
   }
 
   // Determine where to create the thread
@@ -883,6 +909,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     targetChannelId = resolved.targetChannelId
     parentChannelId = resolved.parentChannelId ?? resolved.targetChannelId
     if (resolved.threadId) threadId = resolved.threadId
+    if (threadId && !gateway.isThreadId(threadId)) throw new Error(notAThreadId(threadId))
     if (resolved.warning) process.stderr.write(`daemon: WARNING: ${resolved.warning}\n`)
 
     // Clean up dead session in this thread before spawning
@@ -928,6 +955,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
             process.stderr.write(`daemon: createThread on message failed: ${err}\n`)
           }
         }
+        if (threadId) await refuseMadeThread(threadId)
       }
 
       if (!threadId) {
@@ -943,6 +971,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
           archiveDuration: 1440,
         })
         threadId = thread.id
+        await refuseMadeThread(thread.id, { channelId: targetChannelId!, messageId: anchor.id })
       }
     }
   }
@@ -960,8 +989,9 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
 
   // Clean up dead session in this thread before spawning
   // Runs for all paths: existingThreadId, channel lookup, or spawn-in-dead-thread
-  if (threadId && !isJoin) {
-    const existingId = registry.getByThread(threadId)
+  // A rehomed start (rehomedFrom) replaces the record that stored the unaddressable id, in the thread it now makes.
+  if ((rehomedFrom ?? threadId) && !isJoin) {
+    const existingId = registry.getByThread((rehomedFrom ?? threadId)!)
     if (existingId) {
       const existing = registry.get(existingId)
       if (existing) {
@@ -1004,7 +1034,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
         await killSession(existing, 'replaced by new spawn', { skipWorktreeDestroy: !!opts?.preserveWorktree, keepScratch: isResume || !!opts?.forkFrom, keepWatches: true })
       }
     }
-    if (!anchorMessageId) {
+    if (!anchorMessageId && threadId) {
       const thread = threadRegistry.get(threadId)
       if (thread?.anchorMessageId) {
         anchorMessageId = thread.anchorMessageId
