@@ -476,6 +476,31 @@ describe('delivery paths (adapter-policy T7)', () => {
     expect(written).toEqual([JSON.stringify(envelope) + '\n', JSON.stringify({ type: 'notification', content: 'after reload' }) + '\n'])
   })
 
+  test('main: its queue survives a restart, though main has no registry record; a gone session\'s is dropped and logged', () => {
+    t.sendOrQueue('main', envelope)
+    t.sendOrQueue('t7-gone', envelope)
+    expect(registry.has('main')).toBe(false)
+    const t2 = new BridgeTransport()
+    t2.restorePersistedQueues()
+    expect(t2.messageQueues.get('main')).toEqual([envelope])
+    expect(t2.messageQueues.has('t7-gone')).toBe(false)
+    expect(logged.filter(l => l.includes('dropped 1 queued message(s) for t7-gone'))).toHaveLength(1)
+    expect(JSON.parse(readFileSync(queueFile(), 'utf8'))).toEqual({ main: [envelope] })
+    t2.messageQueues.delete('main'); t2.persistQueues()
+  })
+
+  test('flush into a socket that is gone: every message stays queued and on disk, in order', () => {
+    claude('t7-c8')
+    const msgs = [0, 1, 2].map(i => ({ type: 'notification', content: `m${i}` }))
+    for (const m of msgs) t.sendOrQueue('t7-c8', m)
+    const { written, socket } = socketOn(t, 't7-c8')
+    socket.destroyed = true
+    t.flushQueue('t7-c8')
+    expect(written).toEqual([])
+    expect(t.messageQueues.get('t7-c8')).toEqual(msgs)
+    expect(JSON.parse(readFileSync(queueFile(), 'utf8'))['t7-c8']).toEqual(msgs)
+  })
+
   test('claude, capacity: the 51st message is dropped and logged once', () => {
     claude('t7-c6')
     for (let i = 0; i < 52; i++) t.sendOrQueue('t7-c6', { type: 'notification', content: `m${i}` })

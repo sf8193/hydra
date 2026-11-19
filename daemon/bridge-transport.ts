@@ -225,11 +225,12 @@ export class BridgeTransport {
     const sendable = refused ? queue.filter(m => m.type !== 'notification') : queue
     if (refused) process.stderr.write(`daemon: dropped ${queue.length - sendable.length} queued message(s) for ${sessionId}: ${refused}\n`)
     process.stderr.write(`daemon: flushing ${sendable.length} queued message(s) for ${sessionId}\n`)
+    // Taken off before sending: a send that fails re-queues into a fresh queue, which survives this flush.
+    this.messageQueues.delete(sessionId)
+    this.queueFullLogged.delete(sessionId)
     for (const msg of sendable) {
       this.sendToBridge(bridge, msg)
     }
-    this.messageQueues.delete(sessionId)
-    this.queueFullLogged.delete(sessionId)
     this.persistQueues()
   }
 
@@ -265,9 +266,13 @@ export class BridgeTransport {
       const data = JSON.parse(raw) as Record<string, Array<Record<string, unknown>>>
       let total = 0
       for (const [sid, msgs] of Object.entries(data)) {
-        if (registry.has(sid) && msgs.length > 0) {
+        if (msgs.length === 0) continue
+        // Main has no registry record but has a bridge and a queue (main-handoff); a session with no record is gone.
+        if (sid === 'main' || registry.has(sid)) {
           this.messageQueues.set(sid, msgs)
           total += msgs.length
+        } else {
+          process.stderr.write(`daemon: dropped ${msgs.length} queued message(s) for ${sid}: no such session\n`)
         }
       }
       if (total > 0) process.stderr.write(`daemon: restored ${total} queued message(s)\n`)
