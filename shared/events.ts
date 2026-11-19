@@ -27,7 +27,7 @@ export const EVENTS_KEEP_DAYS_MAX = 3650
  * text above all, cannot reach the file.
  */
 export type EventBody =
-  /** Where a message was delivered, once it settled: `via` is what chose the place and `to` the place it reached. Or that an app was tagged and nothing took it: `via` is then `none`, `guard`, `tag-cap` or `table-full`, and `to` absent. */
+  /** Where a message was delivered, once it settled: `via` is what chose the place and `to` the place it reached. Or that an ask of the bot (a tag, or a DM with the bot; `tagged` says which) found no one: `via` is then `none`, `guard`, `tag-cap` or `table-full`, and `to` absent. */
   | { kind: 'route'; app: string; conversation: string; by?: string; tagged: boolean; via: string; to?: string }
   /** A conversation bound or moved: `from` is its previous binding, a specialist id or a session's thread id (absent when it opened with this one), `by` who did it (`operator`, `main`, the specialist, or `hydra` with a `reason`). */
   | { kind: 'bind'; conversation: string; from?: string; to: string; why?: string; by: string; reason?: BindReason }

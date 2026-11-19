@@ -1263,6 +1263,8 @@ export class ConversationTable {
     const at = placesOf(cfg, ev.channel)
     // A DM with a person, or a group DM: the bot is not (or only) a member, and nothing has said it should answer there.
     const inNoBotDm = dm && !at.some(isDmPlace)
+    // An ask of the bot: a tag, or a DM with it. One turned away is recorded (`noRoute`) and gets the 🚫; chatter, and anything in a DM the bot is not part of, is neither.
+    const asksBot = (tagged || dm) && !inNoBotDm
     // A DM's top-level messages are one conversation. Anywhere else, a top-level message is its thread's first: the
     // conversation is that thread, bound when this message arrives. A thread inside a DM is a thread like any other.
     const threadTs = dm && !isReply ? TOP_LEVEL : ev.threadTs ?? ev.ts
@@ -1333,7 +1335,7 @@ export class ConversationTable {
         this.settle(keyOf(existing), existing, [ev.ts])
         return d.fate
       }
-      if (tagged) this.noRoute(ev, app, threadTs)
+      if (asksBot) this.noRoute(ev, app, threadTs, 'none', tagged)
       // The 🚫 is for the bot's own DMs and for tags in channels. A DM with a person or a group DM is logged and counted, never reacted to: the bot is not part of it.
       this.refuse({ ...ev, app }, threadTs, why, d.fate, !inNoBotDm && (d.fate === 'refused' ? dm || tagged : tagged && !dm))
       return d.fate
@@ -1350,7 +1352,7 @@ export class ConversationTable {
       const why = chatterFull ? `conversations opened by untagged chatter already hold half the conversation table (${half} of ${cfg.maxConversations}) and none has been quiet an hour with nothing owed; a tag still opens one`
         : `the conversation table is full (${cfg.maxConversations}) and none in it has been quiet an hour with nothing owed; unbind a conversation`
       // A tag or a DM with the bot gets the 🚫, as a refused one does; untagged chatter, a DM with a person or a group DM never does.
-      if (this.drop('table-full', { app, channel: ev.channel, threadTs, specialist: d.to }, [ev.ts], why) && (tagged || dm) && !inNoBotDm) { this.noRoute(ev, app, threadTs, 'table-full', tagged); this.turnedAway({ ...ev, app }) }
+      if (this.drop('table-full', { app, channel: ev.channel, threadTs, specialist: d.to }, [ev.ts], why) && asksBot) { this.noRoute(ev, app, threadTs, 'table-full', tagged); this.turnedAway({ ...ev, app }) }
       return 'ignored'
     }
     if (ambient) { entry.ambient = true; this.persist() }
@@ -1475,7 +1477,7 @@ export class ConversationTable {
     return true
   }
 
-  /** A tag no one took is a route event with no `to`, once per message: `via` says which step stopped it (`none`: no step took it, because its sender was refused, no place hears it, or it tags an app that cannot hear it; `tag-cap`; `table-full`). Untagged messages nobody takes are not recorded. */
+  /** An ask of the bot no one took (a tag, or a DM with the bot) is a route event with no `to`, once per message: `via` says which step stopped it (`none`: no step took it, because its sender was refused, no place hears it, or it tags an app that cannot hear it; `tag-cap`; `table-full`), and `tagged` whether it was a tag. Chatter nobody takes, and anything in a DM the bot is not part of, are not recorded. */
   private noRoute(ev: Pick<SlackMessageEvent, 'channel' | 'ts' | 'user'>, app: string, threadTs: string, via: 'none' | 'tag-cap' | 'table-full' = 'none', tagged = true): void {
     if (!this.firstTime(this.noted.refused, `route:${scoped(app, ev.channel)}:${ev.ts}`)) return
     recordEvent({ kind: 'route', app, conversation: conversationId({ app, channel: ev.channel, threadTs }), by: addressOf(ev.user), tagged, via })
