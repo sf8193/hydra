@@ -103,7 +103,7 @@ function setup(over: { tokens?: { app?: string; bot?: string }; toml?: string | 
   })
   listeners.push(listener!)
   return {
-    listener: listener!, watcher, sent, logs, alerts, apps, state, tick: (ms: number) => { now += ms },
+    listener: listener!, watcher, sent, logs, alerts, apps, state, now: () => now, tick: (ms: number) => { now += ms },
     /** The machine sleeps `ms`; on wake the loop watch hands the gap to the detector, and the bus to the listener. */
     sleep: (ms: number) => {
       now += ms
@@ -359,6 +359,8 @@ describe('live events', () => {
 })
 
 describe('catch-up', () => {
+  /** A message posted just now, on the test clock: inside any window that opened before this moment. `n` keeps two apart. */
+  const stamp = (t: { now: () => number }, n: number) => `${Math.floor(t.now() / 1000) - 1}.${String(n).padStart(6, '0')}`
   test('every reconnect triggers a deep catch-up, however short the gap', async () => {
     const t = setup({ threads: { [`${CH}:1050.000001`]: [{ ts: '1060.000001', thread_ts: '1050.000001', user: 'UB', text: 'reply during the gap' }] } })
     await t.listener.start()
@@ -378,20 +380,58 @@ describe('catch-up', () => {
     await t.listener.start()
     await t.listener.runCatchUp(true, 'periodic')
     expect(t.alerts).toHaveLength(0)
+    t.tick(60_000)
     t.apps[0].handler(message({ ts: '1900.000001' })) // live events arrive, so the stream is split, not off
-    t.state.history = [{ ts: '2000.000001', user: 'UB', text: mention }] // the live stream never delivered this
+    t.state.history = [{ ts: stamp(t, 1), user: 'UB', text: mention }] // the live stream never delivered this
     await t.listener.runCatchUp(true, 'periodic')
     expect(t.alerts).toHaveLength(1)
     expect(t.alerts[0]).toContain('never delivered')
-    t.state.history = [...t.state.history, { ts: '2100.000001', user: 'UB', text: mention }]
+    t.state.history = [...t.state.history, { ts: stamp(t, 2), user: 'UB', text: mention }]
     await t.listener.runCatchUp(true, 'periodic')
     expect(t.alerts).toHaveLength(1) // rate limited
+  })
+
+  test('a periodic pass that finds only a message older than its window raises no alarm; one posted inside the window still does', async () => {
+    const t = setup()
+    await t.listener.start()
+    t.tick(10 * 60_000)
+    // Older than the window that opened at the last complete pass (the way a read brings back a thread's root), though newer than the channel cursor (the live event's).
+    t.state.history = [{ ts: '1950.000001', user: 'UB', text: mention }]
+    t.apps[0].handler(message({ ts: '1900.000001' })) // live events arrive, so a miss would read as a split
+    await t.listener.runCatchUp(true, 'periodic')
+    expect(t.logs.some(l => l.includes('catch-up (periodic, deep)') && l.includes('1 message(s)'))).toBe(true) // the pass did accept it
+    expect(t.alerts).toHaveLength(0)
+    t.tick(10 * 60_000)
+    t.state.history = [...t.state.history, { ts: stamp(t, 1), user: 'UB', text: mention }]
+    await t.listener.runCatchUp(true, 'periodic')
+    expect(t.alerts).toHaveLength(1)
+    expect(t.alerts[0]).toContain('found 1 message(s)')
+  })
+
+  /** A pass whose window opened at the boot pass finds one message posted `secondsBefore` seconds before that window opened. */
+  const skewPass = async (secondsBefore: number) => {
+    const t = setup()
+    await t.listener.start()
+    const opened = Math.floor(t.now() / 1000)
+    t.tick(10 * 60_000)
+    t.apps[0].handler(message({ ts: '1900.000001' }))
+    t.state.history = [{ ts: `${opened - secondsBefore}.000001`, user: 'UB', text: mention }]
+    await t.listener.runCatchUp(true, 'periodic')
+    return t
+  }
+  test("the window opens a few seconds early, for the difference between Slack's clock and ours", async () => {
+    const near = await skewPass(5)
+    expect(near.alerts).toHaveLength(1)
+    expect(near.logs.some(l => l.includes('1 message(s) the live stream had not delivered (1 posted since the last complete pass began)'))).toBe(true)
+    const far = await skewPass(15)
+    expect(far.alerts).toHaveLength(0)
+    expect(far.logs.some(l => l.includes('1 message(s) the live stream had not delivered (0 posted since the last complete pass began)'))).toBe(true)
   })
 
   test('finding messages right after a reconnect is expected, not an alarm', async () => {
     const t = setup()
     await t.listener.start()
-    t.state.history = [{ ts: '2000.000001', user: 'UB', text: mention }]
+    t.state.history = [{ ts: stamp(t, 1), user: 'UB', text: mention }]
     t.apps[0].client.emit('connected')
     await Bun.sleep(20)
     await t.listener.runCatchUp(true, 'periodic') // the first periodic pass after a reconnect
@@ -402,7 +442,7 @@ describe('catch-up', () => {
     const t = setup()
     await t.listener.start()
     t.tick(60_000)
-    t.state.history = [{ ts: '2000.000001', user: 'UB', text: mention }]
+    t.state.history = [{ ts: stamp(t, 1), user: 'UB', text: mention }]
     t.state.duringHistory = () => { t.state.duringHistory = undefined; t.tick(1_000); t.apps[0].client.emit('connected'); t.tick(1_000) }
     await t.listener.runCatchUp(true, 'periodic') // the wake: the pass starts before the dead socket is replaced
     expect(t.alerts).toHaveLength(0)
@@ -410,7 +450,7 @@ describe('catch-up', () => {
     expect(t.logs.some(l => l.includes('slack connector: catch-up (queued'))).toBe(true)
     t.tick(10 * 60_000)
     t.apps[0].handler(message({ ts: '2050.000001' }))
-    t.state.history = [...t.state.history, { ts: '2100.000001', user: 'UB', text: mention }]
+    t.state.history = [...t.state.history, { ts: stamp(t, 2), user: 'UB', text: mention }]
     await t.listener.runCatchUp(true, 'periodic') // no gap since that pass started
     expect(t.alerts).toHaveLength(1)
     expect(t.alerts[0]).toContain('never delivered')
@@ -422,13 +462,13 @@ describe('catch-up', () => {
     t.tick(60_000)
     t.apps[0].client.emit('reconnecting')
     t.tick(10_000)
-    t.state.history = [{ ts: '2000.000001', user: 'UB', text: mention }] // posted during the gap
+    t.state.history = [{ ts: stamp(t, 1), user: 'UB', text: mention }] // posted during the gap
     t.apps[0].client.emit('connected') // the gap and the reconnect's catch-up start in the same moment
     await Bun.sleep(20)
     expect(t.logs.some(l => l.includes('slack connector: catch-up (reconnected') && l.includes('1 message(s)'))).toBe(true)
     t.tick(10 * 60_000)
     t.apps[0].handler(message({ ts: '2050.000001' }))
-    t.state.history = [...t.state.history, { ts: '2100.000001', user: 'UB', text: mention }] // after that pass read, socket up
+    t.state.history = [...t.state.history, { ts: stamp(t, 2), user: 'UB', text: mention }] // after that pass read, socket up
     await t.listener.runCatchUp(true, 'periodic')
     expect(t.alerts).toHaveLength(1)
     expect(t.alerts[0]).toContain('the connection stayed up since the previous complete pass began')
@@ -438,7 +478,7 @@ describe('catch-up', () => {
     const t = setup()
     await t.listener.start()
     t.tick(60_000)
-    t.state.history = [{ ts: '2000.000001', user: 'UB', text: mention }]
+    t.state.history = [{ ts: stamp(t, 1), user: 'UB', text: mention }]
     t.state.duringHistory = () => { t.state.duringHistory = undefined; t.tick(1_000); t.apps[0].client.emit('close') }
     await t.listener.runCatchUp(true, 'periodic') // the ping monitor closed the dead socket mid-pass; reconnecting is 5s away
     expect(t.alerts).toHaveLength(0)
@@ -451,7 +491,7 @@ describe('catch-up', () => {
     t.tick(60_000)
     await t.listener.runCatchUp(true, 'periodic') // a pass completes while down: the window now starts after the drop
     t.tick(10 * 60_000)
-    t.state.history = [{ ts: '2000.000001', user: 'UB', text: mention }]
+    t.state.history = [{ ts: stamp(t, 1), user: 'UB', text: mention }]
     await t.listener.runCatchUp(true, 'periodic')
     expect(t.alerts).toHaveLength(0)
   })
@@ -461,7 +501,7 @@ describe('catch-up', () => {
     await t.listener.start()
     t.tick(10 * 60_000)
     t.state.network = false // on wake the network is not back yet, so the supervisor cannot replace the socket
-    t.state.history = [{ ts: '2000.000001', user: 'UB', text: mention }] // posted while the machine slept
+    t.state.history = [{ ts: stamp(t, 1), user: 'UB', text: mention }] // posted while the machine slept
     t.state.duringHistory = () => { t.state.duringHistory = undefined; t.sleep(99 * 60_000) } // the periodic pass overdue at wake runs first
     await t.listener.runCatchUp(true, 'periodic')
     expect(t.apps).toHaveLength(1)
@@ -471,7 +511,7 @@ describe('catch-up', () => {
   /** One periodic pass, ten minutes on, that finds a message the socket never delivered. */
   const missedPass = async (t: ReturnType<typeof setup>, n: number) => {
     t.tick(10 * 60_000)
-    t.state.history = [...t.state.history, { ts: `${3000 + n}.000001`, user: 'UB', text: mention }]
+    t.state.history = [...t.state.history, { ts: stamp(t, n), user: 'UB', text: mention }]
     await t.listener.runCatchUp(true, 'periodic')
   }
 
@@ -508,7 +548,7 @@ describe('catch-up', () => {
       t.tick(10 * 60_000)
       t.apps[0].client.emit('reconnecting')
       t.tick(30_000)
-      t.state.history = [...t.state.history, { ts: `${3000 + n}.000001`, user: 'UB', text: mention }] // posted during the gap
+      t.state.history = [...t.state.history, { ts: stamp(t, n), user: 'UB', text: mention }] // posted during the gap
       t.apps[0].client.emit('connected')
       await Bun.sleep(20) // the reconnect's pass fills the gap
       await t.listener.runCatchUp(true, 'periodic')

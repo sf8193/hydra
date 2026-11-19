@@ -465,7 +465,7 @@ export function mentionedApps(identities: Record<string, { botUserId: string }>,
   if (!text) return []
   return Object.entries(identities).flatMap(([a, i]) => { const m = tagRe(i.botUserId).exec(text); return m ? [{ a, at: m.index }] : [] }).sort((x, y) => x.at - y.at).map(x => x.a)
 }
-const tagRe = (botUserId: string) => new RegExp(`<@${botUserId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\|[^>]*)?>`)
+export const tagRe = (botUserId: string) => new RegExp(`<@${botUserId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\|[^>]*)?>`)
 
 /**
  * The delivered list is the exact dedupe, capped at DELIVERED_KEEP. Catch-up rereads a thread from its oldest owed
