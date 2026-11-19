@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync, utimesSync, readFileSync, mkdirSync
 import { tmpdir } from 'os'
 import { join, dirname } from 'path'
 import {
-  ConversationTable, formatDelivery, renderItem, packItems, cmpTs, placesOf, routedChannels, hearsDms, unresolvedPlaces,
+  ConversationTable, EXTERNAL_AUDIENCE_NOTE, formatDelivery, renderItem, packItems, cmpTs, placesOf, routedChannels, hearsDms, unresolvedPlaces,
   ITEM_TEXT_MAX_CHARS, BATCH_MAX_BYTES, REFUSED_REACTION, heldBySession,
   type ConversationConfig, type SlackMessageEvent, type DeliverResult, type Item, type ConversationDeps, type SlackActions, type SlackFile,
 } from '../watch.js'
@@ -867,7 +867,7 @@ describe('what the specialist reads', () => {
     const item: Item = { ts: '1.1', user: 'U1', name: 'Alice', person: 'alice', roles: ['staff', 'anyone'], operator: false, kind: 'mention', text: 'hello\nworld' }
     expect(renderItem(item)).toBe('[mention ts="1.1" person="alice" roles="staff,anyone" operator=false address="slack:U1" name="Alice"]\n| hello\n| world')
     expect(formatDelivery({ channel: CH, threadTs: '1.1' }, [{ ...item, name: undefined }], where, 'abc123'))
-      .toBe('<<<SLACK-UNTRUSTED-abc123 place="slack:#food" conversation="slack:C0FOOD:1.1" link="https://x.slack.com/archives/C0FOOD/p11"\n[mention ts="1.1" person="alice" roles="staff,anyone" operator=false address="slack:U1"]\n| hello\n| world\nSLACK-UNTRUSTED-abc123>>>')
+      .toBe(`<<<SLACK-UNTRUSTED-abc123 place="slack:#food" conversation="slack:C0FOOD:1.1" link="https://x.slack.com/archives/C0FOOD/p11"\n${EXTERNAL_AUDIENCE_NOTE}\n[mention ts="1.1" person="alice" roles="staff,anyone" operator=false address="slack:U1"]\n| hello\n| world\nSLACK-UNTRUSTED-abc123>>>`)
   })
 
   test('identity rides as attributes on the envelope, never as prose; the text cannot forge the closing marker or a header', () => {

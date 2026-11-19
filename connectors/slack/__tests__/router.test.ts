@@ -5,14 +5,14 @@ import { describe, test, expect, afterEach, beforeEach } from 'bun:test'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { STATE_DIR } from '../../../daemon/config.js'
+import { STATE_DIR, gateway } from '../../../daemon/config.js'
 import { registry } from '../../../daemon/sessions.js'
 import { transport } from '../../../daemon/bridge-transport.js'
 import { _setHydraConfigForTesting } from '../../../daemon/hydra-config.js'
 import { executeTool } from '../../../daemon/bridge-dispatch.js'
 import { setSpecialistThread, _reloadSpecialists } from '../../../specialists/specialists.js'
 import { ConversationTable, ROUTED_REACTION, type ConversationConfig, type DeliverResult, type SlackActions, type SlackMessageEvent } from '../watch.js'
-import { bindConversation, getConversationTable, slackRuntimeDeps, ROUTER_BIND_MAX } from '../runtime.js'
+import { bindConversation, getConversationTable, slackConversationLink, slackRuntimeDeps, ROUTER_BIND_MAX } from '../runtime.js'
 import { BASE, BOT, TWO_APPS, hydra, view } from './slack-config.js'
 import { loadHydraConfig } from '../../../config/load.js'
 import { isRouter, routerOf, placeOf } from '../../../config/types.js'
@@ -243,8 +243,12 @@ describe('the power: bind a conversation it was handed to another session, with 
     slackRuntimeDeps.view = () => v
   }
   const live = (id: string, threadId: string, over: Record<string, unknown> = {}) => { transport.bridges.set(id, {} as any); registry.set(id, { ...over, sessionId: id, tmuxName: id, threadId, threadUrl: `https://chat.example/t/${threadId}`, sessionType: 'thread_owner', engine: 'claude', createdAt: Date.now(), ...over } as any) }
+  const inSessionThreads: string[] = []
+  const realSend = gateway.send
   beforeEach(() => {
     posts.length = 0
+    inSessionThreads.length = 0
+    ;(gateway as any).send = async (to: string, text: string) => { inSessionThreads.push(`${to}|${text}`); return { id: '1', channelId: to } }
     slackRuntimeDeps.post = async (c, t, text) => { posts.push(`${c}|${t ?? '-'}|${text}`); return `${posts.length}.000001` }
     configure(WITH)
     setSpecialistThread('slack-router', ROUTER_THREAD)
@@ -256,6 +260,7 @@ describe('the power: bind a conversation it was handed to another session, with 
   afterEach(() => {
     for (const e of getConversationTable().list()) getConversationTable().unwatch(e.channel, e.threadTs)
     for (const id of ['slack-router', 'sw-ledger', 'sw-plain', 'sw-guest', 'sw-locked', 'sw-policy']) { registry.delete(id); transport.bridges.delete(id) }
+    ;(gateway as any).send = realSend
     slackRuntimeDeps.post = realPost; slackRuntimeDeps.view = realView
     _setHydraConfigForTesting(undefined)
     rmSync(join(STATE_DIR, 'specialist-threads.json'), { force: true })
@@ -264,10 +269,12 @@ describe('the power: bind a conversation it was handed to another session, with 
   })
   const heldBy = () => getConversationTable().get(ELSEWHERE, '1000.000001')?.specialist
 
-  test('the router binds it to a session by name, with the reason; the Slack thread is told, and the binding moves', async () => {
+  test('the router binds it to a session by name, with the reason; the notice is in the bound session\'s thread, not the Slack thread, and the binding moves', async () => {
     const out = await bindConversation(routerSession, CONV, { target: 'sw-ledger', why: 'it owns the ledger work' })
-    expect(out).toStartWith(`${CONV} → ${CANDIDATE_THREAD}; posted in ${CONV}`)
-    expect(posts).toEqual([`${ELSEWHERE}|1000.000001|→ sw-ledger https://chat.example/t/${CANDIDATE_THREAD}: it owns the ledger work`])
+    expect(out).toStartWith(`${CONV} → ${CANDIDATE_THREAD}; posted in the session's thread ${CANDIDATE_THREAD}`)
+    // Nothing in the Slack thread (its audience is outside hydra); the notice is in the bound session's own thread.
+    expect(posts).toEqual([])
+    expect(inSessionThreads).toEqual([`${CANDIDATE_THREAD}|→ sw-ledger https://chat.example/t/${CANDIDATE_THREAD}: it owns the ledger work\nSlack conversation: ${slackConversationLink(CONV)}`])
     expect(heldBy()).toBe(CANDIDATE_THREAD)
   })
 

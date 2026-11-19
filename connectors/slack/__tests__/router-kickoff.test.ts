@@ -53,7 +53,22 @@ describe('the example router kickoff', () => {
     expect(kickoff).toMatch(/a correction/)
     expect(slackDoc).not.toContain('decisions.md')
     expect(kickoff).toMatch(/Never ask a session that declined the same thread again/)
-    expect(kickoff).toMatch(/about 2 minutes/)
+  })
+
+  test('it waits for the asked session\'s reply message in short steps, capped at 2 minutes, never one fixed long sleep', () => {
+    expect(kickoff).toMatch(/Wait for that session's reply message/)
+    expect(kickoff).toMatch(/Cap the wait at 2 minutes/)
+    expect(kickoff).toContain('sleep 10')
+    expect(kickoff).not.toMatch(/sleep (\d{3,}|[2-9]\d)\b/)
+    expect(kickoff).not.toMatch(/about 2 minutes/)
+  })
+
+  test('it never posts in the Slack thread, asks the operator privately, and says what the bind does', () => {
+    expect(kickoff).toMatch(/never post in the Slack thread/i)
+    expect(kickoff).toContain('Never ask in the Slack thread')
+    expect(kickoff).toContain('Nothing is posted in the Slack thread; the notice goes to that session\'s own thread')
+    expect(kickoff).not.toContain('posts `→ <name> <link>: <why>` in the thread')
+    expect(kickoff).not.toMatch(/do not post in the thread/)
   })
 
   test('the docs recommend model = "sonnet" for the router, and that is a real alias; the configuration they show loads', () => {

@@ -8,8 +8,8 @@ import { join } from 'path'
 import { STATE_DIR, gateway } from '../../../daemon/config.js'
 import { registry } from '../../../daemon/sessions.js'
 import { _setHydraConfigForTesting } from '../../../daemon/hydra-config.js'
-import { ConversationTable, NEW_TO_MAIN_NOTE, TOP_LEVEL, type ConversationConfig, type DeliverResult, type SlackMessageEvent } from '../watch.js'
-import { getConversationTable, operatorBind, replyInConversation, slackRuntimeDeps } from '../runtime.js'
+import { ConversationTable, EXTERNAL_AUDIENCE_NOTE, NEW_TO_MAIN_NOTE, TOP_LEVEL, type ConversationConfig, type DeliverResult, type SlackMessageEvent } from '../watch.js'
+import { getConversationTable, operatorBind, replyInConversation, slackConversationLink, slackRuntimeDeps } from '../runtime.js'
 import { BASE, BOT, hydra, view } from './slack-config.js'
 import { owningApp, route } from '../../../routing/route.js'
 import { loadHydraConfig } from '../../../config/load.js'
@@ -119,6 +119,28 @@ describe("the operator's tag of their own app, in a thread nothing holds", () =>
     expect(g.sent[0].msg).not.toContain(NEW_TO_MAIN_NOTE)
     // the note is hydra's line, outside the quoted words: no sender line can pose as it
     expect(s.sent[0].msg.split('\n').filter(l => l === NEW_TO_MAIN_NOTE)).toHaveLength(1)
+  })
+})
+
+describe('every delivery from a Slack conversation carries hydra\'s external-audience line', () => {
+  test('to main, to a specialist and to a session bound to the thread: once, outside the quoted words, before them', async () => {
+    const toMain = setup(WITH)
+    toMain.w.handle(ev({}))
+    await toMain.w.flush()
+    const toSpecialist = setup(WITH)
+    toSpecialist.w.handle(ev({ channel: 'C0DESK' }))
+    await toSpecialist.w.flush()
+    const toSession = setup(WITH)
+    toSession.w.bind(ELSEWHERE, '3000.000001', SESSION, 'cli')
+    toSession.w.handle(ev({ ts: '3001.000001', threadTs: '3000.000001' }))
+    await toSession.w.flush()
+    for (const s of [toMain, toSpecialist, toSession]) {
+      const lines = s.sent[0].msg.split('\n')
+      expect(lines.filter(l => l === EXTERNAL_AUDIENCE_NOTE)).toHaveLength(1)
+      expect(lines[1]).toBe(EXTERNAL_AUDIENCE_NOTE)
+    }
+    expect(EXTERNAL_AUDIENCE_NOTE).toContain('audience is outside hydra')
+    expect(EXTERNAL_AUDIENCE_NOTE).toContain('never post links to Discord, hydra or private Slack conversations, or internal session names')
   })
 })
 
@@ -246,41 +268,89 @@ describe("main's answer, and the bind's notice: in the thread where the bot is a
     expect(posts).toEqual([])
   })
 
-  test('binding the thread to a session posts in it which session took it, its link and why, in the same call', async () => {
+  // The notice goes to the session's own thread (gateway.send), never into the Slack conversation (slackRuntimeDeps.post).
+  const sessionThread: Array<{ to: string; text: string; opts?: any }> = []
+  const logged: string[] = []
+  const realSend = gateway.send
+  const realWrite = process.stderr.write
+  let sendFails: Error | undefined
+  beforeEach(() => {
+    sessionThread.length = 0; logged.length = 0; sendFails = undefined
+    ;(gateway as any).send = async (to: string, text: string, opts?: any) => { if (sendFails) throw sendFails; sessionThread.push({ to, text, opts }); return { id: '1', channelId: to } }
+    process.stderr.write = ((c: any) => { logged.push(String(c)); return true }) as any
+  })
+  afterEach(() => { (gateway as any).send = realSend; process.stderr.write = realWrite })
+  const NOTICE = (link: string) => `→ sw-attached https://chat.example/t/${SESSION}: it owns the ledger work\nSlack conversation: ${link}`
+
+  test('binding the thread to a session posts nothing in the Slack conversation: the notice goes to the session\'s own thread, with the permalink', async () => {
     slack(new Set([ELSEWHERE]))
     attached()
     const out = await operatorBind(CONV, `thread:${SESSION}`, 'it owns the ledger work')
-    expect(out).toStartWith(`${CONV} → ${SESSION}; posted in ${CONV}`)
-    expect(posts).toEqual([`${ELSEWHERE}|1000.000001|→ sw-attached https://chat.example/t/${SESSION}: it owns the ledger work`])
+    expect(out).toStartWith(`${CONV} → ${SESSION}; posted in the session's thread ${SESSION}`)
+    expect(posts).toEqual([])
+    expect(sessionThread).toEqual([{ to: SESSION, text: NOTICE(slackConversationLink(CONV)!), opts: { unfurl: false } }])
+    expect(slackConversationLink(CONV)).toContain('slack.com/archives/C0ELSE')
     expect(getConversationTable().get(ELSEWHERE, '1000.000001')?.specialist).toBe(SESSION)
   })
 
-  test('where the bot is not a member, the notice goes to the operator\'s DM with the app, with the thread\'s link', async () => {
-    slack(new Set())
+  test('a Discord link or session name never reaches a Slack conversation, wherever the bot is a member or not', async () => {
+    for (const member of [new Set([ELSEWHERE]), new Set<string>()]) {
+      slack(member)
+      attached()
+      await operatorBind(CONV, `thread:${SESSION}`, 'why')
+      expect(posts.filter(p => !p.startsWith('UOP|'))).toEqual([])
+      getConversationTable().bind(ELSEWHERE, '1000.000001', 'main', 'cli')
+    }
+  })
+
+  test('where the session\'s thread cannot be posted in, the notice goes to the operator\'s DM with the app, which is private', async () => {
+    slack(new Set([ELSEWHERE]))
     attached()
+    sendFails = new Error('Missing Access')
     const out = await operatorBind(CONV, `thread:${SESSION}`, 'it owns the ledger work')
     expect(out).toContain("to the operator's DM with")
     expect(posts).toHaveLength(1)
-    expect(posts[0]).toStartWith('UOP|-|The bind notice, not posted in https://x.slack.com/archives/C0ELSE/p1000000001: ')
-    expect(posts[0]).toEndWith(`→ sw-attached https://chat.example/t/${SESSION}: it owns the ledger work`)
+    expect(posts[0]).toStartWith('UOP|-|The bind notice, not posted in ')
+    expect(posts[0]).toContain('Missing Access')
+    expect(posts[0]).toContain(NOTICE(slackConversationLink(CONV)!))
   })
 
-  test('`hydra conversations bind … --why` carries the reason to the daemon, which binds and posts in one request', async () => {
+  test('every outcome of the notice is logged: posted, posted in the operator\'s DM, and failed with why', async () => {
+    slack(new Set([ELSEWHERE]))
+    attached()
+    await operatorBind(CONV, `thread:${SESSION}`, 'it owns the ledger work')
+    expect(logged.join('')).toContain(`bind notice for ${CONV} → ${SESSION}: posted in the session's thread ${SESSION}`)
+    logged.length = 0
+    getConversationTable().bind(ELSEWHERE, '1000.000001', 'main', 'cli')
+    sendFails = new Error('Missing Access')
+    await operatorBind(CONV, `thread:${SESSION}`, 'again')
+    expect(logged.join('')).toContain(`bind notice for ${CONV} → ${SESSION}: not posted to ${CONV}: the session's thread ${SESSION} could not be posted in (Missing Access)`)
+    expect(logged.join('')).toContain("operator's DM")
+    logged.length = 0
+    getConversationTable().bind(ELSEWHERE, '1000.000001', 'main', 'cli')
+    slackRuntimeDeps.post = async () => { throw new Error('An API error occurred: ratelimited') }
+    await operatorBind(CONV, `thread:${SESSION}`, 'third')
+    expect(logged.join('')).toContain(`bind notice for ${CONV} → ${SESSION}: not posted: Missing Access; the operator's DM did not take it either: `)
+  })
+
+  test('`hydra conversations bind … --why` carries the reason to the daemon, which binds and sends the notice to the session\'s thread in one request', async () => {
     slack(new Set([ELSEWHERE]))
     attached()
     const r = await handleCLIRequest({ type: 'cli', command: 'conversations', id: 'op-tag-1', params: { action: 'bind', conversation: CONV, to: `thread:${SESSION}`, why: 'it owns the ledger work' } })
     expect(r.ok).toBe(true)
     expect((r.data as { bound: string }).bound).toContain('→ sw-attached')
-    expect(posts).toEqual([`${ELSEWHERE}|1000.000001|→ sw-attached https://chat.example/t/${SESSION}: it owns the ledger work`])
+    expect(posts).toEqual([])
+    expect(sessionThread.map(m => m.to)).toEqual([SESSION])
   })
 
   test('the bind holds when the notice cannot be posted, and says so; --why is refused on a bind that posts no notice', async () => {
+    sendFails = new Error('ratelimited')
     slackRuntimeDeps.post = async () => { throw new Error('An API error occurred: ratelimited') }
     const gw = gateway.getThreadUrl
     ;(gateway as any).getThreadUrl = async () => ''
     try {
       const out = await operatorBind(CONV, `thread:${SESSION}`)
-      expect(out).toContain('the notice was not posted')
+      expect(out).toContain('not posted')
       expect(getConversationTable().get(ELSEWHERE, '1000.000001')?.specialist).toBe(SESSION)
     } finally { (gateway as any).getThreadUrl = gw }
     await expect(operatorBind(CONV, 'main', 'why not')).rejects.toThrow('--why gives the reason in the notice that a bind to a session')
