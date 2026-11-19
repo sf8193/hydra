@@ -1475,7 +1475,7 @@ export class ConversationTable {
     return true
   }
 
-  /** A tag no one took is a route event with no `to`, once per message: `via` says which step stopped it (`none`: refused, or no place hears it; `tag-cap`; `table-full`). Untagged messages nobody takes are not recorded. */
+  /** A tag no one took is a route event with no `to`, once per message: `via` says which step stopped it (`none`: no step took it, because its sender was refused, no place hears it, or it tags an app that cannot hear it; `tag-cap`; `table-full`). Untagged messages nobody takes are not recorded. */
   private noRoute(ev: Pick<SlackMessageEvent, 'channel' | 'ts' | 'user'>, app: string, threadTs: string, via: 'none' | 'tag-cap' | 'table-full' = 'none', tagged = true): void {
     if (!this.firstTime(this.noted.refused, `route:${scoped(app, ev.channel)}:${ev.ts}`)) return
     recordEvent({ kind: 'route', app, conversation: conversationId({ app, channel: ev.channel, threadTs }), by: addressOf(ev.user), tagged, via })
