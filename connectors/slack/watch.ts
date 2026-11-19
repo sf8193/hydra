@@ -376,6 +376,8 @@ const OURS_KEEP = 300
 const AMBIENT_IDLE_MS = 86_400_000
 /** How long a conversation must be quiet before a full table lets it go for a new one. */
 const EVICT_QUIET_MS = 3600_000
+/** `mentionedBy` of a conversation bound by hand (a session's tool, a reply's thread, the operator's CLI), not by routing: never evicted. */
+const BOUND_BY: ReadonlySet<string> = new Set(['tool', 'home', 'cli'])
 /** The time of a tag in a store that kept none: older than any. */
 const UNKNOWN_TS = '0.000000'
 /** How many channels no rule names catch-up reads for an app, the ones it was tagged in most recently: the bound on the extra history reads. */
@@ -724,9 +726,10 @@ export class ConversationTable {
 
   /**
    * Open a conversation bound to `specialist`, or touch the one that exists. Its binding is never changed here: only
-   * `bind` moves a conversation. Undefined when the table is full.
+   * `bind` moves a conversation. Undefined when the table is full. `evict`: a full table first lets go of the routed conversation
+   * quiet the longest (`evict`), which only an inbound message asks for; `bind` never does, so a deliberate bind into a full table is refused.
    */
-  watch(channel: string, threadTs: string, specialist: string, mentionedBy?: string, app?: string): ConversationEntry | undefined {
+  watch(channel: string, threadTs: string, specialist: string, mentionedBy?: string, app?: string, evict = false): ConversationEntry | undefined {
     const now = this.deps.now()
     const existing = this.get(channel, threadTs, app)
     if (existing) {
@@ -737,7 +740,7 @@ export class ConversationTable {
     }
     const cap = this.deps.config(app)?.maxConversations ?? SLACK_LIMITS.maxConversations
     const held = this.list().filter(e => !oneOff(e))
-    if (held.length >= cap && !this.evict(held, held.length - cap + 1, cap, now, conversationId({ app, channel, threadTs }))) return undefined
+    if (held.length >= cap && !(evict && this.evict(held, held.length - cap + 1, cap, now, conversationId({ app, channel, threadTs })))) return undefined
     const entry: ConversationEntry = { ...(appOfEntry({ app }) !== DEFAULT_SLACK_APP && { app }), channel, threadTs, specialist, ...(mentionedBy && { mentionedBy }), createdAt: now, lastEventAt: now }
     this.entries.set(keyOf(entry), entry)
     this.persist()
@@ -746,21 +749,25 @@ export class ConversationTable {
   }
 
   /**
-   * A full table makes room for a new conversation by letting go of the `n` quiet the longest, as idle expiry would (a session thread is told).
-   * Only one with nothing owed, nothing waiting in the window or in flight, no wait for a session, and quiet `EVICT_QUIET_MS`: a session handed
-   * its last message may still be answering, and its reply needs the binding. False, and nothing let go, when fewer than `n` qualify.
+   * A full table makes room for a new conversation by letting go of the `n` quiet the longest, as idle expiry would. Only one routing opened:
+   * never one a session, the operator or a reply bound (`BOUND_BY`), nor one bound to a session's thread. And only with nothing owed, nothing
+   * waiting in the window or in flight, no wait for a session, and quiet `EVICT_QUIET_MS`: a session handed its last message may still be
+   * answering, and its reply needs the binding. Each is logged; its specialist is alerted once per episode. False, and nothing let go, when
+   * fewer than `n` qualify.
    */
   private evict(held: ConversationEntry[], n: number, cap: number, now: number, opening: string): boolean {
     const victims = held.filter(e => {
       const key = keyOf(e)
-      return !e.owed?.length && e.waitingSince === undefined && !this.pending.has(key) && !this.inflight.get(key)?.size && now - e.lastEventAt >= EVICT_QUIET_MS
+      return !BOUND_BY.has(e.mentionedBy ?? '') && !(e.specialist && isSessionThread(e.specialist))
+        && !e.owed?.length && e.waitingSince === undefined && !this.pending.has(key) && !this.inflight.get(key)?.size && now - e.lastEventAt >= EVICT_QUIET_MS
     }).sort((a, b) => a.lastEventAt - b.lastEventAt).slice(0, n)
     if (victims.length < n) return false
     for (const e of victims) {
       this.entries.delete(keyOf(e))
       const quiet = spanText(now - e.lastEventAt)
       this.deps.log(`daemon: slack connector: the conversation table is full (${cap}), so ${conversationId(e)}${e.specialist ? ` (bound to ${spelledBare(e.specialist)})` : ''}, quiet the longest (${quiet}), was let go to open ${opening}\n`)
-      if (e.specialist && isSessionThread(e.specialist)) this.deps.alert?.(`ℹ️ The conversation table was full, so hydra let go of ${conversationId(e)}, the one quiet the longest (no message for ${quiet}). Bind again with \`bind_conversation\` to listen.`, e.specialist, appOfEntry(e))
+      const to = e.specialist ?? listenerOf(this.deps.config(e.app), e.channel)
+      this.alertOnce(`evicted:${to ?? '-'}`, to, `ℹ️ The conversation table is full (${cap}), so hydra let go of ${conversationId(e)}, quiet the longest (${quiet}), to open ${opening}; a new message there opens it again. Further ones within the hour are logged, not alerted.`, appOfEntry(e))
     }
     this.persist()
     return true
@@ -1198,7 +1205,7 @@ export class ConversationTable {
       if (existing?.delivered?.includes(ev.ts)) return skip(() => `it was already delivered`)
       const to = listenerOf(cfg, ev.channel)
       if (!to) return skip(() => `no one listens where the bot posted`)
-      const entry = this.watch(ev.channel, threadTs, to, undefined, app)
+      const entry = this.watch(ev.channel, threadTs, to, undefined, app, true)
       if (!entry) {
         this.drop('table-full', { app, channel: ev.channel, threadTs, specialist: to }, [ev.ts], `the conversation table is full (${cfg.maxConversations}), so the bot's own post opens no conversation and replies to it will not be delivered`)
         return 'ignored'
@@ -1258,13 +1265,13 @@ export class ConversationTable {
     // A conversation opened by untagged chatter may take only half the table: the rest stays free for mentions and DMs.
     const ambient = !existing && !tagged && !dm
     if (ambient && this.list().filter(e => e.ambient && !oneOff(e)).length >= Math.floor(cfg.maxConversations / 2)) {
-      if (this.drop('table-full', { app, channel: ev.channel, threadTs, specialist: d.to }, [ev.ts], `conversations opened by untagged chatter already hold half the conversation table (${Math.floor(cfg.maxConversations / 2)} of ${cfg.maxConversations}); a tag still opens one`)) this.turnedAway({ ...ev, app })
+      this.drop('table-full', { app, channel: ev.channel, threadTs, specialist: d.to }, [ev.ts], `conversations opened by untagged chatter already hold half the conversation table (${Math.floor(cfg.maxConversations / 2)} of ${cfg.maxConversations}); a tag still opens one`)
       return 'ignored'
     }
-    const entry = existing ?? this.watch(ev.channel, threadTs, d.to, ev.user, app)
+    const entry = existing ?? this.watch(ev.channel, threadTs, d.to, ev.user, app, true)
     if (!entry) {
-      // Its sender sees the 🚫, as a refused tag's does; a DM with a person or a group DM is not the bot's to react in.
-      if (this.drop('table-full', { app, channel: ev.channel, threadTs, specialist: d.to }, [ev.ts], `the conversation table is full (${cfg.maxConversations}) and none in it has been quiet an hour with nothing owed; unbind a conversation`) && !inNoBotDm) this.turnedAway({ ...ev, app })
+      // A tag or a DM with the bot gets the 🚫, as a refused one does; untagged chatter, a DM with a person or a group DM never does.
+      if (this.drop('table-full', { app, channel: ev.channel, threadTs, specialist: d.to }, [ev.ts], `the conversation table is full (${cfg.maxConversations}) and none in it has been quiet an hour with nothing owed; unbind a conversation`) && (tagged || dm) && !inNoBotDm) this.turnedAway({ ...ev, app })
       return 'ignored'
     }
     if (ambient) { entry.ambient = true; this.persist() }
