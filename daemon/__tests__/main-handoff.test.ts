@@ -6,7 +6,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { gateway, STATE_DIR } from '../config.js'
-import { transport } from '../bridge-transport.js'
+import { transport, DEPARTING_NOTICE } from '../bridge-transport.js'
 import { registry } from '../sessions.js'
 import { noteMainChannel } from '../main-session.js'
 import { executeTool } from '../bridge-dispatch.js'
@@ -78,6 +78,7 @@ describe('main handoff', () => {
     await handleMainHandoffIntercept(cmd(), { note: 'ship the alert tests' })
     expect(delivered).toHaveLength(1)
     expect(delivered[0]._id).toBe('main')
+    expect(delivered[0][DEPARTING_NOTICE]).toBe(true) // a restart must not replay it
     expect(letterFor().startsWith(join(STATE_DIR, 'handoffs', 'main-'))).toBe(true)
     expect(delivered[0].content).toContain('ship the alert tests')
     expect(reacted).toContain('🤝')
@@ -105,6 +106,7 @@ describe('main handoff', () => {
     writeFileSync(path, 'x'); claudeClearsOnCommand()
     await executeTool('handoff', { path }, 'main')
     await doneOk()
+    expect(successor()[0][DEPARTING_NOTICE]).toBeUndefined() // main has cleared and needs it, restart or not
     expect(successor()[0].content).toContain('beta-note'); expect(successor()[0].content).not.toContain('alpha-note')
   })
 
