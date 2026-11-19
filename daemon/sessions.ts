@@ -45,6 +45,9 @@ export type SessionInfo = {
   originType?: 'spawn' | 'fork' | 'handoff' | 'resurrect'
   originFrom?: string
   initiator?: string
+  // The sha256 of the token this launch was given (HYDRA_SESSION_TOKEN): a CLI caller that presents the token is this session (cli-caller.ts).
+  // Absent on a session launched before tokens: its CLI calls are a session's that cannot show which.
+  sessionTokenHash?: string
   // The sessionId with authority over this one (kill, peek, private send, death notice).
   // null: no parent. undefined: a record from before parentId existed — see isParentOf.
   parentId?: string | null
@@ -226,6 +229,10 @@ export type ThreadSessionEntry = {
   /** The thread of the session that spawned this one (not its session id: a handoff keeps the thread). Lets that thread's sessions destroy this
    *  one's thread after it ends (read by endedDestroyRefusal). Absent on a record from before it was kept, or a spawn nobody made: refused as before. */
   spawnerThreadId?: string
+  /** Hydra made the thread for this session, or for the session it continues: a resume, respawn, revive or handoff in the thread, or a
+   *  spawn into it by the owner of its lineage. False for any other spawn into a thread that already existed (by main or the operator): the
+   *  thread's lineage is not its. Who may destroy reads it (madeFor). Absent on an entry from before it was kept: the thread's own stands in. */
+  hydraMade?: boolean
 }
 
 export type ThreadMetadata = {
@@ -242,7 +249,8 @@ export type ThreadMetadata = {
   sessionHistory: ThreadSessionEntry[]
   listenOverride?: boolean
   parentChannelId?: string
-  /** Hydra posted the anchor message and made the thread itself: nothing in it belongs to a human, so a session that spawned into it may destroy it. Absent for a thread spawned into, or anchored on, someone's message or thread. */
+  /** Hydra posted the anchor message and made the thread itself, so the anchor is hydra's to delete. Absent for a thread spawned into, or
+   *  anchored on, someone's message or thread. Who may destroy reads each entry's own `hydraMade` (madeFor); this stands in for an old entry. */
   hydraMade?: boolean
 }
 
@@ -273,6 +281,7 @@ export type SpawnOpts = {
   memberLabel?: string   // label for thread member (e.g. 'critic', 'judge')
   initiator?: string
   parentId?: string                    // the spawner's sessionId: authority over the new session (see isParentOf)
+  askedBy?: string | null              // the session that asked for this spawn (null: one that could not show which); absent for main, the operator and hydra's own starts. A spawn into an ended thread is refused unless it owns that thread's lineage (lineage.ts)
   label?: SessionLabel  // what the session is for, for cost grouping
   inheritedLabel?: SessionLabel  // bucket handed down by a parent or dead predecessor; loses to `label` and to a flag on the topic
   ephemeral?: boolean    // auto-kill on [done] sentinel, skip death visuals
@@ -632,9 +641,13 @@ export class ThreadRegistry {
     originType: 'spawn' | 'fork' | 'handoff' | 'resurrect', originFrom?: string,
     model?: string, parentChannelId?: string, claudeSessionId?: string,
     label: SessionLabel | undefined, policy?: LaunchPolicy, kickoffHash?: string, hydraMade?: boolean, spawnerThreadId?: string,
+    /** The start continues the thread's own session (resume, respawn, revive, handoff, or its lineage's owner spawning into it): it keeps that session's `hydraMade`. */
+    continuesThread?: boolean,
   }): void {
     const now = Date.now()
     let thread = this.threads.get(threadId)
+    // Read before this start's entry is pushed: the entry it continues is the thread's last.
+    const madeForThis = !!opts.hydraMade || (!!opts.continuesThread && this.madeFor(threadId))
     if (!thread) {
       thread = {
         threadId,
@@ -670,8 +683,19 @@ export class ThreadRegistry {
       ...(opts.policy !== undefined && { policy: opts.policy }),
       ...(opts.kickoffHash !== undefined && { kickoffHash: opts.kickoffHash }),
       ...(opts.spawnerThreadId && { spawnerThreadId: opts.spawnerThreadId }),
+      hydraMade: madeForThis,
     })
     this.persist()
+  }
+
+  /**
+   * Whether hydra made `threadId` for `sessionId`'s lineage (its entry), or, with no session named, for its last session's. An entry
+   * from before entries kept it, or a session with none (a guest, a record older than the history), reads the thread's own `hydraMade`.
+   */
+  madeFor(threadId: string, sessionId?: string): boolean {
+    const thread = this.threads.get(threadId)
+    const entry = sessionId ? thread?.sessionHistory.findLast(h => h.sessionId === sessionId) : thread?.sessionHistory.at(-1)
+    return entry?.hydraMade ?? thread?.hydraMade === true
   }
 
   /** Mark a session's conversation as never to be continued (kill_and_respawn), on disk before anything ends it. False: it has no history entry to mark. */

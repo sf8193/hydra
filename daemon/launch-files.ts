@@ -11,6 +11,7 @@ import { chmodSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { STATE_DIR, STATE_WRITABLE } from './config.js'
 import { removeRestrictedFiles } from './restricted-files.js'
+import { SESSION_TOKEN_VAR } from '../shared/caller.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
@@ -53,8 +54,32 @@ export function removeSpawnPrompt(session: { tmuxName: string; sessionId: string
   rmSync(pathOf(session.tmuxName, session.sessionId), { force: true })
 }
 
-/** Everything a launch wrote for one session (its restricted config, its prompt file): the one call for a session's end. */
+// The session's token (cli-caller.ts), handed to its pane the same way, so it is on no command line: <state>/session-tokens/<session name>-<session
+// id>.token, mode 0600 in a 0700 folder. The pane's shell exports it and removes the file before the engine starts, so it outlives a launch only
+// when the launch fails before the pane reads it (removeLaunchFiles).
+export const sessionTokenDir = () => join(STATE_DIR, 'session-tokens')
+const tokenPathOf = (tmuxName: string, sessionId: string) => join(sessionTokenDir(), `${tmuxName}-${sessionId}.token`)
+
+/** Writes the token to its file and gives the `&&` step that exports it as HYDRA_SESSION_TOKEN and removes the file. The step fails the chain when the file cannot be read. */
+export function writeSessionToken(tmuxName: string, sessionId: string, token: string): { path: string; load: string } {
+  mkdirSync(sessionTokenDir(), { recursive: true, mode: 0o700 })
+  chmodSync(sessionTokenDir(), 0o700)
+  const path = tokenPathOf(tmuxName, sessionId)
+  writeFileSync(path, token, { mode: 0o600 })
+  chmodSync(path, 0o600)
+  // A bare assignment takes its substitution's status (`export X=$(...)` would not): an unreadable file stops the launch.
+  return { path, load: `${SESSION_TOKEN_VAR}=$(cat ${shq(path)}) && export ${SESSION_TOKEN_VAR} && rm -f ${shq(path)}` }
+}
+
+/** Removes one session's token file. Quiet when there is none. A process that does not own the state dir removes nothing. */
+export function removeSessionToken(session: { tmuxName: string; sessionId: string }, writable: boolean = STATE_WRITABLE): void {
+  if (!writable) return
+  rmSync(tokenPathOf(session.tmuxName, session.sessionId), { force: true })
+}
+
+/** Everything a launch wrote for one session (its restricted config, its prompt file, its token file): the one call for a session's end. */
 export function removeLaunchFiles(session: { tmuxName: string; sessionId: string }, writable: boolean = STATE_WRITABLE): void {
   removeRestrictedFiles(session, writable)
   removeSpawnPrompt(session, writable)
+  removeSessionToken(session, writable)
 }

@@ -133,6 +133,7 @@ export type LaunchInput = {
   readonly resumeOmp?: { fromSessionId: string }                 // omp: continue the session file of this dead hydra session
   readonly threadId?: string                                     // the chat thread this session serves; exported to its env
   readonly sessionType?: SessionInfo['sessionType']              // and its role there; exported to its env
+  readonly sessionToken?: string                                 // the token this launch's session presents to the CLI (cli-caller.ts): handed over by file or process env, never on a command line
   readonly policy?: LaunchPolicy                                 // what a specialist's session may reach, decided at its birth (restricted.ts). In launch() alone, restricted = true decides the folder, argv, env and files (it runs in policy.workdir); absent or operator: as ever
 }
 

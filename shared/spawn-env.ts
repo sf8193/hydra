@@ -181,11 +181,13 @@ export function tmuxNewSession(
 }
 
 // A session's identity. Claude and omp export their own at launch. A process started from a session's
-// shell inherits that session's; codex gets none of its own, so drop any it inherited.
-export const SESSION_IDENTITY_VARS = ['HYDRA_SESSION_ID', 'HYDRA_SESSION_NAME', 'HYDRA_THREAD_ID', 'HYDRA_SESSION_TYPE', 'HYDRA_RESTRICTED', 'HYDRA_WRITE_CONFINED'] as const
+// shell inherits that session's; codex must not, so any it inherited is dropped and only what its caller names as
+// its own (`own`: its session token) is set. HYDRA_SESSION_TOKEN is the one the daemon checks: the others are what
+// a session says of itself (shared/caller.ts).
+export const SESSION_IDENTITY_VARS = ['HYDRA_SESSION_ID', 'HYDRA_SESSION_NAME', 'HYDRA_THREAD_ID', 'HYDRA_SESSION_TYPE', 'HYDRA_RESTRICTED', 'HYDRA_WRITE_CONFINED', 'HYDRA_SESSION_TOKEN'] as const
 
-export function codexSpawnEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+export function codexSpawnEnv(extra: NodeJS.ProcessEnv = {}, own: Partial<Record<typeof SESSION_IDENTITY_VARS[number], string>> = {}): NodeJS.ProcessEnv {
   const env = scrubbedSpawnEnv({ ...process.env, ...extra })
   for (const v of SESSION_IDENTITY_VARS) delete env[v]
-  return env
+  return { ...env, ...own }
 }

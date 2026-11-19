@@ -4,6 +4,8 @@ import { transport } from './bridge-transport.js'
 import { doSpawnSession, killSession, refusedLaunches } from './session-lifecycle.js'
 import { macosGateHealth } from './restricted.js'
 import { callerRefusal, endedDestroyRefusal, destroyDeclinedText, destroyThreadById, killThenDestroy } from './destroy.js'
+import { cliCaller } from './cli-caller.js'
+import { UNVERIFIED_SESSION } from './lineage.js'
 import { fallbackDescription, formatDuration } from './util.js'
 import { tmuxServerState, tmuxSessionState } from './tmux.js'
 import { parseIdempotencyTtl, parseIdleTtl } from '../shared/constants.js'
@@ -50,6 +52,8 @@ export type CLIRequest = {
   command: string
   id: string
   params: Record<string, unknown>
+  /** Who is calling, as the CLI says (shared/caller.ts); read by cliCaller, never believed as given. */
+  caller?: unknown
 }
 
 export type CLIResponse = {
@@ -136,7 +140,10 @@ async function handleSpawn(req: CLIRequest): Promise<CLIResponse> {
       const filled = await spawnSpecialist(specialist, initiator)
       result = { sessionId: filled.info.sessionId, name: filled.info.tmuxName, threadId: filled.info.threadId, url: filled.url }
     } else {
-      result = await doSpawnSession(prompt!, channel ?? undefined, message ?? undefined, { initiator, model, ephemeral, idleTtlMs, forceWorktreeCleanup: forceWorktreeCleanup === true, trigger: 'CLI' })
+      // From inside a session, a spawn into a thread whose session has ended answers to that thread's lineage, as spawn_session does.
+      const caller = cliCaller(req)
+      const askedBy = caller.kind === 'session' ? { askedBy: caller.sessionId } : caller.kind === 'unverified' ? { askedBy: UNVERIFIED_SESSION } : {}
+      result = await doSpawnSession(prompt!, channel ?? undefined, message ?? undefined, { initiator, model, ephemeral, idleTtlMs, forceWorktreeCleanup: forceWorktreeCleanup === true, trigger: 'CLI', ...askedBy })
     }
   } catch (err) {
     updateIdempotency(idempotencyKey, { status: 'failed' })
@@ -225,8 +232,13 @@ function endedThreadsOf(name: string): string[] {
 }
 
 async function handleKill(req: CLIRequest): Promise<CLIResponse> {
-  const { name, destroy, callerSessionId } = req.params as { name?: string; destroy?: boolean; callerSessionId?: string }
+  const { name, destroy } = req.params as { name?: string; destroy?: boolean }
   if (!name) return respond(req, false, 'name is required')
+  // A destroy acts on the caller's authority: the operator's shell may destroy any, a session as the kill_session tool allows, and a
+  // caller that cannot show which session it is, none.
+  const caller = destroy === true ? cliCaller(req) : { kind: 'operator' as const }
+  if (caller.kind === 'unverified') return respond(req, false, `cannot destroy ${name} — ${caller.why}. Nothing was killed. Run it from the operator's shell, or ask the session that spawned it.`)
+  const callerSessionId = caller.kind === 'session' ? caller.sessionId : undefined
 
   const info = sessionByName(name)
   if (!info) {
@@ -245,9 +257,9 @@ async function handleKill(req: CLIRequest): Promise<CLIResponse> {
   // and the death handler will set it to completed during killSession
   const idemKey = getBySessionId(info.sessionId)?.key
 
-  // The operator's shell has no session id and may destroy any session, as it may kill any. Run from
-  // inside a session (HYDRA_SESSION_ID) a destroy answers to the same rules as the kill_session tool.
-  if (destroy === true && callerSessionId && callerSessionId !== 'main') {
+  // The operator's shell may destroy any session, as it may kill any. Run from inside a session (its token)
+  // a destroy answers to the same rules as the kill_session tool.
+  if (destroy === true && callerSessionId) {
     const refusal = callerRefusal(registry.get(callerSessionId), info, 'destroy')
     if (refusal) return respond(req, false, refusal)
   }

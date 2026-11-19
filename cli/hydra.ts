@@ -452,6 +452,8 @@ async function main(): Promise<void> {
         console.error('error: session name required')
         process.exit(1)
       }
+      // callerSessionId: the old form, for a daemon from before session tokens (it reads nothing else). A daemon with tokens reads the
+      // request's caller claim (sendRequest) and never believes this. Dropped one release on.
       const response = await sendRequest(socketPath(), {
         type: 'cli', command: 'kill', id: randomUUID(), params: { name, ...(destroy && { destroy, ...(process.env.HYDRA_SESSION_ID && { callerSessionId: process.env.HYDRA_SESSION_ID }) }) },
       })

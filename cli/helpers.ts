@@ -5,6 +5,7 @@ import { homedir } from 'os'
 import { execSync, execFileSync } from 'child_process'
 import { resolveLaunchModel, spawnModel, TRANSCRIBE_TMUX, byteTmuxName, claudeConfigDir, platformStateDir } from '../shared/constants.js'
 import { tmuxNewSession, captureSpawnVars, withRaisedFdLimit } from '../shared/spawn-env.js'
+import { callerClaim } from '../shared/caller.js'
 import { scrubTokenVarsInFile } from '../config/token-vars.js'
 import { sourceEnvFiles, parseEnvLine } from '../shared/env-parse.js'
 import { formatIssues, loadHydraConfig, systemEnv } from '../config/load.js'
@@ -416,8 +417,13 @@ export function resolveSocket(daemonName?: string): string {
   }
 }
 
-/** `timeoutMs`: how long to wait for the reply; a request that spawns a session needs more than the default. */
+/**
+ * `timeoutMs`: how long to wait for the reply; a request that spawns a session needs more than the default.
+ * Every request says who is calling (shared/caller.ts): the session's token, a session's environment without one, or nothing (the operator's shell).
+ */
 export function sendRequest(socketPath: string, request: Record<string, unknown>, timeoutMs = 10_000): Promise<Record<string, unknown>> {
+  const caller = callerClaim(process.env)
+  if (caller) request = { ...request, caller }
   return new Promise((resolve, reject) => {
     const socket = connect(socketPath)
     let buf = ''
