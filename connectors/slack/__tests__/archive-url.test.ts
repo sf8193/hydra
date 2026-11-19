@@ -18,7 +18,6 @@ test('archiveUrl builds each shape the old call sites built', () => {
 test('parseArchiveUrl reads back what each old parser read', () => {
   // router.fetchSlackThreadSummary and artifacts.renderContextLink: a message link, a dot before the last six digits
   expect(parseArchiveUrl(`${WS}/archives/C0FOOD/p1793732224093059`, true)).toEqual({ channel: 'C0FOOD', ts: '1793732224.093059' })
-  expect(parseArchiveUrl('https://ws.slack.com/archives/C000/p12345', true)).toEqual({ channel: 'C000', ts: '12345' })
   expect(parseArchiveUrl(`${WS}/archives/C0FOOD`, true)).toBeUndefined()
   // router's channel-name cache and daemon.ts backfill: any [A-Z0-9]+ id, with or without a message
   expect(parseArchiveUrl(`${WS}/archives/T0TEAM`)).toEqual({ channel: 'T0TEAM' })
@@ -27,6 +26,34 @@ test('parseArchiveUrl reads back what each old parser read', () => {
   // a lowercase id is no channel id, whichever form of link asks
   expect(parseArchiveUrl(`${WS}/archives/c0food/p1793732224093059`, true)).toBeUndefined()
   expect(parseArchiveUrl(`${WS}/archives/c0food`)).toBeUndefined()
+})
+
+test('a message link has the shape Slack writes: https, a slack.com host, p + ten digits + six, an optional query', () => {
+  const ts = { channel: 'C0CF2698RQC', ts: '1794969983.366379' }
+  expect(parseArchiveUrl('https://angellist.slack.com/archives/D0BN3LP8ASV/p1794969983366379', true)).toEqual({ channel: 'D0BN3LP8ASV', ts: '1794969983.366379' })
+  // a thread reply keeps its own ts (the query names the parent)
+  expect(parseArchiveUrl('https://acme.slack.com/archives/C0CF2698RQC/p1794969986907669?thread_ts=1794969983.366379&cid=C0CF2698RQC', true)).toEqual({ channel: 'C0CF2698RQC', ts: '1794969986.907669' })
+  expect(parseArchiveUrl('https://acme.slack.com/archives/C0CF2698RQC/p1794969983366379#x', true)).toEqual(ts)
+  // an Enterprise Grid host is a Slack host
+  expect(parseArchiveUrl('https://grid-acme.enterprise.slack.com/archives/C0CF2698RQC/p1794969983366379', true)).toEqual(ts)
+  // surrounding whitespace is not part of the link
+  expect(parseArchiveUrl('  https://acme.slack.com/archives/C0CF2698RQC/p1794969983366379\n', true)).toEqual(ts)
+  // not a message link: no ts, a ts of the wrong length, another scheme or host, a link inside another URL, or not a URL
+  for (const s of [
+    'https://acme.slack.com/archives/C0CF2698RQC',
+    'https://acme.slack.com/archives/C0CF2698RQC/p123',
+    'https://acme.slack.com/archives/C0CF2698RQC/p17949699833663791',
+    'ftp://acme.slack.com/archives/C0CF2698RQC/p1794969983366379',
+    'https://acme.example.com/archives/C0CF2698RQC/p1794969983366379',
+    'https://evil.example/?u=https://acme.slack.com/archives/C0CF2698RQC/p1794969983366379',
+    'slack:C0CF2698RQC', 'https://discord.com/channels/1/2',
+  ]) expect(parseArchiveUrl(s, true)).toBeUndefined()
+})
+
+test('a channel link has the same host rule: https, a slack.com host, no link inside another URL', () => {
+  expect(parseArchiveUrl('https://grid-acme.enterprise.slack.com/archives/C0CF2698RQC')).toEqual({ channel: 'C0CF2698RQC' })
+  for (const s of ['http://acme.slack.com/archives/C0CF2698RQC', 'https://acme.example.com/archives/C0CF2698RQC', 'https://evil.example/?u=https://acme.slack.com/archives/C0CF2698RQC', 'slack:C0CF2698RQC'])
+    expect(parseArchiveUrl(s)).toBeUndefined()
 })
 
 const realView = slackRuntimeDeps.view

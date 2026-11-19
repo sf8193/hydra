@@ -32,6 +32,7 @@ export function cachePrTitle(url: string, title: string): void { boundedSet(prTi
 // In-memory Slack channel name cache — keyed by channel ID (e.g. "C01NJ09D6UW").
 const slackChannelNames = new Map<string, string>()
 export function cacheSlackChannel(id: string, name: string): void { boundedSet(slackChannelNames, id, name) }
+export const cachedSlackChannel = (id: string): string | undefined => slackChannelNames.get(id)
 
 // In-memory Slack thread summary cache — keyed by archive URL.
 const slackThreadSummaries = new Map<string, string>()
@@ -127,7 +128,7 @@ export function renderContextLink(link: string): string {
     return `• 🔗 <${link}|${label}>`
   }
   let label: string
-  if (/slack\.com\/archives/.test(link)) label = 'Slack thread'
+  if (parseArchiveUrl(link)) label = 'Slack thread'
   else if (/linear\.app/.test(link)) label = 'Linear'
   else if (/incident\.io/.test(link)) label = 'Incident'
   else if (/datadoghq\.com/.test(link)) label = 'Datadog'

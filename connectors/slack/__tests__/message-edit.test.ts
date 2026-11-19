@@ -98,6 +98,24 @@ describe('a session edits and deletes the messages its own app posted', () => {
     expect(calls).toEqual([])
   })
 
+  test('a Slack message link names the chat_id and message_id it stands for, and is held to the same checks', async () => {
+    // chat_id slack:C1 is not an open conversation (only C1's threads are bound), as the link's chat_id and message_id would say.
+    const viaLink = await executeTool('delete_message', { link: 'https://grid-acme.enterprise.slack.com/archives/C1/p1794969983366379' }, 'deals-session')
+    const viaIds = await executeTool('delete_message', { chat_id: 'slack:C1', message_id: '1794969983.366379' }, 'deals-session')
+    expect(viaLink.content[0].text).toContain('slack:C1 is not an open conversation')
+    expect(viaLink.content[0].text).toBe(viaIds.content[0].text)
+    expect(calls).toEqual([])
+  })
+
+  test('a link that is not a message link is refused before anything else is asked', async () => {
+    for (const link of ['https://acme.slack.com/archives/C1', 'https://acme.slack.com/archives/C1/p123', 'https://elsewhere.example/archives/C1/p1794969983366379', 'slack:C1:5.000001']) {
+      const r = await executeTool('edit_message', { link, text: 'x' }, 'crm-session')
+      expect(r.content[0].text).toContain('edit_message: link is not a Slack message link')
+    }
+    expect(reads).toEqual([])
+    expect(calls).toEqual([])
+  })
+
   test('a message that is neither the app’s nor the operator’s is refused, and Slack is not asked to touch it', async () => {
     state.author = 'other'
     await expect(editInConversation('crm-session', 'slack:C1:6.000001', '8.000001', 'x')).rejects.toThrow('was written by neither')

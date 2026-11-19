@@ -24,6 +24,7 @@ import { fileArgTools, snapshotConfinedFiles } from './write-confinement.js'
 import { attachmentTarget } from './attachment-target.js'
 import { fileRefusal } from '../config/write-confinement.js'
 import { bindConversation, unbindConversation, formatConversationsFor, replyInConversation, editInConversation, deleteInConversation, fetchInConversation, ownConversationRefusal, type OwnUse } from '../connectors/slack/runtime.js'
+import { parseArchiveUrl } from '../connectors/slack/conversation.js'
 import { refreshSessionVisual, emojiOf, emojiOfName } from './anchor-state.js'
 import { refreshDashboard } from './dashboard.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './artifacts.js'
@@ -221,15 +222,6 @@ export function ownPlaceRefusal(callerSessionId: string, name: string, args: Rec
   return why && `${refusal} (${why})`
 }
 
-/**
- * A Slack message link (`https://<team>.slack.com/archives/<channel>/p<ts without the dot>`) as the chat_id and message_id
- * edit_message and delete_message take: `slack:<channel>` and the ts with its dot back. Undefined when it is not one.
- */
-export function slackMessageLink(link: string): { chat_id: string; message_id: string } | undefined {
-  const m = /^https:\/\/[\w.-]+\.slack\.com\/archives\/([A-Z0-9]+)\/p(\d{10})(\d{6})(?:[?#].*)?$/.exec(link.trim())
-  return m ? { chat_id: `slack:${m[1]}`, message_id: `${m[2]}.${m[3]}` } : undefined
-}
-
 /** `fetch_messages`' answer: one line per message, oldest first. */
 function fetchedText(msgs: { at: Date; who: string; text: string; id: string; files: number }[]): string {
   if (msgs.length === 0) return '(no messages)'
@@ -241,9 +233,9 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
   try {
     // edit_message and delete_message also take a Slack message's link: read as the chat_id and message_id it names, before any check.
     if ((name === 'edit_message' || name === 'delete_message') && typeof args.link === 'string') {
-      const target = slackMessageLink(args.link)
-      if (!target) throw new Error(`${name}: link is not a Slack message link (https://<team>.slack.com/archives/<channel>/p<digits>)`)
-      args = { ...args, ...target }
+      const archive = parseArchiveUrl(args.link, true)
+      if (!archive) throw new Error(`${name}: link is not a Slack message link (https://<team>.slack.com/archives/<channel>/p<digits>)`)
+      args = { ...args, chat_id: `slack:${archive.channel}`, message_id: archive.ts }
       delete args.link
     }
     // A Slack conversation id is read once, trimmed, before any check: the check below and the routing in each tool see the same id
