@@ -128,8 +128,9 @@ export type ConversationEntry = {
   owed?: string[]
   /** Opened by untagged chatter where `messages = "all"`: while owed or answered, such conversations take at most half the table; they idle out in a day. */
   ambient?: true
-  /** Bound by hand (`BOUND_BY`: a session's tool, a reply's thread, the operator's CLI) after routing opened it: `mentionedBy` keeps the opener, so this is what keeps it from eviction. */
-  boundByHand?: true
+  /** Who bound it by hand (`BOUND_BY`: a session's tool, a reply's thread, the operator's CLI) after routing opened it; `mentionedBy` keeps the opener.
+   *  Keeps it from eviction, and a session's (`tool`, `home`) counts toward its `TOOL_BIND_MAX` (`heldBySession`). */
+  boundBy?: string
   /** When the guard first said deferred (exit 75) to an owed ts: `owed_max` counts from here. */
   deferredSince?: Record<string, number>
   /** `deferredSince`'s two older names, in a store written before the rename: read by `readOldNames`, never written. */
@@ -380,6 +381,8 @@ const AMBIENT_IDLE_MS = 86_400_000
 const EVICT_QUIET_MS = 3600_000
 /** `mentionedBy` of a conversation bound by hand (a session's tool, a reply's thread, the operator's CLI), not by routing: never evicted. */
 const BOUND_BY: ReadonlySet<string> = new Set(['tool', 'home', 'cli'])
+/** A conversation a session holds by its own hand, opened or bound by it: what `TOOL_BIND_MAX` counts. */
+export const heldBySession = (e: ConversationEntry): boolean => e.mentionedBy === 'tool' || e.mentionedBy === 'home' || e.boundBy === 'tool' || e.boundBy === 'home'
 /** The time of a tag in a store that kept none: older than any. */
 const UNKNOWN_TS = '0.000000'
 /** How many channels no rule names catch-up reads for an app, the ones it was tagged in most recently: the bound on the extra history reads. */
@@ -753,8 +756,11 @@ export class ConversationTable {
 
   /**
    * A full table makes room for a new conversation by letting go of the `n` quiet the longest, as idle expiry would. Only one routing opened:
-   * never one a session, the operator or a reply bound (`BOUND_BY`, or `boundByHand` when bound after routing opened it), nor one bound to a
-   * session's thread; for an opener of untagged chatter (`onlyAmbient`), only one chatter opened. And only with nothing owed, nothing
+   * never one a session, the operator or a reply bound (`BOUND_BY`, or `boundBy` when bound after routing opened it), nor one bound to a
+   * session's thread; for an opener of untagged chatter or the bot's own post (`onlyAmbient`), only one chatter opened.
+   * Quiet counts from the last message in or the specialist's last reply (`touch`): a session still working on a message an hour after it
+   * arrived, with nothing else owed, can lose the binding to a new tag, and its reply is then refused. Once let go, only a tag or a DM there
+   * (or any message, where the place hears every message) opens it again: an untagged reply is not heard. And only with nothing owed, nothing
    * waiting in the window or in flight, no wait for a session, and quiet `EVICT_QUIET_MS`: a session handed its last message may still be
    * answering, and its reply needs the binding. Each is logged; its specialist is alerted once per episode. False, and nothing let go, when
    * fewer than `n` qualify.
@@ -762,7 +768,7 @@ export class ConversationTable {
   private evict(held: ConversationEntry[], n: number, cap: number, now: number, opening: string, onlyAmbient: boolean): boolean {
     const victims = held.filter(e => {
       const key = keyOf(e)
-      return !BOUND_BY.has(e.mentionedBy ?? '') && !e.boundByHand && !(e.specialist && isSessionThread(e.specialist)) && (!onlyAmbient || !!e.ambient)
+      return !BOUND_BY.has(e.mentionedBy ?? '') && !e.boundBy && !(e.specialist && isSessionThread(e.specialist)) && (!onlyAmbient || !!e.ambient)
         && !e.owed?.length && e.waitingSince === undefined && !this.pending.has(key) && !this.inflight.get(key)?.size && now - e.lastEventAt >= EVICT_QUIET_MS
     }).sort((a, b) => a.lastEventAt - b.lastEventAt).slice(0, n)
     if (victims.length < n) return false
@@ -771,7 +777,7 @@ export class ConversationTable {
       const quiet = spanText(now - e.lastEventAt)
       this.deps.log(`daemon: slack connector: the conversation table is full (${cap}), so ${conversationId(e)}${e.specialist ? ` (bound to ${spelledBare(e.specialist)})` : ''}, quiet the longest (${quiet}), was let go to open ${opening}\n`)
       const to = e.specialist ?? listenerOf(this.deps.config(e.app), e.channel)
-      this.alertOnce(`evicted:${to ?? '-'}`, to, `ℹ️ The conversation table is full (${cap}), so hydra let go of ${conversationId(e)}, quiet the longest (${quiet}), to open ${opening}; a new message there opens it again. Further ones within the hour are logged, not alerted.`, appOfEntry(e))
+      this.alertOnce(`evicted:${to ?? '-'}`, to, `ℹ️ The conversation table is full (${cap}), so hydra let go of ${conversationId(e)}, quiet the longest (${quiet}), to open ${opening}. Only a tag or a DM there opens it again (any message, where the place hears every message); an untagged reply in it is not heard until then. Further ones within the hour are logged, not alerted.`, appOfEntry(e))
     }
     this.persist()
     return true
@@ -811,7 +817,7 @@ export class ConversationTable {
     const seenParent = !this.get(channel, threadTs, app) && (by === 'tool' || by === 'home')
     const entry = this.watch(channel, threadTs, specialist, by, app)
     if (!entry) return undefined
-    if (by && BOUND_BY.has(by) && !entry.boundByHand && entry.mentionedBy !== by) { entry.boundByHand = true; this.persist() }
+    if (by && BOUND_BY.has(by) && !entry.boundBy && entry.mentionedBy !== by) { entry.boundBy = by; this.persist() }
     if (seenParent && threadTs !== TOP_LEVEL) { entry.delivered = insertTs(entry.delivered, threadTs, DELIVERED_KEEP); this.persist() }
     if (entry.specialist !== specialist) {
       this.deps.log(`daemon: slack connector: ${conversationId(entry)} moved from ${entry.specialist} to ${specialist}\n`)
@@ -819,6 +825,14 @@ export class ConversationTable {
       this.persist()
     }
     return entry
+  }
+
+  /** The specialist answered in it: its quiet clock restarts, so a conversation it is still speaking in is not the one let go first. */
+  touch(channel: string, threadTs: string, app?: string): void {
+    const e = this.get(channel, threadTs, app)
+    if (!e) return
+    e.lastEventAt = this.deps.now()
+    this.persist()
   }
 
   /** Unbind a conversation. What it still owed will never be delivered now: a drop, surfaced (`quiet`: counted and logged only, for a caller that says it itself). */
@@ -1210,7 +1224,7 @@ export class ConversationTable {
       if (existing?.delivered?.includes(ev.ts)) return skip(() => `it was already delivered`)
       const to = listenerOf(cfg, ev.channel)
       if (!to) return skip(() => `no one listens where the bot posted`)
-      const entry = this.watch(ev.channel, threadTs, to, undefined, app, 'any')
+      const entry = this.watch(ev.channel, threadTs, to, undefined, app, 'ambient')   // a scheduled post never pushes out a person's thread
       if (!entry) {
         this.drop('table-full', { app, channel: ev.channel, threadTs, specialist: to }, [ev.ts], `the conversation table is full (${cfg.maxConversations}), so the bot's own post opens no conversation and replies to it will not be delivered`)
         return 'ignored'

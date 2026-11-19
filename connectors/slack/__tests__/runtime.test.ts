@@ -400,6 +400,14 @@ describe('bind_conversation / unbind_conversation', () => {
     expect(await bindConversation(food, 'slack:C1:3.000001')).toContain('is bound to') // one it holds already is fine
   })
 
+  test('binding threads routing opened to it counts toward TOOL_BIND_MAX: hand-binding cannot pin slots past it', async () => {
+    configure(TOML, { maxConversations: 50 })
+    for (let i = 1; i <= 11; i++) getConversationTable().watch('C1', `${i}.000001`, FOOD, 'UALICE')   // routing opened them, bound to it
+    for (let i = 1; i <= 10; i++) await bindConversation(food, `slack:C1:${i}.000001`)
+    await expect(bindConversation(food, 'slack:C1:11.000001')).rejects.toThrow(`${FOOD} already holds 10 conversations it opened itself`)
+    expect(await bindConversation(food, 'slack:C1:3.000001')).toContain('is bound to') // one it holds already is fine
+  })
+
   test('a rename through `renamed_from` keeps a specialist\'s hold on its conversations', async () => {
     getConversationTable().bind('C1', '7.000001', 'old-food')
     configure(TOML.replace(`[specialists.${FOOD}]`, `[specialists.${FOOD}]\nrenamed_from = ["old-food"]`))

@@ -8,7 +8,7 @@ flowchart TD
   nothing(["nothing more"])
   log["logged, counted by kind"]
   g2{"2. an alerted kind?"}
-  n2["alerted: expired, owed-full, too-large,<br/>tag-cap, table-full, catch-up-gap,<br/>unbound, refused, unrouted<br/>not alerted: guard (exit 10);<br/>a held thread gone: its holder is told instead"]
+  n2["alerted: expired, owed-full, too-large,<br/>tag-cap, table-full, catch-up-gap,<br/>unbound, refused, unrouted;<br/>a conversation let go for a full table (evicted:)<br/>not alerted: guard (exit 10);<br/>a held thread gone: its holder is told instead"]
   quiet(["logged and counted only"])
   g3{"3. same app, kind and target<br/>alerted in this episode?"}
   n3["an episode: 60 min from its first alert<br/>it also paces: guard redirects, exit 8,<br/>a specialist at max_sessions,<br/>the operator's token refused, a thread gone"]

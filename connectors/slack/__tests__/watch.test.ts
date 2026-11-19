@@ -609,6 +609,27 @@ describe('limits', () => {
     expect(reactions).toEqual([])
   })
 
+  test("the specialist's reply restarts a conversation's quiet clock: one it answered in under an hour ago is not let go", async () => {
+    const { w, tick } = setup({ maxConversations: 1 })
+    w.handle(ev({ ts: '1.000001', text: mention }))
+    await w.flush()
+    tick(2 * 3600_000)
+    w.touch(CH, '1.000001')                                                          // it replies now
+    tick(10 * 60_000)
+    expect(w.handle(ev({ ts: '2.000001', text: mention }))).toBe('ignored')
+    expect(w.get(CH, '1.000001')).toBeDefined()
+  })
+
+  test("the bot's own top-level post never pushes out a conversation a person opened", async () => {
+    const { w, tick } = setup({ maxConversations: 1 })
+    w.handle(ev({ ts: '1.000001', text: mention }))
+    await w.flush()
+    tick(2 * 3600_000)
+    expect(w.handle(ev({ ts: '2.000001', user: BOT, text: 'the daily report' }))).toBe('ignored')
+    expect(w.list().map(e => e.threadTs)).toEqual(['1.000001'])
+    expect(w.stats().dropped).toEqual({ 'table-full': 1 })
+  })
+
   test("eviction alerts the evicted conversation's specialist once per episode: a stream of new tags into a full table does not spam", async () => {
     const { w, alerts, alertTo, logs, tick } = setup({ maxConversations: 3 })
     for (let i = 1; i <= 3; i++) { w.handle(ev({ ts: `${i}.000001`, user: `U${i}`, text: mention })); await w.flush(); tick(60_000) }

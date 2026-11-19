@@ -1,4 +1,4 @@
-import { ConversationTable, namedChannels, cantRead, NOT_A_MEMBER, cmpTs, slackWatchesPath, unresolvedPlaces, conversationId, placeName, isDm, appOfEntry, TOP_LEVEL, NO_DIRECTORY, SLACK_LIMITS, type ConversationConfig, type ConversationEntry, type ConversationStats, type LateOwed } from './watch.js'
+import { ConversationTable, namedChannels, cantRead, NOT_A_MEMBER, cmpTs, slackWatchesPath, unresolvedPlaces, conversationId, placeName, isDm, appOfEntry, TOP_LEVEL, NO_DIRECTORY, SLACK_LIMITS, heldBySession, type ConversationConfig, type ConversationEntry, type ConversationStats, type LateOwed } from './watch.js'
 import { archiveUrl, parseConversation, THREAD_TS } from './conversation.js'
 import { ConnectedApps, type AppIdentity } from './apps.js'
 import { getSpecialist, conversationSpecialistOf, specialistOf, boundAs } from '../../specialists/specialists.js'
@@ -425,7 +425,10 @@ export async function bindConversation(caller: Partial<Pick<SessionInfo, 'thread
   // A specialist answers where it answers: a session only listening to the thread gives it way, and is told.
   const takeover = !!bound && isSessionThread(bound) && !isSessionThread(me)
   if (bound && currentId(v.hydra, bound) !== me && !takeover) throw new Error(`${conversationId(c)} is bound to ${bound}; only the operator moves it (hydra conversations bind)`)
-  if (!bound && w.list().filter(e => (e.mentionedBy === 'tool' || e.mentionedBy === 'home') && e.specialist && currentId(v.hydra, e.specialist) === me).length >= TOOL_BIND_MAX) {
+  // Counted unless this conversation already counts for it: binding a thread routing opened makes it its own, and counted (`heldBySession`).
+  const entry = w.get(c.channel, c.threadTs, app)
+  const counted = !!entry && heldBySession(entry) && bound !== undefined && currentId(v.hydra, bound) === me
+  if (!counted && w.list().filter(e => heldBySession(e) && e.specialist && currentId(v.hydra, e.specialist) === me).length >= TOOL_BIND_MAX) {
     throw new Error(`${me} already holds ${TOOL_BIND_MAX} conversations it opened itself; unbind one first`)
   }
   if (!w.bind(c.channel, c.threadTs, me, 'tool', app)) throw new Error(`the conversation table is full (${SLACK_LIMITS.maxConversations}); unbind one first`)
@@ -723,6 +726,7 @@ export async function replyInConversation(callerSessionId: string | undefined, c
     if (!(err instanceof NotInChannel) || (me !== MAIN && h.specialists[me ?? '']?.restricted)) throw err
     return toOperatorDm(app, id, err.message, text, stillMine, `From ${me === MAIN ? 'main' : me && isSessionThread(me) ? sessionNameIn(me) ?? `the session in thread ${me}` : me ?? 'a session'}`)
   }
+  if (posted) getConversationTable().touch(c.channel, c.threadTs, app)
   const said = `posted ${posted} message${posted === 1 ? '' : 's'} to ${id}${how}`
   return opened ? (unbound ? `${said}; its thread is not bound to ${me}: ${unbound}, so replies in it go to whoever the rules name here` : `${said}; replies in it come back to ${me}`) : said
 }
@@ -736,7 +740,7 @@ function bindOpenedThread(h: HydraConfig, me: string, channel: string, ts: strin
   // A thread the person answered into while the first part was posting may already be bound by the rules: never taken from whoever holds it.
   const now = w.get(channel, ts, app)?.specialist
   if (now) return currentId(h, now) === me ? undefined : `it is already bound to ${now}`
-  const held = w.list().filter(e => (e.mentionedBy === 'tool' || e.mentionedBy === 'home') && e.specialist && currentId(h, e.specialist) === me).length
+  const held = w.list().filter(e => heldBySession(e) && e.specialist && currentId(h, e.specialist) === me).length
   if (held < TOOL_BIND_MAX && w.bind(channel, ts, me, by, app)) return undefined
   const why = held >= TOOL_BIND_MAX ? `${me} already holds ${TOOL_BIND_MAX} conversations it opened itself` : 'the conversation table is full'
   alert(`⚠️ ${me}'s ${what} opened no conversation (${why}): replies under it go to whoever hears there, not back to ${me}.`, me)
