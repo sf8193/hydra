@@ -286,3 +286,31 @@ describe("main's answer, and the bind's notice: in the thread where the bot is a
     await expect(operatorBind(CONV, 'main', 'why not')).rejects.toThrow('--why gives the reason in the notice that a bind to a session')
   })
 })
+
+describe('a tag the tag cap drops in a group DM the bot is not part of', () => {
+  test('is counted and logged, never reacted to; the same over-cap tag in a channel gets the 🚫', async () => {
+    const run = (channel: string) => {
+      const dir = mkdtempSync(join(tmpdir(), 'operator-tag-cap-'))
+      dirs.push(dir)
+      const reactions: string[] = []
+      const config = view(WITH + '[[rules]]\nplace = "slack:group-dm:G0GROUP01"\ntarget = "main"\n', { coalesceMs: 1, dms: { D0ALICE01: 'UALICE', D0BOT0001: 'bot' }, groupDms: ['G0GROUP01'], maxMentionsPer10Min: 1 })
+      const w = new ConversationTable({
+        now: () => 1_000_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => config, alert: () => {},
+        deliver: async (): Promise<DeliverResult> => ({ ok: true }),
+      })
+      w.setSlackActions({ react: async (c: string, ts: string, name: string) => { reactions.push(`${c}:${ts}:${name}`) } } as any)
+      // Threads, so each tag opens its own conversation (top-level messages in a DM are one conversation, which the cap does not touch).
+      w.handle(ev({ channel, ts: '5000.000002', threadTs: '5000.000001' }))
+      expect(w.handle(ev({ channel, ts: '5001.000002', threadTs: '5001.000001' }))).toBe('ignored')   // a second new conversation inside 10 minutes: over the cap
+      return { w, reactions }
+    }
+    const group = run('G0GROUP01')
+    await Bun.sleep(1)
+    expect(group.w.stats().dropped).toEqual({ 'tag-cap': 1 })
+    expect(group.reactions).toEqual([])
+    const channel = run('C0DESK')
+    await Bun.sleep(1)
+    expect(channel.w.stats().dropped).toEqual({ 'tag-cap': 1 })
+    expect(channel.reactions).toHaveLength(1)
+  })
+})

@@ -37,7 +37,7 @@ flowchart TD
   g3 -->|"yes; or no, in any other case"| g4
   g3 -->|"no, and a DM with a person or a group DM,<br/>or untagged where the app has the operator's token"| ign3
   g4 -->|"yes: a top-level post"| own
-  own -->|"no room"| tfull
+  own -->|"no room, and nothing chatter opened<br/>quiet an hour to let go"| tfull
   g4 -->|"yes: a reply, in a DM,<br/>seen before, or no rule here"| ign4
   g4 -->|no| g5
   g5 -->|yes| ign4
