@@ -1,7 +1,7 @@
 import { LogLevel } from '@slack/bolt'
 import { WebClient } from '@slack/web-api'
 import { SocketSupervisor, START_TIMEOUT_MS, type SocketEmitter } from '../../shared/socket-supervisor.js'
-import { catchUp, toEvent, type CatchUpResult, type Page, type RawMessage, type SlackApi } from './catchup.js'
+import { catchUp, toEvent, BIND_SKEW_S, type CatchUpResult, type Page, type RawMessage, type SlackApi } from './catchup.js'
 import { mkdirSync, openSync, writeSync, closeSync, renameSync, rmSync } from 'fs'
 import { dirname } from 'path'
 import { linkPreviewsOff } from '../../shared/link-previews.js'
@@ -810,10 +810,14 @@ export class SlackListener {
       const windowStart = this.lastOkCatchUpStartedAt
       if (result.complete) { this.lastOkCatchUpAt = this.now(); this.lastOkCatchUpStartedAt = startedAt; this.alerted.catchUp = false; this.alerted.permanent = null }
       else this.alertIfPermanent(result.reason)
-      this.d.log(`daemon: slack connector: catch-up (${why}${deep ? ', deep' : ''}): ${result.complete ? 'done' : 'incomplete'}, ${result.calls} call(s), ${result.accepted} message(s) the live stream had not delivered\n`)
+      // `result.accepted` counts everything the pass took, including an old message a read brings back with its thread;
+      // only what was posted from the window's start on can have been missed live. Slack's clock and ours differ a little, so the
+      // window opens BIND_SKEW_S early, as a thread is reread from that long before its bind.
+      const missed = windowStart === null ? 0 : result.acceptedTs.filter(ts => Number(ts) * 1000 >= windowStart - BIND_SKEW_S * 1000).length
+      this.d.log(`daemon: slack connector: catch-up (${why}${deep ? ', deep' : ''}): ${result.complete ? 'done' : 'incomplete'}, ${result.calls} call(s), ${result.accepted} message(s) the live stream had not delivered${windowStart === null ? '' : ` (${missed} posted since the last complete pass began)`}\n`)
       // A quiet pass should find nothing. Finding messages while the stream held from the last complete pass's start to
       // this pass's end means it is losing events. Judged now, at the end, so a gap that lands while this pass runs counts.
-      if (why === 'periodic' && windowStart !== null && this.streamHeldSince(windowStart) && result.accepted > 0) this.missedLive(windowStart, result.accepted)
+      if (why === 'periodic' && windowStart !== null && this.streamHeldSince(windowStart) && missed > 0) this.missedLive(windowStart, missed)
     } catch (err) {
       this.d.log(`daemon: slack connector: catch-up crashed: ${err instanceof Error ? err.stack ?? err.message : err}\n`)
     } finally {

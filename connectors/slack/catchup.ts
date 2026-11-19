@@ -1,9 +1,9 @@
 import { route } from '../../routing/route.js'
 import { DEFAULT_SLACK_APP, placeOf } from '../../config/types.js'
-import { cmpTs, routedChannels, hearsDms, addressOf, TOP_LEVEL, OPERATOR_TOKEN_REFUSED, NOT_A_MEMBER, type SlackFile, type SlackMessageEvent, type ConversationConfig, type CatchUpConversations } from './watch.js'
+import { cmpTs, tagRe, routedChannels, hearsDms, addressOf, TOP_LEVEL, OPERATOR_TOKEN_REFUSED, NOT_A_MEMBER, type SlackFile, type SlackMessageEvent, type ConversationConfig, type CatchUpConversations } from './watch.js'
 
 /** Slack's clock and ours differ a little: a thread is read from this long before its bind, so a reply just after it is not passed over. */
-const BIND_SKEW_S = 10
+export const BIND_SKEW_S = 10
 
 /** Where a watched thread is reread from at the earliest: its newest delivered message, else when it was bound. Nothing posted before the bind is replayed. */
 function ownCursor(e: { delivered?: string[]; createdAt: number }): string {
@@ -58,8 +58,11 @@ export type SlackApi = {
   otherParties?(): Promise<{ channel: string; user?: string }[]>
 }
 
-/** `accepted`: messages the watcher took that it had not already handled, i.e. what the live stream did not deliver. */
-export type CatchUpResult = { complete: boolean; calls: number; handled: number; accepted: number; reason?: string }
+/**
+ * `accepted`: messages the watcher took that it had not already handled, i.e. what the live stream did not deliver.
+ * `acceptedTs`: their timestamps, so a caller can tell the ones posted inside a window from older ones a read brought back.
+ */
+export type CatchUpResult = { complete: boolean; calls: number; handled: number; accepted: number; acceptedTs: string[]; reason?: string }
 
 export type CatchUpOpts = {
   /** Also reread every watched thread, not just those with owed or newly active messages. */
@@ -124,7 +127,7 @@ export async function catchUp(watcher: CatchUpConversations, api: SlackApi, cfg:
   const maxPages = opts.maxPages ?? 5
   let calls = 0
   let handled = 0
-  let accepted = 0
+  const acceptedTs: string[] = []
   const spend = () => { if (++calls > maxCalls) throw new OutOfBudget('call budget spent') }
 
   const newest = new Map<string, string>()
@@ -135,7 +138,7 @@ export async function catchUp(watcher: CatchUpConversations, api: SlackApi, cfg:
       const ev = toEvent(channel, m)
       if (!ev) { opts.log(`daemon: slack connector: catch-up: dropped a message in ${channel} from ${m.user ?? m.bot_id ?? 'unknown'}: it has no timestamp\n`); continue }
       const outcome = watcher.handle(ev)
-      if (outcome !== 'ignored' && outcome !== 'refused') accepted++
+      if (outcome !== 'ignored' && outcome !== 'refused') acceptedTs.push(ev.ts)
       handled++
     }
   }
@@ -297,7 +300,11 @@ export async function catchUp(watcher: CatchUpConversations, api: SlackApi, cfg:
         if (i === 0) watcher.setVia(t.channel, t.threadTs, res.via ?? 'bot')
         // A reply's ts never moves the channel cursor: only history does. A top-level message posted after the
         // history read, and missed live, would otherwise be passed over for good.
-        feed(t.channel, res.messages)
+        // Slack returns a thread's root with every read, whatever `oldest` is. A root older than where this read starts
+        // (a thread bound after it was posted, or one already handled) is not new, so it is not handed to routing, unless it tags
+        // the bot: a request the live stream missed is still owed an answer.
+        const tag = tagRe(cfg.botUserId)
+        feed(t.channel, res.messages.filter(m => !m.ts || cmpTs(m.ts, t.from) >= 0 || (m.ts === t.threadTs && !!m.text && tag.test(m.text))))
         page = res.next
         if (!page) break
         if (i === maxPages - 1) throw new OutOfBudget(`thread ${t.channel}:${t.threadTs} has more than ${maxPages} pages`)
@@ -307,10 +314,10 @@ export async function catchUp(watcher: CatchUpConversations, api: SlackApi, cfg:
     // The cursor stays held where it was, so the next pass starts from the same place.
     const reason = err instanceof Error ? err.message : String(err)
     opts.log(`daemon: slack connector: catch-up incomplete after ${calls} call(s): ${reason}\n`)
-    return { complete: false, calls: Math.min(calls, maxCalls), handled, accepted, reason }
+    return { complete: false, calls: Math.min(calls, maxCalls), handled, accepted: acceptedTs.length, acceptedTs, reason }
   }
 
   // A skipped DM stays held: a live event must not move its cursor past the gap no pass has read yet.
   for (const channel of scanned) if (!skipped.has(channel)) watcher.endCatchUp(channel, unreadable.has(channel) ? undefined : newest.get(channel))
-  return { complete: true, calls, handled, accepted }
+  return { complete: true, calls, handled, accepted: acceptedTs.length, acceptedTs }
 }

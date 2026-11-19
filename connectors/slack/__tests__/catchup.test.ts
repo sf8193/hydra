@@ -52,6 +52,35 @@ describe('toEvent', () => {
 })
 
 describe('catchUp: a thread a session listens to, where no specialist listens', () => {
+  const ROOT = '1792999000.000001'
+  const SESSION = '1552619225032425525'
+  const root: RawMessage = { ts: ROOT, user: 'UA', text: 'posted days before the bind', reply_count: 1 }
+  /** Slack returns a thread's root with every read, whatever `oldest` is. */
+  const rootAlways = (thread: RawMessage[]): SlackApi => ({ ...fakeApi({ 'C0ELSE': [] }).api, async replies() { return { messages: thread } } })
+
+  test("a bound thread's root older than the bind is not handed to routing: not accepted, not sent", async () => {
+    const { w, sent } = setup()
+    w.bind('C0ELSE', ROOT, SESSION, 'tool')
+    for (let i = 0; i < 2; i++) {
+      const r = await catchUp(w, rootAlways([root]), cfg, opts({ deep: true }))
+      expect(r.handled).toBe(0)
+      expect(r.accepted).toBe(0)
+    }
+    await w.flush()
+    expect(sent).toEqual([])
+  })
+
+  test("a reply after the bind still counts, by its own timestamp; the root beside it does not", async () => {
+    const { w, sent } = setup()
+    w.bind('C0ELSE', ROOT, SESSION, 'tool')
+    const reply = { ts: '1793000100.000001', thread_ts: ROOT, user: 'UA', text: 'after the bind' }
+    const r = await catchUp(w, rootAlways([root, reply]), cfg, opts({ deep: true }))
+    expect(r.acceptedTs).toEqual([reply.ts])
+    await w.flush()
+    expect(sent.join()).toContain('after the bind')
+    expect(sent.join()).not.toContain('days before')
+  })
+
   test('the deep pass rereads it from its own last delivery, though its channel has no cursor; nothing older is replayed', async () => {
     const { w, sent } = setup()
     w.bind('C0ELSE', '1792999000.000001', '1552619225032425525', 'tool')    // bound at now (1_793_000_000 s)
