@@ -4,6 +4,7 @@ import { randomBytes } from 'crypto'
 import { STATE_DIR } from '../../daemon/config.js'
 import { atomicWriteFileSync } from '../../daemon/util.js'
 import { recordEvent } from '../../daemon/events.js'
+import { HYDRA_ACTOR, type BindReason, type UnbindReason } from '../../shared/events.js'
 import { DEFAULT_SLACK_APP, isChannelName, isDmPlace, optionsAt, optionsOf, placeCovers, placeKey, placeOf, type Address, type HydraConfig, type Place, type PlaceOptions, type SlackApp } from '../../config/types.js'
 import { appKey, appName, type Apps } from './app.js'
 import { attr, fence, oneLine, quoteBody, UNTRUSTED_TEXT_MAX_CHARS } from '../../shared/untrusted-text.js'
@@ -393,6 +394,10 @@ const isBoundBy = (x: unknown): x is BoundBy => (BOUND_BY as readonly unknown[])
 export const openedByBind = (e: ConversationEntry): boolean => isBoundBy(e.mentionedBy)
 /** A conversation a session holds by its own hand: what `TOOL_BIND_MAX` counts. */
 export const heldBySession = (e: ConversationEntry): boolean => e.boundBy === 'tool' || e.boundBy === 'home'
+/** Who changed a binding, for the event: a person or session (`by`, and the `why` they gave), or hydra itself (`by` is `hydra`, with a `reason`). */
+export type BindingEvent = { by: string; why?: string; reason?: BindReason }
+/** Who let a conversation go, for the event. */
+export type Removal = { by: string; reason?: UnbindReason }
 /** The time of a tag in a store that kept none: older than any. */
 const UNKNOWN_TS = '0.000000'
 /** How many channels no rule names catch-up reads for an app, the ones it was tagged in most recently: the bound on the extra history reads. */
@@ -524,6 +529,8 @@ export type Item = {
   ts: string; user?: string; name?: string; person?: string; roles?: string[]; operator?: boolean
   kind: 'mention' | 'follow-up' | 'dm' | 'reaction'; text: string; files?: SlackFile[]; saved?: FileRef[]
   tagged?: boolean; from?: SenderStanding
+  /** How routing took it, kept for the event written when its delivery settles: `via` is what chose the place, `tagged` whether the text tags the bot. */
+  routed?: { via: string; tagged: boolean }
 }
 
 export const ITEM_TEXT_MAX_CHARS = UNTRUSTED_TEXT_MAX_CHARS
@@ -768,7 +775,7 @@ export class ConversationTable {
     const existing = this.get(channel, threadTs, app)
     if (existing) {
       existing.lastEventAt = now
-      if (!existing.specialist) this.setBinding(existing, specialist, undefined) // a store written before bindings: its first message since binds it
+      if (!existing.specialist) this.setBinding(existing, specialist, undefined, { by: HYDRA_ACTOR, reason: 'rerouted' }) // a store written before bindings: its first message since binds it
       this.persist()
       return existing
     }
@@ -806,7 +813,7 @@ export class ConversationTable {
     }).sort((a, b) => a.lastEventAt - b.lastEventAt).slice(0, n)
     if (victims.length < n) return false
     for (const e of victims) {
-      this.entries.delete(keyOf(e))
+      this.remove(e, { by: HYDRA_ACTOR, reason: 'evicted' })
       const quiet = spanText(now - e.lastEventAt)
       this.deps.log(`daemon: slack connector: ${limit}, so ${conversationId(e)}${e.specialist ? ` (bound to ${spelledBare(e.specialist)})` : ''}, quiet the longest (${quiet}), was let go to open ${opening}\n`)
       const to = e.specialist ?? listenerOf(this.deps.config(e.app), e.channel)
@@ -820,12 +827,25 @@ export class ConversationTable {
    * The one place a conversation's binding changes to a specialist (it opens bound, is first bound, or is moved): a session listening to
    * the same thread through another app is told then. `hand` is who holds it by hand after the change: the binder, or nothing when routing moved it.
    */
-  private setBinding(entry: ConversationEntry, to: string, hand: BoundBy | undefined): void {
-    if (entry.specialist !== to) delete entry.unansweredAt   // what the old specialist was sent is not the new one's to answer
+  private setBinding(entry: ConversationEntry, to: string, hand: BoundBy | undefined, event?: BindingEvent): void {
+    const from = entry.specialist
+    if (from !== to) delete entry.unansweredAt   // what the old specialist was sent is not the new one's to answer
     entry.specialist = to
     if (hand) entry.boundBy = hand; else delete entry.boundBy
     delete entry.vacantSince   // a vacancy belongs to the thread the conversation was bound to; the next reconcile starts the new one's
+    if (event && from !== to) this.recordBinding(entry, from, event)
     this.tellSessionsTaken(entry)
+  }
+
+  /** The event for a binding that changed: by whoever bound it, or by hydra itself with a reason. The one place a `bind` event is written. */
+  private recordBinding(entry: ConversationEntry, from: string | undefined, event: BindingEvent): void {
+    recordEvent({ kind: 'bind', conversation: conversationId(entry), ...(from && { from }), to: entry.specialist!, ...(event.why && { why: event.why }), by: event.by, ...(event.reason && { reason: event.reason }) })
+  }
+
+  /** A conversation leaves the table: the one place an `unbind` event is written, by whoever let it go or by hydra with a reason. */
+  private remove(entry: ConversationEntry, who: Removal): void {
+    this.entries.delete(keyOf(entry))
+    recordEvent({ kind: 'unbind', conversation: conversationId(entry), ...(entry.specialist && { from: entry.specialist }), by: who.by, ...(who.reason && { reason: who.reason }) })
   }
 
   /**
@@ -848,15 +868,17 @@ export class ConversationTable {
    * the parent as seen: Slack returns it with every thread read, and it would be delivered as a follow-up. The operator's CLI
    * has not necessarily seen it, so it stays undelivered: a request the live stream missed is still delivered.
    */
-  bind(channel: string, threadTs: string, specialist: string, by: BoundBy = 'cli', app?: string): ConversationEntry | undefined {
-    const seenParent = !this.get(channel, threadTs, app) && (by === 'tool' || by === 'home')
+  bind(channel: string, threadTs: string, specialist: string, by: BoundBy = 'cli', app?: string, who: { by: string; why?: string } = { by }): ConversationEntry | undefined {
+    const opened = !this.get(channel, threadTs, app)
+    const seenParent = opened && (by === 'tool' || by === 'home')
     const entry = this.watch(channel, threadTs, specialist, by, app)
     if (!entry) return undefined
     if (seenParent && threadTs !== TOP_LEVEL) { entry.delivered = insertTs(entry.delivered, threadTs, DELIVERED_KEEP); this.persist() }
     if (entry.specialist !== specialist) {
       this.deps.log(`daemon: slack connector: ${conversationId(entry)} moved from ${entry.specialist} to ${specialist}\n`)
-      this.setBinding(entry, specialist, by)
+      this.setBinding(entry, specialist, by, who)
     } else entry.boundBy = by   // the latest binder holds it: a move by the operator is the operator's, not the session's it came from
+    if (opened) this.recordBinding(entry, undefined, who)
     this.persist()
     return entry
   }
@@ -871,14 +893,14 @@ export class ConversationTable {
   }
 
   /** Unbind a conversation. What it still owed will never be delivered now: a drop, surfaced (`quiet`: counted and logged only, for a caller that says it itself). */
-  unwatch(channel: string, threadTs: string, app?: string, quiet = false): boolean {
+  unwatch(channel: string, threadTs: string, app?: string, quiet = false, who: Removal = { by: 'operator' }): boolean {
     const key = watchKey(app, channel, threadTs)
     const pending = this.pending.get(key)
     if (pending) { clearTimeout(pending.timer); this.pending.delete(key) }
     const entry = this.entries.get(key)
     if (!entry) return false
     if (entry.owed?.length) this.drop('unbound', entry, entry.owed, 'its conversation was unbound before they were delivered', !quiet)
-    this.entries.delete(key)
+    this.remove(entry, who)
     this.persist()
     return true
   }
@@ -911,12 +933,12 @@ export class ConversationTable {
       // A session thread nobody has been in for VACANT_RELEASE_MS lets go of its conversations, and what they owed.
       if (vacancy && e.vacantSince !== undefined && e.specialist && isSessionThread(e.specialist) && now - e.vacantSince >= VACANT_RELEASE_MS && !this.pending.has(key)) {
         note(e, 'vacant', idle, e.owed?.length ?? 0)
-        this.unwatch(e.channel, e.threadTs, e.app, true)
+        this.unwatch(e.channel, e.threadTs, e.app, true, { by: HYDRA_ACTOR, reason: 'vacant' })
         n++
         continue
       }
       // An entry still owed messages is not idle: its owed ts expire first (and are alerted), then it goes.
-      if (e.lastEventAt < (e.ambient ? ambientCutoff : cutoff) && !this.pending.has(key) && !e.owed?.length) { note(e, 'idle', idle, 0); this.entries.delete(key); n++; continue }
+      if (e.lastEventAt < (e.ambient ? ambientCutoff : cutoff) && !this.pending.has(key) && !e.owed?.length) { note(e, 'idle', idle, 0); this.remove(e, { by: HYDRA_ACTOR, reason: 'idle' }); n++; continue }
       // Owed to a specialist hydra.toml no longer declares, at a place catch-up no longer reads: no replay will come to
       // route it anew, so it is lost now, not a day from now. (Where catch-up still reads, the replay routes it as its
       // sender: delivered anew, or dropped then.) Not while a batch for it waits in the window: that delivery decides.
@@ -1014,7 +1036,7 @@ export class ConversationTable {
     // Said once, in the alert below; an entry with no holder has its drop alerted where its channel is heard.
     if (lost) this.drop('expired', e, e.owed!, `its thread can't be read any more (${why})`, !e.specialist)
     delete e.owed
-    this.unwatch(channel, threadTs, app)
+    this.unwatch(channel, threadTs, app, false, { by: HYDRA_ACTOR, reason: 'thread-gone' })
     if (!e.specialist) return
     const session = isSessionThread(e.specialist)
     const channelWide = CHANNEL_GONE.test(why)
@@ -1161,7 +1183,7 @@ export class ConversationTable {
     if (!entry.specialist || !isSessionThread(entry.specialist) || !this.deps.hosted?.(host)) return false
     if (this.entries.get(key) !== entry) return true
     const owed = entry.owed?.length ?? 0
-    this.unwatch(entry.channel, entry.threadTs, entry.app, true)
+    this.unwatch(entry.channel, entry.threadTs, entry.app, true, { by: HYDRA_ACTOR, reason: 'hosted' })
     this.deps.alert?.(`ℹ️ ${conversationId(entry)} is now a hydra session's own thread, so this session stopped listening to it${owed ? ` (${owed} owed dropped)` : ''}.`, entry.specialist, appOfEntry(entry))
     return true
   }
@@ -1278,7 +1300,7 @@ export class ConversationTable {
       const fresh = route(withoutFallbacks(cfg.hydra), { from: addressOf(ev.user), at, addressed: true, app })
       if (fresh.fate === 'deliver') {
         const from = existing.specialist
-        this.setBinding(existing, fresh.to, undefined)   // the session's hold goes with its binding: the specialist's own binds count it, and it can be let go
+        this.setBinding(existing, fresh.to, undefined, { by: HYDRA_ACTOR, reason: 'taken' })   // the session's hold goes with its binding: the specialist's own binds count it, and it can be let go
         this.persist()
         this.deps.log(`daemon: slack connector: ${conversationId(existing)} was tagged; ${fresh.to} answers here, so it takes the thread from the session listening in ${from}\n`)
         this.deps.alert?.(`ℹ️ Someone tagged the bot in ${conversationId(existing)}, so ${fresh.to} took it, since it answers there. This session no longer hears it.`, from)
@@ -1325,25 +1347,23 @@ export class ConversationTable {
       const why = chatterFull ? `conversations opened by untagged chatter already hold half the conversation table (${half} of ${cfg.maxConversations}) and none has been quiet an hour with nothing owed; a tag still opens one`
         : `the conversation table is full (${cfg.maxConversations}) and none in it has been quiet an hour with nothing owed; unbind a conversation`
       // A tag or a DM with the bot gets the 🚫, as a refused one does; untagged chatter, a DM with a person or a group DM never does.
-      if (this.drop('table-full', { app, channel: ev.channel, threadTs, specialist: d.to }, [ev.ts], why) && (tagged || dm) && !inNoBotDm) this.turnedAway({ ...ev, app })
+      if (this.drop('table-full', { app, channel: ev.channel, threadTs, specialist: d.to }, [ev.ts], why) && (tagged || dm) && !inNoBotDm) { this.noRoute(ev, app, threadTs, 'table-full', tagged); this.turnedAway({ ...ev, app }) }
       return 'ignored'
     }
     if (ambient) { entry.ambient = true; this.persist() }
     // A new conversation, one whose specialist is gone (routed anew), or a rename through `renamed_from`: the binding takes the current id.
     // A rename keeps whoever holds it by hand; a specialist that is gone took its hold with it.
-    if ((d.bind || d.via === 'binding') && entry.specialist !== d.to) { this.setBinding(entry, d.to, d.bind ? undefined : entry.boundBy); this.persist() }
+    if ((d.bind || d.via === 'binding') && entry.specialist !== d.to) { this.setBinding(entry, d.to, d.bind ? undefined : entry.boundBy, { by: HYDRA_ACTOR, reason: d.bind ? 'rerouted' : 'renamed' }); this.persist() }
     entry.lastEventAt = this.deps.now()
     const kind = dm ? 'dm' : tagged ? 'mention' : 'follow-up'
     // A tag the app's router takes is answered at once with a 👀 from the app that heard it, whatever the place's `ack` says: the router (a session
     // that may have to start) takes a while. Also a tag in a thread still bound to a router specialist; `main` is not told apart from main.
-    // A replay of a message still owed was recorded when it was first accepted.
-    if (!existing?.owed?.includes(ev.ts)) recordEvent({ kind: 'route', app, conversation: conversationId(entry), by: addressOf(ev.user), tagged, via: d.via, to: d.to })
     if (d.via === 'router') this.deps.log(`daemon: slack connector: → router ${spelledBare(d.to)} for ${keyOf(entry)} (ts ${ev.ts})\n`)
     if (kind === 'mention' && (d.via === 'router' || (d.to !== MAIN && d.to === routerOf(cfg.hydra, app)))) {
       const slack = this.actions.get(appOfEntry(entry))
       if (slack) this.reactAs(slack, entry.app, entry.channel, ev.ts, ROUTED_REACTION)
     }
-    this.enqueue(entry, { ts: ev.ts, user: ev.user, kind, text: ev.text ?? '', ...(ev.files?.length && { files: ev.files }) }, cfg)
+    this.enqueue(entry, { ts: ev.ts, user: ev.user, kind, text: ev.text ?? '', ...(ev.files?.length && { files: ev.files }), routed: { via: d.via, tagged } }, cfg)
     return kind
   }
 
@@ -1414,7 +1434,7 @@ export class ConversationTable {
     const recent = (this.mentionTimes.get(user) ?? []).filter(t => now - t < MENTION_WINDOW_MS)
     if (recent.length >= cfg.maxMentionsPer10Min) {
       this.mentionTimes.set(user, recent)
-      if (this.drop('tag-cap', { app: ev.app, channel: ev.channel, threadTs, specialist: to }, [ev.ts], `${user} tagged the bot ${recent.length} times in 10 minutes outside watched threads (maxMentionsPer10Min)`) && react) this.turnedAway(ev)
+      if (this.drop('tag-cap', { app: ev.app, channel: ev.channel, threadTs, specialist: to }, [ev.ts], `${user} tagged the bot ${recent.length} times in 10 minutes outside watched threads (maxMentionsPer10Min)`) && react) { this.noRoute(ev, appOfEntry(ev), threadTs, 'tag-cap'); this.turnedAway(ev) }
       return false
     }
     recent.push(now)
@@ -1452,10 +1472,10 @@ export class ConversationTable {
     return true
   }
 
-  /** A tag no one took (refused, or no place hears it) is a route event with `via: none`, once per message; untagged messages nobody takes are not recorded. */
-  private noRoute(ev: Pick<SlackMessageEvent, 'channel' | 'ts' | 'user'>, app: string, threadTs: string): void {
+  /** A tag no one took is a route event with no `to`, once per message: `via` says which step stopped it (`none`: refused, or no place hears it; `tag-cap`; `table-full`). Untagged messages nobody takes are not recorded. */
+  private noRoute(ev: Pick<SlackMessageEvent, 'channel' | 'ts' | 'user'>, app: string, threadTs: string, via: 'none' | 'tag-cap' | 'table-full' = 'none', tagged = true): void {
     if (!this.firstTime(this.noted.refused, `route:${scoped(app, ev.channel)}:${ev.ts}`)) return
-    recordEvent({ kind: 'route', app, conversation: conversationId({ app, channel: ev.channel, threadTs }), by: addressOf(ev.user), tagged: true, via: 'none' })
+    recordEvent({ kind: 'route', app, conversation: conversationId({ app, channel: ev.channel, threadTs }), by: addressOf(ev.user), tagged, via })
   }
 
   /** `react`: a mention (refused or unrouted) or a refused DM, whose sender sees a 🚫; an unrouted DM is logged and counted, and gets no reply. A replay is neither logged, counted nor reacted to twice. */
@@ -1644,6 +1664,7 @@ export class ConversationTable {
       if (v.verdict !== 'deferred' && entry.deferredSince?.[item.ts] !== undefined) { delete entry.deferredSince[item.ts]; this.persist() }
       if (v.verdict === 'drop') {
         this.drop('guard', entry, [item.ts], 'the guard dropped it (exit 10)', false)
+        if (item.routed?.tagged) recordEvent({ kind: 'route', app, conversation: conversationId(entry), by: addressOf(item.user), tagged: true, via: 'guard' })
         this.settle(key, entry, [item.ts])
         return
       }
@@ -1849,10 +1870,16 @@ export class ConversationTable {
         // Every landed delivery names its target, whoever it is (main, a specialist, a thread).
         this.deps.log(`daemon: slack connector: delivered ${key} (${first}..${last}) to ${spelledBare(target.to)}${result.duplicate ? ' (already delivered)' : ''}\n`)
         this.ack(entry, batch, cfg)
+        if (!result.duplicate) this.recordRoutes(entry, batch, target.to)   // a duplicate is a replay of a delivery whose event was written when it first landed
         if (!entry.ambient && !result.duplicate) entry.unansweredAt = this.deps.now()
       }
       this.settle(key, entry, batch.map(i => i.ts))
     }
+  }
+
+  /** Where each message went, written when its delivery settles (after the guard may have redirected it), once per message: a replay of one already delivered does not reach here. */
+  private recordRoutes(entry: ConversationEntry, batch: Item[], to: string): void {
+    for (const i of batch) if (i.routed) recordEvent({ kind: 'route', app: appOfEntry(entry), conversation: conversationId(entry), by: addressOf(i.user), tagged: i.routed.tagged, via: i.routed.via, to })
   }
 
   /** The sender sees the message was picked up: the place's `ack` reaction on each delivered message. Best effort, never retried. */

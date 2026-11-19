@@ -13,6 +13,7 @@ const put = (ms: number, e: Parameters<typeof eventLine>[0]) => {
   mkdirSync(eventsDir(dir), { recursive: true })
   writeFileSync(join(eventsDir(dir), `${dayOf(ms)}.jsonl`), eventLine(e, ms) + '\n', { flag: 'a' })
 }
+const endTornLine = () => writeFileSync(join(eventsDir(dir), `${dayOf(NOW)}.jsonl`), '\n', { flag: 'a' })   // setup leaves a half-written line: end it before adding more
 const A = 'slack:C0A:1.000001'
 const B = 'slack:C0B:2.000001'
 
@@ -62,6 +63,29 @@ describe('hydra events', () => {
       expect(eventsCommand(['--limit'], dir, false)).toBe(1)
     } finally { console.error = real }
     expect(errs.every(e => e.includes('--limit'))).toBe(true)
+  })
+  test('--to keeps the routes and binds that went to one place; an unbind has none', () => {
+    expect(readEvents(dir, { to: 'desk' }).map(e => e.kind)).toEqual(['bind'])
+    expect(readEvents(dir, { to: 'slack-router' }).map(e => e.kind)).toEqual(['route'])
+    expect(readEvents(dir, { to: 'des' })).toEqual([])
+    expect(out(['--to', 'desk', '--kind', 'bind'], true).lines).toHaveLength(1)
+  })
+  test("--conversation finds a conversation through any app, however it is spelled: with no app, the id matches every app's; with one, only that app's", () => {
+    const C = 'slack:sales:C0C:3.000001'
+    endTornLine()
+    put(NOW - 30 * 60_000, { kind: 'route', app: 'sales', conversation: C, by: 'slack:U3', tagged: true, via: 'rule', to: 'deals' })
+    expect(readEvents(dir, { conversation: 'slack:C0C:3.000001' }).map(e => e.conversation)).toEqual([C])
+    expect(readEvents(dir, { conversation: C }).map(e => e.conversation)).toEqual([C])
+    expect(readEvents(dir, { conversation: 'slack:other:C0C:3.000001' })).toEqual([])
+    // the app `default` is spelled with none, and either way names it
+    expect(readEvents(dir, { conversation: 'slack:default:C0A:1.000001' }).map(e => e.kind)).toEqual(['route', 'bind'])
+    expect(readEvents(dir, { conversation: 'slack:sales:C0A:1.000001' })).toEqual([])
+  })
+  test('a reason shows beside who: hydra letting one go itself, or moving its binding', () => {
+    endTornLine()
+    put(NOW - 10 * 60_000, { kind: 'unbind', conversation: A, from: 'desk', by: 'hydra', reason: 'evicted' })
+    expect(out(['--by', 'hydra']).lines[0]).toContain('by hydra (evicted)')
+    expect(readEvents(dir, { by: 'hydra' }).map(e => e.kind === 'unbind' && e.reason)).toEqual(['evicted'])
   })
   test('--by keeps exactly the events that actor made', () => {
     expect(readEvents(dir, { by: 'slack-router' }).map(e => e.kind)).toEqual(['bind'])

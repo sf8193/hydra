@@ -1,4 +1,4 @@
-// `hydra events [--kind route|bind|unbind] [--since <dur>] [--conversation <id>] [--by <actor>] [--limit <n>] [--json]`: what the daemon decided, from the event
+// `hydra events [--kind route|bind|unbind] [--since <dur>] [--conversation <id>] [--by <actor>] [--to <place>] [--limit <n>] [--json]`: what the daemon decided, from the event
 // stream it writes (daemon/events.ts). Reads the day files directly, so it works with the daemon down. One line each, oldest first.
 
 import { existsSync, readFileSync, readdirSync } from 'fs'
@@ -7,7 +7,7 @@ import { resolveConfig } from './helpers.js'
 import { dayOf, dayOfFile, eventsDir, EVENT_KINDS, matches, parseEvent, type EventKind, type EventQuery, type RecordedEvent } from '../shared/events.js'
 import { parseDuration } from '../shared/constants.js'
 
-export const EVENTS_USAGE = 'hydra [--state-dir <dir>] events [--kind route|bind|unbind] [--since <duration, e.g. 90m, 12h, 7d>] [--conversation <id>] [--by <actor>] [--limit <n>] [--json]'
+export const EVENTS_USAGE = 'hydra [--state-dir <dir>] events [--kind route|bind|unbind] [--since <duration, e.g. 90m, 12h, 7d>] [--conversation <id>] [--by <actor>] [--to <place>] [--limit <n>] [--json]'
 
 /** The events that answer `q`, oldest first; with `q.limit`, the newest that many. Only the day files that can hold a match are read. */
 export function readEvents(stateDir: string, q: EventQuery): RecordedEvent[] {
@@ -22,8 +22,8 @@ export function readEvents(stateDir: string, q: EventQuery): RecordedEvent[] {
 
 const detail = (e: RecordedEvent): string => {
   if (e.kind === 'route') return `${e.via}${e.to ? ` → ${e.to}` : ''} · ${e.app}${e.by ? ` · by ${e.by}` : ''}${e.tagged ? ' · tagged' : ''}`
-  if (e.kind === 'bind') return `${e.from ?? '(new)'} → ${e.to} · by ${e.by}${e.why ? ` · ${e.why}` : ''}`
-  return `${e.from ?? '(unbound)'} · by ${e.by}`
+  if (e.kind === 'bind') return `${e.from ?? '(new)'} → ${e.to} · by ${e.by}${e.reason ? ` (${e.reason})` : ''}${e.why ? ` · ${e.why}` : ''}`
+  return `${e.from ?? '(unbound)'} · by ${e.by}${e.reason ? ` (${e.reason})` : ''}`
 }
 
 export function eventsCommand(args: string[], stateDirOpt: string | undefined, json: boolean): number {
@@ -39,6 +39,7 @@ export function eventsCommand(args: string[], stateDirOpt: string | undefined, j
     }
     else if (a === '--conversation' && v) { q.conversation = v; i++ }
     else if (a === '--by' && v) { q.by = v; i++ }
+    else if (a === '--to' && v) { q.to = v; i++ }
     else if (a === '--limit' && v !== undefined) {
       if (!/^[1-9][0-9]*$/.test(v)) { console.error(`error: --limit ${v}: use a positive whole number`); return 1 }
       q.limit = Number(v); i++

@@ -134,10 +134,11 @@ Routing (hydra.toml):
                                        To thread:<id>, the notice (session, its link, the reason, the conversation's permalink) goes to that
                                        session's own thread; nothing is posted in the Slack thread
   hydra conversations unbind <conversation>
-  hydra [--state-dir <dir>] events [--kind route|bind|unbind] [--since <dur>] [--conversation <id>] [--by <actor>] [--limit <n>] [--json]
-                                       What the daemon decided, from its event stream (<state dir>/events/<day>.jsonl): routes (what took
-                                       a message, or that a tag found no one), binds and unbinds with their reasons. Never message text.
-                                       --since takes 90m, 12h or 7d. --by keeps the events one actor made.
+  hydra [--state-dir <dir>] events [--kind route|bind|unbind] [--since <dur>] [--conversation <id>] [--by <actor>] [--to <place>] [--limit <n>] [--json]
+                                       What the daemon decided, from its event stream (<state dir>/events/<day>.jsonl): where messages were
+                                       delivered (or that a tag found no one), binds and unbinds with their reasons. Slack routing only for now.
+                                       Never message text. --since takes 90m, 12h or 7d. --by keeps the events one actor made (hydra: what it did
+                                       itself). --to keeps those that went to one place. --conversation slack:C..:ts also finds it through any app.
                                        --limit keeps the newest n, still oldest first. --json prints one JSON event per line
 
 Platform: slack | discord (required for lifecycle commands)

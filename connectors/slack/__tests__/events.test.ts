@@ -12,9 +12,9 @@ import { executeTool } from '../../../daemon/bridge-dispatch.js'
 import { setSpecialistThread, _reloadSpecialists } from '../../../specialists/specialists.js'
 import { eventsDir } from '../../../shared/events.js'
 import { readEvents } from '../../../cli/events.js'
-import { ConversationTable, type ConversationConfig, type DeliverResult, type SlackMessageEvent } from '../watch.js'
+import { ConversationTable, type ConversationConfig, type ConversationDeps, type DeliverResult, type SlackMessageEvent } from '../watch.js'
 import { bindConversation, unbindConversation, operatorBind, operatorUnbind, getConversationTable, slackRuntimeDeps } from '../runtime.js'
-import { BASE, BOT, hydra, view } from './slack-config.js'
+import { BASE, BOT, hydra, view, oneListener } from './slack-config.js'
 
 process.stderr.write = (() => true) as any
 
@@ -51,18 +51,21 @@ function table(toml: string) {
 const ev = (over: Partial<SlackMessageEvent> = {}): SlackMessageEvent => ({ channel: ELSEWHERE, ts: '1000.000001', user: 'UOP', text: tag, ...over })
 
 describe('route: recorded when something takes the message, or when a tag finds no one', () => {
-  test('the router takes a tag: one route event with the app, conversation, sender, tag, how and to whom', () => {
+  test('the router takes a tag: one route event with the app, conversation, sender, tag, how and to whom, once it is delivered', async () => {
     const w = table(WITH)
     expect(w.handle(ev())).toBe('mention')
+    expect(events()).toEqual([])   // accepted, not yet delivered: nothing happened that the stream could say
+    await w.flush()
     expect(events()).toMatchObject([{ kind: 'route', app: 'default', conversation: CONV, by: 'slack:UOP', tagged: true, via: 'router', to: 'slack-router' }])
   })
 
-  test('a rule, then a binding: each is a route with its own `via`', () => {
+  test('a rule, then a binding: each is a route with its own `via`', async () => {
     const w = table(WITH)
     w.handle(ev({ channel: 'C0DESK', ts: '2000.000001' }))
     w.bind(ELSEWHERE, '3000.000001', 'desk', 'cli')
     w.handle(ev({ ts: '3001.000001', threadTs: '3000.000001', text: 'a follow-up, untagged' }))
-    expect(events().map(e => e.kind === 'route' && [e.via, e.to, e.tagged])).toEqual([['rule', 'desk', true], ['binding', 'desk', false]])
+    await w.flush()
+    expect(events().filter(e => e.kind === 'route').map(e => e.kind === 'route' && [e.via, e.to, e.tagged])).toEqual([['rule', 'desk', true], ['binding', 'desk', false]])
   })
 
   test('a tag nothing took is recorded with via none: no router, and a sender the router refuses', () => {
@@ -84,7 +87,7 @@ describe('route: recorded when something takes the message, or when a tag finds 
     expect(w.handle(ev({ ts: '2001.000001', threadTs: '2000.000001', user: 'UNOBODY', text: 'a stranger, untagged' }))).toBe('refused')
     const none = table(WITHOUT)
     none.handle(ev({ text: 'untagged, no router', ts: '8000.000001' }))
-    expect(events()).toEqual([])
+    expect(events().filter(e => e.kind === 'route')).toEqual([])
   })
 
   test('a replay is not a second event: the same message handled again (a deep catch-up pass) records once', () => {
@@ -95,23 +98,139 @@ describe('route: recorded when something takes the message, or when a tag finds 
     expect(events().map(e => e.kind === 'route' && [e.conversation, e.via])).toEqual([[CONV, 'none'], ['slack:C0ELSE:6100.000001', 'none']])
   })
 
-  test('a message still owed when it is replayed is not recorded twice', async () => {
+  test('a message that could not be delivered yet is recorded once, when it is: not at the failed try, and not again at the replay', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'events-'))
     dirs.push(dir)
     const config: ConversationConfig = view(WITH, { coalesceMs: 1 })
-    const w = new ConversationTable({ now: () => Date.now(), file: join(dir, 'w.json'), log: () => {}, config: () => config, alert: () => {}, deliver: async (): Promise<DeliverResult> => ({ ok: false, error: 'busy' } as any) })
+    let up = false
+    const w = new ConversationTable({ now: () => Date.now(), file: join(dir, 'w.json'), log: () => {}, config: () => config, alert: () => {}, deliver: async (): Promise<DeliverResult> => up ? { ok: true } : { ok: false, error: 'busy' } as any })
     w.handle(ev())
-    w.handle(ev())   // owed, replayed
+    await w.flush()
+    expect(events()).toEqual([])           // still owed: nowhere yet
+    up = true
+    w.handle(ev())                         // the replay
+    await w.flush()
+    w.handle(ev())                         // and again: already delivered
+    await w.flush()
     expect(events().filter(e => e.kind === 'route')).toHaveLength(1)
   })
 
-  test('no line holds message text, whatever the message says', () => {
+  test('no line holds message text, whatever the message says', async () => {
     const w = table(WITH)
     w.handle(ev())
+    await w.flush()
     table(WITHOUT).handle(ev({ ts: '2000.000001' }))
     const raw = readdirSync(eventsDir(STATE_DIR)).map(f => readFileSync(join(eventsDir(STATE_DIR), f), 'utf8')).join('')
     expect(raw.trim().split('\n')).toHaveLength(2)
     expect(raw).not.toContain(SECRET)
+  })
+})
+
+describe('where delivery settles, and what hydra does by itself', () => {
+  const CH = 'C0FOOD'
+  const OTHER = '[specialists.other]\nworkdir = "/w/other"\nreachable_by = ["role:anyone"]\n'
+  const GUARDED = `${oneListener(CH, 'helper', '["role:anyone"]', '[guard]\ncommand = "guard"')}${OTHER}`
+  const SESSION = '1552619225032425525'
+  const at = (over: Record<string, unknown> = {}) => ({ channel: CH, ts: '1.000001', user: 'UALICE', text: tag, ...over }) as SlackMessageEvent
+  function make(toml: string, over: Parameters<typeof view>[1] = {}, guard?: ConversationDeps['guard'], extra: Partial<ConversationDeps> = {}) {
+    const dir = mkdtempSync(join(tmpdir(), 'events-'))
+    dirs.push(dir)
+    let now = 1_000_000_000_000
+    let config: ConversationConfig = view(toml, { coalesceMs: 1, ...over })
+    const w = new ConversationTable({ now: () => now, file: join(dir, 'w.json'), log: () => {}, config: () => config, alert: () => {}, guard, deliver: async (): Promise<DeliverResult> => ({ ok: true }), ...extra })
+    return { w, tick: (ms: number) => { now += ms }, setConfig: (c: ConversationConfig) => { config = c } }
+  }
+  const routes = () => events().filter(e => e.kind === 'route')
+
+  test('a guard that redirects: the event names where the message went, not where routing chose', async () => {
+    const { w } = make(GUARDED, {}, async () => ({ verdict: 'deliver', target: 'other' }))
+    w.handle(at())
+    await w.flush()
+    expect(routes()).toMatchObject([{ via: 'rule', to: 'other', conversation: `slack:${CH}:1.000001` }])
+  })
+
+  test('a guard that drops a tag records it with via guard and no destination; one that defers records nothing until it delivers', async () => {
+    const drop = make(GUARDED, {}, async () => ({ verdict: 'drop' }))
+    drop.w.handle(at())
+    await drop.w.flush()
+    expect(routes()).toMatchObject([{ via: 'guard', tagged: true }])
+    expect(routes()[0]).not.toHaveProperty('to')
+    clearEvents()
+    const defer = make(GUARDED, {}, async () => ({ verdict: 'deferred' }))
+    defer.w.handle(at())
+    await defer.w.flush()
+    expect(events()).toEqual([])
+  })
+
+  test('a tag the tag cap or a full table drops is recorded with that as its via, once, and no destination', async () => {
+    const capped = make(oneListener(CH), { maxMentionsPer10Min: 1 })
+    capped.w.handle(at())
+    await capped.w.flush()
+    capped.w.handle(at({ ts: '2.000001' }))
+    capped.w.handle(at({ ts: '2.000001' }))   // a replay
+    await capped.w.flush()
+    expect(routes().map(e => e.kind === 'route' && [e.via, e.conversation])).toEqual([['rule', `slack:${CH}:1.000001`], ['tag-cap', `slack:${CH}:2.000001`]])
+    clearEvents()
+    const full = make(oneListener(CH), { maxConversations: 1 })
+    full.w.handle(at({ user: 'UA' }))
+    await full.w.flush()
+    full.w.handle(at({ ts: '2.000001', user: 'UB' }))
+    await full.w.flush()
+    expect(routes().map(e => e.kind === 'route' && [e.via, e.by, e.to])).toEqual([['rule', 'slack:UA', 'helper'], ['table-full', 'slack:UB', undefined]])
+  })
+
+  test('hydra letting a conversation go is an unbind by hydra with its reason: evicted for a new one, idle past the expiry', async () => {
+    const t = make(oneListener(CH), { maxConversations: 1 })
+    t.w.handle(at())
+    await t.w.flush()
+    t.w.touch(CH, '1.000001')
+    t.tick(2 * 3600_000)
+    t.w.handle(at({ ts: '2.000001' }))
+    await t.w.flush()
+    t.w.touch(CH, '2.000001')
+    t.tick(8 * 86_400_000)
+    expect(t.w.sweep()).toBe(1)
+    expect(events().filter(e => e.kind === 'unbind')).toMatchObject([
+      { conversation: `slack:${CH}:1.000001`, from: 'helper', by: 'hydra', reason: 'evicted' },
+      { conversation: `slack:${CH}:2.000001`, from: 'helper', by: 'hydra', reason: 'idle' },
+    ])
+  })
+
+  test("a session's conversations hydra lets go as the session's thread goes: vacant a day, its thread deleted or unreadable, or the thread becoming a session's own", async () => {
+    const vacant = make(oneListener(CH))
+    vacant.w.bind(CH, '1.000001', SESSION, 'tool')
+    vacant.w.vacate(SESSION)
+    vacant.tick(86_400_000)
+    vacant.w.sweep()
+    const gone = make(oneListener(CH))
+    gone.w.bind(CH, '2.000001', SESSION, 'tool')
+    gone.w.threadGone(CH, '2.000001', 'thread_not_found')
+    const hosted = make(oneListener(CH), {}, undefined, { hosted: () => true })
+    hosted.w.bind(CH, '3.000001', SESSION, 'tool')
+    hosted.w.handle(at({ ts: '3.000002', threadTs: '3.000001', text: 'hi' }))
+    await hosted.w.flush()
+    expect(events().filter(e => e.kind === 'unbind' && e.by === 'hydra').map(e => e.kind === 'unbind' && [e.conversation, e.from, e.reason])).toEqual([
+      [`slack:${CH}:1.000001`, SESSION, 'vacant'], [`slack:${CH}:2.000001`, SESSION, 'thread-gone'], [`slack:${CH}:3.000001`, SESSION, 'hosted'],
+    ])
+  })
+
+  test('a tag taking a thread from a session, a rename, and a gone specialist routed anew are binds by hydra with their reasons', async () => {
+    const t = make(`${oneListener(CH)}${OTHER}`)
+    t.w.bind(CH, '1.000001', SESSION, 'tool')
+    t.w.handle(at({ ts: '1.000002', threadTs: '1.000001' }))   // a tag in a thread a session listens to
+    await t.w.flush()
+    t.w.bind(CH, '2.000001', 'ghost', 'cli')                   // a specialist hydra.toml does not declare
+    t.w.handle(at({ ts: '2.000002', threadTs: '2.000001', text: 'still there?' }))
+    await t.w.flush()
+    const renamed = `${BASE}\n[specialists.desk]\nrenamed_from = ["helper"]\nworkdir = "/w/helper"\nreachable_by = ["role:anyone"]\n[[rules]]\nplace = "slack:${CH}"\ntarget = "specialist:desk"\n`
+    t.setConfig(view(renamed, { coalesceMs: 1 }))
+    t.w.handle(at({ ts: '1.000003', threadTs: '1.000001', text: 'again' }))
+    await t.w.flush()
+    expect(events().filter(e => e.kind === 'bind' && e.by === 'hydra')).toMatchObject([
+      { conversation: `slack:${CH}:1.000001`, from: SESSION, to: 'helper', reason: 'taken' },
+      { conversation: `slack:${CH}:2.000001`, from: 'ghost', to: 'helper', reason: 'rerouted' },
+      { conversation: `slack:${CH}:1.000001`, from: 'helper', to: 'desk', reason: 'renamed' },
+    ])
   })
 })
 
@@ -165,7 +284,7 @@ describe('bind and unbind: recorded by every path that makes one', () => {
     await executeTool('bind_conversation', { conversation: CONV, target: 'sw-ledger', why: 'fits' }, 'slack-router')
     getConversationTable().bind(ELSEWHERE, '1000.000001', 'main', 'cli')
     await bindConversation(undefined, CONV, { target: 'sw-ledger', why: 'main knows', callerSessionId: 'main' })
-    expect(events()).toMatchObject([
+    expect(events().filter(e => e.by !== 'cli')).toMatchObject([   // (the seeds bound it as `cli`)
       { kind: 'bind', conversation: CONV, from: 'slack-router', to: LEDGER_THREAD, why: 'fits', by: 'slack-router' },
       { kind: 'bind', conversation: CONV, from: 'main', to: LEDGER_THREAD, why: 'main knows', by: 'main' },
     ])
