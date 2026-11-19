@@ -301,18 +301,18 @@ describe('a schedule in its own zone', () => {
   const exprs = ['0 * * * *', '*/5 * * * *', '30 2 * * *', '0 9 * * 1-5', '15 3 29 * *']
   const around = ['2026-03-08T10:00:00Z', '2026-03-29T01:00:00Z', '2026-10-25T01:00:00Z', '2026-11-01T06:00:00Z', '2026-04-04T15:00:00Z', '2026-10-03T15:00:00Z']
   for (const zone of zones) test(`${zone}: nextSlot and latestSlot equal the host's own, around every 2026 transition`, () => {
-    let checked = 0
-    try {
-    for (const expr of exprs) for (const at of around) for (let t = d(at).getTime() - 4 * 3600_000; t <= d(at).getTime() + 4 * 3600_000; t += 7 * 60_000) {
-      const asked = [nextSlot(expr, new Date(t), zone), latestSlot(expr, new Date(t), zone)]
-      process.env.TZ = zone
-      const hosts = [nextSlot(expr, new Date(t)), latestSlot(expr, new Date(t))]
-      process.env.TZ = host
-      expect(asked).toEqual(hosts)
-      checked++
-    }
-    } finally { process.env.TZ = host }
-    expect(checked).toBeGreaterThan(500)
+    // Every probe instant first, then the zone's answers, then the host's (TZ = that zone): switching the process zone once each way, not twice per probe.
+    const probes = exprs.flatMap(expr => around.flatMap(at => {
+      const out: [string, Date][] = []
+      for (let t = d(at).getTime() - 4 * 3600_000; t <= d(at).getTime() + 4 * 3600_000; t += 7 * 60_000) out.push([expr, new Date(t)])
+      return out
+    }))
+    const asked = probes.map(([expr, at]) => [nextSlot(expr, at, zone), latestSlot(expr, at, zone)])
+    let hosts: typeof asked
+    process.env.TZ = zone
+    try { hosts = probes.map(([expr, at]) => [nextSlot(expr, at), latestSlot(expr, at)]) } finally { process.env.TZ = host }
+    for (const [i, [expr, at]] of probes.entries()) expect(asked[i], `${zone} ${expr} at ${at.toISOString()}`).toEqual(hosts[i])
+    expect(probes.length).toBeGreaterThan(500)
   })
 
   test('offsets and abbreviations are not zones: they would not follow daylight saving', () => {
