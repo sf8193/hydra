@@ -151,8 +151,20 @@ describe('any session listens to a Slack thread: bound to its own thread', () =>
       for (const c of ['slack:C9:1793732224.093060', 'slack:C9:1793732224.09306', 'slack:default:C9:1793732224.093060'])
         await expect(bindConversation({ threadId: SLACK }, c)).rejects.toThrow("is a hydra session's own thread")
       await expect(operatorBind('slack:C9:1793732224.093060', `thread:${SLACK}`)).rejects.toThrow("is a hydra session's own thread")
-      expect(await operatorBind('slack:C9:1793732224.093060', 'main')).toBe('slack:C9:1793732224.093060 → main')
+      await expect(operatorBind('slack:C9:1793732224.093060', 'main')).rejects.toThrow("is a hydra session's own thread")
     } finally { registry.deleteThread('C9:1793732224.093060') }
+  })
+
+  test("no bind path takes a hydra session's own thread, whatever it binds to: a specialist, main or a session", async () => {
+    const HOST = 'C1:5.000009'
+    session('sw-host', HOST)
+    registry.setThread(HOST, 'sw-host')
+    try {
+      await expect(bindConversation(food, 'slack:C1:5.000009')).rejects.toThrow("is a hydra session's own thread")
+      for (const to of [`specialist:${FOOD}`, 'main'])
+        await expect(operatorBind('slack:C1:5.000009', to)).rejects.toThrow("is a hydra session's own thread")
+      expect(getConversationTable().get('C1', '5.000009')).toBeUndefined()
+    } finally { registry.deleteThread(HOST) }
   })
 
   test("a thread a hydra session now lives in is let go by a session listening to it, at its next message; a specialist's binding is kept", async () => {
@@ -579,6 +591,20 @@ describe('replies: posted only into the conversation they answer', () => {
       expect(posted.some(p => p.includes("post to its home_place opened no conversation"))).toBe(true)
       await expect(bindConversation(food, 'slack:C1:99.000001')).rejects.toThrow('already holds 10 conversations it opened itself')
     } finally { (gateway as any).send = realSend }
+  })
+
+  test("a post whose thread turns out to be a hydra session's own is left unbound, and says why", async () => {
+    session('r-food', FOOD_THREAD)
+    session('sw-host', 'C7:300.000001')
+    registry.setThread('C7:300.000001', 'sw-host')
+    configure(TOML.replace(`workdir = "/w/food"`, `workdir = "/w/food"\nhome_place = "slack:C7"`), { maxConversations: 50 })
+    slackRuntimeDeps.post = async () => '300.000001'
+    const realSend = gateway.send
+    ;(gateway as any).send = async () => 'id'
+    try {
+      expect(await replyInConversation('r-food', 'slack:C7', 'report')).toContain(`its thread is not bound to ${FOOD}: it is a hydra session's own thread`)
+      expect(getConversationTable().get('C7', '300.000001')).toBeUndefined()
+    } finally { (gateway as any).send = realSend; registry.deleteThread('C7:300.000001') }
   })
 
   test('a rename through `renamed_from` keeps the right to answer', async () => {

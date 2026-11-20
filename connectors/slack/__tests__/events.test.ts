@@ -205,8 +205,10 @@ describe('where delivery settles, and what hydra does by itself', () => {
     const gone = make(oneListener(CH))
     gone.w.bind(CH, '2.000001', SESSION, 'tool')
     gone.w.threadGone(CH, '2.000001', 'thread_not_found')
-    const hosted = make(oneListener(CH), {}, undefined, { hosted: () => true })
+    let isHosted = false
+    const hosted = make(oneListener(CH), {}, undefined, { hosted: () => isHosted })
     hosted.w.bind(CH, '3.000001', SESSION, 'tool')
+    isHosted = true   // a session has since started in the thread
     hosted.w.handle(at({ ts: '3.000002', threadTs: '3.000001', text: 'hi' }))
     await hosted.w.flush()
     expect(events().filter(e => e.kind === 'unbind' && e.by === 'hydra').map(e => e.kind === 'unbind' && [e.conversation, e.from, e.reason])).toEqual([

@@ -755,6 +755,14 @@ export class ConversationTable {
   }
   get(channel: string, threadTs: string, app?: string): ConversationEntry | undefined { return this.entries.get(watchKey(app, channel, threadTs)) }
 
+  /**
+   * Whether this Slack thread is a hydra session's own (on the Slack gateway, a thread hydra itself talks in). No new conversation may be bound to it,
+   * whatever the target: a specialist bound there would post where the operator reads hydra. `watch` refuses it, and every way a conversation opens
+   * passes through `watch`; an inbound tag also asks first, so it is not routed there. Callers ask this only to say why instead of "the table is full".
+   * A binding made before the session arrived is not undone here: a session's is let go at its next message (`releasedByHost`), a specialist's is kept.
+   */
+  isHosted(channel: string, threadTs: string): boolean { return !!this.deps.hosted?.(`${channel}:${threadTs}`) }
+
   /** What a message calls an app. */
   private appName(app: string | undefined): string { return appName(this.deps.apps?.() ?? {}, appOfEntry({ app })) }
 
@@ -768,12 +776,13 @@ export class ConversationTable {
 
   /**
    * Open a conversation bound to `specialist`, or touch the one that exists. Its binding is never changed here: only
-   * `bind` moves a conversation. Undefined when the table is full. `evict`: a full table first lets go of the routed conversation
+   * `bind` moves a conversation. Undefined when the table is full, or the thread is a session's own (`isHosted`). `evict`: a full table first lets go of the routed conversation
    * quiet the longest (`evict`), which only an inbound message asks for; `bind` never does, so a deliberate bind into a full table is refused.
    * `'ambient'`: untagged chatter opening one may let go only of another opened by chatter, so the half kept for tags and DMs stays theirs.
    * `ambientCap`: the most conversations chatter may hold at once (the half of the table kept for tags and DMs); a second capacity beside the table's, let go of the same way.
    */
   watch(channel: string, threadTs: string, specialist: string, mentionedBy?: string, app?: string, evict: false | 'any' | 'ambient' = false, ambientCap?: number): ConversationEntry | undefined {
+    if (this.isHosted(channel, threadTs)) return undefined
     const now = this.deps.now()
     const existing = this.get(channel, threadTs, app)
     if (existing) {
@@ -1272,6 +1281,9 @@ export class ConversationTable {
     if (own) this.noteOwn(cfg, ev, threadTs, app)
     if (dm && own) return skip(() => `it is the bot's own message in a DM`)
     const existing = this.get(ev.channel, threadTs, app)
+    // A hydra session's own thread opens no conversation. Before routing: it is no one's to refuse, tag-cap or answer.
+    const hosted = this.isHosted(ev.channel, threadTs)
+    if (hosted && !existing) return skip(() => `it is in a hydra session's own thread`)
     const boundApp = through[0]
     // With the operator's token the app hears every channel, DM and group DM the operator is in. Hearing is not delivering: a place no
     // rule, `[places]` entry or open conversation names is nobody's, passed over before it opens, counts, reacts to or owes
@@ -1301,7 +1313,8 @@ export class ConversationTable {
     if (existing?.delivered?.includes(ev.ts)) return skip(() => `it was already delivered`)
     // A tag in a thread bound to a session is for whoever answers a fresh one here, when someone does: they take the thread, and the session is told.
     // A catch-all and a router take only what nothing is bound to, so neither takes a thread from a session: the fresh route is read without them.
-    if (tagged && existing?.specialist && isSessionThread(existing.specialist)) {
+    // Not in a thread that has since become a session's own: the listener is let go at delivery (`releasedByHost`), and no specialist takes it.
+    if (tagged && !hosted && existing?.specialist && isSessionThread(existing.specialist)) {
       const fresh = route(withoutFallbacks(cfg.hydra), { from: addressOf(ev.user), at, addressed: true, app })
       if (fresh.fate === 'deliver') {
         const from = existing.specialist

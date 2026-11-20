@@ -422,7 +422,7 @@ export async function bindConversation(caller: Partial<Pick<SessionInfo, 'thread
   if (!me) throw new Error('this session has no thread to bind a conversation to')
   // A DM, or a place's top level, is routing's to hand out: a tool never takes one, least of all the operator's DM from main.
   if (isDm(c.channel) || c.threadTs === TOP_LEVEL) throw new Error(`${conversationId(c)} is not a thread in a channel: only a thread can be bound by hand`)
-  if (registry.getByThread(`${c.channel}:${c.threadTs}`)) throw new Error(`${conversationId(c)} is a hydra session's own thread: its messages already reach that session`)
+  if (getConversationTable().isHosted(c.channel, c.threadTs)) throw new Error(`${conversationId(c)} is a hydra session's own thread: its messages already reach that session`)
   // A specialist pinned to other apps can't be reached through this one: its answers would never be heard.
   const apart = notServedBy(v.hydra, me, app, 'this conversation is through')
   if (apart) throw new Error(`not bound: ${conversationId(c)}: ${apart}`)
@@ -756,10 +756,11 @@ export async function replyInConversation(callerSessionId: string | undefined, c
 
 /**
  * A thread this session opened by answering under a message is a conversation bound to it, counted with the ones it binds by hand so a loop
- * can't fill the table. Returns why it is not bound (and alerts), or nothing.
+ * can't fill the table. Returns why it is not bound (alerting unless the thread is a hydra session's own), or nothing.
  */
 function bindOpenedThread(h: HydraConfig, me: string, channel: string, ts: string, app: string, what: string, by: 'home' | 'tool'): string | undefined {
   const w = getConversationTable()
+  if (w.isHosted(channel, ts)) return `it is a hydra session's own thread`
   // A thread the person answered into while the first part was posting may already be bound by the rules: never taken from whoever holds it.
   const open = w.get(channel, ts, app)
   if (open?.specialist && currentId(h, open.specialist) !== me) return `it is already bound to ${open.specialist}`
@@ -884,7 +885,7 @@ export async function operatorBind(conversation: string, target: string, why?: s
   if (apart) throw new Error(`${conversationId(c)} can't be bound to ${to}: ${apart}`)
   // A channel has no top-level conversation: every one is a thread (a DM's top level is one, and may be moved).
   if (!isDm(c.channel) && c.threadTs === TOP_LEVEL) throw new Error(`${conversationId(c)} names a channel, not a conversation: add the thread's ts`)
-  if (ref.ref.kind === 'thread' && registry.getByThread(`${c.channel}:${c.threadTs}`)) throw new Error(`${conversationId(c)} is a hydra session's own thread: another session can't listen to it`)
+  if (getConversationTable().isHosted(c.channel, c.threadTs)) throw new Error(`${conversationId(c)} is a hydra session's own thread: nothing new can be bound to it`)
   if (!getConversationTable().bind(c.channel, c.threadTs, to, hand, app, { by, ...(why?.trim() && { why: why.trim() }) })) throw new Error('the conversation table is full')
   const bound = `${conversationId(c)} → ${to}`
   if (ref.ref.kind !== 'thread') return bound
