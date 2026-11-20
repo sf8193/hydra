@@ -240,6 +240,8 @@ The operator's app may still route something the operator saw to a specialist, b
 
 ### The app's router
 
+*Setting one up from scratch: [A Slack router: setup guide](slack-router.md).*
+
 *Slack connector.* A tag of an app in a channel thread goes to one place, by the first of these that applies:
 
 1. **A binding.** The thread is already bound to a session or a specialist: it goes there.
