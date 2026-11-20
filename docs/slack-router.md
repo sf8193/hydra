@@ -48,7 +48,7 @@ Your workspace admin may have to approve the user scopes. A user token missing `
 [specialists.slack-router]
 workdir = "~/agents/slack-router"     # a folder of its own
 kickoff_file = "~/agents/slack-router/kickoff.md"   # your copy of docs/router-kickoff.example.md
-home_place = "discord:<channel id>"   # "discord:<channel id>" | "slack:<channel id>" | "discord:#name" | "slack:#name" | a bare channel id: where its thread opens, and where it asks you (tier 5)
+home_place = "discord:<channel id>"   # "discord:<channel id>" (Discord gateway) | "slack:<channel id>" (Slack gateway) | a bare channel id: where its thread opens, and where it asks you (tier 5). A #name is not resolved yet: it falls back to the default channel
 emoji = "🛜"
 model = "sonnet"                      # "sonnet" | "opus" | "haiku" | a full model id: it reads descriptions and asks questions, so Opus isn't needed
 reachable_by = []                     # [] (only you) | ["role:<role>"] (roles you give people in [people]) | leave out (everyone in [people]); see below
@@ -69,7 +69,19 @@ Copy [`router-kickoff.example.md`](router-kickoff.example.md) into the workdir. 
 4. Tag the app in a Slack thread. The app reacts 👀 at once. The chosen session gets a notice in its Discord thread with the link and the reason, and nothing is posted in Slack.
 5. Run `hydra events --kind bind --since 1d` to see each placement with its `why`.
 
+## On the Slack gateway
+
+Everything above works when you talk to hydra through Slack (`CHAT_PLATFORM=slack`) instead of Discord, with these differences:
+
+- **Two Slack apps.** The router's app must be a second app, not the gateway's. hydra.toml refuses the gateway's `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` under `[slack.apps]`. The same token copied under another variable name passes the check, and then Slack splits events between two connections. The two apps may be in different workspaces.
+- **`home_place = "slack:<channel id>"`**: a channel the gateway's bot is in. With several apps and none named `default`, also set `speaks_as = "<app>"` on the router.
+- **Tier 5 happens in Slack.** The router asks you in its own thread in the gateway's channel. Put your gateway workspace's `<@U…>` in the kickoff, and treat links to that channel as internal, the way the kickoff treats Discord links.
+- **Keep the session channel private.** Every bind notice, 📨/📤 line and router question is a real Slack message there, read by anyone in that channel.
+- **A Discord custom `line_emoji` shows as 💬.** Use a unicode emoji or leave it out.
+
 ## Things to decide
+
+- **What the router is for.** It places threads; it never does the work. It reads the thread, picks a session, binds the thread there and moves on. It doesn't answer in Slack or take the ask itself, and it never takes a thread back from the session it bound. All of its behaviour is its kickoff. It is one shared session running under your account: it spawns sessions and binds threads, so it can't be restricted, and whoever reaches it is staffing work through you.
 
 - **Who may start routing.** `reachable_by` decides whose tag reaches the router. `[]` means only you. The default is everyone in `[people]`, and a stranger's tag gets a 🚫. The router runs under your account and can spawn sessions, so let in only people you would let staff work for you. Once a thread is bound, a tag from you or from anyone in `[people]` gets an answer from the bound session. Anyone else's message is delivered, but the session only listens.
 - **Hearing is not speaking.** Your user token hears; only the bot posts, and only where it is a member. In a channel the bot isn't in, an answer goes to your DM with the app instead, with a link to the thread. Invite the bot wherever answers should land in the thread.
