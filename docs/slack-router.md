@@ -66,7 +66,7 @@ Copy [`router-kickoff.example.md`](router-kickoff.example.md) into the workdir. 
 1. Run `hydra config check <platform>` (`discord` | `slack`, your gateway). It names any key that is wrong.
 2. Run `hydra route --person person:operator --place slack:<channel id> --app app:mine --mentioned app:mine`. It should say `delivers to specialist:slack-router (by router), and binds the conversation to it`.
 3. Run `hydra health --daemon <platform>`. Your app should be up with `scopes ok`.
-4. Tag the app in a Slack thread. The app reacts 👀 at once. The chosen session gets a notice in its Discord thread with the link and the reason, and nothing is posted in Slack.
+4. Tag the app in a Slack thread. The app reacts 👀 at once. The chosen session gets a notice in its own thread (Discord, or the gateway's Slack channel) with the link and the reason, and nothing is posted in Slack.
 5. Run `hydra events --kind bind --since 1d` to see each placement with its `why`.
 
 ## On the Slack gateway
@@ -75,7 +75,7 @@ Everything above works when you talk to hydra through Slack (`CHAT_PLATFORM=slac
 
 - **Two Slack apps.** The router's app must be a second app, not the gateway's. hydra.toml refuses the gateway's `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` under `[slack.apps]`. The same token copied under another variable name passes the check, and then Slack splits events between two connections. The two apps may be in different workspaces.
 - **`home_place = "slack:<channel id>"`**: a channel the gateway's bot is in. With several apps and none named `default`, also set `speaks_as = "<app>"` on the router.
-- **Tier 5 happens in Slack.** The router asks you in its own thread in the gateway's channel. Put your gateway workspace's `<@U…>` in the kickoff, and treat links to that channel as internal, the way the kickoff treats Discord links.
+- **Tier 5 happens in Slack.** The router asks you in its own thread in the gateway's channel. Put your gateway workspace's `<@U…>` in the lines you add to the kickoff, where a Discord operator puts `<@…>` ([section 3](#3-the-kickoff)). Links to that channel are as internal as Discord links.
 - **Keep the session channel private.** Every bind notice, 📨/📤 line and router question is a real Slack message there, read by anyone in that channel.
 - **A Discord custom `line_emoji` shows as 💬.** Use a unicode emoji or leave it out.
 
@@ -88,6 +88,6 @@ Everything above works when you talk to hydra through Slack (`CHAT_PLATFORM=slac
 - **A whole channel still needs the bot.** The user token covers threads you are tagged or bound in. A place that routes every message in a channel (`messages = "all"`) is read through the bot.
 - **The user token reads all your DMs.** Keep it in `.env`, and use it only in your own app.
 - **When not to use your own app.** Give an agent its own app, listening through its own bot, when it must keep working without you, when people tag it by its own name, or when it serves a private channel you aren't in. A restricted specialist ([`restricted = true`](slack.md#a-specialist-other-people-talk-to-restricted--true)) belongs on such an app. The router itself cannot be restricted, and hydra.toml refuses one that is.
-- **Nothing hydra-internal in Slack.** The bind posts nothing in Slack. Every Slack delivery tells the session that its audience is outside hydra: no Discord links and no session names.
+- **Nothing hydra-internal in Slack.** The bind posts nothing in Slack. Every Slack delivery tells the session that its audience is outside hydra, so it posts no links to hydra and no session names. That includes links into hydra's own threads, Discord or the gateway's Slack channel.
 - **A laptop that sleeps or goes offline.** Hydra runs where you run it. While the daemon is unreachable, Slack can turn the app's events off: api.slack.com/apps → the app → **Event Subscriptions** shows **Enable Events: Off**. They stay off until you switch them back on by hand. Hydra catches up on the threads it already knows when it reconnects, but nothing new arrives until events are on again. If `hydra health` shows the app up but its last event is hours old while people are tagging it, check that switch first.
 - **Corrections teach it.** If a thread landed in the wrong place, bind it where it belongs (`hydra conversations bind`, or tell the session that has it). That bind is recorded, and the router reads its last 14 days of binds before every decision.
