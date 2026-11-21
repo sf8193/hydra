@@ -113,6 +113,15 @@ describe('crash detection', () => {
     expect(to(info, '💀')[0].text).toContain(`**${info.tmuxName}** died`)
   })
 
+  test('an agy session whose tmux is gone is a crash too: agy has no runtime of its own to finalise it', () => {
+    const info = seed({ ageMs: OLD, engine: 'agy' })
+
+    pollSessionsOnce(NOW)
+
+    expect(info.deadAt).toBe(NOW)
+    expect(to(info, '💀')).toHaveLength(1)
+  })
+
   test('a fresh session whose tmux is gone is a crash: a missing execution gets no grace', () => {
     const info = seed({ ageMs: 1000 })
     pollSessionsOnce(NOW)

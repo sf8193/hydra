@@ -57,7 +57,7 @@ test('a resume copies the dead session\'s file into the new session\'s directory
   mkdirSync(old, { recursive: true })
   writeFileSync(join(old, '2026-10-13_x.jsonl'), '{"type":"session","id":"x"}\n')
   writeFileSync(join(old, '.2026-10-13_x.jsonl.lock.os'), '')
-  const cmd = await launchCommand('hello', { resumeOmp: { fromSessionId: 'dead-session' } })
+  const cmd = await launchCommand('hello', { resumeSession: { fromSessionId: 'dead-session' } })
   expect(cmd).toMatch(/ -c 2>>/)
   expect(readdirSync(ompSessionDir('s1'))).toEqual(['2026-10-13_x.jsonl'])
   expect(readFileSync(join(ompSessionDir('s1'), '2026-10-13_x.jsonl'), 'utf8')).toBe('{"type":"session","id":"x"}\n')
@@ -67,14 +67,14 @@ test('a resume copies the dead session\'s file into the new session\'s directory
 
 test('a resume with no session file (directory gone, or only omp\'s lock file) fails before omp starts, so the caller falls back to a fresh session', async () => {
   rmSync(ompSessionDir('gone-session'), { recursive: true, force: true })
-  await expect(launchCommand('hello', { resumeOmp: { fromSessionId: 'gone-session' } })).rejects.toThrow('no session file to resume')
+  await expect(launchCommand('hello', { resumeSession: { fromSessionId: 'gone-session' } })).rejects.toThrow('no session file to resume')
   mkdirSync(ompSessionDir('empty-session'), { recursive: true })
   writeFileSync(join(ompSessionDir('empty-session'), '.x.jsonl.lock.os'), '')
-  await expect(launchCommand('hello', { resumeOmp: { fromSessionId: 'empty-session' } })).rejects.toThrow('no session file to resume')
+  await expect(launchCommand('hello', { resumeSession: { fromSessionId: 'empty-session' } })).rejects.toThrow('no session file to resume')
 })
 
 test('recoveryPlan resumes the dead session by id, is not generic, and cannot fork', () => {
   const engine = new OmpEngine({} as any)
-  expect(engine.recoveryPlan({ tmuxName: 't', sessionId: 'dead-1' })).toEqual({ generic: false, resume: { kind: 'at-launch', resumeOmp: { fromSessionId: 'dead-1' } }, fork: null })
+  expect(engine.recoveryPlan({ tmuxName: 't', sessionId: 'dead-1' })).toEqual({ generic: false, resume: { kind: 'at-launch', resumeSession: { fromSessionId: 'dead-1' } }, fork: null })
   expect(engine.recoveryPlan({ tmuxName: 't' })).toEqual({ generic: false, resume: null, fork: null })
 })

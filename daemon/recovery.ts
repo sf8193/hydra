@@ -220,17 +220,17 @@ export async function reviveThread(req: ReviveRequest): Promise<ReviveOutcome> {
           ...(req.reuseName && { reuseName: lastTmuxName }), ...named, ...acting,
           ...(worktree && { worktree, preserveWorktree: true }), ...(carriedOut && { carryOver: carriedOut }),
         })
-      } else if (r && 'resumeOmp' in r) {
-        // The reservation is the lock: two resumes of one dead session would each copy its file into a live session.
-        const from = r.resumeOmp.fromSessionId
+      } else if (r && 'resumeSession' in r) {
+        // The reservation is the lock: two resumes of one dead session would each continue its conversation or copy its file into a live session.
+        const from = r.resumeSession.fromSessionId
         if (registry.reservedNames.has(from)) { busy = true; return undefined }
         const held = reserve(from)
         try {
           result = await recoveryDeps.doSpawnSession(thread.topic, undefined, undefined, {
-            ...common, existingThreadId: thread.threadId, resumeOmp: r.resumeOmp, preserveWorktree: true, promptPrefix: prefix,
+            ...common, existingThreadId: thread.threadId, resumeSession: r.resumeSession, preserveWorktree: true, promptPrefix: prefix,
           })
         } catch (err) {
-          process.stderr.write(`daemon: omp resume of session ${from} failed: ${err}\n`)
+          process.stderr.write(`daemon: ${engine} resume of session ${from} failed: ${err}\n`)
           lastError = errorText(err); lastRefused = err instanceof PolicyRefusal
         } finally {
           if (held) registry.reservedNames.delete(from)

@@ -48,14 +48,14 @@ export class OmpEngine implements EngineAdapter {
     const ompModel = model.replace(/\[1m\]$/, '')
     // Resume: the dead session's file is copied into this session's directory (the old one stays as it was) and omp continues it.
     // With no file omp would start a fresh session that the caller reports as resumed, so that fails the resume instead.
-    if (input.resumeOmp) {
-      const from = ompSessionDir(input.resumeOmp.fromSessionId)
+    if (input.resumeSession) {
+      const from = ompSessionDir(input.resumeSession.fromSessionId)
       const files = existsSync(from) ? readdirSync(from).filter(n => n.endsWith('.jsonl')) : []
-      if (!files.length) throw new Error(`omp session ${input.resumeOmp.fromSessionId} has no session file to resume`)
+      if (!files.length) throw new Error(`omp session ${input.resumeSession.fromSessionId} has no session file to resume`)
       mkdirSync(ompSessionDir(sessionId), { recursive: true })
       for (const n of files) copyFileSync(join(from, n), join(ompSessionDir(sessionId), n))
     }
-    const args = [omp, `--model ${shq(`${ompProvider(ompModel)}/${ompModel}`)}`, `-e ${shq(EXTENSION)}`, `--config ${shq(OMP_CONFIG)}`, '--approval-mode yolo', `--session-dir ${shq(ompSessionDir(sessionId))}`, ...(input.resumeOmp ? ['-c'] : [])]
+    const args = [omp, `--model ${shq(`${ompProvider(ompModel)}/${ompModel}`)}`, `-e ${shq(EXTENSION)}`, `--config ${shq(OMP_CONFIG)}`, '--approval-mode yolo', `--session-dir ${shq(ompSessionDir(sessionId))}`, ...(input.resumeSession ? ['-c'] : [])]
     // The prompt is handed to the pane by file (launch-files.ts), so no part of it is on a command line.
     const promptFile = input.prompt ? writeSpawnPrompt(tmuxName, sessionId, input.prompt) : null
     const tokenFile = input.sessionToken ? writeSessionToken(tmuxName, sessionId, input.sessionToken) : null
@@ -108,6 +108,6 @@ export class OmpEngine implements EngineAdapter {
   detectBlockingState(_info: SessionInfo, _tail: string): BlockingState | null { return null }
   // Resume continues the dead session's file (`launch` copies it). Not `generic`: boot recovery and the `recover` list skip omp (they would relaunch it as Claude). No fork.
   recoveryPlan(src: RecoverySource): RecoveryPlan {
-    return { generic: false, resume: src.sessionId ? { kind: 'at-launch', resumeOmp: { fromSessionId: src.sessionId } } : null, fork: null }
+    return { generic: false, resume: src.sessionId ? { kind: 'at-launch', resumeSession: { fromSessionId: src.sessionId } } : null, fork: null }
   }
 }

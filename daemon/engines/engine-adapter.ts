@@ -15,10 +15,10 @@ export type { BlockingState } from '../pane-probe.js'
 // Provider identity
 // ---------------------------------------------------------------------------
 
-export type ProviderId = 'claude' | 'codex' | 'omp'
+export type ProviderId = 'claude' | 'codex' | 'omp' | 'agy'
 
 /** The engine as a person reads it, for a notice about one of its sessions. */
-export const engineLabel = (engine: ProviderId | undefined): string => engine === 'codex' ? 'Codex' : engine === 'omp' ? 'omp' : 'Claude'
+export const engineLabel = (engine: ProviderId | undefined): string => engine === 'codex' ? 'Codex' : engine === 'omp' ? 'omp' : engine === 'agy' ? 'agy' : 'Claude'
 
 // ---------------------------------------------------------------------------
 // Delivery
@@ -130,7 +130,7 @@ export type LaunchInput = {
   readonly forkFrom?: { claudeSessionId?: string; codexThreadId?: string }
   readonly resumeFrom?: string
   readonly resumeCodex?: { threadId: string; homeName: string }  // Codex: resume this thread in its original CODEX_HOME
-  readonly resumeOmp?: { fromSessionId: string }                 // omp: continue the session file of this dead hydra session
+  readonly resumeSession?: { fromSessionId: string }             // omp, agy: continue the conversation this dead hydra session's own files hold
   readonly threadId?: string                                     // the chat thread this session serves; exported to its env
   readonly sessionType?: SessionInfo['sessionType']              // and its role there; exported to its env
   readonly sessionToken?: string                                 // the token this launch's session presents to the CLI (cli-caller.ts): handed over by file or process env, never on a command line
@@ -167,7 +167,7 @@ export type RecoveryPlan = {
   resume:
     | { kind: 'await-bridge'; resumeFrom: string }                                // relaunch takes no prompt; confirmed when its bridge registers
     | { kind: 'at-launch'; resumeCodex: { threadId: string; homeName: string } }  // launch resumes and takes the prompt
-    | { kind: 'at-launch'; resumeOmp: { fromSessionId: string } }                  // omp: launch continues the dead session's file
+    | { kind: 'at-launch'; resumeSession: { fromSessionId: string } }              // omp, agy: launch continues the dead session's conversation
     | null
   fork: ForkPlan | null
 }

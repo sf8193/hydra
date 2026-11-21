@@ -79,6 +79,10 @@ describe('can_only_write_to', () => {
     expect(errorsOf(spec('can_only_write_to = "workdir"\nengine = "omp"'))).toEqual([omp])
     expect(errorsOf(spec('can_only_write_to = "workdir"\nmodel = "omp-sol"'))).toEqual([omp.replace('.engine:', '.model:')])
   })
+  test('agy cannot confine writes either: a named engine, or a model alias', () => {
+    expect(errorsOf(spec('can_only_write_to = "workdir"\nengine = "agy"'))).toEqual(REFUSED('agy', 'engine'))
+    expect(errorsOf(spec('can_only_write_to = "workdir"\nmodel = "neon"'))).toEqual(REFUSED('agy', 'model'))
+  })
   test('claude, a Claude model, or no engine and no model loads', () => {
     for (const body of ['', 'engine = "claude"', 'model = "opus"', 'engine = "claude"\nmodel = "opus"']) {
       expect(ok(spec(`can_only_write_to = "workdir"\n${body}`)).config.specialists.ops.canOnlyWriteTo).toBe('workdir')

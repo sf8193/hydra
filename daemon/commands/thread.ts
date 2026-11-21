@@ -355,10 +355,11 @@ async function respawnThread(msg: InboundMessage, topic?: string, templateName?:
   const threadId = msg.effectiveThreadId ?? msg.channelId
   const thread = threadRegistry.get(threadId)
 
-  // A template layers tools and a session type onto the respawn; omp takes neither. Refused before anything is torn down.
+  // A template layers tools and a session type onto the respawn; omp and agy take neither. Refused before anything is torn down.
   const earlier = recoveryEntry(thread?.sessionHistory ?? [])
-  if (template && (selection?.engine ?? recoveryEngine(earlier, registry.get(earlier?.sessionId ?? ''))) === 'omp') {
-    await reportError(msg.channelId, msg.id, 'respawn', 'templates (`+f`) are not available for omp sessions', 'Use a plain `respawn`.')
+  const respawnEngine = template ? (selection?.engine ?? recoveryEngine(earlier, registry.get(earlier?.sessionId ?? ''))) : undefined
+  if (respawnEngine === 'omp' || respawnEngine === 'agy') {
+    await reportError(msg.channelId, msg.id, 'respawn', `templates (\`+f\`) are not available for ${respawnEngine} sessions`, 'Use a plain `respawn`.')
     return
   }
 

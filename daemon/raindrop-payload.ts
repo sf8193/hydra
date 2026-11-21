@@ -99,7 +99,7 @@ export const safeUserId = gate(USER_ID)
 // the gate. Closed-set keys get their set; open ones keep the charset rule.
 const SESSION_PROPERTY_GATES = {
   tmuxName: safeProperty,
-  engine: oneOf(['claude', 'codex', 'omp']),
+  engine: oneOf(['claude', 'codex', 'omp', 'agy']),
   sessionType: oneOf(Object.keys(BASE_TOOLS).filter(t => t !== 'restricted')),   // `restricted` is a tool base, not a session type
   restricted: oneOf(['true', 'false']),
   originType: oneOf(['spawn', 'fork', 'handoff', 'resurrect']),

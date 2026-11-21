@@ -13,7 +13,7 @@ import { STATE_DIR, STATE_WRITABLE } from './config.js'
 import { removeRestrictedFiles } from './restricted-files.js'
 import { SESSION_TOKEN_VAR } from '../shared/caller.js'
 
-const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
+export const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 

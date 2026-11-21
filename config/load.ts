@@ -39,7 +39,7 @@ const ADDRESS_RE: Record<Platform, RegExp> = {
   slack: /^slack:[UW][A-Z0-9]+$/,
   github: /^github:[a-z0-9](?:[a-z0-9-]{0,38})$/,
 }
-const ENGINES = ['claude', 'codex', 'omp'] as const
+const ENGINES = ['claude', 'codex', 'omp', 'agy'] as const
 /** Why a built-in tool is not on a restricted specialist's list. Any other name gets the generic refusal. */
 const TOOL_REFUSALS: Readonly<Record<string, string>> = {
   Bash: 'runs code outside the workdir', PowerShell: 'runs code outside the workdir', Monitor: 'runs code outside the workdir',
