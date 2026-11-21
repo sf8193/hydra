@@ -17,7 +17,7 @@ import { withoutIntents } from './engine-adapter.js'
 import type { BlockingState } from '../pane-probe.js'
 import { CLAUDE_WORKING_SILENCE_S, type ClaudeEngine } from './claude-engine.js'
 import { SOCK_PATH, PLATFORM, STATE_DIR } from '../config.js'
-import { removeSessionToken, removeSpawnPrompt, writeSessionToken, writeSpawnPrompt } from '../launch-files.js'
+import { removeSessionToken, removeSpawnPrompt, shq, writeSessionToken, writeSpawnPrompt } from '../launch-files.js'
 import { deliveryRefusal } from '../restricted.js'
 import { tmuxCreateSession, tmuxSync, tmuxWindowActivity } from '../tmux.js'
 import { SESSION_INSTRUCTIONS, contextWindowOf, formatNotification } from '../../shared/constants.js'
@@ -26,7 +26,6 @@ import { isRestrictedPolicy } from '../policy-record.js'
 import { AGY_HOOKS_CONFIG, AGY_MCP_CONFIG, registerHydraHooks, registerHydraTools } from './agy-config.js'
 import { agyContextTokens, agyState, agyStateDir, agyStateFile, agyTurn, agyUsageTotals, type AgyUsageCursor } from './agy-session.js'
 
-const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
 /** A Gemini API key, if the operator keeps one: agy then runs in its API-key mode, else on its own login. Only this file's path is on a command line. */
 export const AGY_API_KEY_FILE = join(STATE_DIR, 'agy-api-key')

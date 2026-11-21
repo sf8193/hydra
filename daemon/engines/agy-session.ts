@@ -7,10 +7,10 @@
 //   {"step_index":3,"source":"MODEL","type":"PLANNER_RESPONSE","created_at":"...","input_tokens":2358,"cache_read_tokens":7635,"output_tokens":171,"content":"done"}
 // A PLANNER_RESPONSE with tool_calls is the model asking for a tool; one with content and no tool_calls is its answer. created_at has whole-second resolution.
 
-import { closeSync, openSync, readFileSync, readSync, statSync } from 'fs'
+import { readFileSync, statSync } from 'fs'
 import { join } from 'path'
 import { STATE_DIR } from '../config.js'
-import { zeroTotals, type TokenTotals } from '../usage.js'
+import { readRange, zeroTotals, type TokenTotals } from '../usage.js'
 
 export const agyStateDir = () => join(STATE_DIR, 'agy-sessions')
 export const agyStateFile = (sessionId: string): string => join(agyStateDir(), `${sessionId}.json`)
@@ -34,10 +34,7 @@ function tailSteps(path: string, bytes = TAIL_BYTES): Step[] {
   try {
     const size = statSync(path).size
     const from = Math.max(0, size - bytes)
-    const buf = Buffer.alloc(size - from)
-    const fd = openSync(path, 'r')
-    try { readSync(fd, buf, 0, buf.length, from) } finally { closeSync(fd) }
-    text = buf.toString('utf8')
+    text = readRange(path, from, size - from).toString('utf8')
   } catch { return [] }
   const out: Step[] = []
   for (const line of text.split('\n')) { try { out.push(JSON.parse(line)) } catch { continue } }
@@ -92,9 +89,7 @@ export function agyUsageTotals(sessionId: string, prev: AgyUsageCursor | undefin
   try { size = statSync(state.transcriptPath).size } catch { return null }
   const restarted = !!prev && (size < prev.offset || prev.conversationId !== state.conversationId)
   const base = prev && !restarted ? prev : { offset: 0, totals: zeroTotals(), conversationId: state.conversationId }
-  const buf = Buffer.alloc(Math.min(size - base.offset, DRAIN_MAX_BYTES))
-  const fd = openSync(state.transcriptPath, 'r')
-  try { readSync(fd, buf, 0, buf.length, base.offset) } finally { closeSync(fd) }
+  const buf = readRange(state.transcriptPath, base.offset, Math.min(size - base.offset, DRAIN_MAX_BYTES))
   const text = buf.toString('utf8')
   const complete = text.slice(0, text.lastIndexOf('\n') + 1)
   const consumed = Buffer.byteLength(complete)

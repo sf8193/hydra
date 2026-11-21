@@ -73,7 +73,7 @@ export function transcriptPathFor(claudeSessionId: string | undefined): string |
 const CWD_TAIL_BYTES = 256 * 1024
 const CWD_WIDE_TAIL_BYTES = 8 * 1024 * 1024
 
-function readRange(path: string, from: number, length: number): Buffer {
+export function readRange(path: string, from: number, length: number): Buffer {
   const fd = openSync(path, 'r')
   try {
     const buf = Buffer.alloc(length)

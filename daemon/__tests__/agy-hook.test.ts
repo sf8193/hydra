@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { existsSync, mkdtempSync, readFileSync } from 'fs'
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -38,4 +38,19 @@ test('a stop is answered even when its input is not JSON', () => {
 test('an agy outside a hydra session records nothing, and still answers a stop', () => {
   expect(hook('Stop', event)).toMatchObject({ out: '{"decision":"stop"}', code: 0 })
   expect(hook('PreInvocation', event)).toMatchObject({ out: '{}', code: 0 })
+})
+
+// One `sh` is one agy process: it is the hook's parent, as agy is in a real run.
+function hooksFrom(one: Array<[string, object]>, state: string) {
+  const cmd = one.map(([name]) => `${process.execPath} ${script} ${name} < $IN${one.findIndex(([n]) => n === name)}`).join('; ')
+  const env: Record<string, string> = { PATH: process.env.PATH!, HYDRA_AGY_STATE: state }
+  one.forEach(([, input], i) => { const f = join(mkdtempSync(join(tmpdir(), 'hydra-agy-in-')), 'in.json'); writeFileSync(f, JSON.stringify(input)); env[`IN${i}`] = f })
+  Bun.spawnSync(['sh', '-c', `${cmd}; true`], { env })
+}
+
+test('an agy run started by a session (another process) does not overwrite the session\'s file; the session\'s own later events still do', () => {
+  const state = stateFile()
+  hooksFrom([['SessionStart', event], ['PreInvocation', event]], state)
+  hooksFrom([['SessionStart', { ...event, conversationId: 'child' }], ['Stop', { ...event, conversationId: 'child', fullyIdle: true }]], state)
+  expect(JSON.parse(readFileSync(state, 'utf8'))).toMatchObject({ conversationId: 'c-1', live: 'working' })
 })

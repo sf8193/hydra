@@ -6,6 +6,7 @@ import { join } from 'path'
 import { BridgeTransport } from '../bridge-transport.js'
 import { AGY_API_KEY_FILE, AgyEngine } from '../engines/agy-engine.js'
 import { AGY_HOOKS_CONFIG, AGY_MCP_CONFIG } from '../engines/agy-config.js'
+import { agyState, agyStateFile } from '../engines/agy-session.js'
 import { ClaudeEngine } from '../engines/claude-engine.js'
 import { SOCK_PATH } from '../config.js'
 
@@ -50,6 +51,18 @@ test.skipIf(!run)('agy session: first turn with the reply rules, a pasted messag
     // The reply rules were in the first prompt: this answer needs them.
     expect(await engine.deliver(info, { type: 'notification', content: 'Do your instructions say that your transcript output never reaches the sender\'s chat? Answer the sender with YES or NO only.', meta: { chat_id: '1', message_id: '2', user: 'sam' } })).toEqual({ status: 'accepted', via: 'tmux-paste' })
     await must(() => replies().some(t => /^\W*yes\W*$/i.test(t)), 120_000)
+
+    // A long message (about 2,000 characters, wrapped in the pane) is seen landing and answered.
+    const filler = 'This sentence is filler and carries no instruction. '.repeat(40)
+    expect(await engine.deliver(info, { type: 'notification', content: `${filler}\nNow answer the sender with the single word LONGOK through the reply tool.`, meta: { chat_id: '1', message_id: '5', user: 'sam' } })).toEqual({ status: 'accepted', via: 'tmux-paste' })
+    await must(() => replies().some(t => /longok/i.test(t)), 120_000)
+
+    // An agy run that the session starts inherits HYDRA_AGY_STATE and fires the same global hooks: it must not take over the session's file.
+    const conversation = agyState(info.sessionId)?.conversationId
+    expect(conversation).toBeTruthy()
+    Bun.spawnSync([process.env.HYDRA_AGY_BIN ?? `${process.env.HOME}/.local/bin/agy`, '--settings', JSON.stringify({ trustedWorkspaces: [cwd], modelProvider: 'gemini' }), '--dangerously-skip-permissions', '-p', 'say hi'],
+      { cwd, env: { ...process.env, GEMINI_API_KEY: readFileSync(key!, 'utf8').trim(), HYDRA_AGY_STATE: agyStateFile(info.sessionId) } })
+    expect(agyState(info.sessionId)?.conversationId).toBe(conversation)
 
     // A text-only answer (no reply tool) is what the reply guard relays: agy's hook says it has stopped, and its transcript holds the answer.
     const since = Date.now()

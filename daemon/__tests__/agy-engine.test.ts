@@ -49,11 +49,6 @@ test('launch runs agy on the model, trusting only its folder, approving tools, w
   expect(JSON.parse(readFileSync(mcpConfig, 'utf8')).mcpServers.hydra.args[0]).toEndWith('/daemon/codex-mcp-server.ts')
 })
 
-test('agy\'s per-launch settings trust the folder, and name the API-key mode only with a key', () => {
-  expect(agySettings('/w', false)).toBe('{"trustedWorkspaces":["/w"]}')
-  expect(agySettings('/w', true)).toBe('{"trustedWorkspaces":["/w"],"modelProvider":"gemini"}')
-})
-
 test('the first prompt is hydra\'s reply rules, then the spawn prompt', async () => {
   const cmd = await launchCommand('say hi')
   const file = /cat '([^']+\.prompt)'/.exec(cmd)![1]

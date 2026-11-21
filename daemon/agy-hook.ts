@@ -3,6 +3,7 @@
 // (engines/agy-session.ts). The conversation id and transcript path arrive on every event; `live` is 'working' from the session start and each model call
 // until a stop, which says 'idle', with backgroundWork when agy stopped while a command it started still runs. Runs for any agy: outside a hydra session
 // HYDRA_AGY_STATE is not set and it records nothing. A stop is answered before anything is written, or agy would not know whether to stop.
+// The hooks are global and agy's commands inherit HYDRA_AGY_STATE, so an `agy -p` that a session runs fires them too: the file belongs to the agy process that wrote it first.
 import { readFileSync, renameSync, writeFileSync } from 'fs'
 
 const event = process.argv[2]
@@ -10,7 +11,10 @@ const file = process.env.HYDRA_AGY_STATE
 process.stdout.write(event === 'Stop' ? '{"decision":"stop"}' : '{}')   // first: nothing below (a bad input, a failed write) may leave agy unanswered
 if (file) {
   const input = JSON.parse(readFileSync(0, 'utf8'))
-  const state = { conversationId: input.conversationId, transcriptPath: input.transcriptPath, live: event === 'Stop' ? 'idle' : 'working', backgroundWork: event === 'Stop' && input.fullyIdle === false }
+  let owner: number | undefined
+  try { owner = JSON.parse(readFileSync(file, 'utf8')).pid } catch {}
+  if (owner !== undefined && owner !== process.ppid) process.exit(0)
+  const state = { pid: process.ppid, conversationId: input.conversationId, transcriptPath: input.transcriptPath, live: event === 'Stop' ? 'idle' : 'working', backgroundWork: event === 'Stop' && input.fullyIdle === false }
   const temp = `${file}.${process.pid}.tmp`   // two hooks can run at once
   writeFileSync(temp, JSON.stringify(state))
   renameSync(temp, file)
