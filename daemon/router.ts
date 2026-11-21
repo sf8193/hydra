@@ -5,6 +5,7 @@ import { cacheSlackChannel, cacheSlackThread, cachedSlackChannel } from './artif
 import { parseArchiveUrl } from '../connectors/slack/conversation.js'
 import { refreshDashboard } from './dashboard.js'
 import { registry, threadRegistry } from './sessions.js'
+import { flagStranger, acknowledged } from './stranger.js'
 import { transport } from './bridge-transport.js'
 import { loadAccess, operatorIds, gate, channelAllowed, admitTaggedChannel } from './access.js'
 import type { Access } from './access.js'
@@ -953,6 +954,12 @@ gateway.onMessage(async (msg: InboundMessage) => {
     if (msg.isThread) {
       const resolvedThreadId = registry.resolveThreadId(msg)
 
+      const letIn = PERMISSION_REPLY_RE.test(msg.content) ? [] : acknowledged(resolvedThreadId, msg.content)
+      if (letIn.length) {
+        threadRegistry.allowSenders(resolvedThreadId, letIn)
+        void gateway.send(resolvedThreadId, `Listening to ${letIn.map(id => `<@${id}>`).join(', ')} in this thread.`, { replyTo: msg.id }).catch(() => {})
+      }
+
       // Behind an answer already held for this thread's specialist: the started session may already be registered, and
       // this one still goes after the held one.
       const holding = holdingFor(resolvedThreadId)
@@ -1137,9 +1144,18 @@ gateway.onMessage(async (msg: InboundMessage) => {
     }
   }
 
-  const result = await gate(msg)
+  const strangerThread = !isAllowed && msg.isThread ? registry.resolveThreadId(msg) : undefined
+  const result = strangerThread && threadRegistry.isSenderAllowed(strangerThread, senderId)
+    ? { action: 'deliver' as const, access }
+    : await gate(msg)
 
-  if (result.action === 'drop') return
+  if (result.action === 'drop') {
+    if (strangerThread && registry.getByThread(strangerThread) && flagStranger(strangerThread, senderId)) {
+      const operator = operatorIds(access)[0]
+      void gateway.send(strangerThread, `Stranger danger: <@${senderId}> is not the operator. <@${operator}>, reply "yes" and I'll listen to them in this thread.`, { replyTo: msg.id }).catch(() => {})
+    }
+    return
+  }
 
   if (result.action === 'pair') {
     const lead = result.isResend ? 'Still pending' : 'Pairing required'
@@ -1174,7 +1190,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
   }
 
   const permMatch = PERMISSION_REPLY_RE.exec(msg.content)
-  if (permMatch) {
+  if (permMatch && isAllowed) {
     const requestId = permMatch[2]!.toLowerCase()
     const pending = pendingPermissions.get(requestId)
     const targetSessionId = pending?.sessionId ?? 'main'

@@ -248,6 +248,8 @@ export type ThreadMetadata = {
   totalMessages: number
   sessionHistory: ThreadSessionEntry[]
   listenOverride?: boolean
+  /** Non-operators the operator has acknowledged in this thread: their messages reach the session here and nowhere else. */
+  allowedSenders?: string[]
   parentChannelId?: string
   /** Hydra posted the anchor message and made the thread itself, so the anchor is hydra's to delete. Absent for a thread spawned into, or
    *  anchored on, someone's message or thread. Who may destroy reads each entry's own `hydraMade` (madeFor); this stands in for an old entry. */
@@ -619,6 +621,17 @@ export class ThreadRegistry {
 
   get(threadId: string): ThreadMetadata | undefined {
     return this.threads.get(threadId)
+  }
+
+  isSenderAllowed(threadId: string, senderId: string): boolean {
+    return this.threads.get(threadId)?.allowedSenders?.includes(senderId) ?? false
+  }
+
+  allowSenders(threadId: string, senderIds: string[]): void {
+    const thread = this.threads.get(threadId)
+    if (!thread) return
+    thread.allowedSenders = [...new Set([...(thread.allowedSenders ?? []), ...senderIds])]
+    this.persist()
   }
 
   has(threadId: string): boolean {
