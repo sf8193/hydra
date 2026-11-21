@@ -174,6 +174,19 @@ export function channelAllowed(access: Pick<Access, 'groups'>, place: Place): bo
   return place.isDM || channelPolicy(access, place) !== undefined
 }
 
+/**
+ * The operator tagging this bot in a channel it has no policy for admits that channel: mention-only at the top level, session threads started there listen untagged.
+ * True when it did. Anyone else's tag, and a static config, admit nothing.
+ */
+export async function admitTaggedChannel(access: Access, msg: InboundMessage): Promise<boolean> {
+  if (STATIC || msg.isDM || !operatorIds(access).includes(msg.authorId)) return false
+  // Only an explicit @-tag admits: a reply to the bot or a mentionPatterns match does not.
+  if (!(await gateway.isMentioned({ ...msg, referenceMessageId: null }))) return false
+  access.groups[msg.parentChannelId ?? msg.channelId] = { requireMention: true, allowFrom: [msg.authorId], defaultListen: true }
+  saveAccess(access)
+  return true
+}
+
 export async function gate(msg: InboundMessage): Promise<GateResult> {
   const access = loadAccess()
   const pruned = pruneExpired(access)
