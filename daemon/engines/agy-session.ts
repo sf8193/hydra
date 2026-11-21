@@ -67,7 +67,7 @@ export function agyTurn(sessionId: string, sinceMs: number): { complete: boolean
   const last = steps.at(-1)
   const asked = steps[0]?.type === 'USER_INPUT' ? steps[0] : undefined
   // created_at is whole seconds: the second the message arrived in counts as at or after it.
-  if (!isAnswer(last) || !asked || Date.parse(asked.created_at ?? '') < Math.floor(sinceMs / 1000) * 1000) return { complete: false, text: null }
+  if (!isAnswer(last) || !asked || !(Date.parse(asked.created_at ?? '') >= Math.floor(sinceMs / 1000) * 1000)) return { complete: false, text: null }   // no readable time: not its answer
   return { complete: true, text: last.content! }
 }
 

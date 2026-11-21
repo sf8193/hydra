@@ -57,6 +57,11 @@ test('only the last user input counts: an answer to an earlier message is not th
   expect(agyTurn(id, since(40)).complete).toBe(false)   // nothing came after a message delivered later than the last input
 })
 
+test('a user input with no readable time is not taken as the message\'s turn', () => {
+  const { id } = session(lines({ ...ask(0, 17), created_at: undefined }, answer(1, 18)))
+  expect(agyTurn(id, since(17)).complete).toBe(false)
+})
+
 test('a tool call that also carries text is not the answer', () => {
   const { id } = session(lines(ask(0, 17), { ...call(1, 18), content: 'let me run that' }))
   expect(agyTurn(id, since(17)).complete).toBe(false)

@@ -53,7 +53,7 @@ export class AgyEngine implements EngineAdapter {
     if (isRestrictedPolicy(input.policy)) throw new Error(`specialist ${input.policy.specialist} has restricted = true, which this engine cannot give: set engine = "claude", or set restricted = false`)
     if (input.policy?.canOnlyWriteTo) throw new Error(`specialist ${input.policy.specialist} has can_only_write_to = "workdir", which this engine cannot give: set engine = "claude", or remove can_only_write_to`)
     const { sessionId, tmuxName } = input
-    const model = input.model!   // doSpawnSession always gives agy one
+    const model = input.model!   // doSpawnSession always gives agy one (its flash model when none is named)
     // Resume: agy continues the dead session's conversation (agy keeps conversations per folder: the caller launches in the folder the session had).
     // With no conversation on record agy would start a fresh one that the caller reports as resumed, so that fails the resume instead.
     const conversation = input.resumeSession ? agyState(input.resumeSession.fromSessionId)?.conversationId : undefined

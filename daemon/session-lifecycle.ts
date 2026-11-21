@@ -28,7 +28,7 @@ import { canAskPredecessor, pushToolSurface } from './tool-surface.js'
 import { parseSpawnTopic, resolveSpawnLabel } from './util.js'
 import { startPhaseBudget, clearPhaseBudget } from './phase-budget.js'
 import { clearIdleLimit, resumeIdleLimit } from './idle-limit.js'
-import { resolveLaunchSelection, spawnModel, withContextSuffix } from '../shared/constants.js'
+import { AGY_MODEL_ALIASES, resolveLaunchSelection, spawnModel, withContextSuffix } from '../shared/constants.js'
 import type { SessionType, ToolBase, SessionLabel } from '../shared/constants.js'
 import { isRestricted, isRestrictedPolicy } from './policy-record.js'
 import { resolveEngine } from './engines/instances.js'
@@ -1237,8 +1237,9 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   prompt = hydraPrompt(prompt)
 
   // Central model resolution (see `selected` above): callers can pass raw aliases (e.g. "sonnet", "astra") or full IDs.
-  // Codex with no model picks its own default (it asks its app-server); the spawn default is a Claude id, which Codex cannot run.
-  const model = selected?.model ?? (engine === 'codex' ? undefined : withContextSuffix(spawnModel()))
+  // Codex with no model picks its own default (it asks its app-server); the spawn default is a Claude id, which Codex cannot run. agy is given its
+  // flash model (the one agy itself starts on, and every plan has it): it needs a model named, and the Claude spawn default is not one it should run.
+  const model = selected?.model ?? (engine === 'codex' ? undefined : engine === 'agy' ? AGY_MODEL_ALIASES.flash : withContextSuffix(spawnModel()))
 
 
   // --- Launch via engine adapter ---
