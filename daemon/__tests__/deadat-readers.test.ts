@@ -86,7 +86,7 @@ const ALLOWED: Record<string, { why: string; lines: string[] }> = {
   'session-health.ts': {
     why: 'a crash is announced once: not again once written',
     lines: [
-      "if (occ === 'dead' && !info.deadAt && info.adapter.channel === 'bridge' && !crashAlerted.has(info.sessionId)) {",
+      "if (occ === 'dead' && !info.deadAt && info.engine !== 'codex' && !crashAlerted.has(info.sessionId)) {",
     ],
   },
   'session-lifecycle.ts': {

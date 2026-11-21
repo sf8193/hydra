@@ -87,6 +87,12 @@ test('an API key file switches agy to its API-key mode, and only the file\'s pat
   } finally { rmSync(AGY_API_KEY_FILE, { force: true }) }
 })
 
+test('a key file other users can read is refused before anything starts', async () => {
+  writeFileSync(AGY_API_KEY_FILE, 'AQ.secret-key', { mode: 0o644 })
+  chmodSync(AGY_API_KEY_FILE, 0o644)
+  try { await expect(launchCommand('hi')).rejects.toThrow('chmod 600') } finally { rmSync(AGY_API_KEY_FILE, { force: true }) }
+})
+
 test('a restricted or write-confined specialist is refused before anything starts', async () => {
   await expect(launchCommand('hi', { policy: { specialist: 'ops', id: 'p1', restricted: true, workdir: '/w', tools: [], servers: [] } })).rejects.toThrow('restricted = true')
   await expect(launchCommand('hi', { policy: { specialist: 'ops', id: 'p2', restricted: false, canOnlyWriteTo: { workdir: '/w' } } as any })).rejects.toThrow('can_only_write_to')

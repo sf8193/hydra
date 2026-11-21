@@ -5,7 +5,7 @@
 // mid-turn). The hydra tools reach the model as MCP tools (agy-config.ts). The tmux mechanics are Claude's, so this delegates them; only launch,
 // delivery, observation and recovery differ. Observation is agy's own files (agy-session.ts); a resume continues the conversation its record names.
 
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import type { SessionInfo } from '../sessions.js'
 import { ENGINE_CAPABILITIES } from '../../shared/engine-capabilities.js'
@@ -66,12 +66,17 @@ export class AgyEngine implements EngineAdapter {
     mkdirSync(agyStateDir(), { recursive: true, mode: 0o700 })
     rmSync(agyStateFile(sessionId), { force: true })   // a relaunch of this session id starts with no word from agy
     const apiKeyMode = existsSync(AGY_API_KEY_FILE)
+    // The key reaches the pane's environment, which agy's own commands can print: it must not also be readable by other users.
+    if (apiKeyMode && statSync(AGY_API_KEY_FILE).mode & 0o077) throw new Error(`${AGY_API_KEY_FILE} is readable by other users: chmod 600 it`)
     const stderrLog = join(SPAWN_LOGS_DIR, `stderr-${tmuxName}-${sessionId}.log`)
     const agy = process.env.HYDRA_AGY_BIN || 'agy'
     // The reply rules go first in the first prompt: agy has no instructions channel of its own. The prompt is handed to the pane by file (launch-files.ts).
     mkdirSync(SPAWN_LOGS_DIR, { recursive: true, mode: 0o700 })
-    const promptFile = writeSpawnPrompt(tmuxName, sessionId, `${SESSION_INSTRUCTIONS}\n\n${input.prompt}`)
-    const tokenFile = input.sessionToken ? writeSessionToken(tmuxName, sessionId, input.sessionToken) : null
+    let promptFile: ReturnType<typeof writeSpawnPrompt>, tokenFile: ReturnType<typeof writeSessionToken> | null = null
+    try {
+      promptFile = writeSpawnPrompt(tmuxName, sessionId, `${SESSION_INSTRUCTIONS}\n\n${input.prompt}`)
+      if (input.sessionToken) tokenFile = writeSessionToken(tmuxName, sessionId, input.sessionToken)
+    } catch (err) { removeSpawnPrompt({ tmuxName, sessionId }); removeSessionToken({ tmuxName, sessionId }); throw err }
     const args = [agy, `--model ${shq(model)}`, `--settings ${shq(agySettings(input.cwd, apiKeyMode))}`, '--dangerously-skip-permissions', ...(conversation ? [`--conversation ${shq(conversation)}`] : []), `-i ${promptFile.ref}`]
     const inner = [
       `cd ${shq(input.cwd)}`,
