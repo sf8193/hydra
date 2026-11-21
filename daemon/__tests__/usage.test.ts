@@ -8,7 +8,6 @@ import { USAGE_PHASES } from '../usage-phase.js'
 import { healSubagent, plantBrokenListing, plantSubagent, plantTranscript, plantUnreadableSubagent, subagentsDirOf, turnLines, uniqueClaudeId } from './projects-fixture.js'
 import { claudeConfigDir } from '../../shared/constants.js'
 import { TEST_STATE_DIR } from '../../test-setup.js'
-import { buildEvent } from '../raindrop-payload.js'
 
 const line = (usage: Record<string, number>, extra: Record<string, unknown> = {}) =>
   JSON.stringify({ ...extra, message: { role: 'assistant', usage } }) + '\n'
@@ -170,38 +169,6 @@ describe('usage: nothing but integers can escape', () => {
     // secret-absence beside an exact match would restate this one, not test it.
     expect(cursor.phaseTotals.report.outputTokens).toBe(3)
     expect(cursor.latch, 'replying is momentary — the latch must not follow it').toBe('plan')
-  })
-
-  // What actually matters: the wire. An earlier version of this test built
-  // `extra` from two numbers and a literal, so it asserted that strings nobody
-  // supplied were absent — deleting every egress gate left it green. Now the
-  // cursor's own transcript-derived strings are what gets handed to buildEvent,
-  // through the two keys most likely to carry one.
-  test('transcript text handed to the payload does not survive into the body', () => {
-    const cursor = readUsageDelta(planted(), newCursor())
-    const body = buildEvent({
-      event: 'hydra.session.usage',
-      eventId: 'e', userId: 'U056CLXJY8P', threadId: 'T', at: 1789752921748, omitRepo: false,
-      facts: {
-        threadId: 'T', createdAt: 0, tmuxName: 'atlas', engine: 'claude',
-        sessionType: 'thread_owner', platform: 'slack',
-        project: 'hydra', label: SECRETS[1],
-      },
-      extra: {
-        cumulativeOutputTokens: cursor.totals.outputTokens,
-        deltaOutputTokens: cursor.totals.outputTokens,
-        claudeSessionId: cursor.lastMessageId!,
-        reason: cursor.path!,
-        summary: SECRETS.join(' '),
-        // Charset-clean, so only the KEY allowlist can stop this one.
-        cwdBasename: 'secret-repo',
-      },
-    })
-    const serialized = JSON.stringify(body)
-    for (const secret of [...SECRETS, cursor.lastMessageId!, cursor.path!, 'secret-repo']) {
-      expect(serialized, `leaked ${secret}`).not.toContain(secret)
-    }
-    expect(body!.properties.cumulativeOutputTokens, 'and the counter still got through').toBe(3)
   })
 })
 
@@ -418,7 +385,7 @@ describe('usage: drainUsage', () => {
     expect(resumed.totals.outputTokens).toBe(128)
   })
 
-  // raindrop.ts banks a read's phaseTotals as a long-lived delivered baseline
+  // a consumer that banks a read's phaseTotals as a long-lived delivered baseline
   // and subtracts the next read from it. If a read handed back the buckets its
   // predecessor still holds, the banked baseline would track the live cursor and
   // every delta would settle at zero — silently, across a file boundary. The

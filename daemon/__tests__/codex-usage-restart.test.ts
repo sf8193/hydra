@@ -1,4 +1,4 @@
-// S10-lite: Codex usage to Raindrop (A) and the restart gap (B).
+// S10-lite: Codex usage (A) and the restart gap (B).
 //
 // Live check, codex-cli 0.157.1, 2026-09-26, throwaway CODEX_HOME + private socket:
 // - initialize, thread/start, turn/start "reply with the word ok", then turn/completed:

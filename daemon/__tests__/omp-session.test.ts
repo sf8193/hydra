@@ -64,7 +64,7 @@ test('context is the last request\'s input plus both cache counters over the lau
   expect(engine.usage({ ...info, sessionMetadata: { model: 'no-such-model' } })).toBeNull()
 })
 
-// Spend (Raindrop). Sums of the fixture's two assistant messages (usage input/output/cacheWrite/cacheRead): 4/74/13713/0 and 2/5/84/13713.
+// Spend. Sums of the fixture's two assistant messages (usage input/output/cacheWrite/cacheRead): 4/74/13713/0 and 2/5/84/13713.
 const FIXTURE_TOTALS = { inputTokens: 6, outputTokens: 79, cacheCreateTokens: 13797, cacheReadTokens: 13713 }
 const assistantLine = (usage: object) => JSON.stringify({ type: 'message', message: { role: 'assistant', stopReason: 'stop', timestamp: FINAL_AT + 100, usage } }) + '\n'
 

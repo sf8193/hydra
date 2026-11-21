@@ -279,18 +279,6 @@
       "desc": "Automatic handoff of idle high-context sessions (cache and full-context rules)"
     },
     {
-      "id": "daemon_raindrop",
-      "label": "daemon/raindrop.ts",
-      "layer": "domain",
-      "desc": "Raindrop egress: opt-in event-bus subscriber, session lifecycle metadata"
-    },
-    {
-      "id": "daemon_raindrop-payload",
-      "label": "daemon/raindrop-payload.ts",
-      "layer": "shared",
-      "desc": "Raindrop wire format — egress allowlist, no daemon imports"
-    },
-    {
       "id": "daemon_usage",
       "label": "daemon/usage.ts",
       "layer": "core",
@@ -403,10 +391,6 @@
     [
       "daemon",
       "connectors_clock_jobs-clock"
-    ],
-    [
-      "daemon",
-      "daemon_raindrop"
     ],
     [
       "daemon",
@@ -715,10 +699,6 @@
     [
       "daemon_cli-handler",
       "daemon_access"
-    ],
-    [
-      "daemon_cli-handler",
-      "daemon_raindrop"
     ],
     [
       "daemon_cli-handler",
@@ -1109,46 +1089,6 @@
       "daemon_util"
     ],
     [
-      "daemon_raindrop",
-      "daemon_tmux"
-    ],
-    [
-      "daemon_raindrop",
-      "daemon_config"
-    ],
-    [
-      "daemon_raindrop",
-      "daemon_access"
-    ],
-    [
-      "daemon_raindrop",
-      "daemon_sessions"
-    ],
-    [
-      "daemon_raindrop",
-      "shared_constants"
-    ],
-    [
-      "daemon_raindrop",
-      "daemon_usage"
-    ],
-    [
-      "daemon_raindrop",
-      "daemon_usage-phase"
-    ],
-    [
-      "daemon_raindrop",
-      "daemon_raindrop-payload"
-    ],
-    [
-      "daemon_raindrop-payload",
-      "shared_constants"
-    ],
-    [
-      "daemon_raindrop-payload",
-      "daemon_usage-phase"
-    ],
-    [
       "daemon_usage",
       "shared_constants"
     ],
@@ -1223,10 +1163,6 @@
     [
       "daemon_commands_status",
       "connectors_github_pr-watch"
-    ],
-    [
-      "daemon_commands_status",
-      "daemon_raindrop"
     ],
     [
       "daemon_commands_thread",

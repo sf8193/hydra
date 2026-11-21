@@ -79,7 +79,7 @@ test.skipIf(!run)('omp session: first turn, reply rules, one bridge, no second M
     expect(engine.turn(info, since).answer()).toContain('PINEAPPLE')
     // omp's own file also gives the context size.
     expect(engine.usage({ ...info, sessionMetadata: { model: 'claude-sonnet-5-5[1m]' } })?.percent).toBeGreaterThan(0)
-    // and the spend Raindrop reads.
+    // and the spend.
     expect(engine.usageTotals(info, undefined)?.totals.outputTokens).toBeGreaterThan(0)
 
     // A Task subagent re-runs the extension in the same process: still one registration.

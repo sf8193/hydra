@@ -102,7 +102,7 @@ export function codexTotals(u: Record<string, unknown>): TokenTotals | null {
   if (cacheWrite > 0 && !loggedCacheWrite) {
     loggedCacheWrite = true
     // Q6e: never seen non-zero; whether it is inside input_tokens is unverified.
-    process.stderr.write(`daemon: raindrop: codex cache_write_input_tokens=${cacheWrite} seen for the first time — check the input mapping\n`)
+    process.stderr.write(`daemon: usage: codex cache_write_input_tokens=${cacheWrite} seen for the first time — check the input mapping\n`)
   }
   return {
     inputTokens: Math.max(0, input - cached),

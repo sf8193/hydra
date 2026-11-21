@@ -346,28 +346,10 @@ export const LONG_TOOL_TIMEOUTS_MS: Readonly<Record<string, number | undefined>>
   ask_predecessor: ASK_PREDECESSOR_TIMEOUT_MS + 30_000,
 }
 
-export type Sentiment = 'POSITIVE' | 'NEGATIVE'
-
-export type SentimentReaction = { name: 'thumbs_up' | 'thumbs_down'; sentiment: Sentiment }
-
-export const SENTIMENT_REACTIONS: Readonly<Record<string, SentimentReaction>> = {
-  '+1': { name: 'thumbs_up', sentiment: 'POSITIVE' },
-  'thumbsup': { name: 'thumbs_up', sentiment: 'POSITIVE' },
-  '👍': { name: 'thumbs_up', sentiment: 'POSITIVE' },
-  '-1': { name: 'thumbs_down', sentiment: 'NEGATIVE' },
-  'thumbsdown': { name: 'thumbs_down', sentiment: 'NEGATIVE' },
-  '👎': { name: 'thumbs_down', sentiment: 'NEGATIVE' },
-}
-
 export const DELETE_REACTIONS: readonly string[] = ['hocho', '🔪']
 
 export function normalizeReaction(emoji: string): string {
   return emoji.replace(/::skin-tone-\d+$/, '').replace(/[\u{1F3FB}-\u{1F3FF}\u{FE0F}]/gu, '')
-}
-
-export function sentimentForReaction(emoji: string): SentimentReaction | undefined {
-  const bare = normalizeReaction(emoji)
-  return lookup(SENTIMENT_REACTIONS, bare)
 }
 
 export function isDeleteReaction(emoji: string): boolean {

@@ -36,7 +36,6 @@ export const APPROVED_DIR = join(STATE_DIR, 'approved')
 export const ENV_FILE = join(STATE_DIR, '.env')
 export const SOCK_PATH = join(STATE_DIR, 'daemon.sock')
 export const INBOX_DIR = join(STATE_DIR, 'inbox')
-export const RAINDROP_DRYRUN_FILE = join(STATE_DIR, 'raindrop-dryrun.jsonl')
 
 const LOCAL_ENV_FILE = join(import.meta.dir, '..', '.env')
 for (const envFile of [LOCAL_ENV_FILE, ENV_FILE]) {

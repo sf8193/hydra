@@ -248,7 +248,7 @@ export function subagentPathsFor(transcript: string): string[] {
 
 // Logged, not thrown: one unreadable subagent must not silence the parent's own spend.
 const subagentReadFailed = (where: string, err: unknown): void => {
-  process.stderr.write(`daemon: raindrop: subagent usage read failed: ${where}: ${err instanceof Error ? err.message : String(err)}\n`)
+  process.stderr.write(`daemon: usage: subagent usage read failed: ${where}: ${err instanceof Error ? err.message : String(err)}\n`)
 }
 
 type SubagentState = Pick<SessionCursor, 'subagents' | 'retired'>

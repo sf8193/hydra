@@ -10,7 +10,6 @@ import { occupancy, occupied } from '../session-reachability.js'
 import { formatContextPercent } from '../engines/engine-adapter.js'
 import { getWatchesBySession } from '../../connectors/github/pr-watch.js'
 import { getActiveRuns } from '../protocol-runner.js'
-import { raindropStatusLine } from '../raindrop.js'
 import { isForMain, mainAlive, mainContext, mainStartedAt, mainTmux } from '../main-session.js'
 import type { InboundMessage } from '../../gateways/gateway.js'
 
@@ -328,7 +327,6 @@ export async function handleHealthIntercept(msg: InboundMessage): Promise<void> 
     heartbeatAge = `${Math.round((Date.now() - hb.mtimeMs) / 1000)}s ago`
   } catch {}
 
-  const raindropLine = raindropStatusLine('chat')
   const lines = [
     `**Daemon Health**`,
     `• Uptime: ${uptimeMin}m`,
@@ -336,7 +334,6 @@ export async function handleHealthIntercept(msg: InboundMessage): Promise<void> 
     `• Heartbeat: ${heartbeatAge}`,
     `• Sessions: ${liveSessions.length} live (${connectedSessions.length} connected, ${disconnectedSessions.length} disconnected)${deadSessions.length > 0 ? `, ${deadSessions.length} dead` : ''}`,
     `• Queued messages: ${queuedMsgCount}`,
-    ...(raindropLine ? [`• Raindrop: ${raindropLine}`] : []),
   ]
 
   if (disconnectedSessions.length > 0) {

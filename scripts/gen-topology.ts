@@ -63,8 +63,6 @@ const LAYER_CONFIG: Record<string, { layer: string; desc: string }> = {
   'daemon/idle-limit.ts':     { layer: 'domain',    desc: 'Ephemeral idle limit: persisted deadline, nudge → grace → reap' },
   'daemon/session-health.ts': { layer: 'domain',    desc: 'Session health poll: crash detection, orphan detection, context alerts' },
   'daemon/auto-handoff.ts': { layer: 'domain',    desc: 'Automatic handoff of idle high-context sessions (cache and full-context rules)' },
-  'daemon/raindrop.ts':       { layer: 'domain',    desc: 'Raindrop egress: opt-in event-bus subscriber, session lifecycle metadata' },
-  'daemon/raindrop-payload.ts': { layer: 'shared',  desc: 'Raindrop wire format — egress allowlist, no daemon imports' },
   'daemon/usage.ts':          { layer: 'core',      desc: 'Transcript location + incremental token-counter cursor' },
   'daemon/usage-alerts.ts':   { layer: 'domain',    desc: 'Account rate-limit alerts: report_usage + pane fallback, one dedupe per window' },
   'daemon/usage-phase.ts':    { layer: 'shared',    desc: 'Work-phase classifier — closed phase set, tool-name vote, no imports' },

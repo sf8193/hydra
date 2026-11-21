@@ -1,5 +1,4 @@
-// Dependency-free so raindrop-payload.ts can gate on these sets without pulling
-// fs and the projects-root reader into the wire-shaping module.
+// Dependency-free: the phase sets are importable without pulling in fs or the projects-root reader.
 export const USAGE_PHASES = ['plan', 'execute', 'review', 'report'] as const
 export type UsagePhase = typeof USAGE_PHASES[number]
 

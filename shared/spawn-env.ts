@@ -144,12 +144,6 @@ export function stateEnvUnsets(names: Iterable<string> = sourcedEnvNames()): str
     .sort()
 }
 
-let onSweepFailure: ((reason: string) => void) | null = null
-
-export function setSweepFailureHandler(fn: ((reason: string) => void) | null): void {
-  onSweepFailure = fn
-}
-
 type ExecFn = typeof childProcess.execFileSync
 type TmuxOpts = Omit<childProcess.ExecFileSyncOptions, 'env'> & { env?: NodeJS.ProcessEnv }
 
@@ -173,8 +167,6 @@ export function tmuxNewSession(
       process.stderr.write(
         `hydra: tmux env sweep failed (${cause}) — a pane may inherit ${scrubbedSpawnVars().join(', ')}\n`,
       )
-      const reason = e.code ?? (e.status === undefined ? 'unknown' : `exit-${e.status}`)
-      try { onSweepFailure?.(reason) } catch {}
     }
   }
   exec('tmux', ['new-session', ...args], run)

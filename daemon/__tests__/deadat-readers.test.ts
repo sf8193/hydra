@@ -68,14 +68,6 @@ const ALLOWED: Record<string, { why: string; lines: string[] }> = {
       "const connected = () => transport.has(sessionId) && !registry.get(sessionId)?.deadAt",
     ],
   },
-  'raindrop.ts': {
-    why: 'final usage is dated at the death',
-    lines: [
-      "const { sessionId, deadAt } = death",
-      "const bodies = usageBodies(sessionId, facts, 'final', deadAt ?? deps.now(), final)",
-      "threadId: facts.threadId, at: deadAt ?? deps.now(),",
-    ],
-  },
   'recovery.ts': {
     why: 'restoring a dead record keeps its first stamp; boot candidates are those the loader stamped (and tmux is checked too)',
     lines: [

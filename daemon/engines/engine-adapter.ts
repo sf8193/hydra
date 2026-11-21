@@ -214,7 +214,7 @@ export interface EngineAdapter {
   isAlive(info: SessionInfo): boolean
   peek(info: SessionInfo, lines?: number): string
   usage(info: SessionInfo): ContextUsage | null
-  // Spend so far, or null when it can't be read yet (Raindrop counts the session unresolved).
+  // Spend so far, or null when it can't be read yet.
   // Claude: its transcript, drained incrementally from `prev`. Codex: the rollout's last token_count.
   usageTotals(info: UsageSubject, prev: unknown): UsageReading | null
 

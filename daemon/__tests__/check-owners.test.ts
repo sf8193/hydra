@@ -99,10 +99,10 @@ describe('check-owners: raw tmux liveness and exec only in owners', () => {
 
   test('a raw sync tmux exec is caught in the daemon, wrapped or in a shell string; daemon/tmux.ts, the CLI and tmuxSync pass', () => {
     const raw = (path: string, ...lines: string[]) => hits(path, ...lines).filter(v => v.includes('raw sync tmux exec'))
-    expect(raw('daemon/raindrop.ts', "execFileSync('tmux', ['list-panes'], { timeout: 2000 })")).toHaveLength(1)
+    expect(raw('daemon/foo.ts', "execFileSync('tmux', ['list-panes'], { timeout: 2000 })")).toHaveLength(1)
     expect(raw('daemon/reply-guard.ts', 'return execSync(', '  `tmux capture-pane -t ${t} -p`,', ')')).toHaveLength(1)
     expect(raw('daemon/cli-handler.ts', "Bun.spawnSync(['tmux', 'list-sessions'])")).toHaveLength(1)
-    expect(raw('daemon/raindrop.ts', "tmuxSync(['list-panes'])")).toEqual([])
+    expect(raw('daemon/foo.ts', "tmuxSync(['list-panes'])")).toEqual([])
     expect(raw('daemon/tmux.ts', "execFileSync('tmux', args)")).toEqual([])
     expect(raw('cli/lifecycle.ts', "execFileSync('tmux', ['capture-pane'])")).toEqual([])
   })

@@ -24,9 +24,6 @@ export interface EventMap {
   // Fires on every successful bridge registration, including reconnects —
   // subscribers must be idempotent.
   'session:bridge-registered': { sessionId: string; threadId: string }
-  // Every reaction the gateway reports, before any emoji or access filter —
-  // each subscriber authorizes for itself rather than trusting the emit.
-  'reaction': { channelId: string; messageId: string; userId: string; emoji: string }
   'review:complete': { threadId: string }
   'review:cancelled': { threadId: string }
   'review:round': { threadId: string; round: number; totalRounds: number; text: string }
