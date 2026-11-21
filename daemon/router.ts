@@ -14,7 +14,7 @@ import { transcribeDownloads, mergeTranscripts } from './transcription.js'
 
 import { handleSpawnIntercept, handleTemplateSpawn, handleKillIntercept, handleRestartIntercept, handleReconnectIntercept, handleCommandsIntercept } from './commands/global.js'
 import { handleRecoverIntercept } from './recovery.js'
-import { resolveModelAlias, resolveCodexModelAlias, resolveOmpModelAlias, extractModelPrefix, isDeleteReaction, MODEL_ALIAS_PATTERN, MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES, OMP_MODEL_ALIAS_PATTERN, DEFAULT_REVIEW_ROUNDS } from '../shared/constants.js'
+import { resolveModelAlias, resolveCodexModelAlias, resolveOmpModelAlias, resolveAgyModelAlias, extractModelPrefix, isDeleteReaction, MODEL_ALIAS_PATTERN, MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES, OMP_MODEL_ALIAS_PATTERN, AGY_MODEL_ALIAS_PATTERN, DEFAULT_REVIEW_ROUNDS } from '../shared/constants.js'
 import { isForMain, noteMainChannel } from './main-session.js'
 import { handleMainHandoffIntercept } from './main-handoff.js'
 import { handleThreadKillIntercept, handleHandoffIntercept, handleDestroyIntercept, handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept, handlePeekIntercept } from './commands/thread.js'
@@ -74,6 +74,10 @@ const SPAWN_CODEX_RE = /^(?:new session|spawn)\s+codex(?:\s+(\S+))?:\s*([\s\S]+)
 export const SPAWN_OMP_ALIAS_RE = new RegExp(`^(?:new session|spawn)\\s+(${OMP_MODEL_ALIAS_PATTERN}):\\s*([\\s\\S]+)`, 'i')
 export const SPAWN_WT_OMP_MODEL_RE = new RegExp(`^(?:spawn-wt|/spawn-wt)\\s+(${OMP_MODEL_ALIAS_PATTERN}):\\s*(\\S+)\\s+([\\s\\S]+)`, 'i')
 export const BARE_OMP_ALIAS_RE = new RegExp(`^(${OMP_MODEL_ALIAS_PATTERN}):?$`, 'i')
+// agy aliases select the agy engine (`spawn agy-neon: topic`), the same three forms.
+export const SPAWN_AGY_ALIAS_RE = new RegExp(`^(?:new session|spawn)\\s+(${AGY_MODEL_ALIAS_PATTERN}):\\s*([\\s\\S]+)`, 'i')
+export const SPAWN_WT_AGY_MODEL_RE = new RegExp(`^(?:spawn-wt|/spawn-wt)\\s+(${AGY_MODEL_ALIAS_PATTERN}):\\s*(\\S+)\\s+([\\s\\S]+)`, 'i')
+export const BARE_AGY_ALIAS_RE = new RegExp(`^(${AGY_MODEL_ALIAS_PATTERN}):?$`, 'i')
 const SPAWN_WT_MODEL_RE = new RegExp(`^(?:spawn-wt|/spawn-wt)\\s+(${MODEL_ALIAS_PATTERN}):\\s*(\\S+)\\s+([\\s\\S]+)`, 'i')
 const SPAWN_WT_CODEX_MODEL_RE = new RegExp(`^(?:spawn-wt|/spawn-wt)\\s+(${CODEX_MODEL_ALIAS_PATTERN}):\\s*(\\S+)\\s+([\\s\\S]+)`, 'i')
 const FORK_MODEL_RE = new RegExp(`^(?:fork|/fork)\\s+(${MODEL_ALIAS_PATTERN}):\\s*([\\s\\S]+)`, 'i')
@@ -481,6 +485,16 @@ gateway.onMessage(async (msg: InboundMessage) => {
       }
     }
 
+    // "spawn agy-neon: topic" — an agy alias selects both model and engine.
+    const spawnAgyAliasMatch = msg.content.match(SPAWN_AGY_ALIAS_RE)
+    if (spawnAgyAliasMatch) {
+      const topic = spawnAgyAliasMatch[2].trim()
+      if (topic) {
+        void handleSpawnIntercept(msg, topic, access, resolveAgyModelAlias(spawnAgyAliasMatch[1]), 'agy')
+        return
+      }
+    }
+
     // "spawn sonnet: topic" / "new session haiku: topic" — model alias before colon
     const spawnModelMatch = msg.content.match(SPAWN_MODEL_RE)
     if (spawnModelMatch) {
@@ -517,7 +531,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
     if (spawnMatch) {
       const topic = spawnMatch[1].trim()
       // Catch "spawn sonnet:" (alias without topic) — don't spawn with "sonnet:" as topic
-      const bareAlias = topic.match(BARE_ALIAS_RE) || topic.match(BARE_CODEX_ALIAS_RE) || topic.match(BARE_OMP_ALIAS_RE) || topic.match(BARE_CODEX_RE)
+      const bareAlias = topic.match(BARE_ALIAS_RE) || topic.match(BARE_CODEX_ALIAS_RE) || topic.match(BARE_OMP_ALIAS_RE) || topic.match(BARE_AGY_ALIAS_RE) || topic.match(BARE_CODEX_RE)
       if (bareAlias) {
         const alias = bareAlias[1] || 'codex'
         void gateway.send(msg.channelId, `_\`spawn ${alias}:\` needs a topic — e.g. \`spawn ${alias}: describe the task\`_`, { replyTo: msg.id })
@@ -535,6 +549,15 @@ gateway.onMessage(async (msg: InboundMessage) => {
       const [, alias, repo, topic] = spawnWtModelMatch
       if (repo && topic.trim()) {
         void handleSpawnIntercept(msg, `wt:${repo.trim()} ${topic.trim()}`, access, alias)
+        return
+      }
+    }
+
+    const spawnWtAgyModelMatch = msg.content.match(SPAWN_WT_AGY_MODEL_RE)
+    if (spawnWtAgyModelMatch) {
+      const [, alias, repo, topic] = spawnWtAgyModelMatch
+      if (repo && topic.trim()) {
+        void handleSpawnIntercept(msg, `wt:${repo.trim()} ${topic.trim()}`, access, resolveAgyModelAlias(alias), 'agy')
         return
       }
     }

@@ -79,6 +79,11 @@ describe('can_only_write_to', () => {
     expect(errorsOf(spec('can_only_write_to = "workdir"\nengine = "omp"'))).toEqual([omp])
     expect(errorsOf(spec('can_only_write_to = "workdir"\nmodel = "omp-sol"'))).toEqual([omp.replace('.engine:', '.model:')])
   })
+  test('agy is refused with its own one message too', () => {
+    const agy = `specialists.ops.engine: agy cannot restrict a session's tools, so a specialist cannot use it; use claude or codex`
+    expect(errorsOf(spec('can_only_write_to = "workdir"\nengine = "agy"'))).toEqual([agy])
+    expect(errorsOf(spec('can_only_write_to = "workdir"\nmodel = "agy-neon"'))).toEqual([agy.replace('.engine:', '.model:')])
+  })
   test('claude, a Claude model, or no engine and no model loads', () => {
     for (const body of ['', 'engine = "claude"', 'model = "opus"', 'engine = "claude"\nmodel = "opus"']) {
       expect(ok(spec(`can_only_write_to = "workdir"\n${body}`)).config.specialists.ops.canOnlyWriteTo).toBe('workdir')

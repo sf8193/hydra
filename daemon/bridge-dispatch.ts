@@ -473,12 +473,14 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const readOnly = args.read_only === true
         const topic = worktree ? `worktree:${worktree} ${args.topic}` : args.topic as string
         const modelArg = (args.model as string | undefined)?.trim()
-        // A Codex or omp alias selects its engine (doSpawnSession reads it); what a spawn_session may ask of that engine is refused here.
+        // A Codex, omp or agy alias selects its engine (doSpawnSession reads it); what a spawn_session may ask of that engine is refused here.
         const aliasOf = modelArg ? engineOfModel(modelArg) : undefined
         if (aliasOf === 'codex' && source) throw new Error('fork_from cannot be combined with a Codex model — Codex sessions cannot be forked')
         if (aliasOf === 'codex' && readOnly) throw new Error('read_only is not enforced on Codex sessions — use a Claude model')
         if (aliasOf === 'omp' && source) throw new Error('fork_from cannot be combined with an omp model — omp sessions cannot be forked')
         if (aliasOf === 'omp' && readOnly) throw new Error('read_only is not enforced on omp sessions — use a Claude model')
+        if (aliasOf === 'agy' && source) throw new Error('fork_from cannot be combined with an agy model — agy sessions cannot be forked')
+        if (aliasOf === 'agy' && readOnly) throw new Error('read_only is not enforced on agy sessions — use a Claude model')
         const model = modelArg || source?.model
         if (model) process.stderr.write(`daemon: spawn_session model override: ${model}\n`)
         const budgetRaw = (args.phase_budget as string | undefined)?.trim() || undefined

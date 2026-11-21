@@ -122,6 +122,15 @@ export function ompProvider(model: string): 'openai-codex' | 'anthropic' {
   return model.startsWith('gpt-') ? 'openai-codex' : 'anthropic'
 }
 
+/** agy (Google Antigravity CLI) model aliases. Selecting one also selects the agy engine; the ids are the ones `agy models` lists. */
+export const AGY_MODEL_ALIASES: Record<string, string> = {
+  'agy-neon': 'gemini-4-neon-high',
+  'agy-carbon': 'gemini-4-carbon-high',
+  'agy-hydrogen': 'gemini-4-hydrogen-high',
+  'agy-argon': 'gemini-4-argon-high',
+  'agy-flash': 'gemini-3.8-flash-high',
+}
+
 // Validate aliases at load time.
 const ALIAS_KEY_RE = /^[a-z0-9-]+$/
 for (const [key, id] of Object.entries(MODEL_ALIASES)) {
@@ -143,6 +152,10 @@ export const OMP_MODEL_ALIAS_PATTERN = Object.keys(OMP_MODEL_ALIASES)
   .sort((a, b) => b.length - a.length)
   .join('|')
 
+export const AGY_MODEL_ALIAS_PATTERN = Object.keys(AGY_MODEL_ALIASES)
+  .sort((a, b) => b.length - a.length)
+  .join('|')
+
 /** Look up a chat alias. Returns the full model ID or undefined.
  *  Lowercases input — router regex 'i' flag handles matching, this handles lookup. */
 function lookup<T>(table: Readonly<Record<string, T>>, key: string): T | undefined {
@@ -155,13 +168,14 @@ export function resolveLaunchModel(raw: string): string {
 }
 
 /**
- * The engine a model belongs to: an alias (an `omp-` alias is omp, Codex's four are codex, the Claude table is claude) or a full id of a
+ * The engine a model belongs to: an alias (an `omp-` alias is omp, an `agy-` alias is agy, Codex's four are codex, the Claude table is claude) or a full id of a
  * known family (a Claude id the Claude table knows, with or without `[1m]`; a Codex table id or any `gpt-*`). Undefined for a name it
  * cannot place: that passes through unchanged and no check holds it against an engine.
  */
 export function engineOfModel(raw: string): EngineName | undefined {
   if (resolveCodexModelAlias(raw)) return 'codex'
   if (resolveOmpModelAlias(raw)) return 'omp'
+  if (resolveAgyModelAlias(raw)) return 'agy'
   if (resolveModelAlias(raw)) return 'claude'
   const id = raw.replace(/\[1m\]$/, '')
   if (isKnownModel(id)) return 'claude'
@@ -171,13 +185,14 @@ export function engineOfModel(raw: string): EngineName | undefined {
 
 /**
  * A raw model, as any launch path names it, resolved to the model to run and the engine that runs it. With no `engine`, an alias picks
- * it (the Codex and omp tables are checked before the Claude one, and any other string is Claude's). With one (the thread's history,
+ * it (the Codex, omp and agy tables are checked before the Claude one, and any other string is Claude's). With one (the thread's history,
  * a handoff), the alias is read in that engine's table and a full id passes through.
  */
 export function resolveLaunchSelection(raw: string, engine?: EngineName): { model: string; engine: EngineName } {
   const run = engine ?? engineOfModel(raw) ?? 'claude'
   if (run === 'codex') return { model: resolveCodexModelAlias(raw) ?? raw, engine: run }
   if (run === 'omp') return { model: resolveOmpModelAlias(raw) ?? raw, engine: run }
+  if (run === 'agy') return { model: resolveAgyModelAlias(raw) ?? raw, engine: run }
   return { model: resolveLaunchModel(raw), engine: run }
 }
 
@@ -193,6 +208,10 @@ export function resolveCodexModelAlias(alias: string): string | undefined {
 
 export function resolveOmpModelAlias(alias: string): string | undefined {
   return lookup(OMP_MODEL_ALIASES, alias.toLowerCase())
+}
+
+export function resolveAgyModelAlias(alias: string): string | undefined {
+  return lookup(AGY_MODEL_ALIASES, alias.toLowerCase())
 }
 
 /** Strip [1m] context-window suffix and check against known models. */
