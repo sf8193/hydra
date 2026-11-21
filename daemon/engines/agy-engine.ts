@@ -1,29 +1,124 @@
 // daemon/engines/agy-engine.ts
 //
-// agy (Google Antigravity CLI) engine adapter — Claude's model: `agy` runs as a TUI in tmux, and the tmux and
-// bridge mechanics are Claude's, so this delegates them; only launch, observation and recovery differ.
-// Not built yet: launch refuses, so no agy session exists to observe or recover.
+// agy (Google Antigravity CLI) engine adapter — a TUI in tmux, as for Claude and omp, so the operator can attach and work in the session.
+// There is no channel into agy: a message starts a turn only as text in the pane, so deliver pastes it (agy queues text that arrives
+// mid-turn). The hydra tools reach the model as MCP tools (agy-mcp.ts). The tmux mechanics are Claude's, so this delegates them; only launch,
+// delivery, observation and recovery differ. Observation and recovery are not built yet: no session reports a turn end or can be resumed.
 
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs'
+import { join } from 'path'
 import type { SessionInfo } from '../sessions.js'
 import { ENGINE_CAPABILITIES } from '../../shared/engine-capabilities.js'
 import type {
   EngineAdapter, LaunchInput, LaunchResult, DeliveryResult, Notification, StopResult,
   ContextUsage, RecoveryPlan, Turn, UsageReading,
 } from './engine-adapter.js'
+import { withoutIntents } from './engine-adapter.js'
 import type { BlockingState } from '../pane-probe.js'
 import type { ClaudeEngine } from './claude-engine.js'
+import { SOCK_PATH, PLATFORM, STATE_DIR } from '../config.js'
+import { removeSessionToken, removeSpawnPrompt, writeSessionToken, writeSpawnPrompt } from '../launch-files.js'
+import { deliveryRefusal } from '../restricted.js'
+import { tmuxCreateSession, tmuxSync } from '../tmux.js'
+import { SESSION_INSTRUCTIONS, formatNotification } from '../../shared/constants.js'
+import { withRaisedFdLimit } from '../../shared/spawn-env.js'
+import { isRestrictedPolicy } from '../policy-record.js'
+import { AGY_MCP_CONFIG, registerHydraTools } from './agy-mcp.js'
+
+const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
+const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
+/** A Gemini API key, if the operator keeps one: agy then runs in its API-key mode, else on its own login. Only this file's path is on a command line. */
+export const AGY_API_KEY_FILE = join(STATE_DIR, 'agy-api-key')
+const PASTE_DIR = join(STATE_DIR, 'agy-paste')
+const LANDED_WAIT_MS = 8_000
+
+/** The `--settings` JSON for one launch (never saved by agy): the folder is trusted, so agy does not stop to ask, and a key file means API-key mode. */
+export function agySettings(cwd: string, apiKeyMode: boolean): string {
+  return JSON.stringify({ trustedWorkspaces: [cwd], ...(apiKeyMode ? { modelProvider: 'gemini' } : {}) })
+}
+
+const collapse = (s: string) => s.replace(/\s+/g, '')
 
 export class AgyEngine implements EngineAdapter {
   readonly limitsAccess = ENGINE_CAPABILITIES.agy.limitsAccess
   readonly provider = 'agy' as const
   readonly channel = 'engine' as const
-  constructor(private readonly claude: ClaudeEngine) {}
+  constructor(private readonly claude: ClaudeEngine, private readonly mcpConfig = AGY_MCP_CONFIG) {}
 
   async start(): Promise<void> {}
-  async launch(_input: LaunchInput): Promise<LaunchResult> { throw new Error('the agy engine is not built yet') }
 
-  deliver(info: SessionInfo, msg: Notification): Promise<DeliveryResult> { return this.claude.deliver(info, msg) }
-  isConnected(info: SessionInfo): boolean { return this.claude.isConnected(info) }
+  async launch(input: LaunchInput): Promise<LaunchResult> {
+    // This engine cannot limit a session's access (limitsAccess); it would run one as the operator.
+    if (isRestrictedPolicy(input.policy)) throw new Error(`specialist ${input.policy.specialist} has restricted = true, which this engine cannot give: set engine = "claude", or set restricted = false`)
+    if (input.policy?.canOnlyWriteTo) throw new Error(`specialist ${input.policy.specialist} has can_only_write_to = "workdir", which this engine cannot give: set engine = "claude", or remove can_only_write_to`)
+    const { sessionId, tmuxName } = input
+    const model = input.model!   // doSpawnSession always gives agy one
+    registerHydraTools(this.mcpConfig)
+    const apiKeyMode = existsSync(AGY_API_KEY_FILE)
+    const stderrLog = join(SPAWN_LOGS_DIR, `stderr-${tmuxName}-${sessionId}.log`)
+    const agy = process.env.HYDRA_AGY_BIN || 'agy'
+    // The reply rules go first in the first prompt: agy has no instructions channel of its own. The prompt is handed to the pane by file (launch-files.ts).
+    const promptFile = writeSpawnPrompt(tmuxName, sessionId, `${SESSION_INSTRUCTIONS}\n\n${input.prompt}`)
+    const tokenFile = input.sessionToken ? writeSessionToken(tmuxName, sessionId, input.sessionToken) : null
+    const args = [agy, `--model ${shq(model)}`, `--settings ${shq(agySettings(input.cwd, apiKeyMode))}`, '--dangerously-skip-permissions', `-i ${promptFile.ref}`]
+    const inner = [
+      `cd ${shq(input.cwd)}`,
+      `export HYDRA_SESSION_ID=${shq(sessionId)}`, `export HYDRA_SESSION_NAME=${shq(tmuxName)}`,
+      `export HYDRA_THREAD_ID=${shq(input.threadId ?? '')}`, `export HYDRA_SESSION_TYPE=${shq(input.sessionType ?? '')}`,
+      `export DAEMON_SOCK=${shq(SOCK_PATH)}`, `export CHAT_PLATFORM=${shq(PLATFORM)}`,
+      ...(apiKeyMode ? [`GEMINI_API_KEY=$(cat ${shq(AGY_API_KEY_FILE)}) && export GEMINI_API_KEY`] : []),
+      ...(tokenFile ? [tokenFile.load] : []),
+      promptFile.load,
+      `unset HYDRA_ROLE CLAUDE_CONFIG_DIR`,
+      `${args.join(' ')} 2>>${shq(stderrLog)}`,
+    ].join(' && ')
+    mkdirSync(SPAWN_LOGS_DIR, { recursive: true, mode: 0o700 })
+    try { tmuxCreateSession(tmuxName, [withRaisedFdLimit(inner)]) } catch (err) { removeSpawnPrompt({ tmuxName, sessionId }); removeSessionToken({ tmuxName, sessionId }); throw err }
+    return { provider: 'agy', model, identity: {}, stderrLogPath: stderrLog }
+  }
+
+  // One message at a time per session: two pastes before the first Enter would reach agy as one turn.
+  private readonly sending = new Map<string, Promise<unknown>>()
+  deliver(info: SessionInfo, msg: Notification): Promise<DeliveryResult> {
+    const run = (this.sending.get(info.sessionId) ?? Promise.resolve()).then(() => this.paste(info, msg))
+    const tail = run.catch(() => {}).then(() => { if (this.sending.get(info.sessionId) === tail) this.sending.delete(info.sessionId) })
+    this.sending.set(info.sessionId, tail)
+    return run
+  }
+
+  // Paste the message into the pane as one bracketed paste, then Enter, then wait for the pane to show it once more than before. agy shows a big paste as
+  // "[Pasted text +N lines]" until Enter, so a big message counts only once sent; a short one is shown in the input box already, so for it this proves the
+  // paste reached the pane, not that Enter sent it (the transcript check of the observation step proves that).
+  private async paste(info: SessionInfo, msg: Notification): Promise<DeliveryResult> {
+    const refused = deliveryRefusal(info)
+    if (refused) return { status: 'rejected', retryable: false, reason: refused }
+    const { content, meta } = withoutIntents(msg)
+    const text = formatNotification(content, meta as Record<string, string> | undefined)
+    const needle = collapse(text).slice(-40)
+    const seen = () => collapse(this.peek(info, 200)).split(needle).length - 1
+    const before = seen()
+    mkdirSync(PASTE_DIR, { recursive: true, mode: 0o700 })
+    const file = join(PASTE_DIR, `${info.sessionId}.txt`)
+    try {
+      writeFileSync(file, text, { mode: 0o600 })
+      tmuxSync(['load-buffer', '-b', `hydra-${info.sessionId}`, file])
+      tmuxSync(['paste-buffer', '-p', '-d', '-b', `hydra-${info.sessionId}`, '-t', info.tmuxName])
+    } catch (err) {
+      return { status: 'rejected', retryable: true, reason: `tmux paste into ${info.tmuxName} failed: ${err instanceof Error ? err.message : err}` }
+    } finally { rmSync(file, { force: true }) }
+    // The text is in agy's input now: a failed Enter must not be retried as a whole message, or it would be pasted twice.
+    try {
+      await Bun.sleep(150)   // the pane takes the paste before the Enter that sends it
+      tmuxSync(['send-keys', '-t', info.tmuxName, 'Enter'])
+    } catch (err) {
+      return { status: 'unknown', reason: `the message was pasted into ${info.tmuxName} but Enter failed: ${err instanceof Error ? err.message : err}` }
+    }
+    for (const start = Date.now(); Date.now() - start < LANDED_WAIT_MS; await Bun.sleep(250)) {
+      if (seen() > before) return { status: 'accepted', via: 'tmux-paste' }
+    }
+    return { status: 'unknown', reason: `the message was pasted into ${info.tmuxName} but the pane never showed it` }
+  }
+  isConnected(info: SessionInfo): boolean { return this.claude.isAlive(info) }
   stop(info: SessionInfo): Promise<StopResult> { return this.claude.stop(info) }
   isAlive(info: SessionInfo): boolean { return this.claude.isAlive(info) }
   peek(info: SessionInfo, lines?: number): string { return this.claude.peek(info, lines) }

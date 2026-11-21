@@ -416,6 +416,12 @@ export function canonicalModel(model: string): string | undefined {
   return Object.values(CODEX_MODEL_ALIASES).includes(model) ? model : undefined
 }
 
+/** A daemon notification as a session that has no channel reads it (omp's extension, agy's pasted text): Claude's channel envelope, so every engine's model reads the same. */
+export function formatNotification(content: unknown, meta: Record<string, string> = {}): string {
+  const attrs = Object.entries(meta).map(([k, v]) => ` ${k}="${String(v).replace(/"/g, '&quot;')}"`).join('')
+  return `<channel source="hydra"${attrs}>\n${typeof content === 'string' ? content : JSON.stringify(content)}\n</channel>`
+}
+
 /** The reply/channel rules every hydra session is told, as MCP `instructions` for Claude (bridge.ts) and as system prompt text for omp (omp/hydra-bridge.ts). */
 export const SESSION_INSTRUCTIONS = [
     'The sender reads chat, not this session. Anything you want them to see must go through the reply tool — your transcript output never reaches their chat.',
