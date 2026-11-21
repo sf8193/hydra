@@ -28,7 +28,7 @@ import { canAskPredecessor, pushToolSurface } from './tool-surface.js'
 import { parseSpawnTopic, resolveSpawnLabel } from './util.js'
 import { startPhaseBudget, clearPhaseBudget } from './phase-budget.js'
 import { clearIdleLimit, resumeIdleLimit } from './idle-limit.js'
-import { resolveLaunchSelection, spawnModel, withContextSuffix } from '../shared/constants.js'
+import { AGY_MODEL_ALIASES, resolveLaunchSelection, spawnModel, withContextSuffix } from '../shared/constants.js'
 import type { SessionType, ToolBase, SessionLabel } from '../shared/constants.js'
 import { isRestricted, isRestrictedPolicy } from './policy-record.js'
 import { resolveEngine } from './engines/instances.js'
@@ -1034,7 +1034,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
         replacedName ??= existing.tmuxName
         // A resume continues the dead session itself. Other tiers (fork, respawn) name it
         // via carryOver; any other replacement has a different predecessor.
-        if (opts?.resumeFrom || opts?.resumeCodex || opts?.resumeOmp) {
+        if (opts?.resumeFrom || opts?.resumeCodex || opts?.resumeSession) {
           carriedPredecessor ??= existing.predecessor
           launchCwd ??= existing.launchCwd
           disallowedTools ??= existing.disallowedTools
@@ -1079,7 +1079,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
 
   // The launch policy: decided once, at birth, from hydra.toml; a continuation (resume, fork) keeps the one its conversation was born with.
   // A start that cannot read or satisfy it refuses, in the thread, naming the cause and the fix: never the operator's account or spawn dir.
-  const continuing = isResume || isFork || !!opts?.resumeCodex || !!opts?.resumeOmp
+  const continuing = isResume || isFork || !!opts?.resumeCodex || !!opts?.resumeSession
   let policy: LaunchPolicy | undefined
   const sessionName = replacedName ?? tmuxName
   try {
@@ -1119,7 +1119,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   let effectiveCwd = spawnCwd
   // Only a fork or a resume continues a transcript filed under launchCwd. A fresh launch
   // (respawn) starts as usual — the dir may be a worktree that died with its session.
-  if (!isFork && !isResume && !opts?.resumeCodex && !opts?.resumeOmp) launchCwd = undefined
+  if (!isFork && !isResume && !opts?.resumeCodex && !opts?.resumeSession) launchCwd = undefined
   // A restricted session runs in its policy's workdir and nowhere else, whatever the caller passed or left out: its file tools reach
   // exactly the folder it starts in, so any other start (the operator's spawn dir, a worktree) would widen them. launch() holds
   // the same line; this keeps the record and the metadata telling the truth.
@@ -1237,8 +1237,9 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   prompt = hydraPrompt(prompt)
 
   // Central model resolution (see `selected` above): callers can pass raw aliases (e.g. "sonnet", "astra") or full IDs.
-  // Codex with no model picks its own default (it asks its app-server); the spawn default is a Claude id, which Codex cannot run.
-  const model = selected?.model ?? (engine === 'codex' ? undefined : withContextSuffix(spawnModel()))
+  // Codex with no model picks its own default (it asks its app-server); the spawn default is a Claude id, which Codex cannot run. agy is given its
+  // flash model (the one agy itself starts on, and every plan has it): it needs a model named, and the Claude spawn default is not one it should run.
+  const model = selected?.model ?? (engine === 'codex' ? undefined : engine === 'agy' ? AGY_MODEL_ALIASES.flash : withContextSuffix(spawnModel()))
 
 
   // --- Launch via engine adapter ---
@@ -1263,7 +1264,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     sessionId, tmuxName, cwd: effectiveCwd, originalCwd: spawnCwd, model, prompt, sessionToken: issued.token,
     worktreePath, forkFromOriginalCwd: !!worktreeTarget,
     tools: opts?.tools, disallowedTools,
-    forkFrom: opts?.forkFrom, resumeFrom: opts?.resumeFrom, resumeCodex: opts?.resumeCodex, resumeOmp: opts?.resumeOmp,
+    forkFrom: opts?.forkFrom, resumeFrom: opts?.resumeFrom, resumeCodex: opts?.resumeCodex, resumeSession: opts?.resumeSession,
     threadId, sessionType: spawnType, ...(policy && { policy }),
   }).catch(async (err: unknown) => {
     // A refusal the launch itself makes (an old Claude Code, a folder it cannot make) is told to the thread, as the checks above are.

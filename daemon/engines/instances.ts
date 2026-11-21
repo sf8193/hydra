@@ -3,6 +3,7 @@ import { transport } from '../bridge-transport.js'
 import { ClaudeEngine } from './claude-engine.js'
 import { CodexEngineAdapter } from './codex-engine-adapter.js'
 import { OmpEngine } from './omp-engine.js'
+import { AgyEngine } from './agy-engine.js'
 import type { EngineAdapter, ProviderId } from './engine-adapter.js'
 
 export { codexEngine }
@@ -14,6 +15,7 @@ export const engines: Record<ProviderId, EngineAdapter> = {
   claude: claudeEngine,
   codex: new CodexEngineAdapter(codexEngine),
   omp: new OmpEngine(claudeEngine),
+  agy: new AgyEngine(claudeEngine),
 }
 
 export function resolveEngine(provider: ProviderId | undefined): EngineAdapter {

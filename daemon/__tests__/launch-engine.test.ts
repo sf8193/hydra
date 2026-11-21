@@ -51,7 +51,7 @@ const fakeEngine = (provider: ProviderId) => ({
 const lastLaunch = () => launches.at(-1)!
 
 beforeAll(() => {
-  for (const p of ['claude', 'codex', 'omp'] as const) { orig[p] = engines[p]; engines[p] = fakeEngine(p) as any }
+  for (const p of ['claude', 'codex', 'omp', 'agy'] as const) { orig[p] = engines[p]; engines[p] = fakeEngine(p) as any }
   for (const k of ['send', 'react', 'edit', 'fetchChannel', 'getThreadUrl', 'createThread'] as const) orig[k] = (gateway as any)[k]
   orig.has = transport.has; orig.sendOrQueue = transport.sendOrQueue
   orig.persist = registry.persist; orig.tpersist = threadRegistry.persist
@@ -70,7 +70,7 @@ beforeAll(() => {
   process.env.SPAWN_CWD = process.cwd()
 })
 afterAll(() => {
-  for (const p of ['claude', 'codex', 'omp'] as const) engines[p] = orig[p]
+  for (const p of ['claude', 'codex', 'omp', 'agy'] as const) engines[p] = orig[p]
   for (const k of ['send', 'react', 'edit', 'fetchChannel', 'getThreadUrl', 'createThread'] as const) (gateway as any)[k] = orig[k]
   ;(transport as any).has = orig.has; (transport as any).sendOrQueue = orig.sendOrQueue
   ;(registry as any).persist = orig.persist; (threadRegistry as any).persist = orig.tpersist
@@ -124,6 +124,21 @@ describe('a specialist declared in hydra.toml', () => {
     expect(lastLaunch().provider).toBe('codex')
     expect(lastLaunch().model).toBeUndefined()
     expect([...registry.values()].find(s => s.tmuxName === 'helper')?.engine).toBe('codex')
+  })
+
+  test('engine = "agy" with no model starts agy on its flash model, not the Claude spawn default', async () => {
+    expect(install(specialistToml('engine = "agy"'))).toEqual([])
+    await ensureSpecialist('helper')
+    expect(lastLaunch()).toMatchObject({ provider: 'agy', model: 'gemini-3.8-flash-high' })
+  })
+
+  test('an agy alias as the model picks the engine and the model; another engine\'s model with engine = "agy" is a load error', async () => {
+    expect(install(specialistToml('model = "neon"'))).toEqual([])
+    await ensureSpecialist('helper')
+    expect(lastLaunch()).toMatchObject({ provider: 'agy', model: 'gemini-4-neon-high' })
+    const errs = install(specialistToml('engine = "agy"\nmodel = "opus"'))
+    expect(errs).toHaveLength(1)
+    expect(errs[0]).toContain('engine = "agy"')
   })
 
   test('with no engine it starts on claude, as before', async () => {

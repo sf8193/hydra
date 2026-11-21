@@ -328,7 +328,7 @@ describe('handleResumeIntercept — omp', () => {
 
     expect(launches).toHaveLength(1)
     expect(launches[0].provider).toBe('omp')
-    expect(launches[0].input.resumeOmp).toEqual({ fromSessionId: dead.sessionId })
+    expect(launches[0].input.resumeSession).toEqual({ fromSessionId: dead.sessionId })
     expect(launches[0].input.cwd).toBe(tmpdir())
     const live = registry.get(registry.getByThread(THREAD)!)!
     expect(live.engine).toBe('omp')

@@ -270,7 +270,7 @@ export type SpawnOpts = {
   existingThreadId?: string                                    // reuse an existing thread instead of creating a new one
   resumeFrom?: string                                          // claude session ID for --resume (no --fork-session)
   resumeCodex?: { threadId: string; homeName: string }          // Codex thread + original CODEX_HOME identity
-  resumeOmp?: { fromSessionId: string }                         // omp: the dead hydra session whose session file continues
+  resumeSession?: { fromSessionId: string }                     // omp, agy: the dead hydra session whose conversation continues
   resurrectFrom?: string                                       // tmuxName of predecessor (for lineage in respawn)
   joinThread?: string                                          // join existing thread as member (skip thread creation)
   promptBuilder?: (sessionId: string, tmuxName: string) => string

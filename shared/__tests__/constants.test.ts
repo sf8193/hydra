@@ -1,5 +1,5 @@
 import { describe, test, expect, afterEach } from 'bun:test'
-import { ompProvider, OMP_MODEL_ALIASES, OMP_MODEL_ALIAS_PATTERN, resolveOmpModelAlias, SESSION_LABELS, isSessionLabel, parseSessionLabel, resolveModelAlias, resolveCodexModelAlias, isKnownModel, contextWindowOf, withContextSuffix, canonicalModel, byteTmuxName, MODEL_ALIASES, MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, KNOWN_MODELS, normalizeReviewRounds, parseIdleTtl, MAX_IDLE_TTL_MS } from '../constants.js'
+import { AGY_MODEL_ALIASES, AGY_MODEL_ALIAS_PATTERN, resolveAgyModelAlias, engineOfModel, resolveLaunchSelection, ompProvider, OMP_MODEL_ALIASES, OMP_MODEL_ALIAS_PATTERN, resolveOmpModelAlias, SESSION_LABELS, isSessionLabel, parseSessionLabel, resolveModelAlias, resolveCodexModelAlias, isKnownModel, contextWindowOf, withContextSuffix, canonicalModel, byteTmuxName, MODEL_ALIASES, MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, KNOWN_MODELS, normalizeReviewRounds, parseIdleTtl, MAX_IDLE_TTL_MS } from '../constants.js'
 
 test('review rounds have a twenty-round default and hard cap', () => {
   expect(normalizeReviewRounds()).toBe(20)
@@ -357,4 +357,38 @@ test('idle TTL parses m/h/d up to a 7-day cap', () => {
   expect(parseIdleTtl('4d')).toBe(4 * 86_400_000)
   expect(parseIdleTtl('7d')).toBe(MAX_IDLE_TTL_MS)
   for (const bad of ['8d', '0m', '30s', '4', 'a while', '']) expect(parseIdleTtl(bad)).toBeNull()
+})
+
+describe('agy model aliases', () => {
+  test('each alias is a model id `agy models` lists, case-insensitively', () => {
+    expect(AGY_MODEL_ALIASES).toEqual({
+      neon: 'gemini-4-neon-high', carbon: 'gemini-4-carbon-high', hydrogen: 'gemini-4-hydrogen-high',
+      argon: 'gemini-4-argon-high', flash: 'gemini-3.8-flash-high',
+    })
+    expect(resolveAgyModelAlias('Neon')).toBe('gemini-4-neon-high')
+  })
+
+  test('an agy alias selects only the agy engine, and no other alias selects it', () => {
+    for (const alias of Object.keys(AGY_MODEL_ALIASES)) {
+      expect(resolveModelAlias(alias)).toBeUndefined()
+      expect(resolveCodexModelAlias(alias)).toBeUndefined()
+      expect(resolveOmpModelAlias(alias)).toBeUndefined()
+      expect(engineOfModel(alias)).toBe('agy')
+      expect(resolveLaunchSelection(alias)).toEqual({ model: AGY_MODEL_ALIASES[alias], engine: 'agy' })
+    }
+    for (const alias of [...Object.keys(MODEL_ALIASES), ...Object.keys(CODEX_MODEL_ALIASES), ...Object.keys(OMP_MODEL_ALIASES)]) expect(resolveAgyModelAlias(alias)).toBeUndefined()
+  })
+
+  test('any gemini- id is agy\'s, as any gpt- id is Codex\'s', () => {
+    expect(engineOfModel('gemini-4-carbon-low')).toBe('agy')
+    expect(engineOfModel('gemini-3.7-flash-medium')).toBe('agy')
+  })
+
+  test('a full id passes through when the thread already runs on agy', () => {
+    expect(resolveLaunchSelection('gemini-4-carbon-low', 'agy')).toEqual({ model: 'gemini-4-carbon-low', engine: 'agy' })
+  })
+
+  test('the pattern lists every alias', () => {
+    expect(AGY_MODEL_ALIAS_PATTERN.split('|').sort()).toEqual(Object.keys(AGY_MODEL_ALIASES).sort())
+  })
 })

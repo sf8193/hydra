@@ -241,7 +241,7 @@ type SpecialistBase = {
   model?: string
   /** Shown in its sessions' thread names in place of the default session emoji: one emoji character. Absent: the default. */
   emoji?: string
-  engine?: 'claude' | 'codex' | 'omp'
+  engine?: 'claude' | 'codex' | 'omp' | 'agy'
   /** `~` expanded; a relative path is under `workdir`. */
   envFile?: string
   /** Old ids, so a rename keeps its thread, session and owed messages. */

@@ -3,7 +3,7 @@
 // Loaded with `omp -e`; the session runs in tmux like Claude's.
 import { connect, type Socket } from 'node:net'
 import { randomUUID } from 'node:crypto'
-import { SESSION_INSTRUCTIONS } from '../shared/constants.js'
+import { SESSION_INSTRUCTIONS, formatNotification } from '../shared/constants.js'
 
 // The part of omp's ExtensionAPI this file uses (omp is not a hydra dependency, so its types are not imported).
 type ExtensionAPI = {
@@ -21,12 +21,6 @@ const RECONNECT_MS = 1000
 const POLL_MS = 100
 // omp re-runs extension factories for child sessions (Task subagents) in the same process: one bridge per process.
 const SINGLETON = Symbol.for('hydra.omp.bridge')
-
-// Mirrors Claude's channel envelope so the same daemon notifications read the same to the model.
-export function formatNotification(content: unknown, meta: Record<string, string> = {}): string {
-  const attrs = Object.entries(meta).map(([k, v]) => ` ${k}="${String(v).replace(/"/g, '&quot;')}"`).join('')
-  return `<channel source="hydra"${attrs}>\n${typeof content === 'string' ? content : JSON.stringify(content)}\n</channel>`
-}
 
 export default function (pi: ExtensionAPI) {
   if (!SOCK || !SESSION_ID || (globalThis as any)[SINGLETON]) return
