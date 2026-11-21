@@ -362,10 +362,10 @@ test('idle TTL parses m/h/d up to a 7-day cap', () => {
 describe('agy model aliases', () => {
   test('each alias is a model id `agy models` lists, case-insensitively', () => {
     expect(AGY_MODEL_ALIASES).toEqual({
-      'agy-neon': 'gemini-4-neon-high', 'agy-carbon': 'gemini-4-carbon-high', 'agy-hydrogen': 'gemini-4-hydrogen-high',
-      'agy-argon': 'gemini-4-argon-high', 'agy-flash': 'gemini-3.8-flash-high',
+      neon: 'gemini-4-neon-high', carbon: 'gemini-4-carbon-high', hydrogen: 'gemini-4-hydrogen-high',
+      argon: 'gemini-4-argon-high', flash: 'gemini-3.8-flash-high',
     })
-    expect(resolveAgyModelAlias('AGY-Neon')).toBe('gemini-4-neon-high')
+    expect(resolveAgyModelAlias('Neon')).toBe('gemini-4-neon-high')
   })
 
   test('an agy alias selects only the agy engine, and no other alias selects it', () => {
@@ -377,6 +377,11 @@ describe('agy model aliases', () => {
       expect(resolveLaunchSelection(alias)).toEqual({ model: AGY_MODEL_ALIASES[alias], engine: 'agy' })
     }
     for (const alias of [...Object.keys(MODEL_ALIASES), ...Object.keys(CODEX_MODEL_ALIASES), ...Object.keys(OMP_MODEL_ALIASES)]) expect(resolveAgyModelAlias(alias)).toBeUndefined()
+  })
+
+  test('any gemini- id is agy\'s, as any gpt- id is Codex\'s', () => {
+    expect(engineOfModel('gemini-4-carbon-low')).toBe('agy')
+    expect(engineOfModel('gemini-3.7-flash-medium')).toBe('agy')
   })
 
   test('a full id passes through when the thread already runs on agy', () => {

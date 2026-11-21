@@ -302,10 +302,10 @@ describe('engine', () => {
       expect(errorsOf(spec(body))).toEqual([`specialists.ops.engine: omp cannot restrict a session's tools, so a specialist cannot use it; use claude or codex`])
     }
   })
-  test('agy is refused for a specialist the same way, named by engine or by model alias', () => {
-    const msg = (key: string) => `specialists.ops.${key}: agy cannot restrict a session's tools, so a specialist cannot use it; use claude or codex`
-    for (const body of ['restricted = true\nengine = "agy"', 'engine = "agy"']) expect(errorsOf(spec(body))).toEqual([msg('engine')])
-    expect(errorsOf(spec('model = "agy-neon"'))).toEqual([msg('model')])
+  test('agy runs an unrestricted specialist, named by engine or by model alias; restricted = true is refused as for codex', () => {
+    expect(ok(spec('engine = "agy"')).config.specialists.ops.engine).toBe('agy')
+    expect(ok(spec('model = "neon"')).config.specialists.ops.model).toBe('neon')
+    expect(errorsOf(spec('restricted = true\nengine = "agy"'))).toEqual([`specialists.ops.engine: agy can't run a restricted specialist: that engine cannot restrict its tools; use claude (engine = "claude", or a Claude model), or set restricted = false`])
   })
   test('claude, or no engine, loads', () => {
     expect(ok(spec('restricted = true\nengine = "claude"')).config.specialists.ops.engine).toBe('claude')

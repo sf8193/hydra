@@ -3,7 +3,7 @@ import { gateway } from '../config.js'
 import * as access from '../access.js'
 import * as global from '../commands/global.js'
 
-// The production router: `spawn agy-neon: …` must reach handleSpawnIntercept with the agy model AND the agy engine.
+// The production router: `spawn neon: …` must reach handleSpawnIntercept with the agy model AND the agy engine.
 let handler: (msg: any) => Promise<void>
 const spawns: any[][] = []
 const sent: string[] = []
@@ -22,22 +22,22 @@ beforeEach(() => { spawns.length = 0; sent.length = 0 })
 const say = (content: string) =>
   handler({ id: 'm1', channelId: 'c1', authorId: 'u1', authorUsername: 'u', content, isBot: false, isDM: false, isThread: false, attachments: [], createdAt: new Date() })
 
-test('spawn agy-neon: topic starts an agy session on the aliased model', async () => {
-  await say('spawn agy-neon: fix the bug')
+test('spawn neon: topic starts an agy session on the aliased model', async () => {
+  await say('spawn neon: fix the bug')
   expect(spawns).toHaveLength(1)
   expect(spawns[0].slice(1, 2)).toEqual(['fix the bug'])
   expect(spawns[0].slice(3)).toEqual(['gemini-4-neon-high', 'agy'])
 })
 
-test('spawn-wt agy-neon: repo topic starts an agy session in a worktree', async () => {
-  await say('spawn-wt agy-neon: options_bot fix the tests')
+test('spawn-wt neon: repo topic starts an agy session in a worktree', async () => {
+  await say('spawn-wt neon: options_bot fix the tests')
   expect(spawns).toHaveLength(1)
   expect(spawns[0].slice(1, 2)).toEqual(['wt:options_bot fix the tests'])
   expect(spawns[0].slice(3)).toEqual(['gemini-4-neon-high', 'agy'])
 })
 
 test('a bare alias is told it needs a topic, and spawns nothing', async () => {
-  await say('spawn: agy-neon')
+  await say('spawn: neon')
   expect(spawns).toHaveLength(0)
   expect(sent.some(t => t.includes('needs a topic'))).toBe(true)
 })

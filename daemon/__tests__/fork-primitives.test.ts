@@ -746,8 +746,8 @@ describe('spawn_session fork_from and read_only', () => {
   test('fork_from and read_only are refused with an agy model alias', async () => {
     mk('fa-caller', 'facaller')
     mk('fa-src', 'fasrc', { claudeSessionId: 'cl-src', worktreePath: dir, sessionMetadata: { model: 'claude-src-model', cwd: dir } as any })
-    expect(await errorOf({ model: 'agy-neon', fork_from: 'fasrc' })).toContain('agy sessions cannot be forked')
-    expect(await errorOf({ model: 'agy-neon', read_only: true })).toContain('read_only is not enforced on agy sessions')
+    expect(await errorOf({ model: 'neon', fork_from: 'fasrc' })).toContain('agy sessions cannot be forked')
+    expect(await errorOf({ model: 'neon', read_only: true })).toContain('read_only is not enforced on agy sessions')
   })
 
   test('a session name resolves to its fork plan, launched in its cwd on its model', async () => {

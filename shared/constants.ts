@@ -122,13 +122,14 @@ export function ompProvider(model: string): 'openai-codex' | 'anthropic' {
   return model.startsWith('gpt-') ? 'openai-codex' : 'anthropic'
 }
 
-/** agy (Google Antigravity CLI) model aliases. Selecting one also selects the agy engine; the ids are the ones `agy models` lists. */
+/** agy (Google Antigravity CLI) model aliases. Gemini models run only on agy, so an alias needs no prefix; selecting one also selects the agy
+ * engine, as for Codex. The ids are the ones `agy models` lists. */
 export const AGY_MODEL_ALIASES: Record<string, string> = {
-  'agy-neon': 'gemini-4-neon-high',
-  'agy-carbon': 'gemini-4-carbon-high',
-  'agy-hydrogen': 'gemini-4-hydrogen-high',
-  'agy-argon': 'gemini-4-argon-high',
-  'agy-flash': 'gemini-3.8-flash-high',
+  'neon': 'gemini-4-neon-high',
+  'carbon': 'gemini-4-carbon-high',
+  'hydrogen': 'gemini-4-hydrogen-high',
+  'argon': 'gemini-4-argon-high',
+  'flash': 'gemini-3.8-flash-high',
 }
 
 // Validate aliases at load time.
@@ -168,8 +169,8 @@ export function resolveLaunchModel(raw: string): string {
 }
 
 /**
- * The engine a model belongs to: an alias (an `omp-` alias is omp, an `agy-` alias is agy, Codex's four are codex, the Claude table is claude) or a full id of a
- * known family (a Claude id the Claude table knows, with or without `[1m]`; a Codex table id or any `gpt-*`). Undefined for a name it
+ * The engine a model belongs to: an alias (an `omp-` alias is omp, an agy alias (`neon`) is agy, Codex's four are codex, the Claude table is claude) or a full id of a
+ * known family (a Claude id the Claude table knows, with or without `[1m]`; a Codex table id or any `gpt-*`; any `gemini-*` is agy's). Undefined for a name it
  * cannot place: that passes through unchanged and no check holds it against an engine.
  */
 export function engineOfModel(raw: string): EngineName | undefined {
@@ -180,6 +181,7 @@ export function engineOfModel(raw: string): EngineName | undefined {
   const id = raw.replace(/\[1m\]$/, '')
   if (isKnownModel(id)) return 'claude'
   if (id.startsWith('gpt-') || Object.values(CODEX_MODEL_ALIASES).includes(id)) return 'codex'
+  if (id.startsWith('gemini-')) return 'agy'
   return undefined
 }
 

@@ -74,7 +74,7 @@ const SPAWN_CODEX_RE = /^(?:new session|spawn)\s+codex(?:\s+(\S+))?:\s*([\s\S]+)
 export const SPAWN_OMP_ALIAS_RE = new RegExp(`^(?:new session|spawn)\\s+(${OMP_MODEL_ALIAS_PATTERN}):\\s*([\\s\\S]+)`, 'i')
 export const SPAWN_WT_OMP_MODEL_RE = new RegExp(`^(?:spawn-wt|/spawn-wt)\\s+(${OMP_MODEL_ALIAS_PATTERN}):\\s*(\\S+)\\s+([\\s\\S]+)`, 'i')
 export const BARE_OMP_ALIAS_RE = new RegExp(`^(${OMP_MODEL_ALIAS_PATTERN}):?$`, 'i')
-// agy aliases select the agy engine (`spawn agy-neon: topic`), the same three forms.
+// agy aliases select the agy engine (`spawn neon: topic`), the same three forms.
 export const SPAWN_AGY_ALIAS_RE = new RegExp(`^(?:new session|spawn)\\s+(${AGY_MODEL_ALIAS_PATTERN}):\\s*([\\s\\S]+)`, 'i')
 export const SPAWN_WT_AGY_MODEL_RE = new RegExp(`^(?:spawn-wt|/spawn-wt)\\s+(${AGY_MODEL_ALIAS_PATTERN}):\\s*(\\S+)\\s+([\\s\\S]+)`, 'i')
 export const BARE_AGY_ALIAS_RE = new RegExp(`^(${AGY_MODEL_ALIAS_PATTERN}):?$`, 'i')
@@ -485,7 +485,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
       }
     }
 
-    // "spawn agy-neon: topic" — an agy alias selects both model and engine.
+    // "spawn neon: topic" — an agy alias selects both model and engine.
     const spawnAgyAliasMatch = msg.content.match(SPAWN_AGY_ALIAS_RE)
     if (spawnAgyAliasMatch) {
       const topic = spawnAgyAliasMatch[2].trim()

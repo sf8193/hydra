@@ -701,7 +701,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     // pinned to a thread's tools, so no specialist runs on it; an `engine` and a model that name two engines is a mistake.
     const aliased = model === undefined ? undefined : engineOfModel(model)
     const runsOn = engine ?? aliased
-    if (runsOn === 'omp' || runsOn === 'agy') error(engine === runsOn ? at('engine') : at('model'), `${runsOn} cannot restrict a session's tools, so a specialist cannot use it; use claude or codex`)
+    if (runsOn === 'omp') error(engine === 'omp' ? at('engine') : at('model'), `omp cannot restrict a session's tools, so a specialist cannot use it; use claude or codex`)
 
     // `restricted`: its session runs in its folder, with only what it lists. Everything below refuses what would let a restricted session reach past its folder.
     const restricted = bool(t, 'restricted', path) ?? false
@@ -767,7 +767,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     }
     const handoff = { ...(handoffAtPct !== undefined && { handoffAtPct }), ...(handoffProtocol !== undefined && { handoffProtocol }) }
     // The engine actually used comes from thread history and `handoff <model>` can switch it, so launch checks it again (as it does a restricted one).
-    if (confinesWrites && runsOn !== undefined && runsOn !== 'omp' && runsOn !== 'agy' && !engineLimitsAccess(runsOn)) error(engine !== undefined ? at('engine') : at('model'), `${runsOn} can't run a write-confined specialist: only Claude Code's own sandbox does the confining; use claude (engine = "claude", or a Claude model), or remove can_only_write_to`)
+    if (confinesWrites && runsOn !== undefined && runsOn !== 'omp' && !engineLimitsAccess(runsOn)) error(engine !== undefined ? at('engine') : at('model'), `${runsOn} can't run a write-confined specialist: only Claude Code's own sandbox does the confining; use claude (engine = "claude", or a Claude model), or remove can_only_write_to`)
     // A folder the layer would deny reading is no folder for the specialist: it could not read its own workdir.
     if (confinesWrites && workdirRaw !== undefined && isAbsolute(workdir)) {
       const inside = unreadableWorkdir(workdir, readDenyRoots(env, workdir, [], cannotRead), env.realpath)
@@ -832,7 +832,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
         if (unproven) warn(`${path}.mcp_servers`, unproven)
       }
       // The engine actually used comes from thread history and `handoff <model>` can switch it, so launch checks it again.
-      if (runsOn !== undefined && runsOn !== 'omp' && runsOn !== 'agy' && !engineLimitsAccess(runsOn)) error(engine !== undefined ? at('engine') : at('model'), `${runsOn} can't run a restricted specialist: that engine cannot restrict its tools; use claude (engine = "claude", or a Claude model), or set restricted = false`)
+      if (runsOn !== undefined && runsOn !== 'omp' && !engineLimitsAccess(runsOn)) error(engine !== undefined ? at('engine') : at('model'), `${runsOn} can't run a restricted specialist: that engine cannot restrict its tools; use claude (engine = "claude", or a Claude model), or set restricted = false`)
       if (workdirRaw !== undefined && isAbsolute(workdir) && env.isDir(workdir)) checkWorkdirRestriction(at('workdir'), workdir)
     }
     const base = {
