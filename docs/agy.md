@@ -8,7 +8,7 @@ It runs in tmux like a Claude session, so `tmux attach -t <name>` shows it and y
 
 1. Install agy (`curl -fsSL https://antigravity.google/cli/install.sh | bash`; it lands in `~/.local/bin`, which the daemon's PATH needs, or set `HYDRA_AGY_BIN`).
 2. Give it a login. Either sign in once by running `agy` (a Google account; the free "Starter" plan has no Neon, AI Pro or Ultra does), or put a Gemini API key (paid tier) in `<state>/agy-api-key`, mode 0600. With the file, every agy session runs in API-key mode; without it, on agy's own login.
-3. Each launch makes sure `~/.gemini/config/mcp_config.json` has a `hydra` server (the tool server Codex uses) and `~/.gemini/config/hooks.json` has a `hydra` hook group. Both do nothing for your own agy runs.
+3. Each launch makes sure `~/.gemini/config/mcp_config.json` has a `hydra` server (the tool server Codex uses) and `~/.gemini/config/hooks.json` has a `hydra` hook group. In your own agy runs the hook does nothing, and `/mcp` lists the `hydra` server as failed ("DAEMON_SOCK and HYDRA_SESSION_ID required"): harmless.
 
 ## How it works
 

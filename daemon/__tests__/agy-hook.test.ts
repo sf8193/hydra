@@ -30,6 +30,11 @@ test('a stop is answered even when the state cannot be written', () => {
   expect(r.out).toBe('{"decision":"stop"}')
 })
 
+test('a stop is answered even when its input is not JSON', () => {
+  const r = Bun.spawnSync([process.execPath, script, 'Stop'], { stdin: Buffer.from('not json'), env: { PATH: process.env.PATH!, HYDRA_AGY_STATE: stateFile() } })
+  expect(r.stdout.toString()).toBe('{"decision":"stop"}')
+})
+
 test('an agy outside a hydra session records nothing, and still answers a stop', () => {
   expect(hook('Stop', event)).toMatchObject({ out: '{"decision":"stop"}', code: 0 })
   expect(hook('PreInvocation', event)).toMatchObject({ out: '{}', code: 0 })

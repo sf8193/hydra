@@ -66,6 +66,7 @@ export class AgyEngine implements EngineAdapter {
     const stderrLog = join(SPAWN_LOGS_DIR, `stderr-${tmuxName}-${sessionId}.log`)
     const agy = process.env.HYDRA_AGY_BIN || 'agy'
     // The reply rules go first in the first prompt: agy has no instructions channel of its own. The prompt is handed to the pane by file (launch-files.ts).
+    mkdirSync(SPAWN_LOGS_DIR, { recursive: true, mode: 0o700 })
     const promptFile = writeSpawnPrompt(tmuxName, sessionId, `${SESSION_INSTRUCTIONS}\n\n${input.prompt}`)
     const tokenFile = input.sessionToken ? writeSessionToken(tmuxName, sessionId, input.sessionToken) : null
     const args = [agy, `--model ${shq(model)}`, `--settings ${shq(agySettings(input.cwd, apiKeyMode))}`, '--dangerously-skip-permissions', ...(conversation ? [`--conversation ${shq(conversation)}`] : []), `-i ${promptFile.ref}`]
@@ -80,7 +81,6 @@ export class AgyEngine implements EngineAdapter {
       `unset HYDRA_ROLE CLAUDE_CONFIG_DIR`,
       `${args.join(' ')} 2>>${shq(stderrLog)}`,
     ].join(' && ')
-    mkdirSync(SPAWN_LOGS_DIR, { recursive: true, mode: 0o700 })
     try { tmuxCreateSession(tmuxName, [withRaisedFdLimit(inner)]) } catch (err) { removeSpawnPrompt({ tmuxName, sessionId }); removeSessionToken({ tmuxName, sessionId }); throw err }
     return { provider: 'agy', model, identity: {}, stderrLogPath: stderrLog }
   }

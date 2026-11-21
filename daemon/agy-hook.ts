@@ -7,9 +7,9 @@ import { readFileSync, renameSync, writeFileSync } from 'fs'
 
 const event = process.argv[2]
 const file = process.env.HYDRA_AGY_STATE
-const input = file ? JSON.parse(readFileSync(0, 'utf8')) : null
-process.stdout.write(event === 'Stop' ? '{"decision":"stop"}' : '{}')   // first: a failed write below must not leave agy unanswered
+process.stdout.write(event === 'Stop' ? '{"decision":"stop"}' : '{}')   // first: nothing below (a bad input, a failed write) may leave agy unanswered
 if (file) {
+  const input = JSON.parse(readFileSync(0, 'utf8'))
   const state = { conversationId: input.conversationId, transcriptPath: input.transcriptPath, live: event === 'Stop' ? 'idle' : 'working', backgroundWork: event === 'Stop' && input.fullyIdle === false }
   const temp = `${file}.${process.pid}.tmp`   // two hooks can run at once
   writeFileSync(temp, JSON.stringify(state))
