@@ -2,8 +2,8 @@
 //
 // agy (Google Antigravity CLI) engine adapter — a TUI in tmux, as for Claude and omp, so the operator can attach and work in the session.
 // There is no channel into agy: a message starts a turn only as text in the pane, so deliver pastes it (agy queues text that arrives
-// mid-turn). The hydra tools reach the model as MCP tools (agy-mcp.ts). The tmux mechanics are Claude's, so this delegates them; only launch,
-// delivery, observation and recovery differ. Observation and recovery are not built yet: no session reports a turn end or can be resumed.
+// mid-turn). The hydra tools reach the model as MCP tools (agy-config.ts). The tmux mechanics are Claude's, so this delegates them; only launch,
+// delivery, observation and recovery differ. Observation is agy's own files (agy-session.ts); recovery is not built yet: no session can be resumed.
 
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
@@ -11,19 +11,20 @@ import type { SessionInfo } from '../sessions.js'
 import { ENGINE_CAPABILITIES } from '../../shared/engine-capabilities.js'
 import type {
   EngineAdapter, LaunchInput, LaunchResult, DeliveryResult, Notification, StopResult,
-  ContextUsage, RecoveryPlan, Turn, UsageReading,
+  ContextUsage, RecoveryPlan, Turn, UsageReading, UsageSubject,
 } from './engine-adapter.js'
 import { withoutIntents } from './engine-adapter.js'
 import type { BlockingState } from '../pane-probe.js'
-import type { ClaudeEngine } from './claude-engine.js'
+import { CLAUDE_WORKING_SILENCE_S, type ClaudeEngine } from './claude-engine.js'
 import { SOCK_PATH, PLATFORM, STATE_DIR } from '../config.js'
 import { removeSessionToken, removeSpawnPrompt, writeSessionToken, writeSpawnPrompt } from '../launch-files.js'
 import { deliveryRefusal } from '../restricted.js'
-import { tmuxCreateSession, tmuxSync } from '../tmux.js'
-import { SESSION_INSTRUCTIONS, formatNotification } from '../../shared/constants.js'
+import { tmuxCreateSession, tmuxSync, tmuxWindowActivity } from '../tmux.js'
+import { SESSION_INSTRUCTIONS, contextWindowOf, formatNotification } from '../../shared/constants.js'
 import { withRaisedFdLimit } from '../../shared/spawn-env.js'
 import { isRestrictedPolicy } from '../policy-record.js'
-import { AGY_MCP_CONFIG, registerHydraTools } from './agy-mcp.js'
+import { AGY_HOOKS_CONFIG, AGY_MCP_CONFIG, registerHydraHooks, registerHydraTools } from './agy-config.js'
+import { agyContextTokens, agyState, agyStateDir, agyStateFile, agyTurn, agyUsageTotals, type AgyUsageCursor } from './agy-session.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
@@ -43,7 +44,7 @@ export class AgyEngine implements EngineAdapter {
   readonly limitsAccess = ENGINE_CAPABILITIES.agy.limitsAccess
   readonly provider = 'agy' as const
   readonly channel = 'engine' as const
-  constructor(private readonly claude: ClaudeEngine, private readonly mcpConfig = AGY_MCP_CONFIG) {}
+  constructor(private readonly claude: ClaudeEngine, private readonly mcpConfig = AGY_MCP_CONFIG, private readonly hooksConfig = AGY_HOOKS_CONFIG) {}
 
   async start(): Promise<void> {}
 
@@ -54,6 +55,9 @@ export class AgyEngine implements EngineAdapter {
     const { sessionId, tmuxName } = input
     const model = input.model!   // doSpawnSession always gives agy one
     registerHydraTools(this.mcpConfig)
+    registerHydraHooks(this.hooksConfig)
+    mkdirSync(agyStateDir(), { recursive: true, mode: 0o700 })
+    rmSync(agyStateFile(sessionId), { force: true })   // a relaunch of this session id starts with no word from agy
     const apiKeyMode = existsSync(AGY_API_KEY_FILE)
     const stderrLog = join(SPAWN_LOGS_DIR, `stderr-${tmuxName}-${sessionId}.log`)
     const agy = process.env.HYDRA_AGY_BIN || 'agy'
@@ -65,7 +69,7 @@ export class AgyEngine implements EngineAdapter {
       `cd ${shq(input.cwd)}`,
       `export HYDRA_SESSION_ID=${shq(sessionId)}`, `export HYDRA_SESSION_NAME=${shq(tmuxName)}`,
       `export HYDRA_THREAD_ID=${shq(input.threadId ?? '')}`, `export HYDRA_SESSION_TYPE=${shq(input.sessionType ?? '')}`,
-      `export DAEMON_SOCK=${shq(SOCK_PATH)}`, `export CHAT_PLATFORM=${shq(PLATFORM)}`,
+      `export DAEMON_SOCK=${shq(SOCK_PATH)}`, `export CHAT_PLATFORM=${shq(PLATFORM)}`, `export HYDRA_AGY_STATE=${shq(agyStateFile(sessionId))}`,
       ...(apiKeyMode ? [`GEMINI_API_KEY=$(cat ${shq(AGY_API_KEY_FILE)}) && export GEMINI_API_KEY`] : []),
       ...(tokenFile ? [tokenFile.load] : []),
       promptFile.load,
@@ -88,7 +92,7 @@ export class AgyEngine implements EngineAdapter {
 
   // Paste the message into the pane as one bracketed paste, then Enter, then wait for the pane to show it once more than before. agy shows a big paste as
   // "[Pasted text +N lines]" until Enter, so a big message counts only once sent; a short one is shown in the input box already, so for it this proves the
-  // paste reached the pane, not that Enter sent it (the transcript check of the observation step proves that).
+  // paste reached the pane, not that Enter sent it.
   private async paste(info: SessionInfo, msg: Notification): Promise<DeliveryResult> {
     const refused = deliveryRefusal(info)
     if (refused) return { status: 'rejected', retryable: false, reason: refused }
@@ -126,9 +130,29 @@ export class AgyEngine implements EngineAdapter {
   sendKeys(info: SessionInfo, keys: string, opts?: { raw?: boolean; trailingKey?: string }) { return this.claude.sendKeys(info, keys, opts) }
   interrupt(info: SessionInfo): Promise<void> { return this.claude.interrupt(info) }
 
-  turn(): Turn { return { confirmedComplete: false, answer: () => null, activityAt: null, live: null } }
-  usage(): ContextUsage | null { return null }
-  usageTotals(): UsageReading | null { return null }
+  // agy's own record (agy-session.ts): the turn is over when agy has stopped with nothing running and its transcript ends in an answer to a message from at or
+  // after sinceMs; that answer's text is what the reply guard relays. `live` is agy's hook's word: working from a model call until a stop.
+  turn(info: SessionInfo, sinceMs: number): Turn {
+    const { complete, text } = agyTurn(info.sessionId, sinceMs)
+    const state = agyState(info.sessionId)
+    return {
+      confirmedComplete: complete,
+      answer: () => (complete && text?.trim() ? text : null),
+      live: state ? state.live : null,
+      workingSilenceLimitS: CLAUDE_WORKING_SILENCE_S,   // an interrupted or crashed agy may never send its stop
+      ...(state?.backgroundWork ? { backgroundWork: true } : {}),
+      get activityAt() { try { return tmuxWindowActivity(info.tmuxName) } catch { return null } },
+    }
+  }
+
+  // Context tokens of the last model call over the model's window.
+  usage(info: SessionInfo): ContextUsage | null {
+    const used = agyContextTokens(info.sessionId)
+    const window = contextWindowOf(info.sessionMetadata?.model)
+    return used === null || !window ? null : { usedTokens: used, contextWindow: window, percent: Math.min(100, Math.round(used * 100 / window)) }
+  }
+  // Spend so far, from every model call in agy's transcript; no phase split, as for Codex.
+  usageTotals(info: UsageSubject, prev: unknown): UsageReading | null { return agyUsageTotals(info.sessionId, prev as AgyUsageCursor | undefined) }
   detectBlockingState(): BlockingState | null { return null }
   recoveryPlan(): RecoveryPlan { return { generic: false, resume: null, fork: null } }
 }

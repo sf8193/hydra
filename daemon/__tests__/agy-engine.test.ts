@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test'
-import { readdirSync } from 'fs'
+import { mkdirSync, readdirSync } from 'fs'
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -8,10 +8,13 @@ import { ClaudeEngine } from '../engines/claude-engine.js'
 import { BridgeTransport } from '../bridge-transport.js'
 import { SESSION_INSTRUCTIONS } from '../../shared/constants.js'
 import { _setTmuxForTesting } from '../tmux.js'
+import { agyStateDir, agyStateFile } from '../engines/agy-session.js'
 import { STATE_DIR } from '../config.js'
 import { sessionTokenDir, spawnPromptDir } from '../launch-files.js'
 
-const mcpConfig = join(mkdtempSync(join(tmpdir(), 'hydra-agy-mcp-')), 'mcp_config.json')
+const configDir = mkdtempSync(join(tmpdir(), 'hydra-agy-mcp-'))
+const mcpConfig = join(configDir, 'mcp_config.json')
+const hooksConfig = join(configDir, 'hooks.json')
 
 // The agy launch command, with tmux faked (a real agy needs a login and a model; this runs in CI).
 async function launchCommand(prompt: string, extra: object = {}, tmuxExit = 0): Promise<string> {
@@ -22,7 +25,7 @@ async function launchCommand(prompt: string, extra: object = {}, tmuxExit = 0): 
   process.env.PATH = `${dir}:${saved.PATH}`
   delete process.env.TMUX
   try {
-    await new AgyEngine({} as any, mcpConfig).launch({ sessionId: 's1', tmuxName: 'agy-t', cwd: '/tmp/work', originalCwd: '/tmp/work', model: 'gemini-4-neon-high', prompt, ...extra })
+    await new AgyEngine({} as any, mcpConfig, hooksConfig).launch({ sessionId: 's1', tmuxName: 'agy-t', cwd: '/tmp/work', originalCwd: '/tmp/work', model: 'gemini-4-neon-high', prompt, ...extra })
     return existsSync(join(dir, 'args')) ? readFileSync(join(dir, 'args'), 'utf8') : ''
   } finally {
     process.env.PATH = saved.PATH
@@ -39,6 +42,8 @@ test('launch runs agy on the model, trusting only its folder, approving tools, w
   expect(cmd).toContain('-i "$_hydra_prompt"')
   expect(cmd).toContain('unset HYDRA_ROLE CLAUDE_CONFIG_DIR')
   expect(cmd).toContain('export DAEMON_SOCK=')
+  expect(cmd).toContain(`export HYDRA_AGY_STATE='${agyStateFile('s1')}'`)
+  expect(JSON.parse(readFileSync(hooksConfig, 'utf8')).hydra.Stop[0].command).toContain('/daemon/agy-hook.ts')
   expect(cmd).not.toContain('say hi')
   expect(cmd).not.toContain('GEMINI_API_KEY')
   expect(JSON.parse(readFileSync(mcpConfig, 'utf8')).mcpServers.hydra.args[0]).toEndWith('/daemon/codex-mcp-server.ts')
@@ -91,7 +96,7 @@ test('a restricted or write-confined specialist is refused before anything start
 const tmuxUp = Bun.spawnSync(['tmux', '-V']).exitCode === 0
 const name = `agy-deliver-${process.pid}`
 const info = { sessionId: 'deliver-1', tmuxName: name } as any
-const engine = new AgyEngine(new ClaudeEngine(new BridgeTransport()), mcpConfig)
+const engine = new AgyEngine(new ClaudeEngine(new BridgeTransport()), mcpConfig, hooksConfig)
 
 beforeAll(() => { if (tmuxUp) Bun.spawnSync(['tmux', 'new-session', '-d', '-s', name, '-x', '200', '-y', '50', 'stty -icanon -echo min 1 time 0; cat']) })
 afterAll(() => { if (tmuxUp) Bun.spawnSync(['tmux', 'kill-session', '-t', name]) })
@@ -171,4 +176,30 @@ test('a message the paste cannot reach is a retryable rejection, and leaves no p
     const r = await engine.deliver({ sessionId: 'deliver-6', tmuxName: 'x' } as any, { type: 'notification', content: 'hi' })
     expect(r).toMatchObject({ status: 'rejected', retryable: true })
   } finally { _setTmuxForTesting() }
+})
+
+test('a relaunch of a session id starts with no word from the earlier agy', async () => {
+  mkdirSync(agyStateDir(), { recursive: true })
+  writeFileSync(agyStateFile('s1'), '{"conversationId":"old"}')
+  await launchCommand('hi')
+  expect(existsSync(agyStateFile('s1'))).toBe(false)
+})
+
+test('the turn reports agy\'s own word: working or idle, the answer once it is over, and nothing before agy has spoken', () => {
+  const t = { sessionId: 'turn-1', tmuxName: 'agy-turn-1' } as any
+  mkdirSync(agyStateDir(), { recursive: true })
+  expect(engine.turn(t, 0)).toMatchObject({ confirmedComplete: false, live: null, workingSilenceLimitS: 600 })
+  const transcriptPath = join(configDir, 'turn.jsonl')
+  writeFileSync(transcriptPath, `{"type":"USER_INPUT","created_at":"2026-11-21T04:55:17Z"}\n{"type":"PLANNER_RESPONSE","created_at":"2026-11-21T04:55:20Z","content":"done"}\n`)
+  const say = (live: string, backgroundWork = false) => writeFileSync(agyStateFile('turn-1'), JSON.stringify({ conversationId: 'c', transcriptPath, live, backgroundWork }))
+  const since = Date.UTC(2026, 10, 21, 4, 55, 17)
+  say('working')
+  expect(engine.turn(t, since)).toMatchObject({ confirmedComplete: false, live: 'working' })
+  say('idle')
+  const idle = engine.turn(t, since)
+  expect(idle).toMatchObject({ confirmedComplete: true, live: 'idle' })
+  expect(idle.answer()).toBe('done')
+  say('idle', true)
+  expect(engine.turn(t, since)).toMatchObject({ confirmedComplete: false, live: 'idle', backgroundWork: true })
+  expect(engine.usage({ ...t, sessionMetadata: { model: 'gemini-4-neon-high' } })).toEqual({ usedTokens: 0, contextWindow: 1_048_576, percent: 0 })
 })

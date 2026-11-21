@@ -2,7 +2,7 @@
 /**
  * Hydra MCP Tool Server — exposes daemon tools to Codex sessions via MCP stdio.
  *
- * Spawned by codex (or agy, daemon/engines/agy-mcp.ts) as an MCP server. When codex calls a tool (reply, react, etc.),
+ * Spawned by codex (or agy, daemon/engines/agy-config.ts) as an MCP server. When codex calls a tool (reply, react, etc.),
  * this server forwards it to the daemon via the daemon's unix socket, using the
  * same protocol as Claude's bridge. From the daemon's perspective, tool calls
  * from codex look identical to tool calls from Claude.
