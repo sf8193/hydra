@@ -37,22 +37,22 @@ test('scrubbedSpawnEnv drops every scrubbed var, keeps the rest, and does not mu
   for (const v of SCRUBBED_SPAWN_VARS) expect(out[v]).toBeUndefined()
   expect(out.PATH).toBe('/bin')
   expect(out.UNRELATED).toBe('keep')
-  expect(base.RAINDROP_WRITE_KEY).toBe('seeded')
+  expect(base.SLOPBOT_SLACK_BOT_TOKEN).toBe('seeded')
 })
 
 test('called with no argument it scrubs the live environment, not an empty one', () => {
-  withEnv({ RAINDROP_WRITE_KEY: 'rk_seeded' }, () => {
+  withEnv({ SLOPBOT_SLACK_BOT_TOKEN: 'rk_seeded' }, () => {
     const out = scrubbedSpawnEnv()
-    expect(out.RAINDROP_WRITE_KEY).toBeUndefined()
+    expect(out.SLOPBOT_SLACK_BOT_TOKEN).toBeUndefined()
     expect(out.PATH).toBe(process.env.PATH)
   })
 })
 
 test('captureSpawnVars returns the values and removes them from the environment', () => {
-  const env: NodeJS.ProcessEnv = { PATH: '/bin', RAINDROP_WRITE_KEY: 'rk_x', RAINDROP_MODE: 'live' }
+  const env: NodeJS.ProcessEnv = { PATH: '/bin', SLOPBOT_SLACK_BOT_TOKEN: 'rk_x', SLOPBOT_SLACK_APP_TOKEN: 'live' }
   const captured = captureSpawnVars(env)
-  expect(captured.RAINDROP_WRITE_KEY).toBe('rk_x')
-  expect(captured.RAINDROP_MODE).toBe('live')
+  expect(captured.SLOPBOT_SLACK_BOT_TOKEN).toBe('rk_x')
+  expect(captured.SLOPBOT_SLACK_APP_TOKEN).toBe('live')
   for (const v of SCRUBBED_SPAWN_VARS) expect(env[v]).toBeUndefined()
   expect(env.PATH).toBe('/bin')
   // Nothing may hand the values back to process.env later.
@@ -65,10 +65,10 @@ test('a captured key is absent from a real forked child', () => {
   const script = join(dir, 'cap.ts')
   writeFileSync(script, [
     'import { captureSpawnVars } from ' + JSON.stringify(join(ROOT, 'shared/spawn-env.ts')),
-    "process.env.RAINDROP_WRITE_KEY = 'rk_forked'",
+    "process.env.SLOPBOT_SLACK_BOT_TOKEN = 'rk_forked'",
     'const captured = captureSpawnVars()',
-    "const out = Bun.spawnSync(['sh', '-c', " + JSON.stringify("echo ${RAINDROP_WRITE_KEY:-absent}") + '], { env: { ...process.env } })',
-    'console.log(captured.RAINDROP_WRITE_KEY, out.stdout.toString().trim())',
+    "const out = Bun.spawnSync(['sh', '-c', " + JSON.stringify("echo ${SLOPBOT_SLACK_BOT_TOKEN:-absent}") + '], { env: { ...process.env } })',
+    'console.log(captured.SLOPBOT_SLACK_BOT_TOKEN, out.stdout.toString().trim())',
   ].join('\n'))
   const proc = Bun.spawnSync([process.execPath, script])
   expect(new TextDecoder().decode(proc.stdout).trim()).toBe('rk_forked absent')
@@ -79,10 +79,10 @@ test('the fd-limit prefix runs before the command and tolerates a shell that rej
   expect(TMUX_PANE_FD_LIMIT).toBeGreaterThan(256)
 })
 
-test('the scrubbed set is exactly these twelve: Raindrop\'s, the Slack connector\'s defaults and the chat gateway\'s own tokens', () => {
+test('the scrubbed set is exactly these eight: the Slack connector\'s defaults and the chat gateway\'s own tokens', () => {
   expect([...SCRUBBED_SPAWN_VARS]).toEqual(
-    ['RAINDROP_WRITE_KEY', 'RAINDROP_MODE', 'RAINDROP_USER_ID', 'RAINDROP_OMIT_REPO', 'SLOPBOT_SLACK_APP_TOKEN', 'SLOPBOT_SLACK_BOT_TOKEN',
-     'HYDRA_SLACK_APP_TOKEN', 'HYDRA_SLACK_BOT_TOKEN', 'HYDRA_SLACK_USER_TOKEN', 'DISCORD_BOT_TOKEN', 'SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN'],
+    ['SLOPBOT_SLACK_APP_TOKEN', 'SLOPBOT_SLACK_BOT_TOKEN', 'HYDRA_SLACK_APP_TOKEN', 'HYDRA_SLACK_BOT_TOKEN', 'HYDRA_SLACK_USER_TOKEN',
+     'DISCORD_BOT_TOKEN', 'SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN'],
   )
 })
 
@@ -97,11 +97,7 @@ test('tmuxNewSession sweeps every var in one call, before it creates the session
   tmuxNewSession(['-d', '-s', 'probe'], {}, exec)
   expect(calls).toHaveLength(2)
   expect(calls[0].argv).toEqual([
-    'set-environment', '-gr', 'RAINDROP_WRITE_KEY',
-    ';', 'set-environment', '-gr', 'RAINDROP_MODE',
-    ';', 'set-environment', '-gr', 'RAINDROP_USER_ID',
-    ';', 'set-environment', '-gr', 'RAINDROP_OMIT_REPO',
-    ';', 'set-environment', '-gr', 'SLOPBOT_SLACK_APP_TOKEN',
+    'set-environment', '-gr', 'SLOPBOT_SLACK_APP_TOKEN',
     ';', 'set-environment', '-gr', 'SLOPBOT_SLACK_BOT_TOKEN',
     ';', 'set-environment', '-gr', 'HYDRA_SLACK_APP_TOKEN',
     ';', 'set-environment', '-gr', 'HYDRA_SLACK_BOT_TOKEN',
@@ -184,10 +180,10 @@ test('a sweep that fails against a running server is reported, naming every var'
 })
 
 test('tmuxNewSession defaults to the live environment, scrubbed', () => {
-  withEnv({ RAINDROP_WRITE_KEY: 'rk_seeded' }, () => {
+  withEnv({ SLOPBOT_SLACK_BOT_TOKEN: 'rk_seeded' }, () => {
     const { calls, exec } = capture()
     tmuxNewSession(['-d', '-s', 'probe'], {}, exec)
-    expect(calls[0].opts.env.RAINDROP_WRITE_KEY).toBeUndefined()
+    expect(calls[0].opts.env.SLOPBOT_SLACK_BOT_TOKEN).toBeUndefined()
     expect(calls[0].opts.env.PATH).toBe(process.env.PATH)
   })
 })
@@ -201,8 +197,8 @@ test('codexSpawnEnv scrubs, keeps the rest, and cannot be overridden by its call
 })
 
 test('codexSpawnEnv with no argument still scrubs the live environment', () => {
-  withEnv({ RAINDROP_WRITE_KEY: 'rk_seeded' }, () => {
-    expect(codexSpawnEnv().RAINDROP_WRITE_KEY).toBeUndefined()
+  withEnv({ SLOPBOT_SLACK_BOT_TOKEN: 'rk_seeded' }, () => {
+    expect(codexSpawnEnv().SLOPBOT_SLACK_BOT_TOKEN).toBeUndefined()
     expect(codexSpawnEnv().PATH).toBe(process.env.PATH)
   })
 })
@@ -219,7 +215,7 @@ const SHELLS = ['bash', 'sh', ...(Bun.which('zsh') ? ['zsh'] : [])]
 
 function runScrub(sh: string, withTmuxShim: boolean): { out: string; code: number | null; swept: string } {
   const dir = mkdtempSync(join(tmpdir(), 'rd-scrub-'))
-  copyFileSync(join(ROOT, 'scrub-raindrop.sh'), join(dir, 'scrub.sh'))
+  copyFileSync(join(ROOT, 'scrub-secrets.sh'), join(dir, 'scrub.sh'))
   const log = join(dir, 'tmux.log')
   let path = '/usr/bin:/bin'
   if (withTmuxShim) {
@@ -233,14 +229,14 @@ function runScrub(sh: string, withTmuxShim: boolean): { out: string; code: numbe
   return { out: new TextDecoder().decode(proc.stdout), code: proc.exitCode, swept }
 }
 
-test.each(SHELLS)('scrub-raindrop.sh unsets under %s, with tmux absent', (sh) => {
+test.each(SHELLS)('scrub-secrets.sh unsets under %s, with tmux absent', (sh) => {
   const { out, code } = runScrub(sh, false)
   expect(code, `${sh} exit`).toBe(0)
   expect(out, `${sh} produced no env`).toContain('PATH=')
   for (const v of SCRUBBED_SPAWN_VARS) expect(out, `${sh}/${v}`).not.toContain(`${v}=`)
 })
 
-test.each(SHELLS)('scrub-raindrop.sh sweeps an already-running server under %s', (sh) => {
+test.each(SHELLS)('scrub-secrets.sh sweeps an already-running server under %s', (sh) => {
   const { swept } = runScrub(sh, true)
   const lines = swept.trim().split('\n').filter(Boolean).sort()
   expect(lines).toEqual(SCRUBBED_SPAWN_VARS.map(v => `set-environment -gr ${v}`).sort())
@@ -250,7 +246,7 @@ test.each(SHELLS)('scrub-raindrop.sh sweeps an already-running server under %s',
 function runScrubWith(sh: string, toml: string | null, extraEnv: Record<string, string>, opts: { shimBun?: string } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'rd-scrub-toml-'))
   try {
-    copyFileSync(join(ROOT, 'scrub-raindrop.sh'), join(dir, 'scrub.sh'))
+    copyFileSync(join(ROOT, 'scrub-secrets.sh'), join(dir, 'scrub.sh'))
     if (toml !== null) writeFileSync(join(dir, 'hydra.toml'), toml)
     // A tmux that does nothing: the script's sweep must never reach a real server.
     writeFileSync(join(dir, 'tmux'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
@@ -261,7 +257,7 @@ function runScrubWith(sh: string, toml: string | null, extraEnv: Record<string, 
   } finally { rmSync(dir, { recursive: true, force: true }) }
 }
 
-test.each(SHELLS)('scrub-raindrop.sh unsets a custom token variable hydra.toml names, under %s', (sh) => {
+test.each(SHELLS)('scrub-secrets.sh unsets a custom token variable hydra.toml names, under %s', (sh) => {
   const r = runScrubWith(sh, '[slack.apps.sales]\nbot_token_env = "ACME_SALES_BOT"\nsocket_token_env = "ACME_SALES_APP"\n', { ACME_SALES_BOT: 'xoxb-secret', ACME_SALES_APP: 'xapp-secret', UNRELATED: 'kept' })
   expect(r.code, `${sh} exit`).toBe(0)
   expect(r.out).not.toContain('ACME_SALES_BOT=')
@@ -290,21 +286,21 @@ test.each(SHELLS)('even if the lookup printed a variable sessions need, the shel
 })
 
 test.each(SHELLS)('when the lookup cannot run, one line on stderr says custom variables were not scrubbed, and the fixed names still go, under %s', (sh) => {
-  const failing = runScrubWith(sh, '', { ACME_BOT: 'b', RAINDROP_WRITE_KEY: 'k' }, { shimBun: '#!/bin/sh\nexit 1\n' })
+  const failing = runScrubWith(sh, '', { ACME_BOT: 'b', SLOPBOT_SLACK_BOT_TOKEN: 'k' }, { shimBun: '#!/bin/sh\nexit 1\n' })
   expect(failing.code).toBe(0)
   expect(failing.err.trim().split('\n')).toHaveLength(1)
   expect(failing.err).toContain('were not scrubbed')
   expect(failing.out).toContain('ACME_BOT=')
-  expect(failing.out).not.toContain('RAINDROP_WRITE_KEY=')
+  expect(failing.out).not.toContain('SLOPBOT_SLACK_BOT_TOKEN=')
   // No state dir at all: the same one line, and the same exit.
-  const bare = runScrubWith(sh, null, { STATE_DIR: '', RAINDROP_WRITE_KEY: 'k' })
+  const bare = runScrubWith(sh, null, { STATE_DIR: '', SLOPBOT_SLACK_BOT_TOKEN: 'k' })
   expect(bare.code).toBe(0)
   expect(bare.err.trim().split('\n')).toHaveLength(1)
-  expect(bare.out).not.toContain('RAINDROP_WRITE_KEY=')
+  expect(bare.out).not.toContain('SLOPBOT_SLACK_BOT_TOKEN=')
 })
 
 test('the shell’s never-scrub list is the loader’s: NEVER_SCRUBBED and its prefixes', () => {
-  const m = /^\s+PATH\|([^)]+)\) continue ;;$/m.exec(read('scrub-raindrop.sh'))
+  const m = /^\s+PATH\|([^)]+)\) continue ;;$/m.exec(read('scrub-secrets.sh'))
   expect(m, 'shell denylist not found').toBeTruthy()
   const items = ('PATH|' + m![1]).split('|')
   const prefixes = items.filter(i => i.endsWith('_*')).map(i => i.slice(0, -1))
@@ -393,22 +389,22 @@ test('every shell entrypoint that creates a tmux server scrubs both halves first
   for (const f of shellSpawners()) {
     // Every offset below must index this one string, or the window goes empty.
     const src = read(f).replace(/\\\n\s*/g, ' ')
-    const at = src.search(/^\s*(source|\.)\s+\S*(scrub-raindrop|env-setup)\.sh/m)
-    expect(at, `${f} sources neither scrub-raindrop.sh nor env-setup.sh`).toBeGreaterThanOrEqual(0)
+    const at = src.search(/^\s*(source|\.)\s+\S*(scrub-secrets|env-setup)\.sh/m)
+    expect(at, `${f} sources neither scrub-secrets.sh nor env-setup.sh`).toBeGreaterThanOrEqual(0)
     const creates = src.search(/\bnew-session\b|\btmux\s+new\b/)
     expect(creates, `${f} no longer creates a session`).toBeGreaterThanOrEqual(0)
     expect(at, `${f} scrubs after it creates the session`).toBeLessThan(creates)
-    const last = Math.max(src.lastIndexOf('scrub-raindrop'), src.lastIndexOf('env-setup'))
+    const last = Math.max(src.lastIndexOf('scrub-secrets'), src.lastIndexOf('env-setup'))
     const between = src.slice(last, creates)
     expect(between.length, `${f} scrub/spawn window is empty — offsets disagree`).toBeGreaterThan(0)
     expect(between, `${f} re-reads a .env after scrubbing`).not.toMatch(/\.env\b/)
-    expect(between, `${f} re-exports a RAINDROP_ var after scrubbing`)
-      .not.toMatch(/RAINDROP_\w*=|export\s+RAINDROP_/)
+    expect(between, `${f} re-exports a token var after scrubbing`)
+      .not.toMatch(/\b(DISCORD_BOT_TOKEN|SLACK_\w*TOKEN|(SLOPBOT|HYDRA)_SLACK_\w*)=|export\s+(DISCORD_BOT_TOKEN|SLACK_\w*TOKEN|(SLOPBOT|HYDRA)_SLACK_)/)
   }
 })
 
 test('the shared scrub covers exactly the scrubbed set', () => {
-  const loop = /^for _rd_v in ([^;]+); do/m.exec(read('scrub-raindrop.sh'))
+  const loop = /^for _ss_v in ([^;]+); do/m.exec(read('scrub-secrets.sh'))
   expect(loop, 'scrub loop not found').toBeTruthy()
   expect(loop![1].trim().split(/\s+/).sort()).toEqual([...SCRUBBED_SPAWN_VARS].sort())
 })
@@ -442,7 +438,7 @@ test('no real credential from a state-dir .env appears anywhere in the repo', ()
 })
 
 function runGuard(dir: string, env: Record<string, string>): { out: string; code: number | null } {
-  const frag = /if \[ -f "\$SCRIPT_DIR\/scrub-raindrop\.sh" \][\s\S]*?\nfi\n/.exec(read('env-setup.sh'))
+  const frag = /if \[ -f "\$SCRIPT_DIR\/scrub-secrets\.sh" \][\s\S]*?\nfi\n/.exec(read('env-setup.sh'))
   if (!frag) throw new Error('guard block not found in env-setup.sh')
   const script = join(dir, 'guard.sh')
   writeFileSync(script, `set -euo pipefail\nSCRIPT_DIR=${dir}\n${frag[0]}echo REACHED_SPAWN\n`)
@@ -456,9 +452,12 @@ function runGuard(dir: string, env: Record<string, string>): { out: string; code
 // Refusing to boot is right only when there is a key to protect: env-setup.sh
 // is also watchdog.sh's preamble, and its exit leaves the fleet unsupervised.
 test.each([
-  ['a key is set', { RAINDROP_WRITE_KEY: 'rk_x' }, 1, false],
-  ['only a mode is set', { RAINDROP_MODE: 'live' }, 1, false],
-  ['no raindrop var is set', {}, 0, true],
+  ['a bot token is set', { SLOPBOT_SLACK_BOT_TOKEN: 'rk_x' }, 1, false],
+  ['only an app token is set', { SLOPBOT_SLACK_APP_TOKEN: 'live' }, 1, false],
+  ['the Discord token is set', { DISCORD_BOT_TOKEN: 'x' }, 1, false],
+  ['a Slack bot token is set', { SLACK_BOT_TOKEN: 'x' }, 1, false],
+  ['a HYDRA_SLACK_ var is set', { HYDRA_SLACK_USER_TOKEN: 'x' }, 1, false],
+  ['no token var is set', {}, 0, true],
 ])('a missing scrub with %s exits %p', (_label, env, code, reachesSpawn) => {
   const dir = mkdtempSync(join(tmpdir(), 'rd-guard-'))
   const r = runGuard(dir, env as Record<string, string>)
@@ -466,10 +465,16 @@ test.each([
   expect(r.out.includes('REACHED_SPAWN'), r.out).toBe(reachesSpawn)
 })
 
+test('start-transcribe.sh carries the same guard block as env-setup.sh', () => {
+  const block = (f: string) => /if \[ -f "\$SCRIPT_DIR\/scrub-secrets\.sh" \][\s\S]*?\nfi\n/.exec(read(f))?.[0]
+  expect(block('start-transcribe.sh')).toBeTruthy()
+  expect(block('start-transcribe.sh')).toBe(block('env-setup.sh'))
+})
+
 test('a present scrub runs and the spawn proceeds', () => {
   const dir = mkdtempSync(join(tmpdir(), 'rd-guard-ok-'))
-  writeFileSync(join(dir, 'scrub-raindrop.sh'), ': \n')
-  const r = runGuard(dir, { RAINDROP_WRITE_KEY: 'rk_x' })
+  writeFileSync(join(dir, 'scrub-secrets.sh'), ': \n')
+  const r = runGuard(dir, { SLOPBOT_SLACK_BOT_TOKEN: 'rk_x' })
   expect(r.code, r.out).toBe(0)
   expect(r.out).toContain('REACHED_SPAWN')
 })
@@ -477,7 +482,7 @@ test('a present scrub runs and the spawn proceeds', () => {
 test('env-setup.sh sources the scrub after the .env, not before', () => {
   const src = read('env-setup.sh')
   // lastIndexOf: a .env re-sourced after the scrub would restore every var.
-  expect(src.search(/scrub-raindrop\.sh/)).toBeGreaterThan(src.lastIndexOf('"$STATE_DIR/.env"'))
+  expect(src.search(/scrub-secrets\.sh/)).toBeGreaterThan(src.lastIndexOf('"$STATE_DIR/.env"'))
 })
 
 

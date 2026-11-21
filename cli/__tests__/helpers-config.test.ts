@@ -235,7 +235,7 @@ test('hydra health says a restricted specialist is refused on a macOS version th
   expect(capturedHealth(HEALTH)).not.toContain('macOS')
 })
 
-test('sourceStateDirEnv loads the .env but keeps no RAINDROP_ value in this process', () => {
+test('sourceStateDirEnv loads the .env but keeps no scrubbed token in this process', () => {
   writeEnv(`${SCRUBBED_SPAWN_VARS.map(v => `${v}=seeded`).join('\n')}\nSPAWN_CWD=/tmp/x\n`)
   sourceStateDirEnv(stateDir)
   expect(process.env.SPAWN_CWD).toBe('/tmp/x')
