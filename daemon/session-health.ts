@@ -27,8 +27,8 @@ export function pollSessionsOnce(now: number): void {
   for (const info of registry.values()) {
     const occ = info.sessionType === 'thread_guest' ? undefined : occupancy(info, now)
     // Bridge-only disconnects are handled by the bridge-server disconnect handler (3s delay + tmux check).
-    // An engine that owns its channel (Codex) owns its deaths too: finaliseCodexDeath drops its queue.
-    if (occ === 'dead' && !info.deadAt && info.adapter.channel === 'bridge' && !crashAlerted.has(info.sessionId)) {
+    // Codex owns its deaths: finaliseCodexDeath drops its queue. Claude and agy are judged by their tmux here.
+    if (occ === 'dead' && !info.deadAt && info.engine !== 'codex' && !crashAlerted.has(info.sessionId)) {
       crashAlerted.add(info.sessionId)
       markDead(info, now)
       process.stderr.write(`daemon: crash detected: ${info.tmuxName}\n`)
