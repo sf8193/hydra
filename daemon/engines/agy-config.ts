@@ -6,7 +6,7 @@
 //    (daemon/codex-mcp-server.ts); agy starts it with the session's environment, so DAEMON_SOCK and HYDRA_SESSION_ID are the session's own.
 //  - `hydra` hooks (daemon/agy-hook.ts): agy tells them the conversation id and when it is working or idle.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
 import { dirname, join } from 'path'
 
@@ -22,7 +22,9 @@ function update(file: string, edit: (config: any) => boolean): void {
   const config = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {}
   if (!edit(config)) return
   mkdirSync(dirname(file), { recursive: true })
-  writeFileSync(file, JSON.stringify(config, null, 2) + '\n')
+  const temp = `${file}.${process.pid}.tmp`   // a reader never sees a half-written file
+  writeFileSync(temp, JSON.stringify(config, null, 2) + '\n')
+  renameSync(temp, file)
 }
 
 /** Make `hydra` an MCP server in agy's config, pointing at this checkout's tool server. Everything else in the file is kept. Throws if the file is not JSON. */
