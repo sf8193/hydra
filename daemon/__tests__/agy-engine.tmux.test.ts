@@ -67,3 +67,45 @@ test.skipIf(!run)('agy session: first turn with the reply rules, a pasted messag
     rmSync(cwd, { recursive: true, force: true })
   }
 }, 600_000)
+
+test.skipIf(!run)('a resumed agy session continues the dead session\'s conversation', async () => {
+  const engine = new AgyEngine(new ClaudeEngine(new BridgeTransport()))
+  const cwd = mkdtempSync(join(tmpdir(), 'hydra-agy-'))
+  const first = { sessionId: 'agy-res-1', tmuxName: 'agy-res-1' } as any
+  const second = { sessionId: 'agy-res-2', tmuxName: 'agy-res-2' } as any
+  const toolCalls: Array<{ name: string; args: any }> = []
+  const replies = () => toolCalls.filter(c => c.name === 'reply').map(c => String(c.args?.text ?? ''))
+  try { unlinkSync(SOCK_PATH) } catch {}
+  const server = createServer(s => {
+    let buf = ''
+    s.on('data', d => {
+      buf += d.toString()
+      let i
+      while ((i = buf.indexOf('\n')) !== -1) {
+        const m = JSON.parse(buf.slice(0, i)); buf = buf.slice(i + 1)
+        if (m.type === 'tool_call') { toolCalls.push({ name: m.name, args: m.args }); s.write(JSON.stringify({ type: 'tool_result', id: m.id, content: [{ type: 'text', text: 'sent' }] }) + '\n') }
+      }
+    })
+  }).listen(SOCK_PATH)
+  const saved = [AGY_MCP_CONFIG, AGY_HOOKS_CONFIG].map(file => [file, existsSync(file) ? readFileSync(file, 'utf8') : null] as const)
+  copyFileSync(key!, AGY_API_KEY_FILE)
+  const base = { cwd, originalCwd: cwd, model: 'gemini-4-neon-low' }
+  pane = () => `${engine.peek(first, 40)}\n=====\n${engine.peek(second, 40)}`
+  try {
+    await engine.launch({ ...base, sessionId: first.sessionId, tmuxName: first.tmuxName, prompt: 'The secret word is MANGO. Call the reply tool with chat_id "1" and text "noted", then stop.' })
+    await must(() => replies().includes('noted'), 120_000)
+    await must(() => engine.turn(first, 0).live === 'idle', 60_000)
+    await engine.stop(first)
+
+    await engine.launch({ ...base, sessionId: second.sessionId, tmuxName: second.tmuxName, resumeSession: { fromSessionId: first.sessionId },
+      prompt: 'What was the secret word? Call the reply tool with chat_id "1" and just that word as the text.' })
+    await must(() => replies().some(t => t.toUpperCase().includes('MANGO')), 120_000)
+  } finally {
+    await engine.stop(first)
+    await engine.stop(second)
+    server.close()
+    rmSync(AGY_API_KEY_FILE, { force: true })
+    for (const [file, text] of saved) if (text === null) rmSync(file, { force: true }); else writeFileSync(file, text)
+    rmSync(cwd, { recursive: true, force: true })
+  }
+}, 600_000)

@@ -3,7 +3,7 @@
 // agy (Google Antigravity CLI) engine adapter — a TUI in tmux, as for Claude and omp, so the operator can attach and work in the session.
 // There is no channel into agy: a message starts a turn only as text in the pane, so deliver pastes it (agy queues text that arrives
 // mid-turn). The hydra tools reach the model as MCP tools (agy-config.ts). The tmux mechanics are Claude's, so this delegates them; only launch,
-// delivery, observation and recovery differ. Observation is agy's own files (agy-session.ts); recovery is not built yet: no session can be resumed.
+// delivery, observation and recovery differ. Observation is agy's own files (agy-session.ts); a resume continues the conversation its record names.
 
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
@@ -11,7 +11,7 @@ import type { SessionInfo } from '../sessions.js'
 import { ENGINE_CAPABILITIES } from '../../shared/engine-capabilities.js'
 import type {
   EngineAdapter, LaunchInput, LaunchResult, DeliveryResult, Notification, StopResult,
-  ContextUsage, RecoveryPlan, Turn, UsageReading, UsageSubject,
+  ContextUsage, RecoveryPlan, RecoverySource, Turn, UsageReading, UsageSubject,
 } from './engine-adapter.js'
 import { withoutIntents } from './engine-adapter.js'
 import type { BlockingState } from '../pane-probe.js'
@@ -54,6 +54,10 @@ export class AgyEngine implements EngineAdapter {
     if (input.policy?.canOnlyWriteTo) throw new Error(`specialist ${input.policy.specialist} has can_only_write_to = "workdir", which this engine cannot give: set engine = "claude", or remove can_only_write_to`)
     const { sessionId, tmuxName } = input
     const model = input.model!   // doSpawnSession always gives agy one
+    // Resume: agy continues the dead session's conversation (agy keeps conversations per folder: the caller launches in the folder the session had).
+    // With no conversation on record agy would start a fresh one that the caller reports as resumed, so that fails the resume instead.
+    const conversation = input.resumeSession ? agyState(input.resumeSession.fromSessionId)?.conversationId : undefined
+    if (input.resumeSession && !conversation) throw new Error(`agy session ${input.resumeSession.fromSessionId} has no conversation to resume`)
     registerHydraTools(this.mcpConfig)
     registerHydraHooks(this.hooksConfig)
     mkdirSync(agyStateDir(), { recursive: true, mode: 0o700 })
@@ -64,7 +68,7 @@ export class AgyEngine implements EngineAdapter {
     // The reply rules go first in the first prompt: agy has no instructions channel of its own. The prompt is handed to the pane by file (launch-files.ts).
     const promptFile = writeSpawnPrompt(tmuxName, sessionId, `${SESSION_INSTRUCTIONS}\n\n${input.prompt}`)
     const tokenFile = input.sessionToken ? writeSessionToken(tmuxName, sessionId, input.sessionToken) : null
-    const args = [agy, `--model ${shq(model)}`, `--settings ${shq(agySettings(input.cwd, apiKeyMode))}`, '--dangerously-skip-permissions', `-i ${promptFile.ref}`]
+    const args = [agy, `--model ${shq(model)}`, `--settings ${shq(agySettings(input.cwd, apiKeyMode))}`, '--dangerously-skip-permissions', ...(conversation ? [`--conversation ${shq(conversation)}`] : []), `-i ${promptFile.ref}`]
     const inner = [
       `cd ${shq(input.cwd)}`,
       `export HYDRA_SESSION_ID=${shq(sessionId)}`, `export HYDRA_SESSION_NAME=${shq(tmuxName)}`,
@@ -154,5 +158,8 @@ export class AgyEngine implements EngineAdapter {
   // Spend so far, from every model call in agy's transcript; no phase split, as for Codex.
   usageTotals(info: UsageSubject, prev: unknown): UsageReading | null { return agyUsageTotals(info.sessionId, prev as AgyUsageCursor | undefined) }
   detectBlockingState(): BlockingState | null { return null }
-  recoveryPlan(): RecoveryPlan { return { generic: false, resume: null, fork: null } }
+  // Resume continues the dead session's conversation (`launch` finds its id in the dead session's record). Not `generic`: boot recovery and the `recover` list skip agy (they would relaunch it as Claude). No fork.
+  recoveryPlan(src: RecoverySource): RecoveryPlan {
+    return { generic: false, resume: src.sessionId ? { kind: 'at-launch', resumeSession: { fromSessionId: src.sessionId } } : null, fork: null }
+  }
 }

@@ -51,8 +51,8 @@ function stubDeps() {
     doSpawnSession: async (topic: string, chatId?: string, messageId?: string, opts?: any) => {
       calls.push({ fn: 'doSpawnSession', args: [topic, chatId, messageId, opts] })
       if (opts?.resumeCodex) reservedDuringSpawn.push(registry.reservedNames.has(opts.resumeCodex.homeName))
-      if (opts?.resumeOmp) reservedDuringSpawn.push(registry.reservedNames.has(opts.resumeOmp.fromSessionId))
-      const kind = opts?.resumeCodex || opts?.resumeOmp ? 'resume' : opts?.forkFrom ? 'fork' : 'fresh'
+      if (opts?.resumeSession) reservedDuringSpawn.push(registry.reservedNames.has(opts.resumeSession.fromSessionId))
+      const kind = opts?.resumeCodex || opts?.resumeSession ? 'resume' : opts?.forkFrom ? 'fork' : 'fresh'
       if ((spawnFails as string[]).includes(kind)) throw new Error(`${kind} failed`)
       return { name: `${kind}-name`, sessionId: 's-new' } as any
     },
@@ -125,7 +125,7 @@ function seedHistory(entry: Partial<ThreadSessionEntry>, info?: Partial<SessionI
 }
 
 const fns = () => calls.map(c => c.fn === 'doSpawnSession'
-  ? (c.args[3]?.resumeCodex || c.args[3]?.resumeOmp ? 'spawn:resume' : c.args[3]?.forkFrom ? 'spawn:fork' : 'spawn:fresh') : c.fn)
+  ? (c.args[3]?.resumeCodex || c.args[3]?.resumeSession ? 'spawn:resume' : c.args[3]?.forkFrom ? 'spawn:fork' : 'spawn:fresh') : c.fn)
 const opts = (i: number) => calls.filter(c => c.fn === 'doSpawnSession')[i].args[3]
 const respawnArgs = () => calls.find(c => c.fn === 'tryRespawn')!.args
 const logged = () => stderr.join('')
@@ -342,7 +342,7 @@ describe('resume tier matrix — omp', () => {
     const e = seedHistory({ engine: 'omp' })
     await handleResumeIntercept(msg())
     expect(fns()).toEqual(['spawn:resume'])
-    expect(opts(0)).toEqual({ existingThreadId: THREAD, resumeOmp: { fromSessionId: e.sessionId }, preserveWorktree: true,
+    expect(opts(0)).toEqual({ existingThreadId: THREAD, resumeSession: { fromSessionId: e.sessionId }, preserveWorktree: true,
       promptPrefix: RECOVERY_REVERIFY_GUARD, model: 'dead-model', engine: 'omp', label: 'build' })
     expect(reservedDuringSpawn).toEqual([true])
     expect(registry.reservedNames.has(e.sessionId)).toBe(false)

@@ -203,3 +203,22 @@ test('the turn reports agy\'s own word: working or idle, the answer once it is o
   expect(engine.turn(t, since)).toMatchObject({ confirmedComplete: false, live: 'idle', backgroundWork: true })
   expect(engine.usage({ ...t, sessionMetadata: { model: 'gemini-4-neon-high' } })).toEqual({ usedTokens: 0, contextWindow: 1_048_576, percent: 0 })
 })
+
+test('a resume continues the dead session\'s conversation, found in the dead session\'s record', async () => {
+  mkdirSync(agyStateDir(), { recursive: true })
+  writeFileSync(agyStateFile('dead-1'), '{"conversationId":"conv-dead","transcriptPath":"/t","live":"idle","backgroundWork":false}')
+  const cmd = await launchCommand('hello', { resumeSession: { fromSessionId: 'dead-1' } })
+  expect(cmd).toContain("--conversation 'conv-dead'")
+  expect(await launchCommand('hello')).not.toContain('--conversation')
+})
+
+test('a resume with no conversation on record fails before agy starts, so the caller falls back to a fresh session', async () => {
+  rmSync(agyStateFile('gone-1'), { force: true })
+  await expect(launchCommand('hello', { resumeSession: { fromSessionId: 'gone-1' } })).rejects.toThrow('has no conversation to resume')
+})
+
+test('recoveryPlan resumes the dead session by id, is not generic, and cannot fork', () => {
+  const e = new AgyEngine({} as any, mcpConfig, hooksConfig)
+  expect(e.recoveryPlan({ tmuxName: 't', sessionId: 'dead-1' })).toEqual({ generic: false, resume: { kind: 'at-launch', resumeSession: { fromSessionId: 'dead-1' } }, fork: null })
+  expect(e.recoveryPlan({ tmuxName: 't' })).toEqual({ generic: false, resume: null, fork: null })
+})
