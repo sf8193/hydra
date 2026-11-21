@@ -4,7 +4,6 @@
 //
 // For lifecycle events (review complete, session death, etc.) use event-bus.ts.
 
-import { emit } from './event-bus.js'
 import { registry } from './sessions.js'
 
 type ProtocolHooks = {
@@ -59,17 +58,10 @@ export function dispatchReconnect(sessionId: string): void {
   }
 }
 
-async function dispatchReply(sessionId: string, text: string, chatId: string, sentIds: string[]): Promise<void> {
+export async function dispatchSessionReply(sessionId: string, text: string, chatId: string, sentIds: string[]): Promise<void> {
   for (const hooks of protocols.values()) {
     if (hooks.isParticipant(sessionId)) { await hooks.onReply(sessionId, text, chatId, sentIds); break }
   }
-}
-
-// Encapsulates dispatch ordering: protocol registry processes the reply first,
-// then the event bus notifies general subscribers.
-export async function dispatchSessionReply(sessionId: string, text: string, chatId: string, sentIds: string[]): Promise<void> {
-  await dispatchReply(sessionId, text, chatId, sentIds)
-  emit('reply', { sessionId, text, chatId, sentIds })
 }
 
 export function dispatchDisconnect(sessionId: string): boolean {

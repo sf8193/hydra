@@ -12,7 +12,6 @@ graph TD
   subgraph shared["Shared"]
     shared_constants["constants.ts"]
     shared_tool-definitions["tool-definitions.ts"]
-    daemon_usage-phase["usage-phase.ts"]
   end
 
   subgraph core["Core"]
@@ -264,7 +263,6 @@ graph TD
   daemon_auto-handoff --> daemon_session-lifecycle
   daemon_auto-handoff --> daemon_util
   daemon_usage --> shared_constants
-  daemon_usage --> daemon_usage-phase
   daemon_usage-alerts --> daemon_config
   daemon_usage-alerts --> daemon_util
   daemon_commands_global --> daemon_config

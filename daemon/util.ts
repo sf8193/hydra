@@ -82,7 +82,7 @@ export function parseContextFooter(pane: string): ContextFooter | null {
 export const parseContextPercent = (pane: string): number | null => parseContextFooter(pane)?.percent ?? null
 
 // Strip protocol routing tags from displayed text. The machine tag
-// ([critic→owner]) is consumed by dispatchReply for routing; the human
+// ([critic→owner]) is consumed by dispatchSessionReply for routing; the human
 // sees only the content. [summary] stripping is handled unconditionally
 // in bridge-dispatch.ts (survives cancel/timeout). Free-form posts and
 // non-routing sentinels ([done]) pass through unchanged.

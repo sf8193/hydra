@@ -1,8 +1,8 @@
 import { afterAll, beforeEach, expect, test } from 'bun:test'
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { agyContextTokens, agyState, agyStateDir, agyStateFile, agyTurn, agyUsageTotals } from '../engines/agy-session.js'
+import { agyContextTokens, agyState, agyStateDir, agyStateFile, agyTurn } from '../engines/agy-session.js'
 
 // A transcript as agy writes it (the shape of a real one: a user input, a tool call, its result, the answer).
 const at = (s: number) => new Date(Date.UTC(2026, 10, 21, 4, 55, s)).toISOString().replace('.000Z', 'Z')
@@ -82,29 +82,6 @@ test('a user input further back than the read cap is not searched for: the turn 
 test('context is the last model call\'s input plus what came from cache', () => {
   expect(agyContextTokens(session(lines(ask(0, 17), call(1, 17), result(2, 18), answer(3, 19))).id)).toBe(2358 + 7635)
   expect(agyContextTokens('no-such-session')).toBeNull()
-})
-
-test('spend sums every model call, and a second read adds only what was appended', () => {
-  const { id, transcriptPath } = session(lines(ask(0, 17), call(1, 17), result(2, 18), answer(3, 19)))
-  const first = agyUsageTotals(id, undefined)!
-  expect(first.totals).toEqual({ inputTokens: 9676 + 2358, outputTokens: 230 + 171, cacheCreateTokens: 0, cacheReadTokens: 7635 })
-  expect(first.providerSessionId).toBe(`conv-${id}`)
-  appendFileSync(transcriptPath, lines(ask(4, 40), answer(5, 41)))
-  const second = agyUsageTotals(id, first.cursor)!
-  expect(second.totals.inputTokens).toBe(9676 + 2358 * 2)
-  expect(second.restarted).toBe(false)
-  expect(agyUsageTotals(id, second.cursor)!.totals).toEqual(second.totals)   // nothing appended: nothing added
-})
-
-test('a shorter transcript, or another conversation, starts the count over', () => {
-  const { id, transcriptPath } = session(lines(ask(0, 17), answer(1, 18)))
-  const first = agyUsageTotals(id, undefined)!
-  writeFileSync(transcriptPath, lines(ask(0, 17)))
-  expect(agyUsageTotals(id, first.cursor)).toMatchObject({ restarted: true, totals: { inputTokens: 0 } })
-  writeFileSync(transcriptPath, lines(ask(0, 17), answer(1, 18), ask(2, 30), answer(3, 31)))   // longer than before: only the conversation id differs
-  writeFileSync(agyStateFile(id), JSON.stringify({ conversationId: 'other', transcriptPath, live: 'idle', backgroundWork: false }))
-  expect(agyUsageTotals(id, first.cursor)!.restarted).toBe(true)
-  expect(agyUsageTotals('no-such-session', undefined)).toBeNull()
 })
 
 test('no word from agy yet reads as no state', () => {

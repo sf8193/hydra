@@ -71,7 +71,6 @@ test.skipIf(!run)('agy session: first turn with the reply rules, a pasted messag
     expect(engine.turn(info, since).answer()).toContain('PINEAPPLE')
     expect(engine.turn(info, since).live).toBe('idle')
     expect(engine.usage({ ...info, sessionMetadata: { model: 'gemini-4-neon-low' } })?.percent).toBeGreaterThan(0)
-    expect(engine.usageTotals(info, undefined)?.totals.outputTokens).toBeGreaterThan(0)
   } finally {
     await engine.stop(info)
     server.close()

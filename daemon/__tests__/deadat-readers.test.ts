@@ -50,12 +50,6 @@ const ALLOWED: Record<string, { why: string; lines: string[] }> = {
       "delete info.deadAt",
     ],
   },
-  'event-bus.ts': {
-    why: 'the death event carries when it happened',
-    lines: [
-      "'session:death': { deliberate?: boolean; sessionId: string; threadId: string; wasOwner: boolean; tmuxName: string; deadAt?: number; claudeSessionId?: string; engine?: ProviderId; codexThreadId?: string; codexHomeName?: string }",
-    ],
-  },
   'observability.ts': {
     why: 'a vitals sample is dropped once the autopsy has read it, which is when the death is written',
     lines: [
@@ -86,7 +80,6 @@ const ALLOWED: Record<string, { why: string; lines: string[] }> = {
     lines: [
       ".filter(s => s.claudeSessionId === resumeFrom && s.deadAt)",
       ".sort((a, b) => (b.deadAt ?? 0) - (a.deadAt ?? 0))[0]",
-      "deadAt: info.deadAt,",
       "if (!s || s.deadAt) return",
     ],
   },

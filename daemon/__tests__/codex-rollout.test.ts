@@ -2,11 +2,11 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { codexLastTurn } from '../codex-rollout.js'
+import { _resetRolloutMemoForTesting, codexLastTurn, findRollout } from '../codex-rollout.js'
 
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'codex-rollout-')) })
-afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
+afterEach(() => { _resetRolloutMemoForTesting(); rmSync(dir, { recursive: true, force: true }) })
 
 const ev = (type: string, extra: Record<string, unknown> = {}) => JSON.stringify({ type: 'event_msg', payload: { type, ...extra } })
 const put = (thread: string, lines: string[], day = '2026/09/28') => {
@@ -69,4 +69,14 @@ describe('codexLastTurn', () => {
     expect(codexLastTurn(dir, 't-blank')).toEqual({ boundary: 'closed', answer: null, at: null })
     expect(codexLastTurn(dir, 't-none')?.answer).toBeNull()
   })
+})
+
+test('the rollout is found by its thread-id suffix, not another thread\'s file', () => {
+  put('other-thread', [ev('task_started')], '2026/09/27')
+  put('t1', [ev('task_started')])
+  // Decoys that contain the suffix but don't end with it; both sort ahead of the real file.
+  writeFileSync(join(dir, 'sessions/2026/09/28', 'rollout-x-t1extra.jsonl'), ev('task_started') + '\n')
+  writeFileSync(join(dir, 'sessions/2026/09/28', 'rollout-x-t1.jsonl.tmp'), ev('task_started') + '\n')
+  expect(findRollout(dir, 't1')).toBe(join(dir, 'sessions/2026/09/28', 'rollout-2026-09-28T07-00-00-t1.jsonl'))
+  expect(findRollout(dir, 'missing')).toBeUndefined()
 })

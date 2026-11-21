@@ -9,16 +9,14 @@
 // Extensible: other modules can augment EventMap via:
 //   declare module './event-bus' { interface EventMap { 'my:event': { ... } } }
 
-import type { ProviderId } from './engines/engine-adapter.js'
 import type { Resume } from '../shared/resume.js'
 
 export interface EventMap {
   'delivery:failed': { sessionId: string; status: 'rejected' | 'unknown'; reason: string; messageId?: string }
-  'reply': { sessionId: string; text: string; chatId: string; sentIds: string[] }
   // A session found dead, by any path (a kill, a crash the health poll sees, a lost bridge): fires once, when its deadAt is set.
   'session:marked-dead': { sessionId: string; tmuxName: string }
   // `deliberate`: ended on purpose (a kill), not by a crash, a handoff, a respawn or a resumable idle end.
-  'session:death': { deliberate?: boolean; sessionId: string; threadId: string; wasOwner: boolean; tmuxName: string; deadAt?: number; claudeSessionId?: string; engine?: ProviderId; codexThreadId?: string; codexHomeName?: string }
+  'session:death': { deliberate?: boolean; sessionId: string; threadId: string; wasOwner: boolean; tmuxName: string }
   // A thread was deleted by `destroy`, whether or not a session was ever in it: what hangs on the thread (bindings) lets go.
   'thread:destroyed': { threadId: string }
   // Fires on every successful bridge registration, including reconnects —

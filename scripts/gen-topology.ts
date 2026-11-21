@@ -65,7 +65,6 @@ const LAYER_CONFIG: Record<string, { layer: string; desc: string }> = {
   'daemon/auto-handoff.ts': { layer: 'domain',    desc: 'Automatic handoff of idle high-context sessions (cache and full-context rules)' },
   'daemon/usage.ts':          { layer: 'core',      desc: 'Transcript location + incremental token-counter cursor' },
   'daemon/usage-alerts.ts':   { layer: 'domain',    desc: 'Account rate-limit alerts: report_usage + pane fallback, one dedupe per window' },
-  'daemon/usage-phase.ts':    { layer: 'shared',    desc: 'Work-phase classifier — closed phase set, tool-name vote, no imports' },
   'daemon/build.ts':          { layer: 'protocols', desc: 'Build — implement/review iteration' },
   'daemon/design.ts':         { layer: 'protocols', desc: 'Design — personas, synthesis, audit' },
   'daemon/commands/global.ts':  { layer: 'commands', desc: 'spawn, kill, restart, recover' },

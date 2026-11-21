@@ -84,11 +84,11 @@ describe('event-bus', () => {
   })
 
   test('getSubscriptions returns labeled subscriber manifest', () => {
-    on('reply', () => {}, 'factory:done-detection')
+    on('review:complete', () => {}, 'factory:done-detection')
     on('session:death', () => {}, 'factory:session-death')
     on('session:death', () => {}, 'cli:idempotency')
     const subs = getSubscriptions()
-    expect(subs['reply']).toEqual(['factory:done-detection'])
+    expect(subs['review:complete']).toEqual(['factory:done-detection'])
     expect(subs['session:death']).toEqual(['factory:session-death', 'cli:idempotency'])
   })
 })

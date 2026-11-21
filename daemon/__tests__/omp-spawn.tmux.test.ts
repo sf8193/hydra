@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, spyOn, test } from 'bun:test'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { gateway } from '../config.js'
@@ -10,11 +10,19 @@ import { handleResumeIntercept } from '../commands/thread.js'
 import { killSession } from '../session-lifecycle.js'
 import { startBridgeServer, socketServer } from '../bridge-server.js'
 import { engines } from '../engines/instances.js'
+import { ompSessionDir } from '../engines/omp-session.js'
 
 // The whole path with real parts: `spawn omp-sonnet:` -> doSpawnSession -> OmpEngine in tmux -> real omp -> the hydra extension -> the real bridge
 // server -> the real `reply` tool -> the gateway; then kill and `resume` in the thread. Only Discord is stubbed. Real model: HYDRA_OMP_E2E=1.
 const run = process.env.HYDRA_OMP_E2E === '1' && Bun.spawnSync(['tmux', '-V']).exitCode === 0
 const until = async (cond: () => boolean, ms: number) => { const end = Date.now() + ms; while (!cond() && Date.now() < end) await Bun.sleep(100); return cond() }
+
+// The id in the `session` header of the session's one file under --session-dir.
+const sessionIdOf = (info: { sessionId: string }): string => {
+  const dir = ompSessionDir(info.sessionId)
+  const text = readFileSync(join(dir, readdirSync(dir).find(n => n.endsWith('.jsonl'))!), 'utf8')
+  return JSON.parse(text.split('\n').find(l => l.includes('"type":"session"'))!).id
+}
 
 const THREAD = 'omp-int-thread'
 const sent: Array<{ to: string; text: string }> = []
@@ -64,7 +72,7 @@ test.skipIf(!run)('spawn omp-sonnet answers through the reply tool, and after a 
   expect(await until(() => said('noted'), 120_000)).toBe(true)
 
   // omp's own session id: a resume continues the same session file, so the id survives; a fresh session has a new one.
-  const ompId = engines.omp.usageTotals(first, undefined)!.providerSessionId
+  const ompId = sessionIdOf(first)
   expect(ompId).not.toBe('')
   await killSession(first, 'integration test')
   expect(registry.getByThread(THREAD)).toBeUndefined()
@@ -74,7 +82,7 @@ test.skipIf(!run)('spawn omp-sonnet answers through the reply tool, and after a 
   expect(second.engine).toBe('omp')
   expect(second.sessionId).not.toBe(first.sessionId)
   expect(await until(() => engines.omp.isConnected(second), 90_000)).toBe(true)
-  expect(engines.omp.usageTotals(second, undefined)?.providerSessionId).toBe(ompId)
+  expect(sessionIdOf(second)).toBe(ompId)
   // and it still knows what only the first session knew (a fresh session that found the old file on disk could too, so the id above is the proof).
   await engines.omp.deliver(second, { type: 'notification', content: 'What was the secret word? Answer the sender via the reply tool.', meta: { chat_id: THREAD, message_id: 'q1', user: 'sam' } })
   expect(await until(() => said('MANGO'), 120_000)).toBe(true)

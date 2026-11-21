@@ -11,7 +11,7 @@ import type { SessionInfo } from '../sessions.js'
 import { ENGINE_CAPABILITIES } from '../../shared/engine-capabilities.js'
 import type {
   EngineAdapter, LaunchInput, LaunchResult, DeliveryResult, Notification, StopResult,
-  ContextUsage, RecoveryPlan, RecoverySource, Turn, UsageReading, UsageSubject,
+  ContextUsage, RecoveryPlan, RecoverySource, Turn,
 } from './engine-adapter.js'
 import { withoutIntents } from './engine-adapter.js'
 import type { BlockingState } from '../pane-probe.js'
@@ -24,7 +24,7 @@ import { SESSION_INSTRUCTIONS, contextWindowOf, formatNotification } from '../..
 import { withRaisedFdLimit } from '../../shared/spawn-env.js'
 import { isRestrictedPolicy } from '../policy-record.js'
 import { AGY_HOOKS_CONFIG, AGY_MCP_CONFIG, registerHydraHooks, registerHydraTools } from './agy-config.js'
-import { agyContextTokens, agyState, agyStateDir, agyStateFile, agyTurn, agyUsageTotals, type AgyUsageCursor } from './agy-session.js'
+import { agyContextTokens, agyState, agyStateDir, agyStateFile, agyTurn } from './agy-session.js'
 
 const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
 /** A Gemini API key, if the operator keeps one: agy then runs in its API-key mode, else on its own login. Only this file's path is on a command line. */
@@ -167,8 +167,6 @@ export class AgyEngine implements EngineAdapter {
     const window = contextWindowOf(info.sessionMetadata?.model)
     return used === null || !window ? null : { usedTokens: used, contextWindow: window, percent: Math.min(100, Math.round(used * 100 / window)) }
   }
-  // Spend so far, from every model call in agy's transcript; no phase split, as for Codex.
-  usageTotals(info: UsageSubject, prev: unknown): UsageReading | null { return agyUsageTotals(info.sessionId, prev as AgyUsageCursor | undefined) }
   detectBlockingState(): BlockingState | null { return null }
   // Resume continues the dead session's conversation (`launch` finds its id in the dead session's record). Not `generic`: boot recovery and the `recover` list skip agy (they would relaunch it as Claude). No fork.
   recoveryPlan(src: RecoverySource): RecoveryPlan {

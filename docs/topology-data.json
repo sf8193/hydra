@@ -291,12 +291,6 @@
       "desc": "Account rate-limit alerts: report_usage + pane fallback, one dedupe per window"
     },
     {
-      "id": "daemon_usage-phase",
-      "label": "daemon/usage-phase.ts",
-      "layer": "shared",
-      "desc": "Work-phase classifier — closed phase set, tool-name vote, no imports"
-    },
-    {
       "id": "daemon_build",
       "label": "daemon/build.ts",
       "layer": "protocols",
@@ -1091,10 +1085,6 @@
     [
       "daemon_usage",
       "shared_constants"
-    ],
-    [
-      "daemon_usage",
-      "daemon_usage-phase"
     ],
     [
       "daemon_usage-alerts",

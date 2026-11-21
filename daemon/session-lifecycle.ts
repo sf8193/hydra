@@ -221,11 +221,6 @@ export function emitSessionDeath(info: SessionInfo, deliberate = false): void {
     threadId: info.threadId,
     wasOwner: info.sessionType !== 'thread_guest',
     tmuxName: info.tmuxName,
-    deadAt: info.deadAt,
-    claudeSessionId: info.claudeSessionId,
-    engine: info.engine,
-    codexThreadId: info.codexThreadId,
-    codexHomeName: info.codexHomeName,
   })
 }
 
