@@ -32,6 +32,9 @@ const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
 export const AGY_API_KEY_FILE = join(STATE_DIR, 'agy-api-key')
 const PASTE_DIR = join(STATE_DIR, 'agy-paste')
 const LANDED_WAIT_MS = 8_000
+// A session this young may still be on agy's boot, login or folder-trust screen: its first hook event (turn().live is null until then) says agy takes input.
+const FRESH_START_MS = 120_000
+const READY_WAIT_MS = 60_000
 
 /** The `--settings` JSON for one launch (never saved by agy): the folder is trusted, so agy does not stop to ask, and a key file means API-key mode. */
 export function agySettings(cwd: string, apiKeyMode: boolean): string {
@@ -102,6 +105,11 @@ export class AgyEngine implements EngineAdapter {
     if (refused) return { status: 'rejected', retryable: false, reason: refused }
     const { content, meta } = withoutIntents(msg)
     const text = formatNotification(content, meta as Record<string, string> | undefined)
+    if (Date.now() - info.createdAt < FRESH_START_MS) {
+      for (const start = Date.now(); this.turn(info, 0).live === null; await Bun.sleep(250)) {
+        if (Date.now() - start > READY_WAIT_MS) return { status: 'rejected', retryable: true, reason: `${info.tmuxName} has not finished starting: agy has sent no first event` }
+      }
+    }
     const needle = collapse(text).slice(-40)
     const seen = () => collapse(this.peek(info, 200)).split(needle).length - 1
     const before = seen()

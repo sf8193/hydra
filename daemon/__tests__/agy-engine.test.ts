@@ -114,6 +114,16 @@ test.skipIf(!tmuxUp)('a message with quotes, backticks, $vars, a blank line, an 
   expect(readdirSync(join(STATE_DIR, 'agy-paste'))).toEqual([])
 })
 
+test.skipIf(!tmuxUp)('a message to a session still starting waits for agy\'s first event before it is pasted', async () => {
+  const young = { sessionId: 'deliver-young', tmuxName: name, createdAt: Date.now() } as any
+  const sent = engine.deliver(young, { type: 'notification', content: 'MARKER-young-start', meta: { chat_id: '1', message_id: '10' } })
+  await Bun.sleep(600)
+  expect(Bun.spawnSync(['tmux', 'capture-pane', '-p', '-t', name]).stdout.toString()).not.toContain('MARKER-young-start')
+  mkdirSync(agyStateDir(), { recursive: true })
+  writeFileSync(agyStateFile('deliver-young'), JSON.stringify({ conversationId: 'c', transcriptPath: '/none', live: 'idle', backgroundWork: false }))
+  try { expect(await sent).toEqual({ status: 'accepted', via: 'tmux-paste' }) } finally { rmSync(agyStateFile('deliver-young'), { force: true }) }
+})
+
 test.skipIf(!tmuxUp)('a message already shown on the screen is not taken as landed when its paste shows nothing new', async () => {
   const shown = `${name}-shown`
   Bun.spawnSync(['tmux', 'new-session', '-d', '-s', shown, '-x', '200', '-y', '50', `printf '<channel source="hydra">\\nhi\\n</channel>\\n'; stty -icanon -echo; cat > /dev/null`])
