@@ -73,6 +73,12 @@ test('a turn whose tool output is far larger than the first read still finds its
   expect(agyTurn(id, since(17))).toEqual({ complete: true, text: 'found it' })
 })
 
+test('a user input further back than the read cap is not searched for: the turn reads as not over', () => {
+  const big = { ...result(2, 19), content: 'x'.repeat(17_000_000) }
+  const { id } = session(lines(ask(0, 17), call(1, 18), big, answer(3, 20, 'too far')))
+  expect(agyTurn(id, since(17)).complete).toBe(false)
+})
+
 test('context is the last model call\'s input plus what came from cache', () => {
   expect(agyContextTokens(session(lines(ask(0, 17), call(1, 17), result(2, 18), answer(3, 19))).id)).toBe(2358 + 7635)
   expect(agyContextTokens('no-such-session')).toBeNull()

@@ -26,6 +26,8 @@ export function agyState(sessionId: string): AgyState | null {
 // Only the tail is read (a cut first line, or one agy is still writing, is skipped). The hook names agy's full transcript, where a tool's whole output is a line:
 // so a turn's tail can hold more than the 256 KB first read, and the read widens until it holds a user input or the whole file.
 const TAIL_BYTES = 256 * 1024
+// The widening stops here: turn() runs on the daemon's event loop at every health poll, and a turn whose input is further back than this reads as not over (its silence limit ends it).
+const MAX_TAIL_BYTES = 16 * 1024 * 1024
 
 function tailSteps(path: string, bytes = TAIL_BYTES): Step[] {
   let text: string
@@ -44,13 +46,13 @@ function tailSteps(path: string, bytes = TAIL_BYTES): Step[] {
 
 /** The steps from the last user input on (or, with no input in the file, all of it). */
 function stepsFromLastAsk(path: string): Step[] {
-  for (let bytes = TAIL_BYTES; ; bytes *= 4) {
+  for (let bytes = TAIL_BYTES; ; bytes = Math.min(bytes * 4, MAX_TAIL_BYTES)) {
     const steps = tailSteps(path, bytes)
     const i = steps.findLastIndex(s => s.type === 'USER_INPUT')
     if (i >= 0) return steps.slice(i)
     let size = 0
     try { size = statSync(path).size } catch { return [] }
-    if (bytes >= size) return steps
+    if (bytes >= size || bytes >= MAX_TAIL_BYTES) return steps
   }
 }
 
