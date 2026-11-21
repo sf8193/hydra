@@ -127,17 +127,17 @@ export class AgyEngine implements EngineAdapter {
     } catch (err) {
       return { status: 'rejected', retryable: true, reason: `tmux paste into ${info.tmuxName} failed: ${err instanceof Error ? err.message : err}` }
     } finally { rmSync(file, { force: true }) }
-    // The text is in agy's input now: a failed Enter must not be retried as a whole message, or it would be pasted twice.
+    // The text is in agy's input now: a failed Enter must not be retried as a whole message, or it would be pasted twice. A caller retries an `unknown` (landing.ts), so these are non-retryable rejections.
     try {
       await Bun.sleep(150)   // the pane takes the paste before the Enter that sends it
       tmuxSync(['send-keys', '-t', info.tmuxName, 'Enter'])
     } catch (err) {
-      return { status: 'unknown', reason: `the message was pasted into ${info.tmuxName} but Enter failed: ${err instanceof Error ? err.message : err}` }
+      return { status: 'rejected', retryable: false, reason: `the message was pasted into ${info.tmuxName} but Enter failed: ${err instanceof Error ? err.message : err}` }
     }
     for (const start = Date.now(); Date.now() - start < LANDED_WAIT_MS; await Bun.sleep(250)) {
       if (seen() > before) return { status: 'accepted', via: 'tmux-paste' }
     }
-    return { status: 'unknown', reason: `the message was pasted into ${info.tmuxName} but the pane never showed it` }
+    return { status: 'rejected', retryable: false, reason: `the message was pasted into ${info.tmuxName} but the pane never showed it, so it may or may not have been sent` }
   }
   isConnected(info: SessionInfo): boolean { return this.claude.isAlive(info) }
   stop(info: SessionInfo): Promise<StopResult> { return this.claude.stop(info) }

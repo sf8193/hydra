@@ -136,7 +136,7 @@ test.skipIf(!tmuxUp)('a message already shown on the screen is not taken as land
   try {
     await Bun.sleep(300)
     const r = await engine.deliver({ sessionId: 'deliver-7', tmuxName: shown } as any, { type: 'notification', content: 'hi' })
-    expect(r.status).toBe('unknown')
+    expect(r).toMatchObject({ status: 'rejected', retryable: false })
   } finally { Bun.spawnSync(['tmux', 'kill-session', '-t', shown]) }
 }, 20_000)
 
@@ -155,7 +155,7 @@ test.skipIf(!tmuxUp)('the message arrives as one bracketed paste followed by one
   const log = await bytesTerminal(bp)
   try {
     const r = await engine.deliver({ sessionId: 'deliver-3', tmuxName: bp } as any, { type: 'notification', content: 'line one\nline two' })
-    expect(r.status).toBe('unknown')   // this terminal shows nothing on its screen, so the landing is not seen
+    expect(r).toMatchObject({ status: 'rejected', retryable: false })   // this terminal shows nothing on its screen, so the landing is not seen
     expect(readFileSync(log, 'utf8')).toBe('\x1b[200~<channel source="hydra">\nline one\nline two\n</channel>\x1b[201~\n')
   } finally { Bun.spawnSync(['tmux', 'kill-session', '-t', bp]) }
 }, 20_000)
@@ -176,12 +176,12 @@ test.skipIf(!tmuxUp)('two messages sent at once are pasted and sent one after th
   } finally { Bun.spawnSync(['tmux', 'kill-session', '-t', two]) }
 }, 30_000)
 
-test('an Enter that fails after the paste is unknown, not a retryable rejection (the text is already in the input)', async () => {
+test('an Enter that fails after the paste is a non-retryable rejection (the text is already in the input, and a caller retries an unknown)', async () => {
   const calls: string[] = []
   _setTmuxForTesting({ exec: ((_cmd: string, args: string[]) => { calls.push(args[0]); if (args[0] === 'send-keys') throw new Error('no server'); return '' }) as any })
   try {
     const r = await engine.deliver({ sessionId: 'deliver-5', tmuxName: 'x' } as any, { type: 'notification', content: 'hi' })
-    expect(r.status).toBe('unknown')
+    expect(r).toMatchObject({ status: 'rejected', retryable: false })
     expect(calls).toEqual(['capture-pane', 'load-buffer', 'paste-buffer', 'send-keys'])
   } finally { _setTmuxForTesting() }
 })
