@@ -14,19 +14,48 @@ const spawns: any[][] = []
 const lists: any[][] = []
 const deletes: string[][] = []
 const spies: Array<{ mockRestore(): void }> = []
+const saved: any[] = []
+let tagged = false
+const mentionCalls: any[][] = []
 
 beforeAll(async () => {
   spies.push(spyOn(gateway, 'onMessage').mockImplementation(((cb: any) => { onMessage = cb }) as any))
   spies.push(spyOn(gateway, 'onReaction' as any).mockImplementation(((cb: any) => { onReaction = cb }) as any))
   spies.push(spyOn(gateway, 'send').mockImplementation((async () => ({ id: 'x' })) as any))
   spies.push(spyOn(gateway, 'delete' as any).mockImplementation((async (c: string, m: string) => { deletes.push([c, m]) }) as any))
+  spies.push(spyOn(gateway, 'isMentioned').mockImplementation((async (...a: any[]) => { mentionCalls.push(a); return tagged }) as any))
+  spies.push(spyOn(access, 'saveAccess').mockImplementation(((a: any) => { saved.push(a) }) as any))
   spies.push(spyOn(access, 'loadAccess').mockImplementation((() => ({ allowFrom: ['u1'], groups: { ours: {} }, pending: {} })) as any))
   spies.push(spyOn(global, 'handleSpawnIntercept').mockImplementation((async (...args: any[]) => { spawns.push(args) }) as any))
   spies.push(spyOn(status, 'handleListIntercept').mockImplementation((async (...args: any[]) => { lists.push(args) }) as any))
   await import('../router.js')
 })
 afterAll(() => { for (const s of spies) s.mockRestore() })
-beforeEach(() => { spawns.length = 0; lists.length = 0; deletes.length = 0 })
+beforeEach(() => { mentionCalls.length = 0; tagged = false; saved.length = 0; spawns.length = 0; lists.length = 0; deletes.length = 0 })
+
+test('the operator tagging the bot in a new channel admits it, mention-only, and the spawn runs', async () => {
+  tagged = true
+  await say('fresh')
+  expect(spawns).toHaveLength(1)
+  expect(saved[0].groups.fresh).toEqual({ requireMention: true, allowFrom: ['u1'], defaultListen: true })
+  expect(access.channelAllowed(saved[0], { isDM: false, channelId: 'fresh', parentChannelId: null })).toBe(true)
+  // a reply to the bot or a mentionPatterns match is not a tag
+  expect(mentionCalls[0]).toHaveLength(1)
+  expect(mentionCalls[0][0].referenceMessageId).toBeNull()
+})
+
+test('the operator posting without a tag in a new channel admits nothing', async () => {
+  await say('fresh')
+  expect(saved).toHaveLength(0)
+  expect(spawns).toHaveLength(0)
+})
+
+test('a tag from someone who is not the operator admits nothing', async () => {
+  tagged = true
+  await onMessage({ id: 'm2', channelId: 'fresh', authorId: 'stranger', authorUsername: 's', content: 'spawn: x', isBot: false, attachments: [], createdAt: new Date(), isThread: false, isDM: false, parentChannelId: null })
+  expect(saved).toHaveLength(0)
+  expect(spawns).toHaveLength(0)
+})
 
 const where = { isDM: false, parentChannelId: null as string | null }
 const say = (channelId: string, over: Partial<typeof where> = {}, content = 'spawn: fix the bug') => {

@@ -6,7 +6,7 @@ import { parseArchiveUrl } from '../connectors/slack/conversation.js'
 import { refreshDashboard } from './dashboard.js'
 import { registry, threadRegistry } from './sessions.js'
 import { transport } from './bridge-transport.js'
-import { loadAccess, operatorIds, gate, channelAllowed } from './access.js'
+import { loadAccess, operatorIds, gate, channelAllowed, admitTaggedChannel } from './access.js'
 import type { Access } from './access.js'
 import type { DownloadedFile } from '../gateways/gateway.js'
 import type { InboundMessage } from '../gateways/gateway.js'
@@ -434,7 +434,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
 
   const access = loadAccess()
   // The one chokepoint: nothing below, operator command or not, acts in a place this daemon is not allowed in.
-  if (!channelAllowed(access, msg)) return
+  if (!channelAllowed(access, msg) && !(await admitTaggedChannel(access, msg))) return
   const senderId = msg.authorId
   const isAllowed = operatorIds(access).includes(senderId)
 
