@@ -18,8 +18,9 @@ import { fileURLToPath } from 'url'
 
 export const TIER_NAMES = ['core', 'edges', 'sessions', 'domain', 'app', 'boot'] as const
 
-const CORE_DAEMON = ['landing', 'idempotency', 'recovery-selection', 'recovery-backoff', 'notice-limit', 'context-lines', 'review-result', 'policy-record', 'protocol-types', 'state-machine', 'protocol-dsl', 'modifiers']
-const EDGE_DAEMON = ['config', 'tmux', 'util', 'event-bus', 'events', 'launch-files', 'restricted-files', 'retirement-journal', 'worktree-manager', 'plugin-manifest', 'transcription', 'gateway-health', 'host-health', 'cpu-watch', 'cpu-spin', 'vitals-snapshot', 'observability', 'transcript-dump', 'usage', 'boot-probe', 'artifacts', 'quiet-send', 'home-status',
+const CORE_DAEMON = ['landing', 'notice-limit', 'context-lines', 'review-result', 'policy-record', 'protocol-types', 'state-machine']
+// idempotency, recovery-selection, recovery-backoff, modifiers and protocol-dsl read config, util or engine history, so they are not pure: edges.
+const EDGE_DAEMON = ['config', 'tmux', 'util', 'event-bus', 'events', 'idempotency', 'recovery-selection', 'recovery-backoff', 'modifiers', 'protocol-dsl', 'launch-files', 'restricted-files', 'retirement-journal', 'worktree-manager', 'plugin-manifest', 'transcription', 'gateway-health', 'host-health', 'cpu-watch', 'cpu-spin', 'vitals-snapshot', 'observability', 'transcript-dump', 'usage', 'boot-probe', 'artifacts', 'quiet-send', 'home-status',
   'codex-engine', 'codex-process', 'codex-rollout', 'codex-key-queue', 'codex-mcp-server', 'agy-hook', 'bridge-sync', 'bridge-tools']
 const SESSIONS_DAEMON = ['sessions', 'access', 'hydra-config', 'session-reachability', 'bridge-transport', 'delivery-notice', 'ended-sessions', 'anchor-state', 'lineage', 'session-activity', 'phase-budget', 'idle-limit', 'protocol-registry', 'thread-route', 'main-session', 'reply-context', 'resume-health', 'cli-caller']
 
@@ -68,15 +69,8 @@ export const ALLOWED: readonly string[] = [
   'daemon/engines/instances.ts -> daemon/bridge-transport.ts',
   'daemon/events.ts -> daemon/hydra-config.ts',
   'daemon/host-health.ts -> daemon/hydra-config.ts',
-  'daemon/idempotency.ts -> daemon/config.ts',
-  'daemon/idempotency.ts -> daemon/util.ts',
-  'daemon/modifiers.ts -> daemon/config.ts',
   'daemon/observability.ts -> daemon/session-reachability.ts',
   'daemon/observability.ts -> daemon/sessions.ts',
-  'daemon/protocol-dsl.ts -> daemon/util.ts',
-  'daemon/recovery-backoff.ts -> daemon/config.ts',
-  'daemon/recovery-backoff.ts -> daemon/util.ts',
-  'daemon/recovery-selection.ts -> daemon/engines/history.ts',
   'gateways/slack.ts -> connectors/slack/conversation.ts',
   'gateways/slack.ts -> daemon/access.ts',
   'specialists/specialist-deliver.ts -> daemon/recovery.ts',
