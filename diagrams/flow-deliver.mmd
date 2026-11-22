@@ -12,7 +12,7 @@ sequenceDiagram
     participant handler as cli-handler.ts
     participant idemp as idempotency.ts
     participant recovery as recovery.ts
-    participant sessions as sessions.ts
+    participant sessions as sessions/registry.ts
     participant transport as bridge-<br/>transport.ts
     participant cc as Claude Code / Codex<br/>(target session)
 
