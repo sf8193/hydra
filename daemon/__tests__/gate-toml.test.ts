@@ -50,11 +50,6 @@ describe('allow', () => {
     expect((await gate(msg('200'))).action).toBe('deliver')
     expect((await gate(msg('999'))).action).toBe('drop')
   })
-  test('people with no address on this platform leave the channel hearing nobody, not everybody', async () => {
-    _setHydraConfigForTesting(config({ 'discord:C1': chan({ mention: false, allow: ['slacker'] }) }))
-    expect((await gate(msg('999'))).action).toBe('drop')
-    expect((await gate(msg('100'))).action).toBe('drop')
-  })
   test('only this platform\'s addresses count: another platform\'s address is never read as an id', async () => {
     _setHydraConfigForTesting(config({ 'discord:C1': chan({ mention: false, allow: ['alice'] }) }))
     // slack:U0ALICE minus the discord: prefix length would read as ALICE

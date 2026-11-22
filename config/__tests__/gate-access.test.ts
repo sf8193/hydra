@@ -37,6 +37,9 @@ describe('access table', () => {
   test('a name that is not a person is an error naming it', () => {
     expect(errors(load(access('allow = ["bob"]')))[0]).toContain('bob is not in [people]')
   })
+  test('a person with no address on the place\'s platform is an error: they could never be heard there', () => {
+    expect(errors(load(access('allow = ["op", "alice"]', 'discord:300000000000000001')))[0]).toContain('alice has no discord: address')
+  })
   test('a channel given by name cannot be admitted: the gate sees ids', () => {
     expect(errors(load(access('allow = ["op"]', 'slack:#ops')))[0]).toContain('given by id')
   })

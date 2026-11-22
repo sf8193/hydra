@@ -43,13 +43,9 @@ function gateSettings(): GateSettings | undefined {
   return currentHydraConfig().gateSettings?.[PLATFORM]
 }
 
-/** Not an id (ids have no spaces): the allowFrom of a channel whose named people have no address on this platform, so it hears nobody. */
-const NO_ONE = 'no one'
-
 /**
  * The policy hydra.toml gives a channel (`[places."<platform>:<id>".access]`), or undefined. Exact key: no wildcard
- * entry admits a channel. `allow` becomes ids on this platform; people with none leave the channel hearing nobody, never
- * everybody (an empty allowFrom means anyone).
+ * entry admits a channel. `allow` becomes ids on this platform (the loader makes sure each person has one; an empty allowFrom means anyone).
  */
 function policyOf(channelId: string): GroupPolicy | undefined {
   const cfg = currentHydraConfig()
@@ -59,7 +55,7 @@ function policyOf(channelId: string): GroupPolicy | undefined {
   const ids = place.access.allow === 'anyone' ? [] : place.access.allow.flatMap(n => cfg.people[n].addresses.filter(a => a.startsWith(prefix)).map(a => a.slice(prefix.length)))
   return {
     requireMention: place.access.mention,
-    allowFrom: place.access.allow === 'anyone' || ids.length > 0 ? ids : [NO_ONE],
+    allowFrom: ids,
     ...(place.threadReply !== undefined && { threadReply: place.threadReply }),
     ...(place.access.listen !== undefined && { defaultListen: place.access.listen }),
   }

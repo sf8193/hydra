@@ -924,6 +924,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (new Set(names).size !== names.length) { error(join2(apath, 'allow'), 'names someone twice'); return undefined }
     const unknown = names.filter(n => !Object.hasOwn(people, n))
     if (unknown.length) { error(join2(apath, 'allow'), `${unknown.join(', ')} ${unknown.length === 1 ? 'is' : 'are'} not in [people]: add ${unknown.length === 1 ? 'them' : 'each'} there first`); return undefined }
+    const noAddress = names.filter(n => !people[n].addresses.some(a => a.startsWith(`${p.platform}:`)))
+    if (noAddress.length) { error(join2(apath, 'allow'), `${noAddress.join(', ')} ${noAddress.length === 1 ? 'has' : 'have'} no ${p.platform}: address, so ${noAddress.length === 1 ? 'they' : 'each'} could never be heard here: add one to people.<id>.addresses`); return undefined }
     return { mention, allow: names, ...(listen !== undefined && { listen }) }
   }
 
