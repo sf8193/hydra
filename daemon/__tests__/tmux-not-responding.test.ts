@@ -5,7 +5,7 @@ import { _setTmuxForTesting, TMUX_HOLD_MS } from '../../infra/tmux.js'
 import { engines } from '../../sessions/engine-instances.js'
 import { CodexEngineAdapter } from '../../engines/codex-engine-adapter.js'
 import { ClaudeEngine } from '../../engines/claude-engine.js'
-import { killSession } from '../../app/session-lifecycle.js'
+import { killSession, killTiming } from '../../app/session-lifecycle.js'
 import { withFakeTmux } from './fake-tmux.js'
 import { checkSessionDeath, deathCheckIO } from '../../app/bridge-server.js'
 import { registry, threadRegistry } from '../../sessions/registry.js'
@@ -115,11 +115,14 @@ describe('kill on a tmux that does not answer', () => {
     const info = session({ engine: 'claude', adapter: engines.claude, claudeSessionId: 'known', sessionType: 'thread_owner' })
     registry.set(info.sessionId, info)
     threadRegistry.set(info.threadId, { threadId: info.threadId, topic: 't', respawnCount: 0, createdAt: 1, lastActive: 1, totalMessages: 0, sessionHistory: [] } as any)
+    const saved = killTiming.deferredKillMs
+    killTiming.deferredKillMs = 20
     try {
       await killSession(info, 'test', { keepRecord: true, skipWorktreeDestroy: true })
       expect(t.logged).toContain(`daemon: stop ${info.tmuxName}: uncertain (tmux not responding); the deferred kill will try again\n`)
-      await Bun.sleep(3_300)
-      expect(t.logged).toContain(`daemon: deferred kill of "${info.tmuxName}" timed out: tmux not responding; the session may linger\n`)
-    } finally { registry.delete(info.sessionId); threadRegistry.delete(info.threadId) }
+      const deferredLine = `daemon: deferred kill of "${info.tmuxName}" timed out: tmux not responding; the session may linger\n`
+      for (let i = 0; i < 100 && !t.logged.includes(deferredLine); i++) await Bun.sleep(10)
+      expect(t.logged).toContain(deferredLine)
+    } finally { killTiming.deferredKillMs = saved; registry.delete(info.sessionId); threadRegistry.delete(info.threadId) }
   }, 10_000)
 })

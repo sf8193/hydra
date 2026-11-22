@@ -92,7 +92,9 @@ test('a key file other users can read is refused before anything starts', async 
 const tmuxUp = Bun.spawnSync(['tmux', '-V']).exitCode === 0
 const name = `agy-deliver-${process.pid}`
 const info = { sessionId: 'deliver-1', tmuxName: name } as any
-const engine = new AgyEngine(new ClaudeEngine(new BridgeTransport()), mcpConfig, hooksConfig)
+const engine = new AgyEngine(new ClaudeEngine(new BridgeTransport()), mcpConfig, hooksConfig, { landedWaitMs: 4_000, pollMs: 25 })
+// For panes that intentionally never echo the pasted text, don't wait the full 8s production landing timeout.
+const fastRejectEngine = new AgyEngine(new ClaudeEngine(new BridgeTransport()), mcpConfig, hooksConfig, { landedWaitMs: 250, pollMs: 25 })
 
 beforeAll(() => { if (tmuxUp) Bun.spawnSync(['tmux', 'new-session', '-d', '-s', name, '-x', '200', '-y', '50', 'stty -icanon -echo min 1 time 0; cat']) })
 afterAll(() => { if (tmuxUp) Bun.spawnSync(['tmux', 'kill-session', '-t', name]) })
@@ -101,7 +103,6 @@ test.skipIf(!tmuxUp)('a message with quotes, backticks, $vars, a blank line, an 
   const content = `a "quoted" 'single' \`tick\` $HOME {braces} 🙂\n\n    indented\n${('word '.repeat(15) + '\n').repeat(400)}END`
   const r = await engine.deliver(info, { type: 'notification', content, meta: { chat_id: '1', message_id: '9' } })
   expect(r).toEqual({ status: 'accepted', via: 'tmux-paste' })
-  await Bun.sleep(300)
   const pane = Bun.spawnSync(['tmux', 'capture-pane', '-p', '-S', '-', '-t', name]).stdout.toString()
   const trimmed = (t: string) => t.split('\n').map(l => l.trimEnd()).join('\n')   // the pane drops trailing spaces
   expect(trimmed(pane)).toContain(`<channel source="hydra" chat_id="1" message_id="9">\n${trimmed(content)}\n</channel>`)
@@ -113,7 +114,7 @@ test.skipIf(!tmuxUp)('a message with quotes, backticks, $vars, a blank line, an 
 test.skipIf(!tmuxUp)('a message to a session still starting waits for agy\'s first event before it is pasted', async () => {
   const young = { sessionId: 'deliver-young', tmuxName: name, createdAt: Date.now() } as any
   const sent = engine.deliver(young, { type: 'notification', content: 'MARKER-young-start', meta: { chat_id: '1', message_id: '10' } })
-  await Bun.sleep(600)
+  await Bun.sleep(150)
   expect(Bun.spawnSync(['tmux', 'capture-pane', '-p', '-t', name]).stdout.toString()).not.toContain('MARKER-young-start')
   mkdirSync(agyStateDir(), { recursive: true })
   writeFileSync(agyStateFile('deliver-young'), JSON.stringify({ conversationId: 'c', transcriptPath: '/none', live: 'idle', backgroundWork: false }))
@@ -124,8 +125,8 @@ test.skipIf(!tmuxUp)('a message already shown on the screen is not taken as land
   const shown = `${name}-shown`
   Bun.spawnSync(['tmux', 'new-session', '-d', '-s', shown, '-x', '200', '-y', '50', `printf '<channel source="hydra">\\nhi\\n</channel>\\n'; stty -icanon -echo; cat > /dev/null`])
   try {
-    await Bun.sleep(300)
-    const r = await engine.deliver({ sessionId: 'deliver-7', tmuxName: shown } as any, { type: 'notification', content: 'hi' })
+    for (let i = 0; i < 200 && !Bun.spawnSync(['tmux', 'capture-pane', '-p', '-t', shown]).stdout.toString().includes('</channel>'); i++) await Bun.sleep(10)
+    const r = await fastRejectEngine.deliver({ sessionId: 'deliver-7', tmuxName: shown } as any, { type: 'notification', content: 'hi' })
     expect(r).toMatchObject({ status: 'rejected', retryable: false })
   } finally { Bun.spawnSync(['tmux', 'kill-session', '-t', shown]) }
 }, 20_000)
@@ -134,9 +135,10 @@ test.skipIf(!tmuxUp)('a message already shown on the screen is not taken as land
 async function bytesTerminal(session: string): Promise<string> {
   const dir = mkdtempSync(join(tmpdir(), 'hydra-agy-bytes-'))
   const log = join(dir, 'bytes')
-  writeFileSync(join(dir, 'tty.sh'), `printf '\\033[?2004h'; stty -icanon -echo min 1 time 0; exec python3 -c "import os; f = open('${log}', 'ab', 0)\nwhile True: f.write(os.read(0, 4096))"`)
+  const ready = join(dir, 'ready')
+  writeFileSync(join(dir, 'tty.sh'), `printf '\\033[?2004h'; stty -icanon -echo min 1 time 0; exec python3 -c "import os; f = open('${log}', 'ab', 0); open('${ready}', 'w').close()\nwhile True: f.write(os.read(0, 4096))"`)
   Bun.spawnSync(['tmux', 'new-session', '-d', '-s', session, '-x', '200', '-y', '50', `sh ${join(dir, 'tty.sh')}`])
-  await Bun.sleep(500)
+  for (let i = 0; i < 200 && !existsSync(ready); i++) await Bun.sleep(10)
   return log
 }
 
@@ -144,7 +146,7 @@ test.skipIf(!tmuxUp)('the message arrives as one bracketed paste followed by one
   const bp = `${name}-bp`
   const log = await bytesTerminal(bp)
   try {
-    const r = await engine.deliver({ sessionId: 'deliver-3', tmuxName: bp } as any, { type: 'notification', content: 'line one\nline two' })
+    const r = await fastRejectEngine.deliver({ sessionId: 'deliver-3', tmuxName: bp } as any, { type: 'notification', content: 'line one\nline two' })
     expect(r).toMatchObject({ status: 'rejected', retryable: false })   // this terminal shows nothing on its screen, so the landing is not seen
     expect(readFileSync(log, 'utf8')).toBe('\x1b[200~<channel source="hydra">\nline one\nline two\n</channel>\x1b[201~\n')
   } finally { Bun.spawnSync(['tmux', 'kill-session', '-t', bp]) }
@@ -161,7 +163,7 @@ test.skipIf(!tmuxUp)('two messages sent at once are pasted and sent one after th
   const log = await bytesTerminal(two)
   try {
     const at = { sessionId: 'deliver-4', tmuxName: two } as any
-    await Promise.all([engine.deliver(at, { type: 'notification', content: 'AAAA' }), engine.deliver(at, { type: 'notification', content: 'BBBB' })])
+    await Promise.all([fastRejectEngine.deliver(at, { type: 'notification', content: 'AAAA' }), fastRejectEngine.deliver(at, { type: 'notification', content: 'BBBB' })])
     expect(readFileSync(log, 'utf8')).toBe('\x1b[200~<channel source="hydra">\nAAAA\n</channel>\x1b[201~\n\x1b[200~<channel source="hydra">\nBBBB\n</channel>\x1b[201~\n')
   } finally { Bun.spawnSync(['tmux', 'kill-session', '-t', two]) }
 }, 30_000)

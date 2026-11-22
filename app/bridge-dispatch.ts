@@ -128,6 +128,8 @@ function resolveForkSource(name: string, callerSessionId: string | undefined): P
 
 /** How long a send_to_thread waits to learn what became of its delivery: a Codex session's takes a request to its app-server, which can run for 30 s. Replaced in tests. */
 export const deliveryWait = { ms: 5000 }
+/** Answer-before-acting delay for the handoff tool, so the caller receives its tool result before kill. Test seam. */
+export const handoffWait = { ms: 500 }
 
 /**
  * What a send_to_thread tells its sender about the delivery, whoever the sender and whichever refusal: a message is "sent" only once
@@ -614,7 +616,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
             r => gateway.send(info.threadId, `🤝 \`${info.tmuxName}\` handed off to \`${r.name}\` — fresh context from \`${path}\`${noteLine(r.name)}`),
             err => gateway.send(info.threadId, `⚠️ handoff from \`${info.tmuxName}\` failed: ${err instanceof Error ? err.message : err}\nRecover: type \`respawn\`, then tell it to read \`${path}\` and continue from its Next action.`),
           ).catch(() => {})
-        }, 500)
+        }, handoffWait.ms)
         return { content: [{ type: 'text', text: `handing off — a fresh session will continue from ${path}` }] }
       }
 

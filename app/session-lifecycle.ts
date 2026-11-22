@@ -587,6 +587,9 @@ export type SessionEnd = 'killed' | 'killed & destroyed' | 'killed by hydra' | '
 // (a budget, a replaced spawn, a protocol closing: 'killed by hydra', the reason is its cause), a crash; 'finished' for a session that ended itself; 'handed off' when a successor took its thread (the reason would only repeat it);
 // left out, no one has classified the end and the notice says 'died'. keepWatches: the thread goes on (a handoff,
 // a replacement, a revive's teardown), so its PR watches do too; any other kill ends them.
+/** Deferred tmux kill delay after killSession. Test seam. */
+export const killTiming = { deferredKillMs: 3_000 }
+
 export async function killSession(info: SessionInfo, reason: string, opts?: { skipWorktreeDestroy?: boolean; keepScratch?: boolean; keepRecord?: boolean; keepWatches?: boolean; ended?: SessionEnd }): Promise<void> {
   if (killsInProgress.has(info.sessionId)) return
   killsInProgress.add(info.sessionId)
@@ -721,7 +724,7 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
         process.stderr.write(`daemon: deferred kill of "${tmuxName}" ${tmuxTimedOut(err) ? 'timed out: tmux not responding' : `failed: ${err instanceof Error ? err.message : err}`}; the session may linger\n`)
       }
       killsInProgress.delete(info.sessionId)
-    }, 3000)
+    }, killTiming.deferredKillMs)
   } catch (err) {
     killsInProgress.delete(info.sessionId)
     throw err

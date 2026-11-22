@@ -70,7 +70,7 @@ describe('Socket Mode keepalive headroom', () => {
 })
 
 /**
- * The SDK's own ping monitor against a local server, at a tenth of real time. Waits for the first pong, lets most of
+ * The SDK's own ping monitor against a local server, at 1/20th of real time. Waits for the first pong, lets most of
  * a ping interval pass (the pong is then as old as it gets before the next ping), holds the loop for `blockMs`, and
  * reports whether the socket outlived two more ping checks.
  */
@@ -86,7 +86,7 @@ async function outlivesBlock(clientPingTimeoutMS: number, blockMs: number): Prom
   try {
     socket.connect()
     while (socket.lastPongReceivedTimestamp === undefined) await sleep(5)
-    await sleep(clientPingTimeoutMS / 3 - 50)
+    await sleep(clientPingTimeoutMS / 3 - Math.min(50, clientPingTimeoutMS / 10))
     const until = Date.now() + blockMs
     while (Date.now() < until) {} // the daemon's loop, held
     await sleep(clientPingTimeoutMS * 2 / 3)
@@ -97,12 +97,12 @@ async function outlivesBlock(clientPingTimeoutMS: number, blockMs: number): Prom
   }
 }
 
-describe('Socket Mode keepalive: what a held loop does to the socket (a tenth of real time)', () => {
-  const tenth = (ms: number) => ms / 10
+describe('Socket Mode keepalive: what a held loop does to the socket (1/20th of real time)', () => {
+  const scaled = (ms: number) => ms / 20
 
   test('a 7 s block drops the socket at the SDK default of 5 s, and not at the headroom', async () => {
     expect(7_000).toBeLessThan(SLACK_SOCKET_SAFE_BLOCK_MS) // inside it, with room for timer jitter
-    expect(await outlivesBlock(tenth(5_000), tenth(7_000))).toBe(false)
-    expect(await outlivesBlock(tenth(SLACK_CLIENT_PING_TIMEOUT_MS), tenth(7_000))).toBe(true)
+    expect(await outlivesBlock(scaled(5_000), scaled(7_000))).toBe(false)
+    expect(await outlivesBlock(scaled(SLACK_CLIENT_PING_TIMEOUT_MS), scaled(7_000))).toBe(true)
   }, 10_000)
 })

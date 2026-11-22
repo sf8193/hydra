@@ -23,12 +23,14 @@ const TMUX_ACTS = new Set(['kill-session', 'pipe-pane', 'send-keys', 'new-window
 // `heldUntil` stays set past its end until tmux next answers, so that answer can be logged.
 let heldUntil = 0
 
-// The test seam: what runs tmux, and the clock the hold reads. With no argument, the real ones again.
+// The test seam: what runs tmux, the clock the hold reads, and the default read timeout. With no argument, the real ones again.
 let tmuxExec: typeof execFileSync = execFileSync
 let tmuxNow: () => number = Date.now
-export function _setTmuxForTesting(seam: { exec?: typeof execFileSync; now?: () => number } = {}): void {
+let tmuxTimeoutMs: number = TMUX_TIMEOUT_MS
+export function _setTmuxForTesting(seam: { exec?: typeof execFileSync; now?: () => number; timeoutMs?: number } = {}): void {
   tmuxExec = seam.exec ?? execFileSync
   tmuxNow = seam.now ?? Date.now
+  tmuxTimeoutMs = seam.timeoutMs ?? TMUX_TIMEOUT_MS
   heldUntil = 0
   freezeFound = undefined
 }
@@ -41,7 +43,7 @@ export function _setTmuxForTesting(seam: { exec?: typeof execFileSync; now?: () 
  * hold) as `code: 'ETIMEDOUT'`, see tmuxTimedOut. `ignoreHold`: the server has just answered another call.
  */
 export function tmuxSync(args: string[], opts: { timeout?: number; ignoreHold?: boolean } = {}): string {
-  const { timeout = TMUX_TIMEOUT_MS } = opts
+  const { timeout = tmuxTimeoutMs } = opts
   if (!TMUX_ACTS.has(args[0]!) && !opts.ignoreHold && tmuxNow() < heldUntil) {
     throw Object.assign(new Error(`tmux ${args[0]}: not asked, tmux timed out within the last ${TMUX_HOLD_MS / 1000}s`), { code: 'ETIMEDOUT' })
   }
@@ -51,7 +53,7 @@ export function tmuxSync(args: string[], opts: { timeout?: number; ignoreHold?: 
     return out
   } catch (err) {
     if (exitedWithStatus(err)) answered()   // an exit status is still an answer: the server is there
-    if (!tmuxTimedOut(err) || timeout > TMUX_TIMEOUT_MS) throw err
+    if (!tmuxTimedOut(err) || timeout > tmuxTimeoutMs) throw err
     if (tmuxNow() >= heldUntil) process.stderr.write(`daemon: tmux ${args[0]} timed out at ${timeout}ms; tmux reads not asked for ${TMUX_HOLD_MS / 1000}s (sessions read as alive)\n`)
     heldUntil = tmuxNow() + TMUX_HOLD_MS
     throw err

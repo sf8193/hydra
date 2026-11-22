@@ -21,11 +21,11 @@ describe('tmuxSync and the hold', () => {
 
   test('a hung has-session is killed at the timeout and reads as alive', () => {
     // A real hang, on a stand-in command that honours the call's own options: no tmux is touched.
-    _setTmuxForTesting({ exec: ((_f: string, _a: string[], opts: object) => execFileSync('sleep', ['30'], opts)) as any })
+    _setTmuxForTesting({ exec: ((_f: string, _a: string[], opts: object) => execFileSync('sleep', ['30'], opts)) as any, timeoutMs: 250 })
     const started = performance.now()
     expect(tmuxSessionState('hung')).toBe('not responding')
     expect(tmuxHasSession('hung')).toBe(true)
-    expect(performance.now() - started).toBeLessThan(TMUX_TIMEOUT_MS + 1_000)
+    expect(performance.now() - started).toBeLessThan(450)
   })
 
   test('a session tmux says is missing is dead', () => {

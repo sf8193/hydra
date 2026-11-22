@@ -3,19 +3,20 @@ import { connect, type Socket } from 'net'
 import { existsSync, mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
-import { socketServer } from '../../app/bridge-server.js'
+import { bridgeLifeIO, socketServer } from '../../app/bridge-server.js'
 import { SOCK_PATH } from '../../infra/config.js'
-import { BRIDGE_SHUTDOWN_GRACE_MS } from '../../shared/constants.js'
 import { appendBridgeLife, bridgeLifePath } from '../../shared/bridge-life.js'
 
 let dir: string
 let sock: string
+const savedReadDelayMs = bridgeLifeIO.readDelayMs
 beforeAll(async () => {
+  bridgeLifeIO.readDelayMs = 20
   dir = mkdtempSync(join(tmpdir(), 'bridge-life-report-'))
   sock = join(dir, 'd.sock')
   await new Promise<void>(r => socketServer.listen(sock, r))
 })
-afterAll(() => { socketServer.close(); rmSync(dir, { recursive: true, force: true }) })
+afterAll(() => { bridgeLifeIO.readDelayMs = savedReadDelayMs; socketServer.close(); rmSync(dir, { recursive: true, force: true }) })
 
 function register(sessionId: string, pid?: number): Promise<Socket> {
   return new Promise(resolve => {
@@ -32,9 +33,9 @@ async function disconnectAndCapture(socket: Socket, expectReport: boolean): Prom
   try {
     socket.end()
     if (expectReport) {
-      for (let waited = 0; waited < 5_000 && !report(); waited += 50) await Bun.sleep(50)
+      for (let waited = 0; waited < 5_000 && !report(); waited += 10) await Bun.sleep(10)
     } else {
-      await Bun.sleep(BRIDGE_SHUTDOWN_GRACE_MS + 1_500)
+      await Bun.sleep(bridgeLifeIO.readDelayMs + 80)
     }
   } finally {
     spy.mockRestore()
