@@ -31,6 +31,7 @@ import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle }
 import { fetchPrTitle, parsePrUrl } from '../connectors/github/pr-watch.js'
 import { SEND_TYPES, type SendType } from '../shared/tool-definitions.js'
 import { ASK_PREDECESSOR_TIMEOUT_MS, engineOfModel, normalizeReviewRounds } from '../shared/constants.js'
+import { ENGINE_CAPABILITIES } from '../shared/engine-capabilities.js'
 import { isRestrictedSession, isToolAllowed, isWriteConfinedSession, predecessorAsker, refusalText } from './tool-surface.js'
 import { deliveryRefusal } from './restricted.js'
 import { parseRateLimits, reportUsage } from './usage-alerts.js'
@@ -475,12 +476,9 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const modelArg = (args.model as string | undefined)?.trim()
         // A Codex, omp or agy alias selects its engine (doSpawnSession reads it); what a spawn_session may ask of that engine is refused here.
         const aliasOf = modelArg ? engineOfModel(modelArg) : undefined
-        if (aliasOf === 'codex' && source) throw new Error('fork_from cannot be combined with a Codex model — Codex sessions cannot be forked')
-        if (aliasOf === 'codex' && readOnly) throw new Error('read_only is not enforced on Codex sessions — use a Claude model')
-        if (aliasOf === 'omp' && source) throw new Error('fork_from cannot be combined with an omp model — omp sessions cannot be forked')
-        if (aliasOf === 'omp' && readOnly) throw new Error('read_only is not enforced on omp sessions — use a Claude model')
-        if (aliasOf === 'agy' && source) throw new Error('fork_from cannot be combined with an agy model — agy sessions cannot be forked')
-        if (aliasOf === 'agy' && readOnly) throw new Error('read_only is not enforced on agy sessions — use a Claude model')
+        const aliasEngine = aliasOf && ENGINE_CAPABILITIES[aliasOf]
+        if (aliasEngine && source && !aliasEngine.forkable) throw new Error(`fork_from cannot be combined with the ${aliasEngine.label} engine — ${aliasEngine.label} sessions cannot be forked`)
+        if (aliasEngine && readOnly && !aliasEngine.enforcesReadOnly) throw new Error(`read_only is not enforced on ${aliasEngine.label} sessions — use a Claude model`)
         const model = modelArg || source?.model
         if (model) process.stderr.write(`daemon: spawn_session model override: ${model}\n`)
         const budgetRaw = (args.phase_budget as string | undefined)?.trim() || undefined
