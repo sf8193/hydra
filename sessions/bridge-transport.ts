@@ -36,7 +36,7 @@ export function setFlushGate(gate: ((info: SessionInfo) => string | undefined) |
 
 /**
  * The one way to hand a message to a session's engine: the drift gate first (a session whose policy no longer matches hydra.toml, or that
- * was never verified, is not delivered to), then the adapter. Every caller of `adapter.deliver` goes through here, so no engine checks it.
+ * was never verified, is not delivered to), then the adapter. Every adapter delivery goes through here, so no engine checks it (a session with no adapter, such as main, is not one).
  */
 export function deliverToAdapter(info: SessionInfo, msg: Notification): Promise<DeliveryResult> {
   // No gate set means app/restricted.ts has not loaded: nothing is delivered rather than everything going ungated.

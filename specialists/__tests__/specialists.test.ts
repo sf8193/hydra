@@ -106,7 +106,7 @@ describe('specialists', () => {
       specialists: { [name]: { id: name, workdir: '/srv/x', kickoff: 'k', homePlace: '555', reachableBy: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false, ...over } as any },
     })
     afterEach(() => _setHydraConfigForTesting(undefined))
-    /** The real Claude adapter (its `deliver` is where every delivery is gated), reported alive: the session is running, with no bridge. */
+    /** The real Claude adapter (deliveries to it are gated by `deliverToAdapter`, not by the engine), reported alive: the session is running, with no bridge. */
     const gated = () => Object.assign(Object.create(engines.claude), { isAlive: () => true })
     const queued = (sid: string) => (transport.messageQueues.get(sid) ?? []).length
     const quiet = async <T>(fn: () => Promise<T>): Promise<{ out: T; log: string; posted: string[] }> => {
