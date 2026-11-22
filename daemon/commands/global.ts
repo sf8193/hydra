@@ -3,6 +3,7 @@ import { join } from 'path'
 import { execSync } from 'child_process'
 import { homedir } from 'os'
 import { gateway, STATE_DIR, PLATFORM } from '../config.js'
+import { bootRefusal } from '../../config/migrate.js'
 import { registry } from '../sessions.js'
 import { emojiOfName } from '../anchor-state.js'
 import { transport } from '../bridge-transport.js'
@@ -173,6 +174,12 @@ export async function handleKillIntercept(msg: InboundMessage, name: string): Pr
 }
 
 export async function handleRestartIntercept(msg: InboundMessage): Promise<void> {
+  // `hydra restart` run in the background would refuse and say so only to /dev/null, leaving "back in a moment" with no follow-up.
+  const refused = bootRefusal(STATE_DIR)
+  if (refused) {
+    try { await gateway.send(msg.channelId, `❌ Not restarting: the daemon would be ${refused}\nThe running daemon is left as it is.`, { replyTo: msg.id }) } catch {}
+    return
+  }
   void gateway.react(msg.channelId, msg.id, '🔄').catch(() => {})
 
   // Active protocol runs live only in memory — a restart tears down the daemon
