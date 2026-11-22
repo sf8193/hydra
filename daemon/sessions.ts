@@ -409,6 +409,17 @@ export class SessionRegistry {
     }, ms)
   }
 
+  /** Drop a URL from every session's artifact list (a merged or closed PR is no longer a deliverable); persists only when something changed. */
+  dropArtifact(url: string): void {
+    let changed = false
+    for (const info of this.sessions.values()) {
+      if (!info.artifacts?.includes(url)) continue
+      info.artifacts = info.artifacts.filter(u => u !== url)
+      changed = true
+    }
+    if (changed) this.persist()
+  }
+
   persist(): void {
     try {
       const data = [...this.sessions.values()].map(({ adapter, ...rest }) => rest)

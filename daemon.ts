@@ -433,7 +433,11 @@ async function backfillArtifacts(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 startHydraConfig({ alert: notifyOperator })
-startPrWatcher()
+startPrWatcher({
+  deliver: deliverToTarget,
+  // A merged or closed PR leaves every session's artifact list and the home tab.
+  onWatchRemoved: entry => { registry.dropArtifact(entry.prUrl); refreshDashboard() },
+})
 startConversationTable()
 pruneEvents()
 
