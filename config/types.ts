@@ -366,6 +366,30 @@ export type Gateways = {
   discord?: { botTokenEnv: string }
 }
 
+/**
+ * What a daemon's gate settles for the whole platform, `[gateways.<platform>]`. Separate from `Gateways`: a table of only these
+ * settings does not connect Discord (that needs `bot_token_env`).
+ */
+export type GateSettings = {
+  /** Reaction added to every message a session picks up: an emoji, unicode or a Discord custom emoji. Not the Slack connector's per-place `ack`. */
+  ackReaction?: string
+  /** Drop every message, channels too (today's `dmPolicy: "disabled"`). Default false. */
+  off: boolean
+  /** Default for whether a session thread listens without a tag; a place's `access.listen` overrides it. */
+  listen?: boolean
+  mentionPatterns?: string[]
+}
+
+/** Who the daemon hears in one channel, `[places."<platform>:<id>".access]`. The table existing is what admits the channel. */
+export type PlaceAccess = {
+  /** Whether a top-level message must tag the bot. Default true. */
+  mention: boolean
+  /** `'anyone'`, or the people (ids in `[people]`) who may be heard. Never empty. */
+  allow: 'anyone' | string[]
+  /** Whether a session thread started here listens without a tag. Absent: the gateway's `listen`, else false. */
+  listen?: boolean
+}
+
 /** Optional platform options for one place. */
 export type PlaceOptions = {
   /** The Slack reaction name added when a message is picked up, like `eyes`: the name, never the character or `:eyes:`. Only the Slack connector reads it. Only the Slack connector reads it. */
@@ -394,6 +418,10 @@ export type PlaceOptions = {
    * Absent: the app named `default` if it is there, else the first app in hydra.toml order that is.
    */
   defaultApp?: string
+  /** A channel the daemon admits: who may talk to it there. Absent: the gate does not admit the place. */
+  access?: PlaceAccess
+  /** With `access`: whether a session posts its replies in a thread of the message. */
+  threadReply?: boolean
 }
 
 /** A clock that sends a message to a specialist. Loaded and checked here; run by the daemon. */
@@ -501,6 +529,8 @@ export type HydraConfig = {
   main?: MainOptions
   connectors: Connectors
   gateways: Gateways
+  /** `[gateways.<platform>]` gate settings, by platform. Absent when none sets any. */
+  gateSettings?: Partial<Record<'discord' | 'slack', GateSettings>>
   /** Every Slack app, by id (no prototype: look one up with Object.hasOwn). */
   slackApps: Record<string, SlackApp>
   /** `[slack] line_emoji`: what stands for Slack in the lines a session's thread shows about its Slack traffic. Absent: `DEFAULT_LINE_EMOJI`. A custom emoji exists in one Discord server only: the line falls back when the gateway cannot render it. */
