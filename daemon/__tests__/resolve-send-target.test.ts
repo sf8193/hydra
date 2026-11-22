@@ -10,7 +10,7 @@
 // real sessions carry the very catalog names these cases need to resolve by.
 
 import { describe, test, expect } from 'bun:test'
-import { resolveSendTarget } from '../../sessions/registry.js'
+import { resolveSendTarget } from '../../sessions/session-reachability.js'
 import type { SessionInfo, ThreadMetadata } from '../../sessions/registry.js'
 
 type FakeSession = { sessionId: string; tmuxName: string; threadId: string; deadAt?: number; running?: boolean }
