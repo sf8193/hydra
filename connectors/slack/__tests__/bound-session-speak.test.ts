@@ -12,10 +12,12 @@ import { _setHydraConfigForTesting } from '../../../infra/hydra-config.js'
 import { noteDeclaredRestrictions } from '../../../sessions/tool-surface.js'
 import { executeTool } from '../../../app/bridge-dispatch.js'
 import { setSpecialistThread } from '../../../sessions/specialists.js'
-import { ConversationTable, boundSessionNote, boundSessionFacts, renderItem, type ConversationConfig, type DeliverResult, type Item, type SlackMessageEvent } from '../watch.js'
+import { ConversationTable, boundSessionNote, boundSessionFacts, renderItem, type ConversationConfig, type Item, type SlackMessageEvent } from '../watch.js'
 import { bindConversation, getConversationTable, replyInConversation, slackRuntimeDeps } from '../runtime.js'
 import { BOT, TWO_APPS, hydra, view } from './slack-config.js'
 import { DELIVER_MAX_MESSAGE_BYTES } from '../../../shared/constants.js'
+import { LANDED } from './outcomes.js'
+import type { DeliverOutcome } from '../../../specialists/targets.js'
 
 process.stderr.write = (() => true) as any
 
@@ -134,7 +136,7 @@ describe('a delivery to the session a thread is bound to: the facts per message,
     const config: ConversationConfig = view(toml, { coalesceMs: 1 })
     const w = new ConversationTable({
       now: () => 1_000_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => config, alert: () => {}, speaksIn: t => speaks && t === MINE,
-      deliver: async ({ to }, msg): Promise<DeliverResult> => { sent.push({ to, msg }); return { ok: true } },
+      deliver: async ({ to }, msg): Promise<DeliverOutcome> => { sent.push({ to, msg }); return LANDED },
     })
     w.bind(ELSEWHERE, TS, MINE, 'cli')
     return { w, sent }

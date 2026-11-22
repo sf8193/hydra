@@ -6,14 +6,13 @@ import {
   prWatchDeps, listWatches, unwatchPr, unwatchBySession, retargetWatches, getWatchesBySession, parsePersistedWatches,
   _pollForTesting, _pollAllForTesting, _setPortsForTesting, _setWatchForTesting, type WatchEntry,
 } from '../pr-watch.js'
-import { deliverToSession, targetDeps, type DeliverOutcome } from '../../../specialists/targets.js'
+import { deliverToSession, outcomeOf, targetDeps, type DeliverOutcome } from '../../../specialists/targets.js'
 import { registry, type SessionInfo } from '../../../sessions/registry.js'
 import { transport } from '../../../sessions/bridge-transport.js'
 import { setSpecialist, removeSpecialist } from '../../../sessions/specialists.js'
 import { killSession } from '../../../app/session-lifecycle.js'
 import { gateway } from '../../../infra/config.js'
 import { reviveThreadForDelivery, reviveDeps } from '../../../app/recovery.js'
-import { landingOf } from '../../../shared/landing.js'
 
 process.stderr.write = (() => true) as any
 
@@ -272,13 +271,13 @@ describe('a kill and a poll in flight', () => {
     const exists = reviveDeps.threadExists
     reviveDeps.threadExists = async () => true
     try {
-      expect(await reviveThreadForDelivery('thread-withdrawn', 'pr-watch', () => false)).toEqual({ ok: false, exitCode: 3, reason: 'withdrawn by its sender' })
+      expect(await reviveThreadForDelivery('thread-withdrawn', 'pr-watch', () => false)).toEqual({ ok: false, exit: 3, reason: 'withdrawn by its sender' })
     } finally { reviveDeps.threadExists = exists }
   })
 
   test('a write requeued on a dying socket is queued when the sender asked to queue (not exit 6, which would resend it)', () => {
-    expect(landingOf({ status: 'accepted', via: 'requeued' } as any, true)).toEqual({ ok: true, status: 'queued', proof: 'persisted' })
-    expect(landingOf({ status: 'accepted', via: 'requeued' } as any, false)).toMatchObject({ ok: false, exitCode: 6 })
+    expect(outcomeOf({ status: 'accepted', via: 'requeued' } as any, true)).toEqual({ ok: true, status: 'queued', proof: 'persisted' })
+    expect(outcomeOf({ status: 'accepted', via: 'requeued' } as any, false)).toMatchObject({ ok: false, exit: 6 })
   })
 })
 

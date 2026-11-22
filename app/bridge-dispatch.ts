@@ -140,7 +140,7 @@ export const handoffWait = { ms: 500 }
  * is not a failure: returns a note, and `taken` runs only if the late outcome is accepted; a late rejection reaches the thread through
  * delivery-notice.ts. Returns '' when it was accepted in time.
  *
- * This maps the adapter's DeliveryResult to the words an agent reads. landing.ts's `landingOf` maps it to a CLI exit code and advice
+ * This maps the adapter's DeliveryResult to the words an agent reads. targets.ts's `outcomeOf` maps it to a CLI exit code and advice
  * ("transient, retry") for a caller with an idempotency key, and deliverToSession adds occupancy refusals (stuck, gone) a send_to_thread
  * never had; neither fits here, so neither is reused.
  */

@@ -21,7 +21,7 @@ import { currentHydraConfig } from '../infra/hydra-config.js'
 import { routeFor, type RouteParams } from '../routing/route-request.js'
 import { deliverToTarget, deliverVia, sessionByName, toSession, toThread, type DeliverOutcome } from '../specialists/targets.js'
 import { readTarget, spelled } from '../shared/target-kind.js'
-import { deliverResult, type DeliverResult } from '../shared/exit-codes.js'
+import { deliverWord, type DeliverWord } from '../shared/exit-codes.js'
 import { gateway } from '../infra/config.js'
 import { operatorIds } from '../sessions/access.js'
 import { on } from '../infra/event-bus.js'
@@ -64,7 +64,7 @@ export type CLIResponse = {
   error?: string
   exitCode?: number
   /** deliver only: the one word the outcome means (shared/exit-codes.ts). */
-  result?: DeliverResult
+  result?: DeliverWord
 }
 
 // ---------------------------------------------------------------------------
@@ -87,7 +87,7 @@ function respond(req: CLIRequest, ok: boolean, dataOrError?: unknown, maybeData?
 
 /** Adds the result word to a deliver response: ok is done; a refusal is its exit code's word (1 when the daemon gave none). */
 function withResult(r: CLIResponse): CLIResponse {
-  return { ...r, result: r.ok ? deliverResult(0) : deliverResult(r.exitCode ?? 1, r.error) }
+  return { ...r, result: r.ok ? deliverWord(0) : deliverWord(r.exitCode ?? 1, r.error) }
 }
 
 // ---------------------------------------------------------------------------
@@ -146,7 +146,7 @@ async function handleSpawn(req: CLIRequest): Promise<CLIResponse> {
     }
   } catch (err) {
     updateIdempotency(idempotencyKey, { status: 'failed' })
-    if (err instanceof SpecialistError) return respond(req, false, err.message, undefined, err.exitCode)
+    if (err instanceof SpecialistError) return respond(req, false, err.message, undefined, err.exit)
     throw err
   }
 
@@ -370,7 +370,7 @@ async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
   if (revive && !(to || (thread && !session))) return respond(req, false, '--revive takes --to or --thread (a specialist always revives)')
   // `--to` says its kind (`specialist:ops`, not `ops`); a conversation goes to a specialist, so it needs the name.
   const typed = to ? readTarget(to, name => !!getSpecialist(name)) : undefined
-  if (typed && !typed.ok && typed.error) return respond(req, false, typed.error, undefined, 8)
+  if (typed && !typed.ok && typed.error) return respond(req, false, typed.error, { malformed: true }, 8)
   const named = typed?.ok ? typed.ref : undefined
   const toName = named?.kind === 'specialist' ? named.name : to
   // A conversation of a per-conversation specialist: its own session, opened for it if it has none (targets.ts).
@@ -405,8 +405,11 @@ async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
     else if (thread) r = await deliverVia(() => toThread(thread, message, opts, false), message, opts)
     else return respond(req, false, `session "${session}" not found`)
   }
-  // `permanent`: drop it rather than retry (it can never be delivered), as distinct from a gone session.
-  if (!r.ok) return respond(req, false, r.reason, r.permanent ? { permanent: true } : undefined, r.exit)
+  // A refusal's flags reach the caller as they are: `permanent` (drop it, never retry), `wait` (its turn comes), `malformed`.
+  if (!r.ok) {
+    const { ok: _ok, exit, reason, ...flags } = r
+    return respond(req, false, reason, Object.keys(flags).length ? flags : undefined, exit)
+  }
   return respond(req, true, {
     status: r.status, proof: r.proof, sessionId: r.sessionId, sessionName: r.sessionName, threadId: r.threadId,
     ...(named && { target: spelled(named) }),

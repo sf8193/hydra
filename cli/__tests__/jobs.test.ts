@@ -11,7 +11,7 @@ import {
 import { awakeTimeout, jobFromWire, parseEnvFile, tccFolder, externalFile, runnerLabel, resultFile, stateFile, daemonFile, attemptArgv, parseAttemptArgs, parseAlertAfter, runWaitMs, type AttemptArgs, type Job } from '../../shared/jobs.js'
 import { writeAtomic, readJobState } from '../../infra/job-files.js'
 import { parseLegacyTitle } from '../../shared/jobs-launchd.js'
-import { deliverResult } from '../../shared/exit-codes.js'
+import { deliverWord } from '../../shared/exit-codes.js'
 
 const repo = join(import.meta.dir, '..', '..')
 /** The zone this file started in, captured once: restoring by name (an older bun ignores an unset TZ), never from a
@@ -483,7 +483,7 @@ describe('runWork', () => {
           }
           const want = before(code, error)
           expect([code, error, await run({ ok: false, exitCode: code, error })]).toEqual([code, error, want])                                              // a daemon that predates the word
-          expect([code, error, await run({ ok: false, exitCode: code, error, result: deliverResult(code, error) })]).toEqual([code, error, want])   // one that sends it
+          expect([code, error, await run({ ok: false, exitCode: code, error, result: deliverWord(code, error) })]).toEqual([code, error, want])   // one that sends it
         }
       }
       // The word is what the runner reads: a daemon that says deferred is deferred, whatever the code.

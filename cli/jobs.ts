@@ -19,7 +19,7 @@ import { isUnder } from '../infra/path-containment.js'
 import { cliSchedules, schedulesAreSource } from '../infra/schedule-source.js'
 import { latestSlot, nextSlot } from '../shared/cron-local.js'
 import { readTarget, spelledTo } from '../shared/target-kind.js'
-import { EX_TEMPFAIL, deliverResult } from '../shared/exit-codes.js'
+import { EX_TEMPFAIL, deliverWord } from '../shared/exit-codes.js'
 import { ACTION_TIMEOUT_MS, ATTEMPT_DEADLINE_MS, runWaitMs, CHECK_TIMEOUT_MS, STALE_TICK_MS, backoffUntil, jobInitiator, jobsDir, jobsToml, owedSlot, parseJobsConfig, attemptEnv, awakeTimeout, isSpawn, jobFromWire, targetLabel, parseEnvFile, tccFolder, externalFile, logFile, runnerLabel, resultFile, resultsDir, type AttemptArgs, type AttemptResult, type ExternalResult, type Job, type Outcome } from '../shared/jobs.js'
 import { externalResults, readDaemonState, readJobState, writeAtomic } from '../infra/job-files.js'
 import { lstartOf } from '../infra/processes.js'
@@ -186,7 +186,7 @@ export async function runAction(job: Job, stateDir: string, key: string, output:
   // (shared/exit-codes.ts): done for a key already delivered, deferred for a key in flight or a target that can't take it
   // yet (booting), failed for the rest, a session stuck on a dialog included. A daemon that predates the word is read by
   // the same table.
-  const word = isSpawn(target) ? (code === 2 ? (existing?.status === 'pending' ? 'deferred' : 'done') : 'failed') : (reply?.result ?? deliverResult(code, reply?.error))
+  const word = isSpawn(target) ? (code === 2 ? (existing?.status === 'pending' ? 'deferred' : 'done') : 'failed') : (reply?.result ?? deliverWord(code, reply?.error))
   if (word === 'deferred') return { result: 'deferred', note: isSpawn(target) ? `duplicate key ${key} still pending` : `${target.to} can't take it yet${reply?.error ? `: ${reply.error.slice(-200)}` : ''}` }
   if (word === 'done') {
     const w: Work = { result: 'done', note: `duplicate key ${key}: already served`, ...(existing?.sessionId && { servedBy: existing.sessionId }) }

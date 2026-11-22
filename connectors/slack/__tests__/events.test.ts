@@ -12,9 +12,11 @@ import { executeTool } from '../../../app/bridge-dispatch.js'
 import { setSpecialistThread, _reloadSpecialists } from '../../../sessions/specialists.js'
 import { eventsDir } from '../../../shared/events.js'
 import { readEvents } from '../../../cli/events.js'
-import { ConversationTable, type ConversationConfig, type ConversationDeps, type DeliverResult, type SlackMessageEvent } from '../watch.js'
+import { ConversationTable, type ConversationConfig, type ConversationDeps, type SlackMessageEvent } from '../watch.js'
 import { bindConversation, unbindConversation, operatorBind, operatorUnbind, getConversationTable, slackRuntimeDeps } from '../runtime.js'
 import { BASE, BOT, hydra, view, oneListener } from './slack-config.js'
+import { LANDED, refused } from './outcomes.js'
+import type { DeliverOutcome } from '../../../specialists/targets.js'
 
 process.stderr.write = (() => true) as any
 
@@ -44,7 +46,7 @@ function table(toml: string) {
   const config: ConversationConfig = view(toml, { coalesceMs: 1 })
   const w = new ConversationTable({
     now: () => Date.now(), file: join(dir, 'w.json'), log: () => {}, config: () => config, alert: () => {},
-    deliver: async (): Promise<DeliverResult> => ({ ok: true }),
+    deliver: async (): Promise<DeliverOutcome> => LANDED,
   })
   return w
 }
@@ -103,7 +105,7 @@ describe('route: recorded when something takes the message, or when a tag finds 
     dirs.push(dir)
     const config: ConversationConfig = view(WITH, { coalesceMs: 1 })
     let up = false
-    const w = new ConversationTable({ now: () => Date.now(), file: join(dir, 'w.json'), log: () => {}, config: () => config, alert: () => {}, deliver: async (): Promise<DeliverResult> => up ? { ok: true } : { ok: false, error: 'busy' } as any })
+    const w = new ConversationTable({ now: () => Date.now(), file: join(dir, 'w.json'), log: () => {}, config: () => config, alert: () => {}, deliver: async (): Promise<DeliverOutcome> => up ? LANDED : refused('busy') })
     w.handle(ev())
     await w.flush()
     expect(events()).toEqual([])           // still owed: nowhere yet
@@ -137,7 +139,7 @@ describe('where delivery settles, and what hydra does by itself', () => {
     dirs.push(dir)
     let now = 1_000_000_000_000
     let config: ConversationConfig = view(toml, { coalesceMs: 1, ...over })
-    const w = new ConversationTable({ now: () => now, file: join(dir, 'w.json'), log: () => {}, config: () => config, alert: () => {}, guard, deliver: async (): Promise<DeliverResult> => ({ ok: true }), ...extra })
+    const w = new ConversationTable({ now: () => now, file: join(dir, 'w.json'), log: () => {}, config: () => config, alert: () => {}, guard, deliver: async (): Promise<DeliverOutcome> => LANDED, ...extra })
     return { w, tick: (ms: number) => { now += ms }, setConfig: (c: ConversationConfig) => { config = c } }
   }
   const routes = () => events().filter(e => e.kind === 'route')
@@ -322,7 +324,7 @@ describe('route: a message that asks the bot and finds no one', () => {
     const dir = mkdtempSync(join(tmpdir(), 'events-'))
     dirs.push(dir)
     const config: ConversationConfig = view(toml, { coalesceMs: 1, dms: { [DM_ALICE]: 'bot', [DM_BOB]: 'bot', [PERSON_DM]: 'UBOB' }, groupDms: [GROUP], ...over })
-    return new ConversationTable({ now: () => 1e12, file: join(dir, 'w.json'), log: () => {}, config: () => config, alert: () => {}, deliver: async (): Promise<DeliverResult> => ({ ok: true }) })
+    return new ConversationTable({ now: () => 1e12, file: join(dir, 'w.json'), log: () => {}, config: () => config, alert: () => {}, deliver: async (): Promise<DeliverOutcome> => LANDED })
   }
   const dm = (over: Partial<SlackMessageEvent> = {}): SlackMessageEvent => ({ channel: DM_ALICE, ts: '1.000001', user: 'UALICE', text: 'can you check the invoice', ...over })
   const routes = () => events().filter(e => e.kind === 'route')

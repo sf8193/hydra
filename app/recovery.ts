@@ -358,7 +358,7 @@ export const reviveDeps = {
 
 export type ThreadReviveResult =
   | { ok: true; revived: boolean }
-  | { ok: false; exitCode: 3 | 4 | 5 | 6; reason: string }
+  | { ok: false; exit: 3 | 4 | 5 | 6; reason: string }
 
 /**
  * `deliver --thread <id> --revive` for a thread no specialist owns: an unnamed thread heals only when asked. Under
@@ -370,19 +370,19 @@ export function reviveThreadForDelivery(threadId: string, initiator?: string, wa
   return withThreadLock(threadId, async () => {
     const home = registry.get(registry.getByThread(threadId) ?? '')
     const occ = occupancy(home)
-    if (occ === 'orphaned') return { ok: false, exitCode: 4, reason: `${home!.tmuxName} is running but not connected; resume it in the thread, or kill it to restart` }
+    if (occ === 'orphaned') return { ok: false, exit: 4, reason: `${home!.tmuxName} is running but not connected; resume it in the thread, or kill it to restart` }
     if (occupied(occ)) return { ok: true, revived: false }
     const refusal = backoffRefusal(threadId)
-    if (refusal) return { ok: false, exitCode: 6, reason: refusal.reason }
+    if (refusal) return { ok: false, exit: 6, reason: refusal.reason }
     // An id the platform cannot address is no deleted thread. A record that stored one (a session id where a thread id belongs) is revived into
     // a fresh thread (doSpawnSession rehomes it); an id nobody stored has nothing to revive.
     if (!gateway.isThreadId(threadId)) {
-      if (!home && !threadRegistry.has(threadId)) return { ok: false, exitCode: 3, reason: `"${threadId}" is not a ${gateway.platform} thread id, and no session sits in it` }
-    } else if (!(await reviveDeps.threadExists(threadId))) return { ok: false, exitCode: 3, reason: `thread ${threadId} is gone` }
-    if (wanted && !wanted()) return { ok: false, exitCode: 3, reason: 'withdrawn by its sender' }
+      if (!home && !threadRegistry.has(threadId)) return { ok: false, exit: 3, reason: `"${threadId}" is not a ${gateway.platform} thread id, and no session sits in it` }
+    } else if (!(await reviveDeps.threadExists(threadId))) return { ok: false, exit: 3, reason: `thread ${threadId} is gone` }
+    if (wanted && !wanted()) return { ok: false, exit: 3, reason: 'withdrawn by its sender' }
     const thread = threadRegistry.get(threadId) ?? threadStub(threadId, 'Continue the work in this thread.')
     const outcome = await reviveThread({ thread, backoffKey: threadId, ...(initiator && { initiator }), trigger: 'deliver --revive' })
-    if (!outcome.ok) return { ok: false, exitCode: outcome.busy ? 5 : 6, reason: outcome.reason }
+    if (!outcome.ok) return { ok: false, exit: outcome.busy ? 5 : 6, reason: outcome.reason }
     return { ok: true, revived: true }
   })
 }

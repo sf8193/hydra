@@ -10,8 +10,10 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { loadHydraConfig } from '../../../config/load.js'
 import { testLoadEnv } from '../../../config/__tests__/load-env.js'
-import { ConversationTable, SLACK_LIMITS, type ConversationConfig, type DeliverResult, type HandleOutcome } from '../watch.js'
+import { ConversationTable, SLACK_LIMITS, type ConversationConfig, type HandleOutcome } from '../watch.js'
 import { BOT, SALES_BOT, directory } from './slack-config.js'
+import { LANDED } from './outcomes.js'
+import type { DeliverOutcome } from '../../../specialists/targets.js'
 
 process.stderr.write = (() => true) as any
 
@@ -75,7 +77,7 @@ async function run(toml: string, app: string, members: Record<string, string[]>,
   const to = new Map<string, string[]>()
   const w = new ConversationTable({
     now: () => 1_000_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => cfg, alert: () => {},
-    deliver: async (t, _msg): Promise<DeliverResult> => { const k = t.conversation ?? '?'; to.set(k, [...(to.get(k) ?? []), t.to]); return { ok: true } },
+    deliver: async (t, _msg): Promise<DeliverOutcome> => { const k = t.conversation ?? '?'; to.set(k, [...(to.get(k) ?? []), t.to]); return LANDED },
   })
   const outcomes = msgs.map(m => {
     if (m.bound && (m.boundApp ?? 'default') === app) w.bind(m.channel, m.threadTs ?? m.ts, m.bound, 'cli', app === 'default' ? undefined : app)

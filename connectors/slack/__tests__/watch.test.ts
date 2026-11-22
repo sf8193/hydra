@@ -6,10 +6,12 @@ import { join, dirname } from 'path'
 import {
   ConversationTable, EXTERNAL_AUDIENCE_NOTE, formatDelivery, renderItem, packItems, cmpTs, placesOf, routedChannels, hearsDms, unresolvedPlaces,
   ITEM_TEXT_MAX_CHARS, BATCH_MAX_BYTES, REFUSED_REACTION, heldBySession,
-  type ConversationConfig, type SlackMessageEvent, type DeliverResult, type Item, type ConversationDeps, type SlackActions, type SlackFile,
+  type ConversationConfig, type SlackMessageEvent, type Item, type ConversationDeps, type SlackActions, type SlackFile,
 } from '../watch.js'
 import type { GuardInput, GuardVerdict } from '../../../routing/guard.js'
 import { BASE, BOT, firstRules, oneListener, view, directory, TWO_APPS, type ViewOver } from './slack-config.js'
+import { LANDED, refused } from './outcomes.js'
+import type { DeliverOutcome } from '../../../specialists/targets.js'
 
 const CH = 'C0FOOD'
 const cfg = (over: ViewOver = {}): ConversationConfig => view(oneListener(CH), over)
@@ -17,7 +19,7 @@ const cfg = (over: ViewOver = {}): ConversationConfig => view(oneListener(CH), o
 const dirs: string[] = []
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
 
-function setup(over: ViewOver = {}, deliver?: (specialist: string, msg: string, key: string) => DeliverResult, resolveName?: (id: string) => Promise<string | undefined>, guard?: ConversationDeps['guard']) {
+function setup(over: ViewOver = {}, deliver?: (specialist: string, msg: string, key: string) => DeliverOutcome, resolveName?: (id: string) => Promise<string | undefined>, guard?: ConversationDeps['guard']) {
   const alerts: string[] = []
   const alertTo: (string | undefined)[] = []
   const dir = mkdtempSync(join(tmpdir(), 'slack-watch-'))
@@ -29,7 +31,7 @@ function setup(over: ViewOver = {}, deliver?: (specialist: string, msg: string, 
   let config = cfg(over)
   const make = () => new ConversationTable({
     now: () => now, file, log: l => logs.push(l), config: () => config, resolveName, guard, alert: (t, to) => { alerts.push(t); alertTo.push(to) },
-    deliver: async ({ to: specialist }, msg, key) => { sent.push({ specialist, msg, key }); return deliver ? deliver(specialist, msg, key) : { ok: true } },
+    deliver: async ({ to: specialist }, msg, key) => { sent.push({ specialist, msg, key }); return deliver ? deliver(specialist, msg, key) : LANDED },
   })
   return { w: make(), make, sent, logs, alerts, alertTo, file, tick: (ms: number) => { now += ms }, setConfig: (c: ConversationConfig) => { config = c }, now: () => now }
 }
@@ -133,7 +135,7 @@ describe("a thread bound to a session's own thread (any session listening)", () 
     })
 
     test('owed to a session with none in its thread, it is let go when replayed after a specialist took the thread', async () => {
-      const s = setup({}, to => to === SESSION ? { ok: false, error: 'no session' } : { ok: true })
+      const s = setup({}, to => to === SESSION ? refused('no session') : LANDED)
       s.w.bind(CH, '6000.000001', SESSION, 'tool')
       s.w.handle(bot({ ts: '6001.000001', threadTs: '6000.000001' }))
       await s.w.flush()
@@ -181,12 +183,12 @@ describe("a thread bound to a session's own thread (any session listening)", () 
 
 describe("a session thread with no session in it (killed, or between a handoff and its successor)", () => {
   const SESSION = '1552619225032425525'
-  const NOBODY: DeliverResult = { ok: false, error: `thread ${SESSION}'s session is gone` }
+  const NOBODY: DeliverOutcome = refused(`thread ${SESSION}'s session is gone`)
   const reply = (n: number) => ev({ channel: 'C0OTHER', ts: `${2001 + n}.000001`, threadTs: '2000.000001', user: 'USTRANGER', text: `message ${n}` })
 
   test('messages stay owed, not dropped, and are delivered once and in order when a session registers; a replay delivers nothing twice', async () => {
     let home = false
-    const s = setup({}, () => home ? { ok: true } : NOBODY)
+    const s = setup({}, () => home ? LANDED : NOBODY)
     s.w.bind('C0OTHER', '2000.000001', SESSION, 'tool')
     for (const n of [1, 2, 3]) s.w.handle(reply(n))
     await s.w.flush()
@@ -496,7 +498,7 @@ describe('what opens and continues a conversation', () => {
   })
 
   test('no config (Slack not connected) means nothing is heard', () => {
-    const w = new ConversationTable({ now: () => 0, file: join(tmpdir(), `sw-${Date.now()}.json`), log: () => {}, config: () => null, deliver: async () => ({ ok: true }) })
+    const w = new ConversationTable({ now: () => 0, file: join(tmpdir(), `sw-${Date.now()}.json`), log: () => {}, config: () => null, deliver: async () => LANDED })
     expect(w.handle(ev({ text: mention }))).toBe('ignored')
   })
 })
@@ -629,7 +631,7 @@ describe('limits', () => {
 
   test('nothing is let go that is owed, waiting in the window, or quiet under an hour: the new one is dropped then', async () => {
     let up = false
-    const owed = setup({ maxConversations: 1 }, () => up ? { ok: true } : { ok: false, error: 'down' })
+    const owed = setup({ maxConversations: 1 }, () => up ? LANDED : refused('down'))
     owed.w.handle(ev({ ts: '1.000001', text: mention }))
     await owed.w.flush()
     owed.tick(2 * 3600_000)
@@ -781,7 +783,7 @@ describe('limits', () => {
   })
 
   test('a delivery the specialist already had (a replay after a crash) does not start the unanswered clock', async () => {
-    const { w } = setup({ maxConversations: 2 }, () => ({ ok: true, duplicate: true }))
+    const { w } = setup({ maxConversations: 2 }, () => ({ ...LANDED, duplicate: true }))
     w.handle(ev({ ts: '1.000001', text: mention }))
     await w.flush()
     expect(w.get(CH, '1.000001')!.delivered).toEqual(['1.000001'])
@@ -956,7 +958,7 @@ describe('delivery', () => {
   })
 
   test('a failed delivery stays owed and is delivered once on replay; a duplicate answer counts as delivered', async () => {
-    let result: DeliverResult = { ok: false, error: 'specialist down' }
+    let result: DeliverOutcome = refused('specialist down')
     const { w, sent } = setup({}, () => result)
     w.handle(ev({ ts: '1000.000001', text: mention }))
     await w.flush()
@@ -964,7 +966,7 @@ describe('delivery', () => {
     expect(w.get(CH, '1000.000001')!.delivered).toBeUndefined()
     expect(w.owedHints()).toEqual([{ channel: CH, threadTs: '1000.000001', fromTs: '1000.000001' }])
 
-    result = { ok: true, duplicate: true }
+    result = { ...LANDED, duplicate: true }
     expect(w.handle(ev({ ts: '1000.000001', text: mention }))).toBe('mention')
     await w.flush()
     expect(w.get(CH, '1000.000001')).toMatchObject({ delivered: ['1000.000001'] })
@@ -974,21 +976,21 @@ describe('delivery', () => {
   })
 
   test('a replay of a message whose delivery is still in flight is not delivered a second time', async () => {
-    let release!: (r: DeliverResult) => void
-    const gate = new Promise<DeliverResult>(res => { release = res })
-    const { w, sent } = setup({}, () => gate as unknown as DeliverResult)
+    let release!: (r: DeliverOutcome) => void
+    const gate = new Promise<DeliverOutcome>(res => { release = res })
+    const { w, sent } = setup({}, () => gate as unknown as DeliverOutcome)
     w.handle(ev({ ts: '1000.000001', text: mention }))
     await new Promise(r => setTimeout(r, 30)) // past the coalescing window: the batch is on the chain, delivery pending
     expect(sent).toHaveLength(1)
     expect(w.handle(ev({ ts: '1000.000001', text: mention }))).toBe('ignored')
-    release({ ok: true })
+    release(LANDED)
     await w.flush()
     expect(sent).toHaveLength(1)
     expect(w.get(CH, '1000.000001')).toMatchObject({ delivered: ['1000.000001'] })
   })
 
   test('a permanent refusal drops the message instead of retrying forever', async () => {
-    const { w, logs } = setup({}, () => ({ ok: false, error: 'message too large', permanent: true }))
+    const { w, logs } = setup({}, () => ({ ok: false, exit: 3, reason: 'message too large', permanent: true }))
     w.handle(ev({ ts: '1000.000001', text: mention }))
     await w.flush()
     expect(w.get(CH, '1000.000001')!.owed).toBeUndefined()
@@ -1122,11 +1124,11 @@ describe('what the specialist reads', () => {
     })
 
     test('a replay of an owed message is named the same way', async () => {
-      let result: DeliverResult = { ok: false, error: 'specialist down' }
+      let result: DeliverOutcome = refused('specialist down')
       const { w, sent } = setup({ toml }, () => result, async () => 'Carol C')
       w.handle(ev({ ts: '1000.000001', user: 'UCAROL', text: mention }))
       await w.flush()
-      result = { ok: true }
+      result = LANDED
       w.handle(ev({ ts: '1000.000001', user: 'UCAROL', text: mention }))
       await w.flush()
       expect(sent).toHaveLength(2)
@@ -1171,8 +1173,8 @@ describe('expiry, cursors and persistence', () => {
 
   test('the sweep runs without a connection too: idle conversations and old owed messages still expire', async () => {
     let connected = true
-    const s = setup({ idleExpiryMs: 1000 }, () => ({ ok: false, error: 'down' }))
-    const w = new ConversationTable({ now: () => s.now(), file: s.file, log: () => {}, config: () => connected ? cfg() : null, deliver: async () => ({ ok: false, error: 'down' }) })
+    const s = setup({ idleExpiryMs: 1000 }, () => refused('down'))
+    const w = new ConversationTable({ now: () => s.now(), file: s.file, log: () => {}, config: () => connected ? cfg() : null, deliver: async () => (refused('down')) })
     w.handle(ev({ ts: '1000.000001', text: mention }))
     await w.flush()
     connected = false
@@ -1181,7 +1183,7 @@ describe('expiry, cursors and persistence', () => {
   })
 
   test('owed timestamps older than a day are no longer chased', async () => {
-    const { w } = setup({}, () => ({ ok: false, error: 'down' }))
+    const { w } = setup({}, () => refused('down'))
     w.handle(ev({ ts: '1000.000001', text: mention })) // 1970: far older than a day
     await w.flush()
     expect(w.owedHints()).toHaveLength(1)
@@ -1253,7 +1255,7 @@ roles = ["guest"]
     let config = cfg({ toml: allowing('["role:anyone"]') })
     const dir = mkdtempSync(join(tmpdir(), 'slack-watch-'))
     dirs.push(dir)
-    const w = new ConversationTable({ now: () => 1_000_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => config, deliver: async () => ({ ok: false, error: 'down' }) })
+    const w = new ConversationTable({ now: () => 1_000_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => config, deliver: async () => (refused('down')) })
     w.handle(ev({ ts: '1.000001', user: 'USTRANGER', text: mention }))
     await w.flush()
     expect(w.owedHints()).toHaveLength(1)
@@ -1319,7 +1321,7 @@ roles = ["guest"]
 
 describe('no silent drops', () => {
   test('a message too large to deliver is logged and alerted', async () => {
-    const { w, alerts } = setup({}, () => ({ ok: false, error: 'message too large', permanent: true }))
+    const { w, alerts } = setup({}, () => ({ ok: false, exit: 3, reason: 'message too large', permanent: true }))
     w.handle(ev({ ts: '1000.000001', text: mention }))
     await w.flush()
     expect(alerts).toHaveLength(1)
@@ -1329,7 +1331,7 @@ describe('no silent drops', () => {
   })
 
   test('an owed message expiring after a day is logged and alerted', async () => {
-    const { w, alerts, logs } = setup({}, () => ({ ok: false, error: 'down' }))
+    const { w, alerts, logs } = setup({}, () => refused('down'))
     w.handle(ev({ ts: '1000.000001', text: mention }))
     await w.flush()
     w.sweep()
@@ -1350,7 +1352,7 @@ describe('no silent drops', () => {
   })
 
   test('more than 200 owed in a thread: the oldest is cut, and counted lost once its delivery cannot be retried', async () => {
-    let result: DeliverResult = { ok: false, error: 'down' }
+    let result: DeliverOutcome = refused('down')
     const { w, alerts } = setup({ coalesceMs: 60_000 }, () => result)
     w.handle(ev({ ts: '1.000001', text: mention }))
     for (let i = 2; i <= 201; i++) w.handle(ev({ ts: `${i}.000001`, threadTs: '1.000001', text: 'x' }))
@@ -1373,7 +1375,7 @@ describe('no silent drops', () => {
   })
 
   test('an idle conversation still owed messages is kept until they expire (alerted), then swept', async () => {
-    const { w, alerts, tick } = setup({ idleExpiryMs: 60_000 }, () => ({ ok: false, error: 'down' }))
+    const { w, alerts, tick } = setup({ idleExpiryMs: 60_000 }, () => refused('down'))
     const nowTs = `${Math.floor(1_000_000_000_000 / 1000)}.000001`
     w.handle(ev({ ts: nowTs, text: mention }))
     await w.flush()
@@ -1478,7 +1480,7 @@ target = "specialist:integrator"
 
   test('a config re-route reaches only new conversations: what is owed follows its binding', async () => {
     let up = false
-    const s = setup({ toml: TWO() }, to => up ? { ok: true } : { ok: false, error: `${to} is down` })
+    const s = setup({ toml: TWO() }, to => up ? LANDED : refused(`${to} is down`))
     s.w.handle(ev({ channel: CH2, ts: '10.000001', user: 'UOWNER', text: mention }))
     await s.w.flush()
     expect(s.w.owedHints()).toHaveLength(1)
@@ -1493,7 +1495,7 @@ target = "specialist:integrator"
   })
 
   test('a binding to a specialist hydra.toml no longer declares is routed anew', async () => {
-    const s = setup({ toml: TWO() }, () => ({ ok: false, error: 'down' }))
+    const s = setup({ toml: TWO() }, () => refused('down'))
     s.w.handle(ev({ channel: CH2, ts: '10.000001', user: 'UOWNER', text: mention }))
     await s.w.flush()
     const noOps = TWO().replace(/\[specialists\.ops\][^]*?(?=\[specialists\.integrator\])/, '').replace('place = "slack:C0INT"', `place = "slack:${CH2}"`)
@@ -1504,7 +1506,7 @@ target = "specialist:integrator"
 
   test('a message owed to a specialist since removed, with nobody hearing that place now, is a counted, alerted drop on replay; no 🚫', async () => {
     const { a, reactions } = actions()
-    const s = setup({ toml: TWO() }, () => ({ ok: false, error: 'busy' }))
+    const s = setup({ toml: TWO() }, () => refused('busy'))
     s.w.setSlackActions(a)
     s.w.handle(ev({ channel: CH2, ts: '10.000001', user: 'UOWNER', text: mention }))
     await s.w.flush()
@@ -1529,7 +1531,7 @@ target = "specialist:integrator"
 
   test("routed anew as its sender: a person's rule moved elsewhere takes the owed message there on replay, not a drop", async () => {
     const toml = (to: string) => firstRules(`${TWO()}\n[specialists.books]\nworkdir = "/w/books"\nreachable_by = ["role:owner"]\n`, `[[rules]]\nplace = "slack:${CH2}"\nperson = "person:olive"\ntarget = "specialist:${to}"\n`)
-    const s = setup({ toml: toml('integrator') }, to => to === 'books' ? { ok: true } : { ok: false, error: 'busy' })
+    const s = setup({ toml: toml('integrator') }, to => to === 'books' ? LANDED : refused('busy'))
     const T = `${Math.floor(s.now() / 1000)}.000001`
     s.w.handle(ev({ channel: CH2, ts: T, user: 'UOWNER', text: mention }))
     await s.w.flush()
@@ -1573,7 +1575,7 @@ reachable_by = ["role:anyone"]
 place = "slack:app-dm:*"
 target = "specialist:assistant"
 `
-    const s = setup({ toml: DMS }, () => ({ ok: false, error: 'busy' }))
+    const s = setup({ toml: DMS }, () => refused('busy'))
     s.w.handle(ev({ channel: 'D0ALICE', ts: `${Math.floor(s.now() / 1000)}.000001`, text: 'hi' }))
     await s.w.flush()
     expect(s.w.owedHints()).toHaveLength(1)
@@ -1628,7 +1630,7 @@ target = "specialist:assistant"
   })
 
   test('bind moves a conversation, and what is owed follows the new binding', async () => {
-    const s = setup({ toml: TWO() }, to => to === 'integrator' ? { ok: true } : { ok: false, error: 'down' })
+    const s = setup({ toml: TWO() }, to => to === 'integrator' ? LANDED : refused('down'))
     s.w.handle(ev({ channel: CH2, ts: '10.000001', user: 'UOWNER', text: mention }))
     await s.w.flush()
     s.w.bind(CH2, '10.000001', 'integrator')
@@ -1651,7 +1653,7 @@ target = "specialist:assistant"
 
   test('a conversation waiting for a session (its specialist at max) stays owed past a day, alerted once, until its turn', async () => {
     let wait = true
-    const s = setup({ toml: TWO() }, to => wait ? { ok: false, error: `${to} already runs 2 conversation sessions (max 2)`, wait: true } : { ok: true })
+    const s = setup({ toml: TWO() }, to => wait ? { ok: false, exit: 5, reason: `${to} already runs 2 conversation sessions (max 2)`, wait: true } : LANDED)
     s.w.handle(ev({ ts: '1000.000001', text: mention })) // 1970: far older than a day
     s.w.handle(ev({ ts: '1001.000001', threadTs: '1000.000001', text: 'more' }))
     await s.w.flush()
@@ -1671,7 +1673,7 @@ target = "specialist:assistant"
   })
 
   test('a wait has an end: past three days the messages are dropped, alerted, and the queue moves on', async () => {
-    const s = setup({ toml: TWO() }, to => ({ ok: false, error: `${to} at max`, wait: true }))
+    const s = setup({ toml: TWO() }, to => ({ ok: false, exit: 5, reason: `${to} at max`, wait: true }))
     const T = `${Math.floor(s.now() / 1000)}.000001`
     s.w.handle(ev({ ts: T, text: mention }))
     await s.w.flush()
@@ -1686,7 +1688,7 @@ target = "specialist:assistant"
   })
 
   test('a binding hydra.toml has no session record for (exit 8) keeps the message owed and alerts once', async () => {
-    const s = setup({}, to => ({ ok: false, error: `no such specialist: ${to}`, exit: 8 }))
+    const s = setup({}, to => ({ ok: false, exit: 8, reason: `no such specialist: ${to}` }))
     s.w.handle(ev({ ts: '1.000001', text: mention }))
     await s.w.flush()
     s.w.handle(ev({ ts: '1.000001', text: mention }))
@@ -1699,7 +1701,7 @@ target = "specialist:assistant"
   })
 
   test('a binding hydra cannot read (exit 8, malformed) is not called a missing specialist', async () => {
-    const s = setup({}, () => ({ ok: false, error: 'not a kind of target', exit: 8, malformed: true }))
+    const s = setup({}, () => ({ ok: false, exit: 8, reason: 'not a kind of target', malformed: true }))
     s.w.handle(ev({ ts: '1.000001', text: mention }))
     await s.w.flush()
     expect(s.alerts).toHaveLength(1)
@@ -1922,7 +1924,7 @@ roles = ["finance"]
   })
 
   test('a redirect to a declared specialist with no session record (exit 8) goes to the binding instead, alerted once', async () => {
-    const s = setup({ toml: GUARDED() }, to => to === 'billing' ? { ok: false, error: 'no such specialist: billing', exit: 8 } : { ok: true }, undefined, async () => ({ verdict: 'deliver', target: 'billing' }))
+    const s = setup({ toml: GUARDED() }, to => to === 'billing' ? { ok: false, exit: 8, reason: 'no such specialist: billing' } : LANDED, undefined, async () => ({ verdict: 'deliver', target: 'billing' }))
     s.w.handle(ev({ ts: '1.000001', text: mention }))
     await s.w.flush()
     expect(s.sent.map(x => x.specialist)).toEqual(['billing', 'ops'])
@@ -2001,7 +2003,7 @@ roles = ["finance"]
     let command = script('drop.sh', 'cat > /dev/null; exit 10')
     const config = () => cfg({ toml: oneListener(CH, 'ops', '["role:anyone"]', `[guard]\ncommand = "${command}"\n`), coalesceMs: 1 })
     const sent: string[] = []
-    const w = new ConversationTable({ now: () => 1e12, file: join(dir, 'w.json'), log: () => {}, config, deliver: async t => { sent.push(t.to); return { ok: true } } })
+    const w = new ConversationTable({ now: () => 1e12, file: join(dir, 'w.json'), log: () => {}, config, deliver: async t => { sent.push(t.to); return LANDED } })
     w.handle(ev({ ts: '1.000001', text: mention }))
     await w.flush()
     expect(sent).toEqual([])
@@ -2039,7 +2041,7 @@ ${place}
     const dir = mkdtempSync(join(tmpdir(), 'slack-files-'))
     dirs.push(dir)
     const w = new ConversationTable({ now: () => 1e12, file: join(dir, 'w.json'), filesDir: join(dir, 'files'), log: l => s.logs.push(l), config: () => config, alert: t => s.alerts.push(t), ...(placeFile && { placeFile }),
-      deliver: async ({ to }, msg, key) => { s.sent.push({ specialist: to, msg, key }); return { ok: true } } })
+      deliver: async ({ to }, msg, key) => { s.sent.push({ specialist: to, msg, key }); return LANDED } })
     w.setSlackActions(a)
     return { w, dir }
   }
@@ -2140,7 +2142,7 @@ ${place}
     dirs.push(dir)
     const config = cfg({ toml: PLACES('files = true', '[guard]\ncommand = "g"\n') })
     const w = new ConversationTable({ now: () => 1e12, file: join(dir, 'w.json'), filesDir: join(dir, 'files'), log: () => {}, config: () => config,
-      guard: async () => ({ verdict: 'drop' }), deliver: async () => ({ ok: true }) })
+      guard: async () => ({ verdict: 'drop' }), deliver: async () => LANDED })
     w.setSlackActions(a)
     w.handle(ev({ ts: '1.000001', text: mention, files: [file()] }))
     await w.flush()
@@ -2259,7 +2261,7 @@ ${place}
     utimesSync(join(filesDir, CH, 'Fold-a.pdf'), old, old)
     const now = 1e12
     const config = cfg({ toml: PLACES('files = true') })
-    const w = new ConversationTable({ now: () => now, file: join(dir, 'w.json'), filesDir, log: () => {}, config: () => config, deliver: async () => ({ ok: true }) })
+    const w = new ConversationTable({ now: () => now, file: join(dir, 'w.json'), filesDir, log: () => {}, config: () => config, deliver: async () => LANDED })
     utimesSync(join(filesDir, CH, 'Fnew-b.pdf'), new Date(now - 86_400_000), new Date(now - 86_400_000))
     w.sweep()
     expect(existsSync(join(filesDir, CH, 'Fold-a.pdf'))).toBe(false)
@@ -2286,7 +2288,7 @@ ${place}
     await Bun.sleep(5)
     expect(reactions.sort()).toEqual([`${CH}:1.000001:eyes`, `${CH}:2.000001:eyes`])
 
-    const down = setup({ toml: PLACES('ack = "eyes"') }, () => ({ ok: false, error: 'down' }))
+    const down = setup({ toml: PLACES('ack = "eyes"') }, () => refused('down'))
     const d = actions()
     down.w.setSlackActions(d.a)
     down.w.handle(ev({ ts: '1.000001', text: mention }))
@@ -2301,7 +2303,7 @@ describe('alert episodes are per app', () => {
   test('a catch-up gap through one app does not silence the same gap through the other, and each is said once; the app rides with the alert', () => {
     const s = setup({ toml })
     const apps: (string | undefined)[] = []
-    const w = new ConversationTable({ now: s.now, file: join(dirs[dirs.length - 1], 'two.json'), log: () => {}, config: app => view(toml, { app }), alert: (t, to, app) => { s.alerts.push(t); apps.push(app) }, deliver: async () => ({ ok: true }) })
+    const w = new ConversationTable({ now: s.now, file: join(dirs[dirs.length - 1], 'two.json'), log: () => {}, config: app => view(toml, { app }), alert: (t, to, app) => { s.alerts.push(t); apps.push(app) }, deliver: async () => LANDED })
     w.catchUpGap(CH, '1000.000001', '1900.000001', 200, 'default')
     w.catchUpGap(CH, '1000.000002', '1900.000001', 200, 'default')
     w.catchUpGap(CH, '1000.000001', '1900.000001', 200, 'sales')
@@ -2316,7 +2318,7 @@ describe('alert episodes are per app', () => {
   test('a refused operator token is said once an hour per app', () => {
     const s = setup({ toml })
     const apps: (string | undefined)[] = []
-    const w = new ConversationTable({ now: s.now, file: join(dirs[dirs.length - 1], 'two.json'), log: () => {}, config: app => view(toml, { app }), alert: (_t, _to, app) => { apps.push(app) }, deliver: async () => ({ ok: true }) })
+    const w = new ConversationTable({ now: s.now, file: join(dirs[dirs.length - 1], 'two.json'), log: () => {}, config: app => view(toml, { app }), alert: (_t, _to, app) => { apps.push(app) }, deliver: async () => LANDED })
     w.operatorTokenRefused('the operator\'s Slack token was refused', 'default')
     w.operatorTokenRefused('the operator\'s Slack token was refused', 'sales')
     w.operatorTokenRefused('the operator\'s Slack token was refused', 'sales')
@@ -2527,7 +2529,7 @@ describe('what hydra health says about owed messages and deliveries (#669)', () 
   const tsAgo = (s: { now: () => number }, min: number, n = 1) => `${Math.floor(s.now() / 1000) - min * 60}.00000${n}`
 
   test('an owed message older than the threshold is listed with its cause; a younger one is not', async () => {
-    const s = setup({}, () => ({ ok: false, error: 'specialist down' }))
+    const s = setup({}, () => refused('specialist down'))
     s.w.handle(ev({ ts: tsAgo(s, 30), text: mention }))
     await s.w.flush()
     const [late] = s.w.lateOwed(20 * MIN)
@@ -2537,7 +2539,7 @@ describe('what hydra health says about owed messages and deliveries (#669)', () 
   })
 
   test('the cause is the one that holds: waiting for a place, the guard saying deferred, an undeclared specialist, an app not connected', async () => {
-    const wait = setup({}, to => ({ ok: false, error: `${to} at max`, wait: true }))
+    const wait = setup({}, to => ({ ok: false, exit: 5, reason: `${to} at max`, wait: true }))
     wait.w.handle(ev({ ts: tsAgo(wait, 30), text: mention }))
     await wait.w.flush()
     expect(wait.w.lateOwed(20 * MIN)[0].cause).toContain('max_sessions')
@@ -2547,23 +2549,23 @@ describe('what hydra health says about owed messages and deliveries (#669)', () 
     await held.w.flush()
     expect(held.w.lateOwed(20 * MIN)[0].cause).toBe('the guard keeps saying deferred (exit 75): check the guard')
 
-    const gone = setup({}, () => ({ ok: false, error: 'x' }))
+    const gone = setup({}, () => refused('x'))
     gone.w.handle(ev({ ts: tsAgo(gone, 30), text: mention }))
     await gone.w.flush()
     gone.setConfig(cfg({ toml: oneListener(CH, 'other') }))
     expect(gone.w.lateOwed(20 * MIN)[0].cause).toContain('is not declared in hydra.toml')
 
-    const off = setup({}, () => ({ ok: false, error: 'x' }))
+    const off = setup({}, () => refused('x'))
     off.w.handle(ev({ ts: tsAgo(off, 30), text: mention }))
     await off.w.flush()
-    const down = new ConversationTable({ now: off.now, file: off.file, log: () => {}, config: () => null, alert: () => {}, deliver: async () => ({ ok: true }) })
+    const down = new ConversationTable({ now: off.now, file: off.file, log: () => {}, config: () => null, alert: () => {}, deliver: async () => LANDED })
     expect(down.lateOwed(20 * MIN)[0].cause).toContain('has no live connection')
-    const named = new ConversationTable({ now: off.now, file: off.file, log: () => {}, config: () => null, apps: () => ({ default: { displayName: 'Acme helper' } }), alert: () => {}, deliver: async () => ({ ok: true }) })
+    const named = new ConversationTable({ now: off.now, file: off.file, log: () => {}, config: () => null, apps: () => ({ default: { displayName: 'Acme helper' } }), alert: () => {}, deliver: async () => LANDED })
     expect(named.lateOwed(20 * MIN)[0].cause).toBe('its app (Acme helper) has no live connection, so nothing goes through it: see its line')
   })
 
   test('when two causes hold, the first in the list wins; a failure is one capped line', async () => {
-    const s = setup({}, () => ({ ok: false, error: `first line\n${'x'.repeat(500)}` }))
+    const s = setup({}, () => refused(`first line\n${'x'.repeat(500)}`))
     s.w.handle(ev({ ts: tsAgo(s, 30), text: mention }))
     await s.w.flush()
     const cause = s.w.lateOwed(20 * MIN)[0].cause
@@ -2575,7 +2577,7 @@ describe('what hydra health says about owed messages and deliveries (#669)', () 
 
   test('a late owed list never throws, and a landed delivery clears its failure', async () => {
     let ok = false
-    const s = setup({}, () => ok ? { ok: true } : { ok: false, error: 'specialist down' })
+    const s = setup({}, () => ok ? LANDED : refused('specialist down'))
     s.w.handle(ev({ ts: tsAgo(s, 30), text: mention }))
     await s.w.flush()
     expect(s.w.lateOwed(20 * MIN)).toHaveLength(1)
@@ -2584,7 +2586,7 @@ describe('what hydra health says about owed messages and deliveries (#669)', () 
     await s.w.flush()
     expect(s.w.lateOwed(20 * MIN)).toEqual([])
     expect((s.w as unknown as { failing: Map<string, string> }).failing.size).toBe(0)
-    const broken = new ConversationTable({ now: s.now, file: s.file, log: () => {}, config: () => { throw new Error('boom') }, alert: () => {}, deliver: async () => ({ ok: true }) })
+    const broken = new ConversationTable({ now: s.now, file: s.file, log: () => {}, config: () => { throw new Error('boom') }, alert: () => {}, deliver: async () => LANDED })
     expect(() => broken.lateOwed(20 * MIN)).not.toThrow()
   })
 

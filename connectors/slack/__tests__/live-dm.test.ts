@@ -11,6 +11,7 @@ import { SlackListener, type SlackAppLike, type RawEvent } from '../listener.js'
 import type { SlackApi } from '../catchup.js'
 import type { SocketEmitter } from '../../../shared/socket-supervisor.js'
 import { createResumeDetector } from '../../../shared/resume.js'
+import { LANDED } from './outcomes.js'
 
 const BOT = 'UBOT'
 class FakeClient implements SocketEmitter {
@@ -53,7 +54,7 @@ function setup(appName: string, userToken: boolean, extra = '', lists: { dms: { 
   const before = view(toml(appName, userToken, extra), { app: appName })
   const watcher = new ConversationTable({
     now: () => now, file: join(dir, 'w.json'), filesDir: join(dir, 'files'), log: l => logs.push(l), config: () => listener?.view() ?? before,
-    deliver: async (s, msg) => { await gate.wait; sent.push({ to: String((s as { specialist?: string; to?: string })?.specialist ?? (s as { to?: string })?.to ?? s), msg }); return { ok: true } },
+    deliver: async (s, msg) => { await gate.wait; sent.push({ to: String((s as { specialist?: string; to?: string })?.specialist ?? (s as { to?: string })?.to ?? s), msg }); return LANDED },
   })
   const client = new FakeClient()
   const api: SlackApi = {
@@ -231,10 +232,10 @@ describe('a DM that is passed over says why', () => {
   })
   test('an app with no live view, and a timestamp Slack does not write', () => {
     const logs: string[] = []
-    const w = new ConversationTable({ now: () => 1_793_000_000_000, file: join(tmpdir(), `live-dm-${Math.random()}.json`), log: l => logs.push(l), config: () => null, deliver: async () => ({ ok: true }) })
+    const w = new ConversationTable({ now: () => 1_793_000_000_000, file: join(tmpdir(), `live-dm-${Math.random()}.json`), log: l => logs.push(l), config: () => null, deliver: async () => LANDED })
     expect(w.handle({ channel: 'D0BOT0001', ts: TS, user: 'UOP' })).toBe('ignored')
     expect(logs.join('')).toMatch(dropped('D0BOT0001', TS, /no live view of hydra\.toml/))
-    const w2 = new ConversationTable({ now: () => 1_793_000_000_000, file: join(tmpdir(), `live-dm-${Math.random()}.json`), log: l => logs.push(l), config: () => view(toml('krust', true), { app: 'krust' }), deliver: async () => ({ ok: true }) })
+    const w2 = new ConversationTable({ now: () => 1_793_000_000_000, file: join(tmpdir(), `live-dm-${Math.random()}.json`), log: l => logs.push(l), config: () => view(toml('krust', true), { app: 'krust' }), deliver: async () => LANDED })
     expect(w2.handle({ channel: 'D0BOT0001', ts: 'not-a-ts', user: 'UOP', app: 'krust' })).toBe('ignored')
     expect(logs.join('')).toMatch(dropped('D0BOT0001', 'not-a-ts', /is not one Slack writes/))
   })

@@ -32,7 +32,7 @@ sequenceDiagram
     end
 
     opt --thread id --revive, and a specialist owns the thread
-        handler->>handler: deliverToSpecialist (its name, kickoff, back-off), then return
+        handler->>handler: toSpecialist (its name, kickoff, back-off), then return
     end
     opt --thread id --revive
         handler->>recovery: reviveThreadForDelivery(id)<br/>under the thread's target lock
