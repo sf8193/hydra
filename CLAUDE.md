@@ -42,10 +42,10 @@ Compile-check all three entry points before committing — they are independent 
 
 ## Invariants
 
-What the code must stay true to that no check catches: it holds only if you hold it. (The ones CI does catch, the tiers, cycles, tier-0 I/O, capability names and dangerous primitives, are in `scripts/check-*.ts` and are not restated here.)
+What the code must stay true to that no check catches: it holds only if you hold it. (The ones CI does catch, the tiers, cycles, tier-0 I/O, capability names and dangerous primitives (`check-owners`), are in `scripts/check-*.ts` and are not restated here.)
 
-- **One owner per fact.** Before you define a constant, a text, an id or a check, search for it and import it. Two definitions drift. A limit, a tool name or a refusal text lives in one file. Only dangerous primitives have a check (`check-owners`).
+- **One owner per fact.** Before you define a constant, a text, an id or a check, search for it and import it. Two definitions drift. Record a fact where it is created and never re-derive it at a reader. A state the code cannot act on consistently should not be constructible.
 - **Split deciding from acting.** What to do (who may start, what is allowed, what a refusal says, whether to resume) is a value one function returns; another carries it out. In functions: `decideResume` in `app/auto-resume.ts` returns the choice and its caller acts. In layers: the app decides and an engine or gateway turns the decision into its own format and runs it. If an engine file names a policy, a role or a refusal of its own, or a function both chooses and does, split it.
 - **Fail closed.** A missing gate, token or config refuses; it never allows.
-- **No work at import.** A module defines; the daemon's boot starts. Safety must not depend on a side-effect import loading.
+- **No work at import.** A module defines; the daemon's boot starts. Today this is a direction, not a fact: the delivery gate is set by importing `app/restricted.ts`, and `app/` registers listeners, timers and gateway handlers at module level (#143 removes them). Do not add another without a reason in the PR.
 - **An exception list only shrinks.** Do not add an entry to a check's list to make it pass without saying why in the PR.
