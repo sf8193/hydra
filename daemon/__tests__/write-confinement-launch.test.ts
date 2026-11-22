@@ -14,7 +14,8 @@ import { EMPTY_CONFIG } from '../../config/load.js'
 import { readDenyRoots } from '../../config/write-confinement.js'
 import { hydraLoadEnv } from '../../infra/hydra-config.js'
 import type { HydraConfig } from '../../config/types.js'
-import { _resetSourcedEnvNamesForTesting, sourceEnvFiles } from '../../shared/env-parse.js'
+import { _resetSourcedEnvNamesForTesting } from '../../shared/env-parse.js'
+import { sourceEnvFiles } from '../../infra/env-files.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 
 process.stderr.write = (() => true) as any

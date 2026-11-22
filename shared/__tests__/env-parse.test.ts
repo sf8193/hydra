@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { parseEnvLine, sourceEnvFiles } from '../env-parse.js'
+import { parseEnvLine } from '../env-parse.js'
+import { sourceEnvFiles } from '../../infra/env-files.js'
 import { mkdtempSync, writeFileSync, rmSync, chmodSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'

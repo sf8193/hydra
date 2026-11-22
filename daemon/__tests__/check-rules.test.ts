@@ -10,9 +10,9 @@ const rule = (id: string) => RULES.find(r => r.id === id)!
 const withAllowed = (id: string, allowed: string[]): Rule[] => [{ ...rule(id), allowed }]
 
 describe('check-rules', () => {
-  test('every rule has an id, a principle, owners and a fix that names where the capability goes', () => {
-    expect(RULES.map(r => r.id)).toEqual(['platform-name-branch', 'engine-name-branch'])
-    for (const r of RULES) {
+  test('the rules, and each name rule has a fix that names where the capability goes', () => {
+    expect(RULES.map(r => r.id)).toEqual(['platform-name-branch', 'engine-name-branch', 'io-in-core'])
+    for (const r of RULES.filter(r => r.id !== 'io-in-core')) {
       expect(r.principle).toBe('capabilities, not names')
       expect(r.fix).toMatch(/give the (gateway|engine) a capability .*(gateways\/gateway\.ts|engines\/engine-adapter\.ts)/)
     }
@@ -69,6 +69,55 @@ describe('check-rules', () => {
     expect(violations([file('app/x.ts', line)], allowed)).toEqual([])
     expect(violations([file('app/use-cases/x.ts', line)], allowed)).toEqual([])
     expect(violations([file('engines/x.ts', line)], allowed)[0]).toContain('Delete the extra entry')
+  })
+
+  describe('io-in-core', () => {
+    const io = (path: string, ...lines: string[]) => hits([file(path, ...lines)], withAllowed('io-in-core', [])).map(h => h.entry)
+
+    test('a new hit fails, naming the principle and the move', () => {
+      const v = violations([file('shared/x.ts', "import { readFileSync } from 'fs'")], withAllowed('io-in-core', []))
+      expect(v).toEqual([`shared/x.ts:1: io-in-core (tier 0 does no I/O): from 'fs'. To fix: ${rule('io-in-core').fix}. If it must stay, add "x.ts: from 'fs'" to its ALLOWED in scripts/check-rules.ts and say why in the PR`])
+      expect(rule('io-in-core').fix).toContain('move the I/O to infra/ (tier 1)')
+    })
+
+    test('each way in is a hit: fs, fs/promises, child_process, net, node:, a dynamic import, require, Bun.spawn/write/file', () => {
+      expect(io('shared/x.ts',
+        "import { readFileSync } from 'fs'",
+        'import { readFile } from "fs/promises"',
+        "import * as cp from 'child_process'",
+        "import { createServer } from 'node:net'",
+        "const fs = await import('node:fs')",
+        "const cp2 = require('child_process')",
+        "Bun.spawn(['ls']); Bun.spawnSync(['ls']); Bun.write('f', ''); Bun.file('f')",
+        "Bun.serve({}); Bun.connect({}); Bun.listen({}); await Bun.$`ls`; await fetch(url)",
+      )).toEqual([
+        "x.ts: from 'fs'", 'x.ts: from "fs/promises"', "x.ts: from 'child_process'", "x.ts: from 'node:net'",
+        "x.ts: import('node:fs')", "x.ts: require('child_process')",
+        'x.ts: Bun.spawn', 'x.ts: Bun.spawnSync', 'x.ts: Bun.write', 'x.ts: Bun.file',
+        'x.ts: Bun.serve', 'x.ts: Bun.connect', 'x.ts: Bun.listen', 'x.ts: Bun.$', 'x.ts: fetch(',
+      ])
+    })
+
+    test('an earlier type-only import hides nothing after it', () => {
+      expect(io('shared/x.ts', "import type { A } from './a.js'", "import { readFileSync } from 'fs'")).toEqual(["x.ts: from 'fs'"])
+      expect(io('shared/x.ts', "import type { Stats } from 'fs'", "import { readFileSync } from 'fs'")).toEqual(["x.ts: from 'fs'"])
+    })
+
+    test('only tier 0 is checked: shared/, config/, routing/ and the tier-0 root file; every other tier may do I/O', () => {
+      const line = "import { readFileSync } from 'fs'"
+      for (const path of ['shared/x.ts', 'shared/engines/x.ts', 'config/x.ts', 'routing/x.ts', 'throttled-queue.ts']) expect(io(path, line)).toHaveLength(1)
+      for (const path of ['infra/x.ts', 'gateways/x.ts', 'sessions/x.ts', 'app/x.ts', 'daemon.ts', 'cli/x.ts', 'shared/__tests__/x.test.ts']) expect(io(path, line)).toEqual([])
+    })
+
+    test('not hits: a type-only import, a path module, a comment, a module named like one, an injected fetch', () => {
+      expect(io('shared/x.ts',
+        "import type { Stats } from 'fs'",
+        "import { join } from 'path'",
+        "// import { readFileSync } from 'fs'",
+        "import { x } from './fs-names.js'",
+        'const r = await this.o.fetch(url); doFetch(url)',
+      )).toEqual([])
+    })
   })
 
   test('the repo today matches the allowlist exactly', () => {

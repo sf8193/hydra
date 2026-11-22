@@ -2,7 +2,7 @@ import { test, expect } from 'bun:test'
 import { mkdirSync, mkdtempSync, existsSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { syncMods, modsExport } from '../mods.js'
+import { syncMods, modsExport } from '../../infra/mods.js'
 
 function repo(): string {
   const r = mkdtempSync(join(tmpdir(), 'mods-repo-'))

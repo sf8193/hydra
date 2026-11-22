@@ -13,7 +13,8 @@ import { _setHydraConfigForTesting, _setLoadEnvForTesting } from '../../infra/hy
 import { EMPTY_CONFIG } from '../../config/load.js'
 import { sandboxInputs } from '../../app/restricted.js'
 import { configInput, macLike, rootsOf, withoutSandbox } from './sandbox-host.js'
-import { _resetSourcedEnvNamesForTesting, sourceEnvFiles } from '../../shared/env-parse.js'
+import { _resetSourcedEnvNamesForTesting } from '../../shared/env-parse.js'
+import { sourceEnvFiles } from '../../infra/env-files.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 
 process.stderr.write = (() => true) as any

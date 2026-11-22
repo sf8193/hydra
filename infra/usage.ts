@@ -1,7 +1,7 @@
 import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from 'fs'
 import { join } from 'path'
 import { claudeConfigDir, contextWindowOf } from '../shared/constants.js'
-import { isUnder } from '../shared/path-containment.js'
+import { isUnder } from './path-containment.js'
 
 export function projectDirName(cwd: string): string {
   return cwd.replace(/[^A-Za-z0-9]/g, '-')

@@ -15,7 +15,7 @@ export const browserDownloadDir = (workdir: string, named?: string): string => n
 
 /**
  * The folder, inside a write-confined specialist's workdir, where the files people send it are saved (the shared inbox under the state folder is denied to it).
- * The daemon makes it (0700) and writes to it; the specialist can write there too, so nothing found in it is trusted (shared/confined-inbox.ts).
+ * The daemon makes it (0700) and writes to it; the specialist can write there too, so nothing found in it is trusted (infra/confined-inbox.ts).
  */
 export const INBOX_DIR_NAME = '.inbox'
 /**

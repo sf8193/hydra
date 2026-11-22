@@ -5,7 +5,7 @@ import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { discardInboxFiles, inboxHooks, inboxSafeName, placeInInbox, prepareConfinedInbox, readPlainFile, writeInboxFile } from '../confined-inbox.js'
+import { discardInboxFiles, inboxHooks, inboxSafeName, placeInInbox, prepareConfinedInbox, readPlainFile, writeInboxFile } from '../../infra/confined-inbox.js'
 import { INBOX_DIR_NAME, INBOX_LIMITS } from '../../config/write-confinement.js'
 
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), 'confined-inbox-')))

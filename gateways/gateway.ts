@@ -212,7 +212,7 @@ export interface ChatGateway {
   getThreadStarterInfo(channelId: string): Promise<ThreadStarterInfo | null>
 
   // Attachments
-  /** Saves a message's attachments in `inboxDir`. `limits` is given for a write-confined specialist's own inbox (its caps and the checks of shared/confined-inbox.ts); absent for the shared inbox. */
+  /** Saves a message's attachments in `inboxDir`. `limits` is given for a write-confined specialist's own inbox (its caps and the checks of infra/confined-inbox.ts); absent for the shared inbox. */
   downloadAttachments(channelId: string, messageId: string, inboxDir: string, limits?: InboxLimits): Promise<DownloadedFile[]>
 
   // Users

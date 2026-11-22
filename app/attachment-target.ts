@@ -1,13 +1,13 @@
 // Where the files people send a session are saved, and under what limits: the one answer, for a message arriving (router.ts) and for the `download_attachment` tool.
 import { INBOX_LIMITS, type InboxLimits } from '../config/write-confinement.js'
-import { prepareConfinedInbox } from '../shared/confined-inbox.js'
+import { prepareConfinedInbox } from '../infra/confined-inbox.js'
 import { INBOX_DIR } from '../infra/config.js'
 import { registry } from '../sessions/registry.js'
 import { isWriteConfinedSession } from '../sessions/tool-surface.js'
 
 /**
  * A write-confined session (its record says so, or its bridge declared it) reads only its own folder, and the shared inbox is under the state folder, which it is denied: its files go to
- * `<workdir>/.inbox`, which the daemon makes and checks itself (shared/confined-inbox.ts; a link or file in its place throws, and the caller says why instead of saving). A confined session
+ * `<workdir>/.inbox`, which the daemon makes and checks itself (infra/confined-inbox.ts; a link or file in its place throws, and the caller says why instead of saving). A confined session
  * with no record has no folder to name, so nothing is saved for it (throws). Every other session, and none named, gets the shared inbox.
  */
 export function attachmentTarget(sessionId: string | undefined): { dir: string; limits?: InboxLimits } {

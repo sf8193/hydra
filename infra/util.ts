@@ -1,7 +1,7 @@
 import { realpathSync } from 'fs'
 import { join, sep } from 'path'
 import { gateway, STATE_DIR, STATE_WRITABLE } from './config.js'
-import { isUnder } from '../shared/path-containment.js'
+import { isUnder } from './path-containment.js'
 import type { Outbound } from '../gateways/gateway.js'
 import { parseSessionLabel, type SessionLabel } from '../shared/constants.js'
 

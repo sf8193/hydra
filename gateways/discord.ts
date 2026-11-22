@@ -21,7 +21,7 @@ import {
 } from 'discord.js'
 import { statSync } from 'fs'
 import { COUNT_EMOJI, SUPERSCRIPT } from './gateway.js'
-import { discardInboxFiles, writeInboxFile } from '../shared/confined-inbox.js'
+import { discardInboxFiles, writeInboxFile } from '../infra/confined-inbox.js'
 import type { InboxLimits } from '../config/write-confinement.js'
 import { GatewayHealth } from '../infra/gateway-health.js'
 import { planReactionReconciliation } from '../shared/reaction-reconcile.js'

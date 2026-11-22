@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { randomUUID } from 'crypto'
 import { join, resolve } from 'path'
 import { projectsRoot } from '../../infra/usage.js'
-import { isUnder } from '../../shared/path-containment.js'
+import { isUnder } from '../../infra/path-containment.js'
 import { TEST_STATE_DIR } from '../../test-setup.js'
 
 // Refuse to write anywhere but a throwaway root. The assertion in usage.test.ts

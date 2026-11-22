@@ -8,7 +8,7 @@
 
 import { App, webApi, type MessageEvent, type GenericMessageEvent, type BotMessageEvent } from '@slack/bolt'
 import { readFileSync, writeFileSync } from 'fs'
-import { discardInboxFiles, writeInboxFile } from '../shared/confined-inbox.js'
+import { discardInboxFiles, writeInboxFile } from '../infra/confined-inbox.js'
 import { customEmojiId } from '../shared/slack-lines.js'
 import type { InboxLimits } from '../config/write-confinement.js'
 import { SocketSupervisor } from '../shared/socket-supervisor.js'
