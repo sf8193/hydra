@@ -102,32 +102,23 @@ export const RULES: readonly Rule[] = [
     // Tier 0 (shared/, config/, routing/): what the tiers above build on, so it stays pure. Every other tier may do I/O.
     scope: path => tierOf(path) === 0,
     allowed: [
-      // config/: hydra.toml's loader, its readers and writers (add, admit, people, watch, token-vars, append, migrate and its steps).
-      "add.ts: from 'fs'",
+      // config/: hydra.toml's loader and its readers (load, watch, token-vars), which move when load does: its reads become one
+      // infra loader handing a pure validate a snapshot. admit and append write hydra.toml, and sessions/access.ts, which
+      // other work in progress holds, imports them.
       "admit.ts: from 'fs'",
       "append.ts: from 'fs'",
       "load.ts: Bun.spawnSync",
       "load.ts: from 'fs'",
-      "migrate-jobs.ts: from 'fs'",
-      "migrate-slack-watch.ts: from 'fs'",
-      "migrate.ts: from 'fs'",
-      "people.ts: from 'fs'",
       "token-vars.ts: from 'fs'",
       "watch.ts: from 'fs'",
       // routing/: the guard runs the operator's guard command.
       "guard.ts: from 'child_process'",
-      // shared/: the jobs files and atomic-write move with config/'s writers, which import them (config/migrate-jobs reads job
-      // state, config/append writes atomically). main-record's importers are sessions/main.ts and cli/lifecycle.ts, and
-      // sessions/ has other work in progress. tmuxNewSession in spawn-env is the next change, kept apart for size.
-      // socket-supervisor's fetch is the default of its injected one.
+      // shared/: atomic-write moves with config/append, which uses it. main-record's importers are sessions/main.ts and
+      // cli/lifecycle.ts, and sessions/ has other work in progress. socket-supervisor's fetch is the default of its
+      // injected one.
       "atomic-write.ts: from 'fs'",
-      "jobs-launchd.ts: from 'fs'",
-      "jobs.ts: from 'child_process'",
-      "jobs.ts: from 'fs'",
       "main-record.ts: from 'fs'",
-      "schedules.ts: from 'fs'",
       "socket-supervisor.ts: fetch(",
-      "spawn-env.ts: from 'child_process'",
     ],
     fix: 'move the I/O to infra/ (tier 1), keeping the pure part (types, parsing, rules) in tier 0, or have the caller pass in what was read',
   },

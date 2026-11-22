@@ -1,6 +1,7 @@
 // `hydra migrate`'s step for `<state>/jobs.toml`: its jobs become [schedules] (and, for a spawn job, a specialist).
 // Pure: the old file's text in, the tables (in hydra.toml's own snake_case keys) and what changes or can't be carried
 // over out. The jobs parser reads the file, so a schedule means exactly what its job meant.
+// Reading the file, and the dry run's owed-slot lines from job state: jobsStep in infra/migrate.ts.
 //
 //   [name] schedule                → [schedules.<name>] cron (same id: its state and launchd entry carry over)
 //   check, env_file                → the same keys; prompt → message; cwd → workdir
@@ -12,15 +13,11 @@
 //   to = "<thread id>"             → refused: a specialist is the only pointer to a thread
 // Dropped, with a note when set: revive (a specialist always revives), channel (alerts go to the operator), durable.
 
-import { existsSync, readFileSync } from 'fs'
-import { join, relative } from 'path'
-import { daemonFile, jobInitiator, owedSlot, parseJobsConfig, readDaemonState, readJobState, type Job } from '../shared/jobs.js'
-import { nextSlot } from '../shared/cron-local.js'
+import { parseJobsConfig, type Job } from '../shared/jobs.js'
 import { DEFAULT_IDLE_TTL_MS } from '../shared/constants.js'
 import { invalidSpecialistName, isSessionThread } from '../shared/specialist-name.js'
 import { readTarget, spelled, spelledTo } from '../shared/target-kind.js'
 import { DEFAULT_ALERT_AFTER_MS, type Runner } from './types.js'
-import type { MigrateStep } from './migrate.js'
 
 export type ScheduleTable = {
   cron: string
@@ -135,49 +132,4 @@ export function migrateJobs(text: string, opts: JobsMigrationOpts): JobsMigratio
     out.schedules[j.name] = s
   }
   return out
-}
-
-/**
- * The jobs.toml step for `hydra migrate`. Pending while jobs.toml is here: until migrate retires it, the clock runs it
- * exactly as before (shared/schedules.ts). A job that can't be carried over refuses the whole migrate, naming it.
- */
-export const jobsStep: MigrateStep = {
-  name: 'jobs.toml',
-  pending: stateDir => existsSync(join(stateDir, 'jobs.toml')),
-  run({ stateDir, env, spawnCwd }) {
-    const path = join(stateDir, 'jobs.toml')
-    if (!existsSync(path)) return undefined
-    const m = migrateJobs(readFileSync(path, 'utf8'), { sessionNames: env.sessionNames, defaultWorkdir: spawnCwd })
-    if (m.refusals.length) throw new Error(m.refusals.join('; '))
-    const now = new Date()
-    return {
-      doc: {
-        ...(Object.keys(m.schedules).length > 0 && { schedules: m.schedules }),
-        ...(Object.keys(m.specialists).length > 0 && { specialists: m.specialists }),
-      },
-      consumed: ['jobs.toml'],
-      // Recorded here, with the daemon stopped, so deleting jobs.toml.migrated before its first tick changes nothing.
-      writes: { [relative(stateDir, daemonFile(stateDir))]: JSON.stringify({ ...readDaemonState(stateDir).state, jobsMigrated: now.toISOString() }, null, 2) },
-      notes: [...m.notes, ...Object.entries(m.schedules).map(([id, s]) => equivalence(stateDir, id, s, m.specialists[id], now))],
-    }
-  },
-}
-
-/**
- * One line per schedule that a dry run can be checked against: the next slot, and whether a slot is owed now (from the
- * same jobs-state/<id>.state.json, so a covered slot stays covered), the runner, and where a run goes and as whom.
- */
-function equivalence(stateDir: string, id: string, s: ScheduleTable, spec: SpecialistTable | undefined, now: Date): string {
-  const next = nextSlot(s.cron, now)
-  let owed = ''
-  if (s.runner === 'daemon') {
-    const r = readJobState(stateDir, id, s.cron)
-    const slot = r.kind === 'ok' ? owedSlot(s.cron, r.state, now) : null
-    owed = r.kind === 'missing' ? ', no record yet (nothing owed)' : r.kind === 'unreadable' ? `, record unreadable (${r.error})` : slot ? `, owed: ${slot.label}` : ', not owed'
-  }
-  const extras = [...(s.needs ? [`needs ${s.needs.join(', ')}`] : []), ...(s.alert_after ? [`alert_after ${s.alert_after}`] : [])]
-  const where = !s.target ? 'a sensor (no message)'
-    : spec ? `to ${s.target}: a fresh session in a new thread in ${spec.home_place}`
-    : `to ${s.target}`
-  return `${id}: next ${next ? next.label : 'never'}${owed}; runner ${s.runner}${extras.length ? `, ${extras.join(', ')}` : ''}; ${where}; initiator ${jobInitiator(id)}`
 }

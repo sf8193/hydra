@@ -7,7 +7,7 @@ import { execFileSync } from 'child_process'
 import { mkdtempSync, rmSync } from 'fs'
 import { join } from 'path'
 import { PANE_ROOTS_FORMAT, parsePaneRoots, vitalsSnapshot } from '../../infra/vitals-snapshot.js'
-import { tmuxNewSession } from '../../shared/spawn-env.js'
+import { tmuxNewSession } from '../../infra/tmux-session.js'
 
 const available = Bun.spawnSync(['tmux', '-V']).exitCode === 0
 let dir = ''

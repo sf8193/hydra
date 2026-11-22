@@ -1,9 +1,9 @@
-// `hydra config add <fragment.toml> [--dry-run]`: add an outside repo's [specialists.*], [schedules.*] and [[rules]] to hydra.toml (config/add.ts).
+// `hydra config add <fragment.toml> [--dry-run]`: add an outside repo's [specialists.*], [schedules.*] and [[rules]] to hydra.toml (infra/add-fragment.ts).
 
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
 import { resolveConfig, statePlatform } from './helpers.js'
-import { addFragment } from '../config/add.js'
+import { addFragment } from '../infra/add-fragment.js'
 import { systemEnv } from '../config/load.js'
 import { SESSION_NAMES } from '../shared/session-catalog.js'
 

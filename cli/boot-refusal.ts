@@ -1,9 +1,9 @@
-// The reason a daemon refused to start (config/migrate.ts bootRefusal), kept in its state dir: the daemon writes it as
+// The reason a daemon refused to start (infra/migrate.ts bootRefusal), kept in its state dir: the daemon writes it as
 // it exits, the watchdog adds that it has logged it, and `hydra health` reads it. A daemon that starts removes it.
 
 import { readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { BOOT_REFUSED_FILE } from '../config/migrate.js'
+import { BOOT_REFUSED_FILE } from '../infra/migrate.js'
 
 type Marker = { reason?: string; at?: number; watchdogLogged?: boolean; alerted?: boolean; alertTries?: number }
 const read = (stateDir: string): Marker => {

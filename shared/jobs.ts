@@ -1,9 +1,8 @@
-// Recurring jobs, the part both sides read: jobs.toml, the state files the daemon writes, and the owed rule.
+// Recurring jobs, the part both sides read: jobs.toml, the state files' shapes, and the owed rule. Reading and writing
+// the files: infra/job-files.ts; the ps reads: infra/processes.ts.
 // The daemon's clock (connectors/clock/jobs-clock.ts) is the only writer of job state; attempts (cli/jobs.ts) write one
 // result file each; the CLI only reads.
 
-import { spawnSync } from 'child_process'
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, writeSync } from 'fs'
 import { homedir } from 'os'
 import { isAbsolute, join, normalize } from 'path'
 import { latestSlot, nextSlot, parseCron, type Slot } from './cron-local.js'
@@ -351,27 +350,10 @@ export function parseExternalName(file: string): { name: string; slotAt: string 
   const m = /^([a-z0-9][a-z0-9-]*)@(\d+)\.json$/.exec(file)
   return m ? { name: m[1], slotAt: new Date(Number(m[2])).toISOString() } : null
 }
-/** A job's launchd results waiting for the daemon, oldest slot first. */
-export function externalResults(stateDir: string, name: string): string[] {
-  let files: string[] = []
-  try { files = readdirSync(resultsDir(stateDir)) } catch {}
-  return files.map(parseExternalName).filter((p): p is { name: string; slotAt: string } => p?.name === name)
-    .map(p => p.slotAt).sort()
-}
-
 /** `<name>.<id>.<nonce>.json` → its parts, or null for anything else in the results dir (a tmp file, say). */
 export function parseResultName(file: string): { name: string; id: number; nonce: string } | null {
   const m = /^([a-z0-9][a-z0-9-]*)\.(\d+)\.([a-z0-9]+)\.json$/.exec(file)
   return m ? { name: m[1], id: Number(m[2]), nonce: m[3] } : null
-}
-
-/** tmp + fsync + rename: a reader sees the old file or the new one, never half of one. */
-export function writeAtomic(file: string, data: string): void {
-  mkdirSync(join(file, '..'), { recursive: true })
-  const tmp = `${file}.${process.pid}.tmp`
-  const fd = openSync(tmp, 'w')
-  try { writeSync(fd, data); fsyncSync(fd) } finally { closeSync(fd) }
-  renameSync(tmp, file)
 }
 
 /** A local calendar date, `YYYY-MM-DD`. */
@@ -399,24 +381,8 @@ const isV0 = (o: Record<string, unknown>) =>
 
 export type ReadState = { kind: 'missing' } | { kind: 'unreadable'; error: string } | { kind: 'ok'; state: JobState; translated: boolean }
 
-/**
- * A job's state: missing (never ran here), unreadable (corrupt or foreign), or the state. With no daemon record yet,
- * the old runner's `<name>.json` is migrated (`translated`), and only then: once the daemon has written its own
- * record, a later v0 write can't touch it.
- */
-export function readJobState(stateDir: string, name: string, schedule?: string): ReadState {
-  if (existsSync(stateFile(stateDir, name))) {
-    const r = readRecord(stateFile(stateDir, name), schedule)
-    return r.kind === 'ok' && r.translated ? { kind: 'unreadable', error: 'a v0 record in the daemon state file' } : r
-  }
-  if (!existsSync(v0File(stateDir, name))) return { kind: 'missing' }
-  const r = readRecord(v0File(stateDir, name), schedule)
-  return r.kind === 'ok' ? { ...r, translated: true } : r
-}
-
-function readRecord(f: string, schedule: string | undefined): ReadState {
-  let o: unknown
-  try { o = JSON.parse(readFileSync(f, 'utf8')) } catch (err) { return { kind: 'unreadable', error: err instanceof Error ? err.message : String(err) } }
+/** A parsed state file, as readJobState (infra/job-files.ts) reports it: the old runner's v0 record translated, an unknown shape unreadable. */
+export function jobStateFrom(o: unknown, schedule: string | undefined): ReadState {
   if (typeof o !== 'object' || o === null || Array.isArray(o)) return { kind: 'unreadable', error: 'not an object' }
   const rec = o as Record<string, unknown>
   if (isV0(rec)) return { kind: 'ok', state: translateV0(rec as { at: string; outcome: V0Outcome; note?: string }, schedule), translated: true }
@@ -425,18 +391,6 @@ function readRecord(f: string, schedule: string | undefined): ReadState {
   }
   if (rec.notNow !== undefined) { if (rec.deferred === undefined) rec.deferred = rec.notNow; delete rec.notNow }
   return { kind: 'ok', state: rec as JobState, translated: false }
-}
-
-export function readDaemonState(stateDir: string): { state: DaemonState; corrupt?: string } {
-  const f = daemonFile(stateDir)
-  if (!existsSync(f)) return { state: {} }
-  try {
-    const o = JSON.parse(readFileSync(f, 'utf8'))
-    if (typeof o !== 'object' || o === null || Array.isArray(o)) return { state: {}, corrupt: 'not an object' }
-    return { state: o as DaemonState }
-  } catch (err) {
-    return { state: {}, corrupt: err instanceof Error ? err.message : String(err) }
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -457,7 +411,6 @@ export function owedSlot(schedule: string, state: JobState, now: Date, zone?: st
   if (c && (slot.at.getTime() <= new Date(c.at).getTime() || c.slot === slot.label)) return null
   return slot
 }
-
 
 /**
  * Back-off: after n consecutive failures the next attempt waits min(2^n minutes, 1 hour, the schedule's
@@ -504,7 +457,6 @@ export function awakeTimeout(fn: () => void, ms: number, clock: LoopClock = {
 
 /** The initiator every session and message a job causes carries. */
 export const jobInitiator = (name: string) => `jobs:${name}`
-
 
 // ---------------------------------------------------------------------------
 // The attempt's command line
@@ -554,39 +506,6 @@ export type Proc = { pid: number; lstart: string; command: string }
 
 /** ps pads the day of month ("Sat Nov  7"); every lstart is compared in this one form, whichever ps call produced it. */
 export const normalizeLstart = (s: string) => s.trim().replace(/\s+/g, ' ')
-
-// ps prints lstart in local time, following TZ, which the clock follows as a laptop travels: every call pins UTC, so
-// one process always has one lstart, whatever the zone is now or was when it was recorded.
-const psEnv = () => ({ ...process.env, TZ: 'UTC' })
-
-// These run on the daemon's loop (the clock's settle). A ps that hangs is killed and reads as ps failing, which
-// settle already takes as "decide next tick": a slow answer costs a tick, never a verdict.
-const PS_TIMEOUT_MS = 2_000
-const psOpts = { encoding: 'utf8', timeout: PS_TIMEOUT_MS, killSignal: 'SIGKILL' } as const
-
-/** The process's start time, or null if no such process. Throws if ps itself failed: that says nothing about the pid. */
-export function lstartOf(pid: number): string | null {
-  const r = spawnSync('ps', ['-o', 'lstart=', '-p', String(pid)], { ...psOpts, env: psEnv() })
-  if (r.error) throw r.error
-  const out = r.stdout ? normalizeLstart(r.stdout) : ''
-  if (r.status === 0 && out) return out
-  if (r.status === 1) return null
-  throw new Error(`ps exited ${r.status}: ${(r.stderr ?? '').trim()}`)
-}
-
-export function listProcesses(): Proc[] {
-  const r = spawnSync('ps', ['-ax', '-o', 'pid=,lstart=,command='], { ...psOpts, env: psEnv(), maxBuffer: 16 * 1024 * 1024 })
-  if (r.error) throw r.error
-  if (r.status !== 0) throw new Error(`ps exited ${r.status}: ${(r.stderr ?? '').trim()}`)
-  const out: Proc[] = []
-  for (const line of (r.stdout ?? '').split('\n')) {
-    // lstart is five fields: "Sat Nov  7 16:25:09 2026"
-    const m = /^\s*(\d+)\s+(\S+\s+\S+\s+\d+\s+[\d:]+\s+\d+)\s+(.*)$/.exec(line)
-    if (m) out.push({ pid: Number(m[1]), lstart: normalizeLstart(m[2]), command: m[3] })
-  }
-  return out
-}
-
 
 // ---------------------------------------------------------------------------
 // The attempt's environment

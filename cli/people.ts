@@ -1,7 +1,7 @@
-// `hydra people add <id> <address> [--role <r>]... [--name <n>] [--dry-run]`: add a person to hydra.toml (config/people.ts).
+// `hydra people add <id> <address> [--role <r>]... [--name <n>] [--dry-run]`: add a person to hydra.toml (infra/add-person.ts).
 
 import { resolveConfig, statePlatform } from './helpers.js'
-import { addPerson } from '../config/people.js'
+import { addPerson } from '../infra/add-person.js'
 import { systemEnv } from '../config/load.js'
 import { SESSION_NAMES } from '../shared/session-catalog.js'
 

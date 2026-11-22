@@ -1,11 +1,11 @@
-// `hydra migrate`: write <state>/hydra.toml once from the old files (config/migrate.ts), and say what changed.
+// `hydra migrate`: write <state>/hydra.toml once from the old files (infra/migrate.ts), and say what changed.
 
 import { connect } from 'net'
 import { homedir } from 'os'
 import { basename, join } from 'path'
 import { readEnvFileValue, resolveConfig } from './helpers.js'
 import { watchdogLoaded } from './lifecycle.js'
-import { applyMigrate, finishMigrate, MIGRATE_JOURNAL, planMigrate } from '../config/migrate.js'
+import { applyMigrate, finishMigrate, MIGRATE_JOURNAL, planMigrate } from '../infra/migrate.js'
 import { formatIssues, systemEnv } from '../config/load.js'
 import { SESSION_NAMES } from '../shared/session-catalog.js'
 import { existsSync } from 'fs'

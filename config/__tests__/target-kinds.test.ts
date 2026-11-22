@@ -3,7 +3,7 @@
 import { describe, test, expect } from 'bun:test'
 import { join } from 'path'
 import { loadHydraConfig } from '../load.js'
-import { planAddFragment } from '../add.js'
+import { planAddFragment } from '../../infra/add-fragment.js'
 import { migrateJobs } from '../migrate-jobs.js'
 import type { ConfigIssue } from '../types.js'
 import { testLoadEnv } from './load-env.js'

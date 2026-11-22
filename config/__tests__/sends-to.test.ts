@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { loadHydraConfig, systemEnv } from '../load.js'
-import { addFragment } from '../add.js'
+import { addFragment } from '../../infra/add-fragment.js'
 import type { HydraConfig } from '../types.js'
 import { testLoadEnv } from './load-env.js'
 

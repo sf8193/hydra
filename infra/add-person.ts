@@ -3,11 +3,12 @@
 // the result loads. Removing someone is an edit to an existing table, which the operator (or the access skill) makes.
 
 import { readFileSync } from 'fs'
-import { withHydraTomlLock, writeIfUnchanged } from './append.js'
+import { withHydraTomlLock, writeIfUnchanged } from '../config/append.js'
 import { join } from 'path'
-import { formatIssues, loadHydraConfig, normalizeAddress } from './load.js'
-import { appendOnly, appendText, HYDRA_TOML, hydraTomlInUse, mergeDocs, toToml } from './migrate.js'
-import type { LoadEnv } from './types.js'
+import { formatIssues, loadHydraConfig, normalizeAddress } from '../config/load.js'
+import { hydraTomlInUse } from './migrate.js'
+import { appendOnly, appendText, HYDRA_TOML, mergeDocs, toToml } from '../config/toml-doc.js'
+import type { LoadEnv } from '../config/types.js'
 
 const ID_RE = /^[a-z0-9][a-z0-9-]*$/
 
