@@ -3,8 +3,8 @@
 import { describe, test, expect, afterEach } from 'bun:test'
 import { threadRegistry, registry, type ThreadMetadata } from '../../sessions/registry.js'
 import { endedSessions, endedWithinDays, ENDED_LIMIT } from '../../sessions/ended-sessions.js'
-import { handleCLIRequest } from '../cli-handler.js'
-import { executeTool } from '../bridge-dispatch.js'
+import { handleCLIRequest } from '../../app/cli-handler.js'
+import { executeTool } from '../../app/bridge-dispatch.js'
 import { transport } from '../../sessions/bridge-transport.js'
 import { fakeAdapter } from './test-harness.js'
 

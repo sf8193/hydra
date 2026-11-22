@@ -3,8 +3,8 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { gateway } from '../../infra/config.js'
 import { registry, threadRegistry, type SessionInfo } from '../../sessions/registry.js'
-import { executeTool } from '../bridge-dispatch.js'
-import { killSession } from '../session-lifecycle.js'
+import { executeTool } from '../../app/bridge-dispatch.js'
+import { killSession } from '../../app/session-lifecycle.js'
 import { fakeAdapter } from './test-harness.js'
 
 process.stderr.write = (() => true) as any

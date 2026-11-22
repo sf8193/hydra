@@ -17,7 +17,7 @@
 | Requested changes | Same builder loops; round increments | `protocols/delegated-build.ts:21,45-49`; `protocol-runner.ts` round handling |
 | Approval | Goes directly to closing; no mechanical or independent-review gate | `protocols/delegated-build.ts:21,45-49` |
 | Final round | Any PM verdict is forced to approval by `finalEvent: pm_approve` | `protocols/delegated-build.ts:48` |
-| Quick delegate | Skips clarification and starts building | `daemon/router.ts:672-683` |
+| Quick delegate | Skips clarification and starts building | `app/router.ts:672-683` |
 | Builder dies | PM self-build fallback | `protocols/delegated-build.ts:20,91-98` |
 | Cleanup timeout | Completes even without PM summary | `protocols/delegated-build.ts:23` (pre-existing, out of scope) |
 

@@ -28,7 +28,7 @@ export type BridgeConn = {
 // ---------------------------------------------------------------------------
 
 /**
- * Whether a queued notification may still be flushed to this session: a reason it may not, or undefined. Set by daemon/restricted.ts
+ * Whether a queued notification may still be flushed to this session: a reason it may not, or undefined. Set by app/restricted.ts
  * (the one drift gate; it cannot be imported here, since it reaches back to this module through the specialists).
  */
 let flushGate: ((info: SessionInfo) => string | undefined) | undefined

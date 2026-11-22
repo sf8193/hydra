@@ -6,7 +6,7 @@ import { registry } from '../../../sessions/registry.js'
 import { setSpecialistThread, _reloadSpecialists } from '../../../sessions/specialists.js'
 import { _setHydraConfigForTesting } from '../../../infra/hydra-config.js'
 import { getConversationTable, slackRuntimeDeps, editInConversation, deleteInConversation, stopSlackListener } from '../runtime.js'
-import { executeTool } from '../../../daemon/bridge-dispatch.js'
+import { executeTool } from '../../../app/bridge-dispatch.js'
 import type { MessageAuthor, Writer } from '../listener.js'
 import { TWO_APPS, hydra, view, SALES_BOT } from './slack-config.js'
 

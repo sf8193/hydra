@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
-import { runHomeStatusAction } from '../home-actions.js'
+import { runHomeStatusAction } from '../../app/home-actions.js'
 import type { SessionInfo } from '../../sessions/registry.js'
-import type { BlockingState } from '../pane-probe.js'
+import type { BlockingState } from '../../app/pane-probe.js'
 
 type Deps = NonNullable<Parameters<typeof runHomeStatusAction>[2]>
 

@@ -4,9 +4,9 @@ import { join } from 'path'
 import { registry, threadRegistry } from '../../sessions/registry.js'
 import { gateway } from '../../infra/config.js'
 import { on } from '../../infra/event-bus.js'
-import { killSession } from '../session-lifecycle.js'
-import { executeTool } from '../bridge-dispatch.js'
-import { handleCLIRequest } from '../cli-handler.js'
+import { killSession } from '../../app/session-lifecycle.js'
+import { executeTool } from '../../app/bridge-dispatch.js'
+import { handleCLIRequest } from '../../app/cli-handler.js'
 
 // `session:death` says whether the session was ended on purpose. What the operator ends ends: a kill takes the thread's
 // Slack subscriptions with it. A crash, a handoff, a respawn or a resumable idle end keeps them.
@@ -69,7 +69,7 @@ test('only these files call killSession with keepRecord or keepWatches (any layo
   const root = join(import.meta.dir, '..', '..')
   const files: string[] = []
   const walk = (d: string) => { for (const f of readdirSync(d)) { if (f === 'node_modules' || f === '__tests__' || f.startsWith('.')) continue; const p = join(d, f); if (statSync(p).isDirectory()) walk(p); else if (p.endsWith('.ts') && !p.includes('/scripts/')) files.push(p) } }
-  for (const d of ['daemon', 'infra', 'engines', 'sessions', 'specialists', 'connectors', 'shared']) walk(join(root, d))
+  for (const d of ['app', 'infra', 'engines', 'sessions', 'specialists', 'connectors', 'shared']) walk(join(root, d))
   const keeping = new Set<string>()
   for (const f of files) {
     const src = readFileSync(f, 'utf8')
@@ -78,6 +78,6 @@ test('only these files call killSession with keepRecord or keepWatches (any layo
       if (/keepRecord|keepWatches/.test(argsOf(src, m.index! + 'killSession'.length))) keeping.add(f.slice(root.length + 1))
     }
   }
-  expect([...keeping].sort()).toEqual(['daemon/recovery.ts', 'daemon/session-lifecycle.ts'])
-  expect(readFileSync(join(root, 'daemon/destroy.ts'), 'utf8')).toContain('emitSessionDeath(info, true)')
+  expect([...keeping].sort()).toEqual(['app/recovery.ts', 'app/session-lifecycle.ts'])
+  expect(readFileSync(join(root, 'app/destroy.ts'), 'utf8')).toContain('emitSessionDeath(info, true)')
 })

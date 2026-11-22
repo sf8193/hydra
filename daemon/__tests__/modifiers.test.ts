@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { resolveModifier, resolveModifiers, listModifierKeys, partitionFlagModifiers, partitionSpawnModifiers, validateModifier, reservedRunParams } from '../modifiers.js'
+import { resolveModifier, resolveModifiers, listModifierKeys, partitionFlagModifiers, partitionSpawnModifiers, validateModifier, reservedRunParams } from '../../protocols/modifiers.js'
 
 describe('modifier registry', () => {
   test('security modifier resolves by name', () => {

@@ -1,5 +1,5 @@
-import { protocol, protocolSeed } from '../daemon/protocol-dsl.js'
-import { request } from '../daemon/prompts/request.js'
+import { protocol, protocolSeed } from './dsl.js'
+import { request } from '../shared/prompts/request.js'
 
 export default protocol('build', {
   emoji: '🔨',

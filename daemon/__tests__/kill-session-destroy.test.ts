@@ -8,8 +8,8 @@
 
 import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from 'bun:test'
 import { engines } from '../../engines/instances.js'
-import { executeTool } from '../bridge-dispatch.js'
-import { handleCLIRequest } from '../cli-handler.js'
+import { executeTool } from '../../app/bridge-dispatch.js'
+import { handleCLIRequest } from '../../app/cli-handler.js'
 import { registry, threadRegistry } from '../../sessions/registry.js'
 import type { SessionInfo } from '../../sessions/registry.js'
 import { gateway } from '../../infra/config.js'

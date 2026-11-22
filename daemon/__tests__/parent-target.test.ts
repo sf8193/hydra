@@ -3,8 +3,8 @@ import { gateway } from '../../infra/config.js'
 import { registry } from '../../sessions/registry.js'
 import type { SessionInfo } from '../../sessions/registry.js'
 import { transport } from '../../sessions/bridge-transport.js'
-import { executeTool } from '../bridge-dispatch.js'
-import { killSession } from '../session-lifecycle.js'
+import { executeTool } from '../../app/bridge-dispatch.js'
+import { killSession } from '../../app/session-lifecycle.js'
 
 process.stderr.write = (() => true) as any
 

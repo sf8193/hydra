@@ -1,10 +1,10 @@
 // `hydra deliver --thread <id> --revive` (spec §2, P1): an unnamed thread heals only when asked. Flows B, D, E, F
 // for a thread id, and the deleted-thread case (exit 3). The spawn is stubbed through recovery.ts's seam.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { handleCLIRequest, type CLIRequest } from '../cli-handler.js'
+import { handleCLIRequest, type CLIRequest } from '../../app/cli-handler.js'
 import { registry, threadRegistry, type SessionInfo } from '../../sessions/registry.js'
 import { transport } from '../../sessions/bridge-transport.js'
-import { _setRecoveryDeps, _resetRecoveryDeps, reviveDeps } from '../recovery.js'
+import { _setRecoveryDeps, _resetRecoveryDeps, reviveDeps } from '../../app/recovery.js'
 import { _resetBackoff } from '../../infra/recovery-backoff.js'
 import { _setDaemonStartedAtForTesting } from '../../sessions/session-reachability.js'
 import { fakeAdapter } from './test-harness.js'

@@ -24,8 +24,8 @@ Implemented on `sf/reviewer-verdicts` in its isolated worktree. The protocol now
 ## Files
 
 - `protocols/review.ts`: verdict transitions, conditional owner phase, prompts.
-- `daemon/review-result.ts`: shared classifier and labels.
-- `daemon/protocol-types.ts`, `daemon/protocol-runner.ts`: terminal phase in completion event.
+- `shared/review-result.ts`: shared classifier and labels.
+- `shared/protocol-types.ts`, `app/protocol-runner.ts`: terminal phase in completion event.
 - `daemon/factory.ts`: PM notification, acceptance gate, retry reset.
 - `shared/constants.ts`, `shared/tool-definitions.ts`, command/template entrypoints: 20-round default and cap.
 - `daemon/__tests__/protocol-scenarios.test.ts`, `daemon/__tests__/factory-qol.test.ts`, `daemon/__tests__/review-result.test.ts`: branch and integration cases.

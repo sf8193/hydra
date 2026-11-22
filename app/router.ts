@@ -23,7 +23,7 @@ import { handleReviewIntercept, handleCancelReviewIntercept } from './commands/r
 import { handleBuildV2Intercept, handleCancelBuildV2Intercept } from './commands/build-v2.js'
 import { handleDelegatedBuildIntercept } from './commands/delegated-build.js'
 import { handleSpikeV2Intercept, handleCancelSpikeV2Intercept } from './commands/spike-v2.js'
-import { listModifierKeys, partitionSpawnModifiers } from './modifiers.js'
+import { listModifierKeys, partitionSpawnModifiers } from '../protocols/modifiers.js'
 import { isThreadOccupied } from '../sessions/protocol-registry.js'
 import { getRunByThread, cancelRun } from './protocol-runner.js'
 import { refreshSessionVisual } from '../sessions/anchor-state.js'

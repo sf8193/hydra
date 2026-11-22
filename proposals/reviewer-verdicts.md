@@ -12,12 +12,12 @@ Give the Hydra critic three structured verdicts: `approve`, `request_changes`, a
 | --- | --- | --- |
 | Normal review | Critic posts prose, owner responds, and the exchange repeats until the configured round count. | `protocols/review.ts:20-23` |
 | Final round | Owner's final response goes to cleanup regardless of whether the critic's last post found a blocker. | `protocols/review.ts:22` |
-| Critic decision API | The DSL supports a required structured verdict and records it in `CompletionEvent.decisions`. | `daemon/protocol-dsl.ts:305-321`, `daemon/protocol-runner.ts:329-361` |
-| Decision on final round | `finalEvent` overrides every verdict with one event. The build protocol uses this now. | `daemon/protocol-runner.ts:1079-1088`, `protocols/build.ts:25-36` |
-| Normal completion | `CompletionEvent.outcome` is `complete`, with no top-level verdict; the factory treats all completed review runs as reviewed. | `daemon/protocol-runner.ts:1449-1463`, `daemon/factory.ts:1583-1605` |
-| Critic death or silence | The review falls back to owner-run subagent review, or cancels with `+no-fallback`. | `protocols/review.ts:21,24-33`, `daemon/protocol-runner.ts:459-620` |
-| Direct subagent review | `+subagent` skips the critic, so no independent critic verdict exists. | `daemon/protocol-runner.ts:171-205` |
-| Timeout in cleanup | It completes even without an owner summary. | `protocols/review.ts:23`, `daemon/protocol-runner.ts:974-1006` |
+| Critic decision API | The DSL supports a required structured verdict and records it in `CompletionEvent.decisions`. | `protocols/dsl.ts:305-321`, `app/protocol-runner.ts:329-361` |
+| Decision on final round | `finalEvent` overrides every verdict with one event. The build protocol uses this now. | `app/protocol-runner.ts:1079-1088`, `protocols/build.ts:25-36` |
+| Normal completion | `CompletionEvent.outcome` is `complete`, with no top-level verdict; the factory treats all completed review runs as reviewed. | `app/protocol-runner.ts:1449-1463`, `daemon/factory.ts:1583-1605` |
+| Critic death or silence | The review falls back to owner-run subagent review, or cancels with `+no-fallback`. | `protocols/review.ts:21,24-33`, `app/protocol-runner.ts:459-620` |
+| Direct subagent review | `+subagent` skips the critic, so no independent critic verdict exists. | `app/protocol-runner.ts:171-205` |
+| Timeout in cleanup | It completes even without an owner summary. | `protocols/review.ts:23`, `app/protocol-runner.ts:974-1006` |
 | Factory PM handoff | Factory gets the owner's summary and offers accept, retry, or abandon. It does not surface a critic verdict. | `daemon/factory.ts:1583-1605,1828-1834` |
 
 ## Proposed transitions

@@ -2,7 +2,7 @@
 // `/usr/bin/sandbox-exec`); where it is missing, a specialist that lists servers is refused, never run without it.
 //
 // BEST-EFFORT HYGIENE, NOT CONTAINMENT. A listed server is code the operator trusts with their own privileges (SERVER_TRUST_SENTENCE in
-// daemon/restricted.ts); the per-server `tools` list is the control. This profile is a layer proven by probes on one macOS version, written
+// app/restricted.ts); the per-server `tools` list is the control. This profile is a layer proven by probes on one macOS version, written
 // to stop a buggy or unsophisticated server from doing the obvious damage. It does not stop a hostile one.
 //
 // The profile is one fixed text for every operator, which the server's own children inherit. It starts from "allow everything" and

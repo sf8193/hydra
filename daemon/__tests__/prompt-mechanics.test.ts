@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { mechanicsBlock } from '../prompts/mechanics.js'
+import { mechanicsBlock } from '../../shared/prompts/mechanics.js'
 
 const mech = { threadId: 't', sessionId: 's', tmuxName: 'm' }
 

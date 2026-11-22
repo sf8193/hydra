@@ -13,10 +13,10 @@ import { refreshSessionVisual, registerProtocolBadge, formatRoundBadge, formatSt
 import { dumpTranscript } from '../infra/transcript-dump.js'
 import { defaultToolDescription } from '../engines/bridge-tools.js'
 import { pushToolSurface } from '../sessions/tool-surface.js'
-import type { Protocol, FallbackCause } from './protocol-dsl.js'
-import type { RunState, BehaviorContext, CompletionEvent, PhaseChangeEvent } from './protocol-types.js'
+import type { Protocol, FallbackCause } from '../protocols/dsl.js'
+import type { RunState, BehaviorContext, CompletionEvent, PhaseChangeEvent } from '../shared/protocol-types.js'
 import { EventEmitter } from 'events'
-import { requiredLenses, withDefaultLenses, type Modifier, type SeedModifier } from './modifiers.js'
+import { requiredLenses, withDefaultLenses, type Modifier, type SeedModifier } from '../protocols/modifiers.js'
 import { timed } from '../shared/loop-watch.js'
 
 let doSpawnSession = _doSpawnSession

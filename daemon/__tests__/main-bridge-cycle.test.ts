@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { createMainBridgeCycle, formatReconnectLine, mainCloseRecordsReason, type ConnectResult } from '../main-bridge-cycle.js'
+import { createMainBridgeCycle, formatReconnectLine, mainCloseRecordsReason, type ConnectResult } from '../../app/main-bridge-cycle.js'
 
 // Narrow a ConnectResult to the reconnect variant (throws if it was 'first').
 function recon(r: ConnectResult) {

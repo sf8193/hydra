@@ -7,7 +7,7 @@ import { setSpecialistThread, _reloadSpecialists } from '../../../sessions/speci
 import { _setHydraConfigForTesting } from '../../../infra/hydra-config.js'
 import { getConversationTable, slackRuntimeDeps, stopSlackListener } from '../runtime.js'
 import { TOP_LEVEL } from '../conversation.js'
-import { executeTool } from '../../../daemon/bridge-dispatch.js'
+import { executeTool } from '../../../app/bridge-dispatch.js'
 import { TWO_APPS, hydra, view, SALES_BOT } from './slack-config.js'
 
 process.stderr.write = (() => true) as any

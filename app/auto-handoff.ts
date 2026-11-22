@@ -13,7 +13,7 @@ import { declaredSpecialist, handoffProtocolOf, type HandoffProtocol } from '../
 import { specialistOf } from '../sessions/specialists.js'
 import { killAndRespawn, NotReplaced } from '../specialists/specialist-deliver.js'
 import { safeSend } from '../infra/util.js'
-import { CACHE_HANDOFF_LINE, FULL_HANDOFF_DEFAULT_LINE } from './context-lines.js'
+import { CACHE_HANDOFF_LINE, FULL_HANDOFF_DEFAULT_LINE } from '../shared/context-lines.js'
 
 // Cache handoff, opt-in with AUTO_HANDOFF_CACHE=1: a Claude session at 50%+ context that nobody has touched for 50 minutes
 // hands off while its 1-hour prompt cache is still warm (the 5-minute poll lands the request 50-55 minutes after the last touch).

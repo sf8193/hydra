@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { createStateMachine } from '../state-machine.js'
+import { createStateMachine } from '../../shared/state-machine.js'
 
 // Suppress stderr logging during tests
 process.stderr.write = (() => true) as any

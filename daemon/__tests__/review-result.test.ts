@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { reviewResult } from '../review-result.js'
-import type { CompletionEvent } from '../protocol-types.js'
+import { reviewResult } from '../../shared/review-result.js'
+import type { CompletionEvent } from '../../shared/protocol-types.js'
 
 function event(terminalPhase: string, verdicts: string[], via: CompletionEvent['via'] = 'normal'): CompletionEvent {
   return {

@@ -1,7 +1,7 @@
 // The watchdog's crash-loop alert. Every daemon restart it makes is recorded in the state dir;
 // when RESTART_ALERT_COUNT of them land within RESTART_ALERT_WINDOW_S, it leaves an alert for the
 // operator in WATCHDOG_ALERT_FILE. The watchdog holds no chat connection, so the daemon posts it
-// once its gateway is up (daemon/watchdog-alert.ts) — the next daemon of the loop, typically.
+// once its gateway is up (app/watchdog-alert.ts) — the next daemon of the loop, typically.
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { WATCHDOG_ALERT_FILE } from '../shared/constants.js'

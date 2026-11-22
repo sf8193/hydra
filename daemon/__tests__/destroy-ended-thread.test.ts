@@ -7,8 +7,8 @@
 
 import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from 'bun:test'
 import { engines } from '../../engines/instances.js'
-import { executeTool } from '../bridge-dispatch.js'
-import { handleCLIRequest } from '../cli-handler.js'
+import { executeTool } from '../../app/bridge-dispatch.js'
+import { handleCLIRequest } from '../../app/cli-handler.js'
 import { _setHydraConfigForTesting } from '../../infra/hydra-config.js'
 import { on } from '../../infra/event-bus.js'
 import { registry, threadRegistry } from '../../sessions/registry.js'
@@ -219,7 +219,7 @@ describe('on, and a guard refuses', () => {
   })
   test('a thread a live session is in: the live destroy is the way, and says so', async () => {
     live('alive', '9203')
-    const out = await import('../destroy.js').then(m => m.destroyThreadById('9203', 'test'))
+    const out = await import('../../app/destroy.js').then(m => m.destroyThreadById('9203', 'test'))
     expect(out.ok).toBe(false)
     expect((out as any).text).toContain('Kill it first')
     expect((out as any).text).toContain('kill +d')

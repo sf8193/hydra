@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { handleCLIRequest, type CLIRequest } from '../cli-handler.js'
+import { handleCLIRequest, type CLIRequest } from '../../app/cli-handler.js'
 import { registry } from '../../sessions/registry.js'
 import { checkIdempotency } from '../../infra/idempotency.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'

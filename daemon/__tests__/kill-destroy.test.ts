@@ -16,7 +16,7 @@
 
 import { engines } from '../../engines/instances.js'
 import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from 'bun:test'
-import { handleThreadKillIntercept, handleDestroyIntercept } from '../commands/thread.js'
+import { handleThreadKillIntercept, handleDestroyIntercept } from '../../app/commands/thread.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import { registry, threadRegistry } from '../../sessions/registry.js'
 import type { SessionInfo } from '../../sessions/registry.js'

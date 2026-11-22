@@ -215,14 +215,14 @@ export type { ToolName }
 
 /**
  * What a session is in its thread. Whether it is a restricted specialist is not a type: it is the boolean `restricted` on its launch
- * policy (daemon/restricted.ts), so a restricted session is stored as the owner it is.
+ * policy (app/restricted.ts), so a restricted session is stored as the owner it is.
  */
 export type SessionType = 'master_orchestrator' | 'thread_owner' | 'thread_guest'
 
 /**
  * Where a session's base tools come from: its type, or `restricted`, a restricted specialist's. It speaks only in its own conversation, so it has none
  * of the tools that reach another thread, watch or the operator's account (spawn, kill, peek, list, handoff, bind, watch, ask_predecessor),
- * and no capability grants it any. `send_to_thread` it keeps only toward the specialists its `sends_to` names (daemon/sends-to.ts).
+ * and no capability grants it any. `send_to_thread` it keeps only toward the specialists its `sends_to` names (app/sends-to.ts).
  */
 export type ToolBase = SessionType | 'restricted'
 
@@ -251,7 +251,7 @@ export const BASE_TOOLS: Readonly<Record<ToolBase, ReadonlySet<ToolName>>> = {
   restricted: new Set([
     'reply', 'react', 'edit_message', 'delete_message', 'fetch_messages',
     'download_attachment', 'set_description',
-    // Its one way to speak to another session: only the specialists in its sends_to, quoted, capped and labelled (daemon/sends-to.ts).
+    // Its one way to speak to another session: only the specialists in its sends_to, quoted, capped and labelled (app/sends-to.ts).
     'send_to_thread',
   ]),
 }
