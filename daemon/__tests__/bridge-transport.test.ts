@@ -1,8 +1,8 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { BridgeTransport, DEPARTING_NOTICE, setFlushGate } from '../bridge-transport.js'
-import { registry } from '../sessions.js'
+import { BridgeTransport, DEPARTING_NOTICE, setFlushGate } from '../../sessions/bridge-transport.js'
+import { registry } from '../../sessions/registry.js'
 import { STATE_DIR } from '../../infra/config.js'
 import { on } from '../../infra/event-bus.js'
 import { engines } from '../../engines/instances.js'
@@ -364,8 +364,8 @@ describe('persisted queues at boot', () => {
     const queueFile = join(stateDir, 'message-queue.json')
     writeFileSync(queueFile, JSON.stringify({ known: [{ type: 'notification', content: 'kept' }], gone: [{ type: 'notification', content: 'dropped' }] }))
     const code = [
-      "const { registry } = await import('./daemon/sessions.ts')",
-      "const { transport } = await import('./daemon/bridge-transport.ts')",
+      "const { registry } = await import('./sessions/registry.ts')",
+      "const { transport } = await import('./sessions/bridge-transport.ts')",
       "registry.set('known', { sessionId: 'known', threadId: 't', tmuxName: 'known' })",
       "transport.restorePersistedQueues()",
       "console.log(JSON.stringify(Object.fromEntries(transport.messageQueues)))",

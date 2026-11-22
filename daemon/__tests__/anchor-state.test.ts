@@ -2,8 +2,8 @@
 // running session that has been respawned at least once; it is computed from `respawnCount` each time and stored nowhere.
 import { describe, test, expect, afterEach } from 'bun:test'
 import { gateway } from '../../infra/config.js'
-import { registry } from '../sessions.js'
-import { refreshSessionVisual, ANCHOR_STATES } from '../anchor-state.js'
+import { registry } from '../../sessions/registry.js'
+import { refreshSessionVisual, ANCHOR_STATES } from '../../sessions/anchor-state.js'
 import { DiscordGateway } from '../../gateways/discord.js'
 import { slackSessionStatus } from '../../gateways/slack.js'
 import type { SessionVisualOpts } from '../../gateways/gateway.js'

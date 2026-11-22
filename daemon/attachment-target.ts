@@ -2,8 +2,8 @@
 import { INBOX_LIMITS, type InboxLimits } from '../config/write-confinement.js'
 import { prepareConfinedInbox } from '../shared/confined-inbox.js'
 import { INBOX_DIR } from '../infra/config.js'
-import { registry } from './sessions.js'
-import { isWriteConfinedSession } from './tool-surface.js'
+import { registry } from '../sessions/registry.js'
+import { isWriteConfinedSession } from '../sessions/tool-surface.js'
 
 /**
  * A write-confined session (its record says so, or its bridge declared it) reads only its own folder, and the shared inbox is under the state folder, which it is denied: its files go to

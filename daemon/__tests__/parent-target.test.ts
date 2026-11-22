@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { gateway } from '../../infra/config.js'
-import { registry } from '../sessions.js'
-import type { SessionInfo } from '../sessions.js'
-import { transport } from '../bridge-transport.js'
+import { registry } from '../../sessions/registry.js'
+import type { SessionInfo } from '../../sessions/registry.js'
+import { transport } from '../../sessions/bridge-transport.js'
 import { executeTool } from '../bridge-dispatch.js'
 import { killSession } from '../session-lifecycle.js'
 

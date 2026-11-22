@@ -15,17 +15,17 @@
 
 import { createHash } from 'crypto'
 import { isAbsolute } from 'path'
-import { currentHydraConfig } from './hydra-config.js'
-import { specialistOf } from '../specialists/specialists.js'
+import { currentHydraConfig } from '../infra/hydra-config.js'
+import { specialistOf } from '../sessions/specialists.js'
 import { declaredSpecialist, type HydraConfig, type LoadEnv } from '../config/types.js'
 import { offLimitRoots, type PrivateRoot } from '../config/restricted-workdir.js'
 import { readDenyRoots } from '../config/write-confinement.js'
 import { macosGateIssue, unprovenMacos } from '../config/server-sandbox.js'
-import { hydraLoadEnv, onHydraConfigLoad } from './hydra-config.js'
-import type { SessionInfo } from './sessions.js'
+import { hydraLoadEnv, onHydraConfigLoad } from '../infra/hydra-config.js'
+import type { SessionInfo } from '../sessions/registry.js'
 import { isRestricted, isRestrictedPolicy } from './policy-record.js'
 import { refusalNoticeKey, threadNotices } from './notice-limit.js'
-import { setFlushGate } from './bridge-transport.js'
+import { setFlushGate } from '../sessions/bridge-transport.js'
 import { safeSend } from '../infra/util.js'
 
 export type PolicyServer = { name: string; command: string; tokenEnv: string[]; tools: string[] }

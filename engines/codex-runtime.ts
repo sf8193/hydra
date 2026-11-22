@@ -10,16 +10,16 @@
  */
 
 import { CodexEngine, type ReconciledTurn } from './codex-engine.js'
-import { markDead, registry, threadRegistry, type SessionInfo } from '../daemon/sessions.js'
-import { dispatchDisconnect } from '../daemon/protocol-registry.js'
+import { markDead, registry, threadRegistry, type SessionInfo } from '../sessions/registry.js'
+import { dispatchDisconnect } from '../sessions/protocol-registry.js'
 import { handleSilenceEvent, noteActivityForSession } from '../daemon/reply-guard.js'
 import { appendFileSync } from 'fs'
 import { join } from 'path'
 import { STATE_DIR } from '../infra/config.js'
 import { safeSend } from '../infra/util.js'
 import { noteCodexMessage, noteCodexTurnState } from './codex-observation.js'
-import { codexPiggyback } from './codex-piggyback.js'
-import { refreshSessionVisual } from '../daemon/anchor-state.js'
+import { codexPiggyback } from '../sessions/codex-piggyback.js'
+import { refreshSessionVisual } from '../sessions/anchor-state.js'
 import type { EngineAdapter } from './engine-adapter.js'
 import { markYourTurn } from '../infra/home-status.js'
 

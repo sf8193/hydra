@@ -2,9 +2,9 @@
 // instead of advance() gets immediate feedback rather than waiting for the
 // T-2m timeout warning. Replaces sentinel-nudge.ts — same pattern, different
 // signal: tool choice instead of first-line tag.
-import { transport } from './bridge-transport.js'
-import { registry } from './sessions.js'
-import { hasProtocolContext } from './protocol-registry.js'
+import { transport } from '../sessions/bridge-transport.js'
+import { registry } from '../sessions/registry.js'
+import { hasProtocolContext } from '../sessions/protocol-registry.js'
 
 const SUBSTANTIAL_LENGTH = 200
 const NUDGE_COOLDOWN_MS = 60_000

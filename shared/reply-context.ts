@@ -3,7 +3,7 @@
 // One home for the meta keys, the trimming and the one-line wording, so every way a message
 // reaches a session (channel, typed paste, held and flushed, codex turn) says it the same way.
 import type { ChatGateway, InboundMessage, ReplyContext } from '../gateways/gateway.js'
-import { oneLine } from '../shared/untrusted-text.js'
+import { oneLine } from './untrusted-text.js'
 
 /** Characters of the quoted message kept: enough to recognise it, short enough not to bury the answer. */
 export const REPLY_QUOTE_MAX = 300

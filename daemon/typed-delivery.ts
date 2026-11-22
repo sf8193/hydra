@@ -13,14 +13,14 @@
 // A message is never dropped: every failure falls back to the channel path.
 
 import { typedDeliveryUserIds, typedDeliveryMode, typedDeliveryHoldMaxMs, PLATFORM, type TypedDeliveryMode } from '../infra/config.js'
-import { occupancy, type Occupancy } from './session-reachability.js'
+import { occupancy, type Occupancy } from '../sessions/session-reachability.js'
 import { pasteTypedInput } from './pane-probe.js'
-import { isSessionWorkingAsync } from './session-activity.js'
-import { registry } from './sessions.js'
+import { isSessionWorkingAsync } from '../sessions/session-activity.js'
+import { registry } from '../sessions/registry.js'
 import { on } from '../infra/event-bus.js'
-import type { SessionInfo } from './sessions.js'
+import type { SessionInfo } from '../sessions/registry.js'
 import { sessionDrift, unverified } from './restricted.js'
-import { replyContextLine } from './reply-context.js'
+import { replyContextLine } from '../shared/reply-context.js'
 
 // ---------------------------------------------------------------------------
 // The rule: one place that knows when each path applies

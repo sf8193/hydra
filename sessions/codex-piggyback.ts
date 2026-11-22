@@ -1,11 +1,11 @@
 import { readFileSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import { STATE_DIR } from '../infra/config.js'
-import { registry } from '../daemon/sessions.js'
+import { registry } from './registry.js'
 import { atomicWriteFileSync } from '../infra/util.js'
 import { on } from '../infra/event-bus.js'
-import { reportDeliveryFailure } from '../daemon/bridge-transport.js'
-import type { DeliveryResult } from './engine-adapter.js'
+import { reportDeliveryFailure } from './bridge-transport.js'
+import type { DeliveryResult } from '../engines/engine-adapter.js'
 
 type PiggybackState = {
   items: string[]

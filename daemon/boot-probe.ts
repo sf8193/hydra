@@ -23,8 +23,8 @@ const PROBE_SOCK: string = process.env.HYDRA_PROBE_SOCK
 // exact class of failure that compile checks miss.
 try {
   await import('../infra/config.js')
-  await import('./sessions.js')
-  await import('./bridge-transport.js')
+  await import('../sessions/registry.js')
+  await import('../sessions/bridge-transport.js')
   await import('./bridge-dispatch.js')
   await import('./bridge-server.js')
   await import('./session-lifecycle.js')

@@ -92,8 +92,8 @@ describe('check-owners: raw tmux liveness and exec only in owners', () => {
   test('a raw kill-session/window/pane exec is caught, in any quoting; infra/tmux.ts and tmuxSync pass', () => {
     const kills = (path: string, line: string) => hits(path, line).filter(v => v.includes('raw tmux kill-session'))
     expect(kills('daemon/router.ts', 'execFileSync("tmux", ["kill-window", "-t", n])')).toHaveLength(1)
-    expect(kills('daemon/sessions.ts', "execFileSync('tmux', ['kill-session', '-t', n])")).toHaveLength(1)
-    expect(kills('daemon/sessions.ts', "tmuxSync(['kill-session', '-t', n])")).toEqual([])
+    expect(kills('sessions/registry.ts', "execFileSync('tmux', ['kill-session', '-t', n])")).toHaveLength(1)
+    expect(kills('sessions/registry.ts', "tmuxSync(['kill-session', '-t', n])")).toEqual([])
     expect(kills('infra/tmux.ts', "execFileSync('tmux', ['kill-session', '-t', n])")).toEqual([])
   })
 

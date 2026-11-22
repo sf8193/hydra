@@ -54,13 +54,13 @@ try {
 import { gateway, TOKEN, PLATFORM, STATE_DIR, CLAUDE_CONFIG, SOCK_PATH, heartbeatPath, DEFAULT_SESSION_CHANNEL, resolveDefaultChannel } from './infra/config.js'
 import { syncMods } from './shared/mods.js'
 import { syncDaemonBridge } from './engines/bridge-sync.js'
-import { registry, threadRegistry, reattachAdapters } from './daemon/sessions.js'
+import { registry, threadRegistry, reattachAdapters } from './sessions/registry.js'
 import { isPlainWorker } from './daemon/policy-record.js'
-import { emojiOfName } from './daemon/anchor-state.js'
+import { emojiOfName } from './sessions/anchor-state.js'
 import { engines, resolveEngine } from './engines/instances.js'
 import { engineRecords } from './engines/boot.js'
-import { transport } from './daemon/bridge-transport.js'
-import { loadAccess, operatorIds, notifyOperator } from './daemon/access.js'
+import { transport } from './sessions/bridge-transport.js'
+import { loadAccess, operatorIds, notifyOperator } from './sessions/access.js'
 import { setupPermissionHandler } from './daemon/permission.js'
 import { socketServer, startBridgeServer } from './daemon/bridge-server.js'
 import { announceRestartComplete } from './daemon/commands/global.js'
@@ -115,8 +115,8 @@ for (const adapter of Object.values(engines)) {
 import { logSubscriptions, emit } from './infra/event-bus.js'
 queueMicrotask(logSubscriptions)
 
-import { initPhaseBudgets } from './daemon/phase-budget.js'
-import { initIdleLimits } from './daemon/idle-limit.js'
+import { initPhaseBudgets } from './sessions/phase-budget.js'
+import { initIdleLimits } from './sessions/idle-limit.js'
 import { killSession, backfillAnchorChannelIds, doSpawnSession } from './daemon/session-lifecycle.js'
 import { runHomeStatusAction } from './daemon/home-actions.js'
 import { parseTemplateTopic, buildTemplateSpawnOpts, runTemplateAction, getTemplate } from './daemon/templates.js'
@@ -136,7 +136,7 @@ const resumes = createResumeDetector({ pendingGap, onStalled: heldNotAsleep })
 installResumeDetector(resumes)
 startLoopWatch({ alert: notifyOperator, onResume: (gapMs, at, servedAt) => { resumes.noteResume(gapMs, at, servedAt); emit('clock:resumed', { at, gapMs }) } })
 
-import { startVitalsSnapshots } from './infra/observability.js'
+import { startVitalsSnapshots } from './sessions/observability.js'
 startVitalsSnapshots((id) => transport.has(id), { alert: notifyOperator })
 
 import { refreshDashboard, refreshDashboardNow } from './daemon/dashboard.js'
@@ -247,7 +247,7 @@ import { restoreHeld } from './daemon/specialist-thread.js'
 import { startPrWatcher, backfillTitles, fetchPrTitle, parsePrUrl } from './connectors/github/pr-watch.js'
 import { startConversationTable, stopConversationTable, startSlackListener } from './connectors/slack/runtime.js'
 import { pruneEvents } from './infra/events.js'
-import { startHydraConfig, stopHydraConfig, retryHydraConfigAlert, currentHydraConfig, onHydraConfigLoad, reloadHydraConfig, hydraConfigLoadedOk } from './daemon/hydra-config.js'
+import { startHydraConfig, stopHydraConfig, retryHydraConfigAlert, currentHydraConfig, onHydraConfigLoad, reloadHydraConfig, hydraConfigLoadedOk } from './infra/hydra-config.js'
 import { jobsFromSchedules, schedulesAreSource } from './shared/schedules.js'
 import { readDaemonState } from './shared/jobs.js'
 import { pollActivityOnce } from './daemon/reply-guard.js'

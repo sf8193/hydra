@@ -2,7 +2,7 @@
 // state files hold nothing a caller could present.
 
 import { createHash, randomBytes } from 'crypto'
-import { registry } from './sessions.js'
+import { registry } from './registry.js'
 import { occupancy } from './session-reachability.js'
 
 export function issueSessionToken(): { token: string; hash: string } {

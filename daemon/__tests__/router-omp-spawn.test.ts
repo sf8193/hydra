@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, expect, spyOn, test } from 'bun:test'
 import { gateway } from '../../infra/config.js'
-import * as access from '../access.js'
+import * as access from '../../sessions/access.js'
 import * as global from '../commands/global.js'
 
 // The production router: `spawn omp-sonnet: …` must reach handleSpawnIntercept with the omp model AND the omp engine.

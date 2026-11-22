@@ -5,11 +5,11 @@ import { describe, test, expect, beforeAll, afterAll, afterEach } from 'bun:test
 import { mkdirSync, writeFileSync, rmSync } from 'fs'
 import { join } from 'path'
 import { spawn, execFileSync, type ChildProcess } from 'child_process'
-import { sampleCpu, getCpuVitals, _setSpinThresholdForTesting } from '../../infra/cpu-watch.js'
+import { sampleCpu, getCpuVitals, _setSpinThresholdForTesting } from '../../sessions/cpu-watch.js'
 import { psAll } from '../../infra/vitals-snapshot.js'
 import { STATE_DIR, ACCESS_FILE, gateway } from '../../infra/config.js'
 import { bridgeLifePath } from '../../shared/bridge-life.js'
-import type { SessionInfo } from '../sessions.js'
+import type { SessionInfo } from '../../sessions/registry.js'
 import { fakeAdapter } from './test-harness.js'
 
 const PRESSURE = { load1: 1, cores: 10 }

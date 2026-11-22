@@ -3,11 +3,11 @@
 // the session really runs on.
 import { afterEach, describe, expect, test } from 'bun:test'
 import { gateway } from '../../infra/config.js'
-import { transport } from '../bridge-transport.js'
+import { transport } from '../../sessions/bridge-transport.js'
 import { executeTool } from '../bridge-dispatch.js'
-import { registry } from '../sessions.js'
+import { registry } from '../../sessions/registry.js'
 import { engines } from '../../engines/instances.js'
-import { _setHydraConfigForTesting } from '../hydra-config.js'
+import { _setHydraConfigForTesting } from '../../infra/hydra-config.js'
 import { endVerifying, policyIdFor, startVerifying, type LaunchPolicy } from '../restricted.js'
 import { threadNotices } from '../notice-limit.js'
 import type { HydraConfig, Specialist } from '../../config/types.js'
@@ -126,7 +126,7 @@ import { tmpdir } from 'os'
 import { writeFileSync } from 'fs'
 import { join } from 'path'
 import { deliveryWait } from '../bridge-dispatch.js'
-import { registerProtocol } from '../protocol-registry.js'
+import { registerProtocol } from '../../sessions/protocol-registry.js'
 import { CodexEngineAdapter } from '../../engines/codex-engine-adapter.js'
 
 const accepts = { status: 'accepted', via: 'bridge-socket' }

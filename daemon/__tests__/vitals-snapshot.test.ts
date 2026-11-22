@@ -82,14 +82,14 @@ describe('a snapshot whose ps failed', () => {
 // reach through session-activity/util is pinned behaviourally in cpu-watch-idle.test.ts. The one sync
 // spawn left in these files is tailSpawnLog's `tail`, run per session death, not on the tick.
 test('no sync spawn in the vitals modules', () => {
-  const src = (f: string) => readFileSync(join(import.meta.dir, '..', '..', 'infra', f), 'utf8')
+  const src = (f: string, dir = 'infra') => readFileSync(join(import.meta.dir, '..', '..', dir, f), 'utf8')
   const SYNC_SPAWN = /\b(?:spawnSync|execFileSync|execSync)\b/g
   expect(src('vitals-snapshot.ts')).not.toMatch(SYNC_SPAWN)
-  const obs = src('observability.ts')
+  const obs = src('observability.ts', 'sessions')
   expect(obs.match(/(?:spawnSync|execFileSync|execSync)\(/g)).toEqual(['execFileSync('])
   expect(obs).toContain("execFileSync('tail'")
   // cpu-watch may read files synchronously (bridge-life records), but call no other *Sync helper.
-  const cw = src('cpu-watch.ts')
+  const cw = src('cpu-watch.ts', 'sessions')
   expect(cw).not.toMatch(SYNC_SPAWN)
   expect([...new Set(cw.match(/\b\w+Sync\b/g))].sort()).toEqual(['readFileSync', 'readdirSync'])
 })

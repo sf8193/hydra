@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { formatStateLine, formatRoundBadge } from '../anchor-state.js'
+import { formatStateLine, formatRoundBadge } from '../../sessions/anchor-state.js'
 
 describe('formatStateLine', () => {
   test('▼ with defending (owner turn = bottom of inning)', () => {

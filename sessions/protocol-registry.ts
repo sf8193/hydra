@@ -4,7 +4,7 @@
 //
 // For lifecycle events (review complete, session death, etc.) use event-bus.ts.
 
-import { registry } from './sessions.js'
+import { registry } from './registry.js'
 
 type ProtocolHooks = {
   getByThread: (threadId: string) => boolean

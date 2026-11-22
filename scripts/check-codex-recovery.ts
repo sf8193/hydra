@@ -36,7 +36,7 @@ Object.assign(gateway, {
  fetchChannel: async () => ({ isThread: true, parentId: 'parent', type: 'thread' }),
  getThreadStarterInfo: async () => null, updateSessionVisual: async () => {}, renameThread: async () => {},
 })
-const { registry, threadRegistry } = await import(repo + '/daemon/sessions.ts')
+const { registry, threadRegistry } = await import(repo + '/sessions/registry.ts')
 const { doSpawnSession, killSession } = await import(repo + '/daemon/session-lifecycle.ts')
 const { codexEngine, reconnectCodexAfterDisconnect } = await import(repo + '/engines/codex-runtime.ts')
 const { handleResumeIntercept, handleRespawnIntercept } = await import(repo + '/daemon/commands/thread.ts')

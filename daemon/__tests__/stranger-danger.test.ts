@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, beforeEach, expect, spyOn, test } from 'bun:test'
 import { gateway } from '../../infra/config.js'
-import * as access from '../access.js'
-import { registry, threadRegistry } from '../sessions.js'
-import { transport } from '../bridge-transport.js'
+import * as access from '../../sessions/access.js'
+import { registry, threadRegistry } from '../../sessions/registry.js'
+import { transport } from '../../sessions/bridge-transport.js'
 import { pendingPermissions } from '../permission.js'
 
 // A non-operator in a session thread is flagged once; the operator's "yes" lets them in for that thread only.

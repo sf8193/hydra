@@ -226,7 +226,7 @@ export class SlackGateway implements ChatGateway {
     // Publish Home tab when user opens it
     this.app.event('app_home_opened' as any, async ({ event }: any) => {
       this.touchHeartbeat()
-      const { loadAccess, operatorIds } = await import('../daemon/access.js')
+      const { loadAccess, operatorIds } = await import('../sessions/access.js')
       const access = loadAccess()
       if (!operatorIds(access).includes(event.user)) return
       if (this.homeTabHandler) {
@@ -240,7 +240,7 @@ export class SlackGateway implements ChatGateway {
       this.touchHeartbeat()
       await ack()
       if (!action?.value || !this.homeStatusHandler) return
-      const { loadAccess, operatorIds } = await import('../daemon/access.js')
+      const { loadAccess, operatorIds } = await import('../sessions/access.js')
       const click = parseHomeStatusClick(String(action.action_id), action.value, body?.user?.id, operatorIds(loadAccess()))
       if (!click) {
         process.stderr.write(`slack gateway: home status action rejected for user ${body?.user?.id ?? '(none)'}\n`)
@@ -256,7 +256,7 @@ export class SlackGateway implements ChatGateway {
       await ack()
       const userId = body?.user?.id
       if (!userId) return
-      const { loadAccess, operatorIds } = await import('../daemon/access.js')
+      const { loadAccess, operatorIds } = await import('../sessions/access.js')
       const access = loadAccess()
       if (!operatorIds(access).includes(userId)) {
         process.stderr.write(`slack gateway: home:spawn rejected — user ${userId} is not the operator\n`)
@@ -274,7 +274,7 @@ export class SlackGateway implements ChatGateway {
     // Auto-add channel to access groups when bot is invited
     this.app.event('member_joined_channel', async ({ event }) => {
       if (event.user === this._botUserId) {
-        const { autoAddGroup } = await import('../daemon/access.js')
+        const { autoAddGroup } = await import('../sessions/access.js')
         autoAddGroup(event.channel)
         process.stderr.write(`slack gateway: bot invited to channel ${event.channel}, auto-added to groups\n`)
       }

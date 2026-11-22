@@ -2,8 +2,8 @@
 // id or a name as its thread) would fail every post forever; a session that has no thread of its own is reached through
 // the thread it reports to. One home for that rule: spawn, posts, visuals and relay links all ask here.
 import { gateway } from '../infra/config.js'
-import { parentSessionOf, registry } from './sessions.js'
-import type { SessionInfo } from './sessions.js'
+import { parentSessionOf, registry } from './registry.js'
+import type { SessionInfo } from './registry.js'
 import { tellOnce } from '../infra/util.js'
 
 const MAX_HOPS = 8

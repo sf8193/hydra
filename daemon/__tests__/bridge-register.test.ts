@@ -4,7 +4,7 @@ import { describe, test, expect } from 'bun:test'
 import { connectionRoleFor } from '../bridge-server.js'
 import { spawnToolNames } from '../session-lifecycle.js'
 import { computeToolsForSession } from '../../engines/bridge-tools.js'
-import type { SessionInfo } from '../sessions.js'
+import type { SessionInfo } from '../../sessions/registry.js'
 import { engines } from '../../engines/instances.js'
 
 const claude = { sessionId: 's1', engine: 'claude', adapter: engines.claude } as SessionInfo

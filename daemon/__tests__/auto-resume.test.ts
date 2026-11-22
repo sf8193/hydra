@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach } from 'bun:test'
 import { decideResume } from '../auto-resume.js'
-import { SessionRegistry } from '../sessions.js'
+import { SessionRegistry } from '../../sessions/registry.js'
 
 process.stderr.write = (() => true) as any
 
