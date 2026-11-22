@@ -73,8 +73,7 @@ describe('specialists', () => {
         spawn(topic, undefined, undefined, { ...extra, existingThreadId: threadId, resurrectFrom, model })) as any,
     })
   }
-  /** A spawn that behaves like doSpawnSession: registers a live session and reports its thread. */
-  /** `born`: what a real spawn stamps on the session it starts (its policy), computed when it spawns. */
+  /** A spawn that behaves like doSpawnSession: registers a live session and reports its thread. `born`: what a real spawn stamps on it (its policy), computed when it spawns. */
   function fakeSpawn(born: () => Record<string, unknown> = () => ({})) {
     const calls: unknown[][] = []
     const spawn = async (...args: unknown[]) => {
