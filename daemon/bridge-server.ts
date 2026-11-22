@@ -8,7 +8,7 @@ import { executeTool } from './bridge-dispatch.js'
 import { BRIDGE_SHUTDOWN_GRACE_MS } from '../shared/constants.js'
 import { pendingPermissions } from './permission.js'
 import { discoverClaudeSessionId, killSession } from './session-lifecycle.js'
-import { loadAccess, operatorIds } from './access.js'
+import { operatorIds } from './access.js'
 import { dispatchReconnect, dispatchSessionReply, dispatchDisconnect } from './protocol-registry.js'
 import './restricted.js'   // registers the queue-flush gate on the transport
 import { advertiseTools, isToolAllowed, noteDeclaredRestrictions, refusalText } from './tool-surface.js'
@@ -400,7 +400,6 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       const { request_id, tool_name, description, input_preview } = msg
       const sessionId = conn.sessionId || 'main'
       pendingPermissions.set(request_id, { tool_name, description, input_preview, sessionId })
-      const access = loadAccess()
       const text = `Permission: ${tool_name}`
       const buttons: ButtonDef[] = [
         { id: `perm:more:${request_id}`, label: 'See more', style: 'secondary' },
@@ -414,7 +413,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
           process.stderr.write(`daemon: permission_request send to thread ${permInfo.threadId} failed: ${e}\n`)
         })
       } else {
-        for (const userId of operatorIds(access)) {
+        for (const userId of operatorIds()) {
           void gateway.sendDM(userId, text, buttons).catch(e => {
             process.stderr.write(`daemon: permission_request send to ${userId} failed: ${e}\n`)
           })

@@ -7,8 +7,7 @@ import { refreshDashboard } from './dashboard.js'
 import { registry, threadRegistry } from './sessions.js'
 import { flagStranger, acknowledged } from './stranger.js'
 import { transport } from './bridge-transport.js'
-import { loadAccess, operatorIds, gate, channelAllowed, admitTaggedChannel } from './access.js'
-import type { Access } from './access.js'
+import { operatorIds, gate, channelAllowed, channelPolicy, admitTaggedChannel, ackReactionOf } from './access.js'
 import type { DownloadedFile } from '../gateways/gateway.js'
 import type { InboundMessage } from '../gateways/gateway.js'
 import { transcribeDownloads, mergeTranscripts } from './transcription.js'
@@ -319,11 +318,12 @@ export function extractContextLinks(text: string): string[] {
   return links
 }
 
-async function deliverToSession(msg: InboundMessage, targetSessionId: string, access: Access, before?: Promise<unknown>): Promise<void> {
+async function deliverToSession(msg: InboundMessage, targetSessionId: string, before?: Promise<unknown>): Promise<void> {
   // Nothing here may yield before enqueueUserMessage: its ingress slot is reserved synchronously.
   void gateway.typing(msg.channelId).catch(() => {})
-  if (access.ackReaction) {
-    void gateway.react(msg.channelId, msg.id, access.ackReaction).catch(() => {})
+  const ack = ackReactionOf()
+  if (ack) {
+    void gateway.react(msg.channelId, msg.id, ack).catch(() => {})
   }
 
   const sessionInfo = registry.get(targetSessionId)
@@ -411,9 +411,8 @@ gateway.onMessageDelete((messageId, threadId) => {
 if (gateway.onReaction) {
   gateway.onReaction(async (event) => {
     if (!isDeleteReaction(event.emoji)) return
-    const access = loadAccess()
-    if (!operatorIds(access).includes(event.userId)) return
-    if (!channelAllowed(access, event)) return
+    if (!operatorIds().includes(event.userId)) return
+    if (!channelAllowed(event)) return
     try {
       await gateway.delete(event.channelId, event.messageId)
       process.stderr.write(`daemon: deleted message ${event.messageId} via reaction from ${event.userId}\n`)
@@ -430,11 +429,10 @@ if (gateway.onReaction) {
 gateway.onMessage(async (msg: InboundMessage) => {
   if (msg.isBot) return
 
-  const access = loadAccess()
   // The one chokepoint: nothing below, operator command or not, acts in a place this daemon is not allowed in.
-  if (!channelAllowed(access, msg) && !(await admitTaggedChannel(access, msg))) return
+  if (!channelAllowed(msg) && !(await admitTaggedChannel(msg))) return
   const senderId = msg.authorId
-  const isAllowed = operatorIds(access).includes(senderId)
+  const isAllowed = operatorIds().includes(senderId)
 
   if (!isAllowed && COMMAND_RE.test(msg.content)) {
     process.stderr.write(`daemon: command-shaped message from non-allowlisted sender ${senderId} ignored — only the operator may use commands\n`)
@@ -458,7 +456,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
     if (spawnCodexMatch) {
       const topic = spawnCodexMatch[2].trim()
       if (topic) {
-        void handleSpawnIntercept(msg, topic, access, spawnCodexMatch[1] || undefined, 'codex')
+        void handleSpawnIntercept(msg, topic, spawnCodexMatch[1] || undefined, 'codex')
         return
       }
     }
@@ -468,7 +466,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
       const aliasMatch = msg.content.match(spawn)
       const topic = aliasMatch?.[2].trim()
       if (aliasMatch && topic) {
-        void handleSpawnIntercept(msg, topic, access, resolveEngineAlias(engine, aliasMatch[1]), engine)
+        void handleSpawnIntercept(msg, topic, resolveEngineAlias(engine, aliasMatch[1]), engine)
         return
       }
     }
@@ -478,7 +476,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
     if (spawnModelMatch) {
       const topic = spawnModelMatch[2].trim()
       if (topic) {
-        void handleSpawnIntercept(msg, topic, access, spawnModelMatch[1])
+        void handleSpawnIntercept(msg, topic, spawnModelMatch[1])
         return
       }
     }
@@ -501,7 +499,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
       if (ignored.length > 0) {
         void gateway.send(msg.channelId, `_Ignored ${ignored.map(n => `\`+${n}\``).join(' ')} — a spawn applies a single template modifier._`, { replyTo: msg.id }).catch(() => {})
       }
-      void handleTemplateSpawn(msg, templateMod.templateName, topic, template, access)
+      void handleTemplateSpawn(msg, templateMod.templateName, topic, template)
       return
     }
 
@@ -516,7 +514,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
         return
       }
       if (topic) {
-        void handleSpawnIntercept(msg, topic, access)
+        void handleSpawnIntercept(msg, topic)
         return
       }
     }
@@ -526,7 +524,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
     if (spawnWtModelMatch) {
       const [, alias, repo, topic] = spawnWtModelMatch
       if (repo && topic.trim()) {
-        void handleSpawnIntercept(msg, `wt:${repo.trim()} ${topic.trim()}`, access, alias)
+        void handleSpawnIntercept(msg, `wt:${repo.trim()} ${topic.trim()}`, alias)
         return
       }
     }
@@ -534,7 +532,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
     for (const { engine, spawnWt } of ENGINE_ALIAS_FORMS) {
       const wtMatch = msg.content.match(spawnWt)
       if (wtMatch && wtMatch[2] && wtMatch[3].trim()) {
-        void handleSpawnIntercept(msg, `wt:${wtMatch[2].trim()} ${wtMatch[3].trim()}`, access, resolveEngineAlias(engine, wtMatch[1]), engine)
+        void handleSpawnIntercept(msg, `wt:${wtMatch[2].trim()} ${wtMatch[3].trim()}`, resolveEngineAlias(engine, wtMatch[1]), engine)
         return
       }
     }
@@ -545,7 +543,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
       const repo = spawnWtMatch[1].trim()
       const topic = spawnWtMatch[2].trim()
       if (repo && topic) {
-        void handleSpawnIntercept(msg, `wt:${repo} ${topic}`, access)
+        void handleSpawnIntercept(msg, `wt:${repo} ${topic}`)
         return
       }
     }
@@ -714,7 +712,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
           const template = getTemplate(candidateName)
           if (template) {
             const candidateTopic = msg.content.slice(colonIdx + 1).trim()
-            void handleTemplateSpawn(msg, candidateName, candidateTopic, template, access)
+            void handleTemplateSpawn(msg, candidateName, candidateTopic, template)
             return
           }
           // "review sonnet: topic" — template name + model alias before colon
@@ -725,7 +723,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
             const tpl = getTemplate(tplName)
             if (tpl && resolveModelAlias(modelAlias)) {
               const candidateTopic = msg.content.slice(colonIdx + 1).trim()
-              void handleTemplateSpawn(msg, tplName, candidateTopic, tpl, access, modelAlias)
+              void handleTemplateSpawn(msg, tplName, candidateTopic, tpl, modelAlias)
               return
             }
           }
@@ -1067,7 +1065,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
               msg.content = stripped
               info.lastActive = Date.now()
               registry.debouncedPersist()
-              void deliverToSession(msg, mappedSession, access, interrupted)
+              void deliverToSession(msg, mappedSession, interrupted)
               return
             }
           }
@@ -1082,7 +1080,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
           if (shouldRoute) {
             info.lastActive = Date.now()
             registry.debouncedPersist()
-            void deliverToSession(msg, mappedSession, access)
+            void deliverToSession(msg, mappedSession)
             return
           }
 
@@ -1091,7 +1089,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
             if (mentioned) {
               info.lastActive = Date.now()
               registry.debouncedPersist()
-              void deliverToSession(msg, mappedSession, access)
+              void deliverToSession(msg, mappedSession)
               return
             }
           }
@@ -1104,23 +1102,13 @@ gateway.onMessage(async (msg: InboundMessage) => {
 
   const strangerThread = !isAllowed && msg.isThread ? registry.resolveThreadId(msg) : undefined
   const result = strangerThread && threadRegistry.isSenderAllowed(strangerThread, senderId)
-    ? { action: 'deliver' as const, access }
+    ? { action: 'deliver' as const }
     : await gate(msg)
 
   if (result.action === 'drop') {
     if (strangerThread && registry.getByThread(strangerThread) && flagStranger(strangerThread, senderId)) {
-      const operator = operatorIds(access)[0]
+      const operator = operatorIds()[0]
       void gateway.send(strangerThread, `Stranger danger: <@${senderId}> is not the operator. <@${operator}>, reply "yes" and I'll listen to them in this thread.`, { replyTo: msg.id }).catch(() => {})
-    }
-    return
-  }
-
-  if (result.action === 'pair') {
-    const lead = result.isResend ? 'Still pending' : 'Pairing required'
-    try {
-      await gateway.send(msg.channelId, `${lead} -- run in Claude Code:\n\n/discord:access pair ${result.code}`, { replyTo: msg.id })
-    } catch (err) {
-      process.stderr.write(`daemon: failed to send pairing code: ${err}\n`)
     }
     return
   }
@@ -1128,11 +1116,10 @@ gateway.onMessage(async (msg: InboundMessage) => {
   let chat_id = msg.channelId
 
   if (!msg.isDM && !msg.isThread) {
-    const channelId = msg.channelId
-    const policy = result.access.groups[channelId]
+    const policy = channelPolicy(msg)
     if (policy?.threadReply) {
       const preview = msg.content.slice(0, 50).replace(/<@!?\d+>\s*/g, '').trim() || 'Thread'
-      const archiveDuration = policy.threadArchiveMinutes ?? 1440
+      const archiveDuration = 1440
 
       const existingSessionId = msg.hasExistingThread && msg.existingThreadId
         && registry.getByThread(msg.existingThreadId)
@@ -1168,8 +1155,9 @@ gateway.onMessage(async (msg: InboundMessage) => {
 
   void gateway.typing(msg.channelId).catch(() => {})
 
-  if (result.access.ackReaction) {
-    void gateway.react(msg.channelId, msg.id, result.access.ackReaction).catch(() => {})
+  const ack = ackReactionOf()
+  if (ack) {
+    void gateway.react(msg.channelId, msg.id, ack).catch(() => {})
   }
 
   let targetSessionId = 'main'

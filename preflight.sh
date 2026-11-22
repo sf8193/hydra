@@ -54,8 +54,8 @@ else
 fi
 
 # --- access control ---
-[ -f "$STATE_DIR/access.json" ] && ok "access.json present" \
-  || wrn "access.json missing — no users are allowlisted yet ($STATE_DIR/access.json)"
+grep -qs '^[[:space:]]*operator[[:space:]]*=' "$STATE_DIR/hydra.toml" && ok "hydra.toml names an operator" \
+  || wrn "no operator in $STATE_DIR/hydra.toml, so every DM is dropped — run: hydra migrate <platform> --operator <your user id>"
 
 # --- bridge plugin must live in the config dir the daemon spawns under ---
 BRIDGE_DIR="$CONFIG_DIR/plugins/cache/claude-plugins-official/discord"

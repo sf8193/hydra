@@ -326,7 +326,7 @@ describe('global.ts spawn announcements', () => {
   })
   afterEach(() => { for (const s of spies.splice(0)) s.mockRestore() })
 
-  const spawnFrom = (isDM: boolean) => handleSpawnIntercept({ id: 'm1', channelId: 'chan', isDM, isThread: false, authorUsername: 'u' } as any, 'a topic', {} as any)
+  const spawnFrom = (isDM: boolean) => handleSpawnIntercept({ id: 'm1', channelId: 'chan', isDM, isThread: false, authorUsername: 'u' } as any, 'a topic')
 
   test('the reply to a DM', async () => {
     for (const k of KINDS) {

@@ -24,6 +24,8 @@ export type MigrateInput = {
   platform: ChatPlatform
   /** Where the old daemon ran, which its relative paths (a kickoffFile) were read from. Default: as written. */
   daemonCwd?: string
+  /** `--operator <user id>`: on a fresh install with nothing to migrate, who the operator is on `platform`. */
+  operator?: string
 }
 
 type Doc = Record<string, unknown>
@@ -48,9 +50,9 @@ export type MigrateStep = {
 const readJson = (path: string): unknown => JSON.parse(readFileSync(path, 'utf8'))
 const isTable = (v: unknown): v is Doc => typeof v === 'object' && v !== null && !Array.isArray(v)
 
-// --- access.json: allowFrom becomes the operator and people --------------------------------------------------------
+// --- access.json: allowFrom becomes the operator and people; groups become places; the settings move to gateways ---------
 
-function allowFromOf(stateDir: string): { raw: Doc; allowFrom: string[] } | undefined {
+function accessOf(stateDir: string): { raw: Doc; allowFrom: string[] } | undefined {
   const path = join(stateDir, 'access.json')
   if (!existsSync(path)) return undefined
   const raw = readJson(path)
@@ -59,14 +61,28 @@ function allowFromOf(stateDir: string): { raw: Doc; allowFrom: string[] } | unde
   return { raw, allowFrom: [...new Set(ids)] }
 }
 
+/** Settings hydra.toml no longer has: hydra uses markdown chunks, replies to the first message, and 1440-minute threads. Set in access.json, they stop the migration rather than vanish. */
+const CUT_TOP_KEYS = ['replyToMode', 'textChunkLimit', 'chunkMode']
+const groupsOf = (raw: Doc): [string, Doc][] => isTable(raw.groups) ? Object.entries(raw.groups).filter((e): e is [string, Doc] => isTable(e[1])) : []
+const cutSettings = (raw: Doc): string[] => [...CUT_TOP_KEYS.filter(k => raw[k] !== undefined), ...groupsOf(raw).filter(([, g]) => g.threadArchiveMinutes !== undefined).map(([id]) => `groups.${id}.threadArchiveMinutes`)]
+const mentionPatternsOf = (raw: Doc): string[] => Array.isArray(raw.mentionPatterns) ? raw.mentionPatterns.filter((x): x is string => typeof x === 'string') : []
+
 export const accessStep: MigrateStep = {
-  name: 'access.json allowFrom',
+  name: 'access.json',
   pending: stateDir => {
-    try { return (allowFromOf(stateDir)?.allowFrom.length ?? 0) > 0 } catch { return true }
+    try {
+      const found = accessOf(stateDir)
+      if (!found) return false
+      const r = found.raw
+      return found.allowFrom.length > 0 || groupsOf(r).length > 0 || cutSettings(r).length > 0 || r.dmPolicy === 'disabled' || r.ackReaction !== undefined || r.defaultListen !== undefined || mentionPatternsOf(r).length > 0
+    } catch { return true }
   },
-  run({ stateDir, platform }) {
-    const found = allowFromOf(stateDir)
-    if (!found || found.allowFrom.length === 0) return undefined
+  run({ stateDir, platform, operator: operatorFlag }) {
+    const found = accessOf(stateDir)
+    if (!found || !this.pending(stateDir)) return undefined
+    const { raw } = found
+    const cut = cutSettings(raw)
+    if (cut.length) throw new Error(`access.json sets ${cut.join(', ')}, which hydra.toml no longer has (hydra uses markdown chunks, replies to the first message, and 1440-minute threads). Remove ${cut.length === 1 ? 'it' : 'them'} from access.json, then run hydra migrate again`)
     const notes: string[] = []
     const people: Doc = {}
     let operator: string | undefined
@@ -79,19 +95,53 @@ export const accessStep: MigrateStep = {
       else notes.push(`${address} (now people.${personId}) was in allowFrom but isn't the operator: they no longer reach main by DM or use admin commands. Route their DMs to a specialist, or make them the operator.`)
     })
     // Never write a hydra.toml with no operator: allowFrom would be gone and nobody would pass admin checks.
-    if (!operator) throw new Error(`no allowFrom id is a ${platform} user id (${found.allowFrom.join(', ')}); is this a ${platform} state dir?`)
-    const chosen = (people.operator as { addresses: string[] }).addresses[0]
-    notes.unshift(`${chosen} is the operator, as people.operator (the first ${platform} id in allowFrom); rename the id if you like, and update operator = to match.`)
-    // B1 retires only allowFrom: the rest of access.json (DM policy, groups, pending codes) stays until places replace it.
-    const { allowFrom: _gone, ...rest } = found.raw
+    if (found.allowFrom.length && !operator) throw new Error(`no allowFrom id is a ${platform} user id (${found.allowFrom.join(', ')}); is this a ${platform} state dir?`)
+    if (operator) {
+      const chosen = (people.operator as { addresses: string[] }).addresses[0]
+      notes.unshift(`${chosen} is the operator, as people.operator (the first ${platform} id in allowFrom); rename the id if you like, and update operator = to match.`)
+    }
+    // Who each id in a group's allowFrom is: a person made above, or one hydra.toml already has. Anyone else must be added first.
+    const known = new Map<string, string>()
+    const toml = join(stateDir, HYDRA_TOML)
+    // The run has already refused a hydra.toml that doesn't parse, so this one does.
+    const existing = existsSync(toml) ? (Bun.TOML.parse(readFileSync(toml, 'utf8')) as Doc) : {}
+    for (const [pid, p] of Object.entries(isTable(existing.people) ? existing.people : {})) for (const a of isTable(p) && Array.isArray(p.addresses) ? p.addresses : []) known.set(normalizeAddress(String(a)) ?? String(a), pid)
+    // An address hydra.toml already gives a person stays theirs: the merge folds the new person into them.
+    for (const [pid, p] of Object.entries(people)) { const a = (p as { addresses: string[] }).addresses[0]; if (!known.has(a)) known.set(a, pid) }
+    // --operator names the person this run adds as people.operator, so a group may list them.
+    const flagged = operatorFlag === undefined ? undefined : normalizeAddress(`${platform}:${operatorFlag.trim()}`)
+    if (flagged && !known.has(flagged)) known.set(flagged, 'operator')
+    const asPerson = (id: string) => known.get(normalizeAddress(`${platform}:${id}`) ?? '')
+    const places: Doc = {}
+    for (const [channel, g] of Object.entries(isTable(raw.groups) ? raw.groups : {})) {
+      if (!isTable(g)) { notes.push(`group "${channel}" left out: not an object`); continue }
+      if (g.allowFrom !== undefined && !Array.isArray(g.allowFrom)) throw new Error(`groups.${channel}.allowFrom must be a list of ids, not ${JSON.stringify(g.allowFrom)}: fix it in access.json, then run hydra migrate again`)
+      const ids = (Array.isArray(g.allowFrom) ? g.allowFrom : []).map(String).map(x => x.trim()).filter(Boolean)
+      const key = `${platform}:${channel}`
+      if (!parsePlace(key).ok) { notes.push(`group "${channel}" left out: ${key} isn't a channel id hydra.toml can name`); continue }
+      const stranger = ids.filter(id => asPerson(id) === undefined)
+      if (stranger.length) throw new Error(`groups.${channel}.allowFrom has ${stranger.join(', ')}, who ${stranger.length === 1 ? 'is' : 'are'} not in hydra.toml's people. Add ${stranger.length === 1 ? 'them' : 'each'} first (hydra people add <name> ${platform}:${stranger[0]}), then run hydra migrate again`)
+      const who = [...new Set(ids.map(id => asPerson(id) as string))]
+      places[key] = {
+        ...(typeof g.threadReply === 'boolean' && { thread_reply: g.threadReply }),
+        access: { mention: g.requireMention !== false, allow: who.length ? who : ['anyone'], ...(typeof g.defaultListen === 'boolean' && { listen: g.defaultListen }) },
+      }
+    }
+    const patterns = mentionPatternsOf(raw)
+    const settings = {
+      ...(raw.dmPolicy === 'disabled' && { off: true }),
+      ...(typeof raw.ackReaction === 'string' && raw.ackReaction !== '' && { ack_reaction: raw.ackReaction }),
+      ...(typeof raw.defaultListen === 'boolean' && { listen: raw.defaultListen }),
+      ...(patterns.length && { mention_patterns: patterns }),
+    }
+    if (isTable(raw.pending) && Object.keys(raw.pending).length) notes.push('access.json had pairing codes waiting: pairing is gone, so those people are dropped. Add anyone you want with hydra people add.')
+    if (raw.dmPolicy === 'pairing') notes.push('dmPolicy "pairing" is gone: strangers\' DMs are dropped, with no pairing code. People come in through hydra people add.')
+    if (raw.dmPolicy === 'disabled') notes.push('dmPolicy "disabled" is now [gateways.' + platform + '] off = true: hydra drops every message')
     return {
-      doc: { ...(operator && { operator }), people },
-      consumed: [],
+      doc: { ...(operator && { operator }), ...(Object.keys(people).length && { people }), ...(Object.keys(places).length && { places }), ...(Object.keys(settings).length && { gateways: { [platform]: settings } }) },
+      // The whole file goes: what it said now lives in hydra.toml; the original is kept as a backup.
+      consumed: ['access.json'],
       notes,
-      writes: {
-        'access.json.migrated': readFileSync(join(stateDir, 'access.json'), 'utf8'),
-        'access.json': JSON.stringify(rest, null, 2) + '\n',
-      },
     }
   },
 }
@@ -184,7 +234,13 @@ export const BOOT_REFUSED_FILE = 'boot-refused.json'
  */
 export function bootRefusal(stateDir: string, steps: MigrateStep[] = STEPS): string | undefined {
   if (existsSync(join(stateDir, MIGRATE_JOURNAL))) return `refusing to start: a hydra migrate in ${stateDir} was interrupted after it committed; run 'hydra migrate' to finish it.`
-  if (!hydraTomlInUse(stateDir)) return undefined
+  if (!hydraTomlInUse(stateDir)) {
+    // access.json's channels and settings live in hydra.toml now: without one, they would be ignored.
+    // (A file that doesn't parse counts as pending: nothing else reads or moves it.)
+    return steps.includes(accessStep) && accessStep.pending(stateDir)
+      ? `refusing to start: ${join(stateDir, 'access.json')} still holds channels or settings, and hydra.toml is not here to take them. Run 'hydra migrate' (it writes hydra.toml from it and retires it).`
+      : undefined
+  }
   const old = steps.filter(s => s.pending(stateDir)).map(s => s.name)
   if (!old.length) return undefined
   return `refusing to start: hydra.toml is in use, but old state it replaces is still in ${stateDir}: ${old.join(', ')}. `
@@ -210,7 +266,7 @@ type PersonDoc = { addresses: string[]; roles?: string[]; name?: string }
 
 /**
  * Merges the steps' docs. People are merged by address (one address, one person; the first step's id wins, roles
- * are unioned), and a merged-away id is rewritten where the step referred to it (operator, a rule's person).
+ * are unioned), and a merged-away id is rewritten where the step referred to it (operator, a rule's person, a place's allow).
  * Everything else merges key by key, a conflict being the same key with different values.
  */
 export function mergeDocs(docs: Doc[]): { doc: Doc; conflicts: string[]; notes: string[]; renames: Map<string, string>[] } {
@@ -252,6 +308,10 @@ export function mergeDocs(docs: Doc[]): { doc: Doc; conflicts: string[]; notes: 
       const list = (out.rules ??= []) as Doc[]
       // A rule's person is its `person`, or, in a file not yet moved to the new name, its `from`.
       for (const r of rules as Doc[]) list.push(Object.fromEntries(Object.entries(r).map(([k, v]) => [k, k === 'person' || k === 'from' ? renamed(v) : v])))
+    }
+    for (const place of Object.values(isTable(rest.places) ? rest.places : {})) {
+      const access = isTable(place) ? place.access : undefined
+      if (isTable(access) && Array.isArray(access.allow)) access.allow = access.allow.map(id => id === 'anyone' ? id : renamed(id))
     }
     mergeTable(out, rest, '', conflicts)
   }
@@ -342,11 +402,17 @@ export function planMigrate(input: MigrateInput, steps: MigrateStep[] = STEPS): 
     }
   }
   if (errors.length) return { ok: false, errors }
-  if (!outputs.length) return { ok: false, errors: ['nothing to migrate: no allowFrom in access.json and no specialists.json'] }
+  if (input.operator !== undefined) {
+    const address = normalizeAddress(`${input.platform}:${input.operator.trim()}`)
+    if (!address) return { ok: false, errors: [`--operator "${input.operator}" isn't a ${input.platform} user id`] }
+    if (existing?.operator !== undefined || outputs.some(o => o.doc.operator !== undefined)) return { ok: false, errors: ['--operator is for a fresh install: this one already names an operator (hydra.toml, or an allowFrom id in access.json)'] }
+    outputs.push({ doc: { operator: 'operator', people: { operator: { addresses: [address] } } }, consumed: [], notes: [`${address} is the operator, as people.operator, from --operator.`] })
+  }
+  if (!outputs.length) return { ok: false, errors: [`nothing to migrate: no allowFrom in access.json and no specialists.json. On a fresh install, say who you are: hydra migrate ${input.platform} --operator <your ${input.platform} user id>`] }
   const merged = mergeDocs([...(existing ? [existing] : []), ...outputs.map(o => o.doc)])
   if (merged.conflicts.length) return { ok: false, errors: merged.conflicts.map(c => `two sources disagree on ${c}`) }
   // A hydra.toml governs only once it names an operator; one without would retire allowFrom and leave nobody in charge.
-  if (typeof merged.doc.operator !== 'string') return { ok: false, errors: ['no operator: access.json has no allowFrom to take one from. Add an allowFrom id (or write hydra.toml by hand).'] }
+  if (typeof merged.doc.operator !== 'string') return { ok: false, errors: ['no operator: access.json has no allowFrom to take one from. Pass --operator <your user id> (or write hydra.toml by hand).'] }
   // A hydra.toml with only comments in it is kept above the new content.
   const after = (body: string) => appendText(existingText, body)
   let text = existingText.trim() && !existing ? after(toToml(merged.doc)) : toToml(merged.doc)
@@ -370,7 +436,15 @@ export function planMigrate(input: MigrateInput, steps: MigrateStep[] = STEPS): 
     writes[path] = content
   }
   const consumed = outputs.flatMap(o => o.consumed)
-  for (const f of consumed) writes[`${f}.migrated`] ??= readFileSync(join(input.stateDir, f), 'utf8')
+  // Each retired file is kept beside it as <name>.migrated, or <name>.2.migrated, ... when an earlier one is there with other content: never overwritten.
+  for (const f of consumed) {
+    const content = readFileSync(join(input.stateDir, f), 'utf8')
+    for (let n = 1; ; n++) {
+      const name = n === 1 ? `${f}.migrated` : `${f}.${n}.migrated`
+      const there = join(input.stateDir, name)
+      if (!existsSync(there) || readFileSync(there, 'utf8') === content) { writes[name] ??= content; break }
+    }
+  }
   // A backup already here is fine when it's this same content (a rerun after an interruption); never overwrite another.
   const clash = Object.entries(writes).filter(([f, content]) => f.endsWith('.migrated') && existsSync(join(input.stateDir, f)) && readFileSync(join(input.stateDir, f), 'utf8') !== content).map(([f]) => f)
   if (clash.length) {

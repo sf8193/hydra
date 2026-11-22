@@ -14,7 +14,7 @@ export function configCheckCommand(platformArg: string | undefined, stateDirOpt:
   const stateDir = stateDirOpt ?? cfg.stateDir
   const platform = statePlatform(stateDir, platformArg, cfg.platform)
   const path = join(stateDir, 'hydra.toml')
-  if (!existsSync(path)) { console.log(`${path}: none (the old files still apply)`); return 0 }
+  if (!existsSync(path)) { console.log(`${path}: none: no operator, so every DM is dropped (hydra migrate ${platform} --operator <your user id>)`); return 0 }
   const r = loadHydraConfig(readFileSync(path, 'utf8'), systemEnv(SESSION_NAMES, stateDir, platform, cfg.configDir))
   if (!r.ok) {
     console.log(`${path}: doesn't load; a running daemon keeps its last good config\n${formatIssues(r.errors)}`)

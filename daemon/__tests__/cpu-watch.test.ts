@@ -7,7 +7,9 @@ import { join } from 'path'
 import { spawn, execFileSync, type ChildProcess } from 'child_process'
 import { sampleCpu, getCpuVitals, _setSpinThresholdForTesting } from '../cpu-watch.js'
 import { psAll } from '../vitals-snapshot.js'
-import { STATE_DIR, ACCESS_FILE, gateway } from '../config.js'
+import { STATE_DIR, gateway } from '../config.js'
+import { setHydra } from './test-hydra.js'
+import { _setHydraConfigForTesting } from '../hydra-config.js'
 import { bridgeLifePath } from '../../shared/bridge-life.js'
 import type { SessionInfo } from '../sessions.js'
 import { fakeAdapter } from './test-harness.js'
@@ -54,7 +56,7 @@ beforeAll(() => {
   busy = spawn(process.execPath, ['-e', BUSY], { stdio: 'ignore' })
   origSendDM = gateway.sendDM
   ;(gateway as any).sendDM = async (_u: string, text: string) => { dms.push(text) }
-  writeFileSync(ACCESS_FILE, JSON.stringify({ allowFrom: ['U-op'] }))
+  setHydra({ operators: ['U-op'] })
 })
 
 afterAll(() => {
@@ -62,7 +64,7 @@ afterAll(() => {
   busy.kill('SIGKILL')
   for (const pid of strays) try { process.kill(pid, 'SIGKILL') } catch {}
   ;(gateway as any).sendDM = origSendDM
-  rmSync(ACCESS_FILE, { force: true })
+  _setHydraConfigForTesting(undefined)
 })
 
 afterEach(async () => {

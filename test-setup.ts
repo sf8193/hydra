@@ -1,4 +1,4 @@
-// Bun test preload — isolates ALL daemon state (sessions.json, pr-watches.json, access.json,
+// Bun test preload — isolates ALL daemon state (sessions.json, pr-watches.json, hydra.toml,
 // inbox, …) to a throwaway temp dir so the suite never reads or clobbers the developer's live
 // ~/.claude channel state. This closes a real hazard: tests that import the daemon modules
 // (e.g. dedup/pr-watch tests) would otherwise persist to the live pr-watches.json and wipe

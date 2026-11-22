@@ -1,6 +1,9 @@
 import { afterAll, beforeAll, beforeEach, expect, spyOn, test } from 'bun:test'
+import { readFileSync, rmSync, writeFileSync } from 'fs'
 import { gateway } from '../config.js'
 import * as access from '../access.js'
+import { hydraConfigPath, reloadHydraConfig, startHydraConfig, stopHydraConfig } from '../hydra-config.js'
+import { testLoadEnv } from '../../config/__tests__/load-env.js'
 import * as global from '../commands/global.js'
 import * as status from '../commands/status.js'
 import { reactionPlace } from '../../gateways/discord.js'
@@ -14,7 +17,9 @@ const spawns: any[][] = []
 const lists: any[][] = []
 const deletes: string[][] = []
 const spies: Array<{ mockRestore(): void }> = []
-const saved: any[] = []
+// hydra.toml as the operator has it: they are the operator, and `ours` is the one channel this daemon is in.
+const U1 = '100000000000000001', OURS = '300000000000000001', FRESH = '300000000000000002'
+const TOML = `operator = "operator"\n[people.operator]\naddresses = ["discord:${U1}"]\n[places."discord:${OURS}".access]\nallow = ["anyone"]\n`
 let tagged = false
 const mentionCalls: any[][] = []
 
@@ -24,46 +29,46 @@ beforeAll(async () => {
   spies.push(spyOn(gateway, 'send').mockImplementation((async () => ({ id: 'x' })) as any))
   spies.push(spyOn(gateway, 'delete' as any).mockImplementation((async (c: string, m: string) => { deletes.push([c, m]) }) as any))
   spies.push(spyOn(gateway, 'isMentioned').mockImplementation((async (...a: any[]) => { mentionCalls.push(a); return tagged }) as any))
-  spies.push(spyOn(access, 'saveAccess').mockImplementation(((a: any) => { saved.push(a) }) as any))
-  spies.push(spyOn(access, 'loadAccess').mockImplementation((() => ({ allowFrom: ['u1'], groups: { ours: {} }, pending: {} })) as any))
+  writeFileSync(hydraConfigPath(), TOML)
+  startHydraConfig({ env: { ...testLoadEnv({ home: '/h', sessionNames: [] }), isDir: () => true } })
   spies.push(spyOn(global, 'handleSpawnIntercept').mockImplementation((async (...args: any[]) => { spawns.push(args) }) as any))
   spies.push(spyOn(status, 'handleListIntercept').mockImplementation((async (...args: any[]) => { lists.push(args) }) as any))
   await import('../router.js')
 })
-afterAll(() => { for (const s of spies) s.mockRestore() })
-beforeEach(() => { mentionCalls.length = 0; tagged = false; saved.length = 0; spawns.length = 0; lists.length = 0; deletes.length = 0 })
+afterAll(() => { for (const s of spies) s.mockRestore(); stopHydraConfig(); rmSync(hydraConfigPath(), { force: true }) })
+beforeEach(() => { writeFileSync(hydraConfigPath(), TOML); reloadHydraConfig(); mentionCalls.length = 0; tagged = false; spawns.length = 0; lists.length = 0; deletes.length = 0 })
 
 test('the operator tagging the bot in a new channel admits it, mention-only, and the spawn runs', async () => {
   tagged = true
-  await say('fresh')
+  await say(FRESH)
   expect(spawns).toHaveLength(1)
-  expect(saved[0].groups.fresh).toEqual({ requireMention: true, allowFrom: ['u1'], defaultListen: true })
-  expect(access.channelAllowed(saved[0], { isDM: false, channelId: 'fresh', parentChannelId: null })).toBe(true)
+  expect(readFileSync(hydraConfigPath(), 'utf8')).toContain(`[places."discord:${FRESH}".access]`)
+  expect(access.channelAllowed({ isDM: false, channelId: FRESH, parentChannelId: null })).toBe(true)
   // a reply to the bot or a mentionPatterns match is not a tag
   expect(mentionCalls[0]).toHaveLength(1)
   expect(mentionCalls[0][0].referenceMessageId).toBeNull()
 })
 
 test('the operator posting without a tag in a new channel admits nothing', async () => {
-  await say('fresh')
-  expect(saved).toHaveLength(0)
+  await say(FRESH)
+  expect(readFileSync(hydraConfigPath(), 'utf8')).toBe(TOML)
   expect(spawns).toHaveLength(0)
 })
 
 test('a tag from someone who is not the operator admits nothing', async () => {
   tagged = true
-  await onMessage({ id: 'm2', channelId: 'fresh', authorId: 'stranger', authorUsername: 's', content: 'spawn: x', isBot: false, attachments: [], createdAt: new Date(), isThread: false, isDM: false, parentChannelId: null })
-  expect(saved).toHaveLength(0)
+  await onMessage({ id: 'm2', channelId: FRESH, authorId: 'stranger', authorUsername: 's', content: 'spawn: x', isBot: false, attachments: [], createdAt: new Date(), isThread: false, isDM: false, parentChannelId: null })
+  expect(readFileSync(hydraConfigPath(), 'utf8')).toBe(TOML)
   expect(spawns).toHaveLength(0)
 })
 
 const where = { isDM: false, parentChannelId: null as string | null }
 const say = (channelId: string, over: Partial<typeof where> = {}, content = 'spawn: fix the bug') => {
   const w = { ...where, ...over }
-  return onMessage({ id: 'm1', channelId, authorId: 'u1', authorUsername: 'u', content, isBot: false, attachments: [], createdAt: new Date(), isThread: w.parentChannelId !== null, ...w })
+  return onMessage({ id: 'm1', channelId, authorId: U1, authorUsername: 'u', content, isBot: false, attachments: [], createdAt: new Date(), isThread: w.parentChannelId !== null, ...w })
 }
 const knife = (channelId: string, over: Partial<typeof where> = {}) =>
-  onReaction({ channelId, messageId: 'bot-msg', userId: 'u1', emoji: 'hocho', ...where, ...over })
+  onReaction({ channelId, messageId: 'bot-msg', userId: U1, emoji: 'hocho', ...where, ...over })
 
 test('spawn in a channel this daemon is not allowed in does nothing', async () => {
   await say('theirs')
@@ -71,12 +76,12 @@ test('spawn in a channel this daemon is not allowed in does nothing', async () =
 })
 
 test('spawn in an allowed channel still spawns', async () => {
-  await say('ours')
+  await say(OURS)
   expect(spawns).toHaveLength(1)
 })
 
 test('spawn in a thread of an allowed channel still spawns', async () => {
-  await say('thread-1', { parentChannelId: 'ours' })
+  await say('thread-1', { parentChannelId: OURS })
   expect(spawns).toHaveLength(1)
 })
 
@@ -91,12 +96,12 @@ test('spawn in a DM from an operator still spawns', async () => {
 })
 
 test('knife reaction deletes in an allowed channel', async () => {
-  await knife('ours')
-  expect(deletes).toEqual([['ours', 'bot-msg']])
+  await knife(OURS)
+  expect(deletes).toEqual([[OURS, 'bot-msg']])
 })
 
 test('knife reaction deletes in a thread of an allowed channel', async () => {
-  await knife('thread-1', { parentChannelId: 'ours' })
+  await knife('thread-1', { parentChannelId: OURS })
   expect(deletes).toEqual([['thread-1', 'bot-msg']])
 })
 
@@ -125,7 +130,7 @@ test('a thread with no known parent falls back to its own id, which is no channe
 test('the gate covers other operator commands, not only spawn', async () => {
   await say('theirs', {}, 'list sessions')
   expect(lists).toHaveLength(0)
-  await say('ours', {}, 'list sessions')
+  await say(OURS, {}, 'list sessions')
   expect(lists).toHaveLength(1)
 })
 
@@ -147,6 +152,6 @@ test('a discord reaction place: guild channel, thread (parent), DM', () => {
   const ch = (type: ChannelType, thread: boolean, parentId: string | null = null) =>
     ({ type, isDMBased: () => type === ChannelType.DM, isThread: () => thread, parentId })
   expect(reactionPlace(ch(ChannelType.GuildText, false))).toEqual({ isDM: false, parentChannelId: null })
-  expect(reactionPlace(ch(ChannelType.PublicThread, true, 'ours'))).toEqual({ isDM: false, parentChannelId: 'ours' })
+  expect(reactionPlace(ch(ChannelType.PublicThread, true, OURS))).toEqual({ isDM: false, parentChannelId: OURS })
   expect(reactionPlace(ch(ChannelType.DM, false))).toEqual({ isDM: true, parentChannelId: null })
 })

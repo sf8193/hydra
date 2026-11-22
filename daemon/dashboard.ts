@@ -7,7 +7,7 @@ import { registry, threadRegistry, type SessionInfo } from './sessions.js'
 import { emojiOf } from './anchor-state.js'
 import { transport } from './bridge-transport.js'
 import { formatDuration } from './util.js'
-import { loadAccess, operatorIds } from './access.js'
+import { operatorIds } from './access.js'
 import { getWatchesBySession, type WatchEntry } from '../connectors/github/pr-watch.js'
 import { assembleContextLines } from './artifacts.js'
 import { sessionLiveAsync } from './session-activity.js'
@@ -239,7 +239,7 @@ function buildHomeBlocks(sessions: SessionRow[], recent: RecentRow[] = []): any[
 
 function homeTabUser(): string | null {
   if (PLATFORM !== 'slack' || !('publishHomeTab' in gateway)) return null
-  return operatorIds(loadAccess())[0] ?? null
+  return operatorIds()[0] ?? null
 }
 
 let publishedStatuses = ''

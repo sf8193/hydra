@@ -140,7 +140,7 @@ bun cli/hydra.ts up discord
 
 ## Platform Setup
 
-- **[Discord Setup](docs/discord.md)** — bot creation, token, permissions, pairing
+- **[Discord Setup](docs/discord.md)** — bot creation, token, permissions, first operator
 - **[Slack Setup](docs/slack.md)** — the Slack gateway (the operator's chat surface): app manifest, Socket Mode, tokens; and the Slack connector (events routed by hydra.toml)
 
 ## CLI Reference
@@ -232,25 +232,26 @@ SLACK_APP_TOKEN=xapp-...
 
 ### Access control
 
-`access.json` controls who can message the bot. Lives in the state dir (`~/.claude/channels/discord/` by default). Once `hydra.toml` exists, its `operator` replaces `allowFrom` (admin checks, DMs to main) and pairing is off; the rest of `access.json` (DM policy, groups) still applies.
+`hydra.toml` controls who can message the bot. Lives in the state dir (`~/.claude/channels/<platform>/` by default). The `operator` is the one person whose DMs reach `main` and who runs commands (`spawn:`, `kill:`, `/sessions`). `access.json` is gone: an old install runs `hydra migrate <platform>` once, which moves its people, channels and settings here and keeps the original as `access.json.migrated`. A new install runs `hydra migrate <platform> --operator <your user id>`.
 
-```jsonc
-{
-  "dmPolicy": "pairing",          // pairing | allowlist | disabled
-  "allowFrom": ["user-id-here"],  // platform user IDs
-  "groups": {                      // channel-level policies
-    "channel-id": {
-      "requireMention": true,
-      "allowFrom": [],
-      "threadReply": true
-    }
-  },
-  "ackReaction": "👀",
-  "replyToMode": "first",         // first | all | off
-  "textChunkLimit": 2000,
-  "chunkMode": "newline"           // newline | length
-}
+```toml
+operator = "operator"
+
+[people.operator]
+addresses = ["discord:184695080709324800"]   # platform user ids
+
+# A channel the bot is in: the table existing admits it.
+[places."discord:846209781206941736".access]
+mention = true               # a top-level message must tag the bot (default true)
+allow = ["anyone"]           # required: people from [people], or ["anyone"] for everyone who tags
+listen = true                # a session thread started here listens without a tag
+
+[gateways.discord]
+ack_reaction = "👀"          # react to every message a session picks up
+# off = true                 # drop every message that would reach a session; the operator's commands still run
 ```
+
+To admit a channel, tag the bot there as the operator: it writes that table for you and runs the same message's command. Add a person with `hydra people add <name> <platform>:<id>`. Strangers' DMs are dropped (there is no pairing). `hydra config check <platform>` loads the file as the daemon does.
 
 See [ACCESS.md](./ACCESS.md) for full reference.
 
@@ -403,7 +404,7 @@ Exit codes of `hydra` commands and the result words `hydra deliver` prints. See 
 Symptoms first — each maps to one root cause. See [docs/ONBOARDING_TIPS.md](./docs/ONBOARDING_TIPS.md) for a full first-machine checklist.
 
 **Bot is online but a spawned thread stays empty, or `spawn:` does nothing.**
-Command interception (`spawn:`, `kill:`, `/sessions`, `/health`) fires only for senders in the **top-level** `access.json` `allowFrom` — separate from a channel group's `allowFrom`. A group lets *replies* through; *commands* need you in the global allowlist. → `/discord:access allow <your-snowflake>`. (The daemon logs `command-shaped message from non-allowlisted sender …` when this happens.)
+Command interception (`spawn:`, `kill:`, `/sessions`, `/health`) fires only for the **operator** in `hydra.toml`. A channel's `allow` list lets *replies* through; *commands* need you to be the operator. → `hydra migrate <platform> --operator <your user id>` on a new install, or check `operator = "…"` and that person's `addresses`. (The daemon logs `command-shaped message from non-allowlisted sender …` when this happens.)
 
 **Byte or spawned session hangs on a theme picker, login, or "trust this folder" screen.**
 The byte is a second, headless Claude in tmux using `CLAUDE_CONFIG_DIR` (default `~/.claude`), so it reads **`$CLAUDE_CONFIG_DIR/.claude.json`** — not `~/.claude.json`. A fresh config dir triggers first-run gates that block a detached session. → Complete them once via `tmux attach -t <platform>-byte`, or pre-seed `theme`, `hasCompletedOnboarding`, `bypassPermissionsModeAccepted`, and per-project `hasTrustDialogAccepted`. `hydra preflight` now flags this.

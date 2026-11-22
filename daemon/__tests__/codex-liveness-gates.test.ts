@@ -201,13 +201,15 @@ describe('gate 5: dashboard rows', () => {
   function dashboardNames(recs: Array<{ tmuxName: string; kind: 'codex-up' | 'codex-down' | 'plain' }>): string[] {
     const state = mkdtempSync(join(tmpdir(), 'hydra-test-dash-'))
     try {
-      writeFileSync(join(state, 'access.json'), JSON.stringify({ dmPolicy: 'pairing', allowFrom: ['U1'], groups: {}, pending: {} }))
+      writeFileSync(join(state, 'hydra.toml'), 'operator = "op"\n[people.op]\naddresses = ["slack:U0OP"]\n')
       const script = join(state, 'dash.ts')
       writeFileSync(script, `
         const { registry } = await import(${JSON.stringify(join(root, 'daemon/sessions.ts'))})
         const { gateway } = await import(${JSON.stringify(join(root, 'daemon/config.ts'))})
         const { CodexEngineAdapter } = await import(${JSON.stringify(join(root, 'daemon/engines/codex-engine-adapter.ts'))})
         const { refreshDashboardNow } = await import(${JSON.stringify(join(root, 'daemon/dashboard.ts'))})
+        const { startHydraConfig } = await import(${JSON.stringify(join(root, 'daemon/hydra-config.ts'))})
+        startHydraConfig()
         const recs = ${JSON.stringify(recs)}
         const names = recs.map(r => r.tmuxName)
         for (const [i, r] of recs.entries()) {

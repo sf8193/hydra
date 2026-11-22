@@ -25,6 +25,36 @@ const SPECIALISTS = {
   '123': { channel: '557', kickoff: 'all digits' },
 }
 
+describe('hydra migrate --operator: a fresh install says who it is', () => {
+  test('with nothing to migrate it writes a hydra.toml naming the operator, which loads and governs', () => {
+    const plan = planMigrate({ ...state({}), operator: ' 100000000000000009 ' })
+    if (!plan.ok) throw new Error(plan.errors.join('\n'))
+    const loaded = loadHydraConfig(plan.text, env)
+    if (!loaded.ok) throw new Error('the fresh hydra.toml must load')
+    expect(loaded.config.operator).toBe('operator')
+    expect(loaded.config.people.operator.addresses).toEqual(['discord:100000000000000009'])
+    applyMigrate(dir, plan)
+    expect(read('hydra.toml')).toBe(plan.text)
+    expect(planMigrate({ ...state({}), operator: '1' }).ok).toBe(true)
+  })
+  test('for Slack the address is a slack: one, and a Discord-style number is refused', () => {
+    const plan = planMigrate({ ...state({}), platform: 'slack', operator: 'U123ABC' })
+    if (!plan.ok) throw new Error(plan.errors.join('\n'))
+    expect(plan.text).toContain('addresses = ["slack:U123ABC"]')
+    expect(planMigrate({ ...state({}), platform: 'slack', operator: '12345' })).toMatchObject({ ok: false, errors: [expect.stringContaining('isn\'t a slack user id')] })
+  })
+  test('without --operator the refusal says how to give one', () => {
+    expect(planMigrate(state({}))).toMatchObject({ ok: false, errors: [expect.stringContaining('hydra migrate discord --operator <your discord user id>')] })
+  })
+  test('an install that already has an operator refuses --operator, writing nothing', () => {
+    expect(planMigrate({ ...state({ 'access.json': ACCESS }), operator: '42' })).toMatchObject({ ok: false, errors: [expect.stringContaining('already names an operator')] })
+    expect(planMigrate({ ...state({ 'hydra.toml': 'operator = "me"\n[people.me]\naddresses = ["discord:7"]\n', 'specialists.json': SPECIALISTS }), operator: '42' })).toMatchObject({ ok: false, errors: [expect.stringContaining('already names an operator')] })
+  })
+  test('an operator that is not a user id is refused', () => {
+    expect(planMigrate({ ...state({}), operator: 'not an id' })).toMatchObject({ ok: false, errors: [expect.stringContaining('isn\'t a discord user id')] })
+  })
+})
+
 describe('hydra migrate', () => {
   test('access.json and specialists.json become one hydra.toml that loads, with pointers and backups', () => {
     const input = state({ 'access.json': ACCESS, 'specialists.json': SPECIALISTS })
@@ -47,10 +77,10 @@ describe('hydra migrate', () => {
     expect(existsSync(join(dir, 'specialists.json'))).toBe(false)
     expect(JSON.parse(read('specialists.json.migrated'))).toEqual(SPECIALISTS)
     expect(JSON.parse(read('specialist-threads.json'))).toEqual({ ops: { threadId: '900', updatedAt: 7 } })
-    // Only allowFrom leaves access.json; the original is kept.
-    const { allowFrom: _a, ...rest } = ACCESS
-    expect(JSON.parse(read('access.json'))).toEqual(rest)
+    // access.json is retired whole: the original is kept, and its group is now an admitted channel.
+    expect(existsSync(join(dir, 'access.json'))).toBe(false)
     expect(JSON.parse(read('access.json.migrated'))).toEqual(ACCESS)
+    expect(loaded.config.channels?.['discord:300']).toEqual({ access: { mention: true, allow: 'anyone' } })
     // Run again: it refuses, hydra.toml is written once.
     const again = planMigrate(input)
     expect(again.ok).toBe(false)
@@ -59,7 +89,6 @@ describe('hydra migrate', () => {
   test('refuses, writing nothing, when a step refuses (slack-watch.json unreadable), or there is nothing to do', () => {
     expect(planMigrate(state({ 'slack-watch.json': '{ nope', 'specialists.json': SPECIALISTS }))).toMatchObject({ ok: false, errors: [expect.stringContaining('slack-watch.json')] })
     expect(planMigrate(state({ 'access.json': { allowFrom: [] } }))).toMatchObject({ ok: false, errors: [expect.stringContaining('nothing to migrate')] })
-    expect(planMigrate(state({ 'specialists.json': SPECIALISTS, 'specialists.json.migrated': '{}', 'access.json': ACCESS }))).toMatchObject({ ok: false, errors: [expect.stringContaining('already exists')] })
   })
 
   test('a result that doesn\'t load is refused: specialists with no allowFrom have no operator', () => {
@@ -107,7 +136,7 @@ describe('hydra migrate: found in review', () => {
     expect(JSON.parse(read('access.json'))).toEqual(ACCESS)
     applyMigrate(dir, okPlan(input))
     const once = endState()
-    expect(Object.keys(once)).toEqual(['access.json', 'access.json.migrated', 'hydra.toml', 'specialist-threads.json', 'specialists.json.migrated'])
+    expect(Object.keys(once)).toEqual(['access.json.migrated', 'hydra.toml', 'specialist-threads.json', 'specialists.json.migrated'])
   })
 
   test('a crash after the commit point is finished, not planned again, and ends the same', () => {
@@ -128,11 +157,10 @@ describe('hydra migrate: found in review', () => {
     expect(plan.notes[0]).toStartWith('discord:222 is the operator')
   })
 
-  test('a clashing backup says exactly how to start over', () => {
-    const input = state({ 'access.json': ACCESS, 'access.json.migrated': '{"older":true}' })
-    const plan = planMigrate(input)
-    expect(plan.ok).toBe(false)
-    if (!plan.ok) expect(plan.errors[0]).toContain(`mv '${join(dir, 'access.json.migrated')}' '${join(dir, 'access.json.migrated')}.old'`)
+  test('a backup already there with other content is kept: the new one takes the next name', () => {
+    const plan = okPlan(state({ 'access.json': ACCESS, 'access.json.migrated': '{"older":true}' }))
+    expect(plan.writes['access.json.migrated']).toBeUndefined()
+    expect(JSON.parse(plan.writes['access.json.2.migrated'])).toEqual(ACCESS)
   })
 
   test('state files are written 0600, as the daemon writes them', () => {
@@ -146,8 +174,8 @@ describe('hydra migrate: found in review', () => {
     const plan = okPlan(input)
     expect(JSON.parse(plan.writes['specialist-threads.json'])).toEqual({ ops: { threadId: '1234', updatedAt: 99 }, desk: { threadId: '777', updatedAt: 1 } })
     expect(plan.writes['specialist-threads.json.migrated']).toBeDefined()
-    writeFileSync(join(dir, 'access.json.migrated'), '{"older":true}')
-    expect(planMigrate(input)).toMatchObject({ ok: false, errors: [expect.stringContaining('access.json.migrated already exists with other content')] })
+    writeFileSync(join(dir, 'specialist-threads.json.migrated'), '{"older":true}')
+    expect(planMigrate(input)).toMatchObject({ ok: false, errors: [expect.stringContaining('specialist-threads.json.migrated already exists with other content')] })
   })
 
   test('a relative kickoffFile is made absolute from the old daemon\'s folder; an unnameable channel is left out, both with a note', () => {
@@ -216,7 +244,9 @@ describe('toToml', () => {
 describe('bootRefusal: hydra.toml beside the old state it replaces', () => {
   const TOML = 'operator = "op"\n[people.op]\naddresses = ["discord:1"]\n'
   test('refuses, naming each old state, only while hydra.toml has content', () => {
-    expect(bootRefusal(state({ 'specialists.json': SPECIALISTS, 'access.json': ACCESS }).stateDir)).toBeUndefined()
+    expect(bootRefusal(state({ 'specialists.json': SPECIALISTS }).stateDir)).toBeUndefined()
+    // access.json's channels and settings need a hydra.toml to live in: without one the daemon will not start on them.
+    expect(bootRefusal(state({ 'access.json': ACCESS }).stateDir)).toContain("Run 'hydra migrate'")
     expect(bootRefusal(state({ 'hydra.toml': '\n', 'specialists.json': SPECIALISTS }).stateDir)).toBeUndefined()
     // The daemon's test for "in use": a comment-only file isn't; one that doesn't parse is.
     expect(bootRefusal(state({ 'hydra.toml': '# nothing yet\n', 'specialists.json': SPECIALISTS }).stateDir)).toBeUndefined()
@@ -224,7 +254,7 @@ describe('bootRefusal: hydra.toml beside the old state it replaces', () => {
     expect(bootRefusal(state({ 'hydra.toml': TOML, 'access.json': { allowFrom: [] } }).stateDir)).toBeUndefined()
     const r = bootRefusal(state({ 'hydra.toml': TOML, 'specialists.json': SPECIALISTS, 'access.json': ACCESS, 'slack-watch.json': '{}' }).stateDir)
     expect(r).toContain('old state it replaces is still in')
-    expect(r).toContain('access.json allowFrom, specialists.json, slack-watch.json')
+    expect(r).toContain('access.json, specialists.json, slack-watch.json')
     expect(r).toContain("Run 'hydra migrate'")
   })
   test('refuses while a migration is half committed, until hydra migrate finishes it', () => {
@@ -253,7 +283,7 @@ describe('incremental migrate: what\'s pending is appended to an existing hydra.
     const plan = planMigrate(input)
     if (!plan.ok) throw new Error(plan.errors.join('\n'))
     expect(plan.text.startsWith(HAND.trimEnd())).toBe(true)
-    expect(plan.notes[0]).toBe('appends to the existing hydra.toml, leaving what\'s there as it is: [people.person-2], [specialists.ops]')
+    expect(plan.notes[0]).toBe('appends to the existing hydra.toml, leaving what\'s there as it is: [people.person-2], [specialists.ops], [places."discord:300"]')
     // allowFrom's operator is hydra.toml's op already: the note names op, not the step's own id.
     expect(plan.notes[1]).toStartWith('discord:100000000000000001 is the operator, as people.op')
     const loaded = loadHydraConfig(plan.text, env)
@@ -295,7 +325,8 @@ describe('incremental migrate: what\'s pending is appended to an existing hydra.
     if (!plan.ok) throw new Error(plan.errors.join('\n'))
     expect(plan.text).toBe(MINE)
     expect(plan.notes[0]).toBe('nothing to add to hydra.toml; it is left as it is')
-    expect(JSON.parse(plan.writes['access.json'])).toEqual({ dmPolicy: 'pairing' })
+    expect(plan.consumed).toContain('access.json')
+    expect(plan.writes['access.json']).toBeUndefined()
   })
 
   test('a table set inline at the top is refused by name, not by a parse error', () => {

@@ -8,11 +8,18 @@ import { transport } from '../bridge-transport.js'
 import { _setRecoveryDeps, _resetRecoveryDeps, reviveDeps } from '../recovery.js'
 import { _resetBackoff } from '../recovery-backoff.js'
 import { _setDaemonStartedAtForTesting } from '../session-reachability.js'
-import { removeSpecialist, setSpecialist } from '../../specialists/specialists.js'
+import { setSpecialistThread } from '../../specialists/specialists.js'
 import { _forgetMemory, _resetHeld, heldCount, MAX_HOLD_MS, restoreHeld, RETRY_MS, specialistThreadDeps } from '../specialist-thread.js'
 import { fakeAdapter } from './test-harness.js'
+import { setHydra } from './test-hydra.js'
 
 process.stderr.write = (() => true) as any
+
+const CHAN = '300000000000000001'
+const OP = '100000000000000001'
+// The specialists this test has declared in hydra.toml so far: one table each, rebuilt whenever one is added.
+const declared: { name: string; homePlace: boolean }[] = []
+const hydra = () => setHydra({ operators: [OP], channels: { [CHAN]: { requireMention: false } }, specialists: declared.map(d => `[specialists.${d.name}]\nworkdir = "/tmp"\nkickoff = "be the specialist"\nreachable_by = ["role:anyone"]\n${d.homePlace ? `home_place = "discord:${CHAN}"\n` : ''}`).join('\n') || undefined })
 
 let onMessage: (msg: any) => Promise<void>
 const spies: Array<{ mockRestore(): void }> = []
@@ -33,7 +40,7 @@ beforeAll(async () => {
   spies.push(spyOn(gateway, 'send').mockImplementation((async () => ({ id: 'x' })) as any))
   spies.push(spyOn(gateway, 'typing').mockImplementation((async () => {}) as any))
   spies.push(spyOn(gateway, 'react').mockImplementation((async () => {}) as any))
-  spies.push(spyOn(access, 'loadAccess').mockImplementation((() => ({ allowFrom: ['op'], groups: { chan: { requireMention: false } }, pending: {} })) as any))
+  spies.push(setHydra({ operators: [OP], channels: { chan: { requireMention: false } } }))
   spies.push(spyOn(transport, 'sendOrQueue').mockImplementation(((to: string, m: any) => { if (m.type === 'notification') landed.push({ to, content: m.content }) }) as any))
   await import('../router.js')
 })
@@ -76,17 +83,19 @@ afterEach(() => {
   Object.assign(specialistThreadDeps, real); reviveDeps.threadExists = real.threadExists
   for (const s of sessions.splice(0)) registry.delete(s)
   for (const t of threads.splice(0)) registry.deleteThread(t)
-  for (const name of names.splice(0)) removeSpecialist(name)
+  declared.length = 0; names.length = 0; hydra()
 })
 
 const specialist = (threadId: string, extra: Record<string, unknown> = {}) => {
   const name = `stspec${++n}`
   names.push(name)
-  setSpecialist(name, { threadId, channel: 'chan', kickoff: 'be the specialist', ...extra })
+  declared.push({ name, homePlace: true })
+  hydra()
+  setSpecialistThread(name, threadId)
   return name
 }
-const say = (threadId: string, content = 'proceed with it', authorId = 'op') =>
-  onMessage({ id: `m${++n}`, channelId: threadId, authorId, authorUsername: 'u', content, isBot: false, isDM: false, isThread: true, parentChannelId: 'chan', effectiveThreadId: threadId, attachments: [], createdAt: new Date() })
+const say = (threadId: string, content = 'proceed with it', authorId = OP) =>
+  onMessage({ id: `m${++n}`, channelId: threadId, authorId, authorUsername: 'u', content, isBot: false, isDM: false, isThread: true, parentChannelId: CHAN, effectiveThreadId: threadId, attachments: [], createdAt: new Date() })
 const settle = async () => { for (let i = 0; i < 20; i++) await new Promise(r => setImmediate(r)) }
 const toMain = () => landed.filter(l => l.to === 'main')
 
@@ -201,8 +210,9 @@ test('still not started after the hold: the thread is told what was not delivere
 })
 
 test('a start that can never succeed is told at once and not held', async () => {
-  const name = specialist('st-thread-8', { channel: undefined })
-  reviveDeps.threadExists = async () => false
+  const name = specialist('st-thread-8')
+  // The start is refused outright (exit code 3): another live session already holds the specialist's name.
+  occupy('st-elsewhere', { tmuxName: name })
   await say('st-thread-8')
   await settle()
   expect(spawns).toHaveLength(0)

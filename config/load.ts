@@ -21,8 +21,8 @@ import { invalidSpecialistName } from '../shared/specialist-name.js'
 import { bareOf, readTarget, spelled } from '../shared/target-kind.js'
 import { readValue, spelledApp, spelledPerson, spelledRole, whoSpelled } from '../shared/value-kind.js'
 import {
-  BUILTIN_ROLES, DEFAULT_SLACK_APP, SLACK_APP_ID_RE, homePlaceOf, isCatchAll, isChannelName, isDmPlace, isEvery, namesDmWithOthers, optionsOf, parsePlace, placeKey, placeShadows, placesAnsweredBy, samePlace, type Address, type ConfigIssue, type Connectors, type Gateways, type Guard, type HydraConfig, type LoadEnv, type LoadResult, type MainOptions,
-  type McpServer, type WorkdirScan, type Person, type Place, type PlaceOptions, type Platform, type Rule, type Schedule, type SlackApp, type Specialist, type Vitals,
+  BUILTIN_ROLES, DEFAULT_SLACK_APP, SLACK_APP_ID_RE, homePlaceOf, isCatchAll, isChannelName, isDmPlace, isEvery, namesDmWithOthers, optionsOf, parsePlace, placeKey, placeShadows, placesAnsweredBy, samePlace, type Address, type ChannelGate, type ConfigIssue, type Connectors, type GateSettings, type Gateways, type Guard, type HydraConfig, type LoadEnv, type LoadResult, type MainOptions,
+  type McpServer, type WorkdirScan, type Person, type Place, type PlaceAccess, type PlaceOptions, type Platform, type Rule, type Schedule, type SlackApp, type Specialist, type Vitals,
   MAX_ALERT_AFTER_MS, NEEDS, RUNNERS, SESSIONS_MODES, WORKDIR_TOOLS, type Need, HANDOFF_PROTOCOLS, type HandoffProtocol, type HandoffWithoutTool,
 } from './types.js'
 
@@ -298,17 +298,37 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     return true
   }
   const gateways: Gateways = {}
+  const GATE_KEYS = ['ack_reaction', 'off', 'listen', 'mention_patterns'] as const
+  const gateSettings: NonNullable<HydraConfig['gateSettings']> = {}
+  const gateSettingsOf = (t: Table, path: string): GateSettings | undefined => {
+    if (!GATE_KEYS.some(k => Object.hasOwn(t, k))) return undefined
+    const ackReaction = str(t, 'ack_reaction', path)
+    const listen = bool(t, 'listen', path)
+    const mentionPatterns = strList(t, 'mention_patterns', path)
+    return { off: bool(t, 'off', path) ?? false, ...(ackReaction !== undefined && { ackReaction }), ...(listen !== undefined && { listen }), ...(mentionPatterns !== undefined && { mentionPatterns }) }
+  }
   const discordGateway = (t: Table, path: string) => {
-    unknownKeys(t, ['bot_token_env'], path)
+    unknownKeys(t, ['bot_token_env', ...GATE_KEYS], path)
+    const settings = gateSettingsOf(t, path)
+    if (settings) gateSettings.discord = settings
+    // A table of only gate settings leaves Discord unconnected; an empty table is still a missing token.
+    if (settings && t.bot_token_env === undefined) return
     const v = str(t, 'bot_token_env', path)
     if (v === undefined) { if (t.bot_token_env === undefined) error(join2(path, 'bot_token_env'), 'is required'); return }
     if (!ENV_NAME_RE.test(v)) { error(join2(path, 'bot_token_env'), `"${v}" must name an environment variable, like DISCORD_BOT_TOKEN`); return }
     if (claimEnv(v, join2(path, 'bot_token_env'))) gateways.discord = { botTokenEnv: v }
   }
   const gw = table(doc.gateways, 'gateways') ?? {}
-  unknownKeys(gw, ['discord'], 'gateways')
+  unknownKeys(gw, ['discord', 'slack'], 'gateways')
   const gwDiscord = table(gw.discord, 'gateways.discord')
   if (gwDiscord) discordGateway(gwDiscord, 'gateways.discord')
+  const gwSlack = table(gw.slack, 'gateways.slack')
+  if (gwSlack) {
+    unknownKeys(gwSlack, GATE_KEYS, 'gateways.slack')
+    const settings = gateSettingsOf(gwSlack, 'gateways.slack')
+    if (settings) gateSettings.slack = settings
+    else error('gateways.slack', `sets nothing: it takes ${GATE_KEYS.join(', ')} (Slack's tokens stay in .env)`)
+  }
 
   const conns = table(doc.connectors, 'connectors') ?? {}
   unknownKeys(conns, ['github'], 'connectors')
@@ -879,14 +899,46 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
 
   // --- places --------------------------------------------------------------------------------------------------------
 
+  // `[places."<platform>:<id>".access]`: who the daemon hears in a channel it admits. The gate sees channel ids, never names.
+  const placeAccess = (p: Place, t: Table, path: string): PlaceAccess | undefined => {
+    const a = table(t.access, join2(path, 'access'))
+    if (!a) return undefined
+    const apath = join2(path, 'access')
+    if (p.kind !== 'channel' || (p.platform !== 'slack' && p.platform !== 'discord') || p.ref.startsWith('#')) {
+      error(apath, `${placeKey(p)} is not a Slack or Discord channel given by id: the gate sees ids, never names, so name it like slack:C0123ABC`)
+      return undefined
+    }
+    unknownKeys(a, ['mention', 'allow', 'listen'], apath)
+    const mention = bool(a, 'mention', apath) ?? true
+    const listen = bool(a, 'listen', apath)
+    const names = strList(a, 'allow', apath)
+    if (names === undefined) {
+      if (a.allow === undefined) error(join2(apath, 'allow'), 'is required: the people who may be heard here, or ["anyone"] to hear everyone who tags')
+      return undefined
+    }
+    if (names.length === 0) { error(join2(apath, 'allow'), 'must not be empty: an empty list would hear everyone. Write ["anyone"] to do that on purpose'); return undefined }
+    if (names.includes('anyone')) {
+      if (names.length > 1) { error(join2(apath, 'allow'), '"anyone" stands alone: it is everyone who tags, so naming people beside it means nothing'); return undefined }
+      return { mention, allow: 'anyone', ...(listen !== undefined && { listen }) }
+    }
+    if (new Set(names).size !== names.length) { error(join2(apath, 'allow'), 'names someone twice'); return undefined }
+    const unknown = names.filter(n => !Object.hasOwn(people, n))
+    if (unknown.length) { error(join2(apath, 'allow'), `${unknown.join(', ')} ${unknown.length === 1 ? 'is' : 'are'} not in [people]: add ${unknown.length === 1 ? 'them' : 'each'} there first`); return undefined }
+    const noAddress = names.filter(n => !people[n].addresses.some(a => a.startsWith(`${p.platform}:`)))
+    if (noAddress.length) { error(join2(apath, 'allow'), `${noAddress.join(', ')} ${noAddress.length === 1 ? 'has' : 'have'} no ${p.platform}: address, so ${noAddress.length === 1 ? 'they' : 'each'} could never be heard here: add one to people.<id>.addresses`); return undefined }
+    return { mention, allow: names, ...(listen !== undefined && { listen }) }
+  }
+
+  const CONNECTOR_KEYS = ['ack', 'files', 'messages', 'bots', 'reactions', 'default_app', 'link_previews']
   const places: Record<string, PlaceOptions> = {}
+  const channels: Record<string, ChannelGate> = {}
   for (const [rawPlace, raw] of Object.entries(table(doc.places, 'places') ?? {})) {
     const path = `places."${rawPlace}"`
     const p = place(rawPlace, path)
     const t = table(raw, path)
     if (!p || !t) continue
     if (has(places, placeKey(p))) { error(path, `${placeKey(p)} is already set: places compare without case on GitHub`); continue }
-    unknownKeys(t, ['ack', 'files', 'messages', 'bots', 'reactions', 'default_app', 'link_previews'], path)
+    unknownKeys(t, [...CONNECTOR_KEYS, 'thread_reply', 'access'], path)
     const ack = str(t, 'ack', path)
     const ackWhy = ack === undefined ? undefined : reactionNameProblem(ack)
     if (ackWhy) error(join2(path, 'ack'), ackWhy)
@@ -899,8 +951,14 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     }
     if (Object.hasOwn(t, 'reactions') && p.platform !== 'slack') error(`${path}.reactions`, `${placeKey(p)} is not a Slack place: \`reactions\` is heard only from Slack`)
     // Hydra reads a Discord channel by id: a place named `discord:#name` can never be matched to a channel, so previews could not be switched off there.
-    if (namesDmWithOthers(p)) for (const key of ['link_previews', 'messages', 'bots', 'reactions']) if (Object.hasOwn(t, key)) error(`${path}.${key}`, `${key} does not apply to ${placeKey(p)}: only ack and files do. Remove it.`)
+    if (namesDmWithOthers(p)) for (const key of ['link_previews', 'messages', 'bots', 'reactions', 'thread_reply']) if (Object.hasOwn(t, key)) error(`${path}.${key}`, `${key} does not apply to ${placeKey(p)}: only ack and files do. Remove it.`)
     if (p.platform === 'discord' && p.kind === 'channel' && p.ref.startsWith('#') && (t.link_previews === false || t.link_previews === 'single')) error(`${path}.link_previews`, 'cannot be set on a Discord channel by name: hydra reads a Discord channel by id, so name it discord:<channel id>')
+    const access = placeAccess(p, t, path)
+    const threadReply = bool(t, 'thread_reply', path)
+    if (threadReply !== undefined && !Object.hasOwn(t, 'access')) error(join2(path, 'thread_reply'), 'needs an access table: it applies only to a channel hydra admits')
+    if (access) channels[placeKey(p)] = { access, ...(threadReply !== undefined && { threadReply }) }
+    // A place that only says who the daemon hears is not named for the connectors: it has no [places] entry.
+    if (access && !CONNECTOR_KEYS.some(k => Object.hasOwn(t, k))) continue
     places[placeKey(p)] = {
       ...(ack !== undefined && !ackWhy && { ack }),
       ...(defaultApp !== undefined && { defaultApp }),
@@ -1302,7 +1360,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   }
 
   if (errors.length) return { ok: false, errors, warnings }
-  return { ok: true, config: { ...(operator && { operator }), ...(main && { main }), connectors, gateways, slackApps, ...(slackLineEmoji && { slackLineEmoji }), people, specialists, places, schedules, rules, ...(Object.keys(mcpServers).length && { mcpServers }), ...(offLimits.length && { offLimits }), ...(allowUnprovenMacos && { allowUnprovenMacos }), ...(allowThreadDestroy && { allowThreadDestroy }), ...(guard && { guard }), ...(vitals && { vitals }), ...(events && { events }) }, warnings }
+  return { ok: true, config: { ...(operator && { operator }), ...(main && { main }), connectors, gateways, ...(Object.keys(gateSettings).length && { gateSettings }), ...(Object.keys(channels).length && { channels }), slackApps, ...(slackLineEmoji && { slackLineEmoji }), people, specialists, places, schedules, rules, ...(Object.keys(mcpServers).length && { mcpServers }), ...(offLimits.length && { offLimits }), ...(allowUnprovenMacos && { allowUnprovenMacos }), ...(allowThreadDestroy && { allowThreadDestroy }), ...(guard && { guard }), ...(vitals && { vitals }), ...(events && { events }) }, warnings }
 }
 
 /** The program a `sh -c` command runs: past any leading VAR=value, with one level of quotes removed. */

@@ -34,6 +34,13 @@ allow_destroy = false                 # true: `hydra kill <name or thread id> --
 [gateways.discord]
 bot_token_env = "DISCORD_BOT_TOKEN"   # required: the .env variable holding the bot token
 
+# Gate settings for a whole platform: `[gateways.discord]` (beside bot_token_env) or `[gateways.slack]` (which takes only these).
+[gateways.slack]
+ack_reaction = "eyes"                 # reaction added to every message a session picks up (unicode or a Discord custom emoji); not the connector's per-place `ack`
+listen = true                         # default: a session thread listens without a tag; a channel's access.listen overrides it (default false)
+off = false                           # true: drop every message, channels too
+mention_patterns = []                 # extra text that counts as tagging the bot
+
 # --- connectors: where events come from. A source with no table isn't heard. Tokens stay in .env. ---
 
 [connectors.github]
@@ -215,6 +222,12 @@ reactions = "bot-messages"            # a Slack place: a person's emoji reaction
 default_app = "app:default"           # a Slack channel only: when two apps are in it, the app that answers a message that tags neither (a tag always picks the app); not the app named `default`
                                       # (here they happen to match). Absent: the app named `default`, else the first app above, among those that deliver to someone here. An untagged follow-up stays with the app that opened the conversation.
 link_previews = true                  # false: no link previews (Slack unfurl_links/unfurl_media, Discord suppress-embeds) on what hydra posts here: replies, new threads, DMs, alerts; not Slack edits (default true). "single": at most one preview per post (a post with 2+ links goes out with none)
+
+# A channel the daemon admits, by id (the gate sees ids, never names): the access table existing is what admits it.
+[places."slack:C0123ABC".access]
+mention = true                        # default true: a top-level message must tag the bot
+allow = ["anyone"]                    # required: the people (from [people]) who may be heard here, or ["anyone"] for everyone who tags; never empty
+listen = true                         # a session thread started here listens without a tag
 
 # The channel helpdesk answers: it hears every top-level post, and its answers carry no previews.
 [places."slack:#ops"]

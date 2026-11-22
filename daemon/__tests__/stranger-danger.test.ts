@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, expect, spyOn, test } from 'bun:test'
 import { gateway } from '../config.js'
-import * as access from '../access.js'
+import { setHydra } from './test-hydra.js'
 import { registry, threadRegistry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { pendingPermissions } from '../permission.js'
@@ -14,7 +14,7 @@ beforeAll(async () => {
   spies.push(spyOn(gateway, 'onMessage').mockImplementation(((cb: any) => { onMessage = cb }) as any))
   spies.push(spyOn(gateway, 'send').mockImplementation((async (_c: string, text: string) => { sent.push(text); return { id: 'x' } }) as any))
   spies.push(spyOn(gateway, 'isMentioned').mockImplementation((async () => false) as any))
-  spies.push(spyOn(access, 'loadAccess').mockImplementation((() => ({ allowFrom: ['op'], groups: { ch: { requireMention: true, allowFrom: ['op'] } }, pending: {} })) as any))
+  spies.push(setHydra({ operators: ['op'], channels: { ch: { onlyOperators: true } } }))
   spies.push(spyOn(registry, 'getByThread').mockImplementation(((t: string) => (t === 'ch:T1' || t === 'ch:T2' ? 'sess' : undefined)) as any))
   spies.push(spyOn(threadRegistry, 'persist').mockImplementation((() => {}) as any))
   await import('../router.js')

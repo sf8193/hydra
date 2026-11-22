@@ -53,8 +53,8 @@ function deliver(): Promise<void> {
 }
 
 /**
- * Whether hydra.toml decides who the operator is. A file that failed to load at boot counts: falling back to
- * access.json then would hand admin back to ids the operator meant to leave out. An emptied or deleted file doesn't.
+ * Whether hydra.toml governs: it names an operator, or it failed to load at boot (declaredInToml then declares nothing,
+ * rather than falling back to specialists.json). An emptied or deleted file doesn't.
  */
 export function hydraConfigInUse(): boolean {
   return override ? override.operator !== undefined : inUse

@@ -3,6 +3,7 @@ import { executeTool } from '../bridge-dispatch.js'
 import * as access from '../access.js'
 import { gateway } from '../config.js'
 import { registry } from '../sessions.js'
+import { setHydra } from './test-hydra.js'
 
 const SID = 'hsw-owner'
 let spies: { mockRestore(): void }[] = []
@@ -17,7 +18,7 @@ beforeEach(() => {
   spies = [
     spyOn(gateway, 'send').mockImplementation((async () => ({ id: 'm1' })) as any),
     spyOn(gateway, 'fetchChannel').mockImplementation((async (id: string) => ({ id, isThread: true, parentId: 'hsw-parent' })) as any),
-    spyOn(access, 'loadAccess').mockImplementation((() => ({ allowFrom: ['u1'], groups: { 'hsw-parent': {} }, pending: {} })) as any),
+    setHydra({ operators: ['u1'], channels: { 'hsw-parent': {} } }),
   ]
 })
 

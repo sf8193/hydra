@@ -1,5 +1,5 @@
 import { transport } from './bridge-transport.js'
-import { loadAccess, operatorIds } from './access.js'
+import { operatorIds } from './access.js'
 import { on } from './event-bus.js'
 import type { ChatGateway, ButtonDef } from '../gateways/gateway.js'
 
@@ -23,8 +23,7 @@ export function setupPermissionHandler(gateway: ChatGateway): void {
     const m = PERM_BUTTON_RE.exec(click.customId)
     if (!m) return
 
-    const access = loadAccess()
-    if (!operatorIds(access).includes(click.userId)) {
+    if (!operatorIds().includes(click.userId)) {
       void click.respond('Not authorized.')
       return
     }

@@ -29,7 +29,7 @@ describe('Codex user-message routing ratchet', () => {
 
   test('! captures the interrupt promise and hands it to the reserved slot', () => {
     expect(source).toMatch(/interrupted = interruptAdapter\.interrupt\(info\)/)
-    expect(source).toMatch(/deliverToSession\(msg, mappedSession, access, interrupted\)/)
+    expect(source).toMatch(/deliverToSession\(msg, mappedSession, interrupted\)/)
     expect(source).not.toMatch(/void interruptAdapter\.interrupt\(info\)/)
   })
 })

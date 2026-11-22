@@ -1,5 +1,4 @@
-// No new `await import(...)` in production code: a static import of a missing name fails at startup, a dynamic one only when its code path first runs (the
-// access.json migration left `gateways/slack.ts` calling a removed store through one, and nothing flagged it). Each allowed import below breaks an import
+// No new `await import(...)` in production code: a static import of a missing name fails at startup, a dynamic one only when its code path first runs. Each allowed import below breaks an import
 // cycle, defers a heavy load, or probes a module on purpose; the list only shrinks. An entry that no longer matches is an error too: delete it.
 //   bun scripts/check-dynamic-imports.ts
 // Type queries (`typeof import('x')`, `x: import('net').Socket`) are types, not loads, and are not counted. Tests, test-setup.ts and scripts/ are out of scope.
@@ -20,10 +19,8 @@ export const ALLOWED: readonly string[] = [
   'daemon/boot-probe.ts -> ./session-lifecycle.js',
   'daemon/boot-probe.ts -> ./router.js',
   'daemon/config.ts -> ./access.js',
-  'daemon/config.ts -> ./access.js',
   'daemon/config.ts -> ../gateways/slack.js',
   'daemon/config.ts -> ../gateways/discord.js',
-  'gateways/slack.ts -> ../daemon/access.js',
   'gateways/slack.ts -> ../daemon/access.js',
   'gateways/slack.ts -> ../daemon/access.js',
   'gateways/slack.ts -> ../daemon/access.js',

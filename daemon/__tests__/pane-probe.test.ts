@@ -3,6 +3,8 @@ import { readFileSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
 import { claudeConfigDir } from '../../shared/constants.js'
+import { setHydra } from './test-hydra.js'
+import { _setHydraConfigForTesting } from '../hydra-config.js'
 
 // ---------------------------------------------------------------------------
 // Test state — injected via PaneProbeIO, no mock.module needed
@@ -260,7 +262,6 @@ function makeTestIO(): PaneProbeIO {
     transportHas: (sessionId: string) => connectedSessions.has(sessionId),
     occupancy: occupancyOf,
     transportSendOrQueue: (sessionId: string, msg: any) => { transportMessages.push({ sessionId, msg }) },
-    loadAccess: () => ({ allowFrom: ['user-123'] }),
     platform: 'discord',
     defaultChannel: 'root-channel-123',
   }
@@ -430,10 +431,12 @@ describe('probeAllSessions', () => {
     fileContents.clear()
     transportMessages.length = 0
     _setIO(makeTestIO())
+    setHydra({ operators: ['user-123'] })
   })
 
   afterEach(() => {
     _resetIO()
+    _setHydraConfigForTesting(undefined)
   })
 
   it('warns when a spawn\'s first turn was "Login expired" under a live prompt, and resends its prompt after login', async () => {

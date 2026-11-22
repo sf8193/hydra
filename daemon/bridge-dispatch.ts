@@ -4,7 +4,7 @@ import { gateway, STATE_DIR } from './config.js'
 import { isParentOf, parentSessionOf, registry, resolveSendTarget, threadRegistry, type Predecessor, type SessionInfo, type ThreadSessionEntry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { callerRefusal, endedDestroyRefusal, destroyDeclinedText, destroyThreadById, killThenDestroy } from './destroy.js'
-import { loadAccess, operatorIds, maxChunkLimit, channelPolicy, MAX_ATTACHMENT_BYTES } from './access.js'
+import { operatorIds, maxChunkLimit, channelPolicy, MAX_ATTACHMENT_BYTES } from './access.js'
 import { partyLink, quietSend, shouldQuiet } from './quiet-send.js'
 import { routeThreadId } from './thread-route.js'
 import { beginMainHandoff } from './main-handoff.js'
@@ -289,13 +289,12 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         }
 
         const ch = await gateway.fetchChannel(chat_id)
-        const access = loadAccess()
         if (ch.isDM) {
-          if (!operatorIds(access).includes(ch.recipientId)) {
+          if (!operatorIds().includes(ch.recipientId)) {
             throw new Error(`channel ${chat_id} is not allowlisted (DM recipient ${ch.recipientId || 'unknown'})`)
           }
         } else {
-          if (!channelPolicy(access, { isDM: false, channelId: ch.id, parentChannelId: ch.parentId })) {
+          if (!channelPolicy({ isDM: false, channelId: ch.id, parentChannelId: ch.parentId })) {
             throw new Error(`channel ${chat_id} is not allowlisted`)
           }
         }
@@ -309,22 +308,16 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         }
         if (files.length > gateway.maxAttachments) throw new Error(`max ${gateway.maxAttachments} attachments per message`)
 
-        const limit = Math.max(1, Math.min(access.textChunkLimit ?? maxChunkLimit(), maxChunkLimit()))
-        const mode = access.chunkMode ?? 'markdown'
-        const replyMode = access.replyToMode ?? 'first'
-
         // The gateway shapes the text first (its pictures go beside the session's own files) and keeps any files it
         // made until this whole send, retries included, has settled.
         const sentIds: string[] = []
         await withOutbound(text, gateway.maxAttachments - files.length, async out => {
           const all = [...files, ...out.files]
-          const chunks = chunk(out.text, limit, mode)
+          const chunks = chunk(out.text, maxChunkLimit(), 'markdown')
           try {
             for (let i = 0; i < chunks.length; i++) {
-              const shouldReplyTo =
-                reply_to != null &&
-                replyMode !== 'off' &&
-                (replyMode === 'all' || i === 0)
+              // Only the first chunk answers the message it replies to.
+              const shouldReplyTo = reply_to != null && i === 0
               const sent = await retrySend(() => gateway.send(chat_id, chunks[i], {
                 ...(i === 0 && all.length > 0 ? { files: all } : {}),
                 ...(shouldReplyTo ? { replyTo: reply_to } : {}),
@@ -819,8 +812,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         }
         if (files.length > gateway.maxAttachments) throw new Error(`max ${gateway.maxAttachments} attachments per message`)
 
-        const access = loadAccess()
-        const sendLimit = Math.max(1, Math.min(access.textChunkLimit ?? maxChunkLimit(), maxChunkLimit()))
+        const sendLimit = maxChunkLimit()
         const senderName = callerSessionId ? registry.get(callerSessionId)?.tmuxName ?? callerSessionId : 'unknown'
         // A session-to-session send reaches the recipient session in full and shows one line in
         // the recipient's thread. The recipient decides what, if anything, to tell the human. A
@@ -851,7 +843,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         if (!quiet) await withOutbound(text, gateway.maxAttachments - files.length, async out => {
           if (!postThread) throw new Error(`send failed: ${targetSession.tmuxName} has no thread the gateway can address, and reports to none`)
           const all = [...files, ...out.files]
-          const chunks = chunk(out.text, sendLimit, access.chunkMode ?? 'markdown')
+          const chunks = chunk(out.text, sendLimit, 'markdown')
           try {
             for (let i = 0; i < chunks.length; i++) {
               const sent = await retrySend(() => gateway.send(postThread, chunks[i], {

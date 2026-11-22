@@ -35,8 +35,6 @@ export const FRESH_START_MS = 120_000
  */
 export const STATE_WRITABLE = ['daemon.ts', 'daemon.js'].includes(basename(Bun.main)) || !isUnder(STATE_DIR, join(homedir(), '.claude', 'channels'), { realpath: true })
 
-export const ACCESS_FILE = join(STATE_DIR, 'access.json')
-export const APPROVED_DIR = join(STATE_DIR, 'approved')
 export const ENV_FILE = join(STATE_DIR, '.env')
 export const SOCK_PATH = join(STATE_DIR, 'daemon.sock')
 export const INBOX_DIR = join(STATE_DIR, 'inbox')
@@ -109,9 +107,7 @@ export let DEFAULT_SESSION_CHANNEL = process.env.DEFAULT_SESSION_CHANNEL ?? ''
 export async function resolveDefaultChannel(): Promise<void> {
   if (DEFAULT_SESSION_CHANNEL) return
   try {
-    const { loadAccess } = await import('./access.js')
-    const access = loadAccess()
-    const userId = (await import('./access.js')).operatorIds(access)[0]
+    const userId = (await import('./access.js')).operatorIds()[0]
     if (!userId) return
     if ('sendDM' in gateway) {
       const ch = await (gateway as any).app?.client?.conversations?.open({ users: userId })
@@ -160,8 +156,6 @@ if (PLATFORM === 'slack') {
 }
 
 export { TOKEN, SLACK_APP_TOKEN }
-
-export const STATIC = process.env.DISCORD_ACCESS_MODE === 'static'
 
 // ---------------------------------------------------------------------------
 // Permission regex

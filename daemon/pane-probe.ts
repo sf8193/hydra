@@ -16,7 +16,7 @@ import { join } from 'path'
 import { registry } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
 import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL } from './config.js'
-import { loadAccess, operatorIds } from './access.js'
+import { operatorIds } from './access.js'
 import { safeSend } from './util.js'
 import { transport } from './bridge-transport.js'
 import { byteTmuxName, claudeConfigDir } from '../shared/constants.js'
@@ -87,7 +87,6 @@ export type PaneProbeIO = {
   transportHas: (sessionId: string) => boolean
   occupancy: (info: SessionInfo) => Occupancy
   transportSendOrQueue: (sessionId: string, msg: any) => void
-  loadAccess: () => { allowFrom: string[] }
   platform: string
   defaultChannel: string
   // Hands a usage reading to the alert owner; optional so tests need not fake it.
@@ -156,7 +155,6 @@ const defaultIO: PaneProbeIO = {
   transportHas: (sessionId) => transport.has(sessionId),
   occupancy: (info) => occupancy(info),
   transportSendOrQueue: (sessionId, msg) => transport.sendOrQueue(sessionId, msg),
-  loadAccess: () => loadAccess(),
   platform: PLATFORM,
   claudeStatus: (tmuxName) => readClaudeStatus(tmuxName),
   getMessageUrl: (channelId, messageId) => gateway.getMessageUrl(channelId, messageId),
@@ -761,8 +759,7 @@ async function notifyLoginRequired(entry: ProbeEntry, now: number): Promise<void
   try {
     const name = entry.tmuxName
     const stage = entry.state.loginStage
-    const access = io.loadAccess()
-    const adminUserId = operatorIds(access)[0]
+    const adminUserId = operatorIds()[0]
 
     let channelId: string
     let mention = ''

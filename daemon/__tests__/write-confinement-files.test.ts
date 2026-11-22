@@ -15,6 +15,7 @@ import { confinedTemp, fileArgTools, snapshotHooks } from '../write-confinement.
 import { noteDeclaredRestrictions } from '../tool-surface.js'
 import { fileRefusal } from '../../config/write-confinement.js'
 import { MAX_ATTACHMENT_BYTES } from '../access.js'
+import { setHydra } from './test-hydra.js'
 
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), 'wc-dispatch-')))
 const WORK = join(ROOT, 'work'), REALTMP = join(ROOT, 'real-tmp'), TMPLINK = join(ROOT, 'tmp-link'), SECRET = join(ROOT, 'secret'), STATE = join(ROOT, 'state')
@@ -47,7 +48,7 @@ beforeEach(() => {
       sends.push({ channel, ...(opts?.files ? { files: opts.files, bytes: opts.files.map(f => readFileSync(f, 'utf8')) } : {}) }); return { id: 'm1', channelId: channel }
     }) as any),
     spyOn(gateway, 'fetchChannel').mockImplementation((async (id: string) => ({ id, isThread: true, parentId: 'wc-parent' })) as any),
-    spyOn(access, 'loadAccess').mockImplementation((() => ({ allowFrom: ['u1'], groups: { 'wc-parent': {} }, pending: {} })) as any),
+    setHydra({ operators: ['u1'], channels: { 'wc-parent': {} } }),
   ]
   mk('wc-confined', { policy: policy(), verified: true })
   mk('wc-plain')

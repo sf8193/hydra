@@ -8,7 +8,7 @@ import { HYDRA_TOML } from './migrate.js'
 
 const LOCK = 'hydra.toml.lock'
 const STALE_LOCK_MS = 10_000
-const BUSY = 'another hydra command is writing hydra.toml; run it again in a moment'
+export const BUSY = 'another hydra command is writing hydra.toml; run it again in a moment'
 
 /**
  * Runs `fn` under hydra.toml.lock (created exclusively; one older than 10s is a crashed writer's and is taken over), so
