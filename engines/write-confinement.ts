@@ -20,7 +20,8 @@ import { STATE_DIR } from '../infra/config.js'
 import { expectedServerNames } from './claude-verify.js'
 import { bridgeCommand } from '../infra/plugin-manifest.js'
 import { readdirSync, readFileSync } from 'fs'
-import { PolicyRefusal, remedy, serverToolRule, type ConfinementPolicy, type ConfinementServer, type LaunchPolicy } from '../shared/launch-policy.js'
+import { PolicyRefusal, remedy, type ConfinementPolicy, type ConfinementServer, type LaunchPolicy } from '../shared/launch-policy.js'
+import { serverToolRule } from './claude-names.js'
 
 /** The first Claude Code with `permissions.blockWritesOutsideWorkingDirectories`: an older one ignores the key, which would leave Edit/Write unconfined. */
 export const MIN_CLAUDE_VERSION = [2, 1, 314] as const

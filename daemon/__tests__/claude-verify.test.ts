@@ -6,7 +6,7 @@ import { readFileSync } from 'fs'
 import { join } from 'path'
 import { expectedLoad, mismatches, readLoaded, surplus, verifyDeps, verifyLaunch } from '../../engines/claude-verify.js'
 import { BRIDGE_MCP_SERVER_KEY, bridgePluginCache } from '../../infra/plugin-manifest.js'
-import { serverToolRule } from '../../shared/launch-policy.js'
+import { serverToolRule } from '../../engines/claude-names.js'
 import type { RestrictedPolicy } from '../../shared/launch-policy.js'
 import { claudeConfigDir } from '../../shared/constants.js'
 

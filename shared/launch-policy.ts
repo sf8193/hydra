@@ -49,14 +49,6 @@ export const remedy = (sessionName: string): string => `Run \`hydra kill ${sessi
 
 export const policyIdOf = (p: LaunchPolicy | undefined): string => p?.id ?? OPERATOR_POLICY_ID
 
-/** The one mod a restricted session loads: the tracked hydra mod, never the operator's `mods.local`. */
-export const HYDRA_MOD = 'hydra'
-
-export const RESTRICTED_MODS = [HYDRA_MOD] as const
-
-/** The permission rule that allows one tool of one MCP server: Claude Code's `mcp__<server>__<tool>`. The launch's settings and the start's check both say it this way. */
-export const serverToolRule = (server: string, tool: string): string => `mcp__${server}__${tool}`
-
 /** A start that must not happen, said with its cause and its fix. Posted in the thread by whoever catches it. */
 export class PolicyRefusal extends Error {}
 
