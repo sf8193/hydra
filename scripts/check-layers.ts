@@ -44,8 +44,6 @@ export const ALLOWED: readonly string[] = [
   'engines/codex-runtime.ts -> sessions/codex-piggyback.ts',
   'engines/codex-runtime.ts -> sessions/protocol-registry.ts',
   'engines/codex-runtime.ts -> sessions/registry.ts',
-  'gateways/slack.ts -> sessions/access.ts',
-  'infra/config.ts -> sessions/access.ts',
   'specialists/specialist-deliver.ts -> app/recovery.ts',
   'specialists/specialist-deliver.ts -> app/session-lifecycle.ts',
   'specialists/targets.ts -> app/recovery.ts',

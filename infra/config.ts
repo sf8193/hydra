@@ -104,10 +104,10 @@ export function typedDeliveryHoldMaxMs(): number {
 // If not set, resolveDefaultChannel() will auto-detect the bot's DM with the primary user.
 export let DEFAULT_SESSION_CHANNEL = process.env.DEFAULT_SESSION_CHANNEL ?? ''
 
-export async function resolveDefaultChannel(): Promise<void> {
+export async function resolveDefaultChannel(operators: string[]): Promise<void> {
   if (DEFAULT_SESSION_CHANNEL) return
   try {
-    const userId = (await import('../sessions/access.js')).operatorIds()[0]
+    const userId = operators[0]
     if (!userId) return
     if ('sendDM' in gateway) {
       const ch = await (gateway as any).app?.client?.conversations?.open({ users: userId })

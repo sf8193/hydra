@@ -145,6 +145,9 @@ import type { ProviderId } from './engines/engine-adapter.js'
 registry.onPersist = refreshDashboard
 targetDeps.stuckState = confirmedStuckState
 
+if ('operators' in gateway) {
+  (gateway as any).operators = operatorIds
+}
 if ('homeTabHandler' in gateway) {
   (gateway as any).homeTabHandler = async (_userId: string) => {
     refreshDashboardNow()
@@ -334,7 +337,7 @@ async function startGateway(attempt = 0): Promise<void> {
   try {
     await gateway.start(TOKEN!)
     process.stderr.write(`daemon: ${PLATFORM} gateway started\n`)
-    await resolveDefaultChannel()
+    await resolveDefaultChannel(operatorIds())
     void announceRestartComplete()
     void deliverWatchdogAlert()
     void retryHydraConfigAlert()
