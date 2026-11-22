@@ -4,9 +4,10 @@
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { HYDRA_TOML } from '../config/migrate.js'
+import { noteOperatorAlert, shouldAlertOperator } from './boot-refusal.js'
+import { readEnvFileValue } from './helpers.js'
 
-const envToken = (stateDir: string, key: string): string | undefined =>
-  readFileSync(join(stateDir, '.env'), 'utf8').match(new RegExp(`^${key}=(.+)$`, 'm'))?.[1].trim().replace(/^["']|["']$/g, '')
+const envToken = (stateDir: string, key: string): string | undefined => readEnvFileValue(join(stateDir, '.env'), key)?.trim() || undefined
 
 /** The operator's id on this platform: the first allowFrom of access.json, or the operator's address in hydra.toml. */
 export function operatorId(stateDir: string, platform: string): string | undefined {
@@ -23,7 +24,7 @@ export function operatorId(stateDir: string, platform: string): string | undefin
 }
 
 const post = async (url: string, token: string, body: object, bearer: string): Promise<any> =>
-  (await fetch(url, { method: 'POST', headers: { Authorization: `${bearer} ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json()
+  (await fetch(url, { method: 'POST', signal: AbortSignal.timeout(10_000), headers: { Authorization: `${bearer} ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json()
 
 /** Sends `text` to the operator's DM. Returns why it could not, or undefined. Never throws: an alert that fails is a log line. */
 export async function alertOperator(stateDir: string, platform: string, text: string): Promise<string | undefined> {
@@ -47,4 +48,15 @@ export async function alertOperator(stateDir: string, platform: string, text: st
   } catch (e) {
     return (e as Error).message
   }
+}
+
+/** The watchdog's tick: DM the operator about `reason` unless they have been told, or the retries are used up. A failed send is logged and tried again next tick. */
+export async function alertOperatorOnce(
+  stateDir: string, platform: string, reason: string, text: string,
+  log: (line: string) => void, send: typeof alertOperator = alertOperator,
+): Promise<void> {
+  if (!shouldAlertOperator(stateDir, reason)) return
+  const failed = await send(stateDir, platform, text)
+  noteOperatorAlert(stateDir, reason, !failed)
+  if (failed) log(`could not tell the operator: ${failed}`)
 }

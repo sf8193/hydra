@@ -15,7 +15,7 @@ import { checkDaemonCpu } from './watchdog-cpu.js'
 import { noteRestart } from './watchdog-restarts.js'
 import { bootRefusal } from '../config/migrate.js'
 import { noteBootRefusal } from './boot-refusal.js'
-import { alertOperator } from './boot-refusal-alert.js'
+import { alertOperatorOnce } from './boot-refusal-alert.js'
 import { clearMainRecord, writeMainRecord } from '../shared/main-record.js'
 import { bridgePluginCache, isLinkedTo, syncHydraBridge, type BridgeSyncResult } from '../infra/plugin-manifest.js'
 
@@ -262,13 +262,14 @@ export async function lifecycleDown(platform: string): Promise<void> {
 // restart — fast by default, +v opts into module validation before kill
 // ---------------------------------------------------------------------------
 
-export async function lifecycleRestart(platform: string, opts?: { validate?: boolean }): Promise<void> {
+export async function lifecycleRestart(platform: string, opts?: { validate?: boolean; dryRun?: boolean }): Promise<void> {
   const cfg = resolveConfig(platform)
   const validate = opts?.validate ?? false
 
   requireSpawnCwd(cfg)
   // Before anything is stopped: a daemon that would refuse to start must not replace one that runs.
   refuseIfBootWouldBeRefused(cfg, true)
+  if (opts?.dryRun) { console.log('ok: the daemon would start'); return }
 
   appendLog(cfg.daemonLog, `Restart requested${validate ? ' (+v)' : ''}`)
 
@@ -399,12 +400,11 @@ export async function lifecycleWatchdog(platform: string): Promise<void> {
   const refused = reason ? bootRefusal(cfg.stateDir) : undefined
   if (refused) {
     const line = noteBootRefusal(cfg.stateDir, refused, now)
-    if (line) {
-      appendLog(cfg.watchdogLog, `${reason}, but not restarting: ${line}`)
-      // Once: noteBootRefusal returns the line only the first time. The bot is silent in chat, so say it there.
-      const failed = await alertOperator(cfg.stateDir, platform, `hydra on ${platform} can't start: ${line}\n\nOr paste this message to Claude Code in the hydra checkout and ask it to walk you through the migration (it should start with hydra migrate ${platform} --dry-run).`)
-      if (failed) appendLog(cfg.watchdogLog, `could not tell the operator: ${failed}`)
-    }
+    if (line) appendLog(cfg.watchdogLog, `${reason}, but not restarting: ${line}`)
+    // The bot is silent in chat, so say it there: once, and again on later ticks only while the DM keeps failing.
+    await alertOperatorOnce(cfg.stateDir, platform, refused,
+      `hydra on ${platform} can't start: ${refused}\n\nOr paste this message to Claude Code in the hydra checkout and ask it to walk you through the migration (it should start with hydra migrate ${platform} --dry-run).`,
+      m => appendLog(cfg.watchdogLog, m))
     return
   }
   const daemonRestartedThisTick = reason !== null

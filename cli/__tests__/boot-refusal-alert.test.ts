@@ -3,7 +3,8 @@ import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { alertOperator, operatorId } from '../boot-refusal-alert.js'
+import { alertOperator, alertOperatorOnce, operatorId } from '../boot-refusal-alert.js'
+import { noteBootRefusal } from '../boot-refusal.js'
 
 let dir: string
 const state = (files: Record<string, string>) => {
@@ -46,11 +47,44 @@ describe('alertOperator', () => {
     expect(calls[1].url).toBe('https://discord.com/api/v10/channels/C1/messages')
     expect(calls[1].auth).toBe('Bot tok')
   })
+  test('a token written as `export KEY=value` is read, as the daemon reads it', async () => {
+    const f = fetchSpy([{ ok: true, channel: { id: 'D1' } }, { ok: true }])
+    const d = state({ 'access.json': '{"allowFrom":["U1"]}', '.env': 'export SLACK_BOT_TOKEN="xoxb-abc"\n' })
+    expect(await alertOperator(d, 'slack', 'x')).toBeUndefined()
+    f.mockRestore()
+    expect(calls[0].auth).toBe('Bearer xoxb-abc')
+  })
   test('a failure is returned as a reason, never thrown', async () => {
     const f = fetchSpy([{ ok: false, error: 'not_authed' }])
     const d = state({ 'access.json': '{"allowFrom":["U1"]}', '.env': 'SLACK_BOT_TOKEN=xoxb-abc\n' })
     expect(await alertOperator(d, 'slack', 'x')).toBe('conversations.open: not_authed')
     f.mockRestore()
-    expect(await alertOperator(state({ 'access.json': '{"allowFrom":["U1"]}' }), 'slack', 'x')).toContain('no such file')
+    expect(await alertOperator(state({ 'access.json': '{"allowFrom":["U1"]}' }), 'slack', 'x')).toContain('no SLACK_BOT_TOKEN')
+  })
+})
+
+describe('alertOperatorOnce (the watchdog tick)', () => {
+  const tick = async (d: string, send: () => Promise<string | undefined>, log: string[] = []) => {
+    noteBootRefusal(d, 'why', 1)
+    await alertOperatorOnce(d, 'slack', 'why', 'text', m => log.push(m), send as any)
+  }
+  test('a sent DM is not sent again on the next tick', async () => {
+    const d = state({}); let sends = 0
+    await tick(d, async () => { sends++; return undefined })
+    await tick(d, async () => { sends++; return undefined })
+    expect(sends).toBe(1)
+  })
+  test('a failed DM is logged and tried again, five times in all', async () => {
+    const d = state({}); let sends = 0; const log: string[] = []
+    for (let i = 0; i < 8; i++) await tick(d, async () => { sends++; return 'not_authed' }, log)
+    expect(sends).toBe(5)
+    expect(log[0]).toBe('could not tell the operator: not_authed')
+  })
+  test('a new reason is a new DM', async () => {
+    const d = state({}); let sends = 0
+    await alertOperatorOnce(d, 'slack', 'one', 't', () => {}, (async () => { sends++; return undefined }) as any)
+    noteBootRefusal(d, 'two', 2)
+    await alertOperatorOnce(d, 'slack', 'two', 't', () => {}, (async () => { sends++; return undefined }) as any)
+    expect(sends).toBe(2)
   })
 })
