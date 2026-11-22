@@ -91,6 +91,8 @@ addresses = ["slack:UXXXXXXXX"]
 
 To let the bot into a channel, tag it there as the operator: it adds `[places."slack:<channel id>".access]` to `hydra.toml`. Gate settings for the workspace go under `[gateways.slack]` (`ack_reaction`, `listen`, `off`, `mention_patterns`).
 
+A tag in a channel the bot is in arrives as two events, `message` (with the message's files) and `app_mention`. The gateway delivers one: the `message` copy; an `app_mention` waits one second for it and is delivered alone only when none comes (a channel the bot is not in). An event carrying a `bot_id` (another app's `@bot` mention, or its file post) reaches the daemon as a bot's and is not answered; an app's plain `bot_message` posts are dropped at the gateway, as before.
+
 **The gateway's app is not a connector app.** The gateway opens its own Socket Mode connection with `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN`. The connector opens one more for each app hydra.toml declares, in every daemon. If hydra.toml declares an app whose `bot_token_env`/`socket_token_env` name those same two variables, the same Slack app gets two connections, and Slack hands each event to only one of them, unpredictably. On a Slack daemon (`CHAT_PLATFORM=slack`) hydra.toml refuses such an app when it loads, naming the key; `hydra config check slack` says the same. So to route Slack by specialists and rules beside the gateway, create a **separate** Slack app for the connector and declare that one ([Apps in hydra.toml](#apps-in-hydratoml)), with its own variables:
 
 ```toml
