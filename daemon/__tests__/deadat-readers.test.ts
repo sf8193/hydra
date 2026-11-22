@@ -63,9 +63,8 @@ const ALLOWED: Record<string, { why: string; lines: string[] }> = {
     ],
   },
   'app/recovery.ts': {
-    why: 'restoring a dead record keeps its first stamp; boot candidates are those the loader stamped (and tmux is checked too)',
+    why: 'boot candidates are those the loader stamped (and tmux is checked too)',
     lines: [
-      "dead.deadAt ??= Date.now()",
       "!!info.deadAt",
     ],
   },
@@ -76,10 +75,11 @@ const ALLOWED: Record<string, { why: string; lines: string[] }> = {
     ],
   },
   'app/session-lifecycle.ts': {
-    why: 'the resume count of the latest death, the resume recheck\'s "already written" guard',
+    why: 'the resume count of the latest death, restoring a replaced record (keeps its first stamp), the resume recheck\'s "already written" guard',
     lines: [
       ".filter(s => s.claudeSessionId === resumeFrom && s.deadAt)",
       ".sort((a, b) => (b.deadAt ?? 0) - (a.deadAt ?? 0))[0]",
+      "old.deadAt ??= Date.now()",
       "if (!s || s.deadAt) return",
     ],
   },

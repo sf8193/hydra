@@ -851,7 +851,7 @@ describe('specialists', () => {
     const calls = fakeSpawn()
     const wt = mkdtempSync(join(tmpdir(), 'specialist-wt-'))
     try {
-      occupy('thread-wt', { adapter: fakeAdapter({ isAlive: () => false }), worktreeRepo: '/repo', worktreePath: wt, worktreeBranch: 'wt/ops-old' })
+      occupy('thread-wt', { adapter: fakeAdapter({ isAlive: () => false }), worktree: { repo: '/repo', path: wt, branch: 'wt/ops-old' } })
       const res = await deliver(specialist('thread-wt'))
       expect(res.ok).toBe(true)
       expect(calls[0][3]).toMatchObject({ preserveWorktree: true, reuseWorktree: { repo: '/repo', path: wt, branch: 'wt/ops-old' } })
@@ -906,7 +906,7 @@ describe('specialists', () => {
       const name = 'opswtown' // no dash: a branch's base name is the text before its first one
       names.push(name)
       setSpecialist(name, { threadId: 'thread-wt-own', kickoff: 'be the helper' })
-      occupy('thread-wt-own', { tmuxName: `${name}-old`, adapter: fakeAdapter({ isAlive: () => false }), worktreeRepo: '/repo', worktreePath: wt, worktreeBranch: `wt/${name}` })
+      occupy('thread-wt-own', { tmuxName: `${name}-old`, adapter: fakeAdapter({ isAlive: () => false }), worktree: { repo: '/repo', path: wt, branch: `wt/${name}` } })
       expect(await deliver(name)).toMatchObject({ ok: true, data: { spawned: true } })
       expect(registry.reservedNames.has(name)).toBe(false)
     } finally { rmSync(wt, { recursive: true, force: true }) }
@@ -918,7 +918,7 @@ describe('specialists', () => {
     const wt = mkdtempSync(join(tmpdir(), 'specialist-wt-'))
     try {
       const name = specialist('thread-m2', { channel: 'c' })
-      occupy('thread-m2', { tmuxName: name, adapter: fakeAdapter({ isAlive: () => false }), worktreeRepo: '/repo', worktreePath: wt, worktreeBranch: `wt/${name}` })
+      occupy('thread-m2', { tmuxName: name, adapter: fakeAdapter({ isAlive: () => false }), worktree: { repo: '/repo', path: wt, branch: `wt/${name}` } })
       expect((await deliver(name)).ok).toBe(true)
       expect(calls[0][1]).toBe('c') // a new thread, in the specialist's channel
       expect(calls[0][3]).toMatchObject({ preserveWorktree: true, reuseWorktree: { path: wt } })

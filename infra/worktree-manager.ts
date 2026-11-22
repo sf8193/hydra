@@ -180,8 +180,8 @@ export async function reattachWorktree(repoDir: string, worktreePath: string, br
       // rev-parse failed — distinguish "branch genuinely absent" (terminal → branch-gone) from
       // "repo itself unreachable" (dir/volume not ready at boot, lock, timeout → transient
       // 'failed', retryable; don't forget the branch). A false branch-gone is non-destructive:
-      // the caller suppresses + skips (branch/worktree stay on disk, manual `recover` works),
-      // dropping only the session's re-addable PR watches — never code.
+      // the revive is refused (branch/worktree stay on disk), and recovery drops only the
+      // session's re-addable PR watches — never code.
       try { await execAsync('git', ['-C', repoDir, 'rev-parse', '--git-dir'], { timeout: 5_000 }) } catch { return 'failed' }
       return 'branch-gone'
     }
