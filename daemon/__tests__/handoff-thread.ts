@@ -1,4 +1,5 @@
 import { handleHandoffIntercept } from '../../app/commands/thread.js'
+import { handoffWait } from '../../app/bridge-dispatch.js'
 import { handoffIO } from '../../app/session-lifecycle.js'
 import { registry, type SessionInfo, type SpawnOpts } from '../../sessions/registry.js'
 import { transport } from '../../sessions/bridge-transport.js'
@@ -32,7 +33,8 @@ export function openHandoffThread(name = 'pulse'): HandoffThread {
   const sessionId = `hot-${n}`, threadId = `hot-thread-${n}`
   mkSession(sessionId, name, threadId)
   registry.setThread(threadId, sessionId)
-  const orig = { ...handoffIO, sendOrQueue: transport.sendOrQueue, react: gateway.react, send: gateway.send }
+  const orig = { ...handoffIO, sendOrQueue: transport.sendOrQueue, react: gateway.react, send: gateway.send, handoffWaitMs: handoffWait.ms }
+  handoffWait.ms = 10
   const delivered: any[] = [], sent: string[] = [], spawned: SpawnOpts[] = []
   ;(transport as any).sendOrQueue = (_id: string, m: any) => { delivered.push(m) }
   ;(gateway as any).react = async () => {}
@@ -48,6 +50,7 @@ export function openHandoffThread(name = 'pulse'): HandoffThread {
     intercept: (msg = {}, selection, note) =>
       handleHandoffIntercept({ channelId: threadId, id: 'm', isThread: true, content: 'handoff', ...msg } as any, selection, note),
     restore: () => {
+      handoffWait.ms = orig.handoffWaitMs
       handoffIO.killSession = orig.killSession; handoffIO.doSpawnSession = orig.doSpawnSession
       ;(transport as any).sendOrQueue = orig.sendOrQueue
       ;(gateway as any).react = orig.react
@@ -66,5 +69,5 @@ export async function withHandoffThread<T>(fn: (t: HandoffThread) => Promise<T>,
 /** Polls instead of a fixed sleep: CI load stretches the handoff's 500ms answer-first delay. */
 export async function waitFor(cond: () => boolean, ms = 5000): Promise<void> {
   const until = Date.now() + ms
-  while (!cond() && Date.now() < until) await Bun.sleep(20)
+  while (!cond() && Date.now() < until) await Bun.sleep(5)
 }

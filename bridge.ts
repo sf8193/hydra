@@ -532,7 +532,9 @@ function shutdown(ev: 'stdin' | 'signal', detail: string): void {
     pending.reject(new Error('bridge shutting down'))
     pendingCalls.delete(id)
   }
-  setTimeout(() => process.exit(0), BRIDGE_SHUTDOWN_GRACE_MS)
+  const parsedGrace = Number(process.env.HYDRA_BRIDGE_SHUTDOWN_GRACE_MS)
+  const graceMs = Number.isFinite(parsedGrace) && parsedGrace > 0 ? parsedGrace : BRIDGE_SHUTDOWN_GRACE_MS
+  setTimeout(() => process.exit(0), graceMs)
 }
 
 process.stdin.on('end', () => shutdown('stdin', 'end'))

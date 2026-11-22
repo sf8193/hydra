@@ -55,6 +55,7 @@ Lifecycle:
   hydra down <platform>                Stop byte + daemon
   hydra restart <platform>             Restart with module validation (validates before kill)
   hydra restart <platform> --fast      Skip module validation (compile check only)
+  hydra restart <platform> --dry-run   Say whether the daemon would start (or why not); stops nothing
   hydra watchdog <platform>            Single watchdog tick (for launchd)
   hydra preflight <platform>           Verify deployment is ready
 
@@ -304,7 +305,7 @@ async function main(): Promise<void> {
       case 'uninstall': lifecycleUninstall(platform); break
       case 'up': await lifecycleUp(platform); break
       case 'down': await lifecycleDown(platform); break
-      case 'restart': await lifecycleRestart(platform, { validate: !filtered.includes('--fast') }); break
+      case 'restart': await lifecycleRestart(platform, { validate: !filtered.includes('--fast'), dryRun: filtered.includes('--dry-run') }); break
       case 'watchdog': await lifecycleWatchdog(platform); break
       case 'preflight': await lifecyclePreflight(platform); break
     }

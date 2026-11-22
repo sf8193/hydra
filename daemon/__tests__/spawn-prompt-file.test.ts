@@ -1,7 +1,7 @@
 // The spawn prompt reaches a pane by file: no part of it is on a command line the daemon builds, and what the session receives
 // is the prompt byte for byte. The wrapper is run for real (tmux shimmed to `sh -c` the command, `claude` and `omp` stubbed to
 // write their argv and environment out), so the proof is what a process would see, not what a string contains.
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -33,23 +33,50 @@ const HARD: Record<string, string> = {
   'very long (100 KB)': `${MARKER} ` + 'x'.repeat(100_000) + '\nend',
 }
 
+let binDir: string
 let dir: string
 let argvOut: string
 const saved = { PATH: process.env.PATH, TMUX: process.env.TMUX }
 
+// Static shim binaries created once per file (avoids re-scanning 111 fresh executables on macOS);
+// per-test output paths and fault injection pass via SPF_* env vars set in beforeEach.
+beforeAll(() => {
+  binDir = mkdtempSync(join(tmpdir(), 'hydra-spf-bin-'))
+  // tmux: new-session runs its command the way tmux does (sh -c), synchronously; has-session says yes; every call is logged.
+  writeFileSync(join(binDir, 'tmux'), `#!/bin/sh
+printf '%s\\0' "$@" >> "$SPF_DIR/tmux-argv"
+printf '\\n' >> "$SPF_DIR/tmux-argv"
+case "$1" in
+  new-session)
+    if [ -n "$SPF_TMUX_FAIL" ]; then echo "$SPF_TMUX_FAIL" >&2; exit 1; fi
+    if [ -n "$SPF_TMUX_RM" ]; then rm -f "$SPF_TMUX_RM"; fi
+    sh -c "$5"
+    ;;
+  has-session) exit 0 ;;
+esac
+`)
+  // claude and omp: record the argv (NUL-separated) and the environment's prompt variable.
+  for (const bin of ['claude', 'omp']) {
+    writeFileSync(join(binDir, bin), `#!/bin/sh
+: > "$SPF_ARGV.${bin}"
+for a in "$@"; do printf '%s\\0' "$a" >> "$SPF_ARGV.${bin}"; done
+printf '%s' "$HYDRA_SPAWN_PROMPT" > "$SPF_ARGV.${bin}.env"
+`)
+  }
+  for (const f of ['tmux', 'claude', 'omp']) chmodSync(join(binDir, f), 0o755)
+})
+afterAll(() => { if (binDir) rmSync(binDir, { recursive: true, force: true }) })
+
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'hydra-spf-'))
   argvOut = join(dir, 'argv')
-  // tmux: new-session runs its command the way tmux does (sh -c), synchronously; has-session says yes; every call is logged.
-  writeFileSync(join(dir, 'tmux'), `#!/bin/sh\nprintf '%s\\0' "$@" >> ${join(dir, 'tmux-argv')}\nprintf '\\n' >> ${join(dir, 'tmux-argv')}\ncase "$1" in new-session) sh -c "$5" ;; has-session) exit 0 ;; esac\n`)
-  // claude and omp: record the argv (NUL-separated) and the environment's prompt variable.
-  for (const bin of ['claude', 'omp']) {
-    writeFileSync(join(dir, bin), `#!/bin/sh\n: > ${argvOut}.${bin}\nfor a in "$@"; do printf '%s\\0' "$a" >> ${argvOut}.${bin}; done\nprintf '%s' "$HYDRA_SPAWN_PROMPT" > ${argvOut}.${bin}.env\n`)
-  }
-  for (const f of ['tmux', 'claude', 'omp']) chmodSync(join(dir, f), 0o755)
-  process.env.PATH = `${dir}:${saved.PATH}`
+  process.env.SPF_DIR = dir
+  process.env.SPF_ARGV = argvOut
+  delete process.env.SPF_TMUX_FAIL
+  delete process.env.SPF_TMUX_RM
+  process.env.PATH = `${binDir}:${saved.PATH}`
   delete process.env.TMUX
-  process.env.HYDRA_OMP_BIN = join(dir, 'omp')
+  process.env.HYDRA_OMP_BIN = join(binDir, 'omp')
   rmSync(spawnPromptDir(), { recursive: true, force: true })
   mkdirSync(join(STATE_DIR, 'mods', 'hydra'), { recursive: true }); writeFileSync(join(STATE_DIR, 'mods', 'hydra', 'plugin.json'), '{}')
   mkdirSync(join(STATE_DIR, 'spawn-logs'), { recursive: true })
@@ -58,6 +85,10 @@ afterEach(() => {
   process.env.PATH = saved.PATH
   if (saved.TMUX !== undefined) process.env.TMUX = saved.TMUX
   delete process.env.HYDRA_OMP_BIN
+  delete process.env.SPF_DIR
+  delete process.env.SPF_ARGV
+  delete process.env.SPF_TMUX_FAIL
+  delete process.env.SPF_TMUX_RM
   _setLoadEnvForTesting(undefined)
   rmSync(dir, { recursive: true, force: true })
 })
@@ -108,7 +139,7 @@ describe('Claude: the prompt is absent from every command line, and arrives unch
 
   test('an unreadable prompt file stops the chain: claude does not start with an empty prompt', async () => {
     // The file is gone by the time the pane's shell reads it.
-    writeFileSync(join(dir, 'tmux'), `#!/bin/sh\ncase "$1" in new-session) rm -f '${join(spawnPromptDir(), `sp-t-${SID}.prompt`)}'; sh -c "$5" ;; has-session) exit 0 ;; esac\n`)
+    process.env.SPF_TMUX_RM = join(spawnPromptDir(), `sp-t-${SID}.prompt`)
     // (Real tmux reports a pane's exit as a dead session; the shim lets the shell's failure through as the command's.)
     await expect(launchClaude({ prompt: 'x' })).rejects.toThrow(/No such file/)
     expect(existsSync(`${argvOut}.claude`)).toBe(false)
@@ -165,7 +196,7 @@ describe('the file: private, replaced by the next launch of the name, removed wi
   })
 
   // One engine per test, and different session ids: the two engines would otherwise write and remove the same path.
-  const tmuxRefuses = () => writeFileSync(join(dir, 'tmux'), '#!/bin/sh\ncase "$1" in new-session) echo "no server" >&2; exit 1;; esac\n')
+  const tmuxRefuses = () => { process.env.SPF_TMUX_FAIL = 'no server' }
 
   test('a Claude launch tmux refuses leaves no file', async () => {
     tmuxRefuses()

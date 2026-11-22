@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "files": {
+    "config/__tests__/server-sandbox.test.ts": 10000,
+    "daemon/__tests__/pre-handoff-hook.test.ts": 5500,
+    "connectors/slack/__tests__/operator-tag-fuzz.test.ts": 4800,
+    "shared/__tests__/spawn-env.test.ts": 4500,
+    "cli/__tests__/jobs.test.ts": 4300,
+    "daemon/__tests__/agy-engine.test.ts": 4300,
+    "daemon/__tests__/cpu-watch.test.ts": 3800,
+    "daemon/__tests__/codex-model.test.ts": 3400,
+    "connectors/slack/__tests__/reactions-fuzz.test.ts": 2600,
+    "shared/__tests__/cron-local.test.ts": 2500
+  }
+}

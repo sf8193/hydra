@@ -1,5 +1,5 @@
 import { describe, test, expect, afterAll } from 'bun:test'
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, chmodSync } from 'fs'
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { runGuard, guardEnv, type GuardInput } from '../guard.js'
@@ -7,7 +7,7 @@ import { EX_TEMPFAIL } from '../../shared/exit-codes.js'
 
 const dir = mkdtempSync(join(tmpdir(), 'slack-guard-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
-const script = (name: string, body: string) => { const p = join(dir, name); writeFileSync(p, `#!/bin/sh\n${body}\n`); chmodSync(p, 0o755); return p }
+const script = (name: string, body: string) => { const p = join(dir, name); writeFileSync(p, `${body}\n`); return `sh ${JSON.stringify(p)}` }
 const input: GuardInput = { person: 'alice', roles: ['ops', 'people', 'anyone'], place: 'slack:#ops', conversation: 'slack:C1:1.000001', target: 'ops' }
 const run = (command: string, timeoutMs = 2000) => runGuard({ command, timeoutMs }, input)
 

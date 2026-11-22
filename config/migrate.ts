@@ -224,6 +224,9 @@ export function hydraTomlInUse(stateDir: string): boolean {
   try { return Object.keys(Bun.TOML.parse(text) as object).length > 0 } catch { return true }
 }
 
+/** Appended to every refusal that `hydra migrate` fixes: where the steps are. */
+const UPGRADE_STEPS = ` Steps: ACCESS.md, "Upgrading from access.json".`
+
 /** Where a daemon that refused to start says why, for the watchdog and `hydra health` (it never reaches chat). */
 export const BOOT_REFUSED_FILE = 'boot-refused.json'
 
@@ -233,18 +236,18 @@ export const BOOT_REFUSED_FILE = 'boot-refused.json'
  * would have the daemon silently prefer one. Also while a migration's journal says it is half committed.
  */
 export function bootRefusal(stateDir: string, steps: MigrateStep[] = STEPS): string | undefined {
-  if (existsSync(join(stateDir, MIGRATE_JOURNAL))) return `refusing to start: a hydra migrate in ${stateDir} was interrupted after it committed; run 'hydra migrate' to finish it.`
+  if (existsSync(join(stateDir, MIGRATE_JOURNAL))) return `refusing to start: a hydra migrate in ${stateDir} was interrupted after it committed; run 'hydra migrate' to finish it.${UPGRADE_STEPS}`
   if (!hydraTomlInUse(stateDir)) {
     // access.json's channels and settings live in hydra.toml now: without one, they would be ignored.
     // (A file that doesn't parse counts as pending: nothing else reads or moves it.)
     return steps.includes(accessStep) && accessStep.pending(stateDir)
-      ? `refusing to start: ${join(stateDir, 'access.json')} still holds channels or settings, and hydra.toml is not here to take them. Run 'hydra migrate' (it writes hydra.toml from it and retires it).`
+      ? `refusing to start: ${join(stateDir, 'access.json')} still holds channels or settings, and hydra.toml is not here to take them. Run 'hydra migrate' (it writes hydra.toml from it and retires it).${UPGRADE_STEPS}`
       : undefined
   }
   const old = steps.filter(s => s.pending(stateDir)).map(s => s.name)
   if (!old.length) return undefined
   return `refusing to start: hydra.toml is in use, but old state it replaces is still in ${stateDir}: ${old.join(', ')}. `
-    + `Run 'hydra migrate' (it adds that state to hydra.toml and retires it), or retire it by hand.`
+    + `Run 'hydra migrate' (it adds that state to hydra.toml and retires it), or retire it by hand.${UPGRADE_STEPS}`
 }
 
 // --- merging the steps --------------------------------------------------------------------------------------------

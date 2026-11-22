@@ -41,8 +41,8 @@ const RESOLVER_SOCKET = '/private/var/run/mDNSResponder'
 
 /**
  * The macOS major versions on which the profile above is PROVEN: the one list, and nothing else decides it. A version belongs here
- * only once the whole of config/__tests__/server-sandbox.test.ts (the tests that run without an opt-in environment variable) was run
- * on a Mac of that version, by hand, and passed. CI runs `ubuntu-latest`, where the real-sandbox tests are skipped, so no CI run
+ * only once config/__tests__/server-sandbox.test.ts (including `HYDRA_LIVE_PERSISTENCE=1` in an interactive GUI session for the
+ * end-to-end `open`/`.app` LaunchServices checks) was run on a Mac of that version, by hand, and passed. CI runs `ubuntu-latest`, where the real-sandbox tests are skipped, so no CI run
  * proves any macOS version. Add a major by running that suite on it; never by reasoning that it ought to be the same.
  *
  * Compared by major version: Seatbelt and LaunchServices change between major releases (the way out through `open` is what the

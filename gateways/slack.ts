@@ -548,7 +548,8 @@ export class SlackGateway implements ChatGateway {
   /** Rate-limit chat.postMessage and chat.update to ~50/min (Slack Tier 4). */
   private throttledSend<T>(fn: () => Promise<T>): Promise<T> {
     const p = this._sendChain.then(async () => {
-      const wait = Math.max(0, this._lastSendAt + SlackGateway.SEND_RATE_MS - Date.now())
+      const rateMs = (this as { _sendRateMs?: number })._sendRateMs ?? SlackGateway.SEND_RATE_MS
+      const wait = Math.max(0, this._lastSendAt + rateMs - Date.now())
       if (wait > 0) await new Promise<void>(r => setTimeout(r, wait))
       this._lastSendAt = Date.now()
       return fn()

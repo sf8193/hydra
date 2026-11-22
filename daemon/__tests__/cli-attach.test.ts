@@ -20,7 +20,7 @@ let server: ReturnType<typeof Bun.listen>
 const ids: string[] = []
 
 beforeEach(() => {
-  fake = withFakeTmux()
+  fake = withFakeTmux({ subprocess: true })
   home = mkdtempSync(join(tmpdir(), 'hz1-'))
   const dir = join(home, '.claude', 'channels', 'test')
   mkdirSync(dir, { recursive: true })

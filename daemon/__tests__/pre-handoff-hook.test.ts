@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
-import { executeTool } from '../../app/bridge-dispatch.js'
+import { executeTool, handoffWait } from '../../app/bridge-dispatch.js'
 import { PRE_HANDOFF_HOOK_PATH, runPreHandoffHook } from '../../app/session-lifecycle.js'
 import { registry, type SessionInfo } from '../../sessions/registry.js'
 import { STATE_DIR } from '../../infra/config.js'
@@ -58,7 +58,7 @@ test('hook exits non-zero: the tool errors with its output and the session is no
   expect(text).toContain('handoff refused by hooks/pre-handoff:')
   expect(text).toContain('letter has no Next action')
   expect(text).toContain('push your branch')
-  await Bun.sleep(700)
+  await Bun.sleep(handoffWait.ms + 50)
   expect(spawned()).toEqual([])
   expect(registry.has(id)).toBe(true)
 })
@@ -97,19 +97,19 @@ test('a hook that cannot start logs one fail-open line with no exit code', async
 })
 
 test('the daemon keeps running while a hook runs', async () => {
-  writeHook('sleep 1\nexit 0')
+  writeHook('sleep 0.35\nexit 0')
   const start = Date.now()
   let tickedAfter = Infinity
   setTimeout(() => { tickedAfter = Date.now() - start }, 50)
   expect(await runPreHandoffHook(info, letter)).toEqual({ ok: true })
-  expect(tickedAfter).toBeLessThan(500)  // a blocking run would hold the timer until the hook's 1s sleep ends
+  expect(tickedAfter).toBeLessThan(250)  // a blocking run would hold the timer until the hook's 350ms sleep ends
 })
 
 test('a background child holding stdout open does not delay the verdict', async () => {
-  writeHook('sleep 4 &\necho not ready\nexit 1')
+  writeHook('sleep 2 &\necho not ready\nexit 1')
   const t = Date.now()
   expect(await runPreHandoffHook(info, letter)).toEqual({ ok: false, output: 'not ready' })
-  expect(Date.now() - t).toBeLessThan(2000)
+  expect(Date.now() - t).toBeLessThan(1200)
 })
 
 test('non-executable hook: treated as no hook, with a warning', async () => {
@@ -134,8 +134,8 @@ test('the reason survives: large output is read to the end, and the tail is kept
 })
 
 test('a second handoff call during the hook is refused at once; the first proceeds', async () => {
-  writeHook('sleep 0.3\nexit 0')
-  const [a, b] = await Promise.all([executeTool('handoff', { path: letter }, id), Bun.sleep(50).then(() => executeTool('handoff', { path: letter }, id))])
+  writeHook('sleep 0.2\nexit 0')
+  const [a, b] = await Promise.all([executeTool('handoff', { path: letter }, id), Bun.sleep(10).then(() => executeTool('handoff', { path: letter }, id))])
   expect(a.isError).toBeFalsy()
   expect(b.isError).toBe(true)
   expect(JSON.stringify(b)).toContain('already handing off')
@@ -144,13 +144,13 @@ test('a second handoff call during the hook is refused at once; the first procee
 })
 
 test('a session killed during the hook does not hand off', async () => {
-  writeHook('sleep 0.3\nexit 0')
+  writeHook('sleep 0.2\nexit 0')
   const call = executeTool('handoff', { path: letter }, id)
-  await Bun.sleep(50); registry.delete(id)
+  await Bun.sleep(10); registry.delete(id)
   const r = await call
   expect(r.isError).toBe(true)
   expect(JSON.stringify(r)).toContain('ended during the pre-handoff check')
-  await Bun.sleep(700)
+  await Bun.sleep(handoffWait.ms + 50)
   expect(spawned()).toEqual([])
 })
 
