@@ -20,7 +20,7 @@
 
 import { readFileSync } from 'fs'
 import { BRIDGE_MCP_SERVER_KEY, BRIDGE_PLUGIN_ID, BRIDGE_TOOLS_PERMISSION, bridgePluginCache } from '../infra/plugin-manifest.js'
-import { HYDRA_MOD, serverToolRule, type RestrictedPolicy } from '../app/restricted.js'
+import { HYDRA_MOD, serverToolRule, type RestrictedPolicy } from './launch-policy.js'
 import { claudeConfigDir } from '../shared/constants.js'
 
 /** What a launch's debug file says Claude Code loaded. Each field is read from the lines that say it, and nothing is inferred. */

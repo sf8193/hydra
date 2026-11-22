@@ -32,9 +32,6 @@ export function tierOf(path: string): number | undefined {
 
 /** `from -> to`, one per allowed upward import. */
 export const ALLOWED: readonly string[] = [
-  'engines/claude-engine.ts -> app/restricted.ts',
-  'engines/claude-engine.ts -> app/write-confinement.ts',
-  'engines/claude-verify.ts -> app/restricted.ts',
   'engines/codex-engine-adapter.ts -> sessions/codex-piggyback.ts',
   'engines/codex-engine-adapter.ts -> sessions/registry.ts',
   'engines/codex-runtime.ts -> app/reply-guard.ts',

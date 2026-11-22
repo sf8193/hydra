@@ -24,7 +24,7 @@ import { resolveEngine } from '../sessions/engine-instances.js'
 import type { ProviderId } from '../engines/engine-adapter.js'
 import { activeBackoff, clearBackoff, recordFailure, type Backoff } from '../infra/recovery-backoff.js'
 import { currentKickoff, kickoffHash, specialistForThread, targetKeyForThread, withThreadLock } from '../sessions/specialists.js'
-import { PolicyRefusal } from './restricted.js'
+import { PolicyRefusal } from '../engines/launch-policy.js'
 import { isPlainWorker } from '../shared/policy-record.js'
 import type { InboundMessage } from '../gateways/gateway.js'
 

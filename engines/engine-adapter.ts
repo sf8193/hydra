@@ -5,7 +5,7 @@
 // callers go through deliverToAdapter (sessions/bridge-transport.ts) — no dispatch logic needed.
 
 import type { SessionInfo, SpawnOpts } from '../sessions/registry.js'
-import type { LaunchPolicy, RestrictedPolicy } from '../app/restricted.js'
+import type { LaunchPolicy, RestrictedPolicy } from './launch-policy.js'
 import type { EngineName } from '../shared/engines/index.js'
 export type BlockingKind = 'plan_mode' | 'login_required' | 'resume_prompt' | 'usage_limit' | 'unknown_dialog'
 

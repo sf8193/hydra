@@ -14,8 +14,8 @@ import { chmodSync, existsSync, linkSync, mkdirSync, readFileSync, realpathSync,
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { makeProbe, type Probe } from './confined-shell-probe.js'
-import { snapshotConfinedFiles } from '../../app/write-confinement.js'
-import { confinementIdFor } from '../../app/restricted.js'
+import { snapshotConfinedFiles } from '../../engines/write-confinement.js'
+import { confinementIdFor } from '../../engines/launch-policy.js'
 
 const LIVE = process.env.HYDRA_LIVE_CLAUDE === '1' && process.platform === 'darwin' && !!Bun.which('claude')
 const SECRET = 'denied-secret-bytes'

@@ -74,7 +74,6 @@ export function defaultListenOf(): boolean {
 export function ackReactionOf(): string | undefined {
   return gateSettings()?.ackReaction
 }
-export const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 
 // Resolves true only if the whole message reached someone.
 export async function notifyOperator(text: string): Promise<boolean> {

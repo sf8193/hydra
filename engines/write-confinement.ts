@@ -17,11 +17,11 @@ import { browserDownloadDir, browserProfileDir, fileRefusal, fileSendDecision, f
 import { CONFINED_TOOLS } from '../shared/constants.js'
 import { UNIVERSAL_TOOLS } from '../shared/tool-definitions.js'
 import { STATE_DIR } from '../infra/config.js'
-import { MAX_ATTACHMENT_BYTES } from '../sessions/access.js'
-import { expectedServerNames } from '../engines/claude-verify.js'
+import { MAX_ATTACHMENT_BYTES } from '../shared/constants.js'
+import { expectedServerNames } from './claude-verify.js'
 import { bridgeCommand } from '../infra/plugin-manifest.js'
 import { readdirSync, readFileSync } from 'fs'
-import { PolicyRefusal, missingTokenRefusal, remedy, serverToolRule, type ConfinementPolicy, type ConfinementServer, type LaunchPolicy } from './restricted.js'
+import { PolicyRefusal, missingTokenRefusal, remedy, serverToolRule, type ConfinementPolicy, type ConfinementServer, type LaunchPolicy } from '../engines/launch-policy.js'
 
 /** The first Claude Code with `permissions.blockWritesOutsideWorkingDirectories`: an older one ignores the key, which would leave Edit/Write unconfined. */
 export const MIN_CLAUDE_VERSION = [2, 1, 314] as const

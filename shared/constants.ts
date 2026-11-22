@@ -372,3 +372,6 @@ export const HOME_STATUS_ACTION_PREFIX = 'home:status:'
 export const SLACK_GATEWAY_TOKEN_ENVS = { bot: 'SLACK_BOT_TOKEN', app: 'SLACK_APP_TOKEN' } as const
 /** The Discord gateway's token variable (infra/config.ts reads it from what the scrub held). */
 export const DISCORD_GATEWAY_TOKEN_ENV = 'DISCORD_BOT_TOKEN'
+
+/** The largest file hydra takes in or sends on a session's behalf: attachments in, and a confined session's inbox. */
+export const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024

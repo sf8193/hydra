@@ -6,8 +6,8 @@ import { readFileSync } from 'fs'
 import { join } from 'path'
 import { expectedLoad, mismatches, readLoaded, surplus, verifyDeps, verifyLaunch } from '../../engines/claude-verify.js'
 import { BRIDGE_MCP_SERVER_KEY, bridgePluginCache } from '../../infra/plugin-manifest.js'
-import { serverToolRule } from '../../app/restricted.js'
-import type { RestrictedPolicy } from '../../app/restricted.js'
+import { serverToolRule } from '../../engines/launch-policy.js'
+import type { RestrictedPolicy } from '../../engines/launch-policy.js'
 import { claudeConfigDir } from '../../shared/constants.js'
 
 // The live launch's lines (restricted-debug-live.txt: three live launches, claude 2.1.3xx, in the order they came) and the earlier recording, which lacks the bridge's `plugin.register` line.
