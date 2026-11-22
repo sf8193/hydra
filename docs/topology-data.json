@@ -400,6 +400,14 @@
     ],
     [
       "daemon",
+      "daemon_templates"
+    ],
+    [
+      "daemon",
+      "shared_constants"
+    ],
+    [
+      "daemon",
       "daemon_dashboard"
     ],
     [

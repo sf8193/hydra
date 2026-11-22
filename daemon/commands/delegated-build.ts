@@ -4,13 +4,7 @@ import { startProtocolRun, getRunByThread, cancelRun } from '../protocol-runner.
 import { isThreadOccupied } from '../protocol-registry.js'
 import type { InboundMessage } from '../../gateways/gateway.js'
 import type { ProviderId } from '../engines/engine-adapter.js'
-
-let selectProto: typeof import('../../protocols/delegated-build-select.js')['selectDelegatedBuildProtocol'] | null = null
-
-async function getProto(quick = false) {
-  if (!selectProto) selectProto = (await import('../../protocols/delegated-build-select.js')).selectDelegatedBuildProtocol
-  return selectProto(quick)
-}
+import { selectDelegatedBuildProtocol } from '../../protocols/delegated-build-select.js'
 
 export async function handleDelegatedBuildIntercept(msg: InboundMessage, rounds: number, task?: string, model?: string, engine?: ProviderId, opts?: { skipClarify?: boolean }): Promise<void> {
   void gateway.react(msg.channelId, msg.id, opts?.skipClarify ? '⚡' : '📋').catch(() => {})
@@ -44,7 +38,7 @@ export async function handleDelegatedBuildIntercept(msg: InboundMessage, rounds:
   const clampedRounds = Math.max(1, Math.min(rounds, opts?.skipClarify ? 5 : 20))
 
   try {
-    const p = await getProto(!!opts?.skipClarify)
+    const p = selectDelegatedBuildProtocol(!!opts?.skipClarify)
     await startProtocolRun(p, threadId, sessionId, { rounds: clampedRounds, task, model, engine, strike: true, skipClarify: opts?.skipClarify })
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err)
