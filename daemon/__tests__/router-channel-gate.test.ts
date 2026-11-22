@@ -163,10 +163,22 @@ test('the operator\'s `@bot spawn: x` is the spawn command; the same words from 
     await say(OURS, {}, '<@999> spawn: fix the bug')
     expect(spawns).toHaveLength(1)
     expect(spawns[0][1]).toBe('fix the bug')
+    expect(spawns[0][0].channelId).toBe(OURS)
     await onMessage({ id: 'm3', channelId: OURS, authorId: 'stranger', authorUsername: 's', content: '<@999> spawn: x', isBot: false, attachments: [], createdAt: new Date(), isThread: false, isDM: false, parentChannelId: null })
     expect(spawns).toHaveLength(1)
   } finally { delete (gateway as any).botId }
   expect(withoutLeadingTag('<@999> hi', '999')).toBe('hi')
   expect(withoutLeadingTag('<@111> spawn: x', '999')).toBe('<@111> spawn: x')
   expect(withoutLeadingTag('<@999> spawn: x', null)).toBe('<@999> spawn: x')
+})
+
+test('a tagged operator message that is not a command reaches the gate with its tag: Slack reads the tag from the text', async () => {
+  Object.defineProperty(gateway, 'botId', { value: '999', configurable: true })
+  const gated: string[] = []
+  const g = spyOn(access, 'gate').mockImplementation((async (m: any) => { gated.push(m.content); return { action: 'drop' } }) as any)
+  try {
+    // 'status' is a command prefix, so the words after the tag pass the loose command match but no handler takes them
+    await say(OURS, {}, '<@999> status of the migration')
+  } finally { g.mockRestore(); delete (gateway as any).botId }
+  expect(gated).toEqual(['<@999> status of the migration'])
 })

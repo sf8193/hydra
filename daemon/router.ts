@@ -438,7 +438,7 @@ gateway.onMessage(async (inbound: InboundMessage) => {
   if (!channelAllowed(inbound) && !(await admitTaggedChannel(inbound))) return
   const senderId = inbound.authorId
   const isAllowed = operatorIds().includes(senderId)
-  // The operator's tagged command is the command. Anything else keeps its tag: the gate reads it.
+  // The operator's tagged command is the command. The gate reads the message as it came, tag included.
   const bare = withoutLeadingTag(inbound.content, gateway.botId)
   const msg = isAllowed && bare !== inbound.content && COMMAND_RE.test(bare) ? { ...inbound, content: bare } : inbound
 
@@ -1111,7 +1111,7 @@ gateway.onMessage(async (inbound: InboundMessage) => {
   const strangerThread = !isAllowed && msg.isThread ? registry.resolveThreadId(msg) : undefined
   const result = strangerThread && threadRegistry.isSenderAllowed(strangerThread, senderId)
     ? { action: 'deliver' as const }
-    : await gate(msg)
+    : await gate(inbound)
 
   if (result.action === 'drop') {
     if (strangerThread && registry.getByThread(strangerThread) && flagStranger(strangerThread, senderId)) {
