@@ -252,6 +252,8 @@ export interface ChatGateway {
   // URL building
   getThreadUrl(threadId: string): Promise<string>
   getMessageUrl(threadId: string, messageTs: string): string
+  /** How a message in this chat points at a thread so the chat renders it as a live link to that thread, where the platform has such a form (Discord: `<#id>`). Absent: the thread's URL is the pointer. */
+  threadMention?(threadId: string): string
   getMessageAppLink?(threadId: string, messageTs: string): string
   getLastReplyId?(threadId: string): Promise<string | null>
 }

@@ -258,6 +258,28 @@ describe('the callers pass who asked', () => {
     const ok = await executeTool('spawn_session', { topic: 't', chat_id: KID_T }, pm.sessionId)
     expect(ok.isError).toBeFalsy()
   })
+  /** Runs `fn` with the gateway's `threadMention` set (or removed), then puts it back. */
+  async function withMention<T>(mention: ((id: string) => string) | undefined, fn: () => Promise<T>): Promise<T> {
+    const g = gateway as any
+    const had = Object.getOwnPropertyDescriptor(g, 'threadMention')
+    g.threadMention = mention
+    try { return await fn() } finally { if (had) Object.defineProperty(g, 'threadMention', had); else delete g.threadMention }
+  }
+  const spawnIn = async (chat_id: string) => (await executeTool('spawn_session', { topic: 't', chat_id })).content[0].text
+  test('spawn_session names the new thread with the gateway\'s mention, and keeps the url beside it', async () => {
+    const text = await withMention(id => `<#${id}>`, () => spawnIn(PARENT))
+    expect(text).toContain(`mention: <#${NEW_THREAD}>, url: https://x/thread`)
+  })
+  test('spawn_session gives no mention where the gateway has none: the url alone', async () => {
+    const text = await withMention(undefined, () => spawnIn(PARENT))
+    expect(text).not.toContain('mention:')
+    expect(text).toContain('url: https://x/thread')
+  })
+  test('spawn_session asked from a Slack conversation gives no mention: its reader is not in the gateway\'s chat, so the url alone points at the thread', async () => {
+    const text = await withMention(id => `<#${id}>`, () => spawnIn('slack:C0TEST:1700000000.000100'))
+    expect(text).not.toContain('mention:')
+    expect(text).toContain('url: https://x/thread')
+  })
   test('spawn_session from main is not asked', async () => {
     endedChild(PM_T)
     const ok = await executeTool('spawn_session', { topic: 't', chat_id: KID_T })
