@@ -1,5 +1,5 @@
 import { describe, test, expect, afterEach } from 'bun:test'
-import type { EngineName } from '../engine-capabilities.js'
+import type { EngineName } from '../engines/index.js'
 import { AGY_MODEL_ALIASES, AGY_MODEL_ALIAS_PATTERN, resolveAgyModelAlias, engineOfModel, resolveLaunchSelection, ompProvider, OMP_MODEL_ALIASES, OMP_MODEL_ALIAS_PATTERN, resolveOmpModelAlias, SESSION_LABELS, isSessionLabel, parseSessionLabel, resolveModelAlias, resolveCodexModelAlias, isKnownModel, contextWindowOf, withContextSuffix, canonicalModel, byteTmuxName, MODEL_ALIASES, MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, KNOWN_MODELS, normalizeReviewRounds, parseIdleTtl, MAX_IDLE_TTL_MS } from '../constants.js'
 
 test('review rounds have a twenty-round default and hard cap', () => {

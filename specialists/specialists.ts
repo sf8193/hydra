@@ -8,7 +8,7 @@ import { clearBackoff } from '../daemon/recovery-backoff.js'
 import { SPECIALIST_NAME_RE, invalidSpecialistName as invalidName, isSessionThread } from '../shared/specialist-name.js'
 import { currentHydraConfig, hydraConfigInUse, onHydraConfigLoad } from '../daemon/hydra-config.js'
 import { declaredSpecialist, isChannelName, parsePlace, type HydraConfig, type Specialist as DeclaredSpecialist } from '../config/types.js'
-import type { EngineName } from '../shared/engine-capabilities.js'
+import type { EngineName } from '../shared/engines/index.js'
 import { engineOfModel, SPECIALIST_THREADS } from '../shared/constants.js'
 
 /**

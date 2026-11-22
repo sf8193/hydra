@@ -31,7 +31,7 @@ import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle }
 import { fetchPrTitle, parsePrUrl } from '../connectors/github/pr-watch.js'
 import { SEND_TYPES, type SendType } from '../shared/tool-definitions.js'
 import { ASK_PREDECESSOR_TIMEOUT_MS, engineOfModel, normalizeReviewRounds } from '../shared/constants.js'
-import { ENGINE_CAPABILITIES } from '../shared/engine-capabilities.js'
+import { ENGINE_PROFILES } from '../shared/engines/index.js'
 import { isRestrictedSession, isToolAllowed, isWriteConfinedSession, predecessorAsker, refusalText } from './tool-surface.js'
 import { deliveryRefusal } from './restricted.js'
 import { parseRateLimits, reportUsage } from './usage-alerts.js'
@@ -476,7 +476,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const modelArg = (args.model as string | undefined)?.trim()
         // A Codex, omp or agy alias selects its engine (doSpawnSession reads it); what a spawn_session may ask of that engine is refused here.
         const aliasOf = modelArg ? engineOfModel(modelArg) : undefined
-        const aliasEngine = aliasOf && ENGINE_CAPABILITIES[aliasOf]
+        const aliasEngine = aliasOf && ENGINE_PROFILES[aliasOf]
         if (aliasEngine && source && !aliasEngine.forkable) throw new Error(`fork_from cannot be combined with the ${aliasEngine.label} engine — ${aliasEngine.label} sessions cannot be forked`)
         if (aliasEngine && readOnly && !aliasEngine.enforcesReadOnly) throw new Error(`read_only is not enforced on ${aliasEngine.label} sessions — use a Claude model`)
         const model = modelArg || source?.model

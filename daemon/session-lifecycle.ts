@@ -32,7 +32,7 @@ import { AGY_MODEL_ALIASES, resolveLaunchSelection, spawnModel, withContextSuffi
 import type { SessionType, ToolBase, SessionLabel } from '../shared/constants.js'
 import { isRestricted, isRestrictedPolicy } from './policy-record.js'
 import { resolveEngine } from './engines/instances.js'
-import { engineLimitsAccess } from '../shared/engine-capabilities.js'
+import { engineLimitsAccess } from '../shared/engines/index.js'
 import type { EngineAdapter, ProviderId } from './engines/engine-adapter.js'
 import { resumeHomeOwner } from './engines/codex-engine-adapter.js'
 import { buildSpawnPrompt, buildForkPrompt, buildHandoffPrompt, buildResurrectPrompt } from './prompts/session.js'
