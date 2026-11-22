@@ -11,15 +11,13 @@ import { registry, threadRegistry, type SessionInfo } from '../sessions/registry
 import { transport, deliverToAdapter } from '../sessions/bridge-transport.js'
 import { gateway } from '../infra/config.js'
 import { occupancy, occupied, ORPHAN_GRACE_MS, bridgeWaitMs } from '../sessions/session-reachability.js'
-import type { BlockingState } from '../engines/engine-adapter.js'
-import { landingOf } from '../shared/landing.js'
+import type { BlockingState, DeliveryResult } from '../engines/engine-adapter.js'
 import { checkIdempotency, clearIdempotency, registerIdempotency, DELIVER_IDEMPOTENCY_TTL_MS } from '../infra/idempotency.js'
 import { DELIVER_MAX_MESSAGE_BYTES, parseIdleTtl } from '../shared/constants.js'
 import { getSpecialist, specialistForThread, withTargetLock, type Specialist } from '../sessions/specialists.js'
 import { currentHydraConfig } from '../infra/hydra-config.js'
 import { ensureSpecialist, SpecialistError } from './specialist-deliver.js'
 import { currentRecoveryDeps, reviveThreadForDelivery } from '../app/recovery.js'
-import type { DeliveryResult } from '../engines/engine-adapter.js'
 import { readTarget, spelledTo, TARGET_FORMS, type TargetValue } from '../shared/target-kind.js'
 import { STUCK_PREFIX } from '../shared/exit-codes.js'
 
@@ -29,17 +27,24 @@ export type Target =
   | { spawn: Recipe }
   /**
    * `sessions = "per-conversation"`: the conversation's own session, made from the specialist's recipe and never stored,
-   * at most hydra.toml's `max_sessions` at once (past that: exit 5 with `atMax`).
+   * at most hydra.toml's `max_sessions` at once (past that: exit 5 with `wait`).
    */
   | { perConversation: string; conversation: string }
+/**
+ * A delivery's result at the target level, one shape from here to every reader: the Slack connector and the PR watch read
+ * it unchanged, and `hydra deliver` sends it as its reply's `exitCode` and `error`, with a refusal's flags in `data` as they
+ * are. The engine level below it is `DeliveryResult` (engine-adapter.ts): what one engine did with one notification, which
+ * `outcomeOf` reads into this.
+ */
 export type DeliverOutcome =
   /** `duplicate`: this idempotency key already landed; a sender counts it as sent (the CLI's exit 2). */
   | { ok: true; sessionName: string; threadId: string; revived: boolean; sessionId: string; status: 'delivered' | 'queued'; proof?: string; duplicate?: true; specialist?: string }
   /** 3 gone/refused, 4 orphaned, 5 booting or busy (deferred), or stuck on a dialog (failed), 6 backing off or failed, 7 a delivery with this key
    *  is still in flight, 8 no such specialist, or a target hydra cannot read (`malformed`). `permanent`: this message can never be delivered (too large); drop it,
    *  alert, never retry. */
-  /** `atMax`: a per-conversation specialist already runs `max_sessions` sessions; this conversation waits its turn (exit 5). */
-  | { ok: false; exit: 3 | 4 | 5 | 6 | 7 | 8; reason: string; permanent?: true; atMax?: true; malformed?: true }
+  /** `wait`: places are short for a per-conversation specialist (it runs `max_sessions` sessions, or the free ones go to older
+   *  waiters); this conversation waits its turn (exit 5). */
+  | { ok: false; exit: 3 | 4 | 5 | 6 | 7 | 8; reason: string; permanent?: true; wait?: true; malformed?: true }
 
 /** `lowPriority`: an engine where every delivery is a priced turn (Codex) may hold it for the next turn. `wanted`: a sender
  *  that can withdraw (a PR watch ended by a kill), asked under the thread's lock just before a revive; false is exit 3. */
@@ -97,12 +102,34 @@ export function parseTarget(raw: unknown, where: string): Target {
 }
 
 /**
+ * The engine's part of a `DeliverOutcome`: what its `DeliveryResult` means at the target level, before the session's identity
+ * is added. `queued` is whether the caller expected the message to
+ * wait for a bridge: Claude's contract fails (exit 6) unless the write hit the socket or the caller asked for the queue.
+ */
+export function outcomeOf(result: DeliveryResult, queued: boolean):
+  | { ok: true; status: 'delivered' | 'queued'; proof: 'socket_write' | 'persisted' | 'adapter' }
+  | { ok: false; exit: 3 | 5 | 6; reason: string } {
+  const via = result.status === 'accepted' ? result.via : undefined
+  // A rejection the engine says may clear is exit 5, `deferred` ("busy, try again later"); one that cannot is exit 3.
+  if (result.status === 'rejected') return result.retryable
+    ? { ok: false, exit: 5, reason: `delivery rejected: ${result.reason} — transient, retry` }
+    : { ok: false, exit: 3, reason: `delivery rejected: ${result.reason}` }
+  if (result.status === 'unknown') return { ok: false, exit: 6, reason: `delivery outcome unknown: ${result.reason} — transient, retry` }
+  if (via === 'requeued' && !queued) return { ok: false, exit: 6, reason: 'bridge write failed (socket destroyed) — transient, retry' }
+  if (via === 'requeued') return { ok: true, status: 'queued', proof: 'persisted' }
+  if (via === 'queued' && !queued) return { ok: false, exit: 6, reason: 'bridge unexpectedly absent after reachability check' }
+  if (via === 'queued') return { ok: true, status: 'queued', proof: 'persisted' }
+  if (via === 'bridge-socket') return { ok: true, status: 'delivered', proof: 'socket_write' }
+  return { ok: true, status: 'delivered', proof: 'adapter' }
+}
+
+/**
  * Land one message on a session. The occupancy exits apply unless `queue` (a revived or booting session's bridge
  * flushes the queue when it connects); a session stuck on a dialog or prompt is never a landing.
  */
 export async function deliverToSession(info: SessionInfo, text: string, opts: { initiator?: string; queue?: boolean; source?: string; meta?: Record<string, string>; lowPriority?: boolean }): Promise<
   | { ok: true; status: 'delivered' | 'queued'; proof?: string }
-  | { ok: false; exit: 3 | 4 | 5 | 6; reason: string }
+  | Extract<DeliverOutcome, { ok: false }>
 > {
   const occ = occupancy(info)
   if (occ === 'dead' || occ === 'none') return { ok: false, exit: 3, reason: `${info.tmuxName} is gone — revive it (deliver --revive, or resume in its thread)` }
@@ -124,8 +151,8 @@ export async function deliverToSession(info: SessionInfo, text: string, opts: { 
   } catch (err) {
     result = { status: 'unknown', reason: String(err) }
   }
-  const outcome = landingOf(result, !!opts.queue)
-  if (!outcome.ok) return { ok: false, exit: outcome.exitCode ?? 3, reason: outcome.error }
+  const outcome = outcomeOf(result, !!opts.queue)
+  if (!outcome.ok) return outcome
   // Queued behind a session that died after it was chosen: nobody will drain that queue.
   if (outcome.status === 'queued' && occupancy(info) === 'dead') return { ok: false, exit: 6, reason: `${info.tmuxName} died during delivery` }
   return { ok: true, status: outcome.status, proof: outcome.proof }
@@ -158,7 +185,7 @@ export async function deliverVia(land: () => Promise<DeliverOutcome>, text: stri
     registerIdempotency(key, '', Math.max(ttl, DELIVER_IDEMPOTENCY_TTL_MS), 'pending')
   }
   const r = await land().catch((err): DeliverOutcome => ({
-    ok: false, exit: err instanceof SpecialistError && isExit(err.exitCode) ? err.exitCode : 6, reason: err instanceof Error ? err.message : String(err),
+    ok: false, exit: err instanceof SpecialistError && isExit(err.exit) ? err.exit : 6, reason: err instanceof Error ? err.message : String(err),
   }))
   if (key) {
     if (r.ok) registerIdempotency(key, r.sessionId, ttl, 'completed')
@@ -193,7 +220,7 @@ export async function toThread(threadId: string, text: string, opts: DeliverOpts
   let revived = false
   if (revive) {
     const r = await reviveThreadForDelivery(threadId, opts.initiator, opts.wanted)
-    if (!r.ok) return { ok: false, exit: r.exitCode, reason: r.reason }
+    if (!r.ok) return r
     revived = r.revived
   }
   const info = occupantOf(threadId)
@@ -282,7 +309,7 @@ async function toConversation(to: string, conversation: string, text: string, op
       const pending = [...(reserved.get(to)?.keys() ?? [])].filter(n => n !== names[0] && !live.includes(n))
       const n = new Set(live).size + pending.length
       if (n >= s.maxSessions) {
-        return { ok: false, exit: 5, atMax: true, reason: `${to} already runs ${n} conversation session${n === 1 ? '' : 's'} (max_sessions ${s.maxSessions}); ${conversation} waits for one to end${s.idleMs ? '' : ', and none ends on its own: give the specialist an idle'}` }
+        return { ok: false, exit: 5, wait: true, reason: `${to} already runs ${n} conversation session${n === 1 ? '' : 's'} (max_sessions ${s.maxSessions}); ${conversation} waits for one to end${s.idleMs ? '' : ', and none ends on its own: give the specialist an idle'}` }
       }
     }
     reserve(to, names[0], 1)

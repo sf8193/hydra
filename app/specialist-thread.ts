@@ -156,7 +156,7 @@ async function drain(threadId: string, hold: Hold): Promise<void> {
       hold.lastError = reason
       process.stderr.write(`daemon: specialist ${hold.specialist}: could not start for a message in its thread ${threadId}: ${reason}\n`)
       // 3: refused outright (no channel to open a thread in, another session holds its name); 8: no such specialist. Waiting changes nothing.
-      if (err instanceof SpecialistError && (err.exitCode === 3 || err.exitCode === 8)) {
+      if (err instanceof SpecialistError && (err.exit === 3 || err.exit === 8)) {
         // Cleared before telling: a message that arrives meanwhile starts a hold of its own.
         const dropped = hold.items.length
         hold.items = []

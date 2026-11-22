@@ -8,7 +8,7 @@ import { join } from 'path'
 import { STATE_DIR, gateway } from '../../../infra/config.js'
 import { registry } from '../../../sessions/registry.js'
 import { _setHydraConfigForTesting } from '../../../infra/hydra-config.js'
-import { ConversationTable, EXTERNAL_AUDIENCE_NOTE, NEW_TO_MAIN_NOTE, TOP_LEVEL, type ConversationConfig, type DeliverResult, type SlackMessageEvent } from '../watch.js'
+import { ConversationTable, EXTERNAL_AUDIENCE_NOTE, NEW_TO_MAIN_NOTE, TOP_LEVEL, type ConversationConfig, type SlackMessageEvent } from '../watch.js'
 import { getConversationTable, operatorBind, replyInConversation, slackConversationLink, slackRuntimeDeps } from '../runtime.js'
 import { BASE, BOT, hydra, view } from './slack-config.js'
 import { owningApp, route } from '../../../routing/route.js'
@@ -16,6 +16,8 @@ import { loadHydraConfig } from '../../../config/load.js'
 import { testLoadEnv } from '../../../config/__tests__/load-env.js'
 import { handleCLIRequest } from '../../../app/cli-handler.js'
 import { placeOf } from '../../../config/types.js'
+import { LANDED } from './outcomes.js'
+import type { DeliverOutcome } from '../../../specialists/targets.js'
 
 process.stderr.write = (() => true) as any
 
@@ -41,7 +43,7 @@ function setup(toml: string) {
   const config: ConversationConfig = view(toml, { coalesceMs: 1, dms: { D0ALICE01: 'UALICE', D0BOT0001: 'bot' }, groupDms: ['G0GROUP01'] })
   const w = new ConversationTable({
     now: () => 1_000_000_000_000, file: join(dir, 'w.json'), log: l => logs.push(l), config: () => config, alert: () => {},
-    deliver: async ({ to }, msg): Promise<DeliverResult> => { sent.push({ to, msg }); return { ok: true } },
+    deliver: async ({ to }, msg): Promise<DeliverOutcome> => { sent.push({ to, msg }); return LANDED },
   })
   return { w, sent, logs }
 }
@@ -366,7 +368,7 @@ describe('a tag the tag cap drops in a group DM the bot is not part of', () => {
       const config = view(WITH + '[[rules]]\nplace = "slack:group-dm:G0GROUP01"\ntarget = "main"\n', { coalesceMs: 1, dms: { D0ALICE01: 'UALICE', D0BOT0001: 'bot' }, groupDms: ['G0GROUP01'], maxMentionsPer10Min: 1 })
       const w = new ConversationTable({
         now: () => 1_000_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => config, alert: () => {},
-        deliver: async (): Promise<DeliverResult> => ({ ok: true }),
+        deliver: async (): Promise<DeliverOutcome> => LANDED,
       })
       w.setSlackActions({ react: async (c: string, ts: string, name: string) => { reactions.push(`${c}:${ts}:${name}`) } } as any)
       // Threads, so each tag opens its own conversation (top-level messages in a DM are one conversation, which the cap does not touch).

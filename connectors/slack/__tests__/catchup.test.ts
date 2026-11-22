@@ -2,10 +2,12 @@ import { describe, test, expect, afterEach } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { ConversationTable, TAGGED_CHANNELS_MAX, type ConversationConfig, type DeliverResult } from '../watch.js'
+import { ConversationTable, TAGGED_CHANNELS_MAX, type ConversationConfig } from '../watch.js'
 import { catchUp, toEvent, _resetCatchUpLogs, type SlackApi, type RawMessage, type Page } from '../catchup.js'
 
 import { BASE, BOT, oneListener, view } from './slack-config.js'
+import { LANDED, refused } from './outcomes.js'
+import type { DeliverOutcome } from '../../../specialists/targets.js'
 
 const CH = 'C0FOOD'
 const cfg: ConversationConfig = view(oneListener(CH))
@@ -14,14 +16,14 @@ const mention = `<@${BOT}> a cart please`
 const dirs: string[] = []
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
 
-function setup(deliver?: () => DeliverResult, config: ConversationConfig = cfg) {
+function setup(deliver?: () => DeliverOutcome, config: ConversationConfig = cfg) {
   const dir = mkdtempSync(join(tmpdir(), 'slack-catchup-'))
   dirs.push(dir)
   const sent: string[] = []
   const logs: string[] = []
   const w = new ConversationTable({
     now: () => 1_793_000_000_000, file: join(dir, 'w.json'), log: l => logs.push(l), config: () => config,
-    deliver: async (_s, msg) => { sent.push(msg); return deliver ? deliver() : { ok: true } },
+    deliver: async (_s, msg) => { sent.push(msg); return deliver ? deliver() : LANDED },
   })
   return { w, sent, logs }
 }
@@ -161,7 +163,7 @@ describe('catchUp: a bind takes only what comes after it', () => {
   test('after a handoff the successor session gets m2 and m3 in order, and the parent is not delivered again', async () => {
     const SESSION = '1552619225032425525'
     let successor = false
-    const { w, sent } = setup(() => successor ? { ok: true } : { ok: false, error: 'the session is gone' })
+    const { w, sent } = setup(() => successor ? LANDED : refused('the session is gone'))
     w.bind(CH, PARENT, SESSION, 'tool')                                          // the thread keeps its binding through the handoff
     const m2 = { ts: '1793000200.000001', thread_ts: PARENT, user: 'UA', text: 'm2' }
     const m3 = { ts: '1793000300.000001', thread_ts: PARENT, user: 'UA', text: 'm3' }
@@ -235,7 +237,7 @@ describe('catchUp', () => {
 
   test('owed messages are refetched from their thread and delivered once; delivered ones are not repeated', async () => {
     let fail = true
-    const { w, sent } = setup(() => fail ? { ok: false, error: 'specialist down' } : { ok: true })
+    const { w, sent } = setup(() => fail ? refused('specialist down') : LANDED)
     w.handle({ channel: CH, ts: '1000.000001', user: 'UA', text: mention })
     await w.flush() // fails: owed
     fail = false
@@ -365,7 +367,7 @@ describe('catchUp', () => {
 })
 
 test("a thread Slack says isn't there (a made-up ts) is skipped and logged; the pass still reads the rest", async () => {
-  const { w, sent } = setup(() => ({ ok: true }))
+  const { w, sent } = setup(() => LANDED)
   const logs: string[] = []
   w.handle({ channel: CH, ts: '1000.000001', user: 'UA', text: 'chat' })
   w.bind(CH, '1.000001', 'helper', 'tool') // made up
@@ -382,7 +384,7 @@ test("a thread Slack says isn't there (a made-up ts) is skipped and logged; the 
 })
 
 test("a thread whose channel the bot can no longer read is let go like a gone one: the pass goes on, the queue isn't pinned", async () => {
-  const { w } = setup(() => ({ ok: false, error: 'down' }))
+  const { w } = setup(() => refused('down'))
   w.handle({ channel: CH, ts: '1000.000001', user: 'UA', text: 'chat' })
   w.bind(CH, '1500.000001', 'helper')
   const e = w.get(CH, '1500.000001')!
@@ -394,7 +396,7 @@ test("a thread whose channel the bot can no longer read is let go like a gone on
 })
 
 test('a gone thread that still owed messages drops them and is let go: they can never be fetched', async () => {
-  const { w } = setup(() => ({ ok: false, error: 'down' }))
+  const { w } = setup(() => refused('down'))
   w.handle({ channel: CH, ts: '1000.000001', user: 'UA', text: 'chat' })
   w.bind(CH, '1500.000001', 'helper')
   const e = w.get(CH, '1500.000001')!
@@ -424,7 +426,7 @@ target = "specialist:ops"
     const dir = mkdtempSync(join(tmpdir(), 'slack-catchup-'))
     dirs.push(dir)
     const sent: string[] = []
-    const w = new ConversationTable({ now: () => 1_793_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => routed, deliver: async t => { sent.push(t.to); return { ok: true } } })
+    const w = new ConversationTable({ now: () => 1_793_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => routed, deliver: async t => { sent.push(t.to); return LANDED } })
     w.handle({ channel: CH, ts: '1000.000001', user: 'UA', text: 'chat' })
     w.handle({ channel: 'C0OPS', ts: '1000.000001', user: 'UA', text: 'chat' })
     const { api } = fakeApi({ [CH]: [{ ts: '1005.000001', user: 'UA', text: mention }], C0OPS: [{ ts: '1006.000001', user: 'UB', text: mention }] })
@@ -519,7 +521,7 @@ describe("tagged channels: when the app was tagged, not when the channel was las
     const dir = mkdtempSync(join(tmpdir(), "slack-catchup-"))
     dirs.push(dir)
     const file = join(dir, "w.json")
-    const open = () => new ConversationTable({ now: () => 1_793_000_000_000, file, log: () => {}, config: () => cfg, deliver: async () => ({ ok: true }) })
+    const open = () => new ConversationTable({ now: () => 1_793_000_000_000, file, log: () => {}, config: () => cfg, deliver: async () => LANDED })
     writeFileSync(file, JSON.stringify({ entries: [], channelCursors: { C0OLD: "900.000001" }, taggedIn: ["C0OLD"] }))
     const w = open()
     expect(w.taggedChannels()).toEqual(["C0OLD"])
@@ -569,7 +571,7 @@ test('owed threads follow their binding: refetched even once no specialist liste
   let routed: ConversationConfig = cfg
   const dir = mkdtempSync(join(tmpdir(), 'slack-catchup-'))
   dirs.push(dir)
-  const w = new ConversationTable({ now: () => 1_793_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => routed, deliver: async () => ({ ok: false, error: 'down' }) })
+  const w = new ConversationTable({ now: () => 1_793_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => routed, deliver: async () => (refused('down')) })
   w.handle({ channel: CH, ts: '1000.000001', user: 'UA', text: mention })
   await w.flush()
   routed = view(oneListener('C0ELSE', 'helper'))
@@ -586,7 +588,7 @@ test('a message the guard put off (exit 75) is refetched by catch-up and judged 
   let verdict: 'deferred' | 'deliver' = 'deferred'
   const sent: string[] = []
   const w = new ConversationTable({ now: () => 1_793_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => guarded,
-    guard: async () => ({ verdict }), deliver: async (_t, msg) => { sent.push(msg); return { ok: true } } })
+    guard: async () => ({ verdict }), deliver: async (_t, msg) => { sent.push(msg); return LANDED } })
   w.handle({ channel: CH, ts: T, user: 'UA', text: mention })
   await w.flush()
   expect(sent).toHaveLength(0)
@@ -603,7 +605,7 @@ describe('catch-up for DMs and files', () => {
   const DM = 'D0ALICE01'
   const DMS = (allow: string) => oneListener(CH) + `[people.a]\naddresses = ["slack:UA"]\nroles = ["owner"]\n[specialists.assistant]\nworkdir = "/w/assistant"\nreachable_by = ${allow}\n[[rules]]\nplace = "slack:app-dm:*"\ntarget = "specialist:assistant"\n`
   const dmCfg: ConversationConfig = view(DMS('["role:owner"]'))
-  const mk = (deliver: () => DeliverResult = () => ({ ok: true })) => {
+  const mk = (deliver: () => DeliverOutcome = () => LANDED) => {
     const dir = mkdtempSync(join(tmpdir(), 'slack-catchup-'))
     dirs.push(dir)
     const sent: { to: string; msg: string }[] = []
@@ -626,7 +628,7 @@ describe('catch-up for DMs and files', () => {
 
   test('an owed DM is refetched from just before it, by history', async () => {
     let fail = true
-    const { w, sent } = mk(() => fail ? { ok: false, error: 'down' } : { ok: true })
+    const { w, sent } = mk(() => fail ? refused('down') : LANDED)
     w.handle({ channel: DM, ts: '1000.000001', user: 'UA', text: 'owed' })
     w.handle({ channel: DM, ts: '1010.000001', user: 'UA', text: 'later' })
     await w.flush()
@@ -641,7 +643,7 @@ describe('catch-up for DMs and files', () => {
 
   test('an owed reply in a thread inside a DM is refetched from that thread, like a channel thread', async () => {
     let fail = false
-    const { w, sent } = mk(() => fail ? { ok: false, error: 'down' } : { ok: true })
+    const { w, sent } = mk(() => fail ? refused('down') : LANDED)
     w.handle({ channel: DM, ts: '1000.000001', user: 'UA', text: 'parent' }) // delivered; older than the cursor from here on
     await w.flush()
     fail = true
@@ -708,7 +710,7 @@ describe('catch-up for DMs and files', () => {
     dirs.push(dir)
     const sent: string[] = []
     const openDms: ConversationConfig = view(DMS('["role:anyone"]'), { maxConversations: 1000 })
-    const w = new ConversationTable({ now: () => now, file: join(dir, 'w.json'), log: () => {}, config: () => openDms, deliver: async (_t, msg) => { sent.push(msg); return { ok: true } } })
+    const w = new ConversationTable({ now: () => now, file: join(dir, 'w.json'), log: () => {}, config: () => openDms, deliver: async (_t, msg) => { sent.push(msg); return LANDED } })
     w.handle({ channel: CH, ts: '1792999000.000001', user: 'UA', text: 'chat' })
     const dms = Array.from({ length: 600 }, (_, i) => ({ channel: `D0GAP${String(i).padStart(4, '0')}`, user: 'UA' }))
     const hist: Record<string, RawMessage[]> = {}
@@ -795,7 +797,7 @@ describe('catch-up never passes over a gap', () => {
     const alerts: string[] = []
     const dir = mkdtempSync(join(tmpdir(), 'slack-catchup-'))
     dirs.push(dir)
-    const w = new ConversationTable({ now: () => 1_793_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => cfg, alert: t => alerts.push(t), deliver: async () => ({ ok: true }) })
+    const w = new ConversationTable({ now: () => 1_793_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => cfg, alert: t => alerts.push(t), deliver: async () => LANDED })
     w.handle({ channel: CH, ts: '1000.000001', user: 'UA', text: 'chat' })
     const hist: RawMessage[] = Array.from({ length: 1001 }, (_, i) => ({ ts: `${1001 + i}.000001`, user: 'UA', text: 'busy' }))
     const api: SlackApi = {
@@ -850,7 +852,7 @@ describe("a thread read with the operator's user token (the bot isn't in its cha
     const alerts: { text: string; to?: string }[] = []
     const dir = mkdtempSync(join(tmpdir(), 'slack-catchup-'))
     dirs.push(dir)
-    const w = new ConversationTable({ now: () => 1_793_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => cfg, deliver: async () => ({ ok: true }), alert: (text, to) => alerts.push({ text, to }) })
+    const w = new ConversationTable({ now: () => 1_793_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => cfg, deliver: async () => LANDED, alert: (text, to) => alerts.push({ text, to }) })
     w.bind('C0ELSE', '1792999000.000001', SESSION, 'tool')
     w.get('C0ELSE', '1792999000.000001')!.owed = ['1792999000.000002']
     const api: SlackApi = { history: async () => ({ messages: [] }), replies: async () => { throw new Error('An API error occurred: not_in_channel') } }
@@ -867,7 +869,7 @@ test("a specialist's conversations in a channel no token can read are all let go
   const alerts: { text: string; to?: string }[] = []
   const dir = mkdtempSync(join(tmpdir(), 'slack-catchup-'))
   dirs.push(dir)
-  const w = new ConversationTable({ now: () => 1_793_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => cfg, deliver: async () => ({ ok: true }), alert: (text, to) => alerts.push({ text, to }) })
+  const w = new ConversationTable({ now: () => 1_793_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => cfg, deliver: async () => LANDED, alert: (text, to) => alerts.push({ text, to }) })
   // A channel no specialist listens on (catch-up reads no history there): bound by the operator, or a home post.
   w.bind('C0LEFT', '1500.000001', 'helper', 'cli')
   w.bind('C0LEFT', '1600.000001', 'helper', 'cli')
@@ -887,7 +889,7 @@ test("a deleted thread a specialist only followed, with nothing lost, is let go 
   const alerts: string[] = []
   const dir = mkdtempSync(join(tmpdir(), 'slack-catchup-'))
   dirs.push(dir)
-  const w = new ConversationTable({ now: () => 1_793_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => cfg, deliver: async () => ({ ok: true }), alert: t => alerts.push(t) })
+  const w = new ConversationTable({ now: () => 1_793_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => cfg, deliver: async () => LANDED, alert: t => alerts.push(t) })
   w.bind('C0LEFT', '1500.000001', 'helper', 'cli')
   const api: SlackApi = { history: async () => ({ messages: [] }), replies: async () => { throw new Error('An API error occurred: thread_not_found') } }
   await catchUp(w, api, cfg, opts({ deep: true }))
@@ -900,7 +902,7 @@ test("a refused operator token skips the thread and keeps it: the token is at fa
   const logs: string[] = []
   const dir = mkdtempSync(join(tmpdir(), 'slack-catchup-'))
   dirs.push(dir)
-  const w = new ConversationTable({ now: () => 1_793_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => cfg, deliver: async () => ({ ok: true }), alert: t => alerts.push(t) })
+  const w = new ConversationTable({ now: () => 1_793_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => cfg, deliver: async () => LANDED, alert: t => alerts.push(t) })
   w.bind('C0ELSE', '1500.000001', '1552619225032425525', 'tool')
   w.bind('C0ELSE', '1600.000001', '1552619225032425525', 'tool')
   const api: SlackApi = { history: async () => ({ messages: [] }), replies: async () => { throw new Error("the operator's Slack token was refused (An API error occurred: token_revoked)") } }

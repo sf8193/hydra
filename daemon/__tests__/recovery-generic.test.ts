@@ -20,7 +20,7 @@ function dead(sessionId: string, engine: 'claude' | 'codex'): void {
     sessionId, topic: 't', threadId: `th-${sessionId}`, createdAt: 1, lastActive: 1, tmuxName: sessionId,
     listening: false, sessionType: 'thread_owner', engine, adapter: engines[engine], deadAt: 1,
     // A worktree that can't be reattached ends recoverOne before any spawn.
-    worktreeRepo: '/nonexistent/rg-repo', worktreePath: `/nonexistent/rg-wt-${sessionId}`, worktreeBranch: 'wt/none',
+    worktree: { repo: '/nonexistent/rg-repo', path: `/nonexistent/rg-wt-${sessionId}`, branch: 'wt/none' },
   } as SessionInfo
   registry.set(sessionId, info)
   threadRegistry.set(info.threadId, { threadId: info.threadId, topic: 't', respawnCount: 0, createdAt: 1, lastActive: 1, totalMessages: 0, sessionHistory: [] } as any)
@@ -146,7 +146,7 @@ test('an extra pass that finds a recovery in progress says so, and where its rec
   try {
     dead('rg-busy', 'claude')
     const info = registry.get('rg-busy')!
-    delete info.worktreeRepo; delete info.worktreePath; delete info.worktreeBranch   // so recoverOne reaches the (held) resume
+    delete info.worktree   // so recoverOne reaches the (held) resume
     t.tmux([])
     const first = autoRecoverAfterBoot()
     for (let i = 0; i < 100 && !t.lines().some(l => l.includes('to revive')); i++) await Bun.sleep(10)

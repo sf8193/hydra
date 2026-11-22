@@ -3,8 +3,10 @@ import { describe, test, expect, afterEach } from 'bun:test'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { ConversationTable, type ConversationConfig, type ConversationDeps, type DeliverResult, type SlackActions, type SlackReactionEvent } from '../watch.js'
+import { ConversationTable, type ConversationConfig, type ConversationDeps, type SlackActions, type SlackReactionEvent } from '../watch.js'
 import { BOT, oneListener, alsoHeard, view, sharedChannel, SALES_BOT, type ViewOver } from './slack-config.js'
+import { LANDED, refused } from './outcomes.js'
+import type { DeliverOutcome } from '../../../specialists/targets.js'
 
 const CH = 'C0FOOD'
 const OWN = '3000.000001'      // the bot's own top-level post
@@ -15,7 +17,7 @@ const cfg = (mode: string, over: ViewOver = {}): ConversationConfig => view(oneL
 const dirs: string[] = []
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
 
-function setup(config: ConversationConfig, deliver?: (key: string) => DeliverResult, guard?: ConversationDeps['guard']) {
+function setup(config: ConversationConfig, deliver?: (key: string) => DeliverOutcome, guard?: ConversationDeps['guard']) {
   const dir = mkdtempSync(join(tmpdir(), 'slack-reactions-'))
   dirs.push(dir)
   const file = join(dir, 'slack-watches.json')
@@ -26,7 +28,7 @@ function setup(config: ConversationConfig, deliver?: (key: string) => DeliverRes
   const make = () => {
     const w = new ConversationTable({
       now: () => 1_000_000_000_000, file, log: l => logs.push(l), config: () => cur, guard,
-      deliver: async ({ to }, msg, key) => { sent.push({ to, msg, key }); return deliver ? deliver(key) : { ok: true } },
+      deliver: async ({ to }, msg, key) => { sent.push({ to, msg, key }); return deliver ? deliver(key) : LANDED },
     })
     const actions: SlackActions = { download: async () => {}, react: async (c, ts, name) => { reacted.push(`${c}:${ts}:${name}`) } }
     w.setSlackActions(actions)
@@ -114,7 +116,7 @@ describe('inbound reactions', () => {
 
   test('a delivery that failed is tried again when the same reaction comes again', async () => {
     let fail = true
-    const { w, sent } = setup(cfg('bot-messages'), () => fail ? { ok: false, error: 'down' } : { ok: true })
+    const { w, sent } = setup(cfg('bot-messages'), () => fail ? refused('down') : LANDED)
     await w.flush(); sent.length = 0
     expect(w.handleReaction(react())).toBe('accepted')
     await w.flush()
@@ -143,7 +145,7 @@ describe('inbound reactions', () => {
     dirs.push(dir)
     let now = 1_000_000_000_000
     const sent: string[] = []
-    const w = new ConversationTable({ now: () => now, file: join(dir, 'w.json'), log: () => {}, config: app => app === 'sales' ? sales : dflt, deliver: async ({ to }) => { sent.push(to); return { ok: true } } })
+    const w = new ConversationTable({ now: () => now, file: join(dir, 'w.json'), log: () => {}, config: app => app === 'sales' ? sales : dflt, deliver: async ({ to }) => { sent.push(to); return LANDED } })
     w.handle({ channel: CH, ts: OWN, user: BOT, text: 'post' })
     now += 1000
     w.handle({ app: 'sales', channel: CH, ts: OWN, user: SALES_BOT, text: 'post' })

@@ -157,7 +157,7 @@ test('a session killed during the hook does not hand off', async () => {
 test('a relative letter path resolves against the session dir, for the daemon and the hook alike', async () => {
   const out = join(dir, 'arg')
   writeHook(`echo "$1|$HYDRA_CWD|$(pwd -P)" > ${out}`)
-  info.worktreePath = dir
+  info.worktree = { repo: '/repo', path: dir, branch: 'wt/x' }
   expect((await executeTool('handoff', { path: 'HANDOFF.md' }, id)).isError).toBeFalsy()
   const [arg, cwdVar, pwd] = readFileSync(out, 'utf8').trim().split('|')
   expect(arg).toBe(letter)
@@ -170,7 +170,7 @@ test('a relative letter path resolves against the session dir, for the daemon an
 test('a session dir that is gone: the hook runs from the temp dir with HYDRA_CWD empty', async () => {
   const out = join(dir, 'cwd')
   writeHook(`echo "[$HYDRA_CWD]|$(pwd -P)" > ${out}`)
-  info.worktreePath = join(dir, 'gone')
+  info.worktree = { repo: '/repo', path: join(dir, 'gone'), branch: 'wt/x' }
   await runPreHandoffHook(info, letter)
   const [cwdVar, pwd] = readFileSync(out, 'utf8').trim().split('|')
   expect(cwdVar).toBe('[]')

@@ -122,7 +122,7 @@ export class AgyEngine implements EngineAdapter {
     } catch (err) {
       return { status: 'rejected', retryable: true, reason: `tmux paste into ${info.tmuxName} failed: ${err instanceof Error ? err.message : err}` }
     } finally { rmSync(file, { force: true }) }
-    // The text is in agy's input now: a failed Enter must not be retried as a whole message, or it would be pasted twice. A caller retries an `unknown` (landing.ts), so these are non-retryable rejections.
+    // The text is in agy's input now: a failed Enter must not be retried as a whole message, or it would be pasted twice. A caller retries an `unknown` (targets.ts `outcomeOf`), so these are non-retryable rejections.
     try {
       await Bun.sleep(150)   // the pane takes the paste before the Enter that sends it
       tmuxSync(['send-keys', '-t', info.tmuxName, 'Enter'])

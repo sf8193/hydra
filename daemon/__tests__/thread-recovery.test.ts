@@ -308,7 +308,7 @@ describe('resume stamps a gone live record dead (Z5)', () => {
   test('H1: an orphan torn down for a resume still hands over its worktree and children, and keeps its thread\'s PR watches', async () => {
     _setDaemonStartedAtForTesting(0)
     const wt = mkdtempSync(join(tmpdir(), 'orphan-wt-'))
-    const info = goneLive('claude', { claudeSessionId: 'C-h1', worktreeRepo: '/repo', worktreePath: wt, worktreeBranch: 'wt/orph' })
+    const info = goneLive('claude', { claudeSessionId: 'C-h1', worktree: { repo: '/repo', path: wt, branch: 'wt/orph' } })
     tmux.alive(info.tmuxName)
     seedPrWatch('https://github.com/o/r/pull/11', THREAD)
     registry.set('h1-child', { sessionId: 'h1-child', tmuxName: 'h1c', topic: 't', threadId: 'h1-child-t', createdAt: 2, lastActive: 2, listening: false,
@@ -656,7 +656,7 @@ describe('resume through the one cascade', () => {
     const wt = mkdtempSync(join(tmpdir(), 'reaped-wt-'))
     try {
       const e = seedHistory({ claudeSessionId: 'C-reap', endedAt: undefined }, {
-        claudeSessionId: 'C-reap', deadAt: undefined, worktreeRepo: '/repo', worktreePath: wt, worktreeBranch: 'wt/reaped',
+        claudeSessionId: 'C-reap', deadAt: undefined, worktree: { repo: '/repo', path: wt, branch: 'wt/reaped' },
         launchCwd: '/tmp/fork-cwd', disallowedTools: ['Edit'],
       })
       registry.setThread(THREAD, e.sessionId)
@@ -681,7 +681,7 @@ describe('resume through the one cascade', () => {
   test('a resume keeps the dead session\'s worktree when it is still on disk', async () => {
     const wt = mkdtempSync(join(tmpdir(), 'resume-wt-'))
     try {
-      seedHistory({ claudeSessionId: 'C-1' }, { claudeSessionId: 'C-1', worktreeRepo: '/repo', worktreePath: wt, worktreeBranch: 'wt/old' })
+      seedHistory({ claudeSessionId: 'C-1' }, { claudeSessionId: 'C-1', worktree: { repo: '/repo', path: wt, branch: 'wt/old' } })
       await handleResumeIntercept(msg())
       expect(calls[0].args[0]).toMatchObject({ preserveWorktree: true, worktree: { repo: '/repo', path: wt, branch: 'wt/old' } })
     } finally { rmSync(wt, { recursive: true, force: true }) }

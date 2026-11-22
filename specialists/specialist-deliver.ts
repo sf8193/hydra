@@ -12,16 +12,11 @@ import { safeSend } from '../infra/util.js'
 import { endForFreshStart } from '../app/session-lifecycle.js'
 import { currentHydraConfig } from '../infra/hydra-config.js'
 import { declaredSpecialist } from '../config/types.js'
-import { conversationRecipe, deliverToTarget } from './targets.js'
-
-export type SpecialistDeliverResult =
-  | { ok: true; data: unknown }
-  // `permanent`: retrying the same message cannot succeed (it is too large). Callers drop it instead of retrying.
-  | { ok: false; error: string; data?: unknown; exitCode?: number; permanent?: true }
+import { conversationRecipe } from './targets.js'
 
 /** A refusal that carries the CLI exit code a caller should see. Nothing was started. */
 export class SpecialistError extends Error {
-  constructor(message: string, readonly exitCode?: number) { super(message) }
+  constructor(message: string, readonly exit?: number) { super(message) }
 }
 
 /** Test seam: the thread check (recovery.ts's). The spawn is `_setRecoveryDeps`, the clock recovery-backoff.ts's. */
@@ -190,20 +185,5 @@ export function specialistStatus(name: string): { occupant?: { session: string; 
   return {
     ...(live && { occupant: { session: live.tmuxName, connected: transport.has(live.sessionId) } }),
     ...(b && wait > 0 && { refillBackoff: { failures: b.failures, retryInSec: wait, lastError: b.lastError } }),
-  }
-}
-
-/**
- * `hydra deliver --specialist <name>` and the Slack connector: the specialist's target, in the shape those callers read.
- */
-export async function deliverToSpecialist(p: { specialist: string; message: string; initiator?: string; idempotencyKey?: string; source?: string }): Promise<SpecialistDeliverResult> {
-  const r = await deliverToTarget({ to: p.specialist }, p.message, {
-    initiator: p.initiator ?? 'unknown', ...(p.idempotencyKey && { idempotencyKey: p.idempotencyKey }), ...(p.source && { source: p.source }),
-  })
-  if (!r.ok) return { ok: false, error: r.reason, exitCode: r.exit, ...(r.permanent && { permanent: true }) }
-  if (r.duplicate) return { ok: false, error: `already delivered with key "${p.idempotencyKey}"`, exitCode: 2 }
-  return {
-    ok: true,
-    data: { status: r.status, proof: r.proof, sessionId: r.sessionId, sessionName: r.sessionName, threadId: r.threadId, specialist: p.specialist, spawned: r.revived },
   }
 }

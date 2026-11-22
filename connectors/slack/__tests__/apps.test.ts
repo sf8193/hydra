@@ -15,6 +15,7 @@ import { SLACK_APP_NEEDS } from '../app.js'
 import { STATE_DIR } from '../../../infra/config.js'
 import { eventsDir } from '../../../shared/events.js'
 import { readEvents } from '../../../cli/events.js'
+import { LANDED } from './outcomes.js'
 
 const CH = 'C0FOOD'
 const OTHER = 'C0OTHER'
@@ -58,7 +59,7 @@ function setup(toml: string, over: { members?: Record<string, string[]>; probeEr
     now: () => now, file, filesDir: join(dir, 'files'), log: l => logs.push(l), config: app => byId[app ?? 'default']?.view() ?? null, apps: () => h.slackApps,
     alert: (t, to) => { alerts.push(t); alertTo.push(to) },
     ...(over.guard && { guard: async (_g, input) => over.guard!(input.target) }),
-    deliver: async (t, msg, key) => { sent.push({ to: t.to, ...(t.conversation && { conversation: t.conversation }), key, msg }); return { ok: true } },
+    deliver: async (t, msg, key) => { sent.push({ to: t.to, ...(t.conversation && { conversation: t.conversation }), key, msg }); return LANDED },
   })
   const shared = new ConnectedApps({ apps: () => h.slackApps, now: () => now, log: l => logs.push(l), alert: (t, app) => { alerts.push(t); alertApps.push(app) } })
   if (over.seed) shared.seedIdentities(over.seed)
@@ -633,7 +634,7 @@ describe('what is stored', () => {
     const file = join(dir, 'w.json')
     const old = { entries: [{ channel: CH, threadTs: '5.000001', specialist: 'crm', createdAt: 1, lastEventAt: 1 }], channelCursors: { [CH]: '9.000001' } }
     writeFileSync(file, JSON.stringify(old))
-    const w = new ConversationTable({ now: () => 5, file, log: () => {}, config: () => null, deliver: async () => ({ ok: true }) })
+    const w = new ConversationTable({ now: () => 5, file, log: () => {}, config: () => null, deliver: async () => LANDED })
     expect(w.get(CH, '5.000001')?.specialist).toBe('crm')
     expect(w.get(CH, '5.000001', 'default')?.specialist).toBe('crm')
     expect(w.get(CH, '5.000001', SALES)).toBeUndefined()
@@ -647,7 +648,7 @@ describe('what is stored', () => {
     expect(stored.entries.find((e: { specialist: string }) => e.specialist === 'crm' && true)).not.toHaveProperty('app')
     expect(stored.entries.filter((e: { app?: string }) => e.app === SALES)).toHaveLength(1)
     // And it loads back as it was.
-    const again = new ConversationTable({ now: () => 5, file, log: () => {}, config: () => null, deliver: async () => ({ ok: true }) })
+    const again = new ConversationTable({ now: () => 5, file, log: () => {}, config: () => null, deliver: async () => LANDED })
     expect(again.get(CH, '6.000001', SALES)?.specialist).toBe('deals')
     expect(again.get(CH, '6.000001')?.specialist).toBe('crm')
   })

@@ -274,8 +274,8 @@ describe('killSession keepRecord: ended the way a crash leaves it', () => {
   test('the worktree is kept, even with forceWorktreeCleanup; a plain kill destroys it', async () => {
     const kept = worktree(), gone = worktree()
     try {
-      const a = seed('claude', { claudeSessionId: SID, worktreeRepo: kept.repo, worktreePath: kept.path, worktreeBranch: kept.branch, forceWorktreeCleanup: true })
-      const b = seed('claude', { claudeSessionId: SID, worktreeRepo: gone.repo, worktreePath: gone.path, worktreeBranch: gone.branch, forceWorktreeCleanup: true })
+      const a = seed('claude', { claudeSessionId: SID, worktree: { repo: kept.repo, path: kept.path, branch: kept.branch }, forceWorktreeCleanup: true })
+      const b = seed('claude', { claudeSessionId: SID, worktree: { repo: gone.repo, path: gone.path, branch: gone.branch }, forceWorktreeCleanup: true })
       await killSession(a, 'idle 7d, ended', { keepRecord: true })
       await killSession(b, 'session ended')
       for (let i = 0; i < 50 && existsSync(gone.path); i++) await Bun.sleep(100)

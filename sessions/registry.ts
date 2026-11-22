@@ -58,9 +58,8 @@ export type SessionInfo = {
   lastReplyId?: string
   lastReplyAt?: number
   lastUserMessageAt?: number
-  worktreeRepo?: string
-  worktreePath?: string
-  worktreeBranch?: string
+  /** The git worktree the session works in: present whole or not at all (see SessionWorktree). */
+  worktree?: SessionWorktree
   handoffSelection?: { model: string; engine: ProviderId }  // set by `handoff <model>`, read by the handoff tool; dies with the record
   handoffArtifact?: string  // the letter the latest handoff request asked for; lets the automatic retry see a newer request
   handoffNote?: { text: string; artifact: string }  // set by `handoff: <note>`: the requester's words, for the successor of that request's letter only
@@ -76,7 +75,7 @@ export type SessionInfo = {
   idleDeadline?: number    // epoch ms; idle-limit nudge fires here, reap at +grace (persisted so restarts re-arm with what was left)
   forceWorktreeCleanup?: boolean  // see SpawnOpts
   suppressDeathMessage?: boolean // skip "died" notification to parent on kill
-  suppressAutoRecover?: boolean // skip the automatic boot recovery batch (e.g. a dead record whose worktree is gone); manual `recover` still works
+  suppressAutoRecover?: boolean // skip the automatic boot recovery batch (e.g. a dead record whose worktree is gone); a manual `recover` asks again
   budgetDeadline?: number  // epoch ms; phase-budget nudge fires here, reap at +grace (persisted so restarts re-arm)
   spawnAnnounceId?: string // message ID of the spawn announce line — edited on death to show completion
   spawnLogPath?: string    // black-box recorder: tmux pane output captured via `pipe-pane`, read on crash
@@ -108,6 +107,36 @@ export type SessionInfo = {
   // clearProtocolOverrides is the canonical cleanup path.
   toolDescriptions?: Partial<Record<ToolName, string>>
   toolInputSchemas?: Partial<Record<ToolName, object>>
+}
+
+/**
+ * A session's own git worktree: the repository it was cut from, the folder, and the branch checked out there. The three are
+ * known together or not at all: the branch is the one the worktree was created on, never derived from a session's name
+ * (a revived session keeps its predecessor's branch under a new name).
+ */
+export type SessionWorktree = { repo: string; path: string; branch: string }
+
+/** The fields a build before SessionWorktree stored. Written beside `worktree` for one release, so a rollback finds the worktree. */
+type LegacyWorktreeFields = { worktreeRepo?: string; worktreePath?: string; worktreeBranch?: string }
+
+/**
+ * Load migration: a record a build before SessionWorktree wrote carries three loose fields. A record with repo and path and no
+ * branch predates stored branches, when every worktree branch was `wt/<session name>`: that is filled in here, the one place a
+ * branch is ever derived. Mutates the raw record; returns it.
+ */
+export function migrateWorktree<T extends LegacyWorktreeFields & { worktree?: SessionWorktree; tmuxName: string }>(raw: T): T {
+  const { worktreeRepo: repo, worktreePath: path, worktreeBranch: branch } = raw
+  if (!raw.worktree && repo && path) raw.worktree = { repo, path, branch: branch ?? `wt/${raw.tmuxName}` }
+  delete raw.worktreeRepo
+  delete raw.worktreePath
+  delete raw.worktreeBranch
+  return raw
+}
+
+/** The record as persisted: SessionWorktree, and the legacy fields beside it so a build from before it still finds the worktree. */
+export function withLegacyWorktree<T extends { worktree?: SessionWorktree }>(rec: T): T & LegacyWorktreeFields {
+  const w = rec.worktree
+  return w ? { ...rec, worktreeRepo: w.repo, worktreePath: w.path, worktreeBranch: w.branch } : rec
 }
 
 export function addCapability(info: SessionInfo, cap: Capability): void {
@@ -303,7 +332,7 @@ export type SpawnOpts = {
   worktree?: string           // git repo subdirectory to create a worktree from (structural alternative to topic prefix)
   worktreeBranchSuffix?: string // appended to `wt/<name>` to avoid branch collisions between same-named builders
   preserveWorktree?: boolean  // recovery: reuse the dead session's on-disk worktree instead of destroying+recreating it (keeps unpushed work + lets --resume find the transcript)
-  reuseWorktree?: { repo: string; path: string; branch: string }  // recovery: explicit worktree to adopt in place — survives even after the dead record it came from is deleted (resume-fail fallback tiers)
+  reuseWorktree?: SessionWorktree  // recovery: explicit worktree to adopt in place — survives even after the dead record it came from is deleted (resume-fail fallback tiers)
   carryOver?: { artifacts?: string[]; contextLinks?: string[]; description?: string; predecessor?: Predecessor; launchCwd?: string; disallowedTools?: string[]; parentId?: string | null; initiator?: string; policy?: LaunchPolicy; kickoffHash?: string; sessionName?: string }  // recovery: deliverables/description (and a handoff successor's predecessor, a fork's launch dir and blocked tools) to re-apply — carried explicitly so fallback tiers keep them after the dead record is gone
 }
 
@@ -422,7 +451,7 @@ export class SessionRegistry {
 
   persist(): void {
     try {
-      const data = [...this.sessions.values()].map(({ adapter, ...rest }) => rest)
+      const data = [...this.sessions.values()].map(({ adapter, ...rest }) => withLegacyWorktree(rest))
       atomicWriteFileSync(this.sessionsFile, JSON.stringify(data, null, 2) + '\n')
     } catch (err) {
       process.stderr.write(`daemon: failed to persist sessions: ${err}\n`)
@@ -440,7 +469,7 @@ export class SessionRegistry {
     // stale-cleanup `git branch -D wt/<name>` destroy that preserved branch and any
     // unpushed commits on it.
     for (const s of others) {
-      if (s.worktreeBranch?.startsWith('wt/')) used.add(baseNameFromBranch(s.worktreeBranch))
+      if (s.worktree?.branch.startsWith('wt/')) used.add(baseNameFromBranch(s.worktree.branch))
       // A resumed Codex session keeps its predecessor's CODEX_HOME; a new spawn named
       // after that home would restart the owner's app-server.
       if (s.codexHomeName) used.add(s.codexHomeName)
@@ -533,6 +562,8 @@ export class SessionRegistry {
           raw.toolDescriptions = raw.toolDescriptionOverrides
           delete raw.toolDescriptionOverrides
         }
+
+        migrateWorktree(raw)
 
         // Backfill explicit engine for pre-adapter sessions
         if (!raw.engine) raw.engine = 'claude'

@@ -6,6 +6,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { ConversationTable, type ConversationConfig } from '../watch.js'
 import { BOT, SALES_BOT, oneListener, alsoHeard, sharedChannel, view } from './slack-config.js'
+import { LANDED } from './outcomes.js'
 
 const CH = 'C0FOOD'
 const DM = 'D0BOT1'
@@ -43,7 +44,7 @@ function holder(c: Case) {
   let sent = 0
   const w = new ConversationTable({
     now: () => now, file: join(dir, 'w.json'), log: () => {}, config: app => byApp[app ?? 'default'],
-    deliver: async () => { sent++; return { ok: true } },
+    deliver: async () => { sent++; return LANDED },
     guard: async (_g, input) => input.person === null ? { verdict: 'drop' } : { verdict: 'deliver' },
   })
   if (dm) {
