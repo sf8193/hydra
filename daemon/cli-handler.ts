@@ -23,7 +23,7 @@ import { deliverToTarget, deliverVia, sessionByName, toSession, toThread, type D
 import { readTarget, spelled } from '../shared/target-kind.js'
 import { deliverResult, type DeliverResult } from '../shared/exit-codes.js'
 import { gateway } from './config.js'
-import { loadAccess, operatorIds } from './access.js'
+import { operatorIds } from './access.js'
 import { on } from './event-bus.js'
 import { getCpuVitals } from './cpu-watch.js'
 import { formatCpuSummary } from './cpu-spin.js'
@@ -153,8 +153,7 @@ async function handleSpawn(req: CLIRequest): Promise<CLIResponse> {
   updateIdempotency(idempotencyKey, { status: 'spawned', sessionId: result.sessionId })
 
   if (!quiet) {
-    const access = loadAccess()
-    const operator = operatorIds(access)
+    const operator = operatorIds()
     if (operator.length > 0) {
       const mentions = operator.map(id => `<@${id}>`).join(' ')
       void gateway.send(result.threadId, `${mentions} spawned via CLI by **${initiator}**`).catch(() => {})

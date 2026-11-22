@@ -12,6 +12,7 @@ import { registry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { safeEdit, safeSend } from '../util.js'
 import type { Outbound } from '../../gateways/gateway.js'
+import { setHydra } from './test-hydra.js'
 
 const DIR = mkdtempSync(join(tmpdir(), 'outbound-test-'))
 const DRAWN = join(DIR, 'drawn.png')
@@ -19,7 +20,7 @@ const OWN = join(DIR, 'own.txt')
 writeFileSync(DRAWN, 'png')
 writeFileSync(OWN, 'own')
 
-const sends: { channel: string; text: string; files?: string[] }[] = []
+const sends: { channel: string; text: string; files?: string[]; replyTo?: string }[] = []
 const shapes: { text: string; room: number }[] = []
 const events: string[] = []
 let spies: { mockRestore(): void }[] = []
@@ -45,11 +46,11 @@ beforeEach(() => {
   }
   ;(transport as any).deliver = async () => ({ status: 'accepted' })
   spies = [
-    spyOn(gateway, 'send').mockImplementation((async (channel: string, text: string, opts?: { files?: string[] }) => {
-      sends.push({ channel, text, ...(opts?.files ? { files: opts.files } : {}) }); events.push('sent'); return { id: 'm1', channelId: channel }
+    spyOn(gateway, 'send').mockImplementation((async (channel: string, text: string, opts?: { files?: string[]; replyTo?: string }) => {
+      sends.push({ channel, text, ...(opts?.files ? { files: opts.files } : {}), ...(opts?.replyTo ? { replyTo: opts.replyTo } : {}) }); events.push('sent'); return { id: 'm1', channelId: channel }
     }) as any),
     spyOn(gateway, 'fetchChannel').mockImplementation((async (id: string) => ({ id, isThread: true, parentId: 'ob-parent' })) as any),
-    spyOn(access, 'loadAccess').mockImplementation((() => ({ allowFrom: ['u1'], groups: { 'ob-parent': {} }, pending: {} })) as any),
+    setHydra({ operators: ['u1'], channels: { 'ob-parent': {} } }),
   ]
   session('ob-owner', 'thread_owner')
   session('ob-restricted', 'thread_owner', { specialist: 'ops', restricted: true, id: 'x' })
@@ -78,6 +79,26 @@ describe('bridge reply', () => {
     const res = await executeTool('reply', { chat_id: 'ob-restricted-thread', text: 'TABLE' }, 'ob-restricted')
     expect(res.isError).toBeUndefined()
     expect(sends).toEqual([{ channel: 'ob-restricted-thread', text: '', files: [DRAWN] }])
+  })
+
+  test('a long reply goes out in chunks no longer than the platform allows, answering the message only on the first', async () => {
+    const text = 'x'.repeat(gateway.maxMessageLength * 2 + 5)
+    const res = await executeTool('reply', { chat_id: 'ob-owner-thread', text, reply_to: 'orig' }, 'ob-owner')
+    expect(res.isError).toBeUndefined()
+    expect(sends).toHaveLength(3)
+    expect(sends.map(x => x.replyTo)).toEqual(['orig', undefined, undefined])
+    for (const x of sends) expect(x.text.length).toBeLessThanOrEqual(gateway.maxMessageLength)
+  })
+
+  test('a reply to a channel the daemon is not in, or to a DM that is not the operator\'s, is refused', async () => {
+    const fetch = spies[1] as any
+    fetch.mockImplementation((async (id: string) => ({ id, isThread: false, isDM: false, parentId: null })) as any)
+    expect((await executeTool('reply', { chat_id: 'elsewhere', text: 'hi' }, 'ob-owner')).isError).toBe(true)
+    fetch.mockImplementation((async (id: string) => ({ id, isThread: false, isDM: true, recipientId: 'stranger' })) as any)
+    expect((await executeTool('reply', { chat_id: 'dm-1', text: 'hi' }, 'ob-owner')).isError).toBe(true)
+    fetch.mockImplementation((async (id: string) => ({ id, isThread: false, isDM: true, recipientId: 'u1' })) as any)
+    expect((await executeTool('reply', { chat_id: 'dm-2', text: 'hi' }, 'ob-owner')).isError).toBeUndefined()
+    expect(sends.map(x => x.channel)).toEqual(['dm-2'])
   })
 
   test('a restricted session still may not attach files of its own', async () => {

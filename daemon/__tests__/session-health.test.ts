@@ -14,7 +14,8 @@ import { pollSessionsOnce } from '../session-health.js'
 import { registry, threadRegistry } from '../sessions.js'
 import type { SessionInfo } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
-import { gateway, ACCESS_FILE, envPercent } from '../config.js'
+import { gateway, envPercent } from '../config.js'
+import { setHydra } from './test-hydra.js'
 import { noteMainChannel } from '../main-session.js'
 import { ORPHAN_GRACE_MS, _setDaemonStartedAtForTesting, occupancy } from '../session-reachability.js'
 import { createResumeDetector, installResumeDetector } from '../../shared/resume.js'
@@ -223,7 +224,7 @@ describe('orphan detection', () => {
 
     afterEach(() => {
       ;(gateway as any).sendDM = origSendDM
-      rmSync(ACCESS_FILE, { force: true })
+      _setHydraConfigForTesting(undefined)
     })
 
     const settle = () => new Promise(r => setTimeout(r, 0))
@@ -234,7 +235,7 @@ describe('orphan detection', () => {
     })
 
     test('one operator summary replaces the per-thread alerts', async () => {
-      writeFileSync(ACCESS_FILE, JSON.stringify({ allowFrom: ['U-op'] }))
+      setHydra({ operators: ['U-op'] })
       const [a, b, c, d] = seedOrphans(4)
       threadRegistry.get(a.threadId)!.threadUrl = 'https://chat/a'
       b.description = '  fixing the thing\r\nsecond line'
@@ -262,7 +263,7 @@ describe('orphan detection', () => {
     })
 
     test('a summary past the platform limit is split, not dropped', async () => {
-      writeFileSync(ACCESS_FILE, JSON.stringify({ allowFrom: ['U-op'] }))
+      setHydra({ operators: ['U-op'] })
       const orphans = seedOrphans(20)
       for (const info of orphans) {
         threadRegistry.get(info.threadId)!.threadUrl = `https://chat/${info.threadId}/${'x'.repeat(200)}`
@@ -279,7 +280,7 @@ describe('orphan detection', () => {
     })
 
     test('when no operator DM lands, each thread gets its own alert', async () => {
-      writeFileSync(ACCESS_FILE, JSON.stringify({ allowFrom: ['U-closed-1', 'U-closed-2'] }))
+      setHydra({ operators: ['U-closed-1', 'U-closed-2'] })
       const [a, b] = seedOrphans(2)
 
       pollSessionsOnce(NOW)
@@ -291,7 +292,7 @@ describe('orphan detection', () => {
     })
 
     test('the fallback skips sessions that reconnected, died or were replaced while the DMs were failing', async () => {
-      writeFileSync(ACCESS_FILE, JSON.stringify({ allowFrom: ['U-closed'] }))
+      setHydra({ operators: ['U-closed'] })
       const [reconnected, died, replaced, stillOrphaned] = seedOrphans(4)
 
       pollSessionsOnce(NOW)
@@ -312,7 +313,7 @@ describe('orphan detection', () => {
     })
 
     test('a DM that fails after a newer episode was alerted does not alert again', async () => {
-      writeFileSync(ACCESS_FILE, JSON.stringify({ allowFrom: ['U-slow'] }))
+      setHydra({ operators: ['U-slow'] })
       const [a] = seedOrphans(2)
 
       pollSessionsOnce(NOW)
@@ -328,7 +329,7 @@ describe('orphan detection', () => {
     })
 
     test('one recipient failing does not stop the others or trigger the fallback', async () => {
-      writeFileSync(ACCESS_FILE, JSON.stringify({ allowFrom: ['U-closed', 'U-op'] }))
+      setHydra({ operators: ['U-closed', 'U-op'] })
       const [a, b] = seedOrphans(2)
 
       pollSessionsOnce(NOW)

@@ -226,9 +226,8 @@ export class SlackGateway implements ChatGateway {
     // Publish Home tab when user opens it
     this.app.event('app_home_opened' as any, async ({ event }: any) => {
       this.touchHeartbeat()
-      const { loadAccess, operatorIds } = await import('../daemon/access.js')
-      const access = loadAccess()
-      if (!operatorIds(access).includes(event.user)) return
+      const { operatorIds } = await import('../daemon/access.js')
+      if (!operatorIds().includes(event.user)) return
       if (this.homeTabHandler) {
         this.homeTabHandler(event.user).catch((e: Error) =>
           process.stderr.write(`slack gateway: app_home_opened handler error: ${e}\n`),
@@ -240,8 +239,8 @@ export class SlackGateway implements ChatGateway {
       this.touchHeartbeat()
       await ack()
       if (!action?.value || !this.homeStatusHandler) return
-      const { loadAccess, operatorIds } = await import('../daemon/access.js')
-      const click = parseHomeStatusClick(String(action.action_id), action.value, body?.user?.id, operatorIds(loadAccess()))
+      const { operatorIds } = await import('../daemon/access.js')
+      const click = parseHomeStatusClick(String(action.action_id), action.value, body?.user?.id, operatorIds())
       if (!click) {
         process.stderr.write(`slack gateway: home status action rejected for user ${body?.user?.id ?? '(none)'}\n`)
         return
@@ -256,9 +255,8 @@ export class SlackGateway implements ChatGateway {
       await ack()
       const userId = body?.user?.id
       if (!userId) return
-      const { loadAccess, operatorIds } = await import('../daemon/access.js')
-      const access = loadAccess()
-      if (!operatorIds(access).includes(userId)) {
+      const { operatorIds } = await import('../daemon/access.js')
+      if (!operatorIds().includes(userId)) {
         process.stderr.write(`slack gateway: home:spawn rejected — user ${userId} is not the operator\n`)
         return
       }
@@ -271,14 +269,6 @@ export class SlackGateway implements ChatGateway {
 
 
 
-    // Auto-add channel to access groups when bot is invited
-    this.app.event('member_joined_channel', async ({ event }) => {
-      if (event.user === this._botUserId) {
-        const { autoAddGroup } = await import('../daemon/access.js')
-        autoAddGroup(event.channel)
-        process.stderr.write(`slack gateway: bot invited to channel ${event.channel}, auto-added to groups\n`)
-      }
-    })
     // Handle reaction_added for :hocho: message deletion
     this.app.event('reaction_added', async ({ event }) => {
       this.touchHeartbeat()

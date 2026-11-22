@@ -46,4 +46,6 @@ test('a delivered message gets the ack reaction from hydra.toml', async () => {
 test('a top-level message in a channel with thread_reply starts a thread', async () => {
   await say(false)
   expect(threads).toHaveLength(1)
+  // The thread auto-archives after a day.
+  expect(threads[0][2]).toBe(1440)
 })

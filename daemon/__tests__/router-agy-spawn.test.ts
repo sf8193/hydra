@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, expect, spyOn, test } from 'bun:test'
 import { gateway } from '../config.js'
 import * as access from '../access.js'
 import * as global from '../commands/global.js'
+import { setHydra } from './test-hydra.js'
 
 // The production router: `spawn neon: …` must reach handleSpawnIntercept with the agy model AND the agy engine.
 let handler: (msg: any) => Promise<void>
@@ -12,7 +13,7 @@ const spies: Array<{ mockRestore(): void }> = []
 beforeAll(async () => {
   spies.push(spyOn(gateway, 'onMessage').mockImplementation(((cb: any) => { handler = cb }) as any))
   spies.push(spyOn(gateway, 'send').mockImplementation((async (_c: string, text: string) => { sent.push(text); return { id: 'x' } }) as any))
-  spies.push(spyOn(access, 'loadAccess').mockImplementation((() => ({ allowFrom: ['u1'], groups: { c1: {} } })) as any))
+  spies.push(setHydra({ operators: ['u1'], channels: { c1: {} } }))
   spies.push(spyOn(global, 'handleSpawnIntercept').mockImplementation((async (...args: any[]) => { spawns.push(args) }) as any))
   await import('../router.js')
 })
@@ -26,14 +27,14 @@ test('spawn neon: topic starts an agy session on the aliased model', async () =>
   await say('spawn neon: fix the bug')
   expect(spawns).toHaveLength(1)
   expect(spawns[0].slice(1, 2)).toEqual(['fix the bug'])
-  expect(spawns[0].slice(3)).toEqual(['gemini-4-neon-high', 'agy'])
+  expect(spawns[0].slice(2)).toEqual(['gemini-4-neon-high', 'agy'])
 })
 
 test('spawn-wt neon: repo topic starts an agy session in a worktree', async () => {
   await say('spawn-wt neon: options_bot fix the tests')
   expect(spawns).toHaveLength(1)
   expect(spawns[0].slice(1, 2)).toEqual(['wt:options_bot fix the tests'])
-  expect(spawns[0].slice(3)).toEqual(['gemini-4-neon-high', 'agy'])
+  expect(spawns[0].slice(2)).toEqual(['gemini-4-neon-high', 'agy'])
 })
 
 test('a bare alias is told it needs a topic, and spawns nothing', async () => {
@@ -45,5 +46,5 @@ test('a bare alias is told it needs a topic, and spawns nothing', async () => {
 test('a Claude alias still starts a Claude session (no engine)', async () => {
   await say('spawn sonnet: fix the bug')
   expect(spawns).toHaveLength(1)
-  expect(spawns[0].slice(3)).toEqual(['sonnet'])
+  expect(spawns[0].slice(2)).toEqual(['sonnet'])
 })

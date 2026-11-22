@@ -60,7 +60,7 @@ import { emojiOfName } from './daemon/anchor-state.js'
 import { engines, resolveEngine } from './daemon/engines/instances.js'
 import { engineRecords } from './daemon/engines/boot.js'
 import { transport } from './daemon/bridge-transport.js'
-import { loadAccess, operatorIds, notifyOperator } from './daemon/access.js'
+import { operatorIds, notifyOperator } from './daemon/access.js'
 import { setupPermissionHandler } from './daemon/permission.js'
 import { socketServer, startBridgeServer } from './daemon/bridge-server.js'
 import { announceRestartComplete } from './daemon/commands/global.js'
@@ -274,8 +274,7 @@ function sendRecoveryReport(gapMs: number): void {
     `• Sessions: ${registry.size} total (${connected} connected, ${disconnected} disconnected)`,
     `• Queued messages: ${queuedMsgCount}`,
   ].join('\n')
-  const access = loadAccess()
-  for (const userId of operatorIds(access)) {
+  for (const userId of operatorIds()) {
     void gateway.sendDM(userId, report).catch(e =>
       process.stderr.write(`daemon: recovery report DM failed: ${e}\n`),
     )

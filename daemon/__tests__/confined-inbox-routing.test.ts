@@ -17,6 +17,7 @@ import { confinementIdFor } from '../restricted.js'
 import { buildNotificationPayload } from '../router.js'
 import { executeTool } from '../bridge-dispatch.js'
 import { noteDeclaredRestrictions } from '../tool-surface.js'
+import { setHydra } from './test-hydra.js'
 
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), 'ib-routing-')))
 const WORK = join(ROOT, 'work'), OTHER = join(ROOT, 'other'), OUT = join(ROOT, 'outside')
@@ -53,7 +54,7 @@ beforeEach(() => {
     }) as any),
     spyOn(gateway, 'getThreadStarterInfo').mockImplementation((async () => null) as any),
     spyOn(gateway, 'fetchChannel').mockImplementation((async (id: string) => ({ id, isThread: true, parentId: 'ib-parent' })) as any),
-    spyOn(access, 'loadAccess').mockImplementation((() => ({ allowFrom: ['u1'], groups: { 'ib-parent': {} }, pending: {} })) as any),
+    setHydra({ operators: ['u1'], channels: { 'ib-parent': {} } }),
   ]
   mk('ib-confined', { policy: policy(), verified: true })
   mk('ib-plain')

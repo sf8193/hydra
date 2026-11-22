@@ -1,46 +1,59 @@
-import { describe, test, expect } from 'bun:test'
+import { afterEach, describe, test, expect } from 'bun:test'
 import { resolveListenStatePure } from '../session-lifecycle.js'
+import { _setHydraConfigForTesting } from '../hydra-config.js'
+import { setHydra } from './test-hydra.js'
 
 process.stderr.write = (() => true) as any
+afterEach(() => _setHydraConfigForTesting(undefined))
 
+// hydra.toml's channel `listen` and `[gateways.<platform>] listen`, in the order a thread resolves them.
 describe('resolveListenStatePure', () => {
   test('listenOverride wins over everything', () => {
-    expect(resolveListenStatePure('ch1', { groups: { ch1: { defaultListen: false } }, defaultListen: false }, true)).toBe(true)
-    expect(resolveListenStatePure('ch1', { groups: { ch1: { defaultListen: true } }, defaultListen: true }, false)).toBe(false)
+    setHydra({ channels: { ch1: { listen: false } }, gate: { off: false, listen: false } })
+    expect(resolveListenStatePure('ch1', true)).toBe(true)
+    setHydra({ channels: { ch1: { listen: true } }, gate: { off: false, listen: true } })
+    expect(resolveListenStatePure('ch1', false)).toBe(false)
   })
 
-  test('channel group defaultListen applies when no override', () => {
-    expect(resolveListenStatePure('ch1', { groups: { ch1: { defaultListen: true } } })).toBe(true)
-    expect(resolveListenStatePure('ch1', { groups: { ch1: { defaultListen: false } } })).toBe(false)
+  test('channel listen applies when no override', () => {
+    setHydra({ channels: { ch1: { listen: true } } })
+    expect(resolveListenStatePure('ch1')).toBe(true)
+    setHydra({ channels: { ch1: { listen: false } } })
+    expect(resolveListenStatePure('ch1')).toBe(false)
   })
 
-  test('parent channel group applies when direct channelId misses', () => {
-    expect(resolveListenStatePure('thread-id', { groups: { 'parent-ch': { defaultListen: true } } }, undefined, 'parent-ch')).toBe(true)
+  test('parent channel applies when direct channelId misses', () => {
+    setHydra({ channels: { 'parent-ch': { listen: true } } })
+    expect(resolveListenStatePure('thread-id', undefined, 'parent-ch')).toBe(true)
   })
 
-  test('falls through to global defaultListen when no group matches', () => {
-    expect(resolveListenStatePure('ch1', { groups: {}, defaultListen: true })).toBe(true)
+  test('falls through to the gateway listen when no channel matches', () => {
+    setHydra({ gate: { off: false, listen: true } })
+    expect(resolveListenStatePure('ch1')).toBe(true)
   })
 
   test('defaults to false when nothing is configured', () => {
-    expect(resolveListenStatePure(undefined, { groups: {} })).toBe(false)
+    setHydra()
+    expect(resolveListenStatePure(undefined)).toBe(false)
   })
 
   test('respawn path: no channelId, parent from thread registry', () => {
-    expect(resolveListenStatePure(undefined, { groups: { 'parent-ch': { defaultListen: true } } }, undefined, 'parent-ch')).toBe(true)
+    setHydra({ channels: { 'parent-ch': { listen: true } } })
+    expect(resolveListenStatePure(undefined, undefined, 'parent-ch')).toBe(true)
   })
 
   test('recovery path: no channelId or parentChannelId, anchorChannelId from thread registry', () => {
-    expect(resolveListenStatePure(undefined, { groups: { 'anchor-ch': { defaultListen: true } } }, undefined, undefined, 'anchor-ch')).toBe(true)
+    setHydra({ channels: { 'anchor-ch': { listen: true } } })
+    expect(resolveListenStatePure(undefined, undefined, undefined, 'anchor-ch')).toBe(true)
   })
 
-  test('anchorChannelId is lowest priority in group lookup', () => {
-    const access = { groups: { 'parent-ch': { defaultListen: false }, 'anchor-ch': { defaultListen: true } } }
-    expect(resolveListenStatePure(undefined, access, undefined, 'parent-ch', 'anchor-ch')).toBe(false)
+  test('anchorChannelId is lowest priority in channel lookup', () => {
+    setHydra({ channels: { 'parent-ch': { listen: false }, 'anchor-ch': { listen: true } } })
+    expect(resolveListenStatePure(undefined, undefined, 'parent-ch', 'anchor-ch')).toBe(false)
   })
 
   test('full priority chain: channelId > parentChannelId > anchorChannelId', () => {
-    const access = { groups: { 'ch': { defaultListen: false }, 'parent-ch': { defaultListen: true }, 'anchor-ch': { defaultListen: true } } }
-    expect(resolveListenStatePure('ch', access, undefined, 'parent-ch', 'anchor-ch')).toBe(false)
+    setHydra({ channels: { ch: { listen: false }, 'parent-ch': { listen: true }, 'anchor-ch': { listen: true } } })
+    expect(resolveListenStatePure('ch', undefined, 'parent-ch', 'anchor-ch')).toBe(false)
   })
 })

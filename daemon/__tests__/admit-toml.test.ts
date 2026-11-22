@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
-import { ACCESS_FILE, gateway } from '../config.js'
+import { gateway } from '../config.js'
 import { admitTaggedChannel, channelAllowed, gate } from '../access.js'
 import { _setHydraConfigForTesting, hydraConfigPath, startHydraConfig, stopHydraConfig } from '../hydra-config.js'
 import { testLoadEnv } from '../../config/__tests__/load-env.js'
@@ -25,32 +25,32 @@ beforeEach(() => {
 })
 afterEach(() => {
   for (const s of spies.splice(0)) s.mockRestore()
-  _setHydraConfigForTesting(undefined); stopHydraConfig(); rmSync(hydraConfigPath(), { force: true }); rmSync(ACCESS_FILE, { force: true })
+  _setHydraConfigForTesting(undefined); stopHydraConfig(); rmSync(hydraConfigPath(), { force: true })
 })
 const start = (toml: string) => { writeFileSync(hydraConfigPath(), toml); startHydraConfig({ env: { ...testLoadEnv({ home: '/h', sessionNames: [] }), isDir: () => true } }) }
 
 describe('tag to admit, where hydra.toml governs', () => {
   test('the operator\'s tag writes the channel into hydra.toml, keeps the file\'s text, and the same message is then delivered', async () => {
     start(BASE)
-    expect(channelAllowed({ groups: {} }, msg())).toBe(false)
-    expect(await admitTaggedChannel({ groups: {} } as any, msg())).toBe(true)
+    expect(channelAllowed(msg())).toBe(false)
+    expect(await admitTaggedChannel(msg())).toBe(true)
     const text = readFileSync(hydraConfigPath(), 'utf8')
     expect(text.startsWith(BASE)).toBe(true)
     expect(text).toContain('[places."discord:300000000000000009".access]')
     expect(text).toContain('allow = ["op"]')
-    expect(channelAllowed({ groups: {} }, msg())).toBe(true)
+    expect(channelAllowed(msg())).toBe(true)
     expect((await gate(msg())).action).toBe('deliver')
-    expect(existsSync(ACCESS_FILE)).toBe(false)
+    expect(existsSync(join(dirname(hydraConfigPath()), 'access.json'))).toBe(false)
   })
   test('what is written is exactly: tag required, the operator only, session threads listen', async () => {
     start(BASE)
-    await admitTaggedChannel({ groups: {} } as any, msg())
+    await admitTaggedChannel(msg())
     expect(readFileSync(hydraConfigPath(), 'utf8').slice(BASE.length)).toBe('\n[places."discord:300000000000000009".access]\nmention = true\nallow = ["op"]\nlisten = true\n')
   })
   test('a hydra.toml that has gone missing is told as a refusal, not thrown', async () => {
     start(BASE)
     rmSync(hydraConfigPath())
-    expect(await admitTaggedChannel({ groups: {} } as any, msg())).toBe(false)
+    expect(await admitTaggedChannel(msg())).toBe(false)
     expect(sent[0]).toContain("can't be read")
   })
   test('a busy lock is not told, does not use up the channel\'s one telling, and the next tag admits', async () => {
@@ -58,34 +58,34 @@ describe('tag to admit, where hydra.toml governs', () => {
     const lock = join(dirname(hydraConfigPath()), 'hydra.toml.lock')
     writeFileSync(lock, '')
     try {
-      expect(await admitTaggedChannel({ groups: {} } as any, msg({ channelId: BUSY_CH }))).toBe(false)
-      expect(await admitTaggedChannel({ groups: {} } as any, msg({ id: 'm2', channelId: BUSY_CH }))).toBe(false)
+      expect(await admitTaggedChannel(msg({ channelId: BUSY_CH }))).toBe(false)
+      expect(await admitTaggedChannel(msg({ id: 'm2', channelId: BUSY_CH }))).toBe(false)
     } finally { rmSync(lock, { force: true }) }
     expect(sent).toHaveLength(0)
-    expect(await admitTaggedChannel({ groups: {} } as any, msg({ id: 'm3', channelId: BUSY_CH }))).toBe(true)
+    expect(await admitTaggedChannel(msg({ id: 'm3', channelId: BUSY_CH }))).toBe(true)
   })
   test('a tag in a thread admits the parent channel', async () => {
     start(BASE)
-    expect(await admitTaggedChannel({ groups: {} } as any, msg({ channelId: '300000000000000010', parentChannelId: '300000000000000009' }))).toBe(true)
+    expect(await admitTaggedChannel(msg({ channelId: '300000000000000010', parentChannelId: '300000000000000009' }))).toBe(true)
     expect(readFileSync(hydraConfigPath(), 'utf8')).toContain('[places."discord:300000000000000009".access]')
   })
   test('no tag, or a tag from someone else, writes nothing', async () => {
     start(BASE)
     tagged = false
-    expect(await admitTaggedChannel({ groups: {} } as any, msg())).toBe(false)
+    expect(await admitTaggedChannel(msg())).toBe(false)
     tagged = true
-    expect(await admitTaggedChannel({ groups: {} } as any, msg({ authorId: '999' }))).toBe(false)
+    expect(await admitTaggedChannel(msg({ authorId: '999' }))).toBe(false)
     expect(readFileSync(hydraConfigPath(), 'utf8')).toBe(BASE)
   })
   test('a write hydra.toml cannot take is told to the operator once per channel, and admits nothing', async () => {
     // an inline place cannot grow a sub-table
     const inline = `${BASE}[places]\n"discord:300000000000000009" = { ack = "eyes" }\n`
     start(inline)
-    expect(await admitTaggedChannel({ groups: {} } as any, msg())).toBe(false)
-    expect(await admitTaggedChannel({ groups: {} } as any, msg({ id: 'm2' }))).toBe(false)
+    expect(await admitTaggedChannel(msg())).toBe(false)
+    expect(await admitTaggedChannel(msg({ id: 'm2' }))).toBe(false)
     expect(sent).toHaveLength(1)
     expect(sent[0]).toContain("can't add this channel to hydra.toml")
     expect(readFileSync(hydraConfigPath(), 'utf8')).toBe(inline)
-    expect(channelAllowed({ groups: {} }, msg())).toBe(false)
+    expect(channelAllowed(msg())).toBe(false)
   })
 })

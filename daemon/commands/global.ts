@@ -14,7 +14,6 @@ import { getActiveRuns } from '../protocol-runner.js'
 import type { SpawnTemplate } from '../templates.js'
 import { buildTemplateSpawnOpts, runTemplateAction } from '../templates.js'
 import type { InboundMessage } from '../../gateways/gateway.js'
-import { type Access } from '../access.js'
 import type { ProviderId } from '../engines/engine-adapter.js'
 
 const RESTART_PENDING_FILE = join(STATE_DIR, 'restart-pending.json')
@@ -136,7 +135,7 @@ async function spawnAndNotify(
   }
 }
 
-export async function handleSpawnIntercept(msg: InboundMessage, topic: string, access: Access, model?: string, engine?: ProviderId): Promise<void> {
+export async function handleSpawnIntercept(msg: InboundMessage, topic: string, model?: string, engine?: ProviderId): Promise<void> {
   // Also parse --codex flag from topic (fallback for non-prefix usage)
   let resolvedEngine = engine
   let cleanTopic = topic
@@ -147,7 +146,7 @@ export async function handleSpawnIntercept(msg: InboundMessage, topic: string, a
   await spawnAndNotify(msg, cleanTopic, undefined, model, resolvedEngine)
 }
 
-export async function handleTemplateSpawn(msg: InboundMessage, templateName: string, topic: string, template: SpawnTemplate, access: Access, model?: string): Promise<void> {
+export async function handleTemplateSpawn(msg: InboundMessage, templateName: string, topic: string, template: SpawnTemplate, model?: string): Promise<void> {
   if (!topic.trim()) {
     await gateway.send(msg.channelId, `_\`${templateName}:\` needs a topic — e.g. \`${templateName}: describe the task\`_`, { replyTo: msg.id })
     return

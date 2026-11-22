@@ -11,6 +11,7 @@ import { killSession } from '../session-lifecycle.js'
 import { startBridgeServer, socketServer } from '../bridge-server.js'
 import { engines } from '../engines/instances.js'
 import { ompSessionDir } from '../engines/omp-session.js'
+import { setHydra } from './test-hydra.js'
 
 // The whole path with real parts: `spawn omp-sonnet:` -> doSpawnSession -> OmpEngine in tmux -> real omp -> the hydra extension -> the real bridge
 // server -> the real `reply` tool -> the gateway; then kill and `resume` in the thread. Only Discord is stubbed. Real model: HYDRA_OMP_E2E=1.
@@ -43,7 +44,7 @@ beforeAll(() => {
     spyOn(gateway, 'fetchChannel').mockImplementation((async (id: string) => ({ isThread: id === THREAD, isDM: false, parentId: id === THREAD ? 'omp-int-chan' : undefined })) as any),
     spyOn(gateway, 'createThread').mockImplementation((async () => ({ id: THREAD })) as any),
     spyOn(gateway, 'getThreadUrl').mockImplementation((async () => 'https://discord.test/thread') as any),
-    spyOn(access, 'loadAccess').mockImplementation((() => ({ allowFrom: ['u1'], groups: { 'omp-int-chan': {} }, pending: {} })) as any),
+    setHydra({ operators: ['u1'], channels: { 'omp-int-chan': {} } }),
     spyOn(registry, 'persist').mockImplementation((() => {}) as any),
     spyOn(threadRegistry, 'persist').mockImplementation((() => {}) as any),
   )
@@ -63,7 +64,7 @@ const msg = (content: string, isThread: boolean) => ({
 }) as any
 
 test.skipIf(!run)('spawn omp-sonnet answers through the reply tool, and after a kill `resume` brings the same conversation back', async () => {
-  await handleSpawnIntercept(msg('spawn omp-sonnet: x', false), 'Tell the sender "ready" with the reply tool, then stop.', {} as any, 'claude-sonnet-5-5[1m]', 'omp')
+  await handleSpawnIntercept(msg('spawn omp-sonnet: x', false), 'Tell the sender "ready" with the reply tool, then stop.', 'claude-sonnet-5-5[1m]', 'omp')
   const first = registry.get(registry.getByThread(THREAD)!)!
   expect(first.engine).toBe('omp')
   expect(await until(() => said('ready'), 120_000)).toBe(true)

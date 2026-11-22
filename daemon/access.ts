@@ -1,52 +1,25 @@
-import { readFileSync, writeFileSync, readdirSync, rmSync, renameSync, mkdirSync } from 'fs'
-import { randomBytes } from 'crypto'
-import { join } from 'path'
-import { STATE_DIR, ACCESS_FILE, APPROVED_DIR, STATIC, gateway, DEFAULT_SESSION_CHANNEL, PLATFORM } from './config.js'
-import { currentHydraConfig, hydraConfigInUse, hydraLoadEnv, reloadHydraConfig } from './hydra-config.js'
+import { STATE_DIR, gateway, DEFAULT_SESSION_CHANNEL, PLATFORM } from './config.js'
+import { currentHydraConfig, hydraLoadEnv, reloadHydraConfig } from './hydra-config.js'
 import { admitChannel } from '../config/admit.js'
 import { BUSY } from '../config/append.js'
 import { chunk, safeSend } from './util.js'
 import type { GateSettings } from '../config/types.js'
 import type { InboundMessage } from '../gateways/gateway.js'
-import { timed } from '../shared/loop-watch.js'
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-export type PendingEntry = {
-  senderId: string
-  chatId: string
-  createdAt: number
-  expiresAt: number
-  replies: number
-}
-
+/** Who this daemon hears in one channel, as the gate reads it. */
 export type GroupPolicy = {
   requireMention: boolean
+  /** Empty: anyone who tags. */
   allowFrom: string[]
   threadReply?: boolean
-  threadArchiveMinutes?: 60 | 1440 | 4320 | 10080
   defaultListen?: boolean
 }
 
-export type Access = {
-  dmPolicy: 'pairing' | 'allowlist' | 'disabled'
-  allowFrom: string[]
-  groups: Record<string, GroupPolicy>
-  pending: Record<string, PendingEntry>
-  mentionPatterns?: string[]
-  ackReaction?: string
-  replyToMode?: 'off' | 'first' | 'all'
-  textChunkLimit?: number
-  chunkMode?: 'length' | 'newline' | 'markdown'
-  defaultListen?: boolean
-}
-
-export type GateResult =
-  | { action: 'deliver'; access: Access }
-  | { action: 'drop' }
-  | { action: 'pair'; code: string; isResend: boolean }
+export type GateResult = { action: 'deliver' } | { action: 'drop' }
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -55,38 +28,32 @@ export type GateResult =
 export function maxChunkLimit(): number { return gateway.maxMessageLength }
 
 /**
- * The operator's user ids on this platform: every admin check and admin DM reads this. hydra.toml's operator while
- * hydra.toml governs, else access.json's allowFrom (until `hydra migrate` moves it). A hydra.toml that hasn't loaded
- * yet gives nobody, never allowFrom. Callers pass the access they loaded.
+ * The operator's user ids on this platform: every admin check and admin DM reads this. hydra.toml's operator, by their
+ * addresses here. A hydra.toml that hasn't loaded gives nobody.
  */
-export function operatorIds(access: Pick<Access, 'allowFrom'>): string[] {
-  if (!hydraConfigInUse()) return access.allowFrom ?? []
+export function operatorIds(): string[] {
   const cfg = currentHydraConfig()
   if (!cfg.operator) return []
   const prefix = `${PLATFORM}:`
   return cfg.people[cfg.operator].addresses.filter(a => a.startsWith(prefix)).map(a => a.slice(prefix.length))
 }
-/**
- * hydra.toml's gate settings for this platform while hydra.toml governs: they win over access.json's. The one reader of
- * `[gateways.<platform>]`.
- */
-function tomlGate(): GateSettings | undefined {
-  return hydraConfigInUse() ? currentHydraConfig().gateSettings?.[PLATFORM] : undefined
+
+/** hydra.toml's gate settings for this platform (`[gateways.<platform>]`): the one reader of them. */
+function gateSettings(): GateSettings | undefined {
+  return currentHydraConfig().gateSettings?.[PLATFORM]
 }
 
 /** Not an id (ids have no spaces): the allowFrom of a channel whose named people have no address on this platform, so it hears nobody. */
 const NO_ONE = 'no one'
 
 /**
- * The policy hydra.toml gives a channel (`[places."<platform>:<id>".access]`) as a group policy, or undefined. Exact key:
- * no wildcard entry admits a channel. `allow` becomes ids on this platform; people with none leave the channel hearing
- * nobody, never everybody (an empty allowFrom means anyone).
+ * The policy hydra.toml gives a channel (`[places."<platform>:<id>".access]`), or undefined. Exact key: no wildcard
+ * entry admits a channel. `allow` becomes ids on this platform; people with none leave the channel hearing nobody, never
+ * everybody (an empty allowFrom means anyone).
  */
-function tomlPolicy(channelId: string): GroupPolicy | undefined {
-  if (!hydraConfigInUse()) return undefined
+function policyOf(channelId: string): GroupPolicy | undefined {
   const cfg = currentHydraConfig()
-  const key = `${PLATFORM}:${channelId}`
-  const place = cfg.channels?.[key]
+  const place = cfg.channels?.[`${PLATFORM}:${channelId}`]
   if (!place) return undefined
   const prefix = `${PLATFORM}:`
   const ids = place.access.allow === 'anyone' ? [] : place.access.allow.flatMap(n => cfg.people[n].addresses.filter(a => a.startsWith(prefix)).map(a => a.slice(prefix.length)))
@@ -98,84 +65,25 @@ function tomlPolicy(channelId: string): GroupPolicy | undefined {
   }
 }
 
-/** Whether a session thread started in this channel listens untagged, from hydra.toml; undefined when it says nothing. */
-export function tomlListen(channelId: string): boolean | undefined {
-  return tomlPolicy(channelId)?.defaultListen
+/** Whether a session thread started in this channel listens untagged; undefined when hydra.toml says nothing. */
+export function channelListen(channelId: string): boolean | undefined {
+  return policyOf(channelId)?.defaultListen
 }
 
-/** The platform-wide listen default: hydra.toml's, else access.json's, else false. */
-export function defaultListenOf(access: Pick<Access, 'defaultListen'>): boolean {
-  return tomlGate()?.listen ?? access.defaultListen ?? false
+/** The platform-wide listen default. */
+export function defaultListenOf(): boolean {
+  return gateSettings()?.listen ?? false
 }
 
-export function ackReactionOf(access: Pick<Access, 'ackReaction'>): string | undefined {
-  return tomlGate()?.ackReaction ?? access.ackReaction
+export function ackReactionOf(): string | undefined {
+  return gateSettings()?.ackReaction
 }
-
 export const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
-
-// ---------------------------------------------------------------------------
-// Store
-// ---------------------------------------------------------------------------
-
-function defaultAccess(): Access {
-  return { dmPolicy: 'pairing', allowFrom: [], groups: {}, pending: {} }
-}
-
-function readAccessFile(): Access {
-  try {
-    const raw = readFileSync(ACCESS_FILE, 'utf8')
-    const parsed = JSON.parse(raw) as Partial<Access>
-    return { ...defaultAccess(), ...parsed }
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return defaultAccess()
-    try { renameSync(ACCESS_FILE, `${ACCESS_FILE}.corrupt-${Date.now()}`) } catch {}
-    process.stderr.write(`daemon: access.json is corrupt, moved aside. Starting fresh.\n`)
-    return defaultAccess()
-  }
-}
-
-const BOOT_ACCESS: Access | null = STATIC
-  ? (() => {
-      const a = readAccessFile()
-      if (a.dmPolicy === 'pairing') {
-        process.stderr.write('daemon: static mode -- dmPolicy "pairing" downgraded to "allowlist"\n')
-        a.dmPolicy = 'allowlist'
-      }
-      a.pending = {}
-      return a
-    })()
-  : null
-
-export function loadAccess(): Access {
-  return BOOT_ACCESS ?? readAccessFile()
-}
-
-export function saveAccess(a: Access): void {
-  if (STATIC) return
-  mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
-  const tmp = ACCESS_FILE + '.tmp'
-  writeFileSync(tmp, JSON.stringify(a, null, 2) + '\n', { mode: 0o600 })
-  renameSync(tmp, ACCESS_FILE)
-}
-
-function pruneExpired(a: Access): boolean {
-  const now = Date.now()
-  let changed = false
-  for (const [code, p] of Object.entries(a.pending)) {
-    if (p.expiresAt < now) {
-      delete a.pending[code]
-      changed = true
-    }
-  }
-  return changed
-}
 
 // Resolves true only if the whole message reached someone.
 export async function notifyOperator(text: string): Promise<boolean> {
-  const access = loadAccess()
   const parts = chunk(text, gateway.maxMessageLength, 'markdown')
-  const operator = operatorIds(access)
+  const operator = operatorIds()
   if (operator.length > 0) {
     const delivered = await Promise.all(operator.map(async userId => {
       try {
@@ -207,11 +115,10 @@ export type Place = Pick<InboundMessage, 'isDM' | 'channelId' | 'parentChannelId
 
 /**
  * The group policy of the channel a place is in (a thread's parent channel; parentChannelId is null outside
- * a thread); undefined when this daemon has none there. Own keys only: 'constructor' is not a channel.
+ * a thread); undefined when this daemon has none there.
  */
-export function channelPolicy(access: Pick<Access, 'groups'>, place: Place): GroupPolicy | undefined {
-  const key = place.parentChannelId ?? place.channelId
-  return tomlPolicy(key) ?? (Object.hasOwn(access.groups, key) ? access.groups[key] : undefined)
+export function channelPolicy(place: Place): GroupPolicy | undefined {
+  return policyOf(place.parentChannelId ?? place.channelId)
 }
 
 /**
@@ -219,8 +126,8 @@ export function channelPolicy(access: Pick<Access, 'groups'>, place: Place): Gro
  * policy for. Two daemons can share a guild and an operator; an operator's word in the other
  * daemon's channel is not this daemon's to obey.
  */
-export function channelAllowed(access: Pick<Access, 'groups'>, place: Place): boolean {
-  return place.isDM || channelPolicy(access, place) !== undefined
+export function channelAllowed(place: Place): boolean {
+  return place.isDM || channelPolicy(place) !== undefined
 }
 
 /** Channels where an admit was refused and the operator told, so each hears it once. */
@@ -228,118 +135,39 @@ const refusedAdmits = new Set<string>()
 
 /**
  * The operator tagging this bot in a channel it has no policy for admits that channel: mention-only at the top level, session threads started there listen untagged.
- * Where hydra.toml governs it is written there and the same message goes on; a write it refuses is said to the operator once per channel and admits nothing.
- * True when it admitted. Anyone else's tag, and a static config, admit nothing.
+ * It is written into hydra.toml and the same message goes on; a write hydra.toml refuses is said to the operator once per channel and admits nothing.
+ * True when it admitted. Anyone else's tag admits nothing.
  */
-export async function admitTaggedChannel(access: Access, msg: InboundMessage): Promise<boolean> {
-  if (STATIC || msg.isDM || !operatorIds(access).includes(msg.authorId)) return false
+export async function admitTaggedChannel(msg: InboundMessage): Promise<boolean> {
+  if (msg.isDM || !operatorIds().includes(msg.authorId)) return false
   // Only an explicit @-tag admits: a reply to the bot or a mentionPatterns match does not.
   if (!(await gateway.isMentioned({ ...msg, referenceMessageId: null }))) return false
   const channelId = msg.parentChannelId ?? msg.channelId
-  if (hydraConfigInUse()) {
-    // operatorIds named the sender, so hydra.toml names an operator.
-    const admitted = admitChannel(STATE_DIR, hydraLoadEnv(), PLATFORM, channelId, currentHydraConfig().operator!)
-    if (!admitted.ok) {
-      // A busy lock passes in a moment: it does not use up the channel's one telling.
-      if (admitted.error !== BUSY && !refusedAdmits.has(channelId)) {
-        refusedAdmits.add(channelId)
-        void gateway.send(msg.channelId, `I can't add this channel to hydra.toml, so I did nothing here: ${admitted.error}\nFix that, then tag me again.`, { replyTo: msg.id }).catch(() => {})
-      }
-      return false
+  // operatorIds named the sender, so hydra.toml names an operator.
+  const admitted = admitChannel(STATE_DIR, hydraLoadEnv(), PLATFORM, channelId, currentHydraConfig().operator!)
+  if (!admitted.ok) {
+    // A busy lock passes in a moment: it does not use up the channel's one telling.
+    if (admitted.error !== BUSY && !refusedAdmits.has(channelId)) {
+      refusedAdmits.add(channelId)
+      void gateway.send(msg.channelId, `I can't add this channel to hydra.toml, so I did nothing here: ${admitted.error}\nFix that, then tag me again.`, { replyTo: msg.id }).catch(() => {})
     }
-    refusedAdmits.delete(channelId)
-    reloadHydraConfig()
-    return true
+    return false
   }
-  access.groups[channelId] = { requireMention: true, allowFrom: [msg.authorId], defaultListen: true }
-  saveAccess(access)
+  refusedAdmits.delete(channelId)
+  reloadHydraConfig()
   return true
 }
 
 export async function gate(msg: InboundMessage): Promise<GateResult> {
-  const access = loadAccess()
-  const pruned = pruneExpired(access)
-  if (pruned) saveAccess(access)
-
-  if (access.dmPolicy === 'disabled' || tomlGate()?.off) return { action: 'drop' }
+  if (gateSettings()?.off) return { action: 'drop' }
 
   const senderId = msg.authorId
 
-  if (msg.isDM) {
-    if (operatorIds(access).includes(senderId)) return { action: 'deliver', access }
-    // Pairing adds to allowFrom, which hydra.toml replaces: a code there would pair into nothing.
-    if (access.dmPolicy === 'allowlist' || hydraConfigInUse()) return { action: 'drop' }
+  if (msg.isDM) return operatorIds().includes(senderId) ? { action: 'deliver' } : { action: 'drop' }
 
-    for (const [code, p] of Object.entries(access.pending)) {
-      if (p.senderId === senderId) {
-        if ((p.replies ?? 1) >= 2) return { action: 'drop' }
-        p.replies = (p.replies ?? 1) + 1
-        saveAccess(access)
-        return { action: 'pair', code, isResend: true }
-      }
-    }
-    if (Object.keys(access.pending).length >= 3) return { action: 'drop' }
-
-    const code = randomBytes(3).toString('hex')
-    const now = Date.now()
-    access.pending[code] = {
-      senderId,
-      chatId: msg.channelId,
-      createdAt: now,
-      expiresAt: now + 60 * 60 * 1000,
-      replies: 1,
-    }
-    saveAccess(access)
-    return { action: 'pair', code, isResend: false }
-  }
-
-  const policy = channelPolicy(access, msg)
+  const policy = channelPolicy(msg)
   if (!policy) return { action: 'drop' }
-  const groupAllowFrom = policy.allowFrom ?? []
-  const requireMention = policy.requireMention ?? true
-  if (groupAllowFrom.length > 0 && !groupAllowFrom.includes(senderId)) {
-    return { action: 'drop' }
-  }
-  if (requireMention && !(await gateway.isMentioned(msg, tomlGate()?.mentionPatterns ?? access.mentionPatterns))) {
-    return { action: 'drop' }
-  }
-  return { action: 'deliver', access }
+  if (policy.allowFrom.length > 0 && !policy.allowFrom.includes(senderId)) return { action: 'drop' }
+  if (policy.requireMention && !(await gateway.isMentioned(msg, gateSettings()?.mentionPatterns))) return { action: 'drop' }
+  return { action: 'deliver' }
 }
-
-// ---------------------------------------------------------------------------
-// Approval polling
-// ---------------------------------------------------------------------------
-
-function checkApprovals(): void {
-  let files: string[]
-  try {
-    files = readdirSync(APPROVED_DIR)
-  } catch { return }
-  if (files.length === 0) return
-
-  for (const senderId of files) {
-    const file = join(APPROVED_DIR, senderId)
-    let dmChannelId: string
-    try {
-      dmChannelId = readFileSync(file, 'utf8').trim()
-    } catch {
-      rmSync(file, { force: true })
-      continue
-    }
-    if (!dmChannelId) {
-      rmSync(file, { force: true })
-      continue
-    }
-    void (async () => {
-      try {
-        await gateway.send(dmChannelId, "Paired! Say hi to Claude.")
-        rmSync(file, { force: true })
-      } catch (err) {
-        process.stderr.write(`daemon: failed to send approval confirm: ${err}\n`)
-        rmSync(file, { force: true })
-      }
-    })()
-  }
-}
-
-if (!STATIC) setInterval(() => timed('access-approvals', checkApprovals), 5000).unref()

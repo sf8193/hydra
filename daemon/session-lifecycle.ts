@@ -40,7 +40,7 @@ import { readHandoffTemplate } from './handoff-templates.js'
 import { projectDirName, transcriptPathFor } from './usage.js'
 import { refreshSessionVisual, emojiOf, emojiOfName } from './anchor-state.js'
 import { unwatchBySession } from '../connectors/github/pr-watch.js'
-import { loadAccess, tomlListen, defaultListenOf } from './access.js'
+import { channelListen, defaultListenOf } from './access.js'
 import { emit } from './event-bus.js'
 import { clearInterceptsForSession } from './pane-probe.js'
 import { classifyResumeFailure } from './resume-health.js'
@@ -174,12 +174,11 @@ export function spawnToolNames(adapter: EngineAdapter, spawnType: ToolBase): str
 
 export function resolveListenState(threadId: string, channelId?: string): boolean {
   const thread = threadRegistry.get(threadId)
-  return resolveListenStatePure(channelId, loadAccess(), thread?.listenOverride, thread?.parentChannelId, thread?.anchorChannelId)
+  return resolveListenStatePure(channelId, thread?.listenOverride, thread?.parentChannelId, thread?.anchorChannelId)
 }
 
 export function resolveListenStatePure(
   channelId: string | undefined,
-  access: { groups: Record<string, { defaultListen?: boolean }>; defaultListen?: boolean },
   listenOverride?: boolean,
   parentChannelId?: string,
   anchorChannelId?: string,
@@ -187,11 +186,11 @@ export function resolveListenStatePure(
   if (listenOverride !== undefined) return listenOverride
   for (const id of [channelId, parentChannelId, anchorChannelId]) {
     if (id) {
-      const listen = tomlListen(id) ?? (Object.hasOwn(access.groups, id) ? access.groups[id].defaultListen : undefined)
+      const listen = channelListen(id)
       if (listen !== undefined) return listen
     }
   }
-  return defaultListenOf(access)
+  return defaultListenOf()
 }
 
 // ---------------------------------------------------------------------------
