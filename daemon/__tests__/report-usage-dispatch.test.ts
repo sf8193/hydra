@@ -1,5 +1,5 @@
 import { test, expect, afterEach } from 'bun:test'
-import { engines } from '../../engines/instances.js'
+import { engines } from '../../sessions/engine-instances.js'
 import { executeTool } from '../../app/bridge-dispatch.js'
 import { registry } from '../../sessions/registry.js'
 import { _setUsageAlertsIO, _resetUsageAlertsIO } from '../../app/usage-alerts.js'

@@ -17,7 +17,7 @@ import { _resetRefusalNotices, _resetVerifyBackoff, _refusalsKept, refusedLaunch
 import { restrictedDir, writeRestrictedFiles } from '../../infra/restricted-files.js'
 import { markDead, registry, threadRegistry, type SessionInfo } from '../../sessions/registry.js'
 import { transport } from '../../sessions/bridge-transport.js'
-import { engines } from '../../engines/instances.js'
+import { engines } from '../../sessions/engine-instances.js'
 import { ClaudeEngine } from '../../engines/claude-engine.js'
 import type { LaunchInput } from '../../engines/engine-adapter.js'
 import { _resetRecoveryDeps, _setRecoveryDeps, reviveThread } from '../../app/recovery.js'

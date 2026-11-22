@@ -605,6 +605,11 @@ export class SessionRegistry {
 
 export const registry = new SessionRegistry()
 
+// The records an engine's start() receives at boot: those it is the adapter of.
+export function engineRecords(adapter: EngineAdapter): SessionInfo[] {
+  return [...registry.values()].filter(r => r.adapter === adapter)
+}
+
 /**
  * Reattach engine adapter instances to all loaded sessions.
  * Call once after both registry and engine singletons are initialized.

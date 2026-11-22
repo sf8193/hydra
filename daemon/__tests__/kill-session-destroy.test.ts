@@ -7,7 +7,7 @@
 // CLI keep their reach.
 
 import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from 'bun:test'
-import { engines } from '../../engines/instances.js'
+import { engines } from '../../sessions/engine-instances.js'
 import { executeTool } from '../../app/bridge-dispatch.js'
 import { handleCLIRequest } from '../../app/cli-handler.js'
 import { registry, threadRegistry } from '../../sessions/registry.js'

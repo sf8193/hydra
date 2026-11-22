@@ -1,5 +1,5 @@
 import { describe, test, expect, afterEach, beforeEach, spyOn } from 'bun:test'
-import { engines } from '../../engines/instances.js'
+import { engines } from '../../sessions/engine-instances.js'
 import { createHarness, createStartedHarness, TestHarness, TOTAL_PHASE_CAP_FACTOR, WARNING_BEFORE_TIMEOUT_MS } from './test-harness.js'
 import { computeToolsForSession } from '../../engines/bridge-tools.js'
 import { CAPABILITY_TOOLS } from '../../shared/constants.js'

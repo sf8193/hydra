@@ -5,7 +5,7 @@ import { tmpdir } from 'os'
 import { trimSpawnLog, trimDaemonLog, buildCrashNotice, buildAutopsy, readConversationForensics, vitalsHeader, type ConversationForensics } from '../../sessions/observability.js'
 import { claudeTurnOutcome } from '../../engines/claude-transcript.js'
 import { codexTurnOutcome, defaultTurnSources, type TurnSources } from '../../engines/codex-observation.js'
-import { engines } from '../../engines/instances.js'
+import { engines } from '../../sessions/engine-instances.js'
 import type { SessionInfo } from '../../sessions/registry.js'
 import { nextResumeCount } from '../../app/session-lifecycle.js'
 

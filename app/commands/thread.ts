@@ -19,7 +19,7 @@ import { autoHandoffIO, canAskHandoff, canHandOff, handoffProtocolFor } from '..
 import { NotReplaced } from '../../specialists/specialist-deliver.js'
 import { recoveryEngine } from '../../engines/history.js'
 import { formatContextPercent, type ProviderId } from '../../engines/engine-adapter.js'
-import { claudeEngine, resolveEngine } from '../../engines/instances.js'
+import { claudeEngine, resolveEngine } from '../../sessions/engine-instances.js'
 import { blocksRecovery, occupancy } from '../../sessions/session-reachability.js'
 import { currentRecoveryDeps, reviveThread, threadStub } from '../recovery.js'
 export { _setRecoveryDeps, _resetRecoveryDeps } from '../recovery.js'

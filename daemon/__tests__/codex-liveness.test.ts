@@ -5,7 +5,7 @@
 import { describe, test, expect, afterEach } from 'bun:test'
 import { fakeCodexAdapter } from './test-harness.js'
 import { isCodexReconnecting, reconnectCodexSessions, reconnectDeps } from '../../engines/codex-runtime.js'
-import { engines } from '../../engines/instances.js'
+import { engines } from '../../sessions/engine-instances.js'
 import { occupancy, occupied } from '../../sessions/session-reachability.js'
 const isAlive = (info: any) => occupied(occupancy(info))
 import { registry } from '../../sessions/registry.js'

@@ -7,7 +7,7 @@ import { doSpawnSession, handOff, handoffIO, predecessorOf } from '../../app/ses
 import { isParentOf, registry, SESSION_NAMES, SessionRegistry, threadRegistry } from '../../sessions/registry.js'
 import type { SessionInfo, ThreadSessionEntry } from '../../sessions/registry.js'
 import { transport } from '../../sessions/bridge-transport.js'
-import { engines } from '../../engines/instances.js'
+import { engines } from '../../sessions/engine-instances.js'
 import { ClaudeEngine } from '../../engines/claude-engine.js'
 import { executeTool } from '../../app/bridge-dispatch.js'
 import type { LaunchInput } from '../../engines/engine-adapter.js'

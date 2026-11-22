@@ -3,7 +3,7 @@ import { onRunReply, onRunAdvance, onRunDisconnect, onRunReconnect, onRunExtend,
 import { transport } from '../../sessions/bridge-transport.js'
 import { gateway } from '../../infra/config.js'
 import { registry } from '../../sessions/registry.js'
-import { engines } from '../../engines/instances.js'
+import { engines } from '../../sessions/engine-instances.js'
 import type { Protocol } from '../../protocols/dsl.js'
 import type { ProtocolRun } from '../../app/protocol-runner.js'
 import type { CompletionEvent } from '../../shared/protocol-types.js'
