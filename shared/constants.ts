@@ -82,20 +82,8 @@ export const KNOWN_MODELS = new Set([
   'claude-sonnet-4-5-20250929',
 ])
 
-/** Short aliases for chat commands like `spawn sonnet: topic`. */
-export const MODEL_ALIASES: Record<string, string> = {
-  'sonnet': 'claude-sonnet-5-5[1m]',
-  'sonnet-5': 'claude-sonnet-5[1m]',
-  'haiku': 'claude-haiku-4-5-20251001',
-  'opus': 'claude-opus-5-5[1m]',
-  'fable': 'claude-fable-5-2[1m]',
-  'fable-5-1': 'claude-fable-5-1[1m]',
-  'fable-5-2': 'claude-fable-5-2[1m]',
-  'opus-5': 'claude-opus-5[1m]',
-  'opus-5-5': 'claude-opus-5-5[1m]',
-  'opus-4-7': 'claude-opus-4-7[1m]',
-  'opus-4-8': 'claude-opus-4-8[1m]',
-}
+/** Short aliases for chat commands like `spawn sonnet: topic`. Each engine's own aliases live in its profile (shared/engines/<engine>.ts). */
+export const MODEL_ALIASES = ENGINE_PROFILES.claude.aliases
 
 /** A bare known model ID (e.g. `claude-opus-5-5`) gets the same 1M window as its alias, so the window hydra records matches what claude runs. */
 export function withContextSuffix(model: string): string {
@@ -103,34 +91,15 @@ export function withContextSuffix(model: string): string {
   return Object.values(MODEL_ALIASES).includes(full) ? full : model
 }
 
-/** Codex model aliases. Kept separate because selecting one also selects the
- * Codex engine; MODEL_ALIASES historically implies the Claude engine. */
-export const CODEX_MODEL_ALIASES: Record<string, string> = {
-  'astra': 'gpt-6-astra',
-  'sol': 'gpt-6.1-sol',
-  'terra': 'gpt-5.6-terra',
-  'luna': 'gpt-5.6-luna',
-}
-
-/** omp (oh-my-pi) model aliases. Selecting one also selects the omp engine, as for Codex. */
-export const OMP_MODEL_ALIASES: Record<string, string> = Object.fromEntries(
-  Object.entries({ ...MODEL_ALIASES, ...CODEX_MODEL_ALIASES }).map(([alias, id]) => [`omp-${alias}`, id]),
-)
+export const CODEX_MODEL_ALIASES = ENGINE_PROFILES.codex.aliases
+export const OMP_MODEL_ALIASES = ENGINE_PROFILES.omp.aliases
 
 /** omp provider for a model id: Codex models are gpt-*, everything else is Claude. */
 export function ompProvider(model: string): 'openai-codex' | 'anthropic' {
   return model.startsWith('gpt-') ? 'openai-codex' : 'anthropic'
 }
 
-/** agy (Google Antigravity CLI) model aliases. Gemini models run only on agy, so an alias needs no prefix; selecting one also selects the agy
- * engine, as for Codex. The ids are the ones `agy models` lists. */
-export const AGY_MODEL_ALIASES: Record<string, string> = {
-  'neon': 'gemini-4-neon-high',
-  'carbon': 'gemini-4-carbon-high',
-  'hydrogen': 'gemini-4-hydrogen-high',
-  'argon': 'gemini-4-argon-high',
-  'flash': 'gemini-3.8-flash-high',
-}
+export const AGY_MODEL_ALIASES = ENGINE_PROFILES.agy.aliases
 
 // Validate aliases at load time.
 const ALIAS_KEY_RE = /^[a-z0-9-]+$/
@@ -141,16 +110,9 @@ for (const [key, id] of Object.entries(MODEL_ALIASES)) {
 
 /** Regex fragment matching any alias key, for use in router patterns.
  *  Sorted longest-first so prefix aliases (e.g. 'sonnet' vs 'sonnet-5') don't short-circuit. */
-const patternOf = (aliases: Readonly<Record<string, string>>) => Object.keys(aliases).sort((a, b) => b.length - a.length).join('|')
-export const MODEL_ALIAS_PATTERN = patternOf(MODEL_ALIASES)
-export const CODEX_MODEL_ALIAS_PATTERN = patternOf(CODEX_MODEL_ALIASES)
-export const OMP_MODEL_ALIAS_PATTERN = patternOf(OMP_MODEL_ALIASES)
-export const AGY_MODEL_ALIAS_PATTERN = patternOf(AGY_MODEL_ALIASES)
-
-/** Each engine's alias table. An alias is looked up in this order (object keys keep it): the other engines' tables before the Claude one. */
-const ENGINE_ALIASES: Record<EngineName, Readonly<Record<string, string>>> = {
-  codex: CODEX_MODEL_ALIASES, omp: OMP_MODEL_ALIASES, agy: AGY_MODEL_ALIASES, claude: MODEL_ALIASES,
-}
+export const engineAliasPattern = (engine: EngineName) => Object.keys(ENGINE_PROFILES[engine].aliases).sort((a, b) => b.length - a.length).join('|')
+export const MODEL_ALIAS_PATTERN = engineAliasPattern('claude')
+export const CODEX_MODEL_ALIAS_PATTERN = engineAliasPattern('codex')
 
 /** Look up a chat alias. Returns the full model ID or undefined.
  *  Lowercases input — router regex 'i' flag handles matching, this handles lookup. */
@@ -169,12 +131,11 @@ export function resolveLaunchModel(raw: string): string {
  * cannot place: that passes through unchanged and no check holds it against an engine.
  */
 export function engineOfModel(raw: string): EngineName | undefined {
-  for (const [engine, aliases] of Object.entries(ENGINE_ALIASES)) if (lookup(aliases, raw.toLowerCase())) return engine as EngineName
+  const engines = Object.entries(ENGINE_PROFILES) as Array<[EngineName, EngineProfile]>
+  for (const [engine, profile] of engines) if (lookup(profile.aliases, raw.toLowerCase())) return engine
   const id = raw.replace(/\[1m\]$/, '')
   if (isKnownModel(id)) return 'claude'
-  if (id.startsWith('gpt-') || Object.values(CODEX_MODEL_ALIASES).includes(id)) return 'codex'
-  if (id.startsWith('gemini-')) return 'agy'
-  return undefined
+  return engines.find(([, profile]) => profile.idPrefix && id.startsWith(profile.idPrefix))?.[0]
 }
 
 /**
@@ -185,26 +146,17 @@ export function engineOfModel(raw: string): EngineName | undefined {
 export function resolveLaunchSelection(raw: string, engine?: EngineName): { model: string; engine: EngineName } {
   const run = engine ?? engineOfModel(raw) ?? 'claude'
   if (run === 'claude') return { model: resolveLaunchModel(raw), engine: run }
-  return { model: lookup(ENGINE_ALIASES[run], raw.toLowerCase()) ?? raw, engine: run }
+  return { model: lookup(ENGINE_PROFILES[run].aliases, raw.toLowerCase()) ?? raw, engine: run }
 }
 
-export function resolveModelAlias(alias: string): string | undefined {
-  const key = alias.toLowerCase()
-  return lookup(MODEL_ALIASES, key)
+/** The model id an engine's alias names, or undefined. */
+export function resolveEngineAlias(engine: EngineName, alias: string): string | undefined {
+  return lookup(ENGINE_PROFILES[engine].aliases, alias.toLowerCase())
 }
-
-export function resolveCodexModelAlias(alias: string): string | undefined {
-  const key = alias.toLowerCase()
-  return lookup(CODEX_MODEL_ALIASES, key)
-}
-
-export function resolveOmpModelAlias(alias: string): string | undefined {
-  return lookup(OMP_MODEL_ALIASES, alias.toLowerCase())
-}
-
-export function resolveAgyModelAlias(alias: string): string | undefined {
-  return lookup(AGY_MODEL_ALIASES, alias.toLowerCase())
-}
+export const resolveModelAlias = (alias: string) => resolveEngineAlias('claude', alias)
+export const resolveCodexModelAlias = (alias: string) => resolveEngineAlias('codex', alias)
+export const resolveOmpModelAlias = (alias: string) => resolveEngineAlias('omp', alias)
+export const resolveAgyModelAlias = (alias: string) => resolveEngineAlias('agy', alias)
 
 /** Strip [1m] context-window suffix and check against known models. */
 export function isKnownModel(id: string): boolean {
@@ -250,7 +202,7 @@ export function buildModel(): string {
 import { homedir } from 'os'
 import { join } from 'path'
 import type { ToolName } from './tool-definitions.js'
-import type { EngineName } from './engines/index.js'
+import { ENGINE_PROFILES, type EngineName, type EngineProfile } from './engines/index.js'
 
 /** The state dir a platform's daemon uses unless HYDRA_STATE_DIR points elsewhere: ~/.claude/channels/<platform>. */
 export const platformStateDir = (platform: string) => join(homedir(), '.claude', 'channels', platform)
