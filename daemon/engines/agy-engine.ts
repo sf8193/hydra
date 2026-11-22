@@ -21,7 +21,6 @@ import { deliveryRefusal } from '../restricted.js'
 import { tmuxCreateSession, tmuxSync, tmuxWindowActivity } from '../tmux.js'
 import { SESSION_INSTRUCTIONS, contextWindowOf, formatNotification } from '../../shared/constants.js'
 import { withRaisedFdLimit } from '../../shared/spawn-env.js'
-import { isRestrictedPolicy } from '../policy-record.js'
 import { AGY_HOOKS_CONFIG, AGY_MCP_CONFIG, registerHydraHooks, registerHydraTools } from './agy-config.js'
 import { agyContextTokens, agyState, agyStateDir, agyStateFile, agyTurn } from './agy-session.js'
 
@@ -47,9 +46,6 @@ export class AgyEngine implements EngineAdapter {
   async start(): Promise<void> {}
 
   async launch(input: LaunchInput): Promise<LaunchResult> {
-    // This engine cannot limit a session's access (see ENGINE_PROFILES); it would run one as the operator.
-    if (isRestrictedPolicy(input.policy)) throw new Error(`specialist ${input.policy.specialist} has restricted = true, which this engine cannot give: set engine = "claude", or set restricted = false`)
-    if (input.policy?.canOnlyWriteTo) throw new Error(`specialist ${input.policy.specialist} has can_only_write_to = "workdir", which this engine cannot give: set engine = "claude", or remove can_only_write_to`)
     const { sessionId, tmuxName } = input
     const model = input.model!   // doSpawnSession always gives agy one (its flash model when none is named)
     // Resume: agy continues the dead session's conversation (agy keeps conversations per folder: the caller launches in the folder the session had).

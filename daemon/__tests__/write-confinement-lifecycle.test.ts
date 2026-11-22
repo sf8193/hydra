@@ -214,7 +214,7 @@ describe('a start of a write-confined specialist', () => {
     expect(told.join('\n')).toMatch(/is not inside the workdir .*so no session starts/)
   })
 
-  test.each(['codex', 'omp'] as const)('%s: refused in the thread, naming the engine hydra actually chose (not "undefined")', async engine => {
+  test.each(['codex', 'omp', 'agy'] as const)('%s: refused in the thread, naming the engine hydra actually chose (not "undefined")', async engine => {
     seedDead({ engine: engine as any })
     await expect(start({ engine })).rejects.toThrow(new RegExp(`which the ${engine} engine cannot give`))
     expect(launches).toHaveLength(0)

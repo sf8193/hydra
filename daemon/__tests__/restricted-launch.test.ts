@@ -778,7 +778,7 @@ describe('a launch path that passes nothing for a specialist session: restricted
 })
 
 describe('the engine is checked at launch', () => {
-  test.each(['codex', 'omp'] as const)('%s for a workdir specialist (a handoff <model> switch, or history) is refused before anything launches', async engine => {
+  test.each(['codex', 'omp', 'agy'] as const)('%s for a workdir specialist (a handoff <model> switch, or history) is refused before anything launches', async engine => {
     seedDead({ policy: opsPolicy() })
     await expect(doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, specialist: 'ops', engine })).rejects.toThrow(/which the \w+ engine cannot give: set engine = "claude", or set restricted = false/)
     expect(launches).toHaveLength(0)
