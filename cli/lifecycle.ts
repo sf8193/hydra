@@ -15,6 +15,7 @@ import { checkDaemonCpu } from './watchdog-cpu.js'
 import { noteRestart } from './watchdog-restarts.js'
 import { bootRefusal } from '../config/migrate.js'
 import { noteBootRefusal } from './boot-refusal.js'
+import { alertOperator } from './boot-refusal-alert.js'
 import { clearMainRecord, writeMainRecord } from '../shared/main-record.js'
 import { bridgePluginCache, isLinkedTo, syncHydraBridge, type BridgeSyncResult } from '../daemon/plugin-manifest.js'
 
@@ -398,7 +399,12 @@ export async function lifecycleWatchdog(platform: string): Promise<void> {
   const refused = reason ? bootRefusal(cfg.stateDir) : undefined
   if (refused) {
     const line = noteBootRefusal(cfg.stateDir, refused, now)
-    if (line) appendLog(cfg.watchdogLog, `${reason}, but not restarting: ${line}`)
+    if (line) {
+      appendLog(cfg.watchdogLog, `${reason}, but not restarting: ${line}`)
+      // Once: noteBootRefusal returns the line only the first time. The bot is silent in chat, so say it there.
+      const failed = await alertOperator(cfg.stateDir, platform, `hydra on ${platform} can't start: ${line}`)
+      if (failed) appendLog(cfg.watchdogLog, `could not tell the operator: ${failed}`)
+    }
     return
   }
   const daemonRestartedThisTick = reason !== null

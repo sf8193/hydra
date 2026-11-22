@@ -46,6 +46,19 @@ mention_patterns = ["^hey claude\\b"]   # extra text that counts as a tag
 
 On Discord, `[gateways.discord]` also takes `bot_token_env` (the variable holding the token). A table with only these settings leaves Discord's connector unchanged.
 
+## Upgrading from access.json
+
+An old install keeps working until its daemon next starts. On start the daemon refuses to boot while `access.json` still holds channels or settings, so migrate first. Per platform, on each machine:
+
+1. `git pull --ff-only` in the hydra checkout.
+2. `hydra migrate <platform> --dry-run`. It prints the `hydra.toml` it would write and changes nothing. Read the notes: they name anything left out.
+3. `hydra down <platform>`, then `hydra migrate <platform>`, then `hydra up <platform>`.
+4. Tag the bot in a channel it has not been in. It adds the channel to `hydra.toml` and answers.
+
+`hydra migrate` keeps the old file as `access.json.migrated` (`access.json.2.migrated` if one exists). To roll back, `hydra down <platform>`, put that file back as `access.json`, and delete `hydra.toml`.
+
+If a daemon refuses to start, `hydra up` and `hydra restart` print why and change nothing. A daemon started another way writes `boot-refused.json` in the state dir, which `hydra health` shows. The watchdog also tells the operator once in a direct message.
+
 ## What went away
 
 | Old | Now |
