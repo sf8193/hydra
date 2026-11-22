@@ -101,6 +101,8 @@ process.on('exit', () => {
   try { if (readFileSync(PID_FILE, 'utf8').trim() === String(process.pid)) unlinkSync(PID_FILE) } catch {}
 })
 
+// Bound before anything can deliver.
+bindRecovery(recoveryPort)
 transport.restorePersistedQueues()
 startBridgeServer()
 
@@ -146,7 +148,6 @@ import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle }
 import type { ProviderId } from './engines/engine-adapter.js'
 registry.onPersist = refreshDashboard
 targetDeps.stuckState = confirmedStuckState
-bindRecovery(recoveryPort)
 
 if ('operators' in gateway) {
   (gateway as any).operators = operatorIds
