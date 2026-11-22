@@ -348,6 +348,17 @@ export function handoffProtocolOf(specialist: Specialist | undefined): HandoffPr
 /** The app named `default`, used where nothing names an app. */
 export const DEFAULT_SLACK_APP = 'default'
 
+/**
+ * What the app is called and says it does when `display_name` or `description` is unset. With an operator token the
+ * description says so: the app then reads threads as its installer.
+ * An app other than `default` is called by its id. Every message names an app by this name too (`appName`).
+ */
+export const SLACK_APP_DEFAULTS = {
+  name: 'hydra',
+  description: 'Answers the Slack threads it is tagged in, and its DMs, using Claude.',
+  operatorTokenNote: ' It can also read the threads, DMs and group DMs its installer can see.',
+} as const
+
 /** The Slack app hydra connects (`default`), or undefined when hydra.toml declares none. */
 export function defaultSlackApp(config: Pick<HydraConfig, 'slackApps'>): SlackApp | undefined {
   return Object.hasOwn(config.slackApps, DEFAULT_SLACK_APP) ? config.slackApps[DEFAULT_SLACK_APP] : undefined

@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test'
 import { loadHydraConfig, VITALS_DEFAULTS } from '../load.js'
-import { SLACK_APP_DEFAULTS } from '../../connectors/slack/app.js'
+import { SLACK_APP_DEFAULTS } from '../types.js'
 import { defaultSlackApp, type HydraConfig, type LoadEnv, type LoadResult } from '../types.js'
 import { testLoadEnv, answeredKeys, ruleKeys } from './load-env.js'
 

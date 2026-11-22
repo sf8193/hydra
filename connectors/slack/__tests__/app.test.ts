@@ -1,6 +1,7 @@
 import { describe, test, expect } from 'bun:test'
 import { alsoHeard, hydra, oneListener, sharedChannel, BASE, TWO_APPS } from './slack-config.js'
-import { slackManifest, SLACK_APP_NEEDS, SLACK_APP_DEFAULTS, appKey, appName, appSuffix, notConnected } from '../app.js'
+import { slackManifest, SLACK_APP_NEEDS, appKey, appName, appSuffix, notConnected } from '../app.js'
+import { SLACK_APP_DEFAULTS } from '../../../config/types.js'
 import { scopesNeeded } from '../listener.js'
 
 type Manifest = {

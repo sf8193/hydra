@@ -9,7 +9,7 @@ import { setSpecialistThread, _reloadSpecialists } from '../../../sessions/speci
 import { _setHydraConfigForTesting } from '../../../infra/hydra-config.js'
 import { restrictedRefusal, PLACE_USE } from '../../../app/bridge-dispatch.js'
 import { ownConversationRefusal, getConversationTable, slackRuntimeDeps, stopSlackListener } from '../runtime.js'
-import { TOP_LEVEL } from '../conversation.js'
+import { TOP_LEVEL } from '../../../shared/slack-conversation.js'
 import { TWO_APPS, hydra, view } from './slack-config.js'
 
 process.stderr.write = (() => true) as any

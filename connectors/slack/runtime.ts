@@ -1,5 +1,5 @@
 import { ConversationTable, namedChannels, cantRead, NOT_A_MEMBER, cmpTs, slackWatchesPath, unresolvedPlaces, conversationId, placeName, isDm, appOfEntry, TOP_LEVEL, NO_DIRECTORY, SLACK_LIMITS, heldBySession, type BoundBy, type ConversationConfig, type ConversationEntry, type ConversationStats, type LateOwed } from './watch.js'
-import { archiveUrl, parseConversation, THREAD_TS } from './conversation.js'
+import { archiveUrl, parseConversation, THREAD_TS } from '../../shared/slack-conversation.js'
 import { ConnectedApps, type AppIdentity } from './apps.js'
 import { getSpecialist, conversationSpecialistOf, specialistOf, boundAs } from '../../sessions/specialists.js'
 import { registry } from '../../sessions/registry.js'

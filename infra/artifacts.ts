@@ -9,7 +9,7 @@
  * from inbound messages routed to it (see router.ts).
  */
 
-import { parseArchiveUrl } from '../connectors/slack/conversation.js'
+import { parseArchiveUrl } from '../shared/slack-conversation.js'
 
 export const MAX_ARTIFACTS = 10
 
