@@ -108,7 +108,7 @@ describe('sampleCpu', () => {
     expect(dms[0]).toContain('`hydra-cpu-byte (main)`')
   }, LOOP_TIMEOUT_MS)
 
-  test('a tick with no snapshot (ps failed) neither ends a spin episode nor re-arms its alert', async () => {
+  test('a tick with no snapshot (ps failed) does not touch the spin tracker', async () => {
     const s = session('spin-8')
     record(s.sessionId, busy.pid!, process.pid, busyStartedAt)
     let v
