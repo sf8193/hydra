@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, unlinkSync, existsSync } from 'fs'
 import { join } from 'path'
-import { execSync } from 'child_process'
+import { execFile, execSync } from 'child_process'
 import { homedir } from 'os'
 import { gateway, STATE_DIR, PLATFORM } from '../../infra/config.js'
 import { registry } from '../../sessions/registry.js'
@@ -173,14 +173,17 @@ export async function handleKillIntercept(msg: InboundMessage, name: string): Pr
 }
 
 export async function handleRestartIntercept(msg: InboundMessage): Promise<void> {
-  // The background `hydra restart` below would refuse and say so only to /dev/null. Ask the build on disk first: a daemon that
-  // was running before a pull has the old build's checks in memory.
+  // The background `hydra restart` below would refuse and say so only to /dev/null. Ask the build on disk first (a daemon that was
+  // running before a pull has the old build's checks in memory), without blocking the gateway while `bun` starts.
   const hydraCli = join(import.meta.dir, '..', '..', 'cli', 'hydra.ts')
-  try {
-    execSync(`bun "${hydraCli}" restart ${PLATFORM} --dry-run`, { stdio: 'pipe', timeout: 30_000, env: { ...process.env, PATH: `${homedir()}/.asdf/shims:${homedir()}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin` } })
-  } catch (err) {
-    const why = String((err as { stderr?: Buffer }).stderr ?? (err as Error).message).trim()
-    try { await gateway.send(msg.channelId, `❌ Not restarting: ${why}\nThe running daemon is left as it is.`, { replyTo: msg.id }) } catch {}
+  const dryRun = await new Promise<string | undefined>(resolve => {
+    execFile('bun', [hydraCli, 'restart', PLATFORM, '--dry-run'], {
+      timeout: 30_000,
+      env: { ...process.env, PATH: `${homedir()}/.asdf/shims:${homedir()}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin` },
+    }, (err, _out, stderr) => resolve(err ? (String(stderr).trim() || err.message).slice(0, 1500) : undefined))
+  })
+  if (dryRun !== undefined) {
+    try { await gateway.send(msg.channelId, `❌ Not restarting: ${dryRun}\nThe running daemon is left as it is.`, { replyTo: msg.id }) } catch {}
     return
   }
   void gateway.react(msg.channelId, msg.id, '🔄').catch(() => {})

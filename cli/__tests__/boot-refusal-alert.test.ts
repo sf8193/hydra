@@ -20,10 +20,15 @@ const fetchSpy = (replies: object[]) => spyOn(globalThis, 'fetch').mockImplement
 afterEach(() => { calls.length = 0; if (dir) rmSync(dir, { recursive: true, force: true }) })
 
 describe('operatorId', () => {
-  test('the first allowFrom of access.json; else the operator\'s address in hydra.toml', () => {
+  const TOML = 'operator = "me"\n[people.me]\naddresses = ["discord:7", "slack:U9"]\n'
+  test('the operator\'s address in hydra.toml; else the first allowFrom of access.json', () => {
+    expect(operatorId(state({ 'hydra.toml': TOML }), 'slack')).toBe('U9')
     expect(operatorId(state({ 'access.json': '{"allowFrom":["U1","U2"]}' }), 'slack')).toBe('U1')
-    expect(operatorId(state({ 'hydra.toml': 'operator = "me"\n[people.me]\naddresses = ["discord:7", "slack:U9"]\n' }), 'slack')).toBe('U9')
     expect(operatorId(state({}), 'slack')).toBeUndefined()
+  })
+  test('hydra.toml wins over a stale access.json, and a corrupt access.json does not hide hydra.toml', () => {
+    expect(operatorId(state({ 'hydra.toml': TOML, 'access.json': '{"allowFrom":["U1"]}' }), 'slack')).toBe('U9')
+    expect(operatorId(state({ 'hydra.toml': TOML, 'access.json': '{ nope' }), 'slack')).toBe('U9')
   })
 })
 

@@ -1,7 +1,7 @@
 // The watchdog finds a daemon that will not start because `hydra migrate` has not been run. The bot is silent in chat then, so the
 // operator is told once in a direct message, through the platform's web API: it needs no connected gateway, only the bot token.
 
-import { existsSync, readFileSync } from 'fs'
+import { readFileSync } from 'fs'
 import { join } from 'path'
 import { HYDRA_TOML } from '../config/migrate.js'
 import { noteOperatorAlert, shouldAlertOperator } from './boot-refusal.js'
@@ -9,18 +9,23 @@ import { readEnvFileValue } from './helpers.js'
 
 const envToken = (stateDir: string, key: string): string | undefined => readEnvFileValue(join(stateDir, '.env'), key)?.trim() || undefined
 
-/** The operator's id on this platform: the first allowFrom of access.json, or the operator's address in hydra.toml. */
+/**
+ * The operator's id on this platform: the operator's address in hydra.toml when it names one (it governs once it does), else the
+ * first allowFrom of access.json. Each file is read raw, so a hydra.toml that does not load, or an access.json that does not parse,
+ * does not hide the other.
+ */
 export function operatorId(stateDir: string, platform: string): string | undefined {
-  const access = join(stateDir, 'access.json')
-  if (existsSync(access)) {
-    const first = (JSON.parse(readFileSync(access, 'utf8')) as { allowFrom?: unknown[] }).allowFrom?.[0]
-    if (first !== undefined) return String(first)
-  }
   const toml = join(stateDir, HYDRA_TOML)
-  if (!existsSync(toml)) return undefined
-  const doc = Bun.TOML.parse(readFileSync(toml, 'utf8')) as { operator?: string; people?: Record<string, { addresses?: string[] }> }
-  const address = doc.operator ? doc.people?.[doc.operator]?.addresses?.find(a => a.startsWith(`${platform}:`)) : undefined
-  return address?.slice(platform.length + 1)
+  try {
+    const doc = Bun.TOML.parse(readFileSync(toml, 'utf8')) as { operator?: string; people?: Record<string, { addresses?: string[] }> }
+    const address = doc.operator ? doc.people?.[doc.operator]?.addresses?.find(a => a.startsWith(`${platform}:`)) : undefined
+    if (address) return address.slice(platform.length + 1)
+  } catch {}
+  try {
+    const first = (JSON.parse(readFileSync(join(stateDir, 'access.json'), 'utf8')) as { allowFrom?: unknown[] }).allowFrom?.[0]
+    if (first !== undefined) return String(first)
+  } catch {}
+  return undefined
 }
 
 const post = async (url: string, token: string, body: object, bearer: string): Promise<any> =>
