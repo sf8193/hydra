@@ -32,7 +32,7 @@ import { fetchPrTitle, parsePrUrl } from '../connectors/github/pr-watch.js'
 import { SEND_TYPES, type SendType } from '../shared/tool-definitions.js'
 import { onRunExtend } from './protocol-runner.js'
 import { ASK_PREDECESSOR_TIMEOUT_MS, engineOfModel, normalizeReviewRounds } from '../shared/constants.js'
-import { ENGINE_PROFILES } from '../shared/engines/index.js'
+import { ENGINE_PROFILES, type EngineName } from '../shared/engines/index.js'
 import { isRestrictedSession, isToolAllowed, isWriteConfinedSession, predecessorAsker, refusalText } from '../sessions/tool-surface.js'
 import { deliveryRefusal } from './restricted.js'
 import { parseRateLimits, reportUsage } from './usage-alerts.js'
@@ -86,10 +86,16 @@ function forkSourceOfHistory(h: ThreadSessionEntry): Predecessor | undefined {
   const engine = h.engine ?? 'claude'
   const fork = resolveEngine(engine).recoveryPlan({ tmuxName: h.tmuxName, claudeSessionId: h.claudeSessionId, codexThreadId: h.codexThreadId, codexHomeName: h.codexHomeName }).fork
   if (!fork) return undefined
-  // A Codex source is refused before launch, so its missing cwd never matters.
+  // An engine that cannot fork is refused before this, so its missing cwd never matters.
   const cwd = fork.claudeSessionId ? claudeLaunchCwd(fork.claudeSessionId) : process.env.SPAWN_CWD
   if (!cwd) throw new Error(`fork_from: no transcript found for ${h.tmuxName} — its conversation is gone; spawn fresh with read_thread instead`)
   return { engine, fork, cwd, ...(h.model ? { model: h.model } : {}) }
+}
+
+/** Throws when the engine's profile says its sessions cannot be forked (absent engine: claude). */
+function refuseUnforkable(engine: EngineName | undefined, name: string): void {
+  const { forkable, label } = ENGINE_PROFILES[engine ?? 'claude']
+  if (!forkable) throw new Error(`fork_from: ${name} runs on the ${label} engine, and ${label} sessions cannot be forked — spawn fresh with read_thread instead`)
 }
 
 /**
@@ -109,12 +115,12 @@ function resolveForkSource(name: string, callerSessionId: string | undefined): P
   } else {
     const found = findSessionByName(name)
     if (!found) throw new Error(`fork_from: no session named "${name}" — call list_sessions for live names`)
+    // Asked of the source's engine before its fork plan: an engine that cannot fork has no plan, and "no conversation id" would blame the wrong thing.
+    refuseUnforkable('record' in found ? found.record.engine : found.history.engine, name)
     source = 'record' in found ? predecessorOf(found.record) : forkSourceOfHistory(found.history)
     if (!source) throw new Error(`fork_from: ${name} has no conversation id to fork — spawn fresh with read_thread instead`)
   }
-  // A Codex fork launches its own app-server in a fresh CODEX_HOME, where the source's
-  // rollout is not found; launching in the source's home would restart its app-server.
-  if (source.engine === 'codex') throw new Error(`fork_from: ${source.fork.parentName} is a Codex session, and Codex sessions cannot be forked yet — spawn fresh with read_thread instead`)
+  refuseUnforkable(source.engine, source.fork.parentName)
   // Checked here, before doSpawnSession creates a thread; its own check is the backstop for resumes.
   if (!existsSync(source.cwd)) throw new Error(`cannot fork: the source's launch directory ${source.cwd} no longer exists`)
   return source
@@ -497,7 +503,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         try {
           result = await doSpawnSession(topic, args.chat_id as string | undefined, args.message_id as string | undefined, {
           ...(model ? { model } : {}),
-          // engine: always 'claude' while Codex sources are refused; it matters once Codex forks are supported.
+          // engine: always 'claude' while engines that cannot fork are refused; it matters once one can.
           ...(source ? { forkFrom: source.fork, launchCwd: source.cwd, engine: source.engine } : {}),
           ...(readOnly ? { disallowedTools: READ_ONLY_DISALLOWED_TOOLS } : {}),
           ...(phaseBudgetMs ? { phaseBudgetMs } : {}),
