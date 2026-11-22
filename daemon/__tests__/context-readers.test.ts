@@ -6,6 +6,7 @@ import { parseContextPercent } from '../../infra/util.js'
 import { CACHE_HANDOFF_LINE, CONTEXT_ALERT_LINES, FULL_HANDOFF_DEFAULT_LINE } from '../../shared/context-lines.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import type { SessionInfo } from '../../sessions/registry.js'
+import { codexAdapter } from './codex-adapter.js'
 
 const RULE = '─'.repeat(40)
 const footer = (line: string, conversation = '⏺ done') => `${conversation}\n${RULE}\n❯ \n${RULE}\n  ${line}\n`
@@ -33,7 +34,7 @@ describe('Codex usage: structured first, the pane regex only as the fallback', (
   let tmux: FakeTmux
   beforeEach(() => { tmux = withFakeTmux() })
   afterEach(() => { tmux.restore() })
-  const adapter = new CodexEngineAdapter({} as never)
+  const adapter = codexAdapter({} as never)
   const info = (extra: Record<string, unknown> = {}) => ({ sessionId: 's', tmuxName: 'cx-ctx', ...extra }) as unknown as SessionInfo
 
   test('the runtime\'s context usage wins over whatever the pane says', () => {

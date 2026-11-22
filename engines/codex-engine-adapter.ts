@@ -8,7 +8,7 @@ import { promisify } from 'util'
 import { mkdirSync } from 'fs'
 import { join } from 'path'
 import { codexSpawnEnv } from '../shared/spawn-env.js'
-import { registry, type SessionInfo } from '../sessions/registry.js'
+import type { SessionInfo, SessionRegistry } from '../sessions/registry.js'
 import type { BlockingState } from './engine-adapter.js'
 import type {
   EngineAdapter, LaunchInput, LaunchResult,
@@ -23,7 +23,7 @@ import { tmuxCreateSession, tmuxHasSession, tmuxSync, tmuxTimedOut, tmuxWindowAc
 import { sendTmuxKeys, type TmuxKeyAction } from './codex-key-queue.js'
 import { SOCK_PATH, SPAWN_LOGS_DIR } from '../infra/config.js'
 import { codexTurnOutcome, defaultTurnSources, isCodexWorking } from './codex-observation.js'
-import { codexPiggyback, type CodexPiggyback } from '../sessions/codex-piggyback.js'
+import type { CodexPiggyback } from '../sessions/codex-piggyback.js'
 import { codexReconnecting } from './codex-reconnecting.js'
 import { replyContextLine } from '../shared/reply-context.js'
 import { shq } from '../infra/launch-files.js'
@@ -67,8 +67,9 @@ export class CodexEngineAdapter implements EngineAdapter {
   readonly channel = 'engine' as const
   constructor(
     private readonly engine: CodexEngine,
-    private readonly proc = codexLaunchProcess,
-    private readonly piggyback: CodexPiggyback = codexPiggyback,
+    private readonly proc: typeof codexLaunchProcess,
+    private readonly piggyback: CodexPiggyback,
+    private readonly registry: Pick<SessionRegistry, 'get' | 'values'>,
   ) {}
 
   // Launch resumes the thread in its original CODEX_HOME and takes the prompt.
@@ -256,7 +257,7 @@ export class CodexEngineAdapter implements EngineAdapter {
     // A home another LIVE record claims (e.g. adopted by a resume) is not ours to stop.
     // Dead records don't count, or a lingering one would leak the live owner's server.
     const home = info.codexHomeName ?? info.tmuxName
-    const claimed = [...registry.values()].some(s => s !== info && !s.deadAt && s.engine === 'codex' && (s.codexHomeName ?? s.tmuxName) === home)
+    const claimed = [...this.registry.values()].some(s => s !== info && !s.deadAt && s.engine === 'codex' && (s.codexHomeName ?? s.tmuxName) === home)
     if (!claimed) this.proc.stop(home)
     try { tmuxSync(['kill-session', '-t', info.tmuxName]) } catch (err) {
       // Any other failure is a session already gone; a timeout says nothing.
@@ -377,7 +378,7 @@ export class CodexEngineAdapter implements EngineAdapter {
     // Generation bound (invariant 10): if this record was replaced or removed while
     // we awaited, its home may belong to a successor — touch nothing.
     const stale = () => {
-      if (registry.get(info.sessionId) === info) return false
+      if (this.registry.get(info.sessionId) === info) return false
       try { this.engine.disconnect(info.sessionId) } catch {}
       process.stderr.write(`codex-adapter: abandoning stale reconnect for ${info.tmuxName}\n`)
       return true

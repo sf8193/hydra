@@ -14,6 +14,7 @@ import { policyIdFor } from '../../app/restricted.js'
 import { threadNotices } from '../../shared/notice-limit.js'
 import type { HydraConfig, Specialist } from '../../config/types.js'
 import '../../app/codex-runtime.js'
+import { codexAdapter } from './codex-adapter.js'
 
 process.stderr.write = (() => true) as any
 
@@ -253,7 +254,7 @@ describe('a message the gate let through but the session did not take', () => {
   })
   test('a Codex target the gate refuses is refused before anything is posted', async () => {
     configure(); watch()
-    const adapter = Object.assign(new CodexEngineAdapter({ isConnected: () => true } as any), { isAlive: () => true })
+    const adapter = Object.assign(codexAdapter({ isConnected: () => true } as any), { isAlive: () => true })
     const target = session('u6', { engine: 'codex', adapter })
     drift()
     const r = await send(target.tmuxName, sender('u6s'))

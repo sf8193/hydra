@@ -19,6 +19,7 @@ import { gateway } from '../../infra/config.js'
 import { transport } from '../../sessions/bridge-transport.js'
 import type { LaunchInput } from '../../engines/engine-adapter.js'
 import type { InboundMessage } from '../../gateways/gateway.js'
+import { codexAdapter } from './codex-adapter.js'
 
 
 // ---------------------------------------------------------------------------
@@ -54,7 +55,7 @@ const baseInput = { sessionId: 'new-sid', tmuxName: 'newname', cwd: '/tmp', orig
 describe('CodexEngineAdapter.launch', () => {
   test('resumeCodex: resumes the original thread in the original home', async () => {
     const engine = fakeEngine(), proc = fakeProc()
-    const adapter = new CodexEngineAdapter(engine as any, proc as any)
+    const adapter = codexAdapter(engine as any, proc as any)
     const r = await adapter.launch({ ...baseInput, resumeCodex: { threadId: 'T-orig', homeName: 'oldhome' } })
 
     expect(engine.calls).toEqual([
@@ -70,7 +71,7 @@ describe('CodexEngineAdapter.launch', () => {
 
   test('resumeCodex: the launch-time surface attaches the TUI to the original home', async () => {
     const engine = fakeEngine(), proc = fakeProc()
-    const adapter = new CodexEngineAdapter(engine as any, proc as any) as any
+    const adapter = codexAdapter(engine as any, proc as any) as any
     const seen: any[] = []
     adapter.surface = (info: any) => { seen.push({ home: info.codexHomeName ?? info.tmuxName, thread: info.codexThreadId }); return `${info.tmuxName}:hydra-chat` }
     await adapter.launch({ ...baseInput, resumeCodex: { threadId: 'T-orig', homeName: 'oldhome' } })
@@ -79,7 +80,7 @@ describe('CodexEngineAdapter.launch', () => {
 
   test('plain spawn still starts a fresh thread in its own home', async () => {
     const engine = fakeEngine(), proc = fakeProc()
-    const adapter = new CodexEngineAdapter(engine as any, proc as any)
+    const adapter = codexAdapter(engine as any, proc as any)
     const r = await adapter.launch(baseInput)
 
     expect(engine.calls).toEqual(['queue new-sid P0', `connect new-sid ${codexSocketPath('newname')}`])
@@ -103,7 +104,7 @@ let stops: Array<{ tmuxName: string; home?: string }> = []
 let homeStops: string[] = []            // app-server homes the REAL CodexEngineAdapter.stop tore down
 let pickedDuringLaunch: string | undefined
 const stopProc = { ...fakeProc(), stop: (home: string) => { homeStops.push(home); return true } }
-const realStopAdapter = new CodexEngineAdapter(fakeEngine() as any, stopProc as any)
+const realStopAdapter = codexAdapter(fakeEngine() as any, stopProc as any)
 let failCodexResume = false
 let failClaudeResume = false
 let claudeLearnsNoId = false
@@ -438,7 +439,7 @@ describe('stale Codex reconnect', () => {
       seedLive('r16-B', 'r16shared')
       throw new Error('thread not loaded')
     }
-    const adapter = new CodexEngineAdapter(engine, fakeProc() as any)
+    const adapter = codexAdapter(engine, fakeProc() as any)
 
     const realRetry = CodexEngineAdapter.RESUME_RETRY_MS
     CodexEngineAdapter.RESUME_RETRY_MS = 1 // the backoff's length is not under test
@@ -456,7 +457,7 @@ describe('stale Codex reconnect', () => {
   test('adapter.reconnect: record replaced while probing the socket → nothing attempted', async () => {
     const A = seedLive('r16-C', 'r16shared2')
     const engine = { ...fakeEngine(), isSocketLive: async () => { registry.delete(A.sessionId); return true } } as any
-    const adapter = new CodexEngineAdapter(engine, fakeProc() as any)
+    const adapter = codexAdapter(engine, fakeProc() as any)
     expect(await adapter.reconnect(A)).toBe(false)
     expect(engine.calls).toEqual([])
   })

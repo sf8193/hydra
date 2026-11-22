@@ -32,8 +32,6 @@ export function tierOf(path: string): number | undefined {
 
 /** `from -> to`, one per allowed upward import. */
 export const ALLOWED: readonly string[] = [
-  'engines/codex-engine-adapter.ts -> sessions/codex-piggyback.ts',
-  'engines/codex-engine-adapter.ts -> sessions/registry.ts',
 ]
 
 const skip = (p: string) => !p.endsWith('.ts') || p.endsWith('.d.ts') || p.endsWith('.test.ts') || /(^|\/)(__tests__|node_modules|docs|scripts|mods\.local|mod)\//.test(p) || p === 'test-setup.ts'

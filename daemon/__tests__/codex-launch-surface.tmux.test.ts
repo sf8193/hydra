@@ -5,6 +5,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { CodexEngineAdapter } from '../../engines/codex-engine-adapter.js'
 import { fakeCodexAdapter } from './test-harness.js'
+import { codexAdapter } from './codex-adapter.js'
 
 // Real-tmux tests on an isolated server (own TMUX_TMPDIR, cleanup by explicit -S).
 const hasTmux = Bun.spawnSync(['tmux', '-V']).exitCode === 0
@@ -53,7 +54,7 @@ test('launch resolves when every tmux call fails', async () => {
       connect: async () => { connected = true; return { threadId: 'thread-1', model: 'm' } },
       isConnected: () => connected,
     }
-    const adapter = new CodexEngineAdapter(engine as any) as any
+    const adapter = codexAdapter(engine as any) as any
     adapter.startAppServer = () => '/tmp/spawn.log'
     const result = await adapter.launch({ sessionId: 's1', tmuxName: 'codex-t', cwd: '/tmp', originalCwd: '/tmp', model: 'm', prompt: 'hi' })
     expect(result).toMatchObject({ provider: 'codex', identity: { codexThreadId: 'thread-1' } })
