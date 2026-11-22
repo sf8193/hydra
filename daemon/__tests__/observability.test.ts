@@ -3,9 +3,9 @@ import { openSync, writeSync, closeSync, writeFileSync, readFileSync, statSync, 
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { trimSpawnLog, trimDaemonLog, buildCrashNotice, buildAutopsy, readConversationForensics, vitalsHeader, type ConversationForensics } from '../../infra/observability.js'
-import { claudeTurnOutcome } from '../engines/claude-transcript.js'
-import { codexTurnOutcome, defaultTurnSources, type TurnSources } from '../engines/codex-observation.js'
-import { engines } from '../engines/instances.js'
+import { claudeTurnOutcome } from '../../engines/claude-transcript.js'
+import { codexTurnOutcome, defaultTurnSources, type TurnSources } from '../../engines/codex-observation.js'
+import { engines } from '../../engines/instances.js'
 import type { SessionInfo } from '../sessions.js'
 import { nextResumeCount } from '../session-lifecycle.js'
 

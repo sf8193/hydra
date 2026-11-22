@@ -1,4 +1,4 @@
-// daemon/engines/omp-session.ts
+// engines/omp-session.ts
 //
 // Reads omp's own session file: one JSONL per hydra session, in the directory OmpEngine passes as --session-dir.
 // omp appends each message as it happens: an assistant message with stopReason 'toolUse' means the turn is still
@@ -6,7 +6,7 @@
 
 import { closeSync, openSync, readdirSync, readSync, statSync } from 'fs'
 import { join } from 'path'
-import { STATE_DIR } from '../../infra/config.js'
+import { STATE_DIR } from '../infra/config.js'
 
 export const ompSessionDir = (sessionId: string): string => join(STATE_DIR, 'omp-sessions', sessionId)
 

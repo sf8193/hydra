@@ -52,7 +52,7 @@ export const RULES: Rule[] = [
     // restoring records at load, before occupancy can be asked.
     allowed: [
       'daemon.ts', 'infra/tmux.ts', 'daemon/bridge-dispatch.ts', 'daemon/commands/thread.ts',
-      'daemon/engines/claude-engine.ts', 'daemon/engines/codex-engine-adapter.ts', 'daemon/recovery.ts',
+      'engines/claude-engine.ts', 'engines/codex-engine-adapter.ts', 'daemon/recovery.ts',
       'daemon/session-lifecycle.ts', 'daemon/session-reachability.ts', 'daemon/bridge-server.ts', 'daemon/cli-handler.ts',
       'daemon/sessions.ts',
     ],

@@ -14,7 +14,7 @@ It runs in tmux like a Claude session, so `tmux attach -t <name>` shows it and y
 
 - **Messages in:** there is no channel into agy, so hydra pastes each message into the pane (a bracketed paste, then Enter, one at a time per session) and waits for the pane to show it. agy queues a message that arrives mid-turn. A message the pane never shows is reported as a non-retryable rejection: it may have been sent, and a retry could paste it twice.
 - **Tools out:** reply, react, send_to_thread and the rest are MCP tools of the `hydra` server.
-- **Turn end, answer, tokens:** agy's hook (`daemon/agy-hook.ts`) records the conversation and working/idle in `<state>/agy-sessions/<session>.json`; the turn's answer and token counts come from agy's transcript (`~/.gemini/antigravity-cli/brain/<conversation>/.system_generated/logs/`).
+- **Turn end, answer, tokens:** agy's hook (`engines/agy-hook.ts`) records the conversation and working/idle in `<state>/agy-sessions/<session>.json`; the turn's answer and token counts come from agy's transcript (`~/.gemini/antigravity-cli/brain/<conversation>/.system_generated/logs/`).
 - **Resume:** `respawn` and revive continue the conversation with `agy --conversation <id>`; boot recovery does not relaunch agy sessions (a daemon restart leaves the tmux pane running; a machine reboot needs `respawn`).
 
 ## Limits

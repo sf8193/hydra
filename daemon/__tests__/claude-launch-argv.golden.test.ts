@@ -2,7 +2,7 @@
 // the temp state dir). Written against the code before restricted specialists and kept green through them: an
 // `restricted = false` specialist and every non-specialist session must launch exactly as they always have.
 import { expect, test } from 'bun:test'
-import { ClaudeEngine } from '../engines/claude-engine.js'
+import { ClaudeEngine } from '../../engines/claude-engine.js'
 import { STATE_DIR, CLAUDE_CONFIG, SOCK_PATH } from '../../infra/config.js'
 import { mkdirSync, writeFileSync } from 'fs'
 import { join } from 'path'

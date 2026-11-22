@@ -33,11 +33,11 @@ import { registry } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
 import { gateway } from '../infra/config.js'
 import { on } from '../infra/event-bus.js'
-import type { TurnOutcome } from './engines/engine-adapter.js'
+import type { TurnOutcome } from '../engines/engine-adapter.js'
 import { safeSend } from '../infra/util.js'
 import { hasFreeze, paneScreenshot, tmuxSync, tmuxWindowActivity } from '../infra/tmux.js'
 import { probeByteTmuxName } from './pane-probe.js'
-import { blockedReason, readClaudeStatus } from './engines/claude-status.js'
+import { blockedReason, readClaudeStatus } from '../engines/claude-status.js'
 import { markYourTurn } from '../infra/home-status.js'
 
 export type ReplyGuardDeps = {

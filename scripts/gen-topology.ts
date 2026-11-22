@@ -37,7 +37,7 @@ const LAYER_CONFIG: Record<string, { layer: string; desc: string }> = {
   'infra/util.ts':           { layer: 'core',      desc: 'safeSend, chunk, parseContextPercent, formatDuration, baseNameFromBranch' },
   'infra/tmux.ts':           { layer: 'core',      desc: 'Sync tmux, bounded with a hold: tmuxSync, session and server state, window activity' },
   'infra/worktree-manager.ts': { layer: 'core',    desc: 'Git worktree create/reattach/destroy, unpushed-commit check' },
-  'daemon/bridge-tools.ts':   { layer: 'tools',     desc: 'UNIVERSAL_TOOLS, computeToolsForSession — zero daemon imports (cycle guard)' },
+  'engines/bridge-tools.ts':   { layer: 'tools',     desc: 'UNIVERSAL_TOOLS, computeToolsForSession — zero daemon imports (cycle guard)' },
   'daemon/tool-surface.ts':   { layer: 'tools',     desc: 'getToolsForSession, pushToolSurface — reads SessionInfo, bridges to bridge-tools' },
   'daemon/bridge-dispatch.ts': { layer: 'tools',    desc: 'executeTool — tool execution dispatch' },
   'daemon/bridge-server.ts':  { layer: 'server',    desc: 'Unix socket server, bridge protocol, death detection, flap guard' },

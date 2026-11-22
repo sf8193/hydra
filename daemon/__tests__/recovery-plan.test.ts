@@ -3,7 +3,7 @@
 // handleForkIntercept (thread-recovery.test.ts "cross-engine: continuation…").
 
 import { describe, expect, test } from 'bun:test'
-import { ClaudeEngine } from '../engines/claude-engine.js'
+import { ClaudeEngine } from '../../engines/claude-engine.js'
 import { fakeCodexAdapter } from './test-harness.js'
 
 const claude = new ClaudeEngine({} as any)

@@ -5,7 +5,7 @@ import { transport } from '../bridge-transport.js'
 import { gateway } from '../../infra/config.js'
 import { registry } from '../sessions.js'
 import { _resetForTesting as resetProtocolRegistry, finishPrivateProtocolChildLaunch, markPrivateProtocolChildLaunching, protocolChildRequiresPrivate, protocolSpawnRequiresPrivate, registerProtocolChild } from '../protocol-registry.js'
-import { computeToolsForSession } from '../bridge-tools.js'
+import { computeToolsForSession } from '../../engines/bridge-tools.js'
 import reviewProto from '../../protocols/review.js'
 import delegatedBuildProto from '../../protocols/delegated-build.js'
 

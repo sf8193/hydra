@@ -8,7 +8,7 @@ import { join } from 'path'
 import { socketServer } from '../bridge-server.js'
 import { registry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
-import { engines } from '../engines/instances.js'
+import { engines } from '../../engines/instances.js'
 import type { SessionInfo } from '../sessions.js'
 import { isToolAllowed } from '../tool-surface.js'
 

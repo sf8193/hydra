@@ -3,7 +3,7 @@
 // respawn's engine/model selection, and native fork vs continuation. Every
 // executor is stubbed through recoveryDeps, so nothing is spawned.
 
-import { engines, codexEngine } from '../engines/instances.js'
+import { engines, codexEngine } from '../../engines/instances.js'
 import { rmSync } from 'fs'
 import { join } from 'path'
 import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test'

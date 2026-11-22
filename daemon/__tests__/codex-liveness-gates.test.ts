@@ -206,7 +206,7 @@ describe('gate 5: dashboard rows', () => {
       writeFileSync(script, `
         const { registry } = await import(${JSON.stringify(join(root, 'daemon/sessions.ts'))})
         const { gateway } = await import(${JSON.stringify(join(root, 'infra/config.ts'))})
-        const { CodexEngineAdapter } = await import(${JSON.stringify(join(root, 'daemon/engines/codex-engine-adapter.ts'))})
+        const { CodexEngineAdapter } = await import(${JSON.stringify(join(root, 'engines/codex-engine-adapter.ts'))})
         const { refreshDashboardNow } = await import(${JSON.stringify(join(root, 'daemon/dashboard.ts'))})
         const { startHydraConfig } = await import(${JSON.stringify(join(root, 'daemon/hydra-config.ts'))})
         startHydraConfig()

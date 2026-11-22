@@ -1,15 +1,15 @@
-// daemon/engines/codex-observation.ts
+// engines/codex-observation.ts
 //
 // What the daemon observes of a Codex turn: its last message and whether the
 // protocol-level turn finished, both pushed by codex-runtime's events.
 
-import { readConversationForensics, vitalsPruners } from '../../infra/observability.js'
-import { transcriptPathFor } from '../../infra/usage.js'
+import { readConversationForensics, vitalsPruners } from '../infra/observability.js'
+import { transcriptPathFor } from '../infra/usage.js'
 import type { TurnOutcome } from './engine-adapter.js'
 import { transcriptAnswer, type TranscriptSources } from './claude-transcript.js'
 import { readClaudeStatus } from './claude-status.js'
-import { codexLastTurn, type CodexLastTurn } from '../codex-rollout.js'
-import { codexHomeDir } from '../codex-process.js'
+import { codexLastTurn, type CodexLastTurn } from './codex-rollout.js'
+import { codexHomeDir } from './codex-process.js'
 
 // Codex has no transcript file to read back (unlike Claude's JSONL) — its
 // protocol streams message text via an event instead, so we stash the latest

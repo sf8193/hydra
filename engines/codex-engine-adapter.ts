@@ -1,5 +1,5 @@
-import { deliveryRefusal } from '../restricted.js'
-// daemon/engines/codex-engine-adapter.ts
+import { deliveryRefusal } from '../daemon/restricted.js'
+// engines/codex-engine-adapter.ts
 //
 // Codex engine adapter — wraps the CodexEngine (app-server + unix socket)
 // and the disposable tmux TUI.
@@ -8,37 +8,39 @@ import { execFile, execFileSync } from 'child_process'
 import { promisify } from 'util'
 import { mkdirSync } from 'fs'
 import { join } from 'path'
-import { codexSpawnEnv } from '../../shared/spawn-env.js'
-import { registry, type SessionInfo } from '../sessions.js'
-import type { BlockingState } from '../pane-probe.js'
+import { codexSpawnEnv } from '../shared/spawn-env.js'
+import { registry, type SessionInfo } from '../daemon/sessions.js'
+import type { BlockingState } from '../daemon/pane-probe.js'
 import type {
   EngineAdapter, LaunchInput, LaunchResult,
   DeliveryMode, DeliveryResult, Notification,
   StopResult,
   ContextUsage, RecoverySource, RecoveryPlan, Turn,
 } from './engine-adapter.js'
-import { codexSocketPath, type CodexEngine } from '../codex-engine.js'
-import { codexHomeDir as codexHomeDirFn, codexRoot, startCodexAppServer, stopCodexAppServer } from '../codex-process.js'
-import { parseContextPercent, safeSend } from '../../infra/util.js'
-import { tmuxCreateSession, tmuxHasSession, tmuxSync, tmuxTimedOut, tmuxWindowActivity } from '../../infra/tmux.js'
-import { sendTmuxKeys, type TmuxKeyAction } from '../codex-key-queue.js'
-import { SOCK_PATH, SPAWN_LOGS_DIR } from '../../infra/config.js'
+import { codexSocketPath, type CodexEngine } from './codex-engine.js'
+import { codexHomeDir as codexHomeDirFn, codexRoot, startCodexAppServer, stopCodexAppServer } from './codex-process.js'
+import { parseContextPercent, safeSend } from '../infra/util.js'
+import { tmuxCreateSession, tmuxHasSession, tmuxSync, tmuxTimedOut, tmuxWindowActivity } from '../infra/tmux.js'
+import { sendTmuxKeys, type TmuxKeyAction } from './codex-key-queue.js'
+import { SOCK_PATH, SPAWN_LOGS_DIR } from '../infra/config.js'
 import { codexTurnOutcome, defaultTurnSources, isCodexWorking } from './codex-observation.js'
 import { codexPiggyback, type CodexPiggyback } from './codex-piggyback.js'
 import { isCodexReconnecting, reconnectCodexSessions } from './codex-runtime.js'
-import { replyContextLine } from '../reply-context.js'
-import { shq } from '../../infra/launch-files.js'
+import { replyContextLine } from '../daemon/reply-context.js'
+import { shq } from '../infra/launch-files.js'
 
 const execFileAsync = promisify(execFile)
 
+/** The stdio MCP server Codex runs for the hydra tools; it sits beside this file. */
+export const CODEX_MCP_SERVER = join(import.meta.dir, 'codex-mcp-server.ts')
+
 function registerCodexMcp(homeDir: string, sessionId: string, tmuxName: string): void {
   if (process.env.NODE_ENV === 'test') throw new Error('refusing to run a real `codex mcp add` under bun test — give the adapter a fake process')
-  const mcpServerPath = join(new URL('.', import.meta.url).pathname, '..', 'codex-mcp-server.ts')
   try {
     execFileSync('bash', ['-c', [
       `mkdir -p ${shq(homeDir)}`,
       `ln -sf ${shq(join(codexRoot(), 'auth.json'))} ${shq(homeDir)}/auth.json`,
-      `CODEX_HOME=${shq(homeDir)} codex mcp remove hydra 2>/dev/null; CODEX_HOME=${shq(homeDir)} codex mcp add hydra --env DAEMON_SOCK=${shq(SOCK_PATH)} --env HYDRA_SESSION_ID=${shq(sessionId)} -- bun ${shq(mcpServerPath)}`,
+      `CODEX_HOME=${shq(homeDir)} codex mcp remove hydra 2>/dev/null; CODEX_HOME=${shq(homeDir)} codex mcp add hydra --env DAEMON_SOCK=${shq(SOCK_PATH)} --env HYDRA_SESSION_ID=${shq(sessionId)} -- bun ${shq(CODEX_MCP_SERVER)}`,
     ].join(' && ')], { stdio: 'pipe', env: codexSpawnEnv(), timeout: 15_000, killSignal: 'SIGKILL' })   // two codex CLI starts
   } catch (err) {
     process.stderr.write((err as { code?: string }).code === 'ETIMEDOUT'

@@ -4,9 +4,9 @@ import { createServer, type Socket } from 'net'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { BridgeTransport } from '../bridge-transport.js'
-import { computeToolsForSession } from '../bridge-tools.js'
-import { ClaudeEngine } from '../engines/claude-engine.js'
-import { OmpEngine } from '../engines/omp-engine.js'
+import { computeToolsForSession } from '../../engines/bridge-tools.js'
+import { ClaudeEngine } from '../../engines/claude-engine.js'
+import { OmpEngine } from '../../engines/omp-engine.js'
 import { SOCK_PATH } from '../../infra/config.js'
 
 // Real omp in tmux against a stub daemon socket, on the suite's private tmux server.

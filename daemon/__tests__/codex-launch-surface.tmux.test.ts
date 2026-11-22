@@ -3,7 +3,7 @@ import { execFileSync } from 'child_process'
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
+import { CodexEngineAdapter } from '../../engines/codex-engine-adapter.js'
 import { fakeCodexAdapter } from './test-harness.js'
 
 // Real-tmux tests on an isolated server (own TMUX_TMPDIR, cleanup by explicit -S).

@@ -11,6 +11,6 @@
     "esModuleInterop": true,
     "resolveJsonModule": true
   },
-  "include": ["*.ts", "daemon/**/*.ts", "infra/**/*.ts", "cli/**/*.ts", "shared/**/*.ts", "config/**/*.ts", "routing/**/*.ts", "connectors/**/*.ts", "specialists/**/*.ts", "gateways/*.ts"],
+  "include": ["*.ts", "daemon/**/*.ts", "infra/**/*.ts", "engines/**/*.ts", "cli/**/*.ts", "shared/**/*.ts", "config/**/*.ts", "routing/**/*.ts", "connectors/**/*.ts", "specialists/**/*.ts", "gateways/*.ts"],
   "exclude": ["node_modules", "gateways/slack.ts"]
 }

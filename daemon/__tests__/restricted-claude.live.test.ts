@@ -11,11 +11,11 @@ import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, r
 import { homedir, tmpdir } from 'os'
 import { join } from 'path'
 import { createServer, connect, type Server } from 'net'
-import { ClaudeEngine } from '../engines/claude-engine.js'
+import { ClaudeEngine } from '../../engines/claude-engine.js'
 import { CLAUDE_CONFIG, STATE_DIR } from '../../infra/config.js'
 import { serverTmpDir } from '../../infra/restricted-files.js'
 import { policyIdFor, type LaunchPolicy } from '../restricted.js'
-import { mismatches, readLoaded, verifyDeps, verifyLaunch } from '../engines/claude-verify.js'
+import { mismatches, readLoaded, verifyDeps, verifyLaunch } from '../../engines/claude-verify.js'
 import { withFakeTmux } from './fake-tmux.js'
 import { PROBE_INHERITED_ENV, minimalProbeEnv } from './restricted-probe.js'
 

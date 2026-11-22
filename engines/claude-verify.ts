@@ -19,9 +19,9 @@
 // refuses at once), then judge. A file that never appears, or never completes, within the deadline refuses.
 
 import { readFileSync } from 'fs'
-import { BRIDGE_MCP_SERVER_KEY, BRIDGE_PLUGIN_ID, BRIDGE_TOOLS_PERMISSION, bridgePluginCache } from '../../infra/plugin-manifest.js'
-import { HYDRA_MOD, serverToolRule, type RestrictedPolicy } from '../restricted.js'
-import { claudeConfigDir } from '../../shared/constants.js'
+import { BRIDGE_MCP_SERVER_KEY, BRIDGE_PLUGIN_ID, BRIDGE_TOOLS_PERMISSION, bridgePluginCache } from '../infra/plugin-manifest.js'
+import { HYDRA_MOD, serverToolRule, type RestrictedPolicy } from '../daemon/restricted.js'
+import { claudeConfigDir } from '../shared/constants.js'
 
 /** What a launch's debug file says Claude Code loaded. Each field is read from the lines that say it, and nothing is inferred. */
 export type Loaded = {
