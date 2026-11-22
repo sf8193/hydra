@@ -14,7 +14,7 @@ import { transcribeDownloads, mergeTranscripts } from '../infra/transcription.js
 
 import { handleSpawnIntercept, handleTemplateSpawn, handleKillIntercept, handleRestartIntercept, handleReconnectIntercept, handleCommandsIntercept } from './commands/global.js'
 import { handleRecoverIntercept } from './recovery.js'
-import { resolveModelAlias, resolveCodexModelAlias, resolveEngineAlias, engineAliasPattern, extractModelPrefix, isDeleteReaction, MODEL_ALIAS_PATTERN, MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES, DEFAULT_REVIEW_ROUNDS } from '../shared/constants.js'
+import { resolveModelAlias, resolveEngineAlias, resolveAnyEngineAlias, engineAliasPattern, extractModelPrefix, isDeleteReaction, MODEL_ALIAS_PATTERN, ENGINE_ALIAS_KEYS, ALL_ENGINE_ALIAS_PATTERN, DEFAULT_REVIEW_ROUNDS } from '../shared/constants.js'
 import { ENGINES } from '../shared/engines/index.js'
 import { isForMain, noteMainChannel } from '../sessions/main.js'
 import { handleMainHandoffIntercept } from './main-handoff.js'
@@ -51,8 +51,7 @@ import { holdForSpecialist, holdingFor, setHeldDelivery } from './specialist-thr
 // can never trigger them.
 const COMMAND_PREFIXES = [
   'new session:', 'spawn:', '/spawn', 'spawn-wt:', '/spawn-wt',
-  ...Object.keys(MODEL_ALIASES).flatMap(a => [`spawn ${a}:`, `new session ${a}:`, `spawn-wt ${a}:`]),
-  ...Object.keys(CODEX_MODEL_ALIASES).flatMap(a => [`spawn ${a}:`, `new session ${a}:`]),
+  ...ENGINE_ALIAS_KEYS.flatMap(a => [`spawn ${a}:`, `new session ${a}:`, `spawn-wt ${a}:`]),
   'kill session:', 'kill:', '/kill',
   '/sessions', 'list sessions',
   '/restart', 'restart daemon', 'restart',
@@ -84,8 +83,7 @@ const aliasForms = (pattern: string) => ({
 })
 export const ENGINE_ALIAS_FORMS = ENGINES.filter(e => e !== 'claude').map(engine => ({ engine, ...aliasForms(engineAliasPattern(engine)) }))
 const SPAWN_WT_MODEL_RE = new RegExp(`^(?:spawn-wt|/spawn-wt)\\s+(${MODEL_ALIAS_PATTERN}):\\s*(\\S+)\\s+([\\s\\S]+)`, 'i')
-const FORK_MODEL_RE = new RegExp(`^(?:fork|/fork)\\s+(${MODEL_ALIAS_PATTERN}):\\s*([\\s\\S]+)`, 'i')
-const FORK_CODEX_MODEL_RE = new RegExp(`^(?:fork|/fork)\\s+(${CODEX_MODEL_ALIAS_PATTERN}):\\s*([\\s\\S]+)`, 'i')
+const FORK_MODEL_RE = new RegExp(`^(?:fork|/fork)\\s+(${ALL_ENGINE_ALIAS_PATTERN}):\\s*([\\s\\S]+)`, 'i')
 const BARE_ALIAS_RE = new RegExp(`^(${MODEL_ALIAS_PATTERN}):?$`, 'i')
 const BARE_CODEX_RE = /^codex:?\s*$/i
 
@@ -109,7 +107,7 @@ export const BUILD_RE = /^(?:\/build_v2|build_v2|\/build|build)\s*(?:(\S+?):\s+)
 /** A model the sender put in the topic instead of before the colon, so the command would run the default model with the alias as part of the topic. Returns the hint to send, or undefined for a topic that merely starts with a word that is also an alias ("opus is slow"). Refused: an alias then a count (`fable 3 topic`), an alias then a spaced dash (`fable - topic`), or a versioned alias such as `fable-5-2` (the form that is easy to type in place of `fable-5-2:`; a task that opens by naming a versioned model is refused too, and is retyped). The separator is a space or tab, so a list or number on the alias's next line is not read as one. */
 export function misplacedModelHint(command: 'review' | 'build', topic: string): string | undefined {
   const counted = topic.match(/^(\S+)[ \t]+(\d+)(?=\s|$)/)
-  const known = (w: string) => resolveModelAlias(w) || resolveCodexModelAlias(w)
+  const known = (w: string) => resolveAnyEngineAlias(w)
   if (counted && known(counted[1])) {
     return `_Model syntax: \`/${command} ${counted[2]} ${counted[1]}: topic\` or \`/${command} ${counted[1]}: ${counted[2]} topic\`_`
   }
@@ -152,7 +150,7 @@ export function parseHandoffCommand(content: string): { model?: string; note?: s
   const m = content.match(/^\/?handoff(?:\s+([a-z][\w.-]*))?(?:(?::\s*|\s+[-–—]\s+)([\s\S]*?))?\s*$/i)
   if (!m) return null
   const [, model, rawNote] = m
-  if (model && rawNote !== undefined && !resolveModelAlias(model) && !resolveCodexModelAlias(model)) return null
+  if (model && rawNote !== undefined && !resolveAnyEngineAlias(model)) return null
   const note = rawNote?.trim()
   return { ...(model ? { model } : {}), ...(note ? { note } : {}) }
 }
@@ -170,15 +168,13 @@ export function isHandoffNearMiss(content: string): boolean {
 
 function resolveProtocolModel(alias: string | undefined, channelId: string, replyTo: string): ProtocolModelSelection | undefined | false {
   if (!alias) return undefined
-  const claudeModel = resolveModelAlias(alias)
-  if (claudeModel) return { model: claudeModel, engine: 'claude' }
-  const codexModel = resolveCodexModelAlias(alias)
-  if (!codexModel) {
-    const available = [...Object.keys(MODEL_ALIASES), ...Object.keys(CODEX_MODEL_ALIASES)].join(', ')
+  const resolved = resolveAnyEngineAlias(alias)
+  if (!resolved) {
+    const available = ENGINE_ALIAS_KEYS.join(', ')
     void gateway.send(channelId, `_Unknown model \`${alias}\`. Available: ${available}_`, { replyTo }).catch(() => {})
     return false
   }
-  return { model: codexModel, engine: 'codex' }
+  return resolved
 }
 
 // ---------------------------------------------------------------------------
@@ -741,16 +737,11 @@ gateway.onMessage(async (inbound: InboundMessage) => {
     }
 
     if (msg.isThread) {
-      const forkCodexModelMatch = msg.content.match(FORK_CODEX_MODEL_RE)
-      if (forkCodexModelMatch) {
-        void handleForkIntercept(msg, forkCodexModelMatch[2].trim(), resolveCodexModelAlias(forkCodexModelMatch[1]), { engine: 'codex' })
-        return
-      }
-
-      // "fork sonnet: topic" / "fork opus-5: topic" — fork with model override
+      // "fork sonnet: topic" / "fork sol: topic" / "fork neon: topic" — fork with model (+ engine) override
       const forkModelMatch = msg.content.match(FORK_MODEL_RE)
       if (forkModelMatch) {
-        void handleForkIntercept(msg, forkModelMatch[2].trim(), resolveModelAlias(forkModelMatch[1]), { engine: 'claude' })
+        const sel = resolveAnyEngineAlias(forkModelMatch[1])!
+        void handleForkIntercept(msg, forkModelMatch[2].trim(), sel.model, { engine: sel.engine })
         return
       }
 

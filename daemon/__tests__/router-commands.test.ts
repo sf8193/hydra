@@ -516,6 +516,8 @@ describe('misplacedModelHint', () => {
     expect(misplacedModelHint('review', 'fable-5-2 - fix the thing')).toBe('_Model syntax: `review fable-5-2: topic`_')
     expect(misplacedModelHint('build', 'opus - add x')).toBe('_Model syntax: `build opus: topic`_')
     expect(misplacedModelHint('review', 'sol \u2014 look at y')).toBe('_Model syntax: `review sol: topic`_')
+    expect(misplacedModelHint('review', 'neon - look at y')).toBe('_Model syntax: `review neon: topic`_')
+    expect(misplacedModelHint('build', 'omp-sonnet add x')).toBe('_Model syntax: `build omp-sonnet: topic`_')
   })
   test('refuses a versioned alias with plain words, and an alias then a count', () => {
     expect(misplacedModelHint('review', 'fable-5-2 fix the thing')).toBe('_Model syntax: `review fable-5-2: topic`_')
