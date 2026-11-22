@@ -62,8 +62,8 @@ describe('check-layers', () => {
   })
 
   test('edges reads the import path relative to the importing file', () => {
-    const files = [file('daemon/engines/x.ts', "import { a } from '../sessions.js'"), file('daemon/sessions.ts', 'export const a = 1')]
-    expect(edges(files)).toEqual(['daemon/engines/x.ts -> daemon/sessions.ts'])
+    const files = [file('engines/x.ts', "import { a } from '../daemon/sessions.js'"), file('daemon/sessions.ts', 'export const a = 1')]
+    expect(edges(files)).toEqual(['engines/x.ts -> daemon/sessions.ts'])
   })
 
   test('the repo today matches the allowlist exactly', () => {

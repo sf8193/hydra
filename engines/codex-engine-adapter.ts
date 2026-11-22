@@ -31,14 +31,16 @@ import { shq } from '../infra/launch-files.js'
 
 const execFileAsync = promisify(execFile)
 
+/** The stdio MCP server Codex runs for the hydra tools; it sits beside this file. */
+export const CODEX_MCP_SERVER = join(import.meta.dir, 'codex-mcp-server.ts')
+
 function registerCodexMcp(homeDir: string, sessionId: string, tmuxName: string): void {
   if (process.env.NODE_ENV === 'test') throw new Error('refusing to run a real `codex mcp add` under bun test — give the adapter a fake process')
-  const mcpServerPath = join(new URL('.', import.meta.url).pathname, '..', 'codex-mcp-server.ts')
   try {
     execFileSync('bash', ['-c', [
       `mkdir -p ${shq(homeDir)}`,
       `ln -sf ${shq(join(codexRoot(), 'auth.json'))} ${shq(homeDir)}/auth.json`,
-      `CODEX_HOME=${shq(homeDir)} codex mcp remove hydra 2>/dev/null; CODEX_HOME=${shq(homeDir)} codex mcp add hydra --env DAEMON_SOCK=${shq(SOCK_PATH)} --env HYDRA_SESSION_ID=${shq(sessionId)} -- bun ${shq(mcpServerPath)}`,
+      `CODEX_HOME=${shq(homeDir)} codex mcp remove hydra 2>/dev/null; CODEX_HOME=${shq(homeDir)} codex mcp add hydra --env DAEMON_SOCK=${shq(SOCK_PATH)} --env HYDRA_SESSION_ID=${shq(sessionId)} -- bun ${shq(CODEX_MCP_SERVER)}`,
     ].join(' && ')], { stdio: 'pipe', env: codexSpawnEnv(), timeout: 15_000, killSignal: 'SIGKILL' })   // two codex CLI starts
   } catch (err) {
     process.stderr.write((err as { code?: string }).code === 'ETIMEDOUT'
