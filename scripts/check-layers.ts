@@ -50,7 +50,6 @@ export const ALLOWED: readonly string[] = [
   'engines/codex-runtime.ts -> sessions/registry.ts',
   'engines/instances.ts -> sessions/bridge-transport.ts',
   'gateways/slack.ts -> connectors/slack/conversation.ts',
-  'gateways/slack.ts -> sessions/access.ts',
   'infra/artifacts.ts -> connectors/slack/conversation.ts',
   'specialists/specialist-deliver.ts -> app/recovery.ts',
   'specialists/specialist-deliver.ts -> app/session-lifecycle.ts',

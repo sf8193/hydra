@@ -268,14 +268,6 @@ export class SlackGateway implements ChatGateway {
 
 
 
-    // Auto-add channel to access groups when bot is invited
-    this.app.event('member_joined_channel', async ({ event }) => {
-      if (event.user === this._botUserId) {
-        const { autoAddGroup } = await import('../sessions/access.js')
-        autoAddGroup(event.channel)
-        process.stderr.write(`slack gateway: bot invited to channel ${event.channel}, auto-added to groups\n`)
-      }
-    })
     // Handle reaction_added for :hocho: message deletion
     this.app.event('reaction_added', async ({ event }) => {
       this.touchHeartbeat()
