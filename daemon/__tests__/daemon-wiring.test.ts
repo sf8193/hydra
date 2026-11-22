@@ -20,3 +20,14 @@ test('the Slack gateway has the `operators` field daemon.ts assigns, and nobody 
   expect('operators' in gw).toBe(true)
   expect(gw.operators()).toEqual([])
 })
+
+// The engine reads a server's token variable without checking it is set: doSpawnSession refuses a start whose token is missing before it launches (app/session-lifecycle.ts),
+// and it is the only caller of `adapter.launch`. A second caller would skip that refusal, so the count is pinned.
+test('doSpawnSession is the only production caller of adapter.launch', async () => {
+  const { execFileSync } = await import('child_process')
+  const root = join(import.meta.dir, '..', '..')
+  const files = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '*.ts'], { cwd: root, encoding: 'utf8' }).split('\n')
+    .filter(f => f && !/(^|\/)(__tests__|node_modules)\//.test(f) && !f.startsWith('scripts/') && !f.endsWith('.test.ts'))
+  const hits = files.filter(f => /\badapter[!?]*\.launch\b|\badapter[!?]*\.?\[\s*['"]launch['"]\s*\]/.test(readFileSync(join(root, f), 'utf8').replace(/\/\/.*$/gm, '')))
+  expect(hits).toEqual(['app/session-lifecycle.ts'])
+})
