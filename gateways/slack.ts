@@ -13,7 +13,7 @@ import type { InboxLimits } from '../config/write-confinement.js'
 import { SocketSupervisor } from '../shared/socket-supervisor.js'
 import { ThrottledQueue } from '../throttled-queue.js'
 import { HOME_STATUS_ACTION_PREFIX, MAX_ATTACHMENT_BYTES } from '../shared/constants.js'
-import { buildSocketApp, parseAuth, unfurlFields } from '../shared/slack-client.js'
+import { buildSocketApp, messageBody, parseAuth, unfurlFields } from '../shared/slack-client.js'
 import { parseHomeStatusClick } from '../infra/home-status.js'
 import { linkPreviewsOff } from '../shared/link-previews.js'
 import { archiveUrl } from '../shared/slack-conversation.js'
@@ -38,17 +38,15 @@ const RECENT_SENT_CAP = 200
 
 /**
  * Slack renders FULL Markdown — tables, `-`/`*` lists, headings, code fences — only via the
- * `markdown_text` field. It can't be combined with `blocks`/`text` and caps at ~12k chars.
+ * `markdown_text` field (`messageBody`, shared/slack-client.ts, which the Slack connector's replies use too). It can't be combined with `blocks`/`text` and caps at ~12k chars.
  * So: plain replies go through `markdown_text` (rich); button messages must use Block Kit (which
  * only does classic mrkdwn); anything past the cap falls back to classic mrkdwn `text`.
  *
  * We deliberately do NOT impose a house style here — presentation taste belongs to each bot's own
  * instructions/CLAUDE.md. This layer's only job is to make the full Markdown palette render reliably.
  */
-const MARKDOWN_TEXT_MAX = 12000
 function applyMessageBody(payload: Record<string, unknown>, text: string, hasButtons: boolean): void {
-  if (hasButtons || text.length > MARKDOWN_TEXT_MAX) payload.text = text
-  else payload.markdown_text = text
+  Object.assign(payload, messageBody(text, hasButtons))
 }
 
 /** The text a chat.postMessage payload shows, for counting its links: `text`, `markdown_text`, and every `text` inside its blocks. */
