@@ -2,8 +2,8 @@
 // A missing file reads as an empty one, which is valid.
 
 import { readFileSync } from 'fs'
-import { EMPTY_CONFIG, formatIssues, loadHydraConfig } from './load.js'
-import type { ConfigIssue, HydraConfig, LoadEnv, LoadResult } from './types.js'
+import { EMPTY_CONFIG, formatIssues, loadHydraConfig } from '../config/load.js'
+import type { ConfigIssue, HydraConfig, LoadEnv, LoadResult } from '../config/types.js'
 
 const EMPTY_CONFIRM_MS = 250
 

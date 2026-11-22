@@ -4,7 +4,7 @@ import { readFileSync } from 'fs'
 import { resolve } from 'path'
 import { resolveConfig, statePlatform } from './helpers.js'
 import { addFragment } from '../infra/add-fragment.js'
-import { systemEnv } from '../config/load.js'
+import { systemEnv } from '../infra/load-env.js'
 import { SESSION_NAMES } from '../shared/session-catalog.js'
 
 export function configAddCommand(args: string[], stateDirOpt: string | undefined): number {

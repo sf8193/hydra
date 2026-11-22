@@ -5,7 +5,7 @@ import { basename, join } from 'path'
 import type { ChatGateway } from '../gateways/gateway.js'
 import { sourceEnvFiles } from './env-files.js'
 import { captureSpawnVars, capturedSpawnVars } from '../shared/spawn-env.js'
-import { scrubTokenVarsInFile } from '../config/token-vars.js'
+import { scrubTokenVarsInFile } from './token-vars-file.js'
 import { claudeConfigDir, DISCORD_GATEWAY_TOKEN_ENV, platformStateDir, SLACK_GATEWAY_TOKEN_ENVS } from '../shared/constants.js'
 import { isUnder } from './path-containment.js'
 

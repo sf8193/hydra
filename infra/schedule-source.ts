@@ -6,7 +6,8 @@ import { join } from 'path'
 import { jobsToml, type DaemonState, type Job } from '../shared/jobs.js'
 import { readDaemonState } from './job-files.js'
 import { jobsFromSchedules, migratedJobsToml } from '../shared/schedules.js'
-import { formatIssues, loadHydraConfig, systemEnv } from '../config/load.js'
+import { formatIssues, loadHydraConfig } from '../config/load.js'
+import { systemEnv } from './load-env.js'
 import type { ChatPlatform } from '../config/types.js'
 
 /**

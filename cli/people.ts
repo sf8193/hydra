@@ -2,7 +2,7 @@
 
 import { resolveConfig, statePlatform } from './helpers.js'
 import { addPerson } from '../infra/add-person.js'
-import { systemEnv } from '../config/load.js'
+import { systemEnv } from '../infra/load-env.js'
 import { SESSION_NAMES } from '../shared/session-catalog.js'
 
 export function peopleCommand(args: string[], stateDirOpt: string | undefined): number {
