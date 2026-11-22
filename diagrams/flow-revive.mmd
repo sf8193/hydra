@@ -9,7 +9,7 @@ flowchart TD
     A1 -- yes --> AR[connected]
     A1 -- no --> A2{"adapter.isAlive?<br/>Claude/omp: tmux · Codex: socket or reconnecting"}
     A2 -- no --> AD[dead]
-    A2 -- yes --> A3{"deadAt set, or waitMs > 90s<br/>waitMs = now − max(createdAt, daemonStart)"}
+    A2 -- yes --> A3{"deadAt set, or waitMs > 90s<br/>waitMs = now − max(createdAt, daemonStartedAt)"}
     A3 -- yes --> AO[orphaned]
     A3 -- no --> AS[starting]
   end
@@ -41,7 +41,7 @@ flowchart TD
     TE -- "gone + channel" --> RTN["reviveThread(newThreadIn)"]
     HO["handOff"] --> HL["withThreadLock"] --> HC{"record still this one?"}
     HC -- no --> HX["throw: already handing off"]
-    HC -- yes --> HS["handoffSpawnOpts: carryOver minus read_only and predecessor<br/>→ kill → spawn(handedOffFrom)<br/>→ restoreWatches → repointChildren"]
+    HC -- yes --> HS["handoffSpawnOpts: carryOver minus read_only and predecessor<br/>→ kill → spawn(handedOffFrom)<br/>(PR watches stay with the thread) → repointChildren"]
     KR["killAndRespawn<br/>(handoff_protocol = kill_and_respawn)"] --> KL["withTargetLock(specialist,<br/>or a conversation session's thread)"] --> KC{"record still this one?"}
     KC -- no --> KX["throw: already being replaced"]
     KC -- yes --> KE["endForFreshStart: mark restartedFresh (on disk),<br/>unmap the thread → kill (not deliberate)<br/>(no entry to mark: nothing ended)"] --> KF["fill → reviveThread: tier 3 as a new birth<br/>→ repointChildren"]
@@ -50,8 +50,7 @@ flowchart TD
     RT["reviveThread<br/>chat and recover pass the target's key, ignoring its wait"] --> BG{"backoffKey active and not ignored?"}
     RTN --> BG
     BG -- yes --> BO["fail: not retrying until …"]
-    BG -- no --> WS["snapshot the dead record's PR watches"]
-    WS --> ORQ{"orphan to tear down?"}
+    BG -- no --> ORQ{"orphan to tear down?"}
     ORQ -- yes --> ORPH["kill it (worktree kept), markDead<br/>its record is still in hand"]
     ORQ -- no --> SNAP
     ORPH --> SNAP["resolve entry/dead · carryOver unless respawnOnly (to every tier, tryResume too)<br/>worktree if on disk · reserve branch base<br/>(never the name being claimed)"]
@@ -65,8 +64,8 @@ flowchart TD
     R1 -- ok --> OK
     R2 -- ok --> OK
     R3 -- ok --> OK
-    NEWT -- ok --> OK["repointChildren · restoreWatches · clearBackoff<br/>(a claimed name retires dead same-named records: doSpawnSession)"]
-    R3 -- "null or throw" --> FAIL["restore dead record + watches if thread unclaimed<br/>recordFailure(key) → exit 6"]
+    NEWT -- ok --> OK["repointChildren · clearBackoff<br/>(a claimed name retires dead same-named records: doSpawnSession)"]
+    R3 -- "null or throw" --> FAIL["restore dead record if thread unclaimed<br/>recordFailure(key) → exit 6"]
     NEWT -- throw --> FAIL
     OK -- specialist --> REP{"re-pointed meanwhile?"}
     REP -- yes --> E3r[exit 3, left running]
@@ -100,8 +99,7 @@ flowchart TD
     TR -- "a thread id" --> TT["toThread (c)"]
     TR -- "anything else" --> T8["exit 8: no such specialist"]
     TK -- "spawn" --> TF["a fresh session from the recipe (idle → reaped when quiet)"]
-    TK -- "perThread + key" --> TP["ensureSpecialist(perThreadName(key), recipe), never stored"]
-    TS & TT & TF & TP --> LS["deliverToSession: dead 3 · orphaned 4 · booting 5 (unless queued)<br/>connected but stuck on a dialog → 5 'stuck: kind'<br/>→ adapter.deliver"]
+    TS & TT & TF --> LS["deliverToSession: dead 3 · orphaned 4 · booting 5 (unless queued)<br/>connected but stuck on a dialog → 5 'stuck: kind'<br/>→ adapter.deliver"]
     LS --> TO["landed: key kept · else key released"]
     ST["send_to_thread(target = a specialist)"] --> TS
     SET["specialist set / rm"] --> SL["withTargetLock(name)"] --> SG{"set --thread elsewhere while the old thread is occupied?"}

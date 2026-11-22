@@ -15,10 +15,9 @@ sequenceDiagram
     Note left of cli: hydra spawn --purpose X<br/>--prompt "..." --idempotency-key K
     cli->>server: socket connect + JSON request (type: 'cli')
     server->>handler: handleCLIRequest(req)
-    Note over handler: validateAuth
     handler->>idemp: checkIdempotency(key)
     Note over idemp: not blocked
-    handler->>lifecycle: doSpawnSession(topic, notifyThread)
+    handler->>lifecycle: doSpawnSession(topic, channel, message, opts)
     lifecycle->>sessions: pickSessionName
     lifecycle->>lifecycle: createThread (→ Chat API)
     lifecycle->>lifecycle: spawn tmux with claude --channels
