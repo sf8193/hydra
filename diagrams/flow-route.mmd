@@ -1,7 +1,7 @@
 %%{init: {"theme":"base","themeVariables":{"background":"#ffffff","primaryColor":"#ffffff","primaryBorderColor":"#6b7280","primaryTextColor":"#1f2937","lineColor":"#374151","clusterBkg":"#ffffff","clusterBorder":"#d1d5db"},"flowchart":{"wrappingWidth":420,"useMaxWidth":false}}}%%
 %% Which target hears a message, and may its sender reach it? route(), routing/route.ts:201. Pure: config and message in, a Fate out.
 %% route() first asks which app is the owning app (route.ts:211-218): drawn in flow-route-owning-app. A Fate is a decision, not an action:
-%% the Slack connector acts on it, and may still drop a "deliver" (flow-slack-accept). Every box's source: diagrams/flow-route.sources.md.
+%% the Slack connector acts on it, and may still drop a "deliver" (flow-slack-accept).
 flowchart TD
   in(["a message this app is the owning app of<br/>flow-route-owning-app"])
   who["<b>Person, roles</b><br/>who sent it; a stranger holds only anyone"]

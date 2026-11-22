@@ -1,7 +1,7 @@
 %%{init: {"theme":"base","themeVariables":{"background":"#ffffff","primaryColor":"#ffffff","primaryBorderColor":"#6b7280","primaryTextColor":"#1f2937","lineColor":"#374151","clusterBkg":"#ffffff","clusterBorder":"#d1d5db"},"flowchart":{"wrappingWidth":420,"useMaxWidth":false}}}%%
 %% What does the Slack connector do with each Fate routing returns?
 %% ConversationTable.classify after route(), connectors/slack/watch.ts:834-871; refuse, :954; enqueue, :920.
-%% Before: flow-route. Next: flow-slack-deliver. Every box's source: diagrams/flow-slack-fate.sources.md.
+%% Before: flow-route. Next: flow-slack-deliver.
 flowchart TD
   in(["the <b>Fate</b> routing returns<br/>flow-route"])
   g1{"1. which Fate?"}

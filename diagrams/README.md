@@ -24,7 +24,7 @@ Each diagram has a `.mmd` source and a rendered `.png`.
 - Bug fixes that don't change the message path
 - Config or env changes
 
-**One question per picture.** A picture that needs paragraphs inside its shapes is two pictures. Labels are a few words; a list a reader needs goes in a side note (a grey box on a dotted line), not inside a gate. The routing and Slack pictures are sourced: each name means one thing across the set, a `<name>.sources.md` puts a `path:line` behind every box, and a reviewer who did not draw it checks the raw `.mmd` against the code before it is rendered. Their legend: orange diamond = a numbered gate, red = refused, unrouted or dropped, grey = held or still owed, green = delivered or done, plain = any other outcome. Their first line is an `%%{init}%%` that sets a white theme and a wider wrap, so any render command draws them the same.
+**One question per picture.** A picture that needs paragraphs inside its shapes is two pictures. Labels are a few words; a list a reader needs goes in a side note (a grey box on a dotted line), not inside a gate. The routing and Slack pictures are sourced: each name means one thing across the set, a reviewer who did not draw it checks the raw `.mmd` against the code before it is rendered. Their legend: orange diamond = a numbered gate, red = refused, unrouted or dropped, grey = held or still owed, green = delivered or done, plain = any other outcome. Their first line is an `%%{init}%%` that sets a white theme and a wider wrap, so any render command draws them the same.
 
 **Quality discipline:** Diagrams are authored with intent — what to emphasize, what level of abstraction serves the reader. Use adversarial review (`/review`) to verify diagram claims against code. Reference actual source file names, not abstractions.
 
@@ -66,7 +66,7 @@ for f in diagrams/*.mmd; do [ -f "${f%.mmd}.png" ] || { echo "unrendered: $f"; e
 | `flow-jobs-dispatch` | Jobs: the clock's tick or `jobs run` → synchronous reserve → detached attempt → result file → apply on a later tick (or "ended without a result", or the guarded kill) |
 
 ### Routing and the Slack connector
-One question per picture, read in this order. Each has a `<name>.sources.md` beside it: every box's `path:line`.
+One question per picture, read in this order.
 
 | Diagram | The question it answers |
 |---------|--------------|

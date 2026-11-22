@@ -1,7 +1,7 @@
 %%{init: {"theme":"base","themeVariables":{"background":"#ffffff","primaryColor":"#ffffff","primaryBorderColor":"#6b7280","primaryTextColor":"#1f2937","lineColor":"#374151","clusterBkg":"#ffffff","clusterBorder":"#d1d5db"},"flowchart":{"wrappingWidth":420,"useMaxWidth":false}}}%%
 %% How does each Slack app connect, and how does a live message reach the connector?
 %% SlackConnections.reconcile, connectors/slack/connections.ts:91; SlackListener.connect and onMessage, connectors/slack/listener.ts:464 and :532.
-%% Next: flow-slack-accept. What the live stream misses: flow-slack-catchup. Every box's source: diagrams/flow-slack-hear.sources.md.
+%% Next: flow-slack-accept. What the live stream misses: flow-slack-catchup.
 flowchart TD
   app(["each <b>App</b> hydra.toml declares"])
   g1{"1. both tokens set?"}
