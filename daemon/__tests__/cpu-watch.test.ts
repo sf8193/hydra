@@ -116,10 +116,8 @@ describe('sampleCpu', () => {
     expect(v!.spinning).toBe('bridge')
     expect((await sampleCpu(undefined, [s], () => PANE, PRESSURE)).sessions.size).toBe(0)
     await tick()
-    let after
-    // Bounded like the cases above: a busy loop on a loaded machine can dip below the threshold for a tick.
-    for (let i = 0; i < 5 && after?.spinning !== 'bridge'; i++) { after = (await sampleNow([s], () => PANE, PRESSURE)).sessions.get(s.sessionId); if (after?.spinning !== 'bridge') await tick() }
-    expect(after!.spinning).toBe('bridge')
+    // One tick's reading, hot or dipped: neither the missing snapshot nor a dip re-arms the alert.
+    await sampleNow([s], () => PANE, PRESSURE)
     expect(dms.length).toBe(1)
   }, LOOP_TIMEOUT_MS)
 
