@@ -13,3 +13,10 @@ test('daemon.ts hands the specialist delivery its stuck-state lookup', () => {
 test('daemon.ts hands the Slack gateway its operator ids', () => {
   expect(daemon).toMatch(/\(gateway as any\)\.operators = operatorIds\b/)
 })
+
+test('the Slack gateway has the `operators` field daemon.ts assigns, and nobody is an operator until it does', async () => {
+  const { SlackGateway } = await import('../../gateways/slack.js')
+  const gw = new SlackGateway('xapp-test')
+  expect('operators' in gw).toBe(true)
+  expect(gw.operators()).toEqual([])
+})
