@@ -1124,7 +1124,7 @@ gateway.onMessage(async (inbound: InboundMessage) => {
     return
   }
 
-  let chat_id = msg.channelId
+  let chat_id = registry.resolveThreadId(msg)
 
   if (!msg.isDM && !msg.isThread) {
     const policy = channelPolicy(msg)

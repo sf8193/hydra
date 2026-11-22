@@ -6,9 +6,18 @@
 
 import type { SessionInfo, SpawnOpts } from '../sessions/registry.js'
 import type { LaunchPolicy, RestrictedPolicy } from '../app/restricted.js'
-import type { BlockingState } from '../app/pane-probe.js'
 import type { EngineName } from '../shared/engines/index.js'
-export type { BlockingState } from '../app/pane-probe.js'
+export type BlockingKind = 'plan_mode' | 'login_required' | 'resume_prompt' | 'usage_limit' | 'unknown_dialog'
+
+export type LoginStage = 'expiring' | 'login-blocked' | 'oauth_url' | 'success'
+
+export type BlockingState = {
+  kind: BlockingKind
+  planPath: string | null
+  loginStage: LoginStage | null
+  oauthUrl: string | null
+  escEndsSession?: boolean
+}
 
 // ---------------------------------------------------------------------------
 // Provider identity
