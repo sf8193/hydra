@@ -68,7 +68,7 @@ const COMMAND_RE = new RegExp(
   `^(?:${COMMAND_PREFIXES.map(p => p.replace(/[.*+?^${}()|[\]\\\/]/g, '\\$&')).join('|')})(?:\\s|$)`, 'i',
 )
 /** `@bot spawn: x` is the command `spawn: x`: the bot's own leading tag is dropped before commands are matched. */
-export function withoutLeadingTag(content: string, botId: string | null): string {
+function withoutLeadingTag(content: string, botId: string | null): string {
   if (!botId) return content
   return content.replace(new RegExp(`^<@!?${botId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}>\\s*`), '')
 }
@@ -438,9 +438,10 @@ gateway.onMessage(async (inbound: InboundMessage) => {
   if (!channelAllowed(inbound) && !(await admitTaggedChannel(inbound))) return
   const senderId = inbound.authorId
   const isAllowed = operatorIds().includes(senderId)
-  // The operator's tagged command is the command. The gate reads the message as it came, tag included.
+  // The operator's tagged command is the command: the command handlers see it without the tag. Everything after them
+  // (thread delivery, the gate) reads the message as it came, tag included: Slack finds the tag in the text.
   const bare = withoutLeadingTag(inbound.content, gateway.botId)
-  const msg = isAllowed && bare !== inbound.content && COMMAND_RE.test(bare) ? { ...inbound, content: bare } : inbound
+  let msg = isAllowed && COMMAND_RE.test(bare) ? { ...inbound, content: bare } : inbound
 
   if (!isAllowed && COMMAND_RE.test(msg.content)) {
     process.stderr.write(`daemon: command-shaped message from non-allowlisted sender ${senderId} ignored — only the operator may use commands\n`)
@@ -915,6 +916,8 @@ gateway.onMessage(async (inbound: InboundMessage) => {
 
     }
 
+    msg = inbound
+
     if (msg.isThread) {
       const resolvedThreadId = registry.resolveThreadId(msg)
 
@@ -1111,7 +1114,7 @@ gateway.onMessage(async (inbound: InboundMessage) => {
   const strangerThread = !isAllowed && msg.isThread ? registry.resolveThreadId(msg) : undefined
   const result = strangerThread && threadRegistry.isSenderAllowed(strangerThread, senderId)
     ? { action: 'deliver' as const }
-    : await gate(inbound)
+    : await gate(msg)
 
   if (result.action === 'drop') {
     if (strangerThread && registry.getByThread(strangerThread) && flagStranger(strangerThread, senderId)) {

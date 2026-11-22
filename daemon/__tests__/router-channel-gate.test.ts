@@ -157,19 +157,19 @@ test('a discord reaction place: guild channel, thread (parent), DM', () => {
 })
 
 test('the operator\'s `@bot spawn: x` is the spawn command; the same words from someone else are not', async () => {
-  const { withoutLeadingTag } = await import('../router.js')
   Object.defineProperty(gateway, 'botId', { value: '999', configurable: true })
+  const gated: string[] = []
+  const g = spyOn(access, 'gate').mockImplementation((async (m: any) => { gated.push(m.content); return { action: 'drop' } }) as any)
   try {
     await say(OURS, {}, '<@999> spawn: fix the bug')
     expect(spawns).toHaveLength(1)
     expect(spawns[0][1]).toBe('fix the bug')
     expect(spawns[0][0].channelId).toBe(OURS)
+    // a stranger's tag is not stripped: it reaches the gate as typed
     await onMessage({ id: 'm3', channelId: OURS, authorId: 'stranger', authorUsername: 's', content: '<@999> spawn: x', isBot: false, attachments: [], createdAt: new Date(), isThread: false, isDM: false, parentChannelId: null })
     expect(spawns).toHaveLength(1)
-  } finally { delete (gateway as any).botId }
-  expect(withoutLeadingTag('<@999> hi', '999')).toBe('hi')
-  expect(withoutLeadingTag('<@111> spawn: x', '999')).toBe('<@111> spawn: x')
-  expect(withoutLeadingTag('<@999> spawn: x', null)).toBe('<@999> spawn: x')
+    expect(gated).toEqual(['<@999> spawn: x'])
+  } finally { g.mockRestore(); delete (gateway as any).botId }
 })
 
 test('a tagged operator message that is not a command reaches the gate with its tag: Slack reads the tag from the text', async () => {
