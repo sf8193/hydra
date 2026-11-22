@@ -510,8 +510,8 @@ export function tomlNamesOperator(path: string): boolean {
   try { return typeof (Bun.TOML.parse(readFileSync(path, 'utf8')) as { operator?: unknown }).operator === 'string' } catch { return false }
 }
 
-export async function lifecyclePreflight(platform: string): Promise<void> {
-  const cfg = resolveConfig(platform)
+export async function lifecyclePreflight(platform: string, stateDirOpt?: string): Promise<void> {
+  const cfg = resolveConfig(platform, stateDirOpt)
   let fail = false
   let warn = false
 
@@ -570,7 +570,7 @@ export async function lifecyclePreflight(platform: string): Promise<void> {
   if (tomlNamesOperator(tomlPath)) {
     ok('hydra.toml names an operator')
   } else {
-    wrn(`no operator in ${tomlPath}, so every DM is dropped — run: hydra migrate ${cfg.platform} --operator <your user id>`)
+    wrn(`no operator in ${tomlPath}, so every DM is dropped — run: hydra ${stateDirOpt ? `--state-dir ${shq(cfg.stateDir)} ` : ''}migrate ${cfg.platform} --operator <your user id>`)
   }
 
   const bridgeDir = bridgePluginCache(cfg.configDir)

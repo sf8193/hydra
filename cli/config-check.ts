@@ -10,8 +10,8 @@ import { isKnownModel, resolveLaunchModel } from '../shared/constants.js'
 
 export function configCheckCommand(platformArg: string | undefined, stateDirOpt: string | undefined): number {
   if (platformArg && platformArg !== 'discord' && platformArg !== 'slack') { console.error(`error: platform must be discord or slack, not "${platformArg}"`); return 1 }
-  const cfg = resolveConfig(platformArg)
-  const stateDir = stateDirOpt ?? cfg.stateDir
+  const cfg = resolveConfig(platformArg, stateDirOpt)
+  const stateDir = cfg.stateDir
   const platform = statePlatform(stateDir, platformArg, cfg.platform)
   const path = join(stateDir, 'hydra.toml')
   if (!existsSync(path)) { console.log(`${path}: none: no operator, so every DM is dropped (hydra migrate ${platform} --operator <your user id>)`); return 0 }

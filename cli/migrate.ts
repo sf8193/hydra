@@ -1,8 +1,8 @@
 // `hydra migrate`: write <state>/hydra.toml once from the old files (infra/migrate.ts), and say what changed.
 
 import { connect } from 'net'
-import { homedir } from 'os'
-import { basename, join } from 'path'
+import { platformStateDir } from '../shared/constants.js'
+import { basename, join, resolve } from 'path'
 import { readEnvFileValue, resolveConfig } from './helpers.js'
 import { watchdogLoaded } from './lifecycle.js'
 import { applyMigrate, finishMigrate, MIGRATE_JOURNAL, planMigrate } from '../infra/migrate.js'
@@ -20,15 +20,20 @@ function daemonListening(stateDir: string): Promise<boolean> {
   })
 }
 
+/** Whether the platform's launchd watchdog is the one that would start this state dir's daemon: no `--state-dir`, or the platform's own dir. */
+export function watchdogCovers(stateDirOpt: string | undefined, platform: string): boolean {
+  return stateDirOpt === undefined || resolve(stateDirOpt) === platformStateDir(platform)
+}
+
 export async function migrateCommand(opts: { platform?: string; stateDir?: string; dryRun: boolean; operator?: string }): Promise<number> {
   if (opts.platform && opts.platform !== 'discord' && opts.platform !== 'slack') {
     console.error(`error: platform must be discord or slack, not "${opts.platform}"`)
     return 1
   }
-  // Read before resolveConfig, which fills a blank SPAWN_CWD from the default state dir's .env.
+  // Read before resolveConfig, which fills a blank SPAWN_CWD from the .env of the state dir it resolves.
   const ambientSpawnCwd = process.env.SPAWN_CWD?.trim()
-  const cfg = resolveConfig(opts.platform)
-  const stateDir = opts.stateDir ?? cfg.stateDir
+  const cfg = resolveConfig(opts.platform, opts.stateDir)
+  const stateDir = cfg.stateDir
   // The ids in allowFrom are this state dir's platform's: a state dir named for one says which.
   const dirPlatform = ['discord', 'slack'].includes(basename(stateDir)) ? basename(stateDir) : undefined
   if (opts.platform && dirPlatform && opts.platform !== dirPlatform) {
@@ -37,7 +42,7 @@ export async function migrateCommand(opts: { platform?: string; stateDir?: strin
   }
   const platform = (opts.platform ?? dirPlatform ?? cfg.platform) === 'slack' ? 'slack' : 'discord'
   // Its own .env says where its sessions start, then a SPAWN_CWD the caller set; another state dir's .env doesn't.
-  const spawnCwd = readEnvFileValue(join(stateDir, '.env'), 'SPAWN_CWD')?.trim() || ambientSpawnCwd || (stateDir === cfg.stateDir ? cfg.spawnCwd : homedir())
+  const spawnCwd = readEnvFileValue(join(stateDir, '.env'), 'SPAWN_CWD')?.trim() || ambientSpawnCwd || cfg.spawnCwd
 
   if (!opts.dryRun && await daemonListening(stateDir)) {
     console.error(`error: the daemon for ${stateDir} is running. Stop it first (hydra down ${platform}), run hydra migrate, then hydra up ${platform}.`)
@@ -45,7 +50,7 @@ export async function migrateCommand(opts: { platform?: string; stateDir?: strin
     return 1
   }
   // A crashed daemon leaves no socket, but its watchdog would start it again mid-migration.
-  if (!opts.dryRun && stateDir === cfg.stateDir && watchdogLoaded(platform)) {
+  if (!opts.dryRun && watchdogCovers(opts.stateDir, platform) && watchdogLoaded(platform)) {
     console.error(`error: the ${platform} watchdog is loaded and could start the daemon mid-migration. Run hydra down ${platform} first, then hydra migrate, then hydra up ${platform}.`)
     console.error('nothing was written')
     return 1
