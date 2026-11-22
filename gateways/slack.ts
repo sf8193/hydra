@@ -1,4 +1,3 @@
-// @ts-nocheck — Slack Bolt type mismatches (pre-existing, runtime-safe under Bun)
 /**
  * Slack gateway implementation.
  *
@@ -6,7 +5,7 @@
  * similar to Discord's gateway model.
  */
 
-import { App, webApi, type MessageEvent, type GenericMessageEvent, type BotMessageEvent } from '@slack/bolt'
+import { App, webApi, type types } from '@slack/bolt'
 import { readFileSync, writeFileSync } from 'fs'
 import { discardInboxFiles, writeInboxFile } from '../infra/confined-inbox.js'
 import { customEmojiId } from '../shared/slack-lines.js'
@@ -212,7 +211,7 @@ export class SlackGateway implements ChatGateway {
       if (message.subtype === 'bot_message') return
       if (!('user' in message) || !message.user) return
 
-      const msg = message as GenericMessageEvent
+      const msg = message as types.GenericMessageEvent
       // The same message may also arrive as an app_mention; the one delivered is this one, which carries the files.
       if (!this.eventDedupe.claimMessage(SlackEventDedupe.key(msg.channel, msg.ts))) return
 
@@ -230,7 +229,7 @@ export class SlackGateway implements ChatGateway {
     })
 
     // Publish Home tab when user opens it
-    this.app.event('app_home_opened' as any, async ({ event }: any) => {
+    this.app.event('app_home_opened', async ({ event }) => {
       this.touchHeartbeat()
       if (!this.operators().includes(event.user)) return
       if (this.homeTabHandler) {
@@ -293,7 +292,7 @@ export class SlackGateway implements ChatGateway {
     })
 
     // Handle app_mention events: the one event for a tag where the bot is not in the channel; where it is, the `message` copy is delivered instead
-    this.app.event('app_mention', ({ event, client }) => {
+    this.app.event('app_mention', async ({ event, client }) => {
       this.touchHeartbeat()
       if (!this.messageHandler) return
       // Where the bot is in the channel the `message` copy follows (with files): the mention waits for it, and is delivered alone only if none comes.
@@ -481,12 +480,12 @@ export class SlackGateway implements ChatGateway {
         try {
           const content = readFileSync(filePath)
           const fileName = filePath.split('/').pop() ?? 'file'
-          await this.app.client.files.uploadV2({
-            channel_id: parsed.channel,
-            file: content,
-            filename: fileName,
-            thread_ts: opts?.replyTo ?? parsed.threadTs,
-          })
+          const uploadThreadTs = opts?.replyTo ?? parsed.threadTs
+          await this.app.client.files.uploadV2(
+            uploadThreadTs
+              ? { channel_id: parsed.channel, file: content, filename: fileName, thread_ts: uploadThreadTs }
+              : { channel_id: parsed.channel, file: content, filename: fileName },
+          )
         } catch (err) {
           process.stderr.write(`slack gateway: file upload failed for ${filePath}: ${err}\n`)
         }
@@ -987,7 +986,7 @@ export class SlackGateway implements ChatGateway {
 
   // --- Internal helpers ---
 
-  private async normalizeMessage(msg: GenericMessageEvent, username: string, client: any): Promise<InboundMessage> {
+  private async normalizeMessage(msg: types.GenericMessageEvent, username: string, client: any): Promise<InboundMessage> {
     const atts: AttachmentInfo[] = (msg.files ?? []).map((f: any) => ({
       id: f.id ?? f.name ?? 'unknown',
       name: (f.name ?? f.id ?? 'unknown').replace(/[\[\]\r\n;]/g, '_'),
@@ -1023,51 +1022,5 @@ export class SlackGateway implements ChatGateway {
 
   private buildMessageUrl(channelId: string, ts: string, threadTs?: string): string {
     return archiveUrl(`https://${this._teamDomain ?? 'app'}.slack.com`, channelId, ts, threadTs || undefined) + (threadTs ? `&cid=${channelId}` : '')
-  }
-
-  private emojiToSlackName(emoji: string): string {
-    // Common unicode → Slack emoji name mappings
-    const map: Record<string, string> = {
-      '👀': 'eyes',
-      '👍': 'thumbsup',
-      '👎': 'thumbsdown',
-      '❤️': 'heart',
-      '✅': 'white_check_mark',
-      '❌': 'x',
-      '🎉': 'tada',
-      '🤔': 'thinking_face',
-      '👂': 'ear',
-      '⏸️': 'double_vertical_bar',
-      '🔥': 'fire',
-      '💯': '100',
-      '⭐': 'star',
-      '🚀': 'rocket',
-      '📋': 'clipboard',
-      '📊': 'bar_chart',
-      '📈': 'chart_with_upwards_trend',
-      '💚': 'green_heart',
-      '☠️': 'skull_and_crossbones',
-      '🍴': 'fork_and_knife',
-      '🍽️': 'knife_fork_plate',
-      '🤝': 'handshake',
-      '🔄': 'arrows_counterclockwise',
-      '🔌': 'electric_plug',
-      '⏯️': 'play_pause',
-      '🔁': 'repeat',
-      '💀': 'skull',
-      '💥': 'boom',
-      '🧟': 'zombie',
-      '🔮': 'crystal_ball',
-      '👁️': 'eye',
-      '🙈': 'see_no_evil',
-      '📡': 'satellite_antenna',
-    }
-    if (map[emoji]) return map[emoji]
-    // If it's already a text name (no colons), return as-is
-    if (/^[a-z0-9_+-]+$/i.test(emoji)) return emoji
-    // Strip colons if present
-    if (emoji.startsWith(':') && emoji.endsWith(':')) return emoji.slice(1, -1)
-    // Fallback: try to use it directly (Slack will error if invalid)
-    return emoji
   }
 }
