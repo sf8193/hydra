@@ -65,14 +65,11 @@ const LAYER_CONFIG: Record<string, { layer: string; desc: string }> = {
   'app/auto-handoff.ts': { layer: 'domain',    desc: 'Automatic handoff of idle high-context sessions (cache and full-context rules)' },
   'infra/usage.ts':          { layer: 'core',      desc: 'Transcript location + incremental token-counter cursor' },
   'app/usage-alerts.ts':   { layer: 'domain',    desc: 'Account rate-limit alerts: report_usage + pane fallback, one dedupe per window' },
-  'daemon/build.ts':          { layer: 'protocols', desc: 'Build — implement/review iteration' },
-  'daemon/design.ts':         { layer: 'protocols', desc: 'Design — personas, synthesis, audit' },
+  'protocols/build.ts':       { layer: 'protocols', desc: 'Build — implement/review iteration' },
   'app/commands/global.ts':  { layer: 'commands', desc: 'spawn, kill, restart, recover' },
   'app/commands/status.ts':  { layer: 'commands', desc: 'sessions list, status display' },
   'app/commands/thread.ts':  { layer: 'commands', desc: 'listen, pause, resume, join, handoff' },
   'app/commands/review.ts':  { layer: 'commands', desc: 'review command handler' },
-  'daemon/commands/build.ts':   { layer: 'commands', desc: 'build command handler' },
-  'daemon/commands/design.ts':  { layer: 'commands', desc: 'design command handler' },
   'app/commands/watch.ts':   { layer: 'commands', desc: 'watch/unwatch PR commands' },
 }
 

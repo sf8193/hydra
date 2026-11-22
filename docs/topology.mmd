@@ -64,8 +64,7 @@ graph TD
   end
 
   subgraph protocols["Protocols"]
-    daemon_build["build.ts"]
-    daemon_design["design.ts"]
+    protocols_build["build.ts"]
   end
 
   subgraph commands["Commands"]
@@ -73,8 +72,6 @@ graph TD
     app_commands_status["status.ts"]
     app_commands_thread["thread.ts"]
     app_commands_review["review.ts"]
-    daemon_commands_build["build.ts"]
-    daemon_commands_design["design.ts"]
     app_commands_watch["watch.ts"]
   end
 

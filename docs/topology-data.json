@@ -291,16 +291,10 @@
       "desc": "Account rate-limit alerts: report_usage + pane fallback, one dedupe per window"
     },
     {
-      "id": "daemon_build",
-      "label": "daemon/build.ts",
+      "id": "protocols_build",
+      "label": "protocols/build.ts",
       "layer": "protocols",
       "desc": "Build — implement/review iteration"
-    },
-    {
-      "id": "daemon_design",
-      "label": "daemon/design.ts",
-      "layer": "protocols",
-      "desc": "Design — personas, synthesis, audit"
     },
     {
       "id": "app_commands_global",
@@ -325,18 +319,6 @@
       "label": "app/commands/review.ts",
       "layer": "commands",
       "desc": "review command handler"
-    },
-    {
-      "id": "daemon_commands_build",
-      "label": "daemon/commands/build.ts",
-      "layer": "commands",
-      "desc": "build command handler"
-    },
-    {
-      "id": "daemon_commands_design",
-      "label": "daemon/commands/design.ts",
-      "layer": "commands",
-      "desc": "design command handler"
     },
     {
       "id": "app_commands_watch",
