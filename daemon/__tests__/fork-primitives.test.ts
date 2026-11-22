@@ -19,6 +19,7 @@ import { buildForkPrompt, buildHandoffPrompt } from '../../shared/prompts/sessio
 import { hydraPrompt } from '../../shared/prompts/request.js'
 import type { InboundMessage } from '../../gateways/gateway.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
+import { ENGINES, ENGINE_PROFILES } from '../../shared/engines/index.js'
 
 process.stderr.write = (() => true) as any
 
@@ -823,13 +824,13 @@ describe('spawn_session fork_from and read_only', () => {
 
   test('errors: unknown name, no conversation id, no predecessor, Codex source, worktree, gone directory', async () => {
     mk('fs-caller', 'fscaller')
-    mk('fs-bare', 'fsbare', { engine: 'codex' })
+    mk('fs-bare', 'fsbare')
     mk('fs-codex', 'fscodex', { engine: 'codex', codexThreadId: 'th-1', worktreePath: dir })
     mk('fs-gone', 'fsgone', { claudeSessionId: 'cl-g', worktreePath: join(dir, 'removed') })
     expect(await errorOf({ fork_from: 'nobody-here' })).toContain('no session named "nobody-here"')
     expect(await errorOf({ fork_from: 'fsbare' })).toContain('fsbare has no conversation id to fork')
     expect(await errorOf({ fork_from: 'predecessor' })).toContain('fscaller has no predecessor')
-    expect(await errorOf({ fork_from: 'fscodex' })).toContain('fscodex is a Codex session')
+    expect(await errorOf({ fork_from: 'fscodex' })).toContain('fscodex runs on the Codex engine')
     expect(await errorOf({ fork_from: 'fscodex', worktree: 'hydra' })).toContain('cannot be combined with worktree')
     expect(await errorOf({ fork_from: 'fsgone' })).toContain(`launch directory ${join(dir, 'removed')} no longer exists`)
     expect(launches).toEqual([])
@@ -837,7 +838,34 @@ describe('spawn_session fork_from and read_only', () => {
 
   test('a Codex predecessor is refused the same way', async () => {
     mk('fs-caller', 'fscaller', { predecessor: { engine: 'codex', fork: { codexThreadId: 'th-2', codexHomeName: 'h', parentName: 'cxold' }, cwd: dir } })
-    expect(await errorOf({ fork_from: 'predecessor' })).toContain('cxold is a Codex session')
+    expect(await errorOf({ fork_from: 'predecessor' })).toContain('cxold runs on the Codex engine')
+  })
+
+  // Whether an engine's sessions can be forked is its profile's `forkable`; each source below is asked that, not matched by name.
+  const UNFORKABLE = ENGINES.filter(e => !ENGINE_PROFILES[e].forkable)
+  test.each(UNFORKABLE)('a session on the %s engine as the fork source is refused for its engine, with or without a conversation id', async (engine) => {
+    const { label } = ENGINE_PROFILES[engine]
+    const refusal = `the ${label} engine, and ${label} sessions cannot be forked — spawn fresh with read_thread instead`
+    mk('fs-caller', 'fscaller')
+    mk('fs-ru', 'fsrunbare', { engine })                                                                    // a live record with no id of its own
+    mk('fs-rid', 'fsrunid', { engine, claudeSessionId: 'cl-x', codexThreadId: 'th-x', worktreePath: dir })  // one that carries ids
+    threadRegistry.threads.set('fs-uf-thread', {
+      threadId: 'fs-uf-thread', topic: 't', respawnCount: 0, createdAt: 1, lastActive: 1, totalMessages: 0,
+      sessionHistory: [{ sessionId: 'fsufhist-sid', tmuxName: 'fsufhist', originType: 'spawn', startedAt: 1, endedAt: 2, messageCount: 0, engine, claudeSessionId: 'cl-x' }],
+    } as any)
+    try {
+      for (const name of ['fsrunbare', 'fsrunid', 'fsufhist']) expect(await errorOf({ fork_from: name })).toContain(`${name} runs on ${refusal}`)
+    } finally { threadRegistry.threads.delete('fs-uf-thread') }
+    mk('fs-pred', 'fspred', { predecessor: { engine, fork: { claudeSessionId: 'cl-x', parentName: 'old' }, cwd: dir } })
+    expect(await errorOf({ fork_from: 'predecessor' }, 'fs-pred')).toContain(`old runs on ${refusal}`)
+    expect(launches).toEqual([])
+  })
+
+  test('a Claude session as the fork source is not refused for its engine', async () => {
+    mk('fs-caller', 'fscaller')
+    mk('fs-cl', 'fsclaude', { claudeSessionId: 'cl-ok', worktreePath: dir })
+    expect((await spawn({ fork_from: 'fsclaude' })).isError).toBeFalsy()
+    expect(launches[0].forkFrom as object).toEqual({ claudeSessionId: 'cl-ok', parentName: 'fsclaude' })
   })
 
   test('a threaded fork whose source dir is gone fails before a thread exists', async () => {
