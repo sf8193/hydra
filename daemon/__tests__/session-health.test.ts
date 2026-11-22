@@ -297,7 +297,7 @@ describe('orphan detection', () => {
 
       pollSessionsOnce(NOW)
       transport.bridges.set(reconnected.sessionId, {} as any)
-      rmSync(join(tmux.dir, `alive-${died.tmuxName}`))
+      tmux.dead(died.tmuxName)
       registry.set(replaced.sessionId, { ...replaced })
       await settle()
 

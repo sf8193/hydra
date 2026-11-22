@@ -156,7 +156,7 @@ describe('bridge.ts records its own exit', () => {
   async function runBridge(stop: (child: ReturnType<typeof Bun.spawn>) => void): Promise<BridgeLifeEvent[]> {
     const stateDir = tempDir()
     const child = Bun.spawn(['bun', bridgePath], {
-      env: { ...process.env, DAEMON_SOCK: join(stateDir, 'daemon.sock'), HYDRA_SESSION_ID: 'life-test' },
+      env: { ...process.env, DAEMON_SOCK: join(stateDir, 'daemon.sock'), HYDRA_SESSION_ID: 'life-test', HYDRA_BRIDGE_SHUTDOWN_GRACE_MS: '20' },
       stdin: 'pipe', stdout: 'ignore', stderr: 'ignore',
     })
     const path = bridgeLifePath(stateDir, 'life-test', child.pid)

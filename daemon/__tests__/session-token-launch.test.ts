@@ -3,7 +3,7 @@
 // The CLI says who calls from that environment (shared/caller.ts), and nothing that drops an identity keeps the token.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { execFileSync } from 'child_process'
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
+import { existsSync, mkdtempSync, readFileSync, statSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { ClaudeEngine, askForkEnv } from '../../engines/claude-engine.js'
@@ -53,22 +53,10 @@ describe('Claude: by launch file, exported then removed by the pane', () => {
 })
 
 test('omp: by launch file, the same step', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'hydra-omp-tok-'))
-  const saved = { PATH: process.env.PATH, TMUX: process.env.TMUX }
-  writeFileSync(join(dir, 'tmux'), `#!/bin/sh\nprintf '%s\\n' "$@" >> ${join(dir, 'args')}\n`)
-  chmodSync(join(dir, 'tmux'), 0o755)
-  process.env.PATH = `${dir}:${saved.PATH}`
-  delete process.env.TMUX
-  try {
-    await new OmpEngine({} as any).launch({ ...base, model: 'claude-sonnet-5-5' } as any)
-    const cmd = readFileSync(join(dir, 'args'), 'utf8')
-    expect(cmd).not.toContain(TOKEN)
-    expect(cmd).toContain(`${SESSION_TOKEN_VAR}=$(cat '${tokenFile}') && export ${SESSION_TOKEN_VAR} && rm -f '${tokenFile}'`)
-  } finally {
-    process.env.PATH = saved.PATH
-    if (saved.TMUX !== undefined) process.env.TMUX = saved.TMUX
-    rmSync(dir, { recursive: true, force: true })
-  }
+  await new OmpEngine({} as any).launch({ ...base, model: 'claude-sonnet-5-5' } as any)
+  const cmd = fake.calls().findLast(c => c.startsWith('new-session'))!
+  expect(cmd).not.toContain(TOKEN)
+  expect(cmd).toContain(`${SESSION_TOKEN_VAR}=$(cat '${tokenFile}') && export ${SESSION_TOKEN_VAR} && rm -f '${tokenFile}'`)
 })
 
 describe('Codex: in its app-server\'s environment', () => {

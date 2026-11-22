@@ -234,6 +234,7 @@ describe('gate 5: dashboard rows', () => {
   }
 
   test('(a) Codex dead with anchor tmux hidden; (b) Codex connected without tmux shown; plain record by tmux', () => {
+    fake.restore(); fake = withFakeTmux({ subprocess: true })
     const t = Date.now()
     const dead = `lgdashdead${t}`, live = `lgdashlive${t}`, plainUp = `lgdashplainup${t}`, plainDown = `lgdashplaindown${t}`
     fake.alive(dead); fake.alive(plainUp)

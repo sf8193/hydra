@@ -464,6 +464,8 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
 // Session death detection
 // ---------------------------------------------------------------------------
 
+export const bridgeLifeIO = { readDelayMs: BRIDGE_LIFE_READ_DELAY_MS }
+
 function reportBridgeExit(sessionId: string, pid: number): void {
   setTimeout(() => {
     const path = bridgeLifePath(dirname(SOCK_PATH), sessionId, pid)
@@ -473,7 +475,7 @@ function reportBridgeExit(sessionId: string, pid: number): void {
     if (!alive) {
       try { unlinkSync(path) } catch {}
     }
-  }, BRIDGE_LIFE_READ_DELAY_MS)
+  }, bridgeLifeIO.readDelayMs)
 }
 
 // A death check tmux didn't answer is asked again after the hold: one retry armed at a time per session, and

@@ -41,7 +41,12 @@ const collapse = (s: string) => s.replace(/\s+/g, '')
 export class AgyEngine implements EngineAdapter {
   readonly provider = 'agy' as const
   readonly channel = 'engine' as const
-  constructor(private readonly claude: ClaudeEngine, private readonly mcpConfig = AGY_MCP_CONFIG, private readonly hooksConfig = AGY_HOOKS_CONFIG) {}
+  constructor(
+    private readonly claude: ClaudeEngine,
+    private readonly mcpConfig = AGY_MCP_CONFIG,
+    private readonly hooksConfig = AGY_HOOKS_CONFIG,
+    private readonly timing: { landedWaitMs?: number; pollMs?: number } = {},
+  ) {}
 
   async start(): Promise<void> {}
 
@@ -101,8 +106,10 @@ export class AgyEngine implements EngineAdapter {
     if (refused) return { status: 'rejected', retryable: false, reason: refused }
     const { content, meta } = withoutIntents(msg)
     const text = formatNotification(content, meta as Record<string, string> | undefined)
+    const pollMs = this.timing.pollMs ?? 250
+    const landedWaitMs = this.timing.landedWaitMs ?? LANDED_WAIT_MS
     if (Date.now() - info.createdAt < FRESH_START_MS) {
-      for (const start = Date.now(); this.turn(info, 0).live === null; await Bun.sleep(250)) {
+      for (const start = Date.now(); this.turn(info, 0).live === null; await Bun.sleep(pollMs)) {
         if (Date.now() - start > READY_WAIT_MS) return { status: 'rejected', retryable: true, reason: `${info.tmuxName} has not finished starting: agy has sent no first event` }
       }
     }
@@ -125,7 +132,7 @@ export class AgyEngine implements EngineAdapter {
     } catch (err) {
       return { status: 'rejected', retryable: false, reason: `the message was pasted into ${info.tmuxName} but Enter failed: ${err instanceof Error ? err.message : err}` }
     }
-    for (const start = Date.now(); Date.now() - start < LANDED_WAIT_MS; await Bun.sleep(250)) {
+    for (const start = Date.now(); Date.now() - start < landedWaitMs; await Bun.sleep(pollMs)) {
       if (seen() > before) return { status: 'accepted', via: 'tmux-paste' }
     }
     return { status: 'rejected', retryable: false, reason: `the message was pasted into ${info.tmuxName} but the pane never showed it, so it may or may not have been sent` }
