@@ -3,6 +3,7 @@
 // cycle, defers a heavy load, or probes a module on purpose; the list only shrinks. An entry that no longer matches is an error too: delete it.
 //   bun scripts/check-dynamic-imports.ts
 // Type queries (`typeof import('x')`, `x: import('net').Socket`) are types, not loads, and are not counted. Tests, test-setup.ts and scripts/ are out of scope.
+// It reads tracked files, so a new file is checked once it is `git add`ed (CI always sees committed files). A string that contains `import(` still counts: rare, and the list absorbs it.
 
 import { execFileSync } from 'child_process'
 import { readFileSync } from 'fs'
@@ -44,9 +45,8 @@ export const ALLOWED: readonly string[] = [
   'gateways/slack.ts -> ../daemon/access.js',
 ]
 
-// What precedes a runtime `import(`: a load is awaited, returned, assigned, passed or chained. Anything else (`typeof`, `:`, `as`, `<`, `|`) is a type.
-const LOAD_BEFORE = /(?:\bawait|\breturn|=>|[=(,?])\s*$/
-const stripComments = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, m => m.replace(/[^\n]/g, ' ')).replace(/^\s*\/\/.*$/gm, m => ' '.repeat(m.length))
+// Bun's transpiler drops types and comments and keeps every runtime `import()`, so a type query is never mistaken for a load and a load is never missed by its spelling.
+const transpiler = new Bun.Transpiler({ loader: 'ts' })
 
 const skip = (path: string) => !path.endsWith('.ts') || path.endsWith('.d.ts') || path.endsWith('.test.ts') || /(^|\/)(__tests__|node_modules|docs)\//.test(path) || path === 'test-setup.ts' || path.startsWith('scripts/')
 
@@ -55,9 +55,8 @@ export function found(files: Array<{ path: string; text: string }>): string[] {
   const out: string[] = []
   for (const { path, text } of files) {
     if (skip(path)) continue
-    const code = stripComments(text)
+    const code = transpiler.transformSync(text)
     for (const m of code.matchAll(/(?<![\w.$])import\(\s*([^)]*?)\s*\)/g)) {
-      if (!LOAD_BEFORE.test(code.slice(Math.max(0, m.index! - 40), m.index!))) continue
       const lit = /^(['"`])([^'"`]*)\1$/.exec(m[1])
       out.push(`${path} -> ${lit ? lit[2] : '<computed>'}`)
     }

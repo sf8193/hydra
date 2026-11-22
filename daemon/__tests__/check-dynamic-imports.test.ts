@@ -33,8 +33,20 @@ describe('check-dynamic-imports', () => {
   })
 
   test('chained, returned and promised loads are loads; a computed specifier is one too', () => {
-    expect(found([file('daemon/x.ts', "return import('./a.js')", "const p = import('./b.js').then(m => m)", 'await import(name)')]))
+    expect(found([file('daemon/x.ts', "export const f = () => { return import('./a.js') }", "const p = import('./b.js').then(m => m)", 'await import(name)')]))
       .toEqual(['daemon/x.ts -> ./a.js', 'daemon/x.ts -> ./b.js', 'daemon/x.ts -> <computed>'])
+  })
+
+  test('a load is a load however it is written', () => {
+    const loads = ["import('x').then(m => m)", 'void import("x")', "const a = [import('x')]", "const a = await Promise.all([import('x'), import('y')])", "const a = ok && import('x')",
+      "const a = { m: import('x') }", "const a = ok ? 1 : import('x')", "const a = // note\nimport('x')", "function* g() { yield import('x') }", "foo(); import('x')"]
+    for (const line of loads) expect(found([file('daemon/x.ts', line)]).length).toBe(line.includes('Promise.all') ? 2 : 1)
+  })
+
+  test('a type position is never a load, wherever it sits', () => {
+    const types = ["const a: [string, import('y').Z] = x", "const a = new Map<string, import('y').Z>()", "const a: (import('y').Z)[] = x", "type T = import('y').Z", "type T<A> = A extends string ? import('y').Z : never",
+      "const f = (x: import('y').Z) => x", "const f = (a: string, x: import('y').Z) => x"]
+    for (const line of types) expect(found([file('daemon/x.ts', line)])).toEqual([])
   })
 
   test('comments, tests, test-setup.ts and scripts/ are not scanned', () => {
