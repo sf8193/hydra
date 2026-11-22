@@ -82,7 +82,7 @@ describe('migrate jobs.toml → [schedules]', () => {
       expect(loaded.config.schedules.pull).toMatchObject({ runner: 'daemon', needs: ['internet'], alertAfterMs: 2 * 86_400_000 })
       expect(loaded.config.schedules.keepalive.target).toBeUndefined()
       expect(loaded.config.specialists.review).toMatchObject({ sessions: 'per-conversation', homePlace: '1551794455227404370', idleMs: 4 * 86_400_000 })
-      expect(plan.consumed).toEqual(['jobs.toml'])
+      expect(plan.consumed).toEqual(['access.json', 'jobs.toml'])
       expect(loaded.config.operator).toBe('operator')
       applyMigrate(dir, plan)
       expect(existsSync(join(dir, 'jobs.toml'))).toBe(false)
