@@ -160,7 +160,7 @@ ENVP="PATH=$(shq "$PATH") HYDRA_MOCK_PORT=$PORT"
 PARK_MSG="transcribe sidecar exited — parked to avoid a supervised crash-loop; inspect the error above (or $LOG), fix it, then: tmux kill-session -t $SESSION"
 if [ -f "$SCRIPT_DIR/scrub-secrets.sh" ]; then
   . "$SCRIPT_DIR/scrub-secrets.sh"
-elif env | grep -qE '^(DISCORD_BOT_TOKEN|SLACK_(BOT|APP)_TOKEN|SLOPBOT_SLACK_|HYDRA_SLACK_)'; then
+elif env | grep -E '^(DISCORD_BOT_TOKEN|SLACK_(BOT|APP)_TOKEN|SLOPBOT_SLACK_|HYDRA_SLACK_)' >/dev/null; then
   echo "hydra: scrub-secrets.sh missing and token vars are set — refusing to spawn" >&2
   exit 1
 else
