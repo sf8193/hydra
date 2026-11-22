@@ -1,6 +1,6 @@
 # Diagrams
 
-The primary orientation surface for agents and humans working on hydra. These diagrams show cross-layer message flows and architectural topology that can't be derived from reading any single file — dispatch ordering, recovery tiers, protocol mutual exclusion, the v1/v2 engine split. They make implicit structural decisions explicitly visible for review and design iteration.
+The primary orientation surface for agents and humans working on hydra. These diagrams show cross-layer message flows and architectural topology that can't be derived from reading any single file — dispatch ordering, recovery tiers, protocol mutual exclusion. They make implicit structural decisions explicitly visible for review and design iteration.
 
 **Use diagrams as design tools, not just documentation.** Drawing a flow diagram *before* implementing a cross-layer feature surfaces structural questions early — the `design.ts` audit bug (issue #194) was found by drawing a diagram, not by reading code. Draw first, implement, then verify the diagram still matches.
 
@@ -25,6 +25,8 @@ Each diagram has a `.mmd` source and a rendered `.png`.
 - Config or env changes
 
 **One question per picture.** A picture that needs paragraphs inside its shapes is two pictures. Labels are a few words; a list a reader needs goes in a side note (a grey box on a dotted line), not inside a gate. The routing and Slack pictures are sourced: each name means one thing across the set, a `<name>.sources.md` puts a `path:line` behind every box, and a reviewer who did not draw it checks the raw `.mmd` against the code before it is rendered. Their legend: orange diamond = a numbered gate, red = refused, unrouted or dropped, grey = held or still owed, green = delivered or done, plain = any other outcome. Their first line is an `%%{init}%%` that sets a white theme and a wider wrap, so any render command draws them the same.
+
+**Names are checked.** CI fails when a diagram shows a `.ts` file or a camelCase name that no longer exists in the code (`__tests__/core-abstractions.test.ts`). It checks names only, so a move that keeps the name never fails it, and it cannot tell whether the flow drawn is still true. When it fails, redraw that part from the code, or delete the diagram if all it draws is removed code.
 
 **Quality discipline:** Diagrams are authored with intent — what to emphasize, what level of abstraction serves the reader. Use adversarial review (`/review`) to verify diagram claims against code. Reference actual source file names, not abstractions.
 
@@ -56,7 +58,7 @@ for f in diagrams/*.mmd; do [ -f "${f%.mmd}.png" ] || { echo "unrendered: $f"; e
 | `flow-list-sessions` | List sessions: registry query → format → gateway send |
 | `flow-respawn` | Respawn: thread command → read thread history → doSpawnSession with resurrectFrom |
 | `flow-recovery-cascade` | Resume/respawn tiers: --resume → fork-transcript → respawn + death detection |
-| `flow-revive` | **Who is home, putting a session back, and where a message goes**: `occupancy()`'s decision; every revive under one lock per target through `reviveThread()`; `deliver --revive`; and every target (`to`, `spawn`, `perThread`) resolving to a session that lands through `deliverToSession` (stuck → exit 5) |
+| `flow-revive` | **Who is home, putting a session back, and where a message goes**: `occupancy()`'s decision; every revive under one lock per target through `reviveThread()`; `deliver --revive`; and every target (`to`, `spawn`) resolving to a session that lands through `deliverToSession` (stuck → exit 5) |
 | `flow-destroy` | Destroy: delete thread + anchor message (Discord only, dead/orphan threads), plus the `kill +d` composite that kills first |
 | `flow-destroy-ended` | `kill --destroy` by name or thread id when no live session answers: who may, the `[threads] allow_destroy` gate, the guards |
 | `flow-slack-edit` | `edit_message` / `delete_message` on a Slack conversation: the conversation rule, whose message it is picks the token, the main-only operator path, the missing-scope refusal |
@@ -100,7 +102,6 @@ A bold name in these pictures is one of README's [core abstractions](../README.m
 ### Protocol Flows
 | Diagram | What it shows |
 |---------|--------------|
-| `protocol-engines` | **v1/v2 engine split** — dispatch ordering, phase sets, shared infrastructure. The most important structural diagram for protocol work. |
 | `flow-protocol-robustness` | Protocol phases with loops, mutual exclusion, disconnect/auto-resume handling, grace periods |
 | `flow-review-fallback` | **Owner-driven subagent review** — how the owner fans out to fresh, independent subagents (one per material-driven lens, *not* forks), runs them in parallel, and synthesizes into the closing summary. Identical whichever door it came through: a critic that died or went silent, or a direct `review +subagent`. The engine triggers (`canFallbackOnDeath` / `enterDirectSubagentPhase` → `subagent_review`) live in `flow-protocol-robustness`. |
 
