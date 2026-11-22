@@ -29,7 +29,7 @@ import { gateway } from '../infra/config.js'
 import { SESSION_IDENTITY_VARS, capturedSpawnVars, stateEnvUnsets, scrubbedSpawnEnv, withRaisedFdLimit } from '../shared/spawn-env.js'
 import { modsExport } from '../infra/mods.js'
 import { BRIDGE_CHANNEL_FLAG, BRIDGE_MCP_SERVER_KEY, BRIDGE_PLUGIN_ID, BRIDGE_TOOLS_PERMISSION, BUILTIN_TOOL_PLUGIN_IDS } from '../infra/plugin-manifest.js'
-import { type LaunchPolicy, missingTokenRefusal, PolicyRefusal, remedy, RESTRICTED_MODS, RESTRICTED_PREAMBLE, serverToolRule, type RestrictedPolicy } from '../shared/launch-policy.js'
+import { type LaunchPolicy, PolicyRefusal, remedy, RESTRICTED_MODS, serverToolRule, type RestrictedPolicy } from '../shared/launch-policy.js'
 import { verifyConfinement as verifyConfinementLoaded, verifyLaunch as verifyLoaded, type Verdict } from './claude-verify.js'
 import { removeSessionToken, removeSpawnPrompt, shq, writeSessionToken, writeSpawnPrompt } from '../infra/launch-files.js'
 import { makeServerTmpDirs, removeRestrictedFiles, serverTmpDir, serverTmpRoot, writeRestrictedFiles } from '../infra/restricted-files.js'
@@ -90,9 +90,8 @@ export function restrictedConfig({ policy, env, held, sessionName, load, roots, 
         type: 'stdio', ...sandboxed(s.command, tmp(s.name)),
         env: {
           ...Object.fromEntries(s.tokenEnv.map(v => {
-            const value = env[v] ?? held[v]
-            if (value === undefined) throw new PolicyRefusal(missingTokenRefusal({ specialist: policy.specialist, servers: [s] }, ENV_FILE, sessionName, env, held)!)
-            return [v, value]
+            // doSpawnSession refused a start whose token variable is unset before it got here (app/session-lifecycle.ts), so it is set.
+            return [v, (env[v] ?? held[v])!]
           })),
           // The one place the server may write is its own folder: npm's cache and the temp dir are put in it, never in ~/.npm (which a server could poison for the operator's other npx runs).
           npm_config_cache: join(tmp(s.name), 'npm-cache'),
@@ -379,8 +378,6 @@ export class ClaudeEngine implements EngineAdapter {
     }
 
     let prompt = input.prompt
-    // A restricted kickoff starts with hydra's fixed preamble (restricted.ts): a prompt, not a control. Operator and non-specialist kickoffs are untouched.
-    if (restricted) prompt = `${RESTRICTED_PREAMBLE} ${prompt}`
     const worktreeAppend = buildWorktreePromptAppend(isFork, worktreePath)
     if (worktreeAppend) prompt += worktreeAppend
 

@@ -4,6 +4,7 @@
  * Wraps discord.js and implements the ChatGateway interface.
  */
 
+import { MAX_ATTACHMENT_BYTES } from '../shared/constants.js'
 import {
   Client,
   Events,
@@ -46,7 +47,6 @@ import type {
 import { shapeDiscordOutbound } from './discord-format.js'
 import { ThrottledQueue } from '../throttled-queue.js'
 
-const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 const RECENT_SENT_CAP = 200
 const HEARTBEAT_TICK_MS = 30_000
 

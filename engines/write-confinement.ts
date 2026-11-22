@@ -20,7 +20,7 @@ import { STATE_DIR } from '../infra/config.js'
 import { expectedServerNames } from './claude-verify.js'
 import { bridgeCommand } from '../infra/plugin-manifest.js'
 import { readdirSync, readFileSync } from 'fs'
-import { PolicyRefusal, missingTokenRefusal, remedy, serverToolRule, type ConfinementPolicy, type ConfinementServer, type LaunchPolicy } from '../shared/launch-policy.js'
+import { PolicyRefusal, remedy, serverToolRule, type ConfinementPolicy, type ConfinementServer, type LaunchPolicy } from '../shared/launch-policy.js'
 
 /** The first Claude Code with `permissions.blockWritesOutsideWorkingDirectories`: an older one ignores the key, which would leave Edit/Write unconfined. */
 export const MIN_CLAUDE_VERSION = [2, 1, 314] as const
@@ -82,9 +82,8 @@ export function confinementMcp(policy: ConfinementPolicy, sessionName: string, e
       args: confinementServerCommand(policy, s).slice(1),
       env: {
         ...Object.fromEntries(s.tokenEnv.map(v => {
-          const value = env[v] ?? held[v]
-          if (value === undefined) throw new PolicyRefusal(missingTokenRefusal({ specialist: policy.specialist, servers: [s] }, envFile, sessionName, env, held)!)
-          return [v, value]
+          // doSpawnSession refused a start whose token variable is unset before it got here (app/session-lifecycle.ts), so it is set.
+          return [v, (env[v] ?? held[v])!]
         })),
         ...Object.fromEntries(Object.entries(s.profileEnv).map(([k, v]) => [k, fillProfile(v, policy.workdir, policy.browserProfile)])),
       },

@@ -13,7 +13,7 @@ import { customEmojiId } from '../shared/slack-lines.js'
 import type { InboxLimits } from '../config/write-confinement.js'
 import { SocketSupervisor } from '../shared/socket-supervisor.js'
 import { ThrottledQueue } from '../throttled-queue.js'
-import { HOME_STATUS_ACTION_PREFIX } from '../shared/constants.js'
+import { HOME_STATUS_ACTION_PREFIX, MAX_ATTACHMENT_BYTES } from '../shared/constants.js'
 import { buildSocketApp, parseAuth, unfurlFields } from '../shared/slack-client.js'
 import { parseHomeStatusClick } from '../infra/home-status.js'
 import { linkPreviewsOff } from '../shared/link-previews.js'
@@ -34,7 +34,6 @@ import type {
   SessionVisualOpts,
 } from './gateway.js'
 
-const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 const RECENT_SENT_CAP = 200
 
 

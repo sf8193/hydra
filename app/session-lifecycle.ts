@@ -11,7 +11,7 @@ import { nameHeldByAnother, occupancy, occupied } from '../sessions/session-reac
 import { withThreadLock } from '../sessions/specialists.js'
 import { browserProfileProblem, managedMcpNameClashes, unreadableWorkdir } from '../config/write-confinement.js'
 import { confinementRefusal, endVerifying, startVerifying, verifyBackoff, verifyRefusal, describePolicy, macosRefusal, resolvePolicy } from './restricted.js'
-import { missingTokenRefusal, PolicyRefusal, remedy, type LaunchPolicy } from '../shared/launch-policy.js'
+import { missingTokenRefusal, PolicyRefusal, remedy, RESTRICTED_PREAMBLE, type LaunchPolicy } from '../shared/launch-policy.js'
 import { refusalNoticeKey, threadNotices } from '../shared/notice-limit.js'
 import { reportUnaddressableThreads } from '../sessions/thread-route.js'
 import { hydraLoadEnv, currentHydraConfig } from '../infra/hydra-config.js'
@@ -1270,7 +1270,9 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   // Its token for the hydra CLI (cli-caller.ts): the session gets the token, its record only the hash.
   const issued = issueSessionToken()
   const launched = await adapter.launch({
-    sessionId, tmuxName, cwd: effectiveCwd, originalCwd: spawnCwd, model, prompt, sessionToken: issued.token,
+    sessionId, tmuxName, cwd: effectiveCwd, originalCwd: spawnCwd, model,
+    // A restricted kickoff starts with hydra's fixed preamble: a prompt, not a control. Operator and non-specialist kickoffs are untouched.
+    prompt: restrictedPolicy ? `${RESTRICTED_PREAMBLE} ${prompt}` : prompt, sessionToken: issued.token,
     worktreePath: worktree?.path, forkFromOriginalCwd: !!worktreeTarget,
     tools: opts?.tools, disallowedTools,
     forkFrom: opts?.forkFrom, resumeFrom: opts?.resumeFrom, resumeCodex: opts?.resumeCodex, resumeSession: opts?.resumeSession,

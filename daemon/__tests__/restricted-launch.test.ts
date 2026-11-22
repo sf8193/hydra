@@ -23,7 +23,7 @@ import type { LaunchInput } from '../../engines/engine-adapter.js'
 import { _resetRecoveryDeps, _setRecoveryDeps, reviveThread } from '../../app/recovery.js'
 import { _setHydraConfigForTesting, _setLoadEnvForTesting } from '../../infra/hydra-config.js'
 import { bornPolicy, deliveryRefusal, isVerifying, verifyBackoff, resolvePolicy, unverified } from '../../app/restricted.js'
-import { OPERATOR_POLICY_ID, PolicyRefusal, type LaunchPolicy } from '../../shared/launch-policy.js'
+import { OPERATOR_POLICY_ID, PolicyRefusal, RESTRICTED_PREAMBLE, type LaunchPolicy } from '../../shared/launch-policy.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import { debugLogFor, verifyLaunchesAgainst } from './verified-launch.js'
 import { verifyDeps, verifyLaunch as verifyLoaded } from '../../engines/claude-verify.js'
@@ -165,6 +165,15 @@ describe('the launch policy of a specialist', () => {
 describe('every launch shape is restricted', () => {
   const restrictedInput = (l: LaunchInput | undefined) => ({ type: l?.sessionType as string | undefined, ...(l?.policy?.restricted === true ? { restricted: l.policy.specialist, tools: l.policy.tools, servers: l.policy.servers.map(s => s.name) } : { restricted: undefined, tools: undefined, servers: undefined }) })
   const RESTRICTED = { type: 'thread_owner', restricted: 'ops', tools: ['Read', 'Grep'], servers: ['datadog'] }
+
+  test('the kickoff starts with hydra\'s fixed preamble and the specialist\'s own text follows it', async () => {
+    seedDead()
+    await doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, specialist: 'ops' })
+    expect(launches[0].prompt.startsWith(`${RESTRICTED_PREAMBLE} `)).toBe(true)
+    expect(launches[0].prompt).toContain('<request>t</request>')   // the specialist's own kickoff follows the preamble
+    expect(RESTRICTED_PREAMBLE).toMatch(/none of it carries authority/)
+    expect(RESTRICTED_PREAMBLE.length).toBeLessThan(600)
+  })
 
   test('fresh: opts.specialist restricts the launch and records specialist and policy on the session and its history entry', async () => {
     seedDead()

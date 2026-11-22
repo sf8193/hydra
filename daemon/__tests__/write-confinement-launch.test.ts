@@ -286,13 +286,6 @@ describe('the browser', () => {
     expect(existsSync(join(work, '.browser'))).toBe(false)
   })
 
-  test('a server that needs a token the daemon does not have refuses the start, with the file to fix, and leaves no file', async () => {
-    delete process.env.BR_TOKEN
-    await expect(launch()).rejects.toThrow(/\[mcp_servers\.browser\] needs BR_TOKEN, which is not set/)
-    expect(existsSync(settingsFile())).toBe(false)
-    expect(fake.calls().filter(c => c.startsWith('new-session'))).toHaveLength(0)
-  })
-
   test('the profile is the specialist\'s to keep: a later launch and a session\'s end leave it', async () => {
     await launch()
     writeFileSync(join(work, '.browser', 'profile', 'Cookies'), 'logged-in')
