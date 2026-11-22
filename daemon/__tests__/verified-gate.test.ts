@@ -6,7 +6,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { readFileSync, rmSync } from 'fs'
 import { join } from 'path'
 import { STATE_DIR, gateway } from '../../infra/config.js'
-import { transport } from '../../sessions/bridge-transport.js'
+import { transport, deliverToAdapter } from '../../sessions/bridge-transport.js'
 import { registry } from '../../sessions/registry.js'
 import { engines } from '../../sessions/engine-instances.js'
 import { _setHydraConfigForTesting } from '../../infra/hydra-config.js'
@@ -45,7 +45,7 @@ afterEach(() => {
   rmSync(join(STATE_DIR, 'message-queue.json'), { force: true })
 })
 const note = { type: 'notification', content: 'hello', meta: { message_id: 'm1' } } as any
-const deliver = (id: string) => registry.get(id)!.adapter.deliver(registry.get(id)!, note)
+const deliver = (id: string) => deliverToAdapter(registry.get(id)!, note)
 
 describe('while the start is being verified, nothing reaches the session', () => {
   test('a delivery by session record is refused, and says the session is still being checked', async () => {

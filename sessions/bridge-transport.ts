@@ -34,6 +34,15 @@ export type BridgeConn = {
 let flushGate: ((info: SessionInfo) => string | undefined) | undefined
 export function setFlushGate(gate: ((info: SessionInfo) => string | undefined) | undefined): void { flushGate = gate }
 
+/**
+ * The one way to hand a message to a session's engine: the drift gate first (a session whose policy no longer matches hydra.toml, or that
+ * was never verified, is not delivered to), then the adapter. Every caller of `adapter.deliver` goes through here, so no engine checks it.
+ */
+export function deliverToAdapter(info: SessionInfo, msg: Notification): Promise<DeliveryResult> {
+  const refused = flushGate?.(info)
+  return refused ? Promise.resolve({ status: 'rejected', retryable: false, reason: refused }) : info.adapter.deliver(info, msg)
+}
+
 /** Set (`true`) on the message that asks main to write a handoff letter: it means something only to the daemon run that asked, which holds the request's state. */
 export const DEPARTING_NOTICE = 'departingNotice'
 
@@ -173,7 +182,7 @@ export class BridgeTransport {
       return result
     }
     try {
-      return info.adapter.deliver(info, msg as Notification).then(complete, err => complete({ status: 'unknown', reason: String(err) }))
+      return deliverToAdapter(info, msg as Notification).then(complete, err => complete({ status: 'unknown', reason: String(err) }))
     } catch (err) {
       return Promise.resolve(complete({ status: 'unknown', reason: String(err) }))
     }

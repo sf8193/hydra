@@ -1,4 +1,3 @@
-import { deliveryRefusal } from '../app/restricted.js'
 // engines/codex-engine-adapter.ts
 //
 // Codex engine adapter — wraps the CodexEngine (app-server + unix socket)
@@ -200,9 +199,6 @@ export class CodexEngineAdapter implements EngineAdapter {
 
   // Every delivery is a priced turn, so the intents decide whether it gets one.
   deliver(info: SessionInfo, msg: Notification): Promise<DeliveryResult> {
-    // The one drift gate every engine's deliver passes (Claude's, and omp's through it): a session whose policy no longer matches hydra.toml is not delivered to.
-    const refused = deliveryRefusal(info)
-    if (refused) return Promise.resolve({ status: 'rejected', retryable: false, reason: refused })
     if (msg.optional === true) return Promise.resolve({ status: 'rejected', retryable: false, reason: 'optional delivery dropped for codex' })
     // Accepting into a dead session's queue would lose it silently.
     if (!this.isAlive(info)) return Promise.resolve({ status: 'rejected', retryable: false, reason: 'session is dead — resume or respawn' })

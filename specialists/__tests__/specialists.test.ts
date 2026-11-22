@@ -74,14 +74,15 @@ describe('specialists', () => {
     })
   }
   /** A spawn that behaves like doSpawnSession: registers a live session and reports its thread. */
-  function fakeSpawn() {
+  /** `born`: what a real spawn stamps on the session it starts (its policy), computed when it spawns. */
+  function fakeSpawn(born: () => Record<string, unknown> = () => ({})) {
     const calls: unknown[][] = []
     const spawn = async (...args: unknown[]) => {
       calls.push(args)
       await Bun.sleep(15) // a real spawn yields; concurrent callers must still share it
       const opts = args[3] as { existingThreadId?: string }
       const threadId = opts.existingThreadId ?? `fresh-thread-${++n}`
-      const sessionId = occupy(threadId)
+      const sessionId = occupy(threadId, born())
       return { name: `${sessionId}-tmux`, sessionId, threadId, url: '' }
     }
     setSpawn(spawn)
@@ -125,8 +126,8 @@ describe('specialists', () => {
     const nameOf = () => { const name = `t-scope-${++n}`; names.push(name); return name }
 
     test('operator access to workdir: nothing is delivered, the thread is told the command, the log names both accesses; after a respawn it delivers', async () => {
-      const calls = fakeSpawn()
       const name = nameOf()
+      const calls = fakeSpawn(() => ({ policy: bornPolicy(name), verified: true }))   // a real spawn stamps the policy hydra.toml gives now, and the verified marker once its start is checked
       const sid = running(name, 'thread-scope-1', operatorPolicy(name))
       expect((await deliver(name)).ok).toBe(true)                                 // unchanged: delivered
       const before = queued(sid)

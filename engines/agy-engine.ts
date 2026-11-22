@@ -17,7 +17,6 @@ import type { BlockingState } from './engine-adapter.js'
 import { CLAUDE_WORKING_SILENCE_S, type ClaudeEngine } from './claude-engine.js'
 import { FRESH_START_MS, SOCK_PATH, PLATFORM, SPAWN_LOGS_DIR, STATE_DIR } from '../infra/config.js'
 import { removeSessionToken, removeSpawnPrompt, shq, writeSessionToken, writeSpawnPrompt } from '../infra/launch-files.js'
-import { deliveryRefusal } from '../app/restricted.js'
 import { tmuxCreateSession, tmuxSync, tmuxWindowActivity } from '../infra/tmux.js'
 import { SESSION_INSTRUCTIONS, contextWindowOf, formatNotification } from '../shared/constants.js'
 import { withRaisedFdLimit } from '../shared/spawn-env.js'
@@ -97,8 +96,6 @@ export class AgyEngine implements EngineAdapter {
   // "[Pasted text +N lines]" until Enter, so a big message counts only once sent; a short one is shown in the input box already, so for it this proves the
   // paste reached the pane, not that Enter sent it.
   private async paste(info: SessionInfo, msg: Notification): Promise<DeliveryResult> {
-    const refused = deliveryRefusal(info)
-    if (refused) return { status: 'rejected', retryable: false, reason: refused }
     const { content, meta } = withoutIntents(msg)
     const text = formatNotification(content, meta as Record<string, string> | undefined)
     if (Date.now() - info.createdAt < FRESH_START_MS) {
