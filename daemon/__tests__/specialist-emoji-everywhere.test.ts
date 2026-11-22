@@ -9,23 +9,23 @@ import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test'
 import { readdirSync, readFileSync, rmSync, statSync } from 'fs'
 import { join, relative, resolve } from 'path'
 import { gateway, STATE_DIR } from '../../infra/config.js'
-import { registry, threadRegistry, sessionEmoji, type SessionInfo } from '../sessions.js'
-import { emojiOf, emojiOfName } from '../anchor-state.js'
-import { transport } from '../bridge-transport.js'
-import { _setHydraConfigForTesting } from '../hydra-config.js'
-import { engines } from '../../engines/instances.js'
-import { handleListIntercept, handleUsageIntercept, __test as statusTest } from '../commands/status.js'
-import { handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept, _setRecoveryDeps, _resetRecoveryDeps } from '../commands/thread.js'
-import { handleSpawnIntercept } from '../commands/global.js'
-import * as lifecycle from '../session-lifecycle.js'
-import { killSession } from '../session-lifecycle.js'
-import { handleRecoverIntercept } from '../recovery.js'
-import { executeTool } from '../bridge-dispatch.js'
-import { sendToThread, sendDeps, _resetSends } from '../sends-to.js'
-import { mainTmux } from '../main-session.js'
-import { protocol } from '../protocol-dsl.js'
-import { onRunAdvance, __test as protocolTest } from '../protocol-runner.js'
-import { setSpecialistThread, _reloadSpecialists } from '../../specialists/specialists.js'
+import { registry, threadRegistry, sessionEmoji, type SessionInfo } from '../../sessions/registry.js'
+import { emojiOf, emojiOfName } from '../../sessions/anchor-state.js'
+import { transport } from '../../sessions/bridge-transport.js'
+import { _setHydraConfigForTesting } from '../../infra/hydra-config.js'
+import { engines } from '../../sessions/engine-instances.js'
+import { handleListIntercept, handleUsageIntercept, __test as statusTest } from '../../app/commands/status.js'
+import { handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept, _setRecoveryDeps, _resetRecoveryDeps } from '../../app/commands/thread.js'
+import { handleSpawnIntercept } from '../../app/commands/global.js'
+import * as lifecycle from '../../app/session-lifecycle.js'
+import { killSession } from '../../app/session-lifecycle.js'
+import { handleRecoverIntercept } from '../../app/recovery.js'
+import { executeTool } from '../../app/bridge-dispatch.js'
+import { sendToThread, sendDeps, _resetSends } from '../../app/sends-to.js'
+import { mainTmux } from '../../sessions/main.js'
+import { protocol } from '../../protocols/dsl.js'
+import { onRunAdvance, __test as protocolTest } from '../../app/protocol-runner.js'
+import { setSpecialistThread, _reloadSpecialists } from '../../sessions/specialists.js'
 import { fakeAdapter } from './test-harness.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 
@@ -130,7 +130,7 @@ describe('emojiOfName', () => {
 })
 
 // ---------------------------------------------------------------------------
-// daemon/commands/status.ts
+// app/commands/status.ts
 // ---------------------------------------------------------------------------
 
 describe('status.ts', () => {
@@ -171,7 +171,7 @@ describe('status.ts', () => {
 })
 
 // ---------------------------------------------------------------------------
-// daemon/commands/thread.ts
+// app/commands/thread.ts
 // ---------------------------------------------------------------------------
 
 describe('thread.ts', () => {
@@ -309,7 +309,7 @@ describe('thread.ts', () => {
 })
 
 // ---------------------------------------------------------------------------
-// daemon/commands/global.ts
+// app/commands/global.ts
 // ---------------------------------------------------------------------------
 
 describe('global.ts spawn announcements', () => {
@@ -352,7 +352,7 @@ describe('global.ts spawn announcements', () => {
 })
 
 // ---------------------------------------------------------------------------
-// daemon/session-lifecycle.ts, daemon/recovery.ts
+// app/session-lifecycle.ts, app/recovery.ts
 // ---------------------------------------------------------------------------
 
 describe('session-lifecycle.ts', () => {
@@ -402,7 +402,7 @@ describe('recovery.ts', () => {
 })
 
 // ---------------------------------------------------------------------------
-// daemon/protocol-runner.ts
+// app/protocol-runner.ts
 // ---------------------------------------------------------------------------
 
 describe('protocol-runner.ts', () => {
@@ -450,7 +450,7 @@ describe('protocol-runner.ts', () => {
 })
 
 // ---------------------------------------------------------------------------
-// daemon/bridge-dispatch.ts (send_to_thread's quiet send)
+// app/bridge-dispatch.ts (send_to_thread's quiet send)
 // ---------------------------------------------------------------------------
 
 describe('bridge-dispatch.ts: the line a session-to-session send posts in each thread', () => {
@@ -486,7 +486,7 @@ describe('bridge-dispatch.ts: the line a session-to-session send posts in each t
 })
 
 // ---------------------------------------------------------------------------
-// daemon/sends-to.ts
+// app/sends-to.ts
 // ---------------------------------------------------------------------------
 
 describe('sends-to.ts: the note a restricted specialist\'s hand-off leaves in the receiver\'s thread', () => {
@@ -527,7 +527,7 @@ const root = resolve(import.meta.dir, '..', '..')
 const read = (file: string) => readFileSync(join(root, file), 'utf8')
 
 describe('no site reads the catalog glyph', () => {
-  test('only the definition (daemon/sessions.ts) and the fallback (daemon/anchor-state.ts) reference sessionEmoji', () => {
+  test('only the definition (sessions/registry.ts) and the fallback (sessions/anchor-state.ts) reference sessionEmoji', () => {
     const files: string[] = []
     const walk = (dir: string) => {
       for (const e of readdirSync(join(root, dir))) {
@@ -537,11 +537,11 @@ describe('no site reads the catalog glyph', () => {
         else if (/\.(ts|tsx|js|mjs)$/.test(e)) files.push(rel)
       }
     }
-    for (const dir of ['daemon', 'specialists', 'shared', 'gateways']) walk(dir)
+    for (const dir of ['app', 'infra', 'engines', 'sessions', 'protocols', 'specialists', 'shared', 'gateways']) walk(dir)
     files.push('daemon.ts')
     expect(files.length).toBeGreaterThan(50)   // the walk found the tree, not nothing
     const holders = files.filter(f => /\bsessionEmoji\b/.test(read(f))).map(f => relative('.', f)).sort()
-    expect(holders).toEqual(['daemon/anchor-state.ts', 'daemon/sessions.ts'])
+    expect(holders).toEqual(['sessions/anchor-state.ts', 'sessions/registry.ts'])
   })
 })
 
@@ -549,7 +549,7 @@ describe('no site reads the catalog glyph', () => {
 // (specialist-emoji-thread-name.test.ts), they are pinned to take their glyph from emojiOfName.
 describe('the spawn-time sites (source-pinned)', () => {
   test('the spawn line doSpawnSession posts in the new session\'s thread', () => {
-    const src = read('daemon/session-lifecycle.ts')
+    const src = read('app/session-lifecycle.ts')
     expect(src).toMatch(/const spawnLine = formatSpawnLine\(\{[^}]*emoji: emojiOfName\(tmuxName\),/s)
   })
 

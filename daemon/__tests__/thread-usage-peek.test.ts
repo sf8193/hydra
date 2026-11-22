@@ -1,9 +1,9 @@
 // Pins what `usage` and `peek` say for a thread session, so the main-session work can't change them.
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { gateway } from '../../infra/config.js'
-import { registry } from '../sessions.js'
-import { handleUsageIntercept } from '../commands/status.js'
-import { handlePeekIntercept } from '../commands/thread.js'
+import { registry } from '../../sessions/registry.js'
+import { handleUsageIntercept } from '../../app/commands/status.js'
+import { handlePeekIntercept } from '../../app/commands/thread.js'
 import { fakeAdapter } from './test-harness.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 

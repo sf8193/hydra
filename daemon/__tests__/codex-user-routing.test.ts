@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 
-const source = readFileSync(join(import.meta.dir, '..', 'router.ts'), 'utf8')
+const source = readFileSync(join(import.meta.dir, '..', '..', 'app', 'router.ts'), 'utf8')
 
 describe('Codex user-message routing ratchet', () => {
   test('user messages are delivered only through the ingress-reserved next-turn path', () => {

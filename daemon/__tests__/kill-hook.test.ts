@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { runKillHook } from '../session-lifecycle.js'
+import { runKillHook } from '../../app/session-lifecycle.js'
 
 test('on-kill hook runs with the dead session identity in env; missing hook is a no-op', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'kill-hook-'))
@@ -25,10 +25,10 @@ test('on-kill hook runs with the dead session identity in env; missing hook is a
 // The hook's job is to retro only human kills, so an agent's kill_session must carry a
 // different reason than a human Kill ('session ended'), all the way through to the hook.
 test('kill_session: agent kill reaches the hook as "session ended by <caller>", main as "session ended"', async () => {
-  const { executeTool } = await import('../bridge-dispatch.js')
-  const { registry, threadRegistry } = await import('../sessions.js')
+  const { executeTool } = await import('../../app/bridge-dispatch.js')
+  const { registry, threadRegistry } = await import('../../sessions/registry.js')
   const { gateway, STATE_DIR } = await import('../../infra/config.js')
-  const { KILL_HOOK_PATH } = await import('../session-lifecycle.js')
+  const { KILL_HOOK_PATH } = await import('../../app/session-lifecycle.js')
   const { mkdirSync } = await import("fs")
   const { dirname } = await import('path')
 

@@ -6,15 +6,15 @@ import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { STATE_DIR, gateway } from '../../../infra/config.js'
-import { registry } from '../../../daemon/sessions.js'
-import { _setHydraConfigForTesting } from '../../../daemon/hydra-config.js'
+import { registry } from '../../../sessions/registry.js'
+import { _setHydraConfigForTesting } from '../../../infra/hydra-config.js'
 import { ConversationTable, EXTERNAL_AUDIENCE_NOTE, NEW_TO_MAIN_NOTE, TOP_LEVEL, type ConversationConfig, type DeliverResult, type SlackMessageEvent } from '../watch.js'
 import { getConversationTable, operatorBind, replyInConversation, slackConversationLink, slackRuntimeDeps } from '../runtime.js'
 import { BASE, BOT, hydra, view } from './slack-config.js'
 import { owningApp, route } from '../../../routing/route.js'
 import { loadHydraConfig } from '../../../config/load.js'
 import { testLoadEnv } from '../../../config/__tests__/load-env.js'
-import { handleCLIRequest } from '../../../daemon/cli-handler.js'
+import { handleCLIRequest } from '../../../app/cli-handler.js'
 import { placeOf } from '../../../config/types.js'
 
 process.stderr.write = (() => true) as any
@@ -247,7 +247,7 @@ describe("main's answer, and the bind's notice: in the thread where the bot is a
   test('a restricted specialist\'s answer never goes to the operator\'s DM, and nothing posted in a DM with a person does', async () => {
     configure(WITH + '[specialists.vault]\nworkdir = "/w/vault"\nrestricted = true\nreachable_by = ["role:anyone"]\n[[rules]]\nplace = "slack:C0VAULT"\ntarget = "specialist:vault"\n')
     registry.set('sw-vault', { sessionId: 'sw-vault', tmuxName: 'sw-vault', threadId: 'vault-thread', sessionType: 'thread_owner', engine: 'claude', createdAt: Date.now() } as any)
-    const { setSpecialistThread } = await import('../../../specialists/specialists.js')
+    const { setSpecialistThread } = await import('../../../sessions/specialists.js')
     setSpecialistThread('vault', 'vault-thread')
     try {
       getConversationTable().bind('C0VAULT', '1000.000001', 'vault', 'cli')

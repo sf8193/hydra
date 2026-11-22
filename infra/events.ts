@@ -3,7 +3,7 @@
 
 import { appendFileSync, mkdirSync, readdirSync, rmSync } from 'fs'
 import { STATE_DIR, STATE_WRITABLE } from './config.js'
-import { currentHydraConfig, hydraConfigLoadedOk } from '../daemon/hydra-config.js'
+import { currentHydraConfig, hydraConfigLoadedOk } from './hydra-config.js'
 import { dayFile, dayOf, dayOfFile, eventLine, eventsDir, EVENTS_KEEP_DAYS_DEFAULT, type EventBody } from '../shared/events.js'
 
 const DAY_MS = 86_400_000

@@ -20,7 +20,7 @@ if [ "$(bun --version 2>/dev/null)" != "$want" ]; then
   exit 1
 fi
 
-# daemon/config.ts exits without a bot token; a dummy one also keeps a session's real token out of
+# infra/config.ts exits without a bot token; a dummy one also keeps a session's real token out of
 # the run. A set channel skips config's network lookup of the default one.
 export DISCORD_BOT_TOKEN=test-token DEFAULT_SESSION_CHANNEL=000000000000000000
 

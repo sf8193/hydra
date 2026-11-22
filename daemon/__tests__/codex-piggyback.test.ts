@@ -12,12 +12,12 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { writeFileSync, readFileSync, existsSync, mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { BridgeTransport } from '../bridge-transport.js'
-import { registry } from '../sessions.js'
+import { BridgeTransport } from '../../sessions/bridge-transport.js'
+import { registry } from '../../sessions/registry.js'
 import { STATE_DIR } from '../../infra/config.js'
 import { on } from '../../infra/event-bus.js'
 import { fakeCodexAdapter } from './test-harness.js'
-import { CodexPiggyback } from '../../engines/codex-piggyback.js'
+import { CodexPiggyback } from '../../sessions/codex-piggyback.js'
 
 // Suppress stderr
 process.stderr.write = (() => true) as any
@@ -570,7 +570,7 @@ describe('piggyback delivery paths (adapter-policy T7)', () => {
 describe('session:death cleanup', () => {
   test('a dying session loses its buffered content', () => {
     const code = [
-      "const { codexPiggyback } = await import('./engines/codex-piggyback.ts')",
+      "const { codexPiggyback } = await import('./sessions/codex-piggyback.ts')",
       "const { emit } = await import('./infra/event-bus.ts')",
       "codexPiggyback.buffer('pb-death', 'x'); codexPiggyback.buffer('pb-alive', 'y')",
       "emit('session:death', { sessionId: 'pb-death', threadId: 't', wasOwner: true, tmuxName: 'n' })",

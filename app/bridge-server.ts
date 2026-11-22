@@ -1,0 +1,633 @@
+import { existsSync, readFileSync, unlinkSync, mkdirSync, chmodSync } from 'fs'
+import { createServer, type Socket } from 'net'
+import { dirname } from 'path'
+import { FRESH_START_MS, gateway, SOCK_PATH, STATE_DIR, PLATFORM } from '../infra/config.js'
+import { markDead, registry, threadRegistry, type SessionInfo } from '../sessions/registry.js'
+import { transport, type BridgeConn } from '../sessions/bridge-transport.js'
+import { executeTool } from './bridge-dispatch.js'
+import { BRIDGE_SHUTDOWN_GRACE_MS } from '../shared/constants.js'
+import { pendingPermissions } from './permission.js'
+import { discoverClaudeSessionId, killSession } from './session-lifecycle.js'
+import { operatorIds } from '../sessions/access.js'
+import { dispatchReconnect, dispatchSessionReply, dispatchDisconnect } from '../sessions/protocol-registry.js'
+import './restricted.js'   // registers the queue-flush gate on the transport
+import { advertiseTools, isToolAllowed, noteDeclaredRestrictions, refusalText } from '../sessions/tool-surface.js'
+import { getProtocolContext } from './protocol-runner.js'
+import { maybeNudgeMissingAdvance } from './advance-nudge.js'
+import { clearPendingReply, settlePendingOnReact, notePendingFromQueue } from './reply-guard.js'
+import { refreshSessionVisual } from '../sessions/anchor-state.js'
+import { handleCLIRequest, type CLIRequest } from './cli-handler.js'
+import { watchPr, getWatchesBySession } from '../connectors/github/pr-watch.js'
+import { sessionFlapAction, shouldHoldIncumbentMain } from './main-guard.js'
+import { buildAutopsy, logCorrelation, tailSpawnLog, buildCrashNotice, getVitalsSample } from '../sessions/observability.js'
+import { clearInterceptsForSession } from './pane-probe.js'
+import { safeSend } from '../infra/util.js'
+import { tmuxSessionState, tmuxSync, TMUX_HOLD_MS } from '../infra/tmux.js'
+import { mainLaunchModel } from '../sessions/main.js'
+import { clearIdleLimit, resumeIdleLimit } from '../sessions/idle-limit.js'
+import { createMainBridgeCycle, formatReconnectLine, mainCloseRecordsReason } from './main-bridge-cycle.js'
+import { emit } from '../infra/event-bus.js'
+import { bridgeLifePath, describeBridgeExit, pidAlive, pruneBridgeLife, readBridgeLife } from '../shared/bridge-life.js'
+import type { ButtonDef } from '../gateways/gateway.js'
+
+const DEATH_DETECT_DELAY_MS = 3_000
+const BRIDGE_LIFE_READ_DELAY_MS = BRIDGE_SHUTDOWN_GRACE_MS + 1_000
+const BRIDGE_LIFE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
+
+// ---------------------------------------------------------------------------
+// Auto-watch: scan session replies for GitHub PR URLs
+// ---------------------------------------------------------------------------
+
+const PR_URL_RE = /https?:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/g
+
+// ---------------------------------------------------------------------------
+// request_tools floor — the daemon's own guard against a client that won't stop
+// ---------------------------------------------------------------------------
+
+// A bridge asks for tools when it suspects an update was lost, so a healthy
+// session asks rarely. Anything faster is a client stuck in a cycle, and the
+// daemon should not be the half that sustains it: declining to answer lets the
+// bridge's request time out and fall back to its cache, which ends the exchange.
+// This is a floor on a pathological rate, not a debounce on a normal one — no
+// legitimate caller comes back inside a second.
+const TOOLS_PUSH_FLOOR_MS = 1_000
+
+function autoWatchPrUrls(sessionId: string, text: string): void {
+  if (!text) return
+  const info = registry.get(sessionId)
+  if (!info) return
+
+  const urls = text.match(PR_URL_RE)
+  if (!urls) return
+
+  const existingWatches = new Set(getWatchesBySession(sessionId).map(w => w.prUrl))
+
+  for (const url of new Set(urls)) {
+    if (existingWatches.has(url)) continue
+
+    watchPr(url, sessionId, info.threadId).then(msg => {
+      process.stderr.write(`daemon: auto-watch: ${msg}\n`)
+      if (!msg.startsWith('already watching')) {
+        gateway.send(info.threadId, `_Auto-watching_ ${url}`).catch(() => {})
+      }
+    }).catch(err => {
+      process.stderr.write(`daemon: auto-watch failed for ${url}: ${err instanceof Error ? err.message : err}\n`)
+    })
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Bridge flap circuit breaker — kill sessions that reconnect too rapidly, unless another
+// live bridge holds the id (then hold the incumbent: see sessionFlapAction)
+// ---------------------------------------------------------------------------
+
+const FLAP_WINDOW_MS = 60_000
+const MAIN_COOLDOWN_MS = 10_000
+const FLAP_THRESHOLD = 10
+const flapTracker = new Map<string, number[]>()
+
+// Tracks each cycle's disconnect reason + true uptime for the 'main' reconnect
+// log below. Instruments an unresolved reconnect-flapping issue; does not fix it.
+// Logic lives in main-bridge-cycle.ts (pure + tested); this owns the stderr write.
+const mainBridge = createMainBridgeCycle()
+
+function trackRegistration(sessionId: string): boolean {
+  const now = Date.now()
+  const timestamps = flapTracker.get(sessionId) ?? []
+  timestamps.push(now)
+  const recent = timestamps.filter(t => now - t < FLAP_WINDOW_MS)
+  flapTracker.set(sessionId, recent)
+  if (recent.length >= FLAP_THRESHOLD) {
+    flapTracker.delete(sessionId)
+    return true
+  }
+  return false
+}
+
+// Refuse newcomer 'main' bridges until this time once a duplicate-'main' flap is
+// detected (see main-guard.ts). 'main' is exempt from the kill path above, so the
+// guard holds the incumbent instead.
+let duplicateMainCooldownUntil = 0
+let duplicateMainIncumbentSocket: import('net').Socket | undefined
+
+// The same hold for spawned sessions: the incumbent socket we are keeping, until when.
+const incumbentHolds = new Map<string, { until: number; socket: import('net').Socket }>()
+
+// ---------------------------------------------------------------------------
+// Bridge protocol handler
+// ---------------------------------------------------------------------------
+
+/** Role of a registering bridge connection: 'control' (tool-only sidecar) or 'session'. */
+export function connectionRoleFor(msg: { connectionRole?: unknown }, info: SessionInfo | undefined): 'control' | 'session' {
+  return msg.connectionRole === 'control' || info?.adapter?.channel === 'engine' ? 'control' : 'session'
+}
+
+function handleBridgeMessage(conn: BridgeConn, raw: string): void {
+  let msg: any
+  try {
+    msg = JSON.parse(raw)
+  } catch {
+    process.stderr.write(`daemon: invalid JSON from bridge: ${raw.slice(0, 200)}\n`)
+    return
+  }
+
+  switch (msg.type) {
+    case 'register': {
+      const sessionId = msg.sessionId as string
+      conn.sessionId = sessionId
+      if (Number.isInteger(msg.pid) && (msg.pid as number) > 0) conn.bridgePid = msg.pid as number
+
+      const claudeSessionId = msg.claudeSessionId as string | undefined
+      const info = registry.get(sessionId)
+      // Existing Codex MCP processes may predate the explicit role field. Codex
+      // session traffic uses codexEngine, so daemon-socket registrations for a
+      // Codex record are control-plane connections by definition.
+      conn.connectionRole = connectionRoleFor(msg, info)
+
+      // Decide flap/hold BEFORE anything below mutates the session (its claudeSessionId, thread history):
+      // a refused or killed registration must leave the live session untouched.
+      if (sessionId !== 'main' && conn.connectionRole !== 'control') {
+        const incumbent = transport.get(sessionId)
+        const hasOtherIncumbent = !!incumbent && incumbent.socket !== conn.socket
+        const hold = incumbentHolds.get(sessionId)
+        const held = hasOtherIncumbent && !!hold && Date.now() < hold.until && hold.socket === incumbent!.socket
+        if (hold && !held) incumbentHolds.delete(sessionId) // expired, or its incumbent is gone
+        // A refused registration must not feed the flap detector (same rule as 'main').
+        const action = sessionFlapAction({ hasOtherIncumbent, held, flapping: !held && trackRegistration(sessionId) })
+        if (action === 'refuse' || action === 'hold') {
+          if (action === 'hold') incumbentHolds.set(sessionId, { until: Date.now() + MAIN_COOLDOWN_MS, socket: incumbent!.socket })
+          process.stderr.write(action === 'hold'
+            ? `daemon: bridge for ${sessionId} flapping with another live bridge on the same id — holding the incumbent, refusing newcomer. A second process is using this session's HYDRA_SESSION_ID (a probe or child claude run from its shell?); stop it. Session NOT killed.\n`
+            : `daemon: bridge for ${sessionId}: another live bridge holds this id — refusing newcomer\n`)
+          try { conn.socket.end() } catch {}
+          break
+        }
+        if (action === 'kill') {
+          if (info) {
+            process.stderr.write(`daemon: circuit breaker: ${info.tmuxName} flapping (${FLAP_THRESHOLD}+ registrations in ${FLAP_WINDOW_MS / 1000}s) — killing session\n`)
+            try { tmuxSync(['kill-session', '-t', info.tmuxName]) } catch {}
+            markDead(info)
+            void gateway.send(info.threadId, `⚠️ **${info.tmuxName}** killed by circuit breaker — bridge was flapping (${FLAP_THRESHOLD}+ reconnects in ${FLAP_WINDOW_MS / 1000}s). Use \`respawn\` to start fresh.`).catch(() => {})
+          } else {
+            process.stderr.write(`daemon: circuit breaker: stray bridge ${sessionId} flapping — disconnecting\n`)
+          }
+          try { conn.socket.end() } catch {}
+          break
+        }
+      }
+
+      // Only a Claude record carries a Claude session id; the Codex MCP sidecar registers here too.
+      if (info && (info.engine ?? 'claude') === 'claude') {
+        const resolved = claudeSessionId || discoverClaudeSessionId(info.tmuxName)
+        if (resolved) {
+          info.claudeSessionId = resolved
+          registry.persist()
+
+          // Flow claudeSessionId to thread history
+          const thread = threadRegistry.get(info.threadId)
+          if (thread) {
+            const histEntry = thread.sessionHistory.find(h => h.sessionId === sessionId)
+            if (histEntry) histEntry.claudeSessionId = resolved
+            threadRegistry.persist()
+          }
+        }
+        if (sessionId !== 'main') logCorrelation(info)
+      }
+
+      // Codex MCP sidecars are control-plane clients. They may execute tools and
+      // receive tool-surface updates, but must never replace the persistent
+      // session bridge or emit session disconnect/death events when they exit.
+      if (conn.connectionRole === 'control') {
+        transport.addControl(sessionId, conn)
+        const tools = advertiseTools(sessionId)
+        transport.sendToBridge(conn, {
+          type: 'registered', sessionId, tools, platform: PLATFORM,
+          sessionMetadata: info?.sessionMetadata ?? {
+            role: 'worker', tools: tools.map(t => t.name), model: 'unknown',
+            cwd: process.env.SPAWN_CWD || '(unknown)', platform: PLATFORM,
+          },
+        })
+        process.stderr.write(`daemon: control bridge registered for session ${sessionId}\n`)
+        break
+      }
+
+      // Whether a live 'main' incumbent already existed at registration —
+      // carried to mainBridge.connect() to flag a two-process fight vs. a reconnect.
+      let mainHadOtherIncumbent = false
+
+      // Duplicate-'main' guard. Retained as a secondary defense — the primary
+      // defense is in bridge.ts: unconfigured bridges get a random ephemeral id
+      // instead of defaulting to 'main'. Only bridges with HYDRA_ROLE=main claim
+      // 'main'. This guard catches the residual case of two byte processes (e.g.
+      // a stale byte surviving a restart) both declaring HYDRA_ROLE=main.
+      if (sessionId === 'main') {
+        const incumbent = transport.get('main')
+        const hasOtherIncumbent = !!incumbent && incumbent.socket !== conn.socket
+        mainHadOtherIncumbent = hasOtherIncumbent
+        const now = Date.now()
+
+        // Cooldown refusal — do NOT track this registration. Refused
+        // registrations must not feed the flap detector, or the guard's own
+        // enforcement generates the signal that perpetuates it.
+        if (hasOtherIncumbent && now < duplicateMainCooldownUntil) {
+          if (duplicateMainIncumbentSocket !== transport.get('main')?.socket) {
+            duplicateMainCooldownUntil = 0
+            duplicateMainIncumbentSocket = undefined
+            process.stderr.write(`daemon: duplicate 'main' cooldown cleared — incumbent died, accepting newcomer\n`)
+          } else {
+            process.stderr.write(`daemon: duplicate 'main' — cooldown active (${Math.ceil((duplicateMainCooldownUntil - now) / 1000)}s remaining), refusing newcomer\n`)
+            try { conn.socket.end() } catch {}
+            break
+          }
+        }
+
+        // Flap detection — only reached by registrations that passed the
+        // cooldown check, so the count reflects real registration attempts.
+        const flapping = trackRegistration('main')
+        if (shouldHoldIncumbentMain({ hasOtherIncumbent, flapping, now, cooldownUntil: duplicateMainCooldownUntil })) {
+          duplicateMainCooldownUntil = now + MAIN_COOLDOWN_MS
+          duplicateMainIncumbentSocket = transport.get('main')?.socket
+          process.stderr.write(`daemon: duplicate 'main' bridge flapping — holding incumbent, refusing newcomer. A second byte/main process is running; kill the extra and keep one.\n`)
+          try { conn.socket.end() } catch {}
+          break
+        }
+      }
+
+      const existing = transport.get(sessionId)
+      if (existing && existing.socket !== conn.socket) {
+        if (sessionId !== 'main') process.stderr.write(`daemon: replacing bridge for session ${sessionId}\n`)
+        // The main replace is otherwise silent — record it as the disconnect
+        // cause for the next reconnect log line. SYNC: mainBridge.connect() below
+        // must run in the same synchronous pass as this notifyReplaced (before the
+        // evicted socket's async 'end' arrives) — do not insert an await between
+        // them, or the 'replaced' reason will be lost. See main-bridge-cycle.ts.
+        if (sessionId === 'main') mainBridge.notifyReplaced(Date.now())
+        try { existing.socket.end() } catch {}
+      }
+
+      // Only a registration that was accepted may declare: a refused newcomer must not narrow the session it was refused for.
+      noteDeclaredRestrictions(sessionId, msg)
+      transport.set(sessionId, conn)
+      const tools = advertiseTools(sessionId)
+      transport.sendToBridge(conn, {
+        type: 'registered',
+        sessionId,
+        tools,
+        platform: PLATFORM,
+        sessionMetadata: info?.sessionMetadata ?? {
+          role: sessionId === 'main' ? 'main' : 'worker',
+          tools: tools.map(t => t.name),
+          // A registered session's record holds the model its launch resolved. Main has none: it is launched by `hydra up`, which recorded it.
+          // Anyone else without a record says so; the spawn default is only what a spawn takes when it names none.
+          model: (sessionId === 'main' ? mainLaunchModel() : undefined) ?? 'unknown',
+          cwd: process.env.SPAWN_CWD || '(unknown)',
+          platform: PLATFORM,
+        },
+      })
+      // Reply guard: re-arm from queued user messages before the flush hands
+      // them over — the queue survives daemon restarts, the guard map doesn't.
+      notePendingFromQueue(sessionId, transport.messageQueues.get(sessionId))
+      if (info?.engine === 'claude' && info.adapter && Date.now() - info.createdAt < FRESH_START_MS) transport.settleThenFlush(sessionId, () => info.adapter!.turn(info, 0).live === 'idle')
+      else transport.flushQueue(sessionId)
+      dispatchReconnect(sessionId)
+      if (info && info.sessionType !== 'thread_guest') refreshSessionVisual(info.threadId)
+      if (sessionId === 'main') {
+        const r = mainBridge.connect(mainHadOtherIncumbent, Date.now())
+        if (r.kind === 'first') process.stderr.write('daemon: main bridge connected\n')
+        else if (!r.throttled) process.stderr.write(formatReconnectLine(r) + '\n')
+      } else if (info) {
+        process.stderr.write(`daemon: bridge registered for session ${sessionId}\n`)
+        resumeIdleLimit(sessionId)
+        // A session is only reachable once its bridge is up, so this — not
+        // spawn — is the moment thread-scoped work can be handed to it.
+        emit('session:bridge-registered', { sessionId, threadId: info.threadId })
+      } else {
+        process.stderr.write(`daemon: stray bridge registered as ${sessionId} (no registry entry, no main tools)\n`)
+      }
+      break
+    }
+
+    case 'tool_call': {
+      const { id, name, args } = msg as { id: string; name: string; args: Record<string, unknown> }
+
+      if (!isToolAllowed(conn.sessionId ?? '', name)) {
+        transport.sendToBridge(conn, {
+          type: 'tool_result',
+          id,
+          content: [{ type: 'text', text: refusalText(conn.sessionId ?? '', name) }],
+          isError: true,
+        })
+        return
+      }
+
+      if (conn.sessionId !== 'main') {
+        const info = registry.get(conn.sessionId)
+        if (info) {
+          info.lastActive = Date.now()
+        }
+      }
+
+      void executeTool(name, args, conn.sessionId).then(async result => {
+        transport.sendToBridge(conn, {
+          type: 'tool_result',
+          id,
+          content: result.content,
+          ...(result.isError ? { isError: true } : {}),
+        })
+
+        try {
+          // Reply guard: a reaction acknowledges the message — but only where one is
+          // actually posted. Slack `react` succeeds as a no-op, so settling on it
+          // would disarm the guard on an ack the sender never sees.
+          if (name === 'react' && PLATFORM !== 'slack' && !result.isError && conn.sessionId && args.chat_id && args.message_id) {
+            settlePendingOnReact(conn.sessionId, args.chat_id as string, args.message_id as string)
+          }
+
+          if (name === 'reply' && !result.isError && conn.sessionId) {
+            const replyInfo = registry.get(conn.sessionId)
+            const replyText = args.text as string
+
+            // Reply guard: settle synchronously — the reply is already sent, and
+            // the hooks below await (and may throw), which would strand the guard.
+            clearPendingReply(conn.sessionId, args.chat_id as string)
+
+            if (replyInfo && !replyInfo.ephemeral) {
+              autoWatchPrUrls(conn.sessionId, replyText)
+            }
+
+            await dispatchSessionReply(conn.sessionId, replyText, args.chat_id as string, result.sentIds ?? [])
+            maybeNudgeMissingAdvance(conn.sessionId, replyText, args.chat_id as string)
+
+            if (replyInfo?.ephemeral && /^\[done\]$/m.test(replyText)) {
+              process.stderr.write(`daemon: ephemeral session ${replyInfo.tmuxName} posted [done], killing\n`)
+              clearIdleLimit(conn.sessionId)
+              const sid = conn.sessionId
+              setTimeout(() => {
+                const current = registry.get(sid)
+                if (current) {
+                  void killSession(current, 'ephemeral [done]', { ended: 'finished' }).catch(err => {
+                    process.stderr.write(`daemon: ephemeral kill failed: ${err}\n`)
+                  })
+                }
+              }, 2000)
+            }
+          }
+        } catch (err) {
+          process.stderr.write(`daemon: post-reply hook failed: ${err}\n`)
+        }
+      }).catch(err => {
+        transport.sendToBridge(conn, {
+          type: 'tool_result',
+          id,
+          content: [{ type: 'text', text: `internal error: ${err}` }],
+          isError: true,
+        })
+      })
+      break
+    }
+
+    case 'tools_request': {
+      const { id } = msg as { id: string }
+      transport.sendToBridge(conn, { type: 'tools_result', id, tools: advertiseTools(conn.sessionId ?? '') })
+      break
+    }
+
+    case 'permission_response': {
+      break
+    }
+
+    case 'permission_request': {
+      const { request_id, tool_name, description, input_preview } = msg
+      const sessionId = conn.sessionId || 'main'
+      pendingPermissions.set(request_id, { tool_name, description, input_preview, sessionId })
+      const text = `Permission: ${tool_name}`
+      const buttons: ButtonDef[] = [
+        { id: `perm:more:${request_id}`, label: 'See more', style: 'secondary' },
+        { id: `perm:allow:${request_id}`, label: 'Allow', style: 'success', emoji: '✅' },
+        { id: `perm:deny:${request_id}`, label: 'Deny', style: 'danger', emoji: '❌' },
+      ]
+      // Post buttons in the session's thread (if it's a spawned session), otherwise DM the operator
+      const permInfo = sessionId !== 'main' ? registry.get(sessionId) : undefined
+      if (permInfo) {
+        void gateway.send(permInfo.threadId, text, { buttons }).catch(e => {
+          process.stderr.write(`daemon: permission_request send to thread ${permInfo.threadId} failed: ${e}\n`)
+        })
+      } else {
+        for (const userId of operatorIds()) {
+          void gateway.sendDM(userId, text, buttons).catch(e => {
+            process.stderr.write(`daemon: permission_request send to ${userId} failed: ${e}\n`)
+          })
+        }
+      }
+      break
+    }
+
+    case 'request_tools': {
+      // Pull-based fallback: bridge requests a tool refresh when it suspects
+      // a tools_update was lost (e.g., after receiving a notification that
+      // may indicate a phase transition). Responds with a tools_update.
+      if (conn.sessionId) {
+        const now = Date.now()
+        if (conn.lastToolsPushAt && now - conn.lastToolsPushAt < TOOLS_PUSH_FLOOR_MS) {
+          // Bridges older than this guard emit `list_changed` on every answer,
+          // including this one, and ask again the moment they get it. Staying
+          // silent is what breaks that cycle for a session already running.
+          break
+        }
+        conn.lastToolsPushAt = now
+        const tools = advertiseTools(conn.sessionId)
+        transport.sendToBridge(conn, { type: 'tools_update', tools })
+      }
+      break
+    }
+
+    case 'cli': {
+      void handleCLIRequest(msg as CLIRequest).then(response => {
+        conn.socket.write(JSON.stringify(response) + '\n')
+      }).catch(err => {
+        conn.socket.write(JSON.stringify({
+          type: 'cli-response',
+          id: msg.id ?? '',
+          ok: false,
+          error: `internal error: ${err instanceof Error ? err.message : String(err)}`,
+        }) + '\n')
+      })
+      break
+    }
+
+    default:
+      process.stderr.write(`daemon: unknown message type from bridge: ${msg.type}\n`)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Session death detection
+// ---------------------------------------------------------------------------
+
+function reportBridgeExit(sessionId: string, pid: number): void {
+  setTimeout(() => {
+    const path = bridgeLifePath(dirname(SOCK_PATH), sessionId, pid)
+    const events = readBridgeLife(path)
+    const alive = pidAlive(pid)
+    process.stderr.write(`daemon: bridge exit check for session ${sessionId} pid ${pid}: ${describeBridgeExit(events, alive, Date.now())}${alive ? ` [record kept: ${path}]` : ''}\n`)
+    if (!alive) {
+      try { unlinkSync(path) } catch {}
+    }
+  }, BRIDGE_LIFE_READ_DELAY_MS)
+}
+
+// A death check tmux didn't answer is asked again after the hold: one retry armed at a time per session, and
+// one log line per episode however many retries it takes. `later` is the test seam.
+export const deathCheckIO = { later: (fn: () => void, ms: number): void => { setTimeout(fn, ms).unref() } }
+const deathCheckArmed = new Set<string>()
+const deathCheckLogged = new Set<string>()
+
+function deferDeathCheck(sessionId: string, tmuxName: string): void {
+  if (!deathCheckLogged.has(sessionId)) {
+    deathCheckLogged.add(sessionId)
+    process.stderr.write(`daemon: death check for ${tmuxName}: tmux not responding; checking again every ${TMUX_HOLD_MS / 1000}s until it answers\n`)
+  }
+  if (deathCheckArmed.has(sessionId)) return
+  deathCheckArmed.add(sessionId)
+  deathCheckIO.later(() => { deathCheckArmed.delete(sessionId); void checkSessionDeath(sessionId) }, TMUX_HOLD_MS)
+}
+
+export async function checkSessionDeath(sessionId: string): Promise<void> {
+  const info = transport.has(sessionId) ? undefined : registry.get(sessionId)
+  // Reconnected, gone, or already dead (a retry outlived another verdict): nothing left to decide.
+  if (!info || info.deadAt) { deathCheckLogged.delete(sessionId); return }
+  const tmux = tmuxSessionState(info.tmuxName)
+  // A tmux that doesn't answer says nothing about the session.
+  if (tmux === 'not responding') return deferDeathCheck(sessionId, info.tmuxName)
+  deathCheckLogged.delete(sessionId)
+  if (tmux === 'dead') {
+    // Read the pane tail once, for the autopsy — which goes to the daemon log
+    // (PRESERVE, hardware-only). The channel gets a LINK to the log, never the bytes.
+    let tail: string[] = []
+    if (info.spawnLogPath) {
+      try {
+        tail = tailSpawnLog(info.spawnLogPath)
+      } catch (err) {
+        process.stderr.write(`daemon: session ${info.tmuxName} black box unreadable (${info.spawnLogPath}): ${err}\n`)
+      }
+    }
+    let exitFileLines: string[] | undefined
+    let stderrTail: string[] | undefined
+    const exitPath = info.exitFilePath ?? info.spawnLogPath?.replace(/\/([^/]+)\.log$/, '/exit-$1.log')
+    if (exitPath) {
+      try {
+        exitFileLines = readFileSync(exitPath, 'utf8').trim().split('\n').filter(Boolean)
+      } catch (err: unknown) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') process.stderr.write(`daemon: exit file unreadable (${exitPath}): ${err}\n`)
+      }
+    }
+    const stderrPath = info.stderrLogPath ?? info.spawnLogPath?.replace(/\/([^/]+)\.log$/, '/stderr-$1.log')
+    if (stderrPath) {
+      try {
+        const raw = readFileSync(stderrPath, 'utf8').trim()
+        if (raw) stderrTail = raw.split('\n').slice(-5)
+      } catch (err: unknown) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') process.stderr.write(`daemon: stderr tail unreadable (${stderrPath}): ${err}\n`)
+      }
+    }
+    let debugTail: string[] | undefined
+    if (info.debugLogPath) {
+      try { const d = tailSpawnLog(info.debugLogPath, 10); if (d.length > 0) debugTail = d } catch {}
+    }
+    process.stderr.write(buildAutopsy(info, 'crashed (tmux dead, bridge disconnected)', tail, Date.now(), getVitalsSample(info.sessionId), { exitFileLines, stderrTail, debugTail, protocolContext: getProtocolContext(info.sessionId), resumeCount: info.resumeCount }) + '\n')
+
+    markDead(info)
+    clearInterceptsForSession(info.tmuxName)
+
+    // Ephemeral sessions die silently — no crash message or skull visual
+    if (!info.ephemeral) {
+      // safeSend (never throws, chunks, logs) — the daemon's delivery path.
+      await safeSend(info.threadId, buildCrashNotice(info))
+      refreshSessionVisual(info.threadId, { state: 'crashed' })
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Socket server
+// ---------------------------------------------------------------------------
+
+export const socketServer = createServer((socket: Socket) => {
+  const conn: BridgeConn = {
+    sessionId: '',
+    socket,
+    buf: '',
+  }
+
+  socket.on('data', (data: Buffer) => {
+    conn.buf += data.toString()
+    let nl: number
+    while ((nl = conn.buf.indexOf('\n')) !== -1) {
+      const line = conn.buf.slice(0, nl).trim()
+      conn.buf = conn.buf.slice(nl + 1)
+      if (line) handleBridgeMessage(conn, line)
+    }
+  })
+
+  function handleSocketClose(reason: string): void {
+    if (!conn.sessionId) return
+    if (conn.connectionRole === 'control') {
+      transport.removeControl(conn.sessionId, conn)
+      return
+    }
+    const isOwner = transport.get(conn.sessionId) === conn
+    // First reason wins. A socket can emit both 'error' and 'end'; the owner's
+    // first close records the cause (and the transport.delete below then makes any
+    // later close a non-owner), so this flag is belt-and-suspenders that keeps the
+    // real cause even if that ordering ever changes.
+    if (mainCloseRecordsReason(conn.sessionId, isOwner) && !conn.mainCloseRecorded) {
+      conn.mainCloseRecorded = true
+      mainBridge.disconnect(reason, Date.now())
+    }
+    if (isOwner && conn.bridgePid) reportBridgeExit(conn.sessionId, conn.bridgePid)
+    if (isOwner) {
+      transport.delete(conn.sessionId)
+    }
+    const protocolClaimed = dispatchDisconnect(conn.sessionId)
+    if (conn.sessionId !== 'main' && !protocolClaimed) {
+      const sid = conn.sessionId
+      setTimeout(() => checkSessionDeath(sid), DEATH_DETECT_DELAY_MS)
+    }
+  }
+
+  socket.on('end', () => {
+    if (conn.sessionId && conn.sessionId !== 'main' && conn.connectionRole !== 'control') {
+      process.stderr.write(`daemon: bridge disconnected for session ${conn.sessionId}\n`)
+    }
+    handleSocketClose('end')
+  })
+
+  socket.on('error', (err) => {
+    process.stderr.write(`daemon: bridge socket error: ${err}\n`)
+    handleSocketClose(`error: ${err instanceof Error ? err.message : String(err)}`)
+  })
+})
+
+export function startBridgeServer(): void {
+  // Clean up stale socket and ensure state dir exists — must happen here
+  // (not at module level) so the socket probe in daemon.ts can test the
+  // incumbent's socket before we delete it.
+  try {
+    if (existsSync(SOCK_PATH)) {
+      unlinkSync(SOCK_PATH)
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      process.stderr.write(`daemon: startBridgeServer: failed to unlink stale socket: ${err}\n`)
+    }
+  }
+  mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
+  pruneBridgeLife(dirname(SOCK_PATH), BRIDGE_LIFE_MAX_AGE_MS, Date.now())
+
+  socketServer.listen(SOCK_PATH, () => {
+    try { chmodSync(SOCK_PATH, 0o700) } catch (err) {
+      process.stderr.write(`daemon: startBridgeServer: failed to chmod socket: ${err}\n`)
+    }
+    process.stderr.write(`daemon: listening on ${SOCK_PATH}\n`)
+  })
+}

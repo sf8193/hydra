@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, expect, spyOn, test } from 'bun:test'
 import { gateway } from '../../infra/config.js'
-import * as access from '../access.js'
-import * as global from '../commands/global.js'
+import * as access from '../../sessions/access.js'
+import * as global from '../../app/commands/global.js'
 import { setHydra } from './test-hydra.js'
 
 // The production router: `spawn omp-sonnet: …` must reach handleSpawnIntercept with the omp model AND the omp engine.
@@ -17,7 +17,7 @@ beforeAll(async () => {
   spies.push(setHydra({ operators: ['u1'], channels: { c1: {} } }))
   spies.push(spyOn(global, 'handleTemplateSpawn').mockImplementation((async (...args: any[]) => { templateSpawns.push(args) }) as any))
   spies.push(spyOn(global, 'handleSpawnIntercept').mockImplementation((async (...args: any[]) => { spawns.push(args) }) as any))
-  await import('../router.js')
+  await import('../../app/router.js')
 })
 afterAll(() => { for (const s of spies) s.mockRestore() })
 beforeEach(() => { spawns.length = 0; sent.length = 0; templateSpawns.length = 0 })

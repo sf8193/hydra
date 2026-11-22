@@ -2,11 +2,11 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { engines } from '../../engines/instances.js'
+import { engines } from '../../sessions/engine-instances.js'
 import { contextWindowOf } from '../../shared/constants.js'
 import { lastContextTurn, transcriptContext, projectDirName, projectsRoot } from '../../infra/usage.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
-import type { SessionInfo } from '../sessions.js'
+import type { SessionInfo } from '../../sessions/registry.js'
 
 const turn = (u: Record<string, number>, extra: Record<string, unknown> = {}, model = 'claude-sonnet-5') =>
   JSON.stringify({ ...extra, message: { role: 'assistant', model, usage: u } }) + '\n'

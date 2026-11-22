@@ -14,7 +14,7 @@ type Source = {
 
 const source: Source = { config: () => undefined, slackName: () => undefined }
 
-/** The daemon says where the live hydra.toml is (daemon/hydra-config.ts). */
+/** The daemon says where the live hydra.toml is (infra/hydra-config.ts). */
 export const registerPreviewConfig = (config: Source['config']): void => { source.config = config }
 
 /** The Slack connector says how a channel id is named (connectors/slack/runtime.ts). */

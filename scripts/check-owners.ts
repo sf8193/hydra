@@ -51,10 +51,10 @@ export const RULES: Rule[] = [
     // bridge-server, cli-handler and sessions ask tmux itself: a death check, `hydra status`'s tmux line, and
     // restoring records at load, before occupancy can be asked.
     allowed: [
-      'daemon.ts', 'infra/tmux.ts', 'daemon/bridge-dispatch.ts', 'daemon/commands/thread.ts',
-      'engines/claude-engine.ts', 'engines/codex-engine-adapter.ts', 'daemon/recovery.ts',
-      'daemon/session-lifecycle.ts', 'daemon/session-reachability.ts', 'daemon/bridge-server.ts', 'daemon/cli-handler.ts',
-      'daemon/sessions.ts',
+      'daemon.ts', 'infra/tmux.ts', 'app/bridge-dispatch.ts', 'app/commands/thread.ts',
+      'engines/claude-engine.ts', 'engines/codex-engine-adapter.ts', 'app/recovery.ts',
+      'app/session-lifecycle.ts', 'sessions/session-reachability.ts', 'app/bridge-server.ts', 'app/cli-handler.ts',
+      'sessions/registry.ts',
     ],
     tests: false, ts: true,
     why: 'liveness is occupancy() in session-reachability.ts (the adapter decides)',

@@ -6,12 +6,12 @@
 
 import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'fs'
 import { join } from 'path'
-import type { SessionInfo } from '../daemon/sessions.js'
+import type { SessionInfo } from '../sessions/registry.js'
 import type {
   EngineAdapter, LaunchInput, LaunchResult, DeliveryResult, Notification, StopResult,
   ContextUsage, RecoveryPlan, RecoverySource, Turn,
 } from './engine-adapter.js'
-import type { BlockingState } from '../daemon/pane-probe.js'
+import type { BlockingState } from '../app/pane-probe.js'
 import type { ClaudeEngine } from './claude-engine.js'
 import { SOCK_PATH, PLATFORM, SPAWN_LOGS_DIR } from '../infra/config.js'
 import { removeSessionToken, removeSpawnPrompt, shq, writeSessionToken, writeSpawnPrompt } from '../infra/launch-files.js'

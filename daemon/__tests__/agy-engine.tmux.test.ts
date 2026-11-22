@@ -3,7 +3,7 @@ import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync
 import { createServer } from 'net'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { BridgeTransport } from '../bridge-transport.js'
+import { BridgeTransport } from '../../sessions/bridge-transport.js'
 import { AGY_API_KEY_FILE, AgyEngine } from '../../engines/agy-engine.js'
 import { AGY_HOOKS_CONFIG, AGY_MCP_CONFIG } from '../../engines/agy-config.js'
 import { agyState, agyStateFile } from '../../engines/agy-session.js'

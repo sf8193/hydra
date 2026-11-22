@@ -1,13 +1,13 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { _setIO, _resetIO, detectBlockingState, type PaneProbeIO } from '../pane-probe.js'
+import { _setIO, _resetIO, detectBlockingState, type PaneProbeIO } from '../../app/pane-probe.js'
 import {
   tryTypedDelivery, typedDeliveryText, deliveryDecision, deliverUserMessage, flushHeld, flushAllHeld,
   _setDeliveryDeps, _resetDelivery, _heldCount, HOLD_QUEUE_MAX, type DeliveryOutcome, type DeliveryFacts,
-} from '../typed-delivery.js'
+} from '../../app/typed-delivery.js'
 import { emit } from '../../infra/event-bus.js'
-import { _setHydraConfigForTesting } from '../hydra-config.js'
-import { bornPolicy } from '../restricted.js'
-import type { SessionInfo } from '../sessions.js'
+import { _setHydraConfigForTesting } from '../../infra/hydra-config.js'
+import { bornPolicy } from '../../app/restricted.js'
+import type { SessionInfo } from '../../sessions/registry.js'
 
 process.stderr.write = (() => true) as any
 

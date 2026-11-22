@@ -53,7 +53,7 @@ const occurrences = (haystack: string, needle: string): number =>
 
 describe('cost-bucket wiring ratchet', () => {
   test.each(Object.entries(REQUIRED_WIRING))('%s still spreads its label', (file, needles) => {
-    const src = readFileSync(join(import.meta.dir, '..', file), 'utf8')
+    const src = readFileSync(join(import.meta.dir, '..', '..', 'app', file), 'utf8')
     for (const [needle, count] of Object.entries(needles)) {
       expect(occurrences(src, needle), `${file}: "${needle}" — the label stops flowing there`).toBe(count)
     }

@@ -1,0 +1,130 @@
+// Protocol registry — thread occupancy, participant routing, turn management.
+// Each protocol registers its hooks at module scope; the registry provides
+// unified queries (isThreadOccupied) and dispatch (reconnect/reply/disconnect/advance).
+//
+// For lifecycle events (review complete, session death, etc.) use event-bus.ts.
+
+import { registry } from './registry.js'
+
+type ProtocolHooks = {
+  getByThread: (threadId: string) => boolean
+  isParticipant: (sessionId: string) => boolean
+  onReply: (sessionId: string, text: string, chatId: string, sentIds: string[]) => void | Promise<void>
+  onDisconnect: (sessionId: string) => void
+  onReconnect: (sessionId: string) => void
+  onAdvance?: (sessionId: string, content: string, verdict?: string) => Promise<{ ok: true; sentIds: string[] } | { ok: false; reason: string }>
+  onChildSpawn?: (parentSessionId: string, childSessionId: string, metadata: ProtocolChildSpawnMetadata) => boolean
+  childSpawnRequiresPrivate?: (parentSessionId: string) => boolean
+  onPrivateChildLaunchStart?: (childSessionId: string) => void
+  onPrivateChildLaunchFinish?: (childSessionId: string) => void
+  childRequiresPrivate?: (childSessionId: string) => boolean
+  onChildResult?: (childSessionId: string, targetSessionId: string, text: string) => boolean
+}
+
+export type ProtocolChildSpawnMetadata = {
+  readThread: boolean
+  phaseBudgetMs?: number
+}
+
+// Protocol names are plain strings — intentionally not a union type so new
+// protocols can register without editing this file.
+const protocols = new Map<string, ProtocolHooks>()
+
+export function registerProtocol(name: string, hooks: ProtocolHooks): void {
+  if (protocols.has(name)) throw new Error(`Protocol '${name}' is already registered`)
+  protocols.set(name, hooks)
+}
+
+
+export function isThreadOccupied(threadId: string, exclude?: string): string | null {
+  for (const [name, hooks] of protocols) {
+    if (name === exclude) continue
+    if (hooks.getByThread(threadId)) return name
+  }
+  return null
+}
+
+export function isProtocolPost(sessionId: string, chatId: string): boolean {
+  for (const hooks of protocols.values()) {
+    if (hooks.isParticipant(sessionId) && hooks.getByThread(chatId)) return true
+  }
+  return false
+}
+
+// Session IDs are unique across protocols — at most one handler fires per dispatch.
+export function dispatchReconnect(sessionId: string): void {
+  for (const hooks of protocols.values()) {
+    if (hooks.isParticipant(sessionId)) { hooks.onReconnect(sessionId); break }
+  }
+}
+
+export async function dispatchSessionReply(sessionId: string, text: string, chatId: string, sentIds: string[]): Promise<void> {
+  for (const hooks of protocols.values()) {
+    if (hooks.isParticipant(sessionId)) { await hooks.onReply(sessionId, text, chatId, sentIds); break }
+  }
+}
+
+export function dispatchDisconnect(sessionId: string): boolean {
+  for (const hooks of protocols.values()) {
+    if (hooks.isParticipant(sessionId)) { hooks.onDisconnect(sessionId); return true }
+  }
+  return false
+}
+
+export async function dispatchAdvance(sessionId: string, content: string, verdict?: string): Promise<{ ok: true; sentIds: string[] } | { ok: false; reason: string }> {
+  for (const hooks of protocols.values()) {
+    if (hooks.isParticipant(sessionId)) {
+      if (!hooks.onAdvance) return { ok: false, reason: 'this protocol does not support advance()' }
+      return hooks.onAdvance(sessionId, content, verdict)
+    }
+  }
+  return { ok: false, reason: 'no active protocol for this session' }
+}
+
+export function registerProtocolChild(parentSessionId: string, childSessionId: string, metadata: ProtocolChildSpawnMetadata): 'registered' | 'rejected' | 'not_protocol' {
+  for (const hooks of protocols.values()) {
+    if (hooks.isParticipant(parentSessionId)) return hooks.onChildSpawn?.(parentSessionId, childSessionId, metadata) ? 'registered' : 'rejected'
+  }
+  return 'not_protocol'
+}
+
+export function protocolSpawnRequiresPrivate(parentSessionId: string): boolean {
+  for (const hooks of protocols.values()) {
+    if (hooks.isParticipant(parentSessionId)) return hooks.childSpawnRequiresPrivate?.(parentSessionId) ?? false
+  }
+  return false
+}
+
+export function markPrivateProtocolChildLaunching(parentSessionId: string, childSessionId: string): void {
+  for (const hooks of protocols.values()) {
+    if (hooks.isParticipant(parentSessionId)) { hooks.onPrivateChildLaunchStart?.(childSessionId); return }
+  }
+}
+
+export function finishPrivateProtocolChildLaunch(childSessionId: string): void {
+  for (const hooks of protocols.values()) hooks.onPrivateChildLaunchFinish?.(childSessionId)
+}
+
+export function registerProtocolChildResult(childSessionId: string, targetSessionId: string, text: string): boolean {
+  for (const hooks of protocols.values()) {
+    if (hooks.onChildResult?.(childSessionId, targetSessionId, text)) return true
+  }
+  return false
+}
+
+export function isProtocolParticipant(sessionId: string): boolean {
+  for (const hooks of protocols.values()) if (hooks.isParticipant(sessionId)) return true
+  return false
+}
+
+export function protocolChildRequiresPrivate(childSessionId: string): boolean {
+  for (const hooks of protocols.values()) if (hooks.childRequiresPrivate?.(childSessionId)) return true
+  return false
+}
+
+export function hasProtocolContext(sessionId: string): boolean {
+  const info = registry.get(sessionId)
+  return !!info?.capabilities?.includes('protocol_context')
+}
+
+export function _resetForTesting(): void { protocols.clear() }

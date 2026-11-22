@@ -8,13 +8,13 @@ import { join } from 'path'
 import { Glob } from 'bun'
 
 const ALLOWED: Record<string, { why: string; lines: string[] }> = {
-  'bridge-server.ts': {
+  'app/bridge-server.ts': {
     why: 'history, not liveness: a death check retried after the hold stops once another path has already given its verdict',
     lines: [
       "if (!info || info.deadAt) { deathCheckLogged.delete(sessionId); return }",
     ],
   },
-  'bridge-dispatch.ts': {
+  'app/bridge-dispatch.ts': {
     why: 'of a name\'s dead records, the latest death',
     lines: [
       "const record = records.find(s => occupancy(s) !== 'dead') ?? records.sort((a, b) => (b.deadAt ?? 0) - (a.deadAt ?? 0))[0]",
@@ -33,7 +33,7 @@ const ALLOWED: Record<string, { why: string; lines: string[] }> = {
       "const claimed = [...registry.values()].some(s => s !== info && !s.deadAt && s.engine === 'codex' && (s.codexHomeName ?? s.tmuxName) === home)",
     ],
   },
-  'engines/codex-piggyback.ts': {
+  'sessions/codex-piggyback.ts': {
     why: 'buffers for a Codex record its runtime has given up on are dropped',
     lines: [
       "if (!info || info.deadAt || !info.adapter) { this.clear(sessionId); return }",
@@ -50,32 +50,32 @@ const ALLOWED: Record<string, { why: string; lines: string[] }> = {
       "delete info.deadAt",
     ],
   },
-  'infra/observability.ts': {
+  'sessions/observability.ts': {
     why: 'a vitals sample is dropped once the autopsy has read it, which is when the death is written',
     lines: [
       "const goneOrDead = (id: string) => { const s = registry.get(id); return !s || !!s.deadAt }",
     ],
   },
-  'protocol-runner.ts': {
+  'app/protocol-runner.ts': {
     why: 'a Codex runtime\'s stamp is its verdict even while its socket lingers (C1)',
     lines: [
       "const connected = () => transport.has(sessionId) && !registry.get(sessionId)?.deadAt",
     ],
   },
-  'recovery.ts': {
+  'app/recovery.ts': {
     why: 'restoring a dead record keeps its first stamp; boot candidates are those the loader stamped (and tmux is checked too)',
     lines: [
       "dead.deadAt ??= Date.now()",
       "!!info.deadAt",
     ],
   },
-  'session-health.ts': {
+  'app/session-health.ts': {
     why: 'a crash is announced once: not again once written',
     lines: [
       "if (occ === 'dead' && !info.deadAt && info.engine !== 'codex' && !crashAlerted.has(info.sessionId)) {",
     ],
   },
-  'session-lifecycle.ts': {
+  'app/session-lifecycle.ts': {
     why: 'the resume count of the latest death, the resume recheck\'s "already written" guard',
     lines: [
       ".filter(s => s.claudeSessionId === resumeFrom && s.deadAt)",
@@ -83,7 +83,7 @@ const ALLOWED: Record<string, { why: string; lines: string[] }> = {
       "if (!s || s.deadAt) return",
     ],
   },
-  'session-reachability.ts': {
+  'sessions/session-reachability.ts': {
     why: 'occupancy() itself: a stamp over a running session reads orphaned, unless a record not given up on holds its name',
     lines: [
       "deadAt?: number",
@@ -92,7 +92,7 @@ const ALLOWED: Record<string, { why: string; lines: string[] }> = {
       "for (const s of records) if (s.sessionId !== info.sessionId && s.tmuxName === info.tmuxName && !s.deadAt) return true",
     ],
   },
-  'sessions.ts': {
+  'sessions/registry.ts': {
     why: 'the field, markDead (the one runtime writer, which says so once, the first time it writes), the boot loader (a tmux that does not answer keeps the saved state), the boot history close, ranking a name\'s past threads by when it died',
     lines: [
       "deadAt?: number",
@@ -109,13 +109,12 @@ const ALLOWED: Record<string, { why: string; lines: string[] }> = {
 }
 
 const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
-const DAEMON = join(import.meta.dir, '..')
-const ROOT = join(import.meta.dir, '..', '..')   // infra/ and engines/ moved out of daemon/: their keys are prefixed with the folder
+const ROOT = join(import.meta.dir, '..', '..')   // keys are repo-relative
 
 describe('deadAt readers', () => {
   test('only the allowed files touch deadAt, each on its listed lines', () => {
     const found: Record<string, string[]> = {}
-    for (const [dir, prefix] of [[DAEMON, ''], [join(ROOT, 'infra'), 'infra/'], [join(ROOT, 'engines'), 'engines/']] as const) {
+    for (const [dir, prefix] of ['app', 'infra', 'engines', 'sessions', 'shared'].map(d => [join(ROOT, d), d + '/'] as const)) {
       for (const f of new Glob('**/*.ts').scanSync(dir)) {
         if (f.startsWith('__tests__/')) continue
         const lines = strip(readFileSync(join(dir, f), 'utf8')).split('\n').filter(l => /\bdeadAt\b/.test(l)).map(l => l.trim())

@@ -2,14 +2,14 @@
 // It is held for the specialist, the specialist is started by the rule, and the message lands in its session: never main's.
 import { afterAll, afterEach, beforeAll, beforeEach, expect, spyOn, test } from 'bun:test'
 import { gateway } from '../../infra/config.js'
-import * as access from '../access.js'
-import { registry, type SessionInfo } from '../sessions.js'
-import { transport } from '../bridge-transport.js'
-import { _setRecoveryDeps, _resetRecoveryDeps, reviveDeps } from '../recovery.js'
+import * as access from '../../sessions/access.js'
+import { registry, type SessionInfo } from '../../sessions/registry.js'
+import { transport } from '../../sessions/bridge-transport.js'
+import { _setRecoveryDeps, _resetRecoveryDeps, reviveDeps } from '../../app/recovery.js'
 import { _resetBackoff } from '../../infra/recovery-backoff.js'
-import { _setDaemonStartedAtForTesting } from '../session-reachability.js'
-import { setSpecialistThread } from '../../specialists/specialists.js'
-import { _forgetMemory, _resetHeld, heldCount, MAX_HOLD_MS, restoreHeld, RETRY_MS, specialistThreadDeps } from '../specialist-thread.js'
+import { _setDaemonStartedAtForTesting } from '../../sessions/session-reachability.js'
+import { setSpecialistThread } from '../../sessions/specialists.js'
+import { _forgetMemory, _resetHeld, heldCount, MAX_HOLD_MS, restoreHeld, RETRY_MS, specialistThreadDeps } from '../../app/specialist-thread.js'
 import { fakeAdapter } from './test-harness.js'
 import { setHydra } from './test-hydra.js'
 
@@ -42,7 +42,7 @@ beforeAll(async () => {
   spies.push(spyOn(gateway, 'react').mockImplementation((async () => {}) as any))
   spies.push(setHydra({ operators: [OP], channels: { chan: { requireMention: false } } }))
   spies.push(spyOn(transport, 'sendOrQueue').mockImplementation(((to: string, m: any) => { if (m.type === 'notification') landed.push({ to, content: m.content }) }) as any))
-  await import('../router.js')
+  await import('../../app/router.js')
 })
 afterAll(() => { for (const s of spies) s.mockRestore() })
 

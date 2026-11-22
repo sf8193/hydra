@@ -1,0 +1,334 @@
+import { createHash } from 'crypto'
+import { readFileSync, existsSync } from 'fs'
+import { join } from 'path'
+import { STATE_DIR, PLATFORM, DEFAULT_SESSION_CHANNEL } from '../infra/config.js'
+import { atomicWriteFileSync } from '../infra/util.js'
+import { SESSION_NAMES, type SessionInfo } from './registry.js'
+import { clearBackoff } from '../infra/recovery-backoff.js'
+import { SPECIALIST_NAME_RE, invalidSpecialistName as invalidName, isSessionThread } from '../shared/specialist-name.js'
+import { currentHydraConfig, hydraConfigInUse, onHydraConfigLoad } from '../infra/hydra-config.js'
+import { declaredSpecialist, isChannelName, parsePlace, type HydraConfig, type Specialist as DeclaredSpecialist } from '../config/types.js'
+import type { EngineName } from '../shared/engines/index.js'
+import { engineOfModel, SPECIALIST_THREADS } from '../shared/constants.js'
+
+/**
+ * A specialist is a named pointer to a thread (or the channel to open one in) plus the recipe for filling it.
+ *
+ * Where each half lives: once hydra.toml names an operator, it declares the recipes and
+ * `specialist-threads.json` holds only the pointers (the daemon's runtime state, written under the
+ * specialist's lock). Until `hydra migrate` runs, specialists.json holds both.
+ *
+ * Sessions come and go; a specialist is the stable address a sender means ("the
+ * slopbot session"). `hydra deliver --specialist <name>` resolves the specialist's thread to
+ * its live session, and when nobody is home the daemon spawns one from the
+ * recipe before delivering. Nothing here knows who the sender or the occupant
+ * is: the specialist's `kickoff` carries all of that.
+ */
+export type Specialist = {
+  /** Where its session lives. Absent until the first spawn: a specialist declared with only a `channel` opens its thread then. */
+  threadId?: string
+  /** Channel to open a fresh thread in when there is no `threadId`, or it is no longer a known thread. */
+  channel?: string
+  /** The occupant's first prompt. `kickoffFile` wins when both are set: it is re-read on every spawn. */
+  kickoff?: string
+  kickoffFile?: string
+  model?: string
+  /** The engine a fresh start runs on; absent: the one `model`'s alias names, else claude. A conversation with history keeps the engine its history records. */
+  engine?: EngineName
+  /** A quiet session ends after this long (`30m`, `4h`, `1d`): nudged, then reaped. Absent: it stays. */
+  idle?: string
+  /** The folder it runs in, from hydra.toml. Absent for a specialists.json recipe. */
+  workdir?: string
+  updatedAt: number
+}
+
+/** The engine a specialist's fresh start runs on: its `engine`, else the one its model alias names; undefined means claude. */
+export const declaredEngineOf = (s: Pick<Specialist, 'engine' | 'model'>): EngineName | undefined => s.engine ?? (s.model ? engineOfModel(s.model) : undefined)
+
+export { SPECIALIST_NAME_RE }
+
+/** Why a name can't be a specialist's, or undefined (the rule is in shared/specialist-name.ts). */
+export const invalidSpecialistName = (name: string): string | undefined => invalidName(name, SESSION_NAMES)
+
+const specialistsPath = () => join(STATE_DIR, 'specialists.json')
+const threadsPath = () => join(STATE_DIR, SPECIALIST_THREADS)
+
+let specialists: Map<string, Specialist> = new Map()
+
+type Pointer = { threadId: string; updatedAt: number }
+let pointers: Map<string, Pointer> = new Map()
+
+/**
+ * hydra.toml declares the specialists while it governs: it names an operator, or it has content that failed to load
+ * at boot (then nothing is declared, rather than falling back to specialists.json). A deleted file hands back.
+ */
+export const declaredInToml = (): boolean => hydraConfigInUse()
+
+/** A `home_place` that names a channel id on this platform, or undefined (a `#name` needs a lookup that doesn't exist yet). */
+function homePlaceChannelId(homePlace: string): string | undefined {
+  if (/^\d+$/.test(homePlace)) return homePlace
+  const r = parsePlace(homePlace)
+  return r.ok && r.place.platform === PLATFORM && r.place.kind === 'channel' && !isChannelName(r.place) ? r.place.ref : undefined
+}
+
+/** The channel a hydra.toml specialist opens a new thread in: its `home_place` when usable, else the operator's default channel. */
+function homePlaceChannel(s: DeclaredSpecialist): string | undefined {
+  return (s.homePlace !== undefined ? homePlaceChannelId(s.homePlace) : undefined) ?? (DEFAULT_SESSION_CHANNEL || undefined)
+}
+
+/** Its pointer: one under an old id (`renamed_from`) not yet moved wins, since a rename means that thread; else its own. */
+function pointerFor(s: DeclaredSpecialist): Pointer | undefined {
+  return s.renamedFrom.map(old => pointers.get(old)).find(p => p !== undefined) ?? pointers.get(s.id)
+}
+
+/**
+ * On each hydra.toml load, from the config that loaded: a renamed specialist's pointer moves from its `renamed_from` id to
+ * its new id, so dropping `renamed_from` later keeps its thread. Nothing is deleted for being absent: a pointer for an id
+ * not declared is inert, and survives a load caught mid-save or a table commented out for a while; an id declared
+ * again later finds its thread. A `home_place` that can't be used is reported here, once per load.
+ */
+function reconcilePointers(config: HydraConfig): void {
+  if (!declaredInToml()) return
+  let moved = false
+  for (const s of Object.values(config.specialists)) {
+    const old = s.renamedFrom.find(o => pointers.has(o))
+    if (old) {
+      pointers.set(s.id, pointers.get(old)!)
+      for (const o of s.renamedFrom) pointers.delete(o)
+      moved = true
+    }
+    if (s.homePlace !== undefined && !homePlaceChannelId(s.homePlace)) {
+      process.stderr.write(`daemon: specialist "${s.id}": home_place ${s.homePlace} isn't a channel id on ${PLATFORM}; its new threads open in the default channel\n`)
+    }
+  }
+  if (moved) persistPointers()
+}
+
+function fromToml(s: DeclaredSpecialist): Specialist {
+  const p = pointerFor(s)
+  const channel = homePlaceChannel(s)
+  return {
+    ...(p && { threadId: p.threadId }),
+    ...(channel && { channel }),
+    ...(s.kickoff !== undefined && { kickoff: s.kickoff }),
+    ...(s.kickoffFile !== undefined && { kickoffFile: s.kickoffFile }),
+    ...(s.model !== undefined && { model: s.model }),
+    ...(s.engine !== undefined && { engine: s.engine }),
+    // hydra.toml durations are whole minutes (m, h or d), so this round-trips through parseIdleTtl.
+    ...(s.idleMs !== undefined && { idle: `${s.idleMs / 60_000}m` }),
+    workdir: s.workdir,
+    updatedAt: p?.updatedAt ?? 0,
+  }
+}
+
+function load(): void {
+  try {
+    if (existsSync(specialistsPath())) {
+      specialists = new Map(Object.entries(JSON.parse(readFileSync(specialistsPath(), 'utf8')) as Record<string, Specialist>))
+    }
+  } catch {
+    specialists = new Map()
+  }
+  // A name saved before names needed a letter is kept in the file but never answers: reported, never renamed.
+  for (const name of specialists.keys()) {
+    const why = invalidSpecialistName(name)
+    if (why) process.stderr.write(`daemon: specialist "${name}" is ignored: ${why}. Remove it with 'hydra specialist rm ${name}' and declare it under a new name.\n`)
+  }
+}
+
+/** Set when specialist-threads.json exists but couldn't be read: it is never written over, so nothing is lost. */
+let pointersUnreadable: string | undefined
+
+function loadPointers(): void {
+  pointersUnreadable = undefined
+  try {
+    pointers = existsSync(threadsPath()) ? new Map(Object.entries(JSON.parse(readFileSync(threadsPath(), 'utf8')) as Record<string, Pointer>)) : new Map()
+  } catch (e) {
+    pointers = new Map()
+    pointersUnreadable = (e as Error).message
+    process.stderr.write(`daemon: ${threadsPath()} couldn't be read (${pointersUnreadable}); specialists' threads are unknown and it won't be written over until it's fixed\n`)
+  }
+}
+
+function persist(): void {
+  atomicWriteFileSync(specialistsPath(), JSON.stringify(Object.fromEntries(specialists), null, 2))
+}
+
+function persistPointers(): void {
+  if (pointersUnreadable) throw new Error(`${threadsPath()} couldn't be read (${pointersUnreadable}); fix or remove it, then restart`)
+  atomicWriteFileSync(threadsPath(), JSON.stringify(Object.fromEntries(pointers), null, 2))
+}
+
+export function getSpecialist(name: string): Specialist | undefined {
+  if (declaredInToml()) {
+    const s = currentHydraConfig().specialists[name]
+    return s && Object.hasOwn(currentHydraConfig().specialists, name) ? fromToml(s) : undefined
+  }
+  return invalidSpecialistName(name) ? undefined : specialists.get(name)
+}
+
+/** Every declared specialist, with `invalid` set on one saved under a name that is no longer allowed. */
+export function listSpecialists(): [string, Specialist & { invalid?: string }][] {
+  if (declaredInToml()) return Object.values(currentHydraConfig().specialists).map(s => [s.id, fromToml(s)])
+  return [...specialists.entries()].map(([name, s]) => {
+    const invalid = invalidSpecialistName(name)
+    return [name, invalid ? { ...s, invalid } : s]
+  })
+}
+
+/** Declaring a specialist by hand: specialists.json only. Once hydra.toml declares them, recipes are written there. */
+export function setSpecialist(name: string, specialist: Omit<Specialist, 'updatedAt'>): Specialist {
+  if (declaredInToml()) throw new Error(`specialists are declared in hydra.toml: add or edit [specialists.${name}] there (only --thread is set here)`)
+  const invalid = invalidSpecialistName(name)
+  if (invalid) throw new Error(invalid)
+  const next = { ...specialist, updatedAt: Date.now() }
+  specialists.set(name, next)
+  persist()
+  return next
+}
+
+/** Records the thread a specialist lives in now: the one write a fill (or `set --thread`) makes. Call under its lock. */
+export function setSpecialistThread(name: string, threadId: string): Specialist {
+  if (declaredInToml()) {
+    const declared = currentHydraConfig().specialists[name]
+    if (!declared || !Object.hasOwn(currentHydraConfig().specialists, name)) throw new Error(`no such specialist: ${name}`)
+    pointers.set(name, { threadId, updatedAt: Date.now() })
+    for (const old of declared.renamedFrom) pointers.delete(old)
+    persistPointers()
+    return fromToml(declared)
+  }
+  const existing = specialists.get(name)
+  if (!existing) throw new Error(`no such specialist: ${name}`)
+  const { updatedAt: _t, ...rest } = existing
+  return setSpecialist(name, { ...rest, threadId })
+}
+
+export function removeSpecialist(name: string): boolean {
+  if (declaredInToml()) throw new Error(`specialists are declared in hydra.toml: remove [specialists.${name}] there`)
+  if (!specialists.delete(name)) return false
+  persist()
+  clearBackoff(name)
+  return true
+}
+
+/** The specialist's kickoff prompt, read fresh so edits apply without a restart. */
+export function readKickoff(specialist: Specialist): string | undefined {
+  if (specialist.kickoffFile) return readFileSync(specialist.kickoffFile, 'utf8').trim() || undefined
+  return specialist.kickoff
+}
+
+/**
+ * What names a kickoff text: a conversation stores this when it is born, and a later start compares it with the kickoff then.
+ * The text is normalised first (trimmed, CRLF read as LF) so an edit that changes no word cannot reset a conversation; whitespace
+ * inside the text is left alone, because a change there can change the meaning (a list, a code block).
+ */
+export const kickoffHash = (text: string): string => createHash('sha256').update(text.replaceAll('\r\n', '\n').trim()).digest('hex').slice(0, 16)
+
+/**
+ * The kickoff a specialist's next conversation would be born under, with its hash. The specialist is found by its id or one it was
+ * renamed from (a record keeps the id it was born under). Undefined when it has no kickoff, is not declared, or the kickoff cannot
+ * be read: a start then goes on as if the kickoff were unchanged, and the one that needs the text reports the read failure.
+ */
+export function currentKickoff(id: string | undefined, h: HydraConfig = currentHydraConfig()): { text: string; hash: string } | undefined {
+  if (id === undefined) return undefined
+  const current = declaredSpecialist(h, id)?.id ?? id
+  try {
+    const specialist = getSpecialist(current)
+    const text = specialist && readKickoff(specialist)
+    return text ? { text, hash: kickoffHash(text) } : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** The specialist whose thread this is, if any. */
+export function specialistForThread(threadId: string): string | undefined {
+  if (declaredInToml()) return listSpecialists().find(([, s]) => s.threadId === threadId)?.[0]
+  for (const [name, s] of specialists) if (s.threadId === threadId && !invalidSpecialistName(name)) return name
+  return undefined
+}
+
+/** What a thread is locked by: its specialist's name, so a revive by name and a resume in the thread share one lock. */
+export function targetKeyForThread(threadId: string): string {
+  return specialistForThread(threadId) ?? threadId
+}
+
+// Serializes everything that decides who is home in a target and acts on it: a revive, a resume,
+// a respawn, a handoff's kill → spawn. Twenty messages in one second all find the target empty;
+// without this they would each start a session. Not reentrant: take it only at an entry point.
+const locks = new Map<string, Promise<unknown>>()
+
+export function withTargetLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const previous = locks.get(key) ?? Promise.resolve()
+  const run = previous.then(fn, fn)
+  const tail = run.catch(() => {})
+  locks.set(key, tail)
+  void tail.finally(() => { if (locks.get(key) === tail) locks.delete(key) })
+  return run
+}
+
+export function withThreadLock<T>(threadId: string, fn: () => Promise<T>): Promise<T> {
+  return withTargetLock(targetKeyForThread(threadId), fn)
+}
+
+/** Someone holds (or waits on) this thread's lock: a person asking by hand is told so instead of queued. */
+export function threadLockHeld(threadId: string): boolean {
+  return locks.has(targetKeyForThread(threadId))
+}
+
+/** Test seam: re-read specialists.json and specialist-threads.json from the current STATE_DIR. */
+export function _reloadSpecialists(): void {
+  specialists = new Map()
+  load()
+  loadPointers()
+}
+
+load()
+loadPointers()
+onHydraConfigLoad(config => {
+  try { reconcilePointers(config) } catch (e) { process.stderr.write(`daemon: ${(e as Error).message}\n`) }
+})
+
+/**
+ * The per-conversation specialist a session named `<id>_<conversation>` belongs to, by its current id (a rename through
+ * `renamed_from` followed). No specialist name holds `_`, so the part before the first one is the id.
+ */
+export function conversationSpecialistOf(tmuxName: string | undefined): string | undefined {
+  const i = tmuxName?.indexOf('_') ?? -1
+  if (!tmuxName || i <= 0) return undefined
+  const id = tmuxName.slice(0, i)
+  const s = declaredSpecialist(currentHydraConfig(), id)
+  return s?.sessions === 'per-conversation' ? s.id : undefined
+}
+
+/** A declared specialist's `emoji`, by its id or by an id it was renamed from (a session records the id it was born under); undefined when it has none or is not declared. */
+export function specialistEmoji(id: string | undefined, h: HydraConfig = currentHydraConfig()): string | undefined {
+  if (id === undefined) return undefined
+  return declaredSpecialist(h, id)?.emoji
+}
+
+/**
+ * The specialist this session acts for: it sits in the specialist's thread, or it is one of a per-conversation
+ * specialist's conversation sessions (named `<id>_…`). A conversation session answers only its own conversation
+ * (replyInConversation checks that), but it may post to its specialist's home_place and bind and unbind for it.
+ */
+export function specialistOf(caller: Partial<Pick<SessionInfo, 'threadId' | 'tmuxName'>> | undefined, h: HydraConfig = currentHydraConfig()): string | undefined {
+  const own = conversationSpecialistOf(caller?.tmuxName)
+  if (own) return own
+  if (!caller?.threadId) return undefined
+  return Object.keys(h.specialists).find(id => getSpecialist(id)?.threadId === caller.threadId)
+}
+
+/** The specialists a session's specialist may send to (its `sends_to`, read from the live hydra.toml config); none for a session that fills no specialist. */
+export function sendsToOf(caller: Partial<Pick<SessionInfo, 'threadId' | 'tmuxName'>> | undefined, h: HydraConfig = currentHydraConfig()): readonly string[] {
+  const id = specialistOf(caller, h)
+  return (id !== undefined && h.specialists[id]?.sendsTo) || []
+}
+
+/**
+ * Where a session's Slack conversations are bound: the specialist it acts for, else its own thread (not a protocol
+ * guest's: it sits in another's). The one notion behind the conversation tools, bind, unbind, list and reply.
+ */
+export function boundAs(caller: Partial<Pick<SessionInfo, 'threadId' | 'tmuxName' | 'sessionType'>> | undefined, h: HydraConfig = currentHydraConfig()): string | undefined {
+  return specialistOf(caller, h) ?? (caller?.threadId && isSessionThread(caller.threadId) && caller.sessionType !== 'thread_guest' ? caller.threadId : undefined)
+}

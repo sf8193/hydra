@@ -4,7 +4,7 @@ import { join } from 'path'
 import { homedir } from 'os'
 import { claudeConfigDir } from '../../shared/constants.js'
 import { setHydra } from './test-hydra.js'
-import { _setHydraConfigForTesting } from '../hydra-config.js'
+import { _setHydraConfigForTesting } from '../../infra/hydra-config.js'
 
 // ---------------------------------------------------------------------------
 // Test state — injected via PaneProbeIO, no mock.module needed
@@ -16,7 +16,7 @@ const registryEntries = new Map<string, any>()
 const transportMessages: Array<{ sessionId: string; msg: any }> = []
 const connectedSessions = new Set<string>()
 
-import { reportUsage, _setUsageAlertsIO, _resetUsageAlertsIO, type UsageReading } from '../usage-alerts.js'
+import { reportUsage, _setUsageAlertsIO, _resetUsageAlertsIO, type UsageReading } from '../../app/usage-alerts.js'
 import {
   detectBlockingState,
   probeAllSessions,
@@ -40,8 +40,8 @@ import {
   sessionVerdict,
   type PaneProbeIO,
   type BlockingState,
-} from '../pane-probe.js'
-import type { Occupancy } from '../session-reachability.js'
+} from '../../app/pane-probe.js'
+import type { Occupancy } from '../../sessions/session-reachability.js'
 // Liveness is occupancy()'s answer, set per record; a stand-in's stamp (`deadAt`) is not consulted: a stamped record may still run.
 const occupancies = new Map<string, Occupancy>()
 const occupancyOf = (s: { sessionId: string }): Occupancy => occupancies.get(s.sessionId) ?? 'connected'

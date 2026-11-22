@@ -1,5 +1,5 @@
 %% `hydra kill <name|thread id> --destroy` and `kill_session {thread_id, destroy}` when no session record answers to the name (a killed session, or none ever).
-%% A live session's destroy (killThenDestroy) is unchanged and ungated. The ended case is destroyThreadById (daemon/destroy.ts).
+%% A live session's destroy (killThenDestroy) is unchanged and ungated. The ended case is destroyThreadById (app/destroy.ts).
 
 flowchart TD
     ask["kill --destroy<br/>name or thread id"] --> live{"a session record<br/>holds the name?"}

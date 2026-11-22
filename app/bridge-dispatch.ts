@@ -1,0 +1,968 @@
+import { existsSync, statSync } from 'fs'
+import { isAbsolute, join, resolve as resolvePath } from 'path'
+import { gateway, STATE_DIR } from '../infra/config.js'
+import { isParentOf, parentSessionOf, registry, resolveSendTarget, threadRegistry, type Predecessor, type SessionInfo, type ThreadSessionEntry } from '../sessions/registry.js'
+import { transport } from '../sessions/bridge-transport.js'
+import { callerRefusal, endedDestroyRefusal, destroyDeclinedText, destroyThreadById, killThenDestroy } from './destroy.js'
+import { operatorIds, maxChunkLimit, channelPolicy, MAX_ATTACHMENT_BYTES } from '../sessions/access.js'
+import { partyLink, quietSend, shouldQuiet } from '../infra/quiet-send.js'
+import { routeThreadId } from '../sessions/thread-route.js'
+import { beginMainHandoff } from './main-handoff.js'
+import { getSpecialist } from '../sessions/specialists.js'
+import { ensureSpecialist } from '../specialists/specialist-deliver.js'
+import { envelopeFor, sendToThread, sendsToRefusal } from './sends-to.js'
+import { READ_ONLY_DISALLOWED_TOOLS, claudeLaunchCwd, doSpawnSession, handOff, handoffNoteFate, killSession, predecessorOf, runPreHandoffHook, sessionDir, type PreHandoffVerdict } from './session-lifecycle.js'
+import { fallbackDescription, formatDuration, chunk, assertSendable, parseDuration, withOutbound } from '../infra/util.js'
+import { tmuxHasSession } from '../infra/tmux.js'
+import { occupancy, occupied } from '../sessions/session-reachability.js'
+import { endedSessions, endedWithinDays } from '../sessions/ended-sessions.js'
+import { formatContextPercent, type DeliveryResult } from '../engines/engine-adapter.js'
+import { resolveEngine } from '../sessions/engine-instances.js'
+import { dispatchAdvance, finishPrivateProtocolChildLaunch, isProtocolParticipant, markPrivateProtocolChildLaunching, protocolChildRequiresPrivate, protocolSpawnRequiresPrivate, registerProtocolChild, registerProtocolChildResult } from '../sessions/protocol-registry.js'
+import { watchPr, unwatchPr, listWatches, getWatchesBySession, formatWatchEntry, detectPrUrl, WATCH_ERRORS } from '../connectors/github/pr-watch.js'
+import { fileArgTools, snapshotConfinedFiles } from './write-confinement.js'
+import { attachmentTarget } from './attachment-target.js'
+import { fileRefusal } from '../config/write-confinement.js'
+import { bindConversation, unbindConversation, formatConversationsFor, replyInConversation, editInConversation, deleteInConversation, fetchInConversation, ownConversationRefusal, type OwnUse } from '../connectors/slack/runtime.js'
+import { parseArchiveUrl } from '../shared/slack-conversation.js'
+import { refreshSessionVisual, emojiOf, emojiOfName } from '../sessions/anchor-state.js'
+import { refreshDashboard } from './dashboard.js'
+import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from '../infra/artifacts.js'
+import { fetchPrTitle, parsePrUrl } from '../connectors/github/pr-watch.js'
+import { SEND_TYPES, type SendType } from '../shared/tool-definitions.js'
+import { onRunExtend } from './protocol-runner.js'
+import { ASK_PREDECESSOR_TIMEOUT_MS, engineOfModel, normalizeReviewRounds } from '../shared/constants.js'
+import { ENGINE_PROFILES } from '../shared/engines/index.js'
+import { isRestrictedSession, isToolAllowed, isWriteConfinedSession, predecessorAsker, refusalText } from '../sessions/tool-surface.js'
+import { deliveryRefusal } from './restricted.js'
+import { parseRateLimits, reportUsage } from './usage-alerts.js'
+import { markYourTurn } from '../infra/home-status.js'
+
+const SEND_RETRY_ATTEMPTS = 3
+const SEND_RETRY_BASE_MS = 1_000
+const RETRYABLE_PATTERNS = /ECONNREFUSED|ECONNRESET|ENOTFOUND|EPIPE|socket hang up|not connected|network/i
+const PRIVATE_HELPER_ALLOWED_TOOLS = new Set([
+  'fetch_messages', 'list_sessions', 'peek_session', 'download_attachment',
+  'set_description', 'send_to_thread',
+])
+
+function resolveProtocolSpawnMode(callerSessionId: string | undefined) {
+  const privateSpawn = !!(callerSessionId && protocolSpawnRequiresPrivate(callerSessionId))
+  return { privateSpawn, quiet: privateSpawn }
+}
+
+export const __test = process.env.NODE_ENV === 'test'
+  ? { PRIVATE_HELPER_ALLOWED_TOOLS, resolveProtocolSpawnMode }
+  : undefined
+
+/** send_to_thread target "parent": the caller's parent by id. */
+function resolveParentTarget(caller: SessionInfo | undefined): { session: SessionInfo; replaced?: string } {
+  if (!caller) throw new Error('target="parent" requires a session context')
+  const parent = parentSessionOf(caller)
+  if (!parent) throw new Error(`${caller.tmuxName} has no parent session to send to`)
+  if (occupancy(parent) === 'dead') throw new Error(`${caller.tmuxName}'s parent ${parent.tmuxName} has ended`)
+  return { session: parent }
+}
+
+/**
+ * The session that ran under this name: the live record, else the latest dead record,
+ * else the latest thread-history entry. Never its successor — that is a different conversation.
+ */
+function findSessionByName(name: string): { record: SessionInfo } | { history: ThreadSessionEntry } | undefined {
+  const records = [...registry.values()].filter(s => s.tmuxName === name)
+  const record = records.find(s => occupancy(s) !== 'dead') ?? records.sort((a, b) => (b.deadAt ?? 0) - (a.deadAt ?? 0))[0]
+  if (record) return { record }
+  let latest: ThreadSessionEntry | undefined
+  for (const thread of threadRegistry.threads.values()) {
+    for (const h of thread.sessionHistory) {
+      if (h.tmuxName === name && (h.endedAt ?? h.startedAt) >= (latest ? latest.endedAt ?? latest.startedAt : -Infinity)) latest = h
+    }
+  }
+  return latest && { history: latest }
+}
+
+/** A fork source rebuilt from a history entry, whose record is gone. History keeps no cwd: a Claude transcript names it. */
+function forkSourceOfHistory(h: ThreadSessionEntry): Predecessor | undefined {
+  const engine = h.engine ?? 'claude'
+  const fork = resolveEngine(engine).recoveryPlan({ tmuxName: h.tmuxName, claudeSessionId: h.claudeSessionId, codexThreadId: h.codexThreadId, codexHomeName: h.codexHomeName }).fork
+  if (!fork) return undefined
+  // A Codex source is refused before launch, so its missing cwd never matters.
+  const cwd = fork.claudeSessionId ? claudeLaunchCwd(fork.claudeSessionId) : process.env.SPAWN_CWD
+  if (!cwd) throw new Error(`fork_from: no transcript found for ${h.tmuxName} — its conversation is gone; spawn fresh with read_thread instead`)
+  return { engine, fork, cwd, ...(h.model ? { model: h.model } : {}) }
+}
+
+/**
+ * spawn_session fork_from: a session name, or "predecessor" for the caller's own.
+ *
+ * Reads are universal, authority is the spawner's. Any session can fork any other by name:
+ * every session runs as the same user and can already read any transcript on disk, so a
+ * fork grants no new information access. Control of the fork (kill, peek, death notice)
+ * belongs to the spawner — see isParentOf.
+ */
+function resolveForkSource(name: string, callerSessionId: string | undefined): Predecessor {
+  let source: Predecessor | undefined
+  if (name === 'predecessor') {
+    const caller = callerSessionId ? registry.get(callerSessionId) : undefined
+    source = caller?.predecessor
+    if (!source) throw new Error(`fork_from="predecessor": ${caller?.tmuxName ?? 'this session'} has no predecessor — only a session that took over by handoff has one`)
+  } else {
+    const found = findSessionByName(name)
+    if (!found) throw new Error(`fork_from: no session named "${name}" — call list_sessions for live names`)
+    source = 'record' in found ? predecessorOf(found.record) : forkSourceOfHistory(found.history)
+    if (!source) throw new Error(`fork_from: ${name} has no conversation id to fork — spawn fresh with read_thread instead`)
+  }
+  // A Codex fork launches its own app-server in a fresh CODEX_HOME, where the source's
+  // rollout is not found; launching in the source's home would restart its app-server.
+  if (source.engine === 'codex') throw new Error(`fork_from: ${source.fork.parentName} is a Codex session, and Codex sessions cannot be forked yet — spawn fresh with read_thread instead`)
+  // Checked here, before doSpawnSession creates a thread; its own check is the backstop for resumes.
+  if (!existsSync(source.cwd)) throw new Error(`cannot fork: the source's launch directory ${source.cwd} no longer exists`)
+  return source
+}
+
+/** How long a send_to_thread waits to learn what became of its delivery: a Codex session's takes a request to its app-server, which can run for 30 s. Replaced in tests. */
+export const deliveryWait = { ms: 5000 }
+
+/**
+ * What a send_to_thread tells its sender about the delivery, whoever the sender and whichever refusal: a message is "sent" only once
+ * the session's adapter accepted it. `shown`: what the target's thread already holds, so the error does not claim more (the text in full,
+ * a one-line note on the quiet route, or nothing). Throws for a rejection (its cause and remedy, in the gate's words) and for a delivery
+ * whose outcome is unknown (it may have landed: the sender is told not to resend blindly). `taken` runs once the session accepted it
+ * (the caller records a protocol result there), never for a rejected or unknown one. A delivery still running after `deliveryWait.ms`
+ * is not a failure: returns a note, and `taken` runs only if the late outcome is accepted; a late rejection reaches the thread through
+ * delivery-notice.ts. Returns '' when it was accepted in time.
+ *
+ * This maps the adapter's DeliveryResult to the words an agent reads. landing.ts's `landingOf` maps it to a CLI exit code and advice
+ * ("transient, retry") for a caller with an idempotency key, and deliverToSession adds occupancy refusals (stuck, gone) a send_to_thread
+ * never had; neither fits here, so neither is reused.
+ */
+async function landed(target: string, delivery: Promise<DeliveryResult>, shown: 'text' | 'note' | 'nothing', taken: () => void): Promise<string> {
+  const pending = Symbol('pending')
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const r = await Promise.race([delivery, new Promise<typeof pending>(res => { timer = setTimeout(() => res(pending), deliveryWait.ms); timer.unref?.() })]).finally(() => clearTimeout(timer))
+  if (r === pending) {
+    void delivery.then(late => { if (late.status === 'accepted') taken() }, () => {})
+    return ` It is still being delivered and may land: do not send it again. If it fails, ${target}'s thread says so.`
+  }
+  if (r.status === 'accepted') { taken(); return '' }
+  const where = shown === 'text' ? `The message is posted in ${target}'s thread, but the session did not take it`
+    : shown === 'note' ? `A one-line note of it is in ${target}'s thread, but the session did not take the message`
+    : `The session did not take the message`
+  if (r.status === 'rejected') throw new Error(`send_to_thread failed: ${where}: ${r.reason}${r.retryable ? ' Retrying may succeed.' : ''}`)
+  throw new Error(`send_to_thread: ${where}, or it is not known whether it did (${r.reason}). It may have landed: do not send it again without checking with ${target}.`)
+}
+
+function str(v: unknown): string | undefined {
+  return typeof v === 'string' && v.trim() ? v.trim() : undefined
+}
+
+function num(v: unknown): number | undefined {
+  return typeof v === 'number' ? v : undefined
+}
+
+function isRetryable(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err)
+  return RETRYABLE_PATTERNS.test(msg)
+}
+
+async function retrySend<T>(fn: () => Promise<T>): Promise<T> {
+  for (let i = 0; i < SEND_RETRY_ATTEMPTS; i++) {
+    try {
+      return await fn()
+    } catch (err) {
+      if (i === SEND_RETRY_ATTEMPTS - 1 || !isRetryable(err)) throw err
+      const delay = SEND_RETRY_BASE_MS * Math.pow(2, i)
+      process.stderr.write(`daemon: send failed (attempt ${i + 1}/${SEND_RETRY_ATTEMPTS}), retrying in ${delay}ms: ${err instanceof Error ? err.message : err}\n`)
+      await new Promise(r => setTimeout(r, delay))
+    }
+  }
+  throw new Error('unreachable')
+}
+
+// ---------------------------------------------------------------------------
+// Tool execution
+// ---------------------------------------------------------------------------
+
+export type ToolResult = { content: Array<{type: string; text: string}>; isError?: boolean; sentIds?: string[] }
+
+// Sessions whose `handoff` call is between the file check and handOff (the pre-handoff hook runs here).
+const handoffChecksInFlight = new Set<string>()
+
+const askingPredecessor = new Set<string>()  // session ids with an ask_predecessor fork running
+
+/** The argument that names where a tool acts, by tool. */
+const PLACE_ARG: Readonly<Record<string, string>> = {
+  reply: 'chat_id', send_to_thread: 'chat_id', react: 'chat_id', edit_message: 'chat_id', delete_message: 'chat_id', download_attachment: 'chat_id', fetch_messages: 'channel',
+}
+/** What a tool does in a Slack conversation, as the one ownership rule (assertOwnConversation) names it: a read is held to more than a reply. */
+export const PLACE_USE: Readonly<Record<string, OwnUse>> = { fetch_messages: 'a read', edit_message: 'an edit', delete_message: 'a delete', react: 'a reaction', download_attachment: 'a download' }
+
+/**
+ * Why a restricted session may not make this call, or undefined. The tools it keeps work only where it speaks: its own session
+ * thread, or a Slack conversation bound to its specialist (not its `home_place`). It attaches no files of its own (the
+ * gateway may attach pictures it drew from the session's text). `send_to_thread` also goes only to a specialist its
+ * `sends_to` names (sends-to.ts). isToolAllowed has already refused the tools it does not keep.
+ */
+export function restrictedRefusal(callerSessionId: string, name: string, args: Record<string, unknown>): string | undefined {
+  if (name === 'reply' && Array.isArray(args.files) && args.files.length) return 'reply: a restricted session may not attach files of its own, so remove files (attachments are not sent)'
+  if (name === 'send_to_thread') { const why = sendsToRefusal(callerSessionId, args); if (why) return why }
+  return ownPlaceRefusal(callerSessionId, name, args, 'a restricted session')
+}
+
+/** The place rule a restricted and a write-confined session share: it describes only itself and acts only in its own conversation (or a Slack one bound to its specialist). */
+export function ownPlaceRefusal(callerSessionId: string, name: string, args: Record<string, unknown>, who: string): string | undefined {
+  if (name === 'set_description') return args.session_id === callerSessionId ? undefined : `set_description: ${who} describes only itself; session_id must be this session's own`
+  const arg = PLACE_ARG[name]
+  const target = arg ? args[arg] : undefined
+  const own = registry.get(callerSessionId)
+  if (typeof target === 'string' && !!own && target === own.threadId) return undefined
+  if (typeof target !== 'string' || !target) return `${name}: ${arg ?? 'chat_id'} is required: pass the ${arg ?? 'chat_id'} of ${arg === 'channel' ? 'the conversation you are reading' : 'the message you are answering'}`
+  const refusal = `${name}: ${arg} ${target} is not this session's own conversation; ${who} acts only in its own thread or in a Slack conversation bound to its specialist`
+  if (!target.startsWith('slack:')) return refusal
+  // A Slack conversation: the one rule (assertOwnConversation) says whether it is this session's, and why not.
+  const why = ownConversationRefusal(callerSessionId, target, PLACE_USE[name])
+  return why && `${refusal} (${why})`
+}
+
+/** `fetch_messages`' answer: one line per message, oldest first. */
+function fetchedText(msgs: { at: Date; who: string; text: string; id: string; files: number }[]): string {
+  if (msgs.length === 0) return '(no messages)'
+  return msgs.map(m => `[${m.at.toISOString()}] ${m.who}: ${m.text.replace(/[\r\n]+/g, ' ⏎ ')}  (id: ${m.id}${m.files > 0 ? ` +${m.files}att` : ''})`).join('\n')
+}
+
+export async function executeTool(name: string, args: Record<string, unknown>, callerSessionId?: string): Promise<ToolResult> {
+  const cleanups: (() => void)[] = []
+  try {
+    // edit_message and delete_message also take a Slack message's link: read as the chat_id and message_id it names, before any check.
+    if ((name === 'edit_message' || name === 'delete_message') && typeof args.link === 'string') {
+      const archive = parseArchiveUrl(args.link, true)
+      if (!archive) throw new Error(`${name}: link is not a Slack message link (https://<team>.slack.com/archives/<channel>/p<digits>)`)
+      args = { ...args, chat_id: `slack:${archive.channel}`, message_id: archive.ts }
+      delete args.link
+    }
+    // A Slack conversation id is read once, trimmed, before any check: the check below and the routing in each tool see the same id
+    // (`" slack:…"` would pass a check that trims and be routed, untrimmed, to the chat gateway).
+    const placeArg = PLACE_ARG[name]
+    const place = placeArg ? args[placeArg] : undefined
+    if (typeof place === 'string' && place !== place.trim() && place.trim().startsWith('slack:')) args = { ...args, [placeArg!]: place.trim() }
+    // Bridge-server enforces this at the socket boundary. Keep the dispatcher
+    // fail-closed too: Codex advertises phase-scoped tools statically, and tests
+    // or future callers may invoke executeTool without crossing bridge-server.
+    if (callerSessionId && !isToolAllowed(callerSessionId, name)) {
+      throw new Error(refusalText(callerSessionId, name))
+    }
+    // A restricted session keeps the tools it has only for its own conversation.
+    if (callerSessionId && isRestrictedSession(callerSessionId)) {
+      const refusal = restrictedRefusal(callerSessionId, name, args)
+      if (refusal) throw new Error(refusal)
+    }
+    // A write-confined session keeps only the tools tool-surface gives it (CONFINED_TOOLS), and those only in its own conversation.
+    if (callerSessionId && isWriteConfinedSession(callerSessionId)) {
+      const refusal = ownPlaceRefusal(callerSessionId, name, args, 'a write-confined session')
+      if (refusal) throw new Error(refusal)
+    }
+    // The bridge posts with the daemon's file access, outside the sandbox that holds a write-confined session's own tools: what it names to attach is
+    // checked here, once, for every tool it holds that takes `files`; the gateway is given daemon-owned copies, never the session's paths. A session
+    // known to be confined only by its bridge's declaration (no record, so no policy) attaches nothing.
+    if (callerSessionId && isWriteConfinedSession(callerSessionId) && fileArgTools().includes(name) && args.files !== undefined) {
+      const w = registry.get(callerSessionId)?.policy?.canOnlyWriteTo
+      const checked = w && Array.isArray(args.files) ? snapshotConfinedFiles(w, args.files) : { refusal: w ? fileRefusal(String(args.files)) : 'this session is write-confined but has no record to say which files it may read, so nothing is attached' }
+      if ('refusal' in checked) throw new Error(`${name}: ${checked.refusal}`)
+      cleanups.push(checked.cleanup)
+      args = { ...args, files: checked.files }
+    }
+    // A private protocol helper must not bypass send_to_thread's visibility
+    // policy through another gateway-mutating tool. Keep this centralized so
+    // every public write stays denied until the helper is fully retired.
+    if (callerSessionId && protocolChildRequiresPrivate(callerSessionId) && !PRIVATE_HELPER_ALLOWED_TOOLS.has(name)) {
+      throw new Error(`${name} is unavailable to a private protocol helper`)
+    }
+    switch (name) {
+      case 'reply': {
+        const chat_id = args.chat_id as string
+        const text = args.text as string
+        const reply_to = args.reply_to as string | undefined
+        const files = (args.files as string[] | undefined) ?? []
+        // A conversation id from a Slack delivery: the answer goes back into that conversation, and only there. `reply_to` is handed on as given: the conversation says what it can mean.
+        if (typeof chat_id === 'string' && chat_id.startsWith('slack:')) {
+          return { content: [{ type: 'text', text: await replyInConversation(callerSessionId, chat_id, text ?? '', files, reply_to) }] }
+        }
+
+        const ch = await gateway.fetchChannel(chat_id)
+        if (ch.isDM) {
+          if (!operatorIds().includes(ch.recipientId)) {
+            throw new Error(`channel ${chat_id} is not allowlisted (DM recipient ${ch.recipientId || 'unknown'})`)
+          }
+        } else {
+          if (!channelPolicy({ isDM: false, channelId: ch.id, parentChannelId: ch.parentId })) {
+            throw new Error(`channel ${chat_id} is not allowlisted`)
+          }
+        }
+
+        for (const f of files) {
+          assertSendable(f)
+          const st = statSync(f)
+          if (st.size > MAX_ATTACHMENT_BYTES) {
+            throw new Error(`file too large: ${f} (${(st.size / 1024 / 1024).toFixed(1)}MB, max 25MB)`)
+          }
+        }
+        if (files.length > gateway.maxAttachments) throw new Error(`max ${gateway.maxAttachments} attachments per message`)
+
+        // The gateway shapes the text first (its pictures go beside the session's own files) and keeps any files it
+        // made until this whole send, retries included, has settled.
+        const sentIds: string[] = []
+        await withOutbound(text, gateway.maxAttachments - files.length, async out => {
+          const all = [...files, ...out.files]
+          const chunks = chunk(out.text, maxChunkLimit(), 'markdown')
+          try {
+            for (let i = 0; i < chunks.length; i++) {
+              // Only the first chunk answers the message it replies to.
+              const shouldReplyTo = reply_to != null && i === 0
+              const sent = await retrySend(() => gateway.send(chat_id, chunks[i], {
+                ...(i === 0 && all.length > 0 ? { files: all } : {}),
+                ...(shouldReplyTo ? { replyTo: reply_to } : {}),
+              }))
+              sentIds.push(sent.id)
+            }
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err)
+            throw new Error(`reply failed after ${sentIds.length} of ${chunks.length} chunk(s) sent: ${msg}`)
+          }
+        })
+
+        if (callerSessionId && sentIds.length > 0) {
+          const info = registry.get(callerSessionId)
+          if (info) {
+            info.lastReplyId = sentIds[sentIds.length - 1]
+            if (markYourTurn(info, chat_id)) registry.debouncedPersist()
+            // lastReplyId drives the session's dashboard/list link — refresh (debounced) so it tracks the latest reply.
+            refreshDashboard()
+            // A live reply means the session is working: clear a stale suppressAutoRecover so a
+            // later reboot auto-recovers it. Dead records with the flag never reply, so theirs stays.
+            if (info.suppressAutoRecover) delete info.suppressAutoRecover
+            // Capture artifact links the session produced in its own thread, so
+            // they surface under its Home item (chat_id === threadId scopes this
+            // to the session's own workspace, not cross-posts to other channels;
+            // verified: spawned/resurrect sessions reply with chat_id === threadId).
+            if (chat_id === info.threadId) {
+              // Sanitize existing entries too (same as the backfill path in daemon.ts),
+              // so any legacy-malformed persisted URL self-heals rather than carrying forward.
+              // Compare against the raw prior list so a sanitize-only cleanup (even when the
+              // reply carries no new artifact URL) still persists and refreshes the dashboard.
+              const before = info.artifacts ?? []
+              const newLinks = extractArtifactLinks(text)
+              const { next, changed } = mergeArtifacts(sanitizeArtifacts(before), newLinks)
+              if (JSON.stringify(next) !== JSON.stringify(before)) {
+                info.artifacts = next
+                refreshDashboard()
+              }
+              if (changed) {
+                for (const url of newLinks) {
+                  if (!parsePrUrl(url)) continue
+                  fetchPrTitle(url).then(title => {
+                    if (title) { cachePrTitle(url, title); refreshDashboard() }
+                  }).catch(() => {})
+                }
+              }
+            }
+            registry.debouncedPersist()
+          }
+        }
+
+        const result =
+          sentIds.length === 1
+            ? `sent (id: ${sentIds[0]})`
+            : `sent ${sentIds.length} parts (ids: ${sentIds.join(', ')})`
+        return { content: [{ type: 'text', text: result }], sentIds }
+      }
+
+      case 'fetch_messages': {
+        const channelId = args.channel as string
+        const asked = args.limit ?? 20
+        if (typeof asked !== 'number' || !Number.isFinite(asked) || asked < 1) throw new Error(`fetch_messages: limit ${JSON.stringify(asked)} is not a number of messages: pass a whole number from 1 to 100 (20 when left out)`)
+        const limit = Math.min(Math.floor(asked), 100)
+        // A conversation id from a Slack delivery: read through the app that heard it, never the chat gateway. Who may read it was settled above (ownPlaceRefusal).
+        if (typeof channelId === 'string' && channelId.startsWith('slack:')) {
+          // A caller with no record that did not declare itself restricted (a stray bridge) is held as a restricted one is: a missing record never widens a read.
+          if (callerSessionId && callerSessionId !== 'main' && !registry.get(callerSessionId)) {
+            const why = ownConversationRefusal(callerSessionId, channelId, 'a read')
+            if (why) throw new Error(`fetch_messages: ${why}`)
+          }
+          const read = await fetchInConversation(channelId, limit)
+          return { content: [{ type: 'text', text: fetchedText(read.map(m => ({ at: new Date(parseFloat(m.ts) * 1000), who: m.author, text: m.text, id: m.ts, files: m.files }))) }] }
+        }
+        const msgs = await gateway.fetchMessages(channelId, limit)
+        const botId = gateway.botId
+        return { content: [{ type: 'text', text: fetchedText(msgs.map(m => ({ at: m.createdAt, who: m.authorId === botId ? 'me' : m.authorUsername, text: m.content, id: m.id, files: m.attachmentCount }))) }] }
+      }
+
+      case 'react': {
+        if (gateway.platform === 'slack') return { content: [{ type: 'text', text: 'no-op on Slack (reactions disabled)' }] }
+        await retrySend(() => gateway.react(args.chat_id as string, args.message_id as string, args.emoji as string))
+        return { content: [{ type: 'text', text: 'reacted' }] }
+      }
+
+      case 'edit_message': {
+        // A Slack conversation's message: rewritten through the app that heard the conversation (connectors/slack/runtime.ts holds who may).
+        if (typeof args.chat_id === 'string' && args.chat_id.startsWith('slack:')) {
+          return { content: [{ type: 'text', text: await editInConversation(callerSessionId, args.chat_id, args.message_id, args.text as string) }] }
+        }
+        // An edit cannot add files: the gateway shapes the text with no room for any.
+        const edited = await withOutbound(args.text as string, 0, out => retrySend(() => gateway.edit(args.chat_id as string, args.message_id as string, out.text)))
+        return { content: [{ type: 'text', text: `edited (id: ${edited})` }] }
+      }
+
+      case 'delete_message': {
+        if (typeof args.chat_id === 'string' && args.chat_id.startsWith('slack:')) {
+          return { content: [{ type: 'text', text: await deleteInConversation(callerSessionId, args.chat_id, args.message_id) }] }
+        }
+        await gateway.delete(args.chat_id as string, args.message_id as string)
+        return { content: [{ type: 'text', text: 'deleted' }] }
+      }
+
+      case 'create_thread': {
+        const threadName = (args.name as string).slice(0, 100)
+        const thread = await gateway.createThread(args.chat_id as string, threadName, {
+          messageId: args.message_id as string | undefined,
+          archiveDuration: (args.auto_archive_minutes as number | undefined) ?? 1440,
+          text: args.text as string | undefined,
+          files: (args.files as string[] | undefined),
+        })
+        return {
+          content: [{
+            type: 'text',
+            text: `thread created (thread_id: ${thread.id})`,
+          }],
+        }
+      }
+
+      case 'download_attachment': {
+        // The one answer for where this session's files go (app/attachment-target.ts); a confined session with no record gets a refusal.
+        const { dir, limits } = attachmentTarget(callerSessionId)
+        const results = await gateway.downloadAttachments(
+          args.chat_id as string,
+          args.message_id as string,
+          dir,
+          limits,
+        )
+        if (results.length === 0) {
+          return { content: [{ type: 'text', text: `message ${args.message_id} has no downloadable attachments` }] }
+        }
+        const lines = results.map(r => `  ${r.path}  (${r.name}, ${r.contentType}, ${r.sizeKB}KB)`)
+        return {
+          content: [{ type: 'text', text: `downloaded ${results.length} attachment(s):\n${lines.join('\n')}` }],
+        }
+      }
+
+      case 'spawn_session': {
+        // Capture this before the asynchronous spawn. If the protocol ends while
+        // the child is launching, its capabilities are removed and registry
+        // lookup returns not_protocol; it is still our responsibility to reap it.
+        const protocolScopedSpawn = !!(callerSessionId && registry.get(callerSessionId)?.capabilities?.includes('protocol_spawn'))
+        const spawnMode = resolveProtocolSpawnMode(callerSessionId)
+        const privateProtocolSpawn = spawnMode.privateSpawn
+        const worktree = args.worktree as string | undefined
+        const forkFromRaw = (args.fork_from as string | undefined)?.trim() || undefined
+        if (forkFromRaw && worktree) throw new Error('fork_from cannot be combined with worktree — a fork runs where its source ran')
+        const source = forkFromRaw ? resolveForkSource(forkFromRaw, callerSessionId) : undefined
+        const readOnly = args.read_only === true
+        const topic = worktree ? `worktree:${worktree} ${args.topic}` : args.topic as string
+        const modelArg = (args.model as string | undefined)?.trim()
+        // A Codex, omp or agy alias selects its engine (doSpawnSession reads it); what a spawn_session may ask of that engine is refused here.
+        const aliasOf = modelArg ? engineOfModel(modelArg) : undefined
+        const aliasEngine = aliasOf && ENGINE_PROFILES[aliasOf]
+        if (aliasEngine && source && !aliasEngine.forkable) throw new Error(`fork_from cannot be combined with the ${aliasEngine.label} engine — ${aliasEngine.label} sessions cannot be forked`)
+        if (aliasEngine && readOnly && !aliasEngine.enforcesReadOnly) throw new Error(`read_only is not enforced on ${aliasEngine.label} sessions — use a Claude model`)
+        const model = modelArg || source?.model
+        if (model) process.stderr.write(`daemon: spawn_session model override: ${model}\n`)
+        const budgetRaw = (args.phase_budget as string | undefined)?.trim() || undefined
+        const phaseBudgetMs = budgetRaw ? parseDuration(budgetRaw) ?? undefined : undefined
+        if (budgetRaw && !phaseBudgetMs) throw new Error(`invalid phase_budget "${budgetRaw}" — use e.g. "90s", "20m", "1h"`)
+        const readThreadRaw = args.read_thread as boolean | number | undefined
+        const spawnerName = callerSessionId ? registry.get(callerSessionId)?.tmuxName ?? 'main' : 'main'
+        let readThreadPrefix = ''
+        if (readThreadRaw) {
+          const limit = typeof readThreadRaw === 'number' ? Math.min(100, Math.max(10, Math.round(readThreadRaw))) : 50
+          const spawnerInfo = callerSessionId ? registry.get(callerSessionId) : undefined
+          const parentThread = spawnerInfo?.threadId
+          if (parentThread) {
+            readThreadPrefix = `Read the history of your parent thread for context before starting work:\n  fetch_messages(channel="${parentThread}", limit=${limit})\n\n`
+          } else {
+            process.stderr.write(`daemon: spawn_session read_thread requested by ${spawnerName} but spawner has no thread — ignoring\n`)
+          }
+        }
+        let preLaunchRegistration: ReturnType<typeof registerProtocolChild> | undefined
+        let allocatedSessionId: string | undefined
+        let result: Awaited<ReturnType<typeof doSpawnSession>>
+        try {
+          result = await doSpawnSession(topic, args.chat_id as string | undefined, args.message_id as string | undefined, {
+          ...(model ? { model } : {}),
+          // engine: always 'claude' while Codex sources are refused; it matters once Codex forks are supported.
+          ...(source ? { forkFrom: source.fork, launchCwd: source.cwd, engine: source.engine } : {}),
+          ...(readOnly ? { disallowedTools: READ_ONLY_DISALLOWED_TOOLS } : {}),
+          ...(phaseBudgetMs ? { phaseBudgetMs } : {}),
+          ...(spawnMode.quiet ? { quiet: true } : {}),
+          ...(readThreadPrefix ? { promptPrefix: readThreadPrefix } : {}),
+          ...(privateProtocolSpawn ? { beforeInitialTurn: (sessionId: string) => {
+            allocatedSessionId = sessionId
+            markPrivateProtocolChildLaunching(callerSessionId!, sessionId)
+            preLaunchRegistration = registerProtocolChild(callerSessionId!, sessionId, {
+              readThread: !!readThreadPrefix,
+              phaseBudgetMs,
+            })
+            if (preLaunchRegistration !== 'registered') {
+              finishPrivateProtocolChildLaunch(sessionId)
+              throw new Error('protocol phase ended before spawned session could be registered')
+            }
+          } } : {}),
+          trigger: 'spawn_session',
+          initiator: spawnerName,
+          ...(callerSessionId && registry.has(callerSessionId) ? { parentId: callerSessionId } : {}),
+          // Any session, registered or not (only main is exempt): a spawn into an ended thread answers to its lineage.
+          ...(callerSessionId && callerSessionId !== 'main' ? { askedBy: callerSessionId } : {}),
+          })
+        } catch (err) {
+          if (allocatedSessionId) finishPrivateProtocolChildLaunch(allocatedSessionId)
+          throw err
+        }
+        // Revalidate after launch even when registration succeeded before it.
+        // The phase may have ended while the engine was starting.
+        const childRegistration = callerSessionId
+          ? registerProtocolChild(callerSessionId, result.sessionId, {
+              readThread: !!readThreadPrefix,
+              phaseBudgetMs,
+            })
+          : 'not_protocol'
+        if (protocolScopedSpawn && childRegistration !== 'registered') {
+          const child = registry.get(result.sessionId)
+          if (child) await killSession(child, 'protocol phase ended during spawn', { ended: 'killed by hydra' }).catch(() => {})
+          if (allocatedSessionId) finishPrivateProtocolChildLaunch(allocatedSessionId)
+          throw new Error('protocol phase ended before spawned session could be registered')
+        }
+        if (allocatedSessionId) finishPrivateProtocolChildLaunch(allocatedSessionId)
+        return { content: [{ type: 'text', text: `session spawned (name: ${result.name}, session_id: ${result.sessionId}, thread_id: ${result.threadId}${result.url ? `, url: ${result.url}` : ''})` }] }
+      }
+
+      case 'list_sessions': {
+        const sorted = [...registry.values()].filter(s => occupied(occupancy(s))).sort((a, b) => b.lastActive - a.lastActive)
+        const list = sorted.map(s => {
+          const desc = s.description ?? fallbackDescription(s.topic)
+          return {
+            name: s.tmuxName,
+            description: desc,
+            thread_id: s.threadId,
+            // Link to the session's latest reply (like dashboard.ts / cli-handler.ts), falling back to the thread anchor.
+            url: (s.lastReplyId ? gateway.getMessageUrl(s.threadId, s.lastReplyId) : '') || s.threadUrl || '',
+            context: formatContextPercent(s.adapter, s),
+            messages: s.messageCount ?? 0,
+            running_for: formatDuration(Date.now() - s.createdAt),
+            status: transport.has(s.sessionId) ? 'connected' : 'disconnected',
+            origin_type: s.originType ?? 'spawn',
+            origin_from: s.originFrom ?? null,
+          }
+        })
+        // Ended sessions, read off the thread history (a restricted session never gets this far: list_sessions is not its tool).
+        const ended = args.include_ended === true ? endedSessions(endedWithinDays(args.ended_within_days)) : []
+        return { content: [{ type: 'text', text: JSON.stringify([...list, ...ended], null, 2) }] }
+      }
+
+      case 'handoff': {
+        if (callerSessionId === 'main') {
+          const raw = args.path as string | undefined
+          if (!raw || !isAbsolute(raw)) throw new Error('handoff: path must be absolute')
+          let size = 0
+          try { size = statSync(raw).size } catch {}
+          if (size === 0) throw new Error(`handoff file missing or empty: ${raw} — write it first`)
+          // The hook may refuse; the clear itself waits for this turn to end, after the answer below.
+          await beginMainHandoff(raw)
+          return { content: [{ type: 'text', text: `handing off — your context clears after this turn, then read ${raw}` }] }
+        }
+        const info = callerSessionId ? registry.get(callerSessionId) : undefined
+        if (!info) throw new Error('handoff: calling session not found')
+        // One absolute path for every reader: a relative one means the session's dir, not the daemon's.
+        const raw = args.path as string | undefined
+        const path = raw && (isAbsolute(raw) ? raw : resolvePath(sessionDir(info) ?? process.cwd(), raw))
+        let size = 0
+        try { size = path ? statSync(path).size : 0 } catch {}
+        if (!path || size === 0) throw new Error(`handoff file missing or empty: ${path ?? '(no path)'} — write it first`)
+        // Claimed before the hook's await: a second call must not run the hook again and then report a false failure.
+        if (handoffChecksInFlight.has(info.sessionId)) throw new Error(`${info.tmuxName} is already handing off`)
+        handoffChecksInFlight.add(info.sessionId)
+        const release = () => handoffChecksInFlight.delete(info.sessionId)
+        let check: PreHandoffVerdict
+        // The hook resolves on every path it knows; this guards the claim against one it doesn't (a leaked claim blocks every later handoff).
+        try { check = await runPreHandoffHook(info, path) } catch (err) { release(); throw err }
+        if (!check.ok) { release(); throw new Error(`handoff refused by hooks/pre-handoff:\n${check.output}`) }
+        if (registry.get(info.sessionId) !== info) { release(); throw new Error(`${info.tmuxName} ended during the pre-handoff check`) }
+        // Read before handOff: the kill deletes the record. The notice echoed the note as "to pass
+        // on", so the handed-off message reports whether it was.
+        const fate = handoffNoteFate(info, path)
+        if (fate.kind === 'dropped') process.stderr.write(`daemon: handoff ${info.tmuxName}: note not carried — letter ${path} is not the requested ${fate.requested}\n`)
+        const noteLine = (successor: string) => fate.kind === 'carried' ? '\nYour note was passed on.'
+          : fate.kind === 'dropped' ? `\n⚠️ Your note was **not** passed on: the session wrote \`${path}\`, not the letter that request asked for. Tell \`${successor}\` the note yourself.`
+          : ''
+        // Answer before acting: the kill inside handOff ends this very session.
+        setTimeout(() => {
+          release()  // handOff holds its own in-flight guard from here
+          handOff(info, path).then(
+            r => gateway.send(info.threadId, `🤝 \`${info.tmuxName}\` handed off to \`${r.name}\` — fresh context from \`${path}\`${noteLine(r.name)}`),
+            err => gateway.send(info.threadId, `⚠️ handoff from \`${info.tmuxName}\` failed: ${err instanceof Error ? err.message : err}\nRecover: type \`respawn\`, then tell it to read \`${path}\` and continue from its Next action.`),
+          ).catch(() => {})
+        }, 500)
+        return { content: [{ type: 'text', text: `handing off — a fresh session will continue from ${path}` }] }
+      }
+
+      case 'ask_predecessor': {
+        const question = str(args.question)
+        if (!question) throw new Error('ask_predecessor: question is required')
+        // The gate above has already refused a session that can't ask; this also covers a caller without a session id.
+        const caller = callerSessionId ? registry.get(callerSessionId) : undefined
+        const ask = caller ? predecessorAsker(caller) : undefined
+        if (!caller || !ask) throw new Error('ask_predecessor: this session has no predecessor it can ask')
+        // One fork per session at a time: each is a full-context turn of up to 180s.
+        if (askingPredecessor.has(caller.sessionId)) throw new Error('ask_predecessor: an earlier question from this session is still running; wait for its answer')
+        askingPredecessor.add(caller.sessionId)
+        try {
+          return { content: [{ type: 'text', text: await ask(question, ASK_PREDECESSOR_TIMEOUT_MS) }] }
+        } finally {
+          askingPredecessor.delete(caller.sessionId)
+        }
+      }
+
+      case 'set_description': {
+        const sessionId = args.session_id as string | undefined
+        const description = args.description as string | undefined
+        if (!sessionId || !description) throw new Error('session_id and description are required')
+        const info = registry.get(sessionId)
+        if (!info) throw new Error('session not found')
+        info.description = description.slice(0, 120)
+        registry.persist()
+        refreshSessionVisual(info.threadId)
+        refreshDashboard()
+        return { content: [{ type: 'text', text: `description set for ${info.tmuxName}` }] }
+      }
+
+      case 'kill_session': {
+        const sessionId = args.session_id as string | undefined
+        const threadId = args.thread_id as string | undefined
+
+        let targetId: string | undefined
+        if (sessionId) {
+          targetId = sessionId
+        } else if (threadId) {
+          targetId = registry.getByThread(threadId)
+        }
+
+        if (!targetId || !registry.has(targetId)) {
+          // A thread id with no live session in it, and destroy: with no session left, a destroy by thread id (`[threads] allow_destroy`).
+          // Main, or the session that spawned the ended one (endedDestroyRefusal): the ended session's history names its spawner's thread.
+          if (!sessionId && threadId && args.destroy === true) {
+            const refusal = endedDestroyRefusal(callerSessionId, threadId, threadRegistry.get(threadId)?.sessionHistory.at(-1)?.tmuxName ?? threadId)
+            if (refusal) throw new Error(refusal)
+            const out = await destroyThreadById(threadId, callerSessionId && callerSessionId !== 'main' ? (registry.get(callerSessionId)?.tmuxName ?? 'agent') : 'main')
+            if (!out.ok) return { content: [{ type: 'text', text: out.text }], isError: true }
+            return { content: [{ type: 'text', text: `deleted thread ${threadId}` }] }
+          }
+          throw new Error('session not found')
+        }
+
+        const info = registry.get(targetId)!
+        const destroy = args.destroy === true
+
+        // Non-main sessions can only kill (and destroy) sessions they spawned
+        let reason = 'session ended'
+        if (callerSessionId && callerSessionId !== 'main') {
+          const caller = registry.get(callerSessionId)
+          // Distinct from a human's 'session ended' so the on-kill hook can tell them apart
+          reason = `session ended by ${caller?.tmuxName ?? 'agent'}`
+          const refusal = callerRefusal(caller, info, destroy ? 'destroy' : 'kill')
+          if (refusal) throw new Error(refusal)
+        }
+
+        if (!destroy) {
+          await killSession(info, reason, { ended: 'killed' })
+          return { content: [{ type: 'text', text: `killed session ${targetId}` }] }
+        }
+        const res = await killThenDestroy(info, reason, callerSessionId && callerSessionId !== 'main' ? (registry.get(callerSessionId)?.tmuxName ?? 'agent') : 'main')
+        if (!res.out.ok) return { content: [{ type: 'text', text: destroyDeclinedText(info.tmuxName, res) }], ...(res.killed ? {} : { isError: true }) }
+        return { content: [{ type: 'text', text: `killed session ${targetId} and deleted its thread ${info.threadId}` }] }
+      }
+
+      case 'watch_pr': {
+        let prUrl = args.pr_url as string | undefined
+        const sessionId = callerSessionId ?? 'main'
+        const info = registry.get(sessionId)
+        if (!prUrl) {
+          const cwd = info?.sessionMetadata?.cwd
+          if (!cwd) throw new Error(WATCH_ERRORS.NO_CWD)
+          const detected = await detectPrUrl(cwd)
+          if (!detected.ok) throw new Error(detected.reason)
+          prUrl = detected.url
+        }
+        const threadId = (args.chat_id as string | undefined) ?? info?.threadId ?? ''
+        if (!threadId) throw new Error('could not determine thread — pass chat_id')
+        const result = await watchPr(prUrl, sessionId, threadId, { notifyGreen: args.notify_green === true })
+        return { content: [{ type: 'text', text: result }] }
+      }
+
+      case 'unwatch_pr': {
+        const result = unwatchPr(args.pr_url as string, callerSessionId)
+        return { content: [{ type: 'text', text: result }] }
+      }
+
+      case 'list_watches': {
+        const all = args.all as boolean | undefined
+        const entries = all ? listWatches() : getWatchesBySession(callerSessionId ?? 'main')
+        const lines = entries.map(e => `• ${formatWatchEntry(e)}`)
+        // A specialist's session also sees the conversations bound to it, and no other specialist's.
+        const caller = callerSessionId ? registry.get(callerSessionId) : undefined
+        const slack = caller ? formatConversationsFor(caller).map(l => `• ${l}`) : []
+        if (lines.length + slack.length === 0) return { content: [{ type: 'text', text: 'no PRs being watched' }] }
+        return { content: [{ type: 'text', text: [...lines, ...slack].join('\n') }] }
+      }
+
+      case 'bind_conversation': {
+        const caller = callerSessionId ? registry.get(callerSessionId) : undefined
+        return { content: [{ type: 'text', text: await bindConversation(caller, args.conversation, { target: args.target, why: args.why, callerSessionId }) }] }
+      }
+
+      case 'unbind_conversation': {
+        const caller = callerSessionId ? registry.get(callerSessionId) : undefined
+        return { content: [{ type: 'text', text: unbindConversation(caller, args.conversation) }] }
+      }
+
+      case 'send_to_thread': {
+        // A restricted caller was held to its sends_to above (restrictedRefusal): what it sends is rendered and landed by sends-to.ts, not by the route below.
+        if (callerSessionId && isRestrictedSession(callerSessionId)) return { content: [{ type: 'text', text: await sendToThread(callerSessionId, args) }] }
+        const target = (args.target as string)?.trim()
+        const msgType = (args.type as string)?.trim()
+        const text = args.text as string
+        const files = (args.files as string[] | undefined) ?? []
+        if (!target) throw new Error('target is required (session name, e.g. "cedar")')
+        if (!msgType || !(SEND_TYPES as readonly string[]).includes(msgType)) throw new Error(`type is required: ${SEND_TYPES.join(', ')}`)
+        if (!text) throw new Error('text is required')
+        const summary = args.summary as string | undefined
+        const visibility = (args.visibility as string | undefined)?.trim() || 'public'
+        if (visibility !== 'public' && visibility !== 'private') throw new Error('visibility must be "public" or "private"')
+        const isPrivate = visibility === 'private'
+        if (!isPrivate && callerSessionId && protocolChildRequiresPrivate(callerSessionId)) {
+          throw new Error('this session is a private protocol helper — use send_to_thread with visibility="private"')
+        }
+        process.stderr.write(`daemon: send_to_thread [${msgType}] → ${target}\n`)
+
+        // Resolve by session name only — no raw thread IDs (use reply for those).
+        // "parent" is the caller's parent by id, so a child never needs its name.
+        const caller = callerSessionId ? registry.get(callerSessionId) : undefined
+        // A live session by the name gets it; a declared specialist with nobody home is filled by its rule first.
+        const byName = target === 'parent' ? undefined : resolveSendTarget(target)
+        const heal = target !== 'parent' && !!getSpecialist(target) && !(byName && !byName.replaced && occupied(occupancy(byName.session)))
+        const resolved = target === 'parent' ? resolveParentTarget(caller)
+          : heal ? { session: (await ensureSpecialist(target, caller?.tmuxName ?? 'send_to_thread')).info }
+          : byName
+        if (!resolved) {
+          const known = [...registry.values()].filter(s => occupied(occupancy(s))).map(s => s.tmuxName).join(', ')
+          throw new Error(`no session named "${target}". Known sessions: ${known || '(none)'}`)
+        }
+        const targetSession = resolved.session
+        const threadId = targetSession.threadId
+        // Where the relay line and the message are posted: the target's thread, or the one it reports to when it has none the gateway can address.
+        const postThread = routeThreadId(targetSession)
+        // The delivery gate speaks before anything is posted or recorded: a refused message is neither shown in the thread nor counted as a protocol result.
+        const refusal = deliveryRefusal(targetSession)
+        if (refusal) throw new Error(`send_to_thread failed: nothing was posted or sent. ${refusal}`)
+        // Private delivery: child → its own parent only, straight to the parent's
+        // session. Never touches the gateway, so nothing lands in any thread.
+        if (isPrivate) {
+          const sender = caller
+          if (!sender) throw new Error('private delivery requires a session context')
+          if (resolved.replaced) throw new Error(`no live session named "${target}" for private delivery`)
+          if (msgType === 'question') throw new Error('private delivery supports progress and result only')
+          if (files.length > 0) throw new Error('private delivery cannot attach files')
+          if (!isParentOf(targetSession, sender)) {
+            throw new Error(`private delivery denied — "${target}" is not your parent session`)
+          }
+          // Private reports enter the parent's model context directly. Bound a
+          // noisy or hostile helper so one result cannot consume it wholesale.
+          const maxPrivateTextChars = 64 * 1024
+          const privateText = text.length > maxPrivateTextChars
+            ? `${text.slice(0, maxPrivateTextChars)}\n[private result truncated at ${maxPrivateTextChars} characters]`
+            : text
+          const lateNote = await landed(target, transport.deliver(targetSession.sessionId, {
+            type: 'notification',
+            content: `[private ${msgType} from ${sender.tmuxName}] ${privateText}`,
+            meta: { chat_id: threadId, message_id: '', user: sender.tmuxName, user_id: 'session', ts: new Date().toISOString() },
+          }), 'nothing',
+            // Recorded as the child's result only once the parent's session took it: a refused or rejected one never reached the parent.
+            () => { if (msgType === 'result') registerProtocolChildResult(callerSessionId!, targetSession.sessionId, privateText) })
+          return { content: [{ type: 'text', text: `privately delivered to ${targetSession.tmuxName}${lateNote}` }] }
+        }
+        const redirectNote = resolved.replaced
+          ? ` (delivered to ${targetSession.tmuxName}, which replaced ${resolved.replaced} in that thread)`
+          : ''
+        if (resolved.replaced) {
+          process.stderr.write(`daemon: send_to_thread: ${resolved.replaced} is gone — redirected to ${targetSession.tmuxName}\n`)
+        }
+
+        for (const f of files) {
+          assertSendable(f)
+          const st = statSync(f)
+          if (st.size > MAX_ATTACHMENT_BYTES) {
+            throw new Error(`file too large: ${f} (${(st.size / 1024 / 1024).toFixed(1)}MB, max 25MB)`)
+          }
+        }
+        if (files.length > gateway.maxAttachments) throw new Error(`max ${gateway.maxAttachments} attachments per message`)
+
+        const sendLimit = maxChunkLimit()
+        const senderName = callerSessionId ? registry.get(callerSessionId)?.tmuxName ?? callerSessionId : 'unknown'
+        // A session-to-session send reaches the recipient session in full and shows one line in
+        // the recipient's thread. The recipient decides what, if anything, to tell the human. A
+        // protocol child's result must be posted in full to count as complete, and attachments
+        // need a real post, so both stay loud.
+        const wantsQuiet = shouldQuiet({ protocolParticipant: !!callerSessionId && isProtocolParticipant(callerSessionId), hasFiles: files.length > 0 })
+        // A link is a nicety: a failed lookup leaves the name plain and never blocks delivery.
+        const party = async (s: SessionInfo) => ({
+          name: s.tmuxName,
+          emoji: emojiOf(s),
+          // The link is to the thread the session is reached through: its own, or the one it reports to when it has none the gateway can address.
+          url: await partyLink({ ...s, threadId: routeThreadId(s) ?? s.threadId }, id => gateway.getThreadUrl(id), m => process.stderr.write(`daemon: ${m}\n`)),
+        })
+        const echoThread = caller?.threadId && caller.threadId !== threadId ? caller.threadId : undefined
+        const quietOutcome = wantsQuiet
+          ? await Promise.all([caller ? party(caller) : { name: senderName, emoji: emojiOfName(senderName) }, party(targetSession)])
+            .then(([from, to]) => quietSend(
+              { from, to, type: msgType as SendType, text, summary, dir: join(STATE_DIR, 'messages') },
+              {
+                postLine: line => postThread ? retrySend(() => gateway.send(postThread, line, { subtext: true })) : Promise.reject(new Error(`${targetSession.tmuxName} has no thread the gateway can address`)),
+                ...(echoThread ? { postEcho: (line: string) => retrySend(() => gateway.send(echoThread, line, { subtext: true })) } : {}),
+                log: m => process.stderr.write(`daemon: ${m}\n`),
+              },
+            ))
+          : undefined
+        const quiet = wantsQuiet
+        const sentIds: string[] = []
+        if (!quiet) await withOutbound(text, gateway.maxAttachments - files.length, async out => {
+          if (!postThread) throw new Error(`send failed: ${targetSession.tmuxName} has no thread the gateway can address, and reports to none`)
+          const all = [...files, ...out.files]
+          const chunks = chunk(out.text, sendLimit, 'markdown')
+          try {
+            for (let i = 0; i < chunks.length; i++) {
+              const sent = await retrySend(() => gateway.send(postThread, chunks[i], {
+                ...(i === 0 && all.length > 0 ? { files: all } : {}),
+              }))
+              sentIds.push(sent.id)
+            }
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err)
+            throw new Error(`send failed after ${sentIds.length} of ${chunks.length} chunk(s) sent: ${msg}`)
+          }
+        })
+
+        // Deliver to the target's Claude session so it actually receives the message
+        const delivered = quietOutcome?.delivered ?? text
+        const replyInstruction = msgType === 'question'
+          ? `\nRespond via send_to_thread(target="${senderName}", type="result", text="...").`
+          : ''
+        // Into a restricted session, whoever sends: quoted, cut and labelled by hydra (sends-to.ts), never behind a header the sender can write into.
+        const intoRestricted = isRestrictedSession(targetSession.sessionId)
+        const lateNote = await landed(target, transport.deliver(targetSession.sessionId, {
+          type: 'notification',
+          // The recipient learns what the human already saw, so its reply can add rather than repeat.
+          content: intoRestricted
+            ? await envelopeFor({ from: senderName, type: msgType, ...(caller?.threadId && { conversation: caller.threadId }), text: delivered })
+            : `[${msgType} from ${senderName}${quietOutcome?.posted ? ` · your thread shows: ${JSON.stringify(quietOutcome.headline)}` : ''}] ${delivered}${replyInstruction}`,
+          meta: {
+            chat_id: threadId,
+            message_id: sentIds[0] ?? '',
+            user: senderName,
+            user_id: 'session',
+            ts: new Date().toISOString(),
+          },
+        }), quiet ? 'note' : 'text',
+          // A reviewer result counts as complete only once it was posted to the parent thread and the parent's session took it:
+          // a failed, refused or late-rejected send must not unlock step_passed.
+          () => { if (msgType === 'result' && callerSessionId) registerProtocolChildResult(callerSessionId, targetSession.sessionId, text) })
+
+        if (quiet) return { content: [{ type: 'text', text: `delivered to ${target}${quietOutcome?.posted ? '' : ' (note failed, logged)'}; one-line note in their thread${quietOutcome?.echoed ? ' and yours' : ''}${redirectNote}${lateNote}` }], sentIds }
+        const result = sentIds.length === 1
+          ? `sent to ${target} (id: ${sentIds[0]})${redirectNote}${lateNote}`
+          : `sent ${sentIds.length} parts to ${target} (ids: ${sentIds.join(', ')})${redirectNote}${lateNote}`
+        return { content: [{ type: 'text', text: result }], sentIds }
+      }
+
+      case 'peek_session': {
+        const name = (args.name as string)?.trim()
+        if (!name) throw new Error('name is required')
+        const lines = Math.min(Math.max((args.lines as number) ?? 50, 1), 500)
+
+        const found = [...registry.values()].find(s => s.tmuxName === name)
+        if (!found) throw new Error(`no session named "${name}"`)
+
+        if (callerSessionId && callerSessionId !== 'main') {
+          const caller = registry.get(callerSessionId)
+          if (caller && !isParentOf(caller, found)) {
+            throw new Error(`peek denied — "${name}" is not a child of your session`)
+          }
+        }
+
+        if (!tmuxHasSession(name)) throw new Error(`session "${name}" tmux not running`)
+
+        const adapter = found.adapter
+        const output = adapter.peek(found, lines)
+
+        const ctx = formatContextPercent(adapter, found)
+        const msgs = found.messageCount ?? 0
+        const duration = formatDuration(Date.now() - found.createdAt)
+        const header = `Session: ${name} | ${ctx} | ${msgs} msgs | ${duration}`
+
+        return { content: [{ type: 'text', text: `${header}\n${'─'.repeat(60)}\n${output || '(empty)'}` }] }
+      }
+
+      case 'advance': {
+        const content = (args.content as string)?.trim()
+        if (!content) throw new Error('advance requires content')
+        if (!callerSessionId) throw new Error('advance requires a session context')
+        const verdict = (args.verdict as string)?.trim() || undefined
+
+        const result = await dispatchAdvance(callerSessionId, content, verdict)
+        if (!result.ok) throw new Error(result.reason)
+
+        const verdictNote = verdict ? ` (verdict: ${verdict})` : ''
+        return { content: [{ type: 'text', text: `advanced${verdictNote}` }], sentIds: result.sentIds }
+      }
+
+      case 'extend_phase': {
+        const reason = (args.reason as string)?.trim()
+        if (!reason) throw new Error('extend_phase requires a reason')
+        if (!callerSessionId) throw new Error('extend_phase requires a session context')
+        const minutes = Math.max(1, Math.min(Number(args.minutes) || 5, 15))
+
+        const result = onRunExtend(callerSessionId, reason, minutes)
+        if (!result.ok) throw new Error(result.reason)
+
+        return { content: [{ type: 'text', text: `phase extended by ${minutes}m: ${reason}` }] }
+      }
+
+      case 'report_usage': {
+        // An observer's report: malformed or unknown entries are dropped, never an error to the caller.
+        const readings = parseRateLimits(args)
+        for (const r of readings) reportUsage(r)
+        return { content: [{ type: 'text', text: `recorded ${readings.length} window(s)` }] }
+      }
+
+      default:
+        return {
+          content: [{ type: 'text', text: `unknown tool: ${name}` }],
+          isError: true,
+        }
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return {
+      // A refusal already starts with the tool's name: not said twice.
+      content: [{ type: 'text', text: msg.startsWith(`${name} `) || msg.startsWith(`${name}:`) ? msg : `${name} failed: ${msg}` }],
+      isError: true,
+    }
+  } finally {
+    for (const c of cleanups) c()
+  }
+}

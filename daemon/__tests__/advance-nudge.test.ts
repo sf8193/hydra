@@ -1,9 +1,9 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { maybeNudgeMissingAdvance, _resetNudgesForTesting } from '../advance-nudge.js'
-import { _resetForTesting as resetRegistry } from '../protocol-registry.js'
-import { transport } from '../bridge-transport.js'
-import { registry } from '../sessions.js'
-import type { SessionInfo } from '../sessions.js'
+import { maybeNudgeMissingAdvance, _resetNudgesForTesting } from '../../app/advance-nudge.js'
+import { _resetForTesting as resetRegistry } from '../../sessions/protocol-registry.js'
+import { transport } from '../../sessions/bridge-transport.js'
+import { registry } from '../../sessions/registry.js'
+import type { SessionInfo } from '../../sessions/registry.js'
 
 const sentMessages: Array<Record<string, unknown>> = []
 let origSendOrQueue: typeof transport.sendOrQueue

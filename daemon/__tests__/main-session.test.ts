@@ -1,4 +1,4 @@
-// `usage` and `peek` in the main channel read main's on-demand record (daemon/main-session.ts);
+// `usage` and `peek` in the main channel read main's on-demand record (sessions/main.ts);
 // main has no registry record, and every other channel behaves as before.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { appendFileSync, mkdirSync, rmSync, writeFileSync } from 'fs'
@@ -6,9 +6,9 @@ import { join } from 'path'
 delete process.env.BYTE_SESSION_NAME
 const { gateway, STATE_DIR } = await import('../../infra/config.js')
 const { writeMainRecord } = await import('../../shared/main-record.js')
-const { handleUsageIntercept } = await import('../commands/status.js')
-const { handlePeekIntercept } = await import('../commands/thread.js')
-const { mainAlive, mainContext, mainLaunchModel } = await import('../main-session.js')
+const { handleUsageIntercept } = await import('../../app/commands/status.js')
+const { handlePeekIntercept } = await import('../../app/commands/thread.js')
+const { mainAlive, mainContext, mainLaunchModel } = await import('../../sessions/main.js')
 const { withFakeTmux } = await import('./fake-tmux.js')
 const { projectDirName, projectsRoot } = await import('../../infra/usage.js')
 type FakeTmux = ReturnType<typeof withFakeTmux>

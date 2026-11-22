@@ -10,11 +10,11 @@ import { writeFileSync, mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join, resolve } from 'path'
 import { fakeCodexAdapter } from './test-harness.js'
-import { registry } from '../sessions.js'
+import { registry } from '../../sessions/registry.js'
 import { gateway } from '../../infra/config.js'
-import { handleSpawnIntercept } from '../commands/global.js'
-import { doSpawnSession } from '../session-lifecycle.js'
-import { dedupForRecovery } from '../recovery.js'
+import { handleSpawnIntercept } from '../../app/commands/global.js'
+import { doSpawnSession } from '../../app/session-lifecycle.js'
+import { dedupForRecovery } from '../../app/recovery.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 
 const codex = (connected: boolean) => {
@@ -204,11 +204,11 @@ describe('gate 5: dashboard rows', () => {
       writeFileSync(join(state, 'hydra.toml'), 'operator = "op"\n[people.op]\naddresses = ["slack:U0OP"]\n')
       const script = join(state, 'dash.ts')
       writeFileSync(script, `
-        const { registry } = await import(${JSON.stringify(join(root, 'daemon/sessions.ts'))})
+        const { registry } = await import(${JSON.stringify(join(root, 'sessions/registry.ts'))})
         const { gateway } = await import(${JSON.stringify(join(root, 'infra/config.ts'))})
         const { CodexEngineAdapter } = await import(${JSON.stringify(join(root, 'engines/codex-engine-adapter.ts'))})
-        const { refreshDashboardNow } = await import(${JSON.stringify(join(root, 'daemon/dashboard.ts'))})
-        const { startHydraConfig } = await import(${JSON.stringify(join(root, 'daemon/hydra-config.ts'))})
+        const { refreshDashboardNow } = await import(${JSON.stringify(join(root, 'app/dashboard.ts'))})
+        const { startHydraConfig } = await import(${JSON.stringify(join(root, 'infra/hydra-config.ts'))})
         startHydraConfig()
         const recs = ${JSON.stringify(recs)}
         const names = recs.map(r => r.tmuxName)

@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, beforeEach, expect, spyOn, test } from 'bun:test'
 import { gateway } from '../../infra/config.js'
 import { setHydra } from './test-hydra.js'
-import { registry, threadRegistry } from '../sessions.js'
-import { transport } from '../bridge-transport.js'
-import { pendingPermissions } from '../permission.js'
+import { registry, threadRegistry } from '../../sessions/registry.js'
+import { transport } from '../../sessions/bridge-transport.js'
+import { pendingPermissions } from '../../app/permission.js'
 
 // A non-operator in a session thread is flagged once; the operator's "yes" lets them in for that thread only.
 let onMessage: (msg: any) => Promise<void>
@@ -17,7 +17,7 @@ beforeAll(async () => {
   spies.push(setHydra({ operators: ['op'], channels: { ch: { onlyOperators: true } } }))
   spies.push(spyOn(registry, 'getByThread').mockImplementation(((t: string) => (t === 'ch:T1' || t === 'ch:T2' ? 'sess' : undefined)) as any))
   spies.push(spyOn(threadRegistry, 'persist').mockImplementation((() => {}) as any))
-  await import('../router.js')
+  await import('../../app/router.js')
 })
 afterAll(() => { for (const s of spies) s.mockRestore() })
 beforeEach(() => {

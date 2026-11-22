@@ -336,7 +336,7 @@ async function validateModuleGraph(cfg: HydraConfig): Promise<{ ok: boolean; err
   try { unlinkSync(scratchSock) } catch {}
   tmuxKill(probeTmux)
 
-  const probeScript = join(cfg.hydraDir, 'daemon', 'boot-probe.ts')
+  const probeScript = join(cfg.hydraDir, 'boot-probe.ts')
   try {
     tmuxSpawn(probeTmux,
       `cd ${shq(cfg.hydraDir)} && ${buildDaemonEnvs(cfg)} HYDRA_PROBE_SOCK=${shq(scratchSock)} bun run ${shq(probeScript)}`)

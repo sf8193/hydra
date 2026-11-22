@@ -1,7 +1,7 @@
-import { handleHandoffIntercept } from '../commands/thread.js'
-import { handoffIO } from '../session-lifecycle.js'
-import { registry, type SessionInfo, type SpawnOpts } from '../sessions.js'
-import { transport } from '../bridge-transport.js'
+import { handleHandoffIntercept } from '../../app/commands/thread.js'
+import { handoffIO } from '../../app/session-lifecycle.js'
+import { registry, type SessionInfo, type SpawnOpts } from '../../sessions/registry.js'
+import { transport } from '../../sessions/bridge-transport.js'
 import { gateway } from '../../infra/config.js'
 
 /** A live session in its own thread, with everything a handoff touches outside the daemon stubbed. */

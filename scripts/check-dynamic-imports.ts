@@ -11,19 +11,19 @@ import { fileURLToPath } from 'url'
 
 /** `file -> specifier`, one entry per allowed dynamic import (a file that loads the same module twice lists it twice). */
 export const ALLOWED: readonly string[] = [
-  'daemon/boot-probe.ts -> ../infra/config.js',
-  'daemon/boot-probe.ts -> ./bridge-dispatch.js',
-  'daemon/boot-probe.ts -> ./bridge-server.js',
-  'daemon/boot-probe.ts -> ./bridge-transport.js',
-  'daemon/boot-probe.ts -> ./router.js',
-  'daemon/boot-probe.ts -> ./session-lifecycle.js',
-  'daemon/boot-probe.ts -> ./sessions.js',
-  'gateways/slack.ts -> ../daemon/access.js',
-  'gateways/slack.ts -> ../daemon/access.js',
-  'gateways/slack.ts -> ../daemon/access.js',
-  'infra/config.ts -> ../daemon/access.js',
+  'boot-probe.ts -> ./app/bridge-dispatch.js',
+  'boot-probe.ts -> ./app/bridge-server.js',
+  'boot-probe.ts -> ./app/router.js',
+  'boot-probe.ts -> ./app/session-lifecycle.js',
+  'boot-probe.ts -> ./infra/config.js',
+  'boot-probe.ts -> ./sessions/bridge-transport.js',
+  'boot-probe.ts -> ./sessions/registry.js',
+  'gateways/slack.ts -> ../sessions/access.js',
+  'gateways/slack.ts -> ../sessions/access.js',
+  'gateways/slack.ts -> ../sessions/access.js',
   'infra/config.ts -> ../gateways/discord.js',
   'infra/config.ts -> ../gateways/slack.js',
+  'infra/config.ts -> ../sessions/access.js',
 ]
 
 // Bun's transpiler drops types and comments and keeps every runtime `import()`, so a type query is never mistaken for a load and a load is never missed by its spelling.

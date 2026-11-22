@@ -1,4 +1,4 @@
-import { deliveryRefusal } from '../daemon/restricted.js'
+import { deliveryRefusal } from '../app/restricted.js'
 // engines/codex-engine-adapter.ts
 //
 // Codex engine adapter — wraps the CodexEngine (app-server + unix socket)
@@ -9,8 +9,8 @@ import { promisify } from 'util'
 import { mkdirSync } from 'fs'
 import { join } from 'path'
 import { codexSpawnEnv } from '../shared/spawn-env.js'
-import { registry, type SessionInfo } from '../daemon/sessions.js'
-import type { BlockingState } from '../daemon/pane-probe.js'
+import { registry, type SessionInfo } from '../sessions/registry.js'
+import type { BlockingState } from '../app/pane-probe.js'
 import type {
   EngineAdapter, LaunchInput, LaunchResult,
   DeliveryMode, DeliveryResult, Notification,
@@ -24,9 +24,9 @@ import { tmuxCreateSession, tmuxHasSession, tmuxSync, tmuxTimedOut, tmuxWindowAc
 import { sendTmuxKeys, type TmuxKeyAction } from './codex-key-queue.js'
 import { SOCK_PATH, SPAWN_LOGS_DIR } from '../infra/config.js'
 import { codexTurnOutcome, defaultTurnSources, isCodexWorking } from './codex-observation.js'
-import { codexPiggyback, type CodexPiggyback } from './codex-piggyback.js'
+import { codexPiggyback, type CodexPiggyback } from '../sessions/codex-piggyback.js'
 import { isCodexReconnecting, reconnectCodexSessions } from './codex-runtime.js'
-import { replyContextLine } from '../daemon/reply-context.js'
+import { replyContextLine } from '../shared/reply-context.js'
 import { shq } from '../infra/launch-files.js'
 
 const execFileAsync = promisify(execFile)

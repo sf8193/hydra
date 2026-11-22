@@ -6,9 +6,9 @@ import { randomUUID } from 'crypto'
 import { spawn } from 'child_process'
 import { existsSync, mkdirSync, readFileSync } from 'fs'
 import { join } from 'path'
-import type { SessionInfo, SessionMetadata } from '../daemon/sessions.js'
-import { detectBlockingState as detectBlockingStateFn } from '../daemon/pane-probe.js'
-import type { BlockingState } from '../daemon/pane-probe.js'
+import type { SessionInfo, SessionMetadata } from '../sessions/registry.js'
+import { detectBlockingState as detectBlockingStateFn } from '../app/pane-probe.js'
+import type { BlockingState } from '../app/pane-probe.js'
 import type {
   EngineAdapter, ForkPlan, LaunchInput, LaunchResult,
   DeliveryResult, Notification,
@@ -16,7 +16,7 @@ import type {
   ContextUsage, RecoverySource, RecoveryPlan, Turn,
 } from './engine-adapter.js'
 import { withoutIntents } from './engine-adapter.js'
-import type { BridgeTransport } from '../daemon/bridge-transport.js'
+import type { BridgeTransport } from '../sessions/bridge-transport.js'
 import { parseContextFooter, type ContextFooter } from '../infra/util.js'
 import { tmuxCreateSession, tmuxHasSession, tmuxSessionState, tmuxSync, tmuxTimedOut, tmuxWindowActivity } from '../infra/tmux.js'
 import { claudeConfigDir, contextWindowOf, isKnownModel } from '../shared/constants.js'
@@ -29,17 +29,17 @@ import { gateway } from '../infra/config.js'
 import { SESSION_IDENTITY_VARS, capturedSpawnVars, stateEnvUnsets, scrubbedSpawnEnv, withRaisedFdLimit } from '../shared/spawn-env.js'
 import { modsExport } from '../shared/mods.js'
 import { BRIDGE_CHANNEL_FLAG, BRIDGE_MCP_SERVER_KEY, BRIDGE_PLUGIN_ID, BRIDGE_TOOLS_PERMISSION, BUILTIN_TOOL_PLUGIN_IDS } from '../infra/plugin-manifest.js'
-import { deliveryRefusal, type LaunchPolicy, missingTokenRefusal, PolicyRefusal, remedy, RESTRICTED_MODS, RESTRICTED_PREAMBLE, sandboxInputs, serverToolRule, type RestrictedPolicy } from '../daemon/restricted.js'
+import { deliveryRefusal, type LaunchPolicy, missingTokenRefusal, PolicyRefusal, remedy, RESTRICTED_MODS, RESTRICTED_PREAMBLE, sandboxInputs, serverToolRule, type RestrictedPolicy } from '../app/restricted.js'
 import { verifyConfinement as verifyConfinementLoaded, verifyLaunch as verifyLoaded, type Verdict } from './claude-verify.js'
 import { removeSessionToken, removeSpawnPrompt, shq, writeSessionToken, writeSpawnPrompt } from '../infra/launch-files.js'
 import { makeServerTmpDirs, removeRestrictedFiles, serverTmpDir, serverTmpRoot, writeRestrictedFiles } from '../infra/restricted-files.js'
 import { sandboxedServer, sandboxIssues } from '../config/server-sandbox.js'
 import type { PrivateRoot } from '../config/restricted-workdir.js'
 import type { LoadEnv } from '../config/types.js'
-import { bridgeServerCommands, claudeSettingsProblems, claudeVersionRefusal, confinementRules, confinementServers, makeBrowserDirs, confinementLogLine, confinementMcp, confinementSettings } from '../daemon/write-confinement.js'
+import { bridgeServerCommands, claudeSettingsProblems, claudeVersionRefusal, confinementRules, confinementServers, makeBrowserDirs, confinementLogLine, confinementMcp, confinementSettings } from '../app/write-confinement.js'
 import { syncDaemonBridge } from './bridge-sync.js'
 import { clearNeedsAuthEntry, describeSetAt, NEEDS_AUTH_CLEARED_NOTE } from './claude-needs-auth.js'
-import { isRestricted, isRestrictedPolicy } from '../daemon/policy-record.js'
+import { isRestricted, isRestrictedPolicy } from '../shared/policy-record.js'
 
 // What the pane-and-transcript methods read. The byte (main) has no SessionInfo, so these take only this.
 export type ClaudeSubject = Pick<SessionInfo, 'tmuxName'> & Partial<Pick<SessionInfo, 'claudeSessionId'>>

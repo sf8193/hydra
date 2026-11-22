@@ -5,12 +5,12 @@ import { connect, type Socket } from 'net'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { socketServer } from '../bridge-server.js'
-import { registry } from '../sessions.js'
-import { transport } from '../bridge-transport.js'
-import { engines } from '../../engines/instances.js'
-import type { SessionInfo } from '../sessions.js'
-import { isToolAllowed } from '../tool-surface.js'
+import { socketServer } from '../../app/bridge-server.js'
+import { registry } from '../../sessions/registry.js'
+import { transport } from '../../sessions/bridge-transport.js'
+import { engines } from '../../sessions/engine-instances.js'
+import type { SessionInfo } from '../../sessions/registry.js'
+import { isToolAllowed } from '../../sessions/tool-surface.js'
 
 let dir: string
 let sock: string

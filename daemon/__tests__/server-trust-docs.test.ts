@@ -2,7 +2,7 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { SERVER_TRUST_SENTENCE } from '../restricted.js'
+import { SERVER_TRUST_SENTENCE } from '../../app/restricted.js'
 
 const root = join(import.meta.dir, '..', '..')
 

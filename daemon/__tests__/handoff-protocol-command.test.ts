@@ -1,13 +1,13 @@
 // The `handoff` command follows the session's specialist's handoff_protocol: kill_and_respawn restarts it fresh now (no letter is asked
 // for), and a session that cannot write a letter (no handoff tool) is told so, instead of being sent an ask it can only ignore.
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { autoHandoffIO } from '../auto-handoff.js'
-import { _setHydraConfigForTesting } from '../hydra-config.js'
+import { autoHandoffIO } from '../../app/auto-handoff.js'
+import { _setHydraConfigForTesting } from '../../infra/hydra-config.js'
 import { withHandoffThread, waitFor } from './handoff-thread.js'
 import { NotReplaced } from '../../specialists/specialist-deliver.js'
 import type { HydraConfig, Specialist } from '../../config/types.js'
-import type { SessionInfo } from '../sessions.js'
-import { transport } from '../bridge-transport.js'
+import type { SessionInfo } from '../../sessions/registry.js'
+import { transport } from '../../sessions/bridge-transport.js'
 import { fakeAdapter } from './test-harness.js'
 
 process.stderr.write = (() => true) as any

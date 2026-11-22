@@ -93,14 +93,14 @@
       "desc": "Env, paths, .env loading, gateway instance"
     },
     {
-      "id": "daemon_sessions",
-      "label": "daemon/sessions.ts",
+      "id": "sessions_registry",
+      "label": "sessions/registry.ts",
       "layer": "core",
       "desc": "SessionRegistry, ThreadRegistry, session catalog"
     },
     {
-      "id": "daemon_bridge-transport",
-      "label": "daemon/bridge-transport.ts",
+      "id": "sessions_bridge-transport",
+      "label": "sessions/bridge-transport.ts",
       "layer": "core",
       "desc": "BridgeConn map, message queuing, flush"
     },
@@ -129,80 +129,80 @@
       "desc": "UNIVERSAL_TOOLS, computeToolsForSession — zero daemon imports (cycle guard)"
     },
     {
-      "id": "daemon_tool-surface",
-      "label": "daemon/tool-surface.ts",
+      "id": "sessions_tool-surface",
+      "label": "sessions/tool-surface.ts",
       "layer": "tools",
       "desc": "getToolsForSession, pushToolSurface — reads SessionInfo, bridges to bridge-tools"
     },
     {
-      "id": "daemon_bridge-dispatch",
-      "label": "daemon/bridge-dispatch.ts",
+      "id": "app_bridge-dispatch",
+      "label": "app/bridge-dispatch.ts",
       "layer": "tools",
       "desc": "executeTool — tool execution dispatch"
     },
     {
-      "id": "daemon_bridge-server",
-      "label": "daemon/bridge-server.ts",
+      "id": "app_bridge-server",
+      "label": "app/bridge-server.ts",
       "layer": "server",
       "desc": "Unix socket server, bridge protocol, death detection, flap guard"
     },
     {
-      "id": "daemon_protocol-registry",
-      "label": "daemon/protocol-registry.ts",
+      "id": "sessions_protocol-registry",
+      "label": "sessions/protocol-registry.ts",
       "layer": "server",
       "desc": "Protocol registration, isThreadOccupied query, dispatch{Reconnect,Reply,Disconnect}"
     },
     {
-      "id": "daemon_main-guard",
-      "label": "daemon/main-guard.ts",
+      "id": "app_main-guard",
+      "label": "app/main-guard.ts",
       "layer": "server",
       "desc": "Duplicate-main detection logic"
     },
     {
-      "id": "daemon_permission",
-      "label": "daemon/permission.ts",
+      "id": "app_permission",
+      "label": "app/permission.ts",
       "layer": "server",
       "desc": "Permission request routing to DM"
     },
     {
-      "id": "daemon_cli-handler",
-      "label": "daemon/cli-handler.ts",
+      "id": "app_cli-handler",
+      "label": "app/cli-handler.ts",
       "layer": "server",
       "desc": "CLI socket request handler"
     },
     {
-      "id": "daemon_session-lifecycle",
-      "label": "daemon/session-lifecycle.ts",
+      "id": "app_session-lifecycle",
+      "label": "app/session-lifecycle.ts",
       "layer": "lifecycle",
       "desc": "doSpawnSession, killSession, tryResume, tryRespawn"
     },
     {
-      "id": "daemon_recovery",
-      "label": "daemon/recovery.ts",
+      "id": "app_recovery",
+      "label": "app/recovery.ts",
       "layer": "lifecycle",
       "desc": "Post-reboot/crash recovery: recoverOne cascade, work-key dedup, autoRecoverAfterBoot"
     },
     {
-      "id": "daemon_anchor-state",
-      "label": "daemon/anchor-state.ts",
+      "id": "sessions_anchor-state",
+      "label": "sessions/anchor-state.ts",
       "layer": "lifecycle",
       "desc": "Thread anchor message visual state machine"
     },
     {
-      "id": "daemon_router",
-      "label": "daemon/router.ts",
+      "id": "app_router",
+      "label": "app/router.ts",
       "layer": "domain",
       "desc": "Inbound routing, command interception, COMMAND_PREFIXES"
     },
     {
-      "id": "daemon_access",
-      "label": "daemon/access.ts",
+      "id": "sessions_access",
+      "label": "sessions/access.ts",
       "layer": "domain",
       "desc": "Access control, allowlists, maxChunkLimit"
     },
     {
-      "id": "daemon_templates",
-      "label": "daemon/templates.ts",
+      "id": "app_templates",
+      "label": "app/templates.ts",
       "layer": "domain",
       "desc": "Spawn templates (review:, fix:, design:)"
     },
@@ -219,8 +219,8 @@
       "desc": "Jobs clock: tick, dispatch detached attempts, apply results"
     },
     {
-      "id": "daemon_dashboard",
-      "label": "daemon/dashboard.ts",
+      "id": "app_dashboard",
+      "label": "app/dashboard.ts",
       "layer": "domain",
       "desc": "Slack Home tab dashboard"
     },
@@ -231,8 +231,8 @@
       "desc": "Message deduplication"
     },
     {
-      "id": "daemon_state-machine",
-      "label": "daemon/state-machine.ts",
+      "id": "shared_state-machine",
+      "label": "shared/state-machine.ts",
       "layer": "domain",
       "desc": "Generic state machine for protocols"
     },
@@ -243,38 +243,38 @@
       "desc": "Preserve-then-strike: raw transcript dump before deletion"
     },
     {
-      "id": "daemon_advance-nudge",
-      "label": "daemon/advance-nudge.ts",
+      "id": "app_advance-nudge",
+      "label": "app/advance-nudge.ts",
       "layer": "domain",
       "desc": "Liveness: nudge protocol participants that post via reply() instead of advance()"
     },
     {
-      "id": "daemon_reply-guard",
-      "label": "daemon/reply-guard.ts",
+      "id": "app_reply-guard",
+      "label": "app/reply-guard.ts",
       "layer": "domain",
       "desc": "Reply guard: nudge sessions that go silent on user-authored messages"
     },
     {
-      "id": "daemon_phase-budget",
-      "label": "daemon/phase-budget.ts",
+      "id": "sessions_phase-budget",
+      "label": "sessions/phase-budget.ts",
       "layer": "domain",
       "desc": "Per-session max lifetime: nudge → grace → reap"
     },
     {
-      "id": "daemon_idle-limit",
-      "label": "daemon/idle-limit.ts",
+      "id": "sessions_idle-limit",
+      "label": "sessions/idle-limit.ts",
       "layer": "domain",
       "desc": "Ephemeral idle limit: persisted deadline, nudge → grace → reap"
     },
     {
-      "id": "daemon_session-health",
-      "label": "daemon/session-health.ts",
+      "id": "app_session-health",
+      "label": "app/session-health.ts",
       "layer": "domain",
       "desc": "Session health poll: crash detection, orphan detection, context alerts"
     },
     {
-      "id": "daemon_auto-handoff",
-      "label": "daemon/auto-handoff.ts",
+      "id": "app_auto-handoff",
+      "label": "app/auto-handoff.ts",
       "layer": "domain",
       "desc": "Automatic handoff of idle high-context sessions (cache and full-context rules)"
     },
@@ -285,62 +285,44 @@
       "desc": "Transcript location + incremental token-counter cursor"
     },
     {
-      "id": "daemon_usage-alerts",
-      "label": "daemon/usage-alerts.ts",
+      "id": "app_usage-alerts",
+      "label": "app/usage-alerts.ts",
       "layer": "domain",
       "desc": "Account rate-limit alerts: report_usage + pane fallback, one dedupe per window"
     },
     {
-      "id": "daemon_build",
-      "label": "daemon/build.ts",
+      "id": "protocols_build",
+      "label": "protocols/build.ts",
       "layer": "protocols",
       "desc": "Build — implement/review iteration"
     },
     {
-      "id": "daemon_design",
-      "label": "daemon/design.ts",
-      "layer": "protocols",
-      "desc": "Design — personas, synthesis, audit"
-    },
-    {
-      "id": "daemon_commands_global",
-      "label": "daemon/commands/global.ts",
+      "id": "app_commands_global",
+      "label": "app/commands/global.ts",
       "layer": "commands",
       "desc": "spawn, kill, restart, recover"
     },
     {
-      "id": "daemon_commands_status",
-      "label": "daemon/commands/status.ts",
+      "id": "app_commands_status",
+      "label": "app/commands/status.ts",
       "layer": "commands",
       "desc": "sessions list, status display"
     },
     {
-      "id": "daemon_commands_thread",
-      "label": "daemon/commands/thread.ts",
+      "id": "app_commands_thread",
+      "label": "app/commands/thread.ts",
       "layer": "commands",
       "desc": "listen, pause, resume, join, handoff"
     },
     {
-      "id": "daemon_commands_review",
-      "label": "daemon/commands/review.ts",
+      "id": "app_commands_review",
+      "label": "app/commands/review.ts",
       "layer": "commands",
       "desc": "review command handler"
     },
     {
-      "id": "daemon_commands_build",
-      "label": "daemon/commands/build.ts",
-      "layer": "commands",
-      "desc": "build command handler"
-    },
-    {
-      "id": "daemon_commands_design",
-      "label": "daemon/commands/design.ts",
-      "layer": "commands",
-      "desc": "design command handler"
-    },
-    {
-      "id": "daemon_commands_watch",
-      "label": "daemon/commands/watch.ts",
+      "id": "app_commands_watch",
+      "label": "app/commands/watch.ts",
       "layer": "commands",
       "desc": "watch/unwatch PR commands"
     }
@@ -352,35 +334,35 @@
     ],
     [
       "daemon",
-      "daemon_sessions"
+      "sessions_registry"
     ],
     [
       "daemon",
-      "daemon_anchor-state"
+      "sessions_anchor-state"
     ],
     [
       "daemon",
-      "daemon_bridge-transport"
+      "sessions_bridge-transport"
     ],
     [
       "daemon",
-      "daemon_access"
+      "sessions_access"
     ],
     [
       "daemon",
-      "daemon_permission"
+      "app_permission"
     ],
     [
       "daemon",
-      "daemon_bridge-server"
+      "app_bridge-server"
     ],
     [
       "daemon",
-      "daemon_commands_global"
+      "app_commands_global"
     ],
     [
       "daemon",
-      "daemon_recovery"
+      "app_recovery"
     ],
     [
       "daemon",
@@ -388,19 +370,19 @@
     ],
     [
       "daemon",
-      "daemon_phase-budget"
+      "sessions_phase-budget"
     ],
     [
       "daemon",
-      "daemon_idle-limit"
+      "sessions_idle-limit"
     ],
     [
       "daemon",
-      "daemon_session-lifecycle"
+      "app_session-lifecycle"
     ],
     [
       "daemon",
-      "daemon_templates"
+      "app_templates"
     ],
     [
       "daemon",
@@ -408,15 +390,15 @@
     ],
     [
       "daemon",
-      "daemon_dashboard"
+      "app_dashboard"
     ],
     [
       "daemon",
-      "daemon_commands_status"
+      "app_commands_status"
     ],
     [
       "daemon",
-      "daemon_router"
+      "app_router"
     ],
     [
       "daemon",
@@ -424,7 +406,7 @@
     ],
     [
       "daemon",
-      "daemon_reply-guard"
+      "app_reply-guard"
     ],
     [
       "daemon",
@@ -436,7 +418,7 @@
     ],
     [
       "daemon",
-      "daemon_session-health"
+      "app_session-health"
     ],
     [
       "bridge",
@@ -455,31 +437,31 @@
       "shared_constants"
     ],
     [
-      "daemon_sessions",
+      "sessions_registry",
       "infra_config"
     ],
     [
-      "daemon_sessions",
+      "sessions_registry",
       "infra_util"
     ],
     [
-      "daemon_sessions",
+      "sessions_registry",
       "infra_tmux"
     ],
     [
-      "daemon_sessions",
+      "sessions_registry",
       "shared_constants"
     ],
     [
-      "daemon_bridge-transport",
+      "sessions_bridge-transport",
       "infra_config"
     ],
     [
-      "daemon_bridge-transport",
-      "daemon_sessions"
+      "sessions_bridge-transport",
+      "sessions_registry"
     ],
     [
-      "daemon_bridge-transport",
+      "sessions_bridge-transport",
       "infra_util"
     ],
     [
@@ -499,415 +481,415 @@
       "shared_tool-definitions"
     ],
     [
-      "daemon_tool-surface",
-      "daemon_sessions"
+      "sessions_tool-surface",
+      "sessions_registry"
     ],
     [
-      "daemon_tool-surface",
-      "daemon_bridge-transport"
+      "sessions_tool-surface",
+      "sessions_bridge-transport"
     ],
     [
-      "daemon_tool-surface",
+      "sessions_tool-surface",
       "engines_bridge-tools"
     ],
     [
-      "daemon_tool-surface",
+      "sessions_tool-surface",
       "shared_constants"
     ],
     [
-      "daemon_bridge-dispatch",
+      "app_bridge-dispatch",
       "infra_config"
     ],
     [
-      "daemon_bridge-dispatch",
-      "daemon_sessions"
+      "app_bridge-dispatch",
+      "sessions_registry"
     ],
     [
-      "daemon_bridge-dispatch",
-      "daemon_bridge-transport"
+      "app_bridge-dispatch",
+      "sessions_bridge-transport"
     ],
     [
-      "daemon_bridge-dispatch",
-      "daemon_access"
+      "app_bridge-dispatch",
+      "sessions_access"
     ],
     [
-      "daemon_bridge-dispatch",
-      "daemon_session-lifecycle"
+      "app_bridge-dispatch",
+      "app_session-lifecycle"
     ],
     [
-      "daemon_bridge-dispatch",
+      "app_bridge-dispatch",
       "infra_util"
     ],
     [
-      "daemon_bridge-dispatch",
+      "app_bridge-dispatch",
       "infra_tmux"
     ],
     [
-      "daemon_bridge-dispatch",
-      "daemon_protocol-registry"
+      "app_bridge-dispatch",
+      "sessions_protocol-registry"
     ],
     [
-      "daemon_bridge-dispatch",
+      "app_bridge-dispatch",
       "connectors_github_pr-watch"
     ],
     [
-      "daemon_bridge-dispatch",
-      "daemon_anchor-state"
+      "app_bridge-dispatch",
+      "sessions_anchor-state"
     ],
     [
-      "daemon_bridge-dispatch",
-      "daemon_dashboard"
+      "app_bridge-dispatch",
+      "app_dashboard"
     ],
     [
-      "daemon_bridge-dispatch",
+      "app_bridge-dispatch",
       "shared_tool-definitions"
     ],
     [
-      "daemon_bridge-dispatch",
+      "app_bridge-dispatch",
       "shared_constants"
     ],
     [
-      "daemon_bridge-dispatch",
-      "daemon_tool-surface"
+      "app_bridge-dispatch",
+      "sessions_tool-surface"
     ],
     [
-      "daemon_bridge-dispatch",
-      "daemon_usage-alerts"
+      "app_bridge-dispatch",
+      "app_usage-alerts"
     ],
     [
-      "daemon_bridge-server",
+      "app_bridge-server",
       "infra_config"
     ],
     [
-      "daemon_bridge-server",
-      "daemon_sessions"
+      "app_bridge-server",
+      "sessions_registry"
     ],
     [
-      "daemon_bridge-server",
-      "daemon_bridge-transport"
+      "app_bridge-server",
+      "sessions_bridge-transport"
     ],
     [
-      "daemon_bridge-server",
-      "daemon_bridge-dispatch"
+      "app_bridge-server",
+      "app_bridge-dispatch"
     ],
     [
-      "daemon_bridge-server",
+      "app_bridge-server",
       "shared_constants"
     ],
     [
-      "daemon_bridge-server",
-      "daemon_permission"
+      "app_bridge-server",
+      "app_permission"
     ],
     [
-      "daemon_bridge-server",
-      "daemon_session-lifecycle"
+      "app_bridge-server",
+      "app_session-lifecycle"
     ],
     [
-      "daemon_bridge-server",
-      "daemon_access"
+      "app_bridge-server",
+      "sessions_access"
     ],
     [
-      "daemon_bridge-server",
-      "daemon_protocol-registry"
+      "app_bridge-server",
+      "sessions_protocol-registry"
     ],
     [
-      "daemon_bridge-server",
-      "daemon_tool-surface"
+      "app_bridge-server",
+      "sessions_tool-surface"
     ],
     [
-      "daemon_bridge-server",
-      "daemon_advance-nudge"
+      "app_bridge-server",
+      "app_advance-nudge"
     ],
     [
-      "daemon_bridge-server",
-      "daemon_reply-guard"
+      "app_bridge-server",
+      "app_reply-guard"
     ],
     [
-      "daemon_bridge-server",
-      "daemon_anchor-state"
+      "app_bridge-server",
+      "sessions_anchor-state"
     ],
     [
-      "daemon_bridge-server",
-      "daemon_cli-handler"
+      "app_bridge-server",
+      "app_cli-handler"
     ],
     [
-      "daemon_bridge-server",
+      "app_bridge-server",
       "connectors_github_pr-watch"
     ],
     [
-      "daemon_bridge-server",
-      "daemon_main-guard"
+      "app_bridge-server",
+      "app_main-guard"
     ],
     [
-      "daemon_bridge-server",
+      "app_bridge-server",
       "infra_util"
     ],
     [
-      "daemon_bridge-server",
+      "app_bridge-server",
       "infra_tmux"
     ],
     [
-      "daemon_bridge-server",
-      "daemon_idle-limit"
+      "app_bridge-server",
+      "sessions_idle-limit"
     ],
     [
-      "daemon_protocol-registry",
-      "daemon_sessions"
+      "sessions_protocol-registry",
+      "sessions_registry"
     ],
     [
-      "daemon_permission",
-      "daemon_bridge-transport"
+      "app_permission",
+      "sessions_bridge-transport"
     ],
     [
-      "daemon_permission",
-      "daemon_access"
+      "app_permission",
+      "sessions_access"
     ],
     [
-      "daemon_cli-handler",
-      "daemon_sessions"
+      "app_cli-handler",
+      "sessions_registry"
     ],
     [
-      "daemon_cli-handler",
-      "daemon_tool-surface"
+      "app_cli-handler",
+      "sessions_tool-surface"
     ],
     [
-      "daemon_cli-handler",
-      "daemon_bridge-transport"
+      "app_cli-handler",
+      "sessions_bridge-transport"
     ],
     [
-      "daemon_cli-handler",
-      "daemon_session-lifecycle"
+      "app_cli-handler",
+      "app_session-lifecycle"
     ],
     [
-      "daemon_cli-handler",
+      "app_cli-handler",
       "infra_util"
     ],
     [
-      "daemon_cli-handler",
+      "app_cli-handler",
       "infra_tmux"
     ],
     [
-      "daemon_cli-handler",
+      "app_cli-handler",
       "shared_constants"
     ],
     [
-      "daemon_cli-handler",
+      "app_cli-handler",
       "infra_idempotency"
     ],
     [
-      "daemon_cli-handler",
+      "app_cli-handler",
       "infra_config"
     ],
     [
-      "daemon_cli-handler",
-      "daemon_access"
+      "app_cli-handler",
+      "sessions_access"
     ],
     [
-      "daemon_cli-handler",
+      "app_cli-handler",
       "connectors_clock_jobs-clock"
     ],
     [
-      "daemon_session-lifecycle",
+      "app_session-lifecycle",
       "infra_config"
     ],
     [
-      "daemon_session-lifecycle",
+      "app_session-lifecycle",
       "infra_util"
     ],
     [
-      "daemon_session-lifecycle",
+      "app_session-lifecycle",
       "infra_tmux"
     ],
     [
-      "daemon_session-lifecycle",
-      "daemon_sessions"
+      "app_session-lifecycle",
+      "sessions_registry"
     ],
     [
-      "daemon_session-lifecycle",
-      "daemon_reply-guard"
+      "app_session-lifecycle",
+      "app_reply-guard"
     ],
     [
-      "daemon_session-lifecycle",
-      "daemon_bridge-transport"
+      "app_session-lifecycle",
+      "sessions_bridge-transport"
     ],
     [
-      "daemon_session-lifecycle",
+      "app_session-lifecycle",
       "engines_bridge-tools"
     ],
     [
-      "daemon_session-lifecycle",
-      "daemon_tool-surface"
+      "app_session-lifecycle",
+      "sessions_tool-surface"
     ],
     [
-      "daemon_session-lifecycle",
-      "daemon_phase-budget"
+      "app_session-lifecycle",
+      "sessions_phase-budget"
     ],
     [
-      "daemon_session-lifecycle",
-      "daemon_idle-limit"
+      "app_session-lifecycle",
+      "sessions_idle-limit"
     ],
     [
-      "daemon_session-lifecycle",
+      "app_session-lifecycle",
       "shared_constants"
     ],
     [
-      "daemon_session-lifecycle",
+      "app_session-lifecycle",
       "infra_usage"
     ],
     [
-      "daemon_session-lifecycle",
-      "daemon_anchor-state"
+      "app_session-lifecycle",
+      "sessions_anchor-state"
     ],
     [
-      "daemon_session-lifecycle",
+      "app_session-lifecycle",
       "connectors_github_pr-watch"
     ],
     [
-      "daemon_session-lifecycle",
-      "daemon_access"
+      "app_session-lifecycle",
+      "sessions_access"
     ],
     [
-      "daemon_session-lifecycle",
+      "app_session-lifecycle",
       "infra_worktree-manager"
     ],
     [
-      "daemon_recovery",
+      "app_recovery",
       "infra_config"
     ],
     [
-      "daemon_recovery",
-      "daemon_sessions"
+      "app_recovery",
+      "sessions_registry"
     ],
     [
-      "daemon_recovery",
-      "daemon_anchor-state"
+      "app_recovery",
+      "sessions_anchor-state"
     ],
     [
-      "daemon_recovery",
-      "daemon_session-lifecycle"
+      "app_recovery",
+      "app_session-lifecycle"
     ],
     [
-      "daemon_recovery",
+      "app_recovery",
       "infra_util"
     ],
     [
-      "daemon_recovery",
+      "app_recovery",
       "infra_tmux"
     ],
     [
-      "daemon_recovery",
+      "app_recovery",
       "connectors_github_pr-watch"
     ],
     [
-      "daemon_recovery",
+      "app_recovery",
       "infra_worktree-manager"
     ],
     [
-      "daemon_recovery",
-      "daemon_access"
+      "app_recovery",
+      "sessions_access"
     ],
     [
-      "daemon_recovery",
+      "app_recovery",
       "shared_constants"
     ],
     [
-      "daemon_anchor-state",
+      "sessions_anchor-state",
       "infra_config"
     ],
     [
-      "daemon_anchor-state",
-      "daemon_sessions"
+      "sessions_anchor-state",
+      "sessions_registry"
     ],
     [
-      "daemon_router",
+      "app_router",
       "infra_config"
     ],
     [
-      "daemon_router",
-      "daemon_dashboard"
+      "app_router",
+      "app_dashboard"
     ],
     [
-      "daemon_router",
-      "daemon_sessions"
+      "app_router",
+      "sessions_registry"
     ],
     [
-      "daemon_router",
-      "daemon_bridge-transport"
+      "app_router",
+      "sessions_bridge-transport"
     ],
     [
-      "daemon_router",
-      "daemon_access"
+      "app_router",
+      "sessions_access"
     ],
     [
-      "daemon_router",
-      "daemon_commands_global"
+      "app_router",
+      "app_commands_global"
     ],
     [
-      "daemon_router",
-      "daemon_recovery"
+      "app_router",
+      "app_recovery"
     ],
     [
-      "daemon_router",
+      "app_router",
       "shared_constants"
     ],
     [
-      "daemon_router",
-      "daemon_commands_thread"
+      "app_router",
+      "app_commands_thread"
     ],
     [
-      "daemon_router",
-      "daemon_commands_review"
+      "app_router",
+      "app_commands_review"
     ],
     [
-      "daemon_router",
-      "daemon_protocol-registry"
+      "app_router",
+      "sessions_protocol-registry"
     ],
     [
-      "daemon_router",
-      "daemon_anchor-state"
+      "app_router",
+      "sessions_anchor-state"
     ],
     [
-      "daemon_router",
-      "daemon_commands_status"
+      "app_router",
+      "app_commands_status"
     ],
     [
-      "daemon_router",
-      "daemon_commands_watch"
+      "app_router",
+      "app_commands_watch"
     ],
     [
-      "daemon_router",
-      "daemon_session-lifecycle"
+      "app_router",
+      "app_session-lifecycle"
     ],
     [
-      "daemon_router",
-      "daemon_idle-limit"
+      "app_router",
+      "sessions_idle-limit"
     ],
     [
-      "daemon_router",
-      "daemon_permission"
+      "app_router",
+      "app_permission"
     ],
     [
-      "daemon_router",
-      "daemon_reply-guard"
+      "app_router",
+      "app_reply-guard"
     ],
     [
-      "daemon_router",
+      "app_router",
       "infra_util"
     ],
     [
-      "daemon_router",
-      "daemon_templates"
+      "app_router",
+      "app_templates"
     ],
     [
-      "daemon_access",
+      "sessions_access",
       "infra_config"
     ],
     [
-      "daemon_access",
+      "sessions_access",
       "infra_util"
     ],
     [
-      "daemon_templates",
+      "app_templates",
       "shared_constants"
     ],
     [
@@ -916,7 +898,7 @@
     ],
     [
       "connectors_github_pr-watch",
-      "daemon_sessions"
+      "sessions_registry"
     ],
     [
       "connectors_github_pr-watch",
@@ -927,31 +909,31 @@
       "shared_constants"
     ],
     [
-      "daemon_dashboard",
+      "app_dashboard",
       "infra_config"
     ],
     [
-      "daemon_dashboard",
-      "daemon_sessions"
+      "app_dashboard",
+      "sessions_registry"
     ],
     [
-      "daemon_dashboard",
-      "daemon_anchor-state"
+      "app_dashboard",
+      "sessions_anchor-state"
     ],
     [
-      "daemon_dashboard",
-      "daemon_bridge-transport"
+      "app_dashboard",
+      "sessions_bridge-transport"
     ],
     [
-      "daemon_dashboard",
+      "app_dashboard",
       "infra_util"
     ],
     [
-      "daemon_dashboard",
-      "daemon_access"
+      "app_dashboard",
+      "sessions_access"
     ],
     [
-      "daemon_dashboard",
+      "app_dashboard",
       "connectors_github_pr-watch"
     ],
     [
@@ -971,123 +953,123 @@
       "infra_util"
     ],
     [
-      "daemon_advance-nudge",
-      "daemon_bridge-transport"
+      "app_advance-nudge",
+      "sessions_bridge-transport"
     ],
     [
-      "daemon_advance-nudge",
-      "daemon_sessions"
+      "app_advance-nudge",
+      "sessions_registry"
     ],
     [
-      "daemon_advance-nudge",
-      "daemon_protocol-registry"
+      "app_advance-nudge",
+      "sessions_protocol-registry"
     ],
     [
-      "daemon_reply-guard",
-      "daemon_bridge-transport"
+      "app_reply-guard",
+      "sessions_bridge-transport"
     ],
     [
-      "daemon_reply-guard",
-      "daemon_sessions"
+      "app_reply-guard",
+      "sessions_registry"
     ],
     [
-      "daemon_reply-guard",
+      "app_reply-guard",
       "infra_config"
     ],
     [
-      "daemon_reply-guard",
+      "app_reply-guard",
       "infra_util"
     ],
     [
-      "daemon_reply-guard",
+      "app_reply-guard",
       "infra_tmux"
     ],
     [
-      "daemon_phase-budget",
-      "daemon_sessions"
+      "sessions_phase-budget",
+      "sessions_registry"
     ],
     [
-      "daemon_phase-budget",
-      "daemon_bridge-transport"
+      "sessions_phase-budget",
+      "sessions_bridge-transport"
     ],
     [
-      "daemon_phase-budget",
+      "sessions_phase-budget",
       "infra_util"
     ],
     [
-      "daemon_idle-limit",
-      "daemon_sessions"
+      "sessions_idle-limit",
+      "sessions_registry"
     ],
     [
-      "daemon_idle-limit",
-      "daemon_bridge-transport"
+      "sessions_idle-limit",
+      "sessions_bridge-transport"
     ],
     [
-      "daemon_idle-limit",
+      "sessions_idle-limit",
       "infra_util"
     ],
     [
-      "daemon_idle-limit",
+      "sessions_idle-limit",
       "infra_config"
     ],
     [
-      "daemon_idle-limit",
-      "daemon_protocol-registry"
+      "sessions_idle-limit",
+      "sessions_protocol-registry"
     ],
     [
-      "daemon_idle-limit",
+      "sessions_idle-limit",
       "shared_constants"
     ],
     [
-      "daemon_session-health",
-      "daemon_sessions"
+      "app_session-health",
+      "sessions_registry"
     ],
     [
-      "daemon_session-health",
+      "app_session-health",
       "infra_config"
     ],
     [
-      "daemon_session-health",
+      "app_session-health",
       "infra_util"
     ],
     [
-      "daemon_session-health",
-      "daemon_anchor-state"
+      "app_session-health",
+      "sessions_anchor-state"
     ],
     [
-      "daemon_session-health",
-      "daemon_access"
+      "app_session-health",
+      "sessions_access"
     ],
     [
-      "daemon_session-health",
-      "daemon_auto-handoff"
+      "app_session-health",
+      "app_auto-handoff"
     ],
     [
-      "daemon_auto-handoff",
-      "daemon_sessions"
+      "app_auto-handoff",
+      "sessions_registry"
     ],
     [
-      "daemon_auto-handoff",
-      "daemon_tool-surface"
+      "app_auto-handoff",
+      "sessions_tool-surface"
     ],
     [
-      "daemon_auto-handoff",
+      "app_auto-handoff",
       "infra_config"
     ],
     [
-      "daemon_auto-handoff",
-      "daemon_bridge-transport"
+      "app_auto-handoff",
+      "sessions_bridge-transport"
     ],
     [
-      "daemon_auto-handoff",
-      "daemon_permission"
+      "app_auto-handoff",
+      "app_permission"
     ],
     [
-      "daemon_auto-handoff",
-      "daemon_session-lifecycle"
+      "app_auto-handoff",
+      "app_session-lifecycle"
     ],
     [
-      "daemon_auto-handoff",
+      "app_auto-handoff",
       "infra_util"
     ],
     [
@@ -1095,143 +1077,143 @@
       "shared_constants"
     ],
     [
-      "daemon_usage-alerts",
+      "app_usage-alerts",
       "infra_config"
     ],
     [
-      "daemon_usage-alerts",
+      "app_usage-alerts",
       "infra_util"
     ],
     [
-      "daemon_commands_global",
+      "app_commands_global",
       "infra_config"
     ],
     [
-      "daemon_commands_global",
-      "daemon_sessions"
+      "app_commands_global",
+      "sessions_registry"
     ],
     [
-      "daemon_commands_global",
-      "daemon_anchor-state"
+      "app_commands_global",
+      "sessions_anchor-state"
     ],
     [
-      "daemon_commands_global",
-      "daemon_bridge-transport"
+      "app_commands_global",
+      "sessions_bridge-transport"
     ],
     [
-      "daemon_commands_global",
-      "daemon_session-lifecycle"
+      "app_commands_global",
+      "app_session-lifecycle"
     ],
     [
-      "daemon_commands_global",
+      "app_commands_global",
       "infra_util"
     ],
     [
-      "daemon_commands_global",
-      "daemon_commands_status"
+      "app_commands_global",
+      "app_commands_status"
     ],
     [
-      "daemon_commands_global",
-      "daemon_templates"
+      "app_commands_global",
+      "app_templates"
     ],
     [
-      "daemon_commands_status",
+      "app_commands_status",
       "infra_config"
     ],
     [
-      "daemon_commands_status",
-      "daemon_sessions"
+      "app_commands_status",
+      "sessions_registry"
     ],
     [
-      "daemon_commands_status",
-      "daemon_anchor-state"
+      "app_commands_status",
+      "sessions_anchor-state"
     ],
     [
-      "daemon_commands_status",
-      "daemon_bridge-transport"
+      "app_commands_status",
+      "sessions_bridge-transport"
     ],
     [
-      "daemon_commands_status",
+      "app_commands_status",
       "infra_util"
     ],
     [
-      "daemon_commands_status",
+      "app_commands_status",
       "connectors_github_pr-watch"
     ],
     [
-      "daemon_commands_thread",
+      "app_commands_thread",
       "infra_config"
     ],
     [
-      "daemon_commands_thread",
-      "daemon_sessions"
+      "app_commands_thread",
+      "sessions_registry"
     ],
     [
-      "daemon_commands_thread",
-      "daemon_bridge-transport"
+      "app_commands_thread",
+      "sessions_bridge-transport"
     ],
     [
-      "daemon_commands_thread",
-      "daemon_session-lifecycle"
+      "app_commands_thread",
+      "app_session-lifecycle"
     ],
     [
-      "daemon_commands_thread",
-      "daemon_anchor-state"
+      "app_commands_thread",
+      "sessions_anchor-state"
     ],
     [
-      "daemon_commands_thread",
-      "daemon_commands_status"
+      "app_commands_thread",
+      "app_commands_status"
     ],
     [
-      "daemon_commands_thread",
+      "app_commands_thread",
       "infra_util"
     ],
     [
-      "daemon_commands_thread",
+      "app_commands_thread",
       "infra_tmux"
     ],
     [
-      "daemon_commands_thread",
-      "daemon_templates"
+      "app_commands_thread",
+      "app_templates"
     ],
     [
-      "daemon_commands_thread",
-      "daemon_auto-handoff"
+      "app_commands_thread",
+      "app_auto-handoff"
     ],
     [
-      "daemon_commands_thread",
-      "daemon_recovery"
+      "app_commands_thread",
+      "app_recovery"
     ],
     [
-      "daemon_commands_review",
+      "app_commands_review",
       "infra_config"
     ],
     [
-      "daemon_commands_review",
-      "daemon_sessions"
+      "app_commands_review",
+      "sessions_registry"
     ],
     [
-      "daemon_commands_review",
-      "daemon_protocol-registry"
+      "app_commands_review",
+      "sessions_protocol-registry"
     ],
     [
-      "daemon_commands_review",
+      "app_commands_review",
       "shared_constants"
     ],
     [
-      "daemon_commands_watch",
+      "app_commands_watch",
       "infra_config"
     ],
     [
-      "daemon_commands_watch",
-      "daemon_sessions"
+      "app_commands_watch",
+      "sessions_registry"
     ],
     [
-      "daemon_commands_watch",
+      "app_commands_watch",
       "connectors_github_pr-watch"
     ],
     [
-      "daemon_commands_watch",
+      "app_commands_watch",
       "infra_util"
     ]
   ]

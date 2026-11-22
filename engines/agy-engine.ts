@@ -7,17 +7,17 @@
 
 import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import type { SessionInfo } from '../daemon/sessions.js'
+import type { SessionInfo } from '../sessions/registry.js'
 import type {
   EngineAdapter, LaunchInput, LaunchResult, DeliveryResult, Notification, StopResult,
   ContextUsage, RecoveryPlan, RecoverySource, Turn,
 } from './engine-adapter.js'
 import { withoutIntents } from './engine-adapter.js'
-import type { BlockingState } from '../daemon/pane-probe.js'
+import type { BlockingState } from '../app/pane-probe.js'
 import { CLAUDE_WORKING_SILENCE_S, type ClaudeEngine } from './claude-engine.js'
 import { FRESH_START_MS, SOCK_PATH, PLATFORM, SPAWN_LOGS_DIR, STATE_DIR } from '../infra/config.js'
 import { removeSessionToken, removeSpawnPrompt, shq, writeSessionToken, writeSpawnPrompt } from '../infra/launch-files.js'
-import { deliveryRefusal } from '../daemon/restricted.js'
+import { deliveryRefusal } from '../app/restricted.js'
 import { tmuxCreateSession, tmuxSync, tmuxWindowActivity } from '../infra/tmux.js'
 import { SESSION_INSTRUCTIONS, contextWindowOf, formatNotification } from '../shared/constants.js'
 import { withRaisedFdLimit } from '../shared/spawn-env.js'

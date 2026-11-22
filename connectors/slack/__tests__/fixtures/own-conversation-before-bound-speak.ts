@@ -2,14 +2,14 @@
 // FROZEN COPY of the ownership rule in connectors/slack/runtime.ts as it was at the parent of the change that lets a plain session speak in a
 // thread bound to its own thread (lines 377 and 460-511 there, verbatim but for `export` and the imports). bound-speak-fuzz.test.ts runs it
 // beside the current rule on generated cases. Do not edit it to follow runtime.ts.
-import { parseConversation } from '../../conversation.js'
+import { parseConversation } from '../../../../shared/slack-conversation.js'
 import { appOfEntry, conversationId, isDm, TOP_LEVEL, type ConversationEntry } from '../../watch.js'
 import { getConversationTable } from '../../runtime.js'
-import { conversationSpecialistOf, boundAs } from '../../../../specialists/specialists.js'
+import { conversationSpecialistOf, boundAs } from '../../../../sessions/specialists.js'
 import { conversationSessionName } from '../../../../specialists/targets.js'
-import { registry, type SessionInfo } from '../../../../daemon/sessions.js'
+import { registry, type SessionInfo } from '../../../../sessions/registry.js'
 import { MAIN, currentId, isSessionThread } from '../../../../routing/route.js'
-import { currentHydraConfig as hydraConfig } from '../../../../daemon/hydra-config.js'
+import { currentHydraConfig as hydraConfig } from '../../../../infra/hydra-config.js'
 import type { HydraConfig } from '../../../../config/types.js'
 
 const isConversationSession = (caller: Partial<Pick<SessionInfo, 'tmuxName'>> | undefined): boolean => !!conversationSpecialistOf(caller?.tmuxName)

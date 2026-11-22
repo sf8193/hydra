@@ -1,8 +1,8 @@
 import { test, expect, afterEach } from 'bun:test'
-import { engines } from '../../engines/instances.js'
-import { executeTool } from '../bridge-dispatch.js'
-import { registry } from '../sessions.js'
-import { _setUsageAlertsIO, _resetUsageAlertsIO } from '../usage-alerts.js'
+import { engines } from '../../sessions/engine-instances.js'
+import { executeTool } from '../../app/bridge-dispatch.js'
+import { registry } from '../../sessions/registry.js'
+import { _setUsageAlertsIO, _resetUsageAlertsIO } from '../../app/usage-alerts.js'
 
 process.stderr.write = (() => true) as any
 
