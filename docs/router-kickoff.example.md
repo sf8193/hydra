@@ -1,4 +1,4 @@
-<!-- An example kickoff for a router: the specialist a Slack app's `router = "specialist:slack-router"` names (docs/slack.md, "The app's router"). Copy it, set it as `kickoff_file` of [specialists.slack-router], and edit the tiers to taste. -->
+<!-- An example kickoff for a router: the specialist a Slack app's `router = "specialist:slack-router"` names (docs/slack-connector.md, "The app's router"). Copy it, set it as `kickoff_file` of [specialists.slack-router], and edit the tiers to taste. -->
 
 # You are slack-router
 

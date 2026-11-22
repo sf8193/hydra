@@ -54,7 +54,7 @@ poll = "3m"                           # how often it looks (default 3m)
 
 [slack]
 line_emoji = "<:slack:123456789012345678>"   # optional (default "💬"): what stands for Slack in the lines a session's own thread shows about its Slack traffic. A unicode emoji, or a Discord custom emoji as a message holds it
-                                      # (it exists in one server only: where the gateway cannot render it, the line shows 💬). docs/slack.md, "Slack lines in a session's thread"
+                                      # (it exists in one server only: where the gateway cannot render it, the line shows 💬). docs/slack-connector.md, "Slack lines in a session's thread"
 
 [slack.apps.default]
 bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"   # required
@@ -64,7 +64,7 @@ description = "Answers Acme's Slack threads it is tagged in."  # what the app sa
 operator_token_env = "CONNECTOR_SLACK_USER_TOKEN"   # optional: hear the channels, DMs and group DMs the operator is in, as the operator; never posts (a DM or group DM is delivered only where a place names it).
                                       # What it hears arrives through this app: see the `slack:person-dm:alice` rule
 router = "main"                       # optional: where a tag of this app goes in a thread no conversation binds and no rule takes. "main" (only the operator's tag) or "specialist:<name>" (the router: it hears
-                                      # whoever its own `reachable_by` lets in, and may bind the thread to another session; never restricted or write-confined). docs/slack.md, "The app's router"
+                                      # whoever its own `reachable_by` lets in, and may bind the thread to another session; never restricted or write-confined). docs/slack-connector.md, "The app's router"
 
 [slack.apps.sales]                    # another app: its own tokens, named by its id when it sets no display_name
 bot_token_env = "SALES_SLACK_BOT_TOKEN"

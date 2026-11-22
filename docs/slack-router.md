@@ -10,7 +10,7 @@ Tag your own Slack app in a thread, and hydra finds the session that should hand
 
 The router then binds the Slack thread to the session it picked. From then on, every message in that thread goes to that session, and the session answers in Slack itself.
 
-This page is the short path. The full reference is [Slack setup](slack.md), especially [Which app listens](slack.md#which-app-listens) and [The app's router](slack.md#the-apps-router).
+This page is the short path. The full reference is [the Slack connector page](slack-connector.md), especially [Which app listens](slack-connector.md#which-app-listens) and [The app's router](slack-connector.md#the-apps-router).
 
 ## 1. Your own Slack app
 

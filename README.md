@@ -322,7 +322,7 @@ live-but-slow one delays only the voice message itself, up to
 |------|-------------|
 | `reply` | Send a message. Takes `chat_id` + `text`, optionally `reply_to` for threading and `files` for attachments (max 10, 25MB each). Auto-chunks long messages. |
 | `react` | Add emoji reaction to a message. |
-| `edit_message` | Edit a previously sent message. With a Slack conversation as `chat_id`, `message_id` is the message's ts: the operator's own and any app's bot's, in any conversation; a restricted specialist only its own app's, in one bound to it (see [Slack setup](docs/slack.md#editing-and-deleting-slack-messages)). |
+| `edit_message` | Edit a previously sent message. With a Slack conversation as `chat_id`, `message_id` is the message's ts: the operator's own and any app's bot's, in any conversation; a restricted specialist only its own app's, in one bound to it (see [Slack setup](docs/slack-connector.md#editing-and-deleting-slack-messages)). |
 | `fetch_messages` | Pull recent history (up to 100). |
 | `download_attachment` | Download attachments from a message to local inbox. |
 | `create_thread` | Create a thread on a message or standalone. |

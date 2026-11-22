@@ -1,5 +1,5 @@
 // The example router kickoff (docs/router-kickoff.example.md) is a prompt a model follows to the letter: every tool, argument and command it
-// names must exist, and the tiers it names must be the ones docs/slack.md explains. A rename of any of them fails here, not in a live thread.
+// names must exist, and the tiers it names must be the ones docs/slack-connector.md explains. A rename of any of them fails here, not in a live thread.
 import { describe, test, expect } from 'bun:test'
 import { readFileSync } from 'fs'
 import { join } from 'path'
@@ -10,7 +10,7 @@ import { testLoadEnv } from '../../../config/__tests__/load-env.js'
 
 const ROOT = join(import.meta.dir, '../../..')
 const kickoff = readFileSync(join(ROOT, 'docs/router-kickoff.example.md'), 'utf8')
-const slackDoc = readFileSync(join(ROOT, 'docs/slack.md'), 'utf8')
+const slackDoc = readFileSync(join(ROOT, 'docs/slack-connector.md'), 'utf8')
 const cli = readFileSync(join(ROOT, 'cli/hydra.ts'), 'utf8')
 const tool = (name: string) => TOOL_DEFINITIONS.find(t => t.name === name) as unknown as { inputSchema: { properties: Record<string, unknown> } } | undefined
 
@@ -36,7 +36,7 @@ describe('the example router kickoff', () => {
     expect(kickoff).toContain('hydra deliver --to specialist:<name>')
   })
 
-  test('its five tiers are the five docs/slack.md explains, in the same order', () => {
+  test('its five tiers are the five docs/slack-connector.md explains, in the same order', () => {
     const order = (text: string) => [/live session/, /ended session/, /declared specialist/, /new session|nothing fits/, /operator, last|last resort/].map(re => text.replace(/\*/g, '').toLowerCase().search(re))
     for (const text of [kickoff, slackDoc.slice(slackDoc.indexOf('### The app\'s router'))]) {
       const at = order(text)
