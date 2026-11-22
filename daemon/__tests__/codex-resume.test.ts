@@ -338,11 +338,11 @@ describe('handleResumeIntercept — omp', () => {
   })
 
   test('a worktree session resumes in its own worktree, which the resume does not destroy', async () => {
-    const dead = seedDead('omp', { worktreeRepo: 'some-repo', worktreePath: tmpdir(), worktreeBranch: 'wt/b' })
+    const dead = seedDead('omp', { worktree: { repo: 'some-repo', path: tmpdir(), branch: 'wt/b' } })
     await handleResumeIntercept(msg())
     expect(launches[0].input.cwd).toBe(tmpdir())
     const live = registry.get(registry.getByThread(THREAD)!)!
-    expect([live.worktreeRepo, live.worktreePath, live.worktreeBranch]).toEqual(['some-repo', tmpdir(), 'wt/b'])
+    expect(live.worktree).toEqual({ repo: 'some-repo', path: tmpdir(), branch: 'wt/b' })
     expect(registry.reservedNames.has(dead.sessionId)).toBe(false)
   })
 

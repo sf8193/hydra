@@ -20,7 +20,7 @@ import { capturedSpawnVars } from '../shared/spawn-env.js'
 import { authorityId, markDead, parentSessionOf, registry, repointChildren, threadRegistry } from '../sessions/registry.js'
 import { ownsLineage, spawnIntoRefusal } from '../sessions/lineage.js'
 import { issueSessionToken } from '../sessions/cli-caller.js'
-import type { Predecessor, SessionInfo, SessionMetadata, SpawnOpts, SpawnResult } from '../sessions/registry.js'
+import type { Predecessor, SessionInfo, SessionMetadata, SessionWorktree, SpawnOpts, SpawnResult } from '../sessions/registry.js'
 import { notePendingReply } from './reply-guard.js'
 import { transport } from '../sessions/bridge-transport.js'
 import { computeToolsForSession } from '../engines/bridge-tools.js'
@@ -259,7 +259,7 @@ export function predecessorOf(info: SessionInfo): Predecessor | undefined {
   const fork = resolveEngine(info.engine).recoveryPlan(info, { discover: true }).fork
   if (!fork) return undefined
   const cwd = (fork.claudeSessionId ? claudeLaunchCwd(fork.claudeSessionId) : undefined)
-    ?? info.worktreePath ?? info.sessionMetadata?.cwd ?? process.env.SPAWN_CWD
+    ?? info.worktree?.path ?? info.sessionMetadata?.cwd ?? process.env.SPAWN_CWD
   if (!cwd) return undefined
   const model = info.sessionMetadata?.model
   return { engine: info.engine ?? 'claude', fork, cwd, ...(model ? { model } : {}) }
@@ -308,9 +308,7 @@ export function handoffSpawnOpts(info: SessionInfo, artifact: string): SpawnOpts
   const sel = info.handoffSelection
   const predecessor = predecessorOf(info)
   const fate = handoffNoteFate(info, artifact)
-  const reuseWorktree = info.worktreePath && info.worktreeRepo
-    ? { repo: info.worktreeRepo, path: info.worktreePath, branch: info.worktreeBranch ?? `wt/${info.tmuxName}` }
-    : undefined
+  const reuseWorktree = info.worktree
   return {
     existingThreadId: info.threadId,
     handedOffFrom: info.tmuxName,
@@ -360,10 +358,35 @@ export async function handOff(info: SessionInfo, artifact: string): Promise<Spaw
     if (registry.get(info.sessionId) !== info) throw new Error(`${info.tmuxName} is already handing off (or gone)`)
     const opts = handoffSpawnOpts(info, artifact)
     await handoffIO.killSession(info, 'handed off', { skipWorktreeDestroy: true, keepWatches: true, ended: 'handed off' })
-    const r = await handoffIO.doSpawnSession(info.topic, undefined, undefined, opts)
+    const r = await restoreIfNotStarted(info, () => handoffIO.doSpawnSession(info.topic, undefined, undefined, opts), 'handoff')
     repointChildren(info, r.sessionId)  // its children now answer to the successor
     return r
   })
+}
+
+/**
+ * The one step that replaces a session whose kill deleted its record (a handoff, a revive): run the start, and if it fails
+ * (throws, or returns nothing) put the old record back as dead, so `respawn`, `resume` and boot recovery still find its worktree,
+ * launch dir, parent and predecessor. Not when another session has claimed the thread meanwhile. The caller holds the thread's lock.
+ */
+export async function restoreIfNotStarted<T>(old: SessionInfo | undefined, start: () => Promise<T>, what: string): Promise<T> {
+  let started: T | undefined
+  try {
+    started = await start()
+    return started
+  } finally {
+    const holder = old && registry.getByThread(old.threadId)
+    const claimed = holder !== undefined && holder !== old?.sessionId && registry.get(holder ?? '') !== undefined
+    if (old && (started === undefined || started === null) && registry.get(old.sessionId) === undefined && !claimed) {
+      old.deadAt ??= Date.now()
+      registry.set(old.sessionId, old)
+      registry.setThread(old.threadId, old.sessionId)
+      // Its kill is over: a later kill of the restored record (a `respawn` replacing it) must run, not wait out the deferred kill's guard.
+      killsInProgress.delete(old.sessionId)
+      registry.persist()
+      process.stderr.write(`daemon: ${what} ${old.tmuxName}: the new session did not start — restored the old record\n`)
+    }
+  }
 }
 
 /**
@@ -415,7 +438,7 @@ export function requestHandoff(info: SessionInfo, { channelId, msgId, threadId, 
   }
   const vars = {
     artifact, session: info.tmuxName, requester: requester ?? 'hydra', model: selection?.model ?? '', note: note ?? '',
-    cwd: sessionDir(info) ?? '', worktree: info.worktreePath ?? '', branch: info.worktreeBranch ?? '', label: info.label ?? '',
+    cwd: sessionDir(info) ?? '', worktree: info.worktree?.path ?? '', branch: info.worktree?.branch ?? '', label: info.label ?? '',
   }
   transport.sendOrQueue(info.sessionId, {
     type: 'notification',
@@ -478,12 +501,12 @@ export type PreHandoffVerdict = { ok: true } | { ok: false; output: string }
 
 /** What the hooks read about a session. Main has no SessionInfo, so hooks take only this (it has no thread and no worktree). */
 export type HookSubject = Pick<SessionInfo, 'tmuxName' | 'sessionId'>
-  & Partial<Pick<SessionInfo, 'threadId' | 'engine' | 'claudeSessionId' | 'codexHomeName' | 'sessionType' | 'policy' | 'worktreePath'>>
+  & Partial<Pick<SessionInfo, 'threadId' | 'engine' | 'claudeSessionId' | 'codexHomeName' | 'sessionType' | 'policy' | 'worktree'>>
   & { sessionMetadata?: Pick<SessionMetadata, 'cwd'> }
 
 /** Where the session works: its Hydra worktree, else the cwd it was launched in. */
-export function sessionDir(info: Pick<HookSubject, 'worktreePath' | 'sessionMetadata'>): string | undefined {
-  return info.worktreePath ?? info.sessionMetadata?.cwd
+export function sessionDir(info: Pick<HookSubject, 'worktree' | 'sessionMetadata'>): string | undefined {
+  return info.worktree?.path ?? info.sessionMetadata?.cwd
 }
 
 /**
@@ -655,15 +678,14 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
     if (!replaced) clearInterceptsForSession(info.tmuxName)
 
     const keepWorktree = replaced || opts?.skipWorktreeDestroy || opts?.keepRecord
-    if (info.worktreePath && info.worktreeRepo && !keepWorktree) {
-      const branch = info.worktreeBranch ?? `wt/${info.tmuxName}`
-
+    const wt = info.worktree
+    if (wt && !keepWorktree) {
       // Async worktree cleanup — fire-and-forget (killSession is sync, cleanup is best-effort).
       // Work at risk (uncommitted, mid-operation, not on a remote) is kept, never destroyed —
       // unless info.forceWorktreeCleanup (see SpawnOpts).
       void (async () => {
-        const kept = await destroyWorktree(info.worktreeRepo!, info.worktreePath!, branch, info.forceWorktreeCleanup)
-        if (kept) void safeSend(info.threadId, `⚠️ Worktree \`${info.worktreePath}\` (branch \`${branch}\`) kept: ${kept}. Remove it once the work is safe.`).catch(() => {})
+        const kept = await destroyWorktree(wt.repo, wt.path, wt.branch, info.forceWorktreeCleanup)
+        if (kept) void safeSend(info.threadId, `⚠️ Worktree \`${wt.path}\` (branch \`${wt.branch}\`) kept: ${kept}. Remove it once the work is safe.`).catch(() => {})
       })().catch(err => {
         process.stderr.write(`daemon: worktree cleanup failed for ${info.tmuxName}: ${err}\n`)
       })
@@ -848,7 +870,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   // Recovery: reuse the dead session's on-disk worktree rather than recreate one.
   // An explicit descriptor (opts.reuseWorktree) wins so fallback tiers can adopt it
   // even after the record it came from was deleted.
-  let reuseWorktree: { repo: string; path: string; branch: string } | undefined = opts?.reuseWorktree
+  let reuseWorktree: SessionWorktree | undefined = opts?.reuseWorktree
   // The recovery orchestrator (recoverOne) reserves the predecessor's name in
   // registry.reservedNames across the whole cascade — protecting the preserved worktree
   // branch from a concurrent spawn's `branch -D` during the kill→persist window — so
@@ -1043,13 +1065,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
         // work survives and --resume can find the transcript under the same CWD.
         // An explicit opts.reuseWorktree (fallback tiers) already covers this — only
         // derive from the record when one wasn't passed.
-        if (!reuseWorktree && opts?.preserveWorktree && existing.worktreeRepo && existing.worktreePath && !worktreeTarget) {
-          reuseWorktree = {
-            repo: existing.worktreeRepo,
-            path: existing.worktreePath,
-            branch: existing.worktreeBranch ?? `wt/${existing.tmuxName}`,
-          }
-        }
+        if (!reuseWorktree && opts?.preserveWorktree && existing.worktree && !worktreeTarget) reuseWorktree = existing.worktree
         await killSession(existing, 'replaced by new spawn', { skipWorktreeDestroy: !!opts?.preserveWorktree, keepScratch: isResume || !!opts?.forkFrom, keepWatches: true })
       }
     }
@@ -1111,9 +1127,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   const spawnCwd = process.env.SPAWN_CWD
   if (!spawnCwd) throw new Error('SPAWN_CWD env var is required -- set it to the working directory for spawned sessions')
 
-  let worktreeRepo: string | undefined
-  let worktreePath: string | undefined
-  let worktreeBranch: string | undefined
+  let worktree: SessionWorktree | undefined
   let effectiveCwd = spawnCwd
   // Only a fork or a resume continues a transcript filed under launchCwd. A fresh launch
   // (respawn) starts as usual — the dir may be a worktree that died with its session.
@@ -1168,21 +1182,19 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     if (!existsSync(launchCwd)) throw new Error(`cannot fork: the source's launch directory ${launchCwd} no longer exists`)
     effectiveCwd = launchCwd
   } else if (reuseWorktree) {
-    // Recovery adopts the dead session's worktree in place. recoverOne has already resolved
-    // availability (reattached the dir, or deferred/skipped) BEFORE this cascade — so the
+    // Recovery adopts the dead session's worktree in place. reviveThread (resolveWorktree) has
+    // already resolved availability (reattached the dir, or refused) BEFORE this cascade — so the
     // dir is expected to exist here. If it doesn't (sub-second race: removed between that
     // check and now), throw rather than fall back to spawnCwd: a recovered autonomous agent
     // must never run in the shared main checkout, and a live record whose worktree isn't
     // there would let a later non-recovery kill `branch -D` the branch. The throw fails this
-    // tier; the cascade's total-failure path re-persists the dead record to retry next boot.
+    // tier; restoreIfNotStarted puts the dead record back, for a later revive to retry.
     if (!existsSync(reuseWorktree.path)) {
       throw new Error(`worktree ${reuseWorktree.path} unavailable at spawn (branch ${reuseWorktree.branch} preserved) — deferring recovery`)
     }
-    worktreeRepo = reuseWorktree.repo
-    worktreePath = reuseWorktree.path
-    worktreeBranch = reuseWorktree.branch
+    worktree = reuseWorktree
     effectiveCwd = reuseWorktree.path
-    process.stderr.write(`daemon: spawn ${tmuxName}: reusing worktree ${worktreePath} (branch ${worktreeBranch})\n`)
+    process.stderr.write(`daemon: spawn ${tmuxName}: reusing worktree ${worktree.path} (branch ${worktree.branch})\n`)
   } else if (worktreeTarget) {
     const wt = await createWorktree({
       repoName: worktreeTarget,
@@ -1191,9 +1203,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       dirSuffix: `${worktreeTarget}-${tmuxName}`,
     })
 
-    worktreeRepo = wt.repoDir
-    worktreePath = wt.worktreePath
-    worktreeBranch = wt.branch
+    worktree = { repo: wt.repoDir, path: wt.worktreePath, branch: wt.branch }
     effectiveCwd = wt.worktreePath
 
     // Pre-approve Claude trust for the worktree paths (Claude-specific, not git)
@@ -1217,7 +1227,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   } else if (isHandoff) {
     // Only Claude predecessors can be forked today.
     const hasPredecessor = carriedPredecessor?.engine === 'claude'
-    const arrival = handoffArrival(opts ?? {}, { from: originFrom!, session: tmuxName, cwd: effectiveCwd, worktree: worktreePath ?? '', branch: worktreeBranch ?? '' })
+    const arrival = handoffArrival(opts ?? {}, { from: originFrom!, session: tmuxName, cwd: effectiveCwd, worktree: worktree?.path ?? '', branch: worktree?.branch ?? '' })
     prompt = buildHandoffPrompt({ ...promptParams, originFrom: originFrom!, artifact: opts?.artifact, note: opts?.handoffNote, arrival, hasPredecessor, canAsk: canAskPredecessor({ engine, predecessor: carriedPredecessor }) })
   } else if (isFork) {
     prompt = buildForkPrompt({ ...promptParams, originFrom: originFrom! })
@@ -1260,7 +1270,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   const issued = issueSessionToken()
   const launched = await adapter.launch({
     sessionId, tmuxName, cwd: effectiveCwd, originalCwd: spawnCwd, model, prompt, sessionToken: issued.token,
-    worktreePath, forkFromOriginalCwd: !!worktreeTarget,
+    worktreePath: worktree?.path, forkFromOriginalCwd: !!worktreeTarget,
     tools: opts?.tools, disallowedTools,
     forkFrom: opts?.forkFrom, resumeFrom: opts?.resumeFrom, resumeCodex: opts?.resumeCodex, resumeSession: opts?.resumeSession,
     threadId, sessionType: spawnType, ...(policy && { policy }),
@@ -1293,7 +1303,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     ...launched.identity,
     ...(respawnCount > 0 ? { respawnCount } : {}),
     ...(resumeCount > 0 ? { resumeCount } : {}),
-    ...(worktreeRepo ? { worktreeRepo, worktreePath, worktreeBranch } : {}),
+    ...(worktree && { worktree }),
     ...(launched.spawnLogPath ? { spawnLogPath: launched.spawnLogPath } : {}),
     ...(launched.exitFilePath ? { exitFilePath: launched.exitFilePath } : {}),
     ...(launched.stderrLogPath ? { stderrLogPath: launched.stderrLogPath } : {}),
@@ -1490,8 +1500,8 @@ export async function tryResume(dead: {
   threadUrl?: string
   model?: string
   label?: SessionLabel
-  worktree?: { repo: string; path: string; branch: string }
-  // Set only when the worktree is still on disk (reviveThread checks; boot recovery reattaches it first), so
+  worktree?: SessionWorktree
+  // Set only when the worktree is on disk (reviveThread's resolveWorktree checks, and reattaches a missing one), so
   // adopting the branch is safe.
   preserveWorktree?: boolean
   /** What the resumed session keeps off the one it continues, whose record may already be gone (an orphan torn down). */

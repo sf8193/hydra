@@ -330,7 +330,7 @@ async function resumeThread(msg: RecoveryAnchor, claudeSessionIdArg?: string): P
   } else if (outcome.busy) {
     await gateway.send(msg.channelId, `⏳ A resume of this session is already in progress.`, { replyTo: msg.id }).catch(() => {})
   } else {
-    await reportError(msg.channelId, msg.id, 'resume', 'all recovery methods failed')
+    await reportError(msg.channelId, msg.id, 'resume', outcome.worktree ? outcome.reason : 'all recovery methods failed')
   }
 }
 
@@ -412,7 +412,7 @@ async function respawnThread(msg: InboundMessage, topic?: string, templateName?:
     }
     debouncedRefreshListDisplay()
   } else {
-    await reportError(msg.channelId, msg.id, 'respawn', 'failed to spawn session')
+    await reportError(msg.channelId, msg.id, 'respawn', !outcome.ok && outcome.worktree ? outcome.reason : 'failed to spawn session')
   }
 }
 

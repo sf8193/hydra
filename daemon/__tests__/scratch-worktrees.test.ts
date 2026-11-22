@@ -217,7 +217,7 @@ describe('killSession: forceWorktreeCleanup wiring', () => {
       sessionId: 'kfc-me', tmuxName: 'kfc', threadId, createdAt: Date.now(), lastActive: Date.now(),
       listening: false, engine: 'claude', sessionType: 'thread_owner', ephemeral: true,
       adapter: { stop: async () => {}, isAlive: (i: any) => !i.deadAt, isConnected: () => false }, claudeSessionId: 'me-2',
-      worktreeRepo: '/fake/repo', worktreePath: '/fake/repo/../.worktrees/kfc', worktreeBranch: 'wt/kfc',
+      worktree: { repo: '/fake/repo', path: '/fake/repo/../.worktrees/kfc', branch: 'wt/kfc' },
       forceWorktreeCleanup: true,
     } as unknown as SessionInfo
 

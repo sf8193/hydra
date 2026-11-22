@@ -36,7 +36,7 @@ test('handOff: the successor gets the predecessor (engine, fork ids, cwd, model)
   const fake = withFakeTmux()  // transcript lookups read its temp CLAUDE_CONFIG_DIR, not ~/.claude
   const orig = { ...handoffIO }
   const info = mk('fp-1', 'flint', {
-    claudeSessionId: 'cl-abc', worktreePath: '/wt/flint',
+    claudeSessionId: 'cl-abc', worktree: { repo: '/repo', path: '/wt/flint', branch: 'wt/x' },
     sessionMetadata: { model: 'claude-opus-5-5', cwd: '/elsewhere' } as any,
   })
   const order: string[] = []
@@ -44,7 +44,7 @@ test('handOff: the successor gets the predecessor (engine, fork ids, cwd, model)
   handoffIO.killSession = (async (i: SessionInfo) => {
     order.push('kill')
     // A kill forgets everything a later snapshot could have read.
-    delete i.claudeSessionId; delete i.worktreePath; delete i.sessionMetadata
+    delete i.claudeSessionId; delete i.worktree; delete i.sessionMetadata
     registry.delete(i.sessionId)
   }) as any
   handoffIO.doSpawnSession = (async (_t: string, _c?: string, _m?: string, o?: any) => {
@@ -82,8 +82,8 @@ test('predecessor survives persist and a reload', () => {
 })
 
 test('predecessorOf: a Codex thread gives its thread id and home; no native id gives undefined', () => {
-  const codex = mk('fp-3', 'reed', { engine: 'codex', codexThreadId: 'th-9', codexHomeName: 'reed-home', worktreePath: '/wt/reed' })
-  const bare = mk('fp-4', 'moss', { engine: 'codex', worktreePath: '/wt/moss' })
+  const codex = mk('fp-3', 'reed', { engine: 'codex', codexThreadId: 'th-9', codexHomeName: 'reed-home', worktree: { repo: '/repo', path: '/wt/reed', branch: 'wt/x' } })
+  const bare = mk('fp-4', 'moss', { engine: 'codex', worktree: { repo: '/repo', path: '/wt/moss', branch: 'wt/x' } })
   try {
     expect(predecessorOf(codex)).toEqual({
       engine: 'codex',
@@ -620,7 +620,7 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
   })
 
   test('predecessorOf: a Claude session with no stored id is discovered from its pane', () => {
-    const info = mk('fp-6', 'fpdisc', { worktreePath: '/wt/disc' })
+    const info = mk('fp-6', 'fpdisc', { worktree: { repo: '/repo', path: '/wt/disc', branch: 'wt/x' } })
     fake.pid('fpdisc', '4242')
     fake.seedClaudeSession('4242', 'cl-discovered', '/launch/dir')
     try {
@@ -636,8 +636,8 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
       JSON.stringify({ type: 'user', cwd: '/spawn/root' }),
       JSON.stringify({ type: 'user', cwd: '/wt/forked' }),  // a later `cd` into the worktree
     ].join('\n') + '\n')
-    const info = mk('fp-7', 'fpfork', { claudeSessionId: 'cl-forked', worktreePath: '/wt/forked', sessionMetadata: { model: 'm', cwd: '/wt/forked' } as any })
-    const noTranscript = mk('fp-8', 'fpnone', { claudeSessionId: 'cl-missing', worktreePath: '/wt/none' })
+    const info = mk('fp-7', 'fpfork', { claudeSessionId: 'cl-forked', worktree: { repo: '/repo', path: '/wt/forked', branch: 'wt/x' }, sessionMetadata: { model: 'm', cwd: '/wt/forked' } as any })
+    const noTranscript = mk('fp-8', 'fpnone', { claudeSessionId: 'cl-missing', worktree: { repo: '/repo', path: '/wt/none', branch: 'wt/x' } })
     try {
       expect(predecessorOf(info)?.cwd).toBe('/spawn/root')
       expect(predecessorOf(noTranscript)?.cwd).toBe('/wt/none')
@@ -651,7 +651,7 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
       JSON.stringify({ type: 'user', cwd: '/other/project' }),
       JSON.stringify({ type: 'user', cwd: '/spawn/root' }),
     ].join('\n') + '\n')
-    const info = mk('fp-9', 'fpmoved', { claudeSessionId: 'cl-moved', worktreePath: '/wt/moved' })
+    const info = mk('fp-9', 'fpmoved', { claudeSessionId: 'cl-moved', worktree: { repo: '/repo', path: '/wt/moved', branch: 'wt/x' } })
     try {
       expect(predecessorOf(info)?.cwd).toBe('/spawn/root')
     } finally { registry.delete('fp-9') }
@@ -733,7 +733,7 @@ describe('spawn_session fork_from and read_only', () => {
 
   test('an omp model alias launches the omp engine on that model; fork_from and read_only are refused with it', async () => {
     mk('fs-caller', 'fscaller')
-    mk('fs-src', 'fssrc', { claudeSessionId: 'cl-src', worktreePath: dir, sessionMetadata: { model: 'claude-src-model', cwd: dir } as any })
+    mk('fs-src', 'fssrc', { claudeSessionId: 'cl-src', worktree: { repo: '/repo', path: dir, branch: 'wt/x' }, sessionMetadata: { model: 'claude-src-model', cwd: dir } as any })
     expect((await spawn({ model: 'omp-sonnet' })).isError).toBeFalsy()
     expect(launches).toHaveLength(0)
     expect(ompLaunches).toHaveLength(1)
@@ -746,21 +746,21 @@ describe('spawn_session fork_from and read_only', () => {
 
   test('fork_from and read_only are refused with an agy model alias', async () => {
     mk('fa-caller', 'facaller')
-    mk('fa-src', 'fasrc', { claudeSessionId: 'cl-src', worktreePath: dir, sessionMetadata: { model: 'claude-src-model', cwd: dir } as any })
+    mk('fa-src', 'fasrc', { claudeSessionId: 'cl-src', worktree: { repo: '/repo', path: dir, branch: 'wt/x' }, sessionMetadata: { model: 'claude-src-model', cwd: dir } as any })
     expect(await errorOf({ model: 'neon', fork_from: 'fasrc' })).toContain('agy sessions cannot be forked')
     expect(await errorOf({ model: 'neon', read_only: true })).toContain('read_only is not enforced on agy sessions')
   })
 
   test('fork_from and read_only are refused with a Codex model', async () => {
     mk('fc-caller', 'fccaller')
-    mk('fc-src', 'fcsrc', { claudeSessionId: 'cl-src', worktreePath: dir, sessionMetadata: { model: 'claude-src-model', cwd: dir } as any })
+    mk('fc-src', 'fcsrc', { claudeSessionId: 'cl-src', worktree: { repo: '/repo', path: dir, branch: 'wt/x' }, sessionMetadata: { model: 'claude-src-model', cwd: dir } as any })
     expect(await errorOf({ model: 'gpt-5.1', fork_from: 'fcsrc' })).toContain('Codex sessions cannot be forked')
     expect(await errorOf({ model: 'gpt-5.1', read_only: true })).toContain('read_only is not enforced on Codex sessions')
   })
 
   test('a session name resolves to its fork plan, launched in its cwd on its model', async () => {
     mk('fs-caller', 'fscaller')
-    mk('fs-src', 'fssrc', { claudeSessionId: 'cl-src', worktreePath: dir, sessionMetadata: { model: 'claude-src-model', cwd: dir } as any })
+    mk('fs-src', 'fssrc', { claudeSessionId: 'cl-src', worktree: { repo: '/repo', path: dir, branch: 'wt/x' }, sessionMetadata: { model: 'claude-src-model', cwd: dir } as any })
     expect((await spawn({ fork_from: 'fssrc' })).isError).toBeFalsy()
     expect(launches).toHaveLength(1)
     expect(launches[0].forkFrom as object).toEqual({ claudeSessionId: 'cl-src', parentName: 'fssrc' })
@@ -795,7 +795,7 @@ describe('spawn_session fork_from and read_only', () => {
 
   test('a dead record still in the registry is forked by its name', async () => {
     mk('fs-caller', 'fscaller')
-    mk('fs-dead', 'fsdead', { claudeSessionId: 'cl-dead', worktreePath: dir, deadAt: Date.now() })
+    mk('fs-dead', 'fsdead', { claudeSessionId: 'cl-dead', worktree: { repo: '/repo', path: dir, branch: 'wt/x' }, deadAt: Date.now() })
     expect((await spawn({ fork_from: 'fsdead' })).isError).toBeFalsy()
     expect(launches[0].forkFrom as object).toEqual({ claudeSessionId: 'cl-dead', parentName: 'fsdead' })
   })
@@ -814,7 +814,7 @@ describe('spawn_session fork_from and read_only', () => {
   test('a handed-off name forks the session that ran under it, not its live successor', async () => {
     mk('fs-caller', 'fscaller')
     historyOnly('fsold', 'cl-old', 'fs-ho-thread', [{ sessionId: 'fs-new', tmuxName: 'fsnew', originType: 'handoff', originFrom: 'fsold', startedAt: 3, messageCount: 0 }])
-    mk('fs-new', 'fsnew', { threadId: 'fs-ho-thread', claudeSessionId: 'cl-new', worktreePath: dir })
+    mk('fs-new', 'fsnew', { threadId: 'fs-ho-thread', claudeSessionId: 'cl-new', worktree: { repo: '/repo', path: dir, branch: 'wt/x' } })
     registry.setThread('fs-ho-thread', 'fs-new')
     try {
       expect((await spawn({ fork_from: 'fsold' })).isError).toBeFalsy()
@@ -825,8 +825,8 @@ describe('spawn_session fork_from and read_only', () => {
   test('errors: unknown name, no conversation id, no predecessor, Codex source, worktree, gone directory', async () => {
     mk('fs-caller', 'fscaller')
     mk('fs-bare', 'fsbare')
-    mk('fs-codex', 'fscodex', { engine: 'codex', codexThreadId: 'th-1', worktreePath: dir })
-    mk('fs-gone', 'fsgone', { claudeSessionId: 'cl-g', worktreePath: join(dir, 'removed') })
+    mk('fs-codex', 'fscodex', { engine: 'codex', codexThreadId: 'th-1', worktree: { repo: '/repo', path: dir, branch: 'wt/x' } })
+    mk('fs-gone', 'fsgone', { claudeSessionId: 'cl-g', worktree: { repo: '/repo', path: join(dir, 'removed'), branch: 'wt/x' } })
     expect(await errorOf({ fork_from: 'nobody-here' })).toContain('no session named "nobody-here"')
     expect(await errorOf({ fork_from: 'fsbare' })).toContain('fsbare has no conversation id to fork')
     expect(await errorOf({ fork_from: 'predecessor' })).toContain('fscaller has no predecessor')
@@ -848,7 +848,7 @@ describe('spawn_session fork_from and read_only', () => {
     const refusal = `the ${label} engine, and ${label} sessions cannot be forked — spawn fresh with read_thread instead`
     mk('fs-caller', 'fscaller')
     mk('fs-ru', 'fsrunbare', { engine })                                                                    // a live record with no id of its own
-    mk('fs-rid', 'fsrunid', { engine, claudeSessionId: 'cl-x', codexThreadId: 'th-x', worktreePath: dir })  // one that carries ids
+    mk('fs-rid', 'fsrunid', { engine, claudeSessionId: 'cl-x', codexThreadId: 'th-x', worktree: { repo: '/repo', path: dir, branch: 'wt/x' } })  // one that carries ids
     threadRegistry.threads.set('fs-uf-thread', {
       threadId: 'fs-uf-thread', topic: 't', respawnCount: 0, createdAt: 1, lastActive: 1, totalMessages: 0,
       sessionHistory: [{ sessionId: 'fsufhist-sid', tmuxName: 'fsufhist', originType: 'spawn', startedAt: 1, endedAt: 2, messageCount: 0, engine, claudeSessionId: 'cl-x' }],
@@ -863,7 +863,7 @@ describe('spawn_session fork_from and read_only', () => {
 
   test('a Claude session as the fork source is not refused for its engine', async () => {
     mk('fs-caller', 'fscaller')
-    mk('fs-cl', 'fsclaude', { claudeSessionId: 'cl-ok', worktreePath: dir })
+    mk('fs-cl', 'fsclaude', { claudeSessionId: 'cl-ok', worktree: { repo: '/repo', path: dir, branch: 'wt/x' } })
     expect((await spawn({ fork_from: 'fsclaude' })).isError).toBeFalsy()
     expect(launches[0].forkFrom as object).toEqual({ claudeSessionId: 'cl-ok', parentName: 'fsclaude' })
   })
@@ -875,7 +875,7 @@ describe('spawn_session fork_from and read_only', () => {
     ;(gateway as any).send = async (c: string) => { calls.push(`send:${c}`); return { id: 'm', channelId: c } }
     try {
       mk('fs-caller', 'fscaller')
-      mk('fs-gone', 'fsgone', { claudeSessionId: 'cl-g', worktreePath: join(dir, 'removed') })
+      mk('fs-gone', 'fsgone', { claudeSessionId: 'cl-g', worktree: { repo: '/repo', path: join(dir, 'removed'), branch: 'wt/x' } })
       expect(await errorOf({ fork_from: 'fsgone', chat_id: 'fs-chan' })).toContain(`launch directory ${join(dir, 'removed')} no longer exists`)
       expect(calls).toEqual([])
       expect(launches).toEqual([])
@@ -906,7 +906,7 @@ describe('spawn_session fork_from and read_only', () => {
 
     test('a live source can neither kill nor peek its fork; the spawner can, and gets the death notice', async () => {
       mk('fs-caller', 'fscaller', old)
-      mk('fs-src', 'fssrc', { ...old, claudeSessionId: 'cl-src', worktreePath: dir })
+      mk('fs-src', 'fssrc', { ...old, claudeSessionId: 'cl-src', worktree: { repo: '/repo', path: dir, branch: 'wt/x' } })
       expect((await spawn({ fork_from: 'fssrc' })).isError).toBeFalsy()
       const child = registry.get(launches[0].sessionId)!
       expect(child.originFrom).toBe('fssrc')  // lineage stays the source
@@ -949,7 +949,7 @@ describe('spawn_session fork_from and read_only', () => {
 
   test('a fork launches with its own new thread and its type, not its source\'s or its spawner\'s', async () => {
     mk('fs-caller', 'fscaller')
-    mk('fs-src', 'fssrc', { claudeSessionId: 'cl-src', worktreePath: dir, sessionMetadata: { model: 'claude-src-model', cwd: dir } as any })
+    mk('fs-src', 'fssrc', { claudeSessionId: 'cl-src', worktree: { repo: '/repo', path: dir, branch: 'wt/x' }, sessionMetadata: { model: 'claude-src-model', cwd: dir } as any })
     expect((await spawn({ fork_from: 'fssrc' })).isError).toBeFalsy()
     const child = registry.get(launches[0].sessionId)!
     expect(launches[0].threadId).toMatch(/^fs-spawned-thread-/)

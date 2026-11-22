@@ -9,8 +9,8 @@ import { existsSync } from 'fs'
 import { gateway } from '../infra/config.js'
 import { markDead, registry, repointChildren, threadRegistry } from '../sessions/registry.js'
 import { emojiOfName } from '../sessions/anchor-state.js'
-import type { ThreadMetadata, ThreadSessionEntry, SessionInfo, SpawnOpts, SpawnResult } from '../sessions/registry.js'
-import { carryOver, doSpawnSession, killSession, tryResume, tryRespawn, RECOVERY_REVERIFY_GUARD } from './session-lifecycle.js'
+import type { ThreadMetadata, ThreadSessionEntry, SessionInfo, SessionWorktree, SpawnOpts, SpawnResult } from '../sessions/registry.js'
+import { carryOver, doSpawnSession, killSession, restoreIfNotStarted, tryResume, tryRespawn, RECOVERY_REVERIFY_GUARD } from './session-lifecycle.js'
 import { baseNameFromBranch, safeSend } from '../infra/util.js'
 import { tmuxSessionState, TMUX_HOLD_MS } from '../infra/tmux.js'
 import { occupancy, occupied } from '../sessions/session-reachability.js'
@@ -82,11 +82,47 @@ export type ReviveRequest = {
   ignoreBackoff?: boolean
 }
 
+/** Why a revive was refused for its worktree: `unavailable`, the folder could not be put back just now (its branch is still
+ *  there); `gone`, the folder and its branch are both gone and the caller named no folder for a fresh start. */
+export type WorktreeRefusal = 'unavailable' | 'gone'
+
+/** Where a revived session works: `ready`, its worktree (on disk now) or none (it never had one); `fresh`, a new start in the
+ *  caller's folder, its worktree and branch being gone; `refused`, nowhere, with why. */
+export type RevivePlace =
+  | { kind: 'ready'; worktree?: SessionWorktree }
+  | { kind: 'fresh' }
+  | { kind: 'refused'; refusal: WorktreeRefusal; reason: string }
+
+/**
+ * The one place that decides where a revived session works. A session that had a worktree works there and nowhere else: a
+ * folder pruned while it was dead is put back on its branch; if that cannot be done just now (the branch is still there) the
+ * revive is refused and can be tried again. If the branch is gone too, there is nothing to continue: a caller that names a folder
+ * for a fresh start (`freshIn`, a specialist's workdir) gets a fresh start there, and any other is refused. Never the main
+ * checkout, where a fresh agent would edit the shared tree. It changes nothing: a refusal leaves everything as it was.
+ */
+export async function resolveWorktree(dead: SessionInfo | undefined, name: string, freshIn?: string): Promise<RevivePlace> {
+  const wt = dead?.worktree
+  if (!wt || existsSync(wt.path)) return { kind: 'ready', worktree: wt }
+  const st = await reattachWorktree(wt.repo, wt.path, wt.branch)
+  if (st === 'attached') return { kind: 'ready', worktree: wt }
+  if (st === 'failed') {
+    process.stderr.write(`daemon: revive ${name}: worktree ${wt.path} is missing and could not be put back on ${wt.branch} just now — not revived\n`)
+    return { kind: 'refused', refusal: 'unavailable', reason: `the session's worktree ${wt.path} is missing and could not be put back just now (branch ${wt.branch} is still there), so it was not revived. It is never started in the main checkout instead: try again shortly` }
+  }
+  if (freshIn) {
+    process.stderr.write(`daemon: revive ${name}: worktree ${wt.path} and branch ${wt.branch} are gone — a fresh start in ${freshIn}\n`)
+    return { kind: 'fresh' }
+  }
+  process.stderr.write(`daemon: revive ${name}: worktree ${wt.path} and branch ${wt.branch} are gone — not revived\n`)
+  return { kind: 'refused', refusal: 'gone', reason: `the session's worktree ${wt.path} and branch ${wt.branch} are both gone (merged or pruned?), so it was not revived: a session that worked in a worktree is never restarted in the main checkout. Spawn a new session for further work` }
+}
+
 export type ReviveMethod = 'resumed' | 'forked' | 'respawned'
 export type ReviveOutcome =
   | { ok: true; result: SpawnResult & { bridgeOrphan?: boolean }; method: ReviveMethod; lastTmuxName: string }
-  /** `busy`: another resume holds this conversation; `backoff`: refused, or this failure started/extended one. */
-  | { ok: false; reason: string; lastTmuxName: string; busy?: true; backoff?: Backoff }
+  /** `busy`: another resume holds this conversation; `backoff`: refused, or this failure started/extended one;
+   *  `worktree`: refused for its worktree before anything was torn down or started, and `reason` says why, for the operator. */
+  | { ok: false; reason: string; lastTmuxName: string; busy?: true; backoff?: Backoff; worktree?: WorktreeRefusal }
 
 /**
  * Put a session back in a thread whose session is gone: resume its conversation, else fork it, else
@@ -109,6 +145,17 @@ export async function reviveThread(req: ReviveRequest): Promise<ReviveOutcome> {
     const refusal = backoffRefusal(req.backoffKey)
     if (refusal) return { ok: false, lastTmuxName, ...refusal }
   }
+
+  // Where the revived session works, decided before anything is torn down: a refusal leaves everything as it was.
+  const place = await resolveWorktree(dead, lastTmuxName, req.cwd)
+  if (place.kind === 'refused') {
+    // Counted toward the back-off, so a refill or a delivery per message does not ask git each time; an operator by hand is not held back.
+    const backoff = req.backoffKey ? recordFailure(req.backoffKey, place.reason) : undefined
+    return { ok: false, lastTmuxName, reason: place.reason, worktree: place.refusal, ...(backoff && { backoff }) }
+  }
+  const worktree = place.kind === 'ready' ? place.worktree : undefined
+  // Nothing of the conversation's folder is left to resume or fork in: only a fresh start (in req.cwd) runs.
+  const freshOnly = place.kind === 'fresh'
 
   if (req.orphan) {
     process.stderr.write(`daemon: revive: tearing down orphaned ${req.orphan.info.tmuxName} first\n`)
@@ -141,10 +188,7 @@ export async function reviveThread(req: ReviveRequest): Promise<ReviveOutcome> {
   const kickoffChanged = !req.respawnOnly && bornKickoff !== undefined && kickoff !== undefined && bornKickoff !== kickoff.hash
   // A conversation its specialist's kill_and_respawn replaced is never continued, by any caller: that would bring back the context the restart dropped.
   const restartedFresh = entry?.restartedFresh === true
-  // A worktree still on disk is kept on every tier and into a new thread; boot recovery reattaches a missing one first.
-  const worktree = dead?.worktreeRepo && dead.worktreePath && existsSync(dead.worktreePath)
-    ? { repo: dead.worktreeRepo, path: dead.worktreePath, branch: dead.worktreeBranch ?? `wt/${dead.tmuxName}` }
-    : undefined
+  // The worktree is kept on every tier and into a new thread.
   const keep = worktree ? { preserveWorktree: true, reuseWorktree: worktree } : {}
   const named = req.name ? { name: req.name } : {}
   // Whom the revived session acts for is passed through (a fill names it); its launch policy is decided, and a conversation born under
@@ -166,7 +210,7 @@ export async function reviveThread(req: ReviveRequest): Promise<ReviveOutcome> {
   let lastRefused = false   // the last tier failed with a refusal hydra.toml caused (a policy that cannot be read or satisfied), not a fault
   let revived: Extract<ReviveOutcome, { ok: true }> | undefined
   try {
-    revived = req.newThreadIn ? await respawnInNewThread(req.newThreadIn) : await cascade()
+    revived = req.newThreadIn ? await respawnInNewThread(req.newThreadIn) : await restoreIfNotStarted(dead, cascade, 'revive')
   } finally {
     if (reservedBranch) registry.reservedNames.delete(reservedName!)
   }
@@ -179,15 +223,7 @@ export async function reviveThread(req: ReviveRequest): Promise<ReviveOutcome> {
   }
   if (busy) return { ok: false, busy: true, lastTmuxName, reason: 'a resume of this session is already in progress' }
 
-  // Total failure: the spawn deleted the dead record before it threw. Put it back so a later revive can still find
-  // it, unless a fallback tier already claimed the thread. (Its PR watches deliver to the thread, and stayed.)
-  if (dead && !req.newThreadIn && registry.getByThread(thread.threadId) === undefined) {
-    dead.deadAt ??= Date.now()
-    registry.set(dead.sessionId, dead)
-    registry.setThread(dead.threadId, dead.sessionId)
-    registry.persist()
-    process.stderr.write(`daemon: revive ${lastTmuxName}: all tiers failed — restored the dead record\n`)
-  }
+  // Total failure: `restoreIfNotStarted` put the dead record back (its PR watches deliver to the thread, and stayed).
   // A refusal hydra.toml caused is not a failure to back off from: once the operator fixes the config, the next revive must run.
   const backoff = req.backoffKey && !lastRefused ? recordFailure(req.backoffKey, lastError ?? 'all recovery methods failed') : undefined
   return { ok: false, lastTmuxName, reason: lastError ? `start failed: ${lastError}` : 'all recovery methods failed', ...(backoff && { backoff }) }
@@ -211,7 +247,7 @@ export async function reviveThread(req: ReviveRequest): Promise<ReviveOutcome> {
     // The gate reads both ids (PINNED R9: a mixed-ID record logs both tier failures, then respawns).
     if (kickoffChanged) process.stderr.write(`daemon: revive ${lastTmuxName}: the kickoff of ${specialistId} changed since this conversation began, so it is not resumed or forked\n`)
     if (restartedFresh && !req.respawnOnly) process.stderr.write(`daemon: revive ${lastTmuxName}: this conversation was restarted fresh (handoff_protocol = "kill_and_respawn"), so it is not resumed or forked\n`)
-    if (!req.respawnOnly && !kickoffChanged && !restartedFresh && (claudeSessionId || entry?.codexThreadId || dead?.codexThreadId || plan.resume)) {
+    if (!req.respawnOnly && !freshOnly && !kickoffChanged && !restartedFresh && (claudeSessionId || entry?.codexThreadId || dead?.codexThreadId || plan.resume)) {
       let result: (SpawnResult & { bridgeOrphan?: boolean }) | null = null
       const r = plan.resume
       if (r?.kind === 'await-bridge') {
@@ -379,7 +415,7 @@ function findDeadSessions(): SessionInfo[] {
     info.sessionType !== 'thread_guest'
     && info.adapter.recoveryPlan(info).generic
     // suppressAutoRecover intentionally NOT checked — it gates only AUTOMATIC boot recovery
-    // (parked awaiting_pm / branch-gone); an explicit manual `recover` overrides it.
+    // (parked awaiting_pm / branch-gone); an explicit manual `recover` asks again (reviveThread refuses a gone branch again).
     && !occupied(occupancy(info))
     && threadRegistry.has(info.threadId),
   )
@@ -405,48 +441,21 @@ async function recoverOne(dead: { sessionId?: string; thread: ThreadMetadata; cl
   const { thread, lastTmuxName, model } = dead
   const displayName = dead.description || thread.description || thread.topic
 
-  // Capture everything off the dead record up front: tier 1's kill deletes it, so the
-  // fallback tiers (and post-cascade watch restore) can't read it later. Resolve by the
-  // caller's exact sessionId when known (avoids a second, possibly-stale threadId→session
-  // map lookup); fall back to getByThread only for callers that don't pass it.
+  // Resolve by the caller's exact sessionId when known (avoids a second, possibly-stale threadId→session map lookup);
+  // fall back to getByThread only for callers that don't pass it. Where it works (its worktree) reviveThread decides.
   const deadInfo = (dead.sessionId ? registry.get(dead.sessionId) : undefined)
     ?? registry.get(registry.getByThread(thread.threadId) ?? '')
-  const worktree = deadInfo?.worktreeRepo && deadInfo.worktreePath
-    ? { repo: deadInfo.worktreeRepo, path: deadInfo.worktreePath, branch: deadInfo.worktreeBranch ?? `wt/${deadInfo.tmuxName}` }
-    : undefined
-  // Resolve worktree availability BEFORE the cascade so a recovered agent is NEVER spawned
-  // into the shared main checkout (spawnCwd). If the dir is gone: reattach it; if that's
-  // transiently impossible, defer to next boot; if the branch is truly gone, skip and mark
-  // so we don't retry every boot. Only proceed to the cascade once the worktree dir exists
-  // (or the session never had a worktree).
-  if (worktree && !existsSync(worktree.path)) {
-    const st = await reattachWorktree(worktree.repo, worktree.path, worktree.branch)
-    if (st === 'failed') {
-      // Transient (stale registration, lock, FS/repo hiccup) — branch preserved. Leave the
-      // dead record untouched (no kill, no spawn) so the next boot retries the reattach.
-      process.stderr.write(`daemon: recover ${lastTmuxName}: worktree ${worktree.path} reattach failed transiently — deferring to next boot\n`)
-      return { name: lastTmuxName, method: 'failed', reason: `worktree temporarily unavailable (${worktree.branch}) — deferred to next boot`, threadUrl: thread.threadUrl, displayName }
-    }
-    if (st === 'branch-gone' && deadInfo) {
-      // Worktree dir AND branch both gone (typically merged + pruned). Don't revive into
-      // the main checkout; mark suppressAutoRecover so it isn't retried every boot, and
-      // surface it so the operator can manually recover the thread if still needed.
-      deadInfo.suppressAutoRecover = true
-      // Terminal (branch gone ⇒ never revived): drop its PR watches. They'd otherwise linger
-      // frozen forever — pollPr skips dead-owner watches, so they can never self-unwatch on
-      // merge. The branch is gone (PR merged/pruned), so the watch is dead weight anyway.
-      unwatchBySession(deadInfo)
-      registry.persist()
-      process.stderr.write(`daemon: recover ${lastTmuxName}: worktree + branch ${worktree.branch} gone — skipping auto-recovery (manual recover still available)\n`)
-      return { name: lastTmuxName, method: 'failed', reason: `worktree + branch gone (${worktree.branch}, likely merged/pruned) — not auto-revived`, threadUrl: thread.threadUrl, displayName }
-    }
-    // 'attached' → dir now exists; fall through to the cascade.
-  }
-
   const outcome = await reviveThread({
     thread, dead: deadInfo, model, promptPrefix: dead.promptPrefix ?? RECOVERY_REVERIFY_GUARD, reuseName: true,
     backoffKey: targetKeyForThread(thread.threadId), ignoreBackoff: true,
   })
+  if (!outcome.ok && outcome.worktree === 'gone' && deadInfo) {
+    // Nothing left to continue: recovery at each boot stops trying it, and its PR watches go (pollPr skips a dead owner's watches,
+    // so they could never unwatch themselves on merge). Only recovery does this: `resume` and `respawn` by hand only refuse.
+    deadInfo.suppressAutoRecover = true
+    unwatchBySession(deadInfo)
+    registry.persist()
+  }
   if (!outcome.ok) return { name: lastTmuxName, method: 'failed', reason: outcome.reason, threadUrl: thread.threadUrl, displayName }
   const method = outcome.method === 'respawned' ? 'resurrected' : outcome.method
   return { name: lastTmuxName, method, newName: outcome.result.name, threadUrl: thread.threadUrl, displayName }
@@ -602,10 +611,10 @@ export function workKey(info: Partial<Pick<SessionInfo, 'artifacts' | 'topic' | 
 // lingers. If it holds unpushed commits, fold the count into the skip reason so the
 // operator doesn't `kill` it and discard unmerged work unaware.
 async function skipReason(info: SessionInfo, base: string): Promise<string> {
-  if (info.worktreeRepo && info.worktreePath) {
-    const branch = info.worktreeBranch ?? `wt/${info.tmuxName}`
+  if (info.worktree) {
+    const { branch } = info.worktree
     try {
-      const n = await checkUnpushedCommits(info.worktreeRepo, branch)
+      const n = await checkUnpushedCommits(info.worktree.repo, branch)
       if (n > 0) return `${base} — ⚠️ ${n} unpushed commit(s) on ${branch}, inspect before kill`
       if (n < 0) return `${base} — ⚠️ couldn't verify unpushed commits on ${branch} (transient git error), inspect before kill`
     } catch (err) {

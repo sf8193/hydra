@@ -27,7 +27,7 @@ flowchart TD
     RC["recover / boot candidates<br/>(!occupied · boot: deadAt ∧ no tmux)"] --> DEDUP[dedupForRecovery] --> RL["recoverLocked: withThreadLock"]
     RL --> RO{"thread's record occupied?"}
     RO -- yes --> RF["failed: already live as X"]
-    RO -- no --> WT["recoverOne: reattach / defer / skip worktree"] --> RT
+    RO -- no --> RT
     SP["deliver / spawn --specialist"] --> NL["withTargetLock(name)"] --> SO{"occupant in specialist.threadId?<br/>(re-read under lock)"}
     SO -- "orphaned (deliver)" --> E4s[exit 4]
     SO -- "occupied" --> HOME["deliver to it · spawn: exit 3"]
@@ -41,7 +41,7 @@ flowchart TD
     TE -- "gone + channel" --> RTN["reviveThread(newThreadIn)"]
     HO["handOff"] --> HL["withThreadLock"] --> HC{"record still this one?"}
     HC -- no --> HX["throw: already handing off"]
-    HC -- yes --> HS["handoffSpawnOpts: carryOver minus read_only and predecessor<br/>→ kill → spawn(handedOffFrom)<br/>(PR watches stay with the thread) → repointChildren"]
+    HC -- yes --> HS["handoffSpawnOpts: carryOver minus read_only and predecessor<br/>→ kill → restoreIfNotStarted: spawn(handedOffFrom), old record back if it fails<br/>(PR watches stay with the thread) → repointChildren"]
     KR["killAndRespawn<br/>(handoff_protocol = kill_and_respawn)"] --> KL["withTargetLock(specialist,<br/>or a conversation session's thread)"] --> KC{"record still this one?"}
     KC -- no --> KX["throw: already being replaced"]
     KC -- yes --> KE["endForFreshStart: mark restartedFresh (on disk),<br/>unmap the thread → kill (not deliberate)<br/>(no entry to mark: nothing ended)"] --> KF["fill → reviveThread: tier 3 as a new birth<br/>→ repointChildren"]
@@ -50,10 +50,17 @@ flowchart TD
     RT["reviveThread<br/>chat and recover pass the target's key, ignoring its wait"] --> BG{"backoffKey active and not ignored?"}
     RTN --> BG
     BG -- yes --> BO["fail: not retrying until …"]
-    BG -- no --> ORQ{"orphan to tear down?"}
+    BG -- no --> WTQ{"resolveWorktree: had a worktree<br/>whose folder is gone?"}
+    WTQ -- "no" --> ORQ{"orphan to tear down?"}
+    WTQ -- yes --> REA{"reattachWorktree"}
+    REA -- attached --> ORQ
+    REA -- "failed, branch still there" --> WD["fail: try again shortly · recordFailure<br/>nothing torn down or started"]
+    REA -- "branch gone" --> FR{"a folder for a fresh start?<br/>(req.cwd: a specialist's workdir)"}
+    FR -- "yes: tier 3 only, there, no worktree" --> ORQ
+    FR -- no --> WG["refuse: never the main checkout<br/>record kept · recordFailure<br/>(recover also: suppressAutoRecover · unwatchBySession)"]
     ORQ -- yes --> ORPH["kill it (worktree kept), markDead<br/>its record is still in hand"]
     ORQ -- no --> SNAP
-    ORPH --> SNAP["resolve entry/dead · carryOver unless respawnOnly (to every tier, tryResume too)<br/>worktree if on disk · reserve branch base<br/>(never the name being claimed)"]
+    ORPH --> SNAP["resolve entry/dead · carryOver unless respawnOnly (to every tier, tryResume too)<br/>worktree · reserve branch base<br/>(never the name being claimed)"]
     SNAP --> NT{"newThreadIn?"}
     NT -- yes --> NEWT["spawn in channel from kickoff, worktree kept,<br/>told its old thread is gone"]
     NT -- no --> T1{"ids, not respawnOnly, kickoff unchanged,<br/>entry not restartedFresh?"}
@@ -65,8 +72,8 @@ flowchart TD
     R2 -- ok --> OK
     R3 -- ok --> OK
     NEWT -- ok --> OK["repointChildren · clearBackoff<br/>(a claimed name retires dead same-named records: doSpawnSession)"]
-    R3 -- "null or throw" --> FAIL["restore dead record if thread unclaimed<br/>recordFailure(key) → exit 6"]
-    NEWT -- throw --> FAIL
+    R3 -- "null or throw" --> FAIL["restoreIfNotStarted: dead record back if thread unclaimed<br/>recordFailure(key) → exit 6"]
+    NEWT -- throw --> FAILN["recordFailure(key) → exit 6"]
     OK -- specialist --> REP{"re-pointed meanwhile?"}
     REP -- yes --> E3r[exit 3, left running]
     REP -- no --> SET["setSpecialist(threadId) · pushToolSurface"]
