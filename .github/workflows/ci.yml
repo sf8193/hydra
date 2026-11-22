@@ -39,6 +39,10 @@ jobs:
       - name: Owner check
         run: bun scripts/check-owners.ts
 
+      # No new lazy `await import(...)` in production code: they hide breakage until the code path first runs (scripts/check-dynamic-imports.ts).
+      - name: Dynamic imports
+        run: bun scripts/check-dynamic-imports.ts
+
       - name: Install tmux
         run: sudo apt-get install -y tmux
 
