@@ -1,4 +1,4 @@
-// What one engine is, so far: its name for a person, and what its sessions can be asked. Each engine keeps its own profile in its own file (shared/engines/<engine>.ts);
+// What one engine is: its name for a person, what its sessions can be asked, and the aliases and id prefix that name its models. Each engine keeps its own profile in its own file (shared/engines/<engine>.ts);
 // the list in shared/engines/index.ts is the only place that names them all. A profile is plain data, so config and the CLI can read it without importing an adapter.
 
 export type EngineProfile = {
