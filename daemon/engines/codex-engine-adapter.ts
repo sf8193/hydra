@@ -22,7 +22,7 @@ import { codexHomeDir as codexHomeDirFn, codexRoot, startCodexAppServer, stopCod
 import { parseContextPercent, safeSend } from '../util.js'
 import { tmuxCreateSession, tmuxHasSession, tmuxSync, tmuxTimedOut, tmuxWindowActivity } from '../tmux.js'
 import { sendTmuxKeys, type TmuxKeyAction } from '../codex-key-queue.js'
-import { SOCK_PATH, STATE_DIR } from '../config.js'
+import { SOCK_PATH, SPAWN_LOGS_DIR } from '../config.js'
 import { codexTurnOutcome, defaultTurnSources, isCodexWorking } from './codex-observation.js'
 import { codexPiggyback, type CodexPiggyback } from './codex-piggyback.js'
 import { isCodexReconnecting, reconnectCodexSessions } from './codex-runtime.js'
@@ -30,7 +30,6 @@ import { replyContextLine } from '../reply-context.js'
 import { isRestrictedPolicy } from '../policy-record.js'
 import { shq } from '../launch-files.js'
 
-const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
 const execFileAsync = promisify(execFile)
 
 function registerCodexMcp(homeDir: string, sessionId: string, tmuxName: string): void {

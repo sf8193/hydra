@@ -13,7 +13,7 @@ import type {
 } from './engine-adapter.js'
 import type { BlockingState } from '../pane-probe.js'
 import type { ClaudeEngine } from './claude-engine.js'
-import { SOCK_PATH, PLATFORM, STATE_DIR } from '../config.js'
+import { SOCK_PATH, PLATFORM, SPAWN_LOGS_DIR } from '../config.js'
 import { removeSessionToken, removeSpawnPrompt, shq, writeSessionToken, writeSpawnPrompt } from '../launch-files.js'
 import { tmuxCreateSession, tmuxWindowActivity } from '../tmux.js'
 import { ompContextTokens, ompSessionDir, ompTurn } from './omp-session.js'
@@ -23,7 +23,6 @@ import { isRestrictedPolicy } from '../policy-record.js'
 
 const EXTENSION = join(import.meta.dir, '..', '..', 'omp', 'hydra-bridge.ts')
 const OMP_CONFIG = join(import.meta.dir, '..', '..', 'omp', 'hydra-omp.yml')
-const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
 
 export class OmpEngine implements EngineAdapter {
   readonly provider = 'omp' as const

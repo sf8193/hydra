@@ -24,7 +24,7 @@ import { projectDirName, projectsRoot, transcriptContext, transcriptPathFor } fr
 import { claudeTurnOutcome } from './claude-transcript.js'
 import { readClaudeStatus } from './claude-status.js'
 import { defaultTurnSources } from './codex-observation.js'
-import { CLAUDE_CONFIG, ENV_FILE, SOCK_PATH, PLATFORM, STATE_DIR } from '../config.js'
+import { CLAUDE_CONFIG, ENV_FILE, SOCK_PATH, PLATFORM, SPAWN_LOGS_DIR, STATE_DIR } from '../config.js'
 import { gateway } from '../config.js'
 import { SESSION_IDENTITY_VARS, capturedSpawnVars, stateEnvUnsets, scrubbedSpawnEnv, withRaisedFdLimit } from '../../shared/spawn-env.js'
 import { modsExport } from '../../shared/mods.js'
@@ -45,7 +45,6 @@ import { isRestricted, isRestrictedPolicy } from '../policy-record.js'
 export type ClaudeSubject = Pick<SessionInfo, 'tmuxName'> & Partial<Pick<SessionInfo, 'claudeSessionId'>>
   & { sessionMetadata?: Pick<SessionMetadata, 'model'> }
 
-const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
 
 /**
  * What a restricted launch writes and passes: the settings (the bridge plugin on, and the only tool permissions: the bridge's

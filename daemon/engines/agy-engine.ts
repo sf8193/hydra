@@ -15,7 +15,7 @@ import type {
 import { withoutIntents } from './engine-adapter.js'
 import type { BlockingState } from '../pane-probe.js'
 import { CLAUDE_WORKING_SILENCE_S, type ClaudeEngine } from './claude-engine.js'
-import { SOCK_PATH, PLATFORM, STATE_DIR } from '../config.js'
+import { FRESH_START_MS, SOCK_PATH, PLATFORM, SPAWN_LOGS_DIR, STATE_DIR } from '../config.js'
 import { removeSessionToken, removeSpawnPrompt, shq, writeSessionToken, writeSpawnPrompt } from '../launch-files.js'
 import { deliveryRefusal } from '../restricted.js'
 import { tmuxCreateSession, tmuxSync, tmuxWindowActivity } from '../tmux.js'
@@ -25,13 +25,11 @@ import { isRestrictedPolicy } from '../policy-record.js'
 import { AGY_HOOKS_CONFIG, AGY_MCP_CONFIG, registerHydraHooks, registerHydraTools } from './agy-config.js'
 import { agyContextTokens, agyState, agyStateDir, agyStateFile, agyTurn } from './agy-session.js'
 
-const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
 /** A Gemini API key, if the operator keeps one: agy then runs in its API-key mode, else on its own login. Only this file's path is on a command line. */
 export const AGY_API_KEY_FILE = join(STATE_DIR, 'agy-api-key')
 const PASTE_DIR = join(STATE_DIR, 'agy-paste')
 const LANDED_WAIT_MS = 8_000
-// A session this young may still be on agy's boot, login or folder-trust screen: its first hook event (turn().live is null until then) says agy takes input.
-const FRESH_START_MS = 120_000
+// A session still in FRESH_START_MS may be on agy's boot, login or folder-trust screen: its first hook event (turn().live is null until then) says agy takes input.
 const READY_WAIT_MS = 60_000
 
 /** The `--settings` JSON for one launch (never saved by agy): the folder is trusted, so agy does not stop to ask, and a key file means API-key mode. */
