@@ -67,7 +67,7 @@ import { announceRestartComplete } from './app/commands/global.js'
 import { deliverWatchdogAlert } from './app/watchdog-alert.js'
 import { autoRecoverAfterBoot } from './app/recovery.js'
 import { startJobsClock, stopJobsClock, realDeps } from './connectors/clock/jobs-clock.js'
-import { deliverToTarget, targetDeps } from './specialists/targets.js'
+import { deliverToTarget, targetDeps, conversationSessionName, conversationSessionRunning, placesFree } from './app/targets.js'
 
 threadRegistry.boot(registry)
 reattachAdapters(resolveEngine)
@@ -148,6 +148,7 @@ import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle }
 import type { ProviderId } from './engines/engine-adapter.js'
 registry.onPersist = refreshDashboard
 targetDeps.stuckState = confirmedStuckState
+bindSlackDelivery({ deliverToTarget, conversationSessionName, conversationSessionRunning, placesFree })
 
 if ('operators' in gateway) {
   (gateway as any).operators = operatorIds
@@ -252,7 +253,7 @@ if ('homeSpawnHandler' in gateway) {
 import { warmContextLink } from './app/router.js'
 import { restoreHeld } from './app/specialist-thread.js'
 import { startPrWatcher, backfillTitles, fetchPrTitle, parsePrUrl } from './connectors/github/pr-watch.js'
-import { startConversationTable, stopConversationTable, startSlackListener } from './connectors/slack/runtime.js'
+import { startConversationTable, stopConversationTable, startSlackListener, bindSlackDelivery } from './connectors/slack/runtime.js'
 import { pruneEvents } from './infra/events.js'
 import { startHydraConfig, stopHydraConfig, retryHydraConfigAlert, currentHydraConfig, onHydraConfigLoad, reloadHydraConfig, hydraConfigLoadedOk } from './infra/hydra-config.js'
 import { jobsFromSchedules } from './shared/schedules.js'

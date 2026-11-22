@@ -624,6 +624,11 @@ export class DiscordGateway implements ChatGateway {
     return null
   }
 
+  // A thread is a channel here, so its id mentions it; Discord renders that as the thread's pill with its live name, which a bare or wrapped URL does not always do.
+  threadMention(threadId: string): string {
+    return `<#${threadId}>`
+  }
+
   // Sync by contract, so the guild comes from cache rather than a fetch.
   // Discord thread IDs *are* channel IDs, so threadId slots straight into the URL.
   //

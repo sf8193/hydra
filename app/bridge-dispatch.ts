@@ -9,7 +9,7 @@ import { partyLink, quietSend, shouldQuiet } from '../infra/quiet-send.js'
 import { routeThreadId } from '../sessions/thread-route.js'
 import { beginMainHandoff } from './main-handoff.js'
 import { getSpecialist } from '../sessions/specialists.js'
-import { ensureSpecialist } from '../specialists/specialist-deliver.js'
+import { ensureSpecialist } from './specialist-deliver.js'
 import { envelopeFor, sendToThread, sendsToRefusal } from './sends-to.js'
 import { READ_ONLY_DISALLOWED_TOOLS, claudeLaunchCwd, doSpawnSession, handOff, handoffNoteFate, killSession, predecessorOf, runPreHandoffHook, sessionDir, type PreHandoffVerdict } from './session-lifecycle.js'
 import { fallbackDescription, formatDuration, chunk, assertSendable, parseDuration, withOutbound } from '../infra/util.js'
@@ -548,7 +548,10 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           throw new Error('protocol phase ended before spawned session could be registered')
         }
         if (allocatedSessionId) finishPrivateProtocolChildLaunch(allocatedSessionId)
-        return { content: [{ type: 'text', text: `session spawned (name: ${result.name}, session_id: ${result.sessionId}, thread_id: ${result.threadId}${result.url ? `, url: ${result.url}` : ''})` }] }
+        // The mention renders in the gateway's own chat; a Slack conversation (a `slack:` chat_id) is read elsewhere, where it would show as raw text, so the url alone points there.
+        const spawnChat = args.chat_id
+        const mention = typeof spawnChat === 'string' && spawnChat.startsWith('slack:') ? undefined : gateway.threadMention?.(result.threadId)
+        return { content: [{ type: 'text', text: `session spawned (name: ${result.name}, session_id: ${result.sessionId}, thread_id: ${result.threadId}${mention ? `, mention: ${mention}` : ''}${result.url ? `, url: ${result.url}` : ''})` }] }
       }
 
       case 'list_sessions': {

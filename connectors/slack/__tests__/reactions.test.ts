@@ -6,7 +6,7 @@ import { join } from 'path'
 import { ConversationTable, type ConversationConfig, type ConversationDeps, type SlackActions, type SlackReactionEvent } from '../watch.js'
 import { BOT, oneListener, alsoHeard, view, sharedChannel, SALES_BOT, type ViewOver } from './slack-config.js'
 import { LANDED, refused } from './outcomes.js'
-import type { DeliverOutcome } from '../../../specialists/targets.js'
+import type { DeliverOutcome } from '../../../app/targets.js'
 
 const CH = 'C0FOOD'
 const OWN = '3000.000001'      // the bot's own top-level post

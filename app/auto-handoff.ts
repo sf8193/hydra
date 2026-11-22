@@ -11,7 +11,7 @@ import { readHandoffTemplate } from './handoff-templates.js'
 import { currentHydraConfig } from '../infra/hydra-config.js'
 import { declaredSpecialist, handoffProtocolOf, type HandoffProtocol } from '../config/types.js'
 import { specialistOf } from '../sessions/specialists.js'
-import { killAndRespawn, NotReplaced } from '../specialists/specialist-deliver.js'
+import { killAndRespawn, NotReplaced } from './specialist-deliver.js'
 import { safeSend } from '../infra/util.js'
 import { CACHE_HANDOFF_LINE, FULL_HANDOFF_DEFAULT_LINE } from '../shared/context-lines.js'
 
