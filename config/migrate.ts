@@ -24,6 +24,8 @@ export type MigrateInput = {
   platform: ChatPlatform
   /** Where the old daemon ran, which its relative paths (a kickoffFile) were read from. Default: as written. */
   daemonCwd?: string
+  /** `--operator <user id>`: on a fresh install with nothing to migrate, who the operator is on `platform`. */
+  operator?: string
 }
 
 type Doc = Record<string, unknown>
@@ -342,7 +344,13 @@ export function planMigrate(input: MigrateInput, steps: MigrateStep[] = STEPS): 
     }
   }
   if (errors.length) return { ok: false, errors }
-  if (!outputs.length) return { ok: false, errors: ['nothing to migrate: no allowFrom in access.json and no specialists.json'] }
+  if (input.operator !== undefined) {
+    const address = normalizeAddress(`${input.platform}:${input.operator.trim()}`)
+    if (!address) return { ok: false, errors: [`--operator "${input.operator}" isn't a ${input.platform} user id`] }
+    if (existing?.operator !== undefined || outputs.some(o => o.doc.operator !== undefined)) return { ok: false, errors: ['--operator is for a fresh install: this one already names an operator (hydra.toml, or an allowFrom id in access.json)'] }
+    outputs.push({ doc: { operator: 'operator', people: { operator: { addresses: [address] } } }, consumed: [], notes: [`${address} is the operator, as people.operator, from --operator.`] })
+  }
+  if (!outputs.length) return { ok: false, errors: [`nothing to migrate: no allowFrom in access.json and no specialists.json. On a fresh install, say who you are: hydra migrate ${input.platform} --operator <your ${input.platform} user id>`] }
   const merged = mergeDocs([...(existing ? [existing] : []), ...outputs.map(o => o.doc)])
   if (merged.conflicts.length) return { ok: false, errors: merged.conflicts.map(c => `two sources disagree on ${c}`) }
   // A hydra.toml governs only once it names an operator; one without would retire allowFrom and leave nobody in charge.

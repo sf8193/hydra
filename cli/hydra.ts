@@ -97,7 +97,7 @@ Deliver (whisper channel — message to session context, not thread):
   --json adds "result" (done, deferred or failed) and exits 0 whenever the daemon answers (no answer: exit 1, no JSON). Every code and word: README, "Exit codes and result words"
 
 Config:
-  hydra migrate [<platform>] [--dry-run]   write <state>/hydra.toml once from access.json's allowFrom, specialists.json and slack-watch.json,
+  hydra migrate [<platform>] [--operator <user id>] [--dry-run]   write <state>/hydra.toml once from access.json's allowFrom, specialists.json and slack-watch.json,
                                        keeping each file it changes or retires as *.migrated; --dry-run prints it and writes
                                        nothing. Stop the daemon first; an interrupted run is finished by running it again
 
@@ -272,8 +272,12 @@ async function main(): Promise<void> {
 
   if (command === 'migrate') {
     if (daemonName) { console.error('error: migrate takes --state-dir <dir> or a platform, not --daemon'); process.exit(1) }
-    const platform = filtered.slice(1).find(a => !a.startsWith('-'))
-    process.exit(await migrateCommand({ platform, stateDir: stateDirOpt, dryRun: filtered.includes('--dry-run') }))
+    const at = filtered.indexOf('--operator')
+    const operator = at >= 0 ? filtered[at + 1] : undefined
+    if (filtered.indexOf('--operator', at + 1) >= 0) { console.error('error: --operator is given once: one operator'); process.exit(1) }
+    if (at >= 0 && (!operator || operator.startsWith('-'))) { console.error('error: --operator takes your user id on the platform'); process.exit(1) }
+    const platform = filtered.slice(1).filter((a, i) => !a.startsWith('-') && filtered[i] !== '--operator')[0]
+    process.exit(await migrateCommand({ platform, stateDir: stateDirOpt, dryRun: filtered.includes('--dry-run'), ...(operator !== undefined && { operator }) }))
   }
 
   // Lifecycle commands

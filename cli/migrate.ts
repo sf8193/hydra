@@ -20,7 +20,7 @@ function daemonListening(stateDir: string): Promise<boolean> {
   })
 }
 
-export async function migrateCommand(opts: { platform?: string; stateDir?: string; dryRun: boolean }): Promise<number> {
+export async function migrateCommand(opts: { platform?: string; stateDir?: string; dryRun: boolean; operator?: string }): Promise<number> {
   if (opts.platform && opts.platform !== 'discord' && opts.platform !== 'slack') {
     console.error(`error: platform must be discord or slack, not "${opts.platform}"`)
     return 1
@@ -57,7 +57,7 @@ export async function migrateCommand(opts: { platform?: string; stateDir?: strin
     return 0
   }
 
-  const plan = planMigrate({ stateDir, env: systemEnv(SESSION_NAMES, stateDir, platform, cfg.configDir), spawnCwd, platform, daemonCwd: cfg.hydraDir })
+  const plan = planMigrate({ stateDir, env: systemEnv(SESSION_NAMES, stateDir, platform, cfg.configDir), spawnCwd, platform, daemonCwd: cfg.hydraDir, ...(opts.operator !== undefined && { operator: opts.operator }) })
   if (!plan.ok) {
     for (const e of plan.errors) console.error(`error: ${e}`)
     console.error('nothing was written')
@@ -69,10 +69,10 @@ export async function migrateCommand(opts: { platform?: string; stateDir?: strin
   const changed = Object.keys(plan.writes).filter(f => !f.endsWith('.migrated'))
   const kept = Object.keys(plan.writes).filter(f => f.endsWith('.migrated'))
   if (opts.dryRun) {
-    console.log(`dry run: nothing written. Without --dry-run this writes ${['hydra.toml', ...changed].join(', ')} in ${stateDir}, keeps ${kept.join(', ')}${plan.consumed.length ? `, and removes ${plan.consumed.join(', ')}` : ''}.`)
+    console.log(`dry run: nothing written. Without --dry-run this writes ${['hydra.toml', ...changed].join(', ')} in ${stateDir}${kept.length ? `, keeps ${kept.join(', ')}` : ''}${plan.consumed.length ? `, and removes ${plan.consumed.join(', ')}` : ''}.`)
     return 0
   }
   applyMigrate(stateDir, plan)
-  console.log(`wrote ${['hydra.toml', ...changed].join(', ')}; kept ${kept.join(', ')}${plan.consumed.length ? `; removed ${plan.consumed.join(', ')}` : ''}. Start the daemon: hydra up ${platform}`)
+  console.log(`wrote ${['hydra.toml', ...changed].join(', ')}${kept.length ? `; kept ${kept.join(', ')}` : ''}${plan.consumed.length ? `; removed ${plan.consumed.join(', ')}` : ''}. Start the daemon: hydra up ${platform}`)
   return 0
 }

@@ -1,10 +1,16 @@
 // The gate reads hydra.toml's [places."<id>".access] and [gateways.<platform>] first, access.json second.
 import { describe, test, expect, afterEach, spyOn } from 'bun:test'
-import { rmSync, writeFileSync } from 'fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import { ACCESS_FILE, gateway } from '../config.js'
 import { ackReactionOf, channelAllowed, channelPolicy, defaultListenOf, gate } from '../access.js'
 import { _setHydraConfigForTesting } from '../hydra-config.js'
 import { resolveListenStatePure } from '../session-lifecycle.js'
+import { planMigrate } from '../../config/migrate.js'
+import { loadHydraConfig } from '../../config/load.js'
+import { testLoadEnv } from '../../config/__tests__/load-env.js'
+import { operatorIds } from '../access.js'
 import type { GateSettings, PlaceAccess, PlaceOptions } from '../../config/types.js'
 import type { HydraConfig } from '../../config/types.js'
 import type { InboundMessage } from '../../gateways/gateway.js'
@@ -113,5 +119,23 @@ describe('listen state', () => {
     expect(resolveListenStatePure('T1', access, undefined, 'C1')).toBe(false)
     expect(resolveListenStatePure('C2', access)).toBe(false)
     expect(resolveListenStatePure('C3', { groups: {} })).toBe(true)
+  })
+})
+
+describe('a fresh install', () => {
+  test('hydra migrate --operator makes that id the operator: its DM is delivered and a stranger\'s is dropped, with no access.json', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hydra-fresh-'))
+    try {
+      const env = testLoadEnv({ home: '/h', sessionNames: [] })
+      const plan = planMigrate({ stateDir: dir, env, spawnCwd: '/h', platform: 'discord', operator: '100000000000000009' })
+      if (!plan.ok) throw new Error(plan.errors.join('\n'))
+      const loaded = loadHydraConfig(plan.text, env)
+      if (!loaded.ok) throw new Error('must load')
+      _setHydraConfigForTesting(loaded.config)
+      expect(operatorIds({ allowFrom: [] })).toEqual(['100000000000000009'])
+      const dm = (authorId: string) => ({ isDM: true, authorId, channelId: 'D1', parentChannelId: null, content: 'hi' }) as unknown as InboundMessage
+      expect((await gate(dm('100000000000000009'))).action).toBe('deliver')
+      expect((await gate(dm('5'))).action).toBe('drop')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 })

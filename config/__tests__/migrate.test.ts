@@ -25,6 +25,36 @@ const SPECIALISTS = {
   '123': { channel: '557', kickoff: 'all digits' },
 }
 
+describe('hydra migrate --operator: a fresh install says who it is', () => {
+  test('with nothing to migrate it writes a hydra.toml naming the operator, which loads and governs', () => {
+    const plan = planMigrate({ ...state({}), operator: ' 100000000000000009 ' })
+    if (!plan.ok) throw new Error(plan.errors.join('\n'))
+    const loaded = loadHydraConfig(plan.text, env)
+    if (!loaded.ok) throw new Error('the fresh hydra.toml must load')
+    expect(loaded.config.operator).toBe('operator')
+    expect(loaded.config.people.operator.addresses).toEqual(['discord:100000000000000009'])
+    applyMigrate(dir, plan)
+    expect(read('hydra.toml')).toBe(plan.text)
+    expect(planMigrate({ ...state({}), operator: '1' }).ok).toBe(true)
+  })
+  test('for Slack the address is a slack: one, and a Discord-style number is refused', () => {
+    const plan = planMigrate({ ...state({}), platform: 'slack', operator: 'U123ABC' })
+    if (!plan.ok) throw new Error(plan.errors.join('\n'))
+    expect(plan.text).toContain('addresses = ["slack:U123ABC"]')
+    expect(planMigrate({ ...state({}), platform: 'slack', operator: '12345' })).toMatchObject({ ok: false, errors: [expect.stringContaining('isn\'t a slack user id')] })
+  })
+  test('without --operator the refusal says how to give one', () => {
+    expect(planMigrate(state({}))).toMatchObject({ ok: false, errors: [expect.stringContaining('hydra migrate discord --operator <your discord user id>')] })
+  })
+  test('an install that already has an operator refuses --operator, writing nothing', () => {
+    expect(planMigrate({ ...state({ 'access.json': ACCESS }), operator: '42' })).toMatchObject({ ok: false, errors: [expect.stringContaining('already names an operator')] })
+    expect(planMigrate({ ...state({ 'hydra.toml': 'operator = "me"\n[people.me]\naddresses = ["discord:7"]\n', 'specialists.json': SPECIALISTS }), operator: '42' })).toMatchObject({ ok: false, errors: [expect.stringContaining('already names an operator')] })
+  })
+  test('an operator that is not a user id is refused', () => {
+    expect(planMigrate({ ...state({}), operator: 'not an id' })).toMatchObject({ ok: false, errors: [expect.stringContaining('isn\'t a discord user id')] })
+  })
+})
+
 describe('hydra migrate', () => {
   test('access.json and specialists.json become one hydra.toml that loads, with pointers and backups', () => {
     const input = state({ 'access.json': ACCESS, 'specialists.json': SPECIALISTS })
