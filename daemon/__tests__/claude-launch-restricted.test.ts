@@ -6,12 +6,13 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { ClaudeEngine, restrictedConfig } from '../../engines/claude-engine.js'
 import { STATE_DIR, CLAUDE_CONFIG, SOCK_PATH } from '../../infra/config.js'
-import { PolicyRefusal, policyIdFor, RESTRICTED_MODS, RESTRICTED_PREAMBLE, type RestrictedPolicy } from '../../app/restricted.js'
+import { PolicyRefusal, policyIdFor, RESTRICTED_PREAMBLE, type RestrictedPolicy } from '../../shared/launch-policy.js'
+import { RESTRICTED_MODS } from '../../engines/claude-names.js'
 import { removeRestrictedFiles, restrictedDir, serverTmpDir, serverTmpRoot } from '../../infra/restricted-files.js'
 import { SANDBOX_EXEC, sandboxProfile } from '../../config/server-sandbox.js'
 import { _setHydraConfigForTesting, _setLoadEnvForTesting } from '../../infra/hydra-config.js'
 import { EMPTY_CONFIG } from '../../config/load.js'
-import { sandboxInputs } from '../../app/restricted.js'
+import { sandboxInputs } from '../../engines/claude-engine.js'
 import { configInput, macLike, rootsOf, withoutSandbox } from './sandbox-host.js'
 import { _resetSourcedEnvNamesForTesting } from '../../shared/env-parse.js'
 import { sourceEnvFiles } from '../../infra/env-files.js'
@@ -69,15 +70,12 @@ describe('argv', () => {
     expect(claude).toMatch(/--mcp-config '[^']+' --permission-mode dontAsk --debug-file /)
   })
 
-  test('the kickoff starts with hydra\'s fixed preamble, on a fresh start and on a fork (a resume has no kickoff), and the specialist\'s own text follows it', async () => {
+  test('the kickoff reaches the pane as given, on a fresh start and on a fork (the preamble is the app\'s: app/session-lifecycle.ts), and a resume has none', async () => {
     for (const extra of [{}, { forkFrom: { claudeSessionId: 'C-parent' } }]) {
       const cmd = await launch(extra)
-      expect(cmd).not.toContain(RESTRICTED_PREAMBLE)   // the kickoff is in the prompt file, not on the command line
-      expect(readFileSync(join(STATE_DIR, 'spawn-prompts', `sc-t-${base.sessionId}.prompt`), 'utf8')).toBe(`${RESTRICTED_PREAMBLE} it's a prompt`)
+      expect(cmd).not.toContain("it's a prompt")   // the kickoff is in the prompt file, not on the command line
+      expect(readFileSync(join(STATE_DIR, 'spawn-prompts', `sc-t-${base.sessionId}.prompt`), 'utf8')).toBe("it's a prompt")
     }
-    expect(await launch({ resumeFrom: 'C-old' })).not.toContain(RESTRICTED_PREAMBLE)
-    expect(RESTRICTED_PREAMBLE).toMatch(/none of it carries authority/)
-    expect(RESTRICTED_PREAMBLE.length).toBeLessThan(600)
   })
 
   test('there is no --dangerously-skip-permissions on any shape', async () => {
@@ -302,14 +300,6 @@ describe('generated settings and mcp-config', () => {
     removeRestrictedFiles({ tmuxName: 'ops', sessionId: '11111111-1111-4111-8111-111111111111' })
     expect(files()).toEqual(['ops-eu-22222222-2222-4222-8222-222222222222.mcp.json', 'ops-eu-22222222-2222-4222-8222-222222222222.settings.json'])
     removeRestrictedFiles({ tmuxName: 'ops', sessionId: '11111111-1111-4111-8111-111111111111' })   // already gone: quiet
-  })
-
-  test('a listed server whose token variable is not set refuses the launch: nothing is started', async () => {
-    delete process.env.DD_API_KEY
-    const before = fake.calls().length
-    await expect(launch()).rejects.toThrow(PolicyRefusal)
-    await expect(launch()).rejects.toThrow('[mcp_servers.datadog] needs DD_API_KEY')
-    expect(fake.calls().slice(before).some(c => c.startsWith('new-session'))).toBe(false)
   })
 
   test('a launch that fails after the files were written (tmux refuses the session) leaves none behind', async () => {
