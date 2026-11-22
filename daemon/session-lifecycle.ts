@@ -40,7 +40,7 @@ import { readHandoffTemplate } from './handoff-templates.js'
 import { projectDirName, transcriptPathFor } from './usage.js'
 import { refreshSessionVisual, emojiOf, emojiOfName } from './anchor-state.js'
 import { unwatchBySession } from '../connectors/github/pr-watch.js'
-import { loadAccess } from './access.js'
+import { loadAccess, tomlListen, defaultListenOf } from './access.js'
 import { emit } from './event-bus.js'
 import { clearInterceptsForSession } from './pane-probe.js'
 import { classifyResumeFailure } from './resume-health.js'
@@ -187,11 +187,11 @@ export function resolveListenStatePure(
   if (listenOverride !== undefined) return listenOverride
   for (const id of [channelId, parentChannelId, anchorChannelId]) {
     if (id) {
-      const group = access.groups[id]
-      if (group?.defaultListen !== undefined) return group.defaultListen
+      const listen = tomlListen(id) ?? (Object.hasOwn(access.groups, id) ? access.groups[id].defaultListen : undefined)
+      if (listen !== undefined) return listen
     }
   }
-  return access.defaultListen ?? false
+  return defaultListenOf(access)
 }
 
 // ---------------------------------------------------------------------------

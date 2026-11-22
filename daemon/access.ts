@@ -4,6 +4,7 @@ import { join } from 'path'
 import { STATE_DIR, ACCESS_FILE, APPROVED_DIR, STATIC, gateway, DEFAULT_SESSION_CHANNEL, PLATFORM } from './config.js'
 import { currentHydraConfig, hydraConfigInUse } from './hydra-config.js'
 import { chunk, safeSend } from './util.js'
+import type { GateSettings } from '../config/types.js'
 import type { InboundMessage } from '../gateways/gateway.js'
 import { timed } from '../shared/loop-watch.js'
 
@@ -63,6 +64,52 @@ export function operatorIds(access: Pick<Access, 'allowFrom'>): string[] {
   const prefix = `${PLATFORM}:`
   return cfg.people[cfg.operator].addresses.filter(a => a.startsWith(prefix)).map(a => a.slice(prefix.length))
 }
+/**
+ * hydra.toml's gate settings for this platform while hydra.toml governs: they win over access.json's. The one reader of
+ * `[gateways.<platform>]`.
+ */
+function tomlGate(): GateSettings | undefined {
+  return hydraConfigInUse() ? currentHydraConfig().gateSettings?.[PLATFORM] : undefined
+}
+
+/** Not an id (ids have no spaces): the allowFrom of a channel whose named people have no address on this platform, so it hears nobody. */
+const NO_ONE = 'no one'
+
+/**
+ * The policy hydra.toml gives a channel (`[places."<platform>:<id>".access]`) as a group policy, or undefined. Exact key:
+ * no wildcard entry admits a channel. `allow` becomes ids on this platform; people with none leave the channel hearing
+ * nobody, never everybody (an empty allowFrom means anyone).
+ */
+function tomlPolicy(channelId: string): GroupPolicy | undefined {
+  if (!hydraConfigInUse()) return undefined
+  const cfg = currentHydraConfig()
+  const key = `${PLATFORM}:${channelId}`
+  const place = cfg.places[key]
+  if (!place?.access) return undefined
+  const prefix = `${PLATFORM}:`
+  const ids = place.access.allow === 'anyone' ? [] : place.access.allow.flatMap(n => cfg.people[n].addresses.filter(a => a.startsWith(prefix)).map(a => a.slice(prefix.length)))
+  return {
+    requireMention: place.access.mention,
+    allowFrom: place.access.allow === 'anyone' || ids.length > 0 ? ids : [NO_ONE],
+    ...(place.threadReply !== undefined && { threadReply: place.threadReply }),
+    ...(place.access.listen !== undefined && { defaultListen: place.access.listen }),
+  }
+}
+
+/** Whether a session thread started in this channel listens untagged, from hydra.toml; undefined when it says nothing. */
+export function tomlListen(channelId: string): boolean | undefined {
+  return tomlPolicy(channelId)?.defaultListen
+}
+
+/** The platform-wide listen default: hydra.toml's, else access.json's, else false. */
+export function defaultListenOf(access: Pick<Access, 'defaultListen'>): boolean {
+  return tomlGate()?.listen ?? access.defaultListen ?? false
+}
+
+export function ackReactionOf(access: Pick<Access, 'ackReaction'>): string | undefined {
+  return tomlGate()?.ackReaction ?? access.ackReaction
+}
+
 export const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 
 // ---------------------------------------------------------------------------
@@ -162,7 +209,7 @@ export type Place = Pick<InboundMessage, 'isDM' | 'channelId' | 'parentChannelId
  */
 export function channelPolicy(access: Pick<Access, 'groups'>, place: Place): GroupPolicy | undefined {
   const key = place.parentChannelId ?? place.channelId
-  return Object.hasOwn(access.groups, key) ? access.groups[key] : undefined
+  return tomlPolicy(key) ?? (Object.hasOwn(access.groups, key) ? access.groups[key] : undefined)
 }
 
 /**
@@ -192,7 +239,7 @@ export async function gate(msg: InboundMessage): Promise<GateResult> {
   const pruned = pruneExpired(access)
   if (pruned) saveAccess(access)
 
-  if (access.dmPolicy === 'disabled') return { action: 'drop' }
+  if (access.dmPolicy === 'disabled' || tomlGate()?.off) return { action: 'drop' }
 
   const senderId = msg.authorId
 
@@ -231,7 +278,7 @@ export async function gate(msg: InboundMessage): Promise<GateResult> {
   if (groupAllowFrom.length > 0 && !groupAllowFrom.includes(senderId)) {
     return { action: 'drop' }
   }
-  if (requireMention && !(await gateway.isMentioned(msg, access.mentionPatterns))) {
+  if (requireMention && !(await gateway.isMentioned(msg, tomlGate()?.mentionPatterns ?? access.mentionPatterns))) {
     return { action: 'drop' }
   }
   return { action: 'deliver', access }

@@ -7,7 +7,7 @@ import { refreshDashboard } from './dashboard.js'
 import { registry, threadRegistry } from './sessions.js'
 import { flagStranger, acknowledged } from './stranger.js'
 import { transport } from './bridge-transport.js'
-import { loadAccess, operatorIds, gate, channelAllowed, admitTaggedChannel } from './access.js'
+import { loadAccess, operatorIds, gate, channelAllowed, channelPolicy, admitTaggedChannel, ackReactionOf } from './access.js'
 import type { Access } from './access.js'
 import type { DownloadedFile } from '../gateways/gateway.js'
 import type { InboundMessage } from '../gateways/gateway.js'
@@ -323,8 +323,9 @@ export function extractContextLinks(text: string): string[] {
 async function deliverToSession(msg: InboundMessage, targetSessionId: string, access: Access, before?: Promise<unknown>): Promise<void> {
   // Nothing here may yield before enqueueUserMessage: its ingress slot is reserved synchronously.
   void gateway.typing(msg.channelId).catch(() => {})
-  if (access.ackReaction) {
-    void gateway.react(msg.channelId, msg.id, access.ackReaction).catch(() => {})
+  const ack = ackReactionOf(access)
+  if (ack) {
+    void gateway.react(msg.channelId, msg.id, ack).catch(() => {})
   }
 
   const sessionInfo = registry.get(targetSessionId)
@@ -1168,8 +1169,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
   let chat_id = msg.channelId
 
   if (!msg.isDM && !msg.isThread) {
-    const channelId = msg.channelId
-    const policy = result.access.groups[channelId]
+    const policy = channelPolicy(result.access, msg)
     if (policy?.threadReply) {
       const preview = msg.content.slice(0, 50).replace(/<@!?\d+>\s*/g, '').trim() || 'Thread'
       const archiveDuration = policy.threadArchiveMinutes ?? 1440
@@ -1208,8 +1208,9 @@ gateway.onMessage(async (msg: InboundMessage) => {
 
   void gateway.typing(msg.channelId).catch(() => {})
 
-  if (result.access.ackReaction) {
-    void gateway.react(msg.channelId, msg.id, result.access.ackReaction).catch(() => {})
+  const ack = ackReactionOf(result.access)
+  if (ack) {
+    void gateway.react(msg.channelId, msg.id, ack).catch(() => {})
   }
 
   let targetSessionId = 'main'
