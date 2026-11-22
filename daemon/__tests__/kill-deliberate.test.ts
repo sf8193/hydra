@@ -69,7 +69,7 @@ test('only these files call killSession with keepRecord or keepWatches (any layo
   const root = join(import.meta.dir, '..', '..')
   const files: string[] = []
   const walk = (d: string) => { for (const f of readdirSync(d)) { if (f === 'node_modules' || f === '__tests__' || f.startsWith('.')) continue; const p = join(d, f); if (statSync(p).isDirectory()) walk(p); else if (p.endsWith('.ts') && !p.includes('/scripts/')) files.push(p) } }
-  for (const d of ['app', 'infra', 'engines', 'sessions', 'protocols', 'specialists', 'connectors', 'shared']) walk(join(root, d))
+  for (const d of ['app', 'infra', 'engines', 'sessions', 'protocols', 'connectors', 'shared']) walk(join(root, d))
   const keeping = new Set<string>()
   for (const f of files) {
     const src = readFileSync(f, 'utf8')

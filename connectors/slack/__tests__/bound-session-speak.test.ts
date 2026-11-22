@@ -17,7 +17,10 @@ import { bindConversation, getConversationTable, replyInConversation, slackRunti
 import { BOT, TWO_APPS, hydra, view } from './slack-config.js'
 import { DELIVER_MAX_MESSAGE_BYTES } from '../../../shared/constants.js'
 import { LANDED } from './outcomes.js'
-import type { DeliverOutcome } from '../../../specialists/targets.js'
+import type { DeliverOutcome } from '../../../app/targets.js'
+import * as slackTargets from '../../../app/targets.js'
+import { bindSlackDelivery } from '../runtime.js'
+bindSlackDelivery(slackTargets)
 
 process.stderr.write = (() => true) as any
 

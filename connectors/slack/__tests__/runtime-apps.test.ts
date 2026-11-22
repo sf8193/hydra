@@ -12,6 +12,9 @@ import { slackSpecialistsOf } from '../../../routing/route.js'
 import { sessionCapabilities } from '../../../sessions/tool-surface.js'
 import { BASE, TWO_APPS, hydra, view, SALES_BOT } from './slack-config.js'
 import { ConversationTable } from '../watch.js'
+import * as slackTargets from '../../../app/targets.js'
+import { bindSlackDelivery } from '../runtime.js'
+bindSlackDelivery(slackTargets)
 
 process.stderr.write = (() => true) as any
 

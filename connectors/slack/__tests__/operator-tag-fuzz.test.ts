@@ -13,7 +13,7 @@ import { testLoadEnv } from '../../../config/__tests__/load-env.js'
 import { ConversationTable, SLACK_LIMITS, type ConversationConfig, type HandleOutcome } from '../watch.js'
 import { BOT, SALES_BOT, directory } from './slack-config.js'
 import { LANDED } from './outcomes.js'
-import type { DeliverOutcome } from '../../../specialists/targets.js'
+import type { DeliverOutcome } from '../../../app/targets.js'
 
 process.stderr.write = (() => true) as any
 

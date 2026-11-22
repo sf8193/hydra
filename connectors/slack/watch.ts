@@ -17,7 +17,7 @@ export { conversationId, appOfEntry, TOP_LEVEL }
 export type RouteTarget = { to: string; conversation?: string }
 import { runGuard, type GuardInput, type GuardVerdict } from '../../routing/guard.js'
 import type { Guard } from '../../config/types.js'
-import type { DeliverOutcome } from '../../specialists/targets.js'
+import type { DeliverOutcome } from '../../app/targets.js'
 import { spelledBare } from '../../shared/target-kind.js'
 import { receivedLine, type LinePoster } from './lines.js'
 

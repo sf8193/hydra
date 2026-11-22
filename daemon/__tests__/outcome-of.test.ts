@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test'
-import { outcomeOf } from '../targets.js'
+import { outcomeOf } from '../../app/targets.js'
 import { deliverWord } from '../../shared/exit-codes.js'
 
 test('a rejection the engine marks retryable lands as deferred (exit 5), so a caller retries it (#782)', () => {

@@ -5,8 +5,8 @@ import { join } from 'path'
 import { handleCLIRequest, type CLIRequest } from '../../app/cli-handler.js'
 import { registry, threadRegistry } from '../../sessions/registry.js'
 import { transport } from '../../sessions/bridge-transport.js'
-import { specialistDeps } from '../specialist-deliver.js'
-import { conversationSessionName, deliverToTarget, toSession, toThread } from '../targets.js'
+import { specialistDeps } from '../../app/specialist-deliver.js'
+import { conversationSessionName, deliverToTarget, toSession, toThread } from '../../app/targets.js'
 import { executeTool } from '../../app/bridge-dispatch.js'
 import { _resetDelivery, _setDeliveryDeps, deliverUserMessage } from '../../app/typed-delivery.js'
 import { engines } from '../../sessions/engine-instances.js'
@@ -800,7 +800,7 @@ describe('specialists', () => {
     const seen: any[] = []
     occupy('thread-src', { adapter: fakeAdapter({ isAlive: () => true, deliver: async (_i: unknown, m: unknown) => { seen.push(m); return { status: 'accepted' } } }) })
     const name = specialist('thread-src')
-    const { deliverToTarget } = await import('../targets.js')
+    const { deliverToTarget } = await import('../../app/targets.js')
     expect((await deliverToTarget({ to: name }, 'hi', { source: 'slack-watch', initiator: 'slack-watch' })).ok).toBe(true)
     expect(seen[0].meta).toMatchObject({ source: 'slack-watch', specialist: name, initiator: 'slack-watch' })
     const big = await deliverToTarget({ to: name }, 'x'.repeat(10_001), { initiator: 'unknown' })

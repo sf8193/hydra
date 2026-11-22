@@ -10,7 +10,6 @@ import { fileURLToPath } from 'url'
 import { edges } from './check-layers.js'
 
 export const ALLOWED: readonly string[] = [
-  'specialists/specialist-deliver.ts specialists/targets.ts',
 ]
 
 /** Each cycle group as its sorted files joined by a space (Tarjan's strongly connected components of size 2 or more). */

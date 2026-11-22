@@ -1,4 +1,4 @@
-import type { DeliverOutcome } from '../../../specialists/targets.js'
+import type { DeliverOutcome } from '../../../app/targets.js'
 
 /** A delivery that landed, as targets.ts answers one: for a test whose connector only needs the message to go. */
 export const LANDED: Extract<DeliverOutcome, { ok: true }> = { ok: true, status: 'delivered', sessionId: 's-1', sessionName: 'session', threadId: 'thread-1', revived: false }

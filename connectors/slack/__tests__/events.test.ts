@@ -16,7 +16,7 @@ import { ConversationTable, type ConversationConfig, type ConversationDeps, type
 import { bindConversation, unbindConversation, operatorBind, operatorUnbind, getConversationTable, slackRuntimeDeps } from '../runtime.js'
 import { BASE, BOT, hydra, view, oneListener } from './slack-config.js'
 import { LANDED, refused } from './outcomes.js'
-import type { DeliverOutcome } from '../../../specialists/targets.js'
+import type { DeliverOutcome } from '../../../app/targets.js'
 
 process.stderr.write = (() => true) as any
 

@@ -46,7 +46,7 @@ export class NoticeLimiter {
   clear(): void { this.said.clear() }
 }
 
-/** The thread notices of app/session-lifecycle.ts and specialists/specialist-deliver.ts share this one. */
+/** The thread notices of app/session-lifecycle.ts and app/specialist-deliver.ts share this one. */
 export const threadNotices = new NoticeLimiter()
 
 /** The cause a refusal notice is limited by: one thread, one reason. Every place that tells a thread about a refused delivery builds it here. */

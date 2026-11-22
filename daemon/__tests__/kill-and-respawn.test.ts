@@ -13,7 +13,7 @@ import { _resetBackoff } from '../../infra/recovery-backoff.js'
 import { _setHydraConfigForTesting } from '../../infra/hydra-config.js'
 import { fakeAdapter } from '../../daemon/__tests__/test-harness.js'
 import { _resetHeld, holdForSpecialist, setHeldDelivery } from '../../app/specialist-thread.js'
-import { ensureSpecialist, killAndRespawn, NotReplaced, specialistDeps } from '../specialist-deliver.js'
+import { ensureSpecialist, killAndRespawn, NotReplaced, specialistDeps } from '../../app/specialist-deliver.js'
 import { setSpecialistThread } from '../../sessions/specialists.js'
 import type { HydraConfig, Specialist } from '../../config/types.js'
 

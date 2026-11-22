@@ -11,6 +11,9 @@ import { restrictedRefusal, PLACE_USE } from '../../../app/bridge-dispatch.js'
 import { ownConversationRefusal, getConversationTable, slackRuntimeDeps, stopSlackListener } from '../runtime.js'
 import { TOP_LEVEL } from '../../../shared/slack-conversation.js'
 import { TWO_APPS, hydra, view } from './slack-config.js'
+import * as slackTargets from '../../../app/targets.js'
+import { bindSlackDelivery } from '../runtime.js'
+bindSlackDelivery(slackTargets)
 
 process.stderr.write = (() => true) as any
 
