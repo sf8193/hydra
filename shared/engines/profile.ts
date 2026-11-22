@@ -1,4 +1,4 @@
-// What one engine is, so far: its name for a person, and what its sessions can be asked. Each engine keeps its own profile in its own file (shared/engines/<engine>.ts);
+// What one engine is: its name for a person, what its sessions can be asked, and the aliases and id prefix that name its models. Each engine keeps its own profile in its own file (shared/engines/<engine>.ts);
 // the list in shared/engines/index.ts is the only place that names them all. A profile is plain data, so config and the CLI can read it without importing an adapter.
 
 export type EngineProfile = {
@@ -12,4 +12,8 @@ export type EngineProfile = {
   enforcesReadOnly: boolean
   /** `respawn +f` can layer a template's tools and session type onto the session. */
   takesTemplates: boolean
+  /** The chat aliases that name this engine's models (`spawn neon: topic`), each mapped to the model id it runs. An alias selects the engine as well as the model. */
+  aliases: Readonly<Record<string, string>>
+  /** Every model id that starts with this is this engine's (`gpt-` is Codex's, `gemini-` is agy's). Absent: the engine's ids are known by other means. */
+  idPrefix?: string
 }
