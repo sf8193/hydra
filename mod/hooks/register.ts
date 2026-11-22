@@ -53,7 +53,9 @@ export function register(on: On) {
   on('prompt.submit', async ($, e, next) => {
     for (const chat of channelChats(e.text)) unanswered.add(chat)
     if (unanswered.size > 1) ambiguous = true
-    return next(e)
+    // The session's own thread, restated with every prompt: a compaction summary drops it, and a notice with no chat_id would then leave the session guessing where to reply.
+    const thread = await $.env.get('HYDRA_THREAD_ID')
+    return next(thread ? { ...e, context: [...(e.context ?? []), `Your own chat_id (reply here unless a message names another chat): ${thread}`] } : e)
   })
   on('tool.call', async ($, e, next) => {
     const r = await next(e)

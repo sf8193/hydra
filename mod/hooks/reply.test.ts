@@ -139,3 +139,11 @@ test('the guard sends the answer as written: the gateway shapes tables and box a
   await $.classic.Stop(stop('| a | b |\n|---|---|'))
   expect(seen.sent).toEqual([R('111', '| a | b |\n|---|---|')])
 })
+
+test('every prompt carries the session\'s own thread id as context, so a compaction cannot lose it', async ($, on) => {
+  const seen: any[] = []
+  on('prompt.submit', ($: any, e: any) => { seen.push(e.context); return { text: e.text } })
+  on('env.get', (_$: any, e: any) => ({ value: e.name === 'HYDRA_THREAD_ID' ? 'D1:99.5' : undefined }))
+  await $.prompt.submit({ text: 'hello', wait: false, origin: { kind: 'user' } })
+  expect(seen[0]).toEqual(['Your own chat_id (reply here unless a message names another chat): D1:99.5'])
+})
