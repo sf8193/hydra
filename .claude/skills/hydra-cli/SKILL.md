@@ -64,10 +64,10 @@ Identity of who triggered the spawn. Appears in announcements, stored for audit.
 **3. What model?**
 
 ```bash
---model <alias>     # e.g. sonnet, haiku, opus, fable (= fable-5-2), fable-5-1, fable-5-2
+--model <alias>     # e.g. sonnet, opus, sol, neon, omp-sonnet
 ```
 
-Run `hydra spawn --help` for current aliases, or check `shared/constants.ts`. Omit for the daemon's default (`HYDRA_MODEL` env). Full model IDs also accepted.
+Run `hydra --help` for all current aliases across engines, or check `shared/engines/`. Omit for the daemon's default (`HYDRA_MODEL` env). Full model IDs also accepted.
 
 ### Optional Flags
 

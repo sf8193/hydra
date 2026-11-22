@@ -307,6 +307,9 @@ test('parseHandoffCommand: a note needs a separator; a chat line that starts wit
   expect(parseHandoffCommand('/handoff opus')).toEqual({ model: 'opus' })
   expect(parseHandoffCommand('handoff: So next session can listen to each of these PRs')).toEqual({ note: 'So next session can listen to each of these PRs' })
   expect(parseHandoffCommand('handoff opus: watch CI\nand refine')).toEqual({ model: 'opus', note: 'watch CI\nand refine' })
+  expect(parseHandoffCommand('handoff neon: finish the docs')).toEqual({ model: 'neon', note: 'finish the docs' })
+  expect(parseHandoffCommand('handoff omp-sonnet: finish the docs')).toEqual({ model: 'omp-sonnet', note: 'finish the docs' })
+  expect(parseHandoffCommand('Handoff Neon - finish the docs')).toEqual({ model: 'Neon', note: 'finish the docs' })
   expect(parseHandoffCommand('Handoff sonnet:let\'s do A')).toEqual({ model: 'sonnet', note: 'let\'s do A' })
   expect(parseHandoffCommand('handoff: ')).toEqual({})
   expect(parseHandoffCommand('handoff - ')).toEqual({})
@@ -373,7 +376,7 @@ test('isHandoffNearMiss: an attempted note that did not parse is flagged; chat a
   const { isHandoffNearMiss } = await import('../../app/router.js')
   for (const t of ['handoff -- note', 'handoff -note', 'handoff- note', 'handoff status: is it done?', 'handoff status - is it done?'])
     expect([t, isHandoffNearMiss(t)]).toEqual([t, true])
-  for (const t of ['handoff: note', 'handoff opus: note', 'handoff - note', 'handoff opus - note', 'handoff', 'handoff opus', 'handoff-related bug', 'handoff looks broken', 'handoffs are slow', 'please handoff: x'])
+  for (const t of ['handoff: note', 'handoff opus: note', 'handoff neon: note', 'handoff omp-sonnet: note', 'handoff - note', 'handoff opus - note', 'handoff neon - note', 'handoff', 'handoff opus', 'handoff neon', 'handoff-related bug', 'handoff looks broken', 'handoffs are slow', 'please handoff: x'])
     expect([t, isHandoffNearMiss(t)]).toEqual([t, false])
 })
 
