@@ -419,6 +419,7 @@ describe('delivery paths (adapter-policy T7)', () => {
   }
 
   beforeEach(() => {
+    setFlushGate(() => undefined)   // these tests are about the delivery paths, not the policy gate
     t = new BridgeTransport()
     logged = []
     process.stderr.write = ((line: string) => { logged.push(line); return true }) as any
@@ -538,7 +539,7 @@ describe('delivery paths (adapter-policy T7)', () => {
       socket.write = (d: string) => { out.push(d); return true }
       t.flushQueue('t7-c10')
       expect(out.map(o => JSON.parse(o).n)).toEqual(['a', 'b', 'c'])
-    } finally { setFlushGate(undefined) }
+    } finally { setFlushGate(() => undefined) }
   })
 
   test("main: a departing notice queued before a restart is dropped at restore; the successor prompt and an ordinary message queued with it are kept, in order", () => {

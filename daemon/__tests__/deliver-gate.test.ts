@@ -9,7 +9,7 @@ const root = join(import.meta.dir, '..', '..')
 const info = (deliver: () => Promise<unknown>) => ({ sessionId: 's', adapter: { deliver } }) as unknown as SessionInfo
 const note = { type: 'notification', content: 'hi' } as never
 
-afterEach(() => setFlushGate(undefined))
+afterEach(() => setFlushGate(() => undefined))
 
 describe('deliverToAdapter: the one drift gate in front of every engine', () => {
   test('a refusal from the gate is a non-retryable rejection, and the engine is never called', async () => {
@@ -20,15 +20,23 @@ describe('deliverToAdapter: the one drift gate in front of every engine', () => 
     expect(called).toBe(0)
   })
 
+  test('with no gate set nothing is delivered', async () => {
+    let called = 0
+    setFlushGate(undefined)
+    const r = await deliverToAdapter(info(async () => { called++; return { status: 'accepted', via: 'x' } }), note)
+    expect(r).toMatchObject({ status: 'rejected', retryable: false })
+    expect(called).toBe(0)
+  })
+
   test('no refusal: the engine answers', async () => {
     setFlushGate(() => undefined)
     expect(await deliverToAdapter(info(async () => ({ status: 'accepted', via: 'x' })), note)).toEqual({ status: 'accepted', via: 'x' })
   })
 
   test('no production file calls adapter.deliver except deliverToAdapter, so no route skips the gate', () => {
-    const files = execFileSync('git', ['ls-files', '*.ts'], { cwd: root, encoding: 'utf8' }).split('\n')
+    const files = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '*.ts'], { cwd: root, encoding: 'utf8' }).split('\n')
       .filter(f => f && !/(^|\/)(__tests__|scripts|node_modules)\//.test(f) && !f.endsWith('.test.ts'))
-    const hits = files.filter(f => /\badapter\.deliver\(/.test(readFileSync(join(root, f), 'utf8').replace(/\/\/.*$/gm, '')))
+    const hits = files.filter(f => /\badapter\??\.deliver\b|\badapter\??\.?\[\s*['"]deliver['"]\s*\]/.test(readFileSync(join(root, f), 'utf8').replace(/\/\/.*$/gm, '')))
     expect(hits).toEqual(['sessions/bridge-transport.ts'])
   })
 })

@@ -360,7 +360,7 @@ describe('what any session sends INTO a restricted session is fenced and capped 
 describe('a landing on the real session', () => {
   test('the envelope reaches the specialist\'s own session through its adapter, with its own thread as the chat_id to answer in', async () => {
     Object.assign(sendDeps, real)
-    setFlushGate(undefined)   // the session's policy here is a stand-in: this test is about the landing, not the drift gate
+    setFlushGate(() => undefined)   // the session's policy here is a stand-in: this test is about the landing, not the drift gate
     sendDeps.linkOf = async () => undefined
     const got: Record<string, unknown>[] = []
     const deep = session('deep-live', 'deep-thread', { adapter: fakeAdapter({ isAlive: () => true, deliver: async (_i: unknown, m: Record<string, unknown>) => { got.push(m); return { status: 'accepted' } } }) })
@@ -471,7 +471,7 @@ describe('the receiver\'s thread shows a one-line note that a hand-off arrived',
   })
   test('through the real landing: gateway.send is called once for the receiver\'s own thread, as subtext', async () => {
     Object.assign(sendDeps, real)
-    setFlushGate(undefined)   // as above: the landing, not the drift gate
+    setFlushGate(() => undefined)   // as above: the landing, not the drift gate
     sendDeps.linkOf = async () => undefined
     const sentTo: { id: string; opts: unknown }[] = []
     const realSend = gateway.send

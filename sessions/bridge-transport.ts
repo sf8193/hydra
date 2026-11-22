@@ -39,7 +39,8 @@ export function setFlushGate(gate: ((info: SessionInfo) => string | undefined) |
  * was never verified, is not delivered to), then the adapter. Every caller of `adapter.deliver` goes through here, so no engine checks it.
  */
 export function deliverToAdapter(info: SessionInfo, msg: Notification): Promise<DeliveryResult> {
-  const refused = flushGate?.(info)
+  // No gate set means app/restricted.ts has not loaded: nothing is delivered rather than everything going ungated.
+  const refused = flushGate ? flushGate(info) : 'the delivery gate is not set (app/restricted.ts sets it when it loads)'
   return refused ? Promise.resolve({ status: 'rejected', retryable: false, reason: refused }) : info.adapter.deliver(info, msg)
 }
 
