@@ -305,7 +305,7 @@ describe('cli-handler: deliver (Z2)', () => {
     expect(res).toEqual({ type: 'cli-response', command: 'deliver', id: res.id, ok: true,
       data: { status: 'delivered', proof: 'socket_write', ...common(info) }, result: 'done' })
     expect(written).toHaveLength(1)
-    expect(JSON.parse(written[0])).toEqual({ type: 'notification', content: 'whisper', meta: { source: 'cli-deliver', initiator: 'op' } })
+    expect(JSON.parse(written[0])).toEqual({ type: 'notification', content: 'whisper', meta: { source: 'cli-deliver', chat_id: info.threadId, initiator: 'op' } })
     expect(checkIdempotency(k)).toMatchObject({ blocked: true, entry: { status: 'completed' } })
   })
 

@@ -115,7 +115,8 @@ export async function deliverToSession(info: SessionInfo, text: string, opts: { 
 
   const notification = {
     type: 'notification' as const, content: text,
-    meta: { source: opts.source ?? 'cli-deliver', ...(opts.initiator && { initiator: opts.initiator }), ...opts.meta },
+    // chat_id: the receiving session's own thread, so a reply from a notice with no human message lands there, not in the operator's DM.
+    meta: { source: opts.source ?? 'cli-deliver', ...(info.threadId && { chat_id: info.threadId }), ...(opts.initiator && { initiator: opts.initiator }), ...opts.meta },
     ...(opts.lowPriority && { lowPriority: true }),
   }
   let result: DeliveryResult
