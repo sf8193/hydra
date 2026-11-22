@@ -14,8 +14,8 @@ import { transcribeDownloads, mergeTranscripts } from '../infra/transcription.js
 
 import { handleSpawnIntercept, handleTemplateSpawn, handleKillIntercept, handleRestartIntercept, handleReconnectIntercept, handleCommandsIntercept } from './commands/global.js'
 import { handleRecoverIntercept } from './recovery.js'
-import { resolveModelAlias, resolveEngineAlias, resolveAnyEngineAlias, engineAliasPattern, extractModelPrefix, isDeleteReaction, MODEL_ALIAS_PATTERN, DEFAULT_REVIEW_ROUNDS } from '../shared/constants.js'
-import { ENGINES, ENGINE_PROFILES } from '../shared/engines/index.js'
+import { resolveModelAlias, resolveEngineAlias, resolveAnyEngineAlias, engineAliasPattern, extractModelPrefix, isDeleteReaction, MODEL_ALIAS_PATTERN, ENGINE_ALIAS_KEYS, ALL_ENGINE_ALIAS_PATTERN, DEFAULT_REVIEW_ROUNDS } from '../shared/constants.js'
+import { ENGINES } from '../shared/engines/index.js'
 import { isForMain, noteMainChannel } from '../sessions/main.js'
 import { handleMainHandoffIntercept } from './main-handoff.js'
 import { handleThreadKillIntercept, handleHandoffIntercept, handleDestroyIntercept, handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept, handlePeekIntercept } from './commands/thread.js'
@@ -51,7 +51,7 @@ import { holdForSpecialist, holdingFor, setHeldDelivery } from './specialist-thr
 // can never trigger them.
 const COMMAND_PREFIXES = [
   'new session:', 'spawn:', '/spawn', 'spawn-wt:', '/spawn-wt',
-  ...ENGINES.flatMap(e => Object.keys(ENGINE_PROFILES[e].aliases)).flatMap(a => [`spawn ${a}:`, `new session ${a}:`, `spawn-wt ${a}:`]),
+  ...ENGINE_ALIAS_KEYS.flatMap(a => [`spawn ${a}:`, `new session ${a}:`, `spawn-wt ${a}:`]),
   'kill session:', 'kill:', '/kill',
   '/sessions', 'list sessions',
   '/restart', 'restart daemon', 'restart',
@@ -83,7 +83,6 @@ const aliasForms = (pattern: string) => ({
 })
 export const ENGINE_ALIAS_FORMS = ENGINES.filter(e => e !== 'claude').map(engine => ({ engine, ...aliasForms(engineAliasPattern(engine)) }))
 const SPAWN_WT_MODEL_RE = new RegExp(`^(?:spawn-wt|/spawn-wt)\\s+(${MODEL_ALIAS_PATTERN}):\\s*(\\S+)\\s+([\\s\\S]+)`, 'i')
-const ALL_ENGINE_ALIAS_PATTERN = ENGINES.flatMap(e => Object.keys(ENGINE_PROFILES[e].aliases)).sort((a, b) => b.length - a.length).join('|')
 const FORK_MODEL_RE = new RegExp(`^(?:fork|/fork)\\s+(${ALL_ENGINE_ALIAS_PATTERN}):\\s*([\\s\\S]+)`, 'i')
 const BARE_ALIAS_RE = new RegExp(`^(${MODEL_ALIAS_PATTERN}):?$`, 'i')
 const BARE_CODEX_RE = /^codex:?\s*$/i
@@ -171,7 +170,7 @@ function resolveProtocolModel(alias: string | undefined, channelId: string, repl
   if (!alias) return undefined
   const resolved = resolveAnyEngineAlias(alias)
   if (!resolved) {
-    const available = ENGINES.flatMap(e => Object.keys(ENGINE_PROFILES[e].aliases)).join(', ')
+    const available = ENGINE_ALIAS_KEYS.join(', ')
     void gateway.send(channelId, `_Unknown model \`${alias}\`. Available: ${available}_`, { replyTo }).catch(() => {})
     return false
   }

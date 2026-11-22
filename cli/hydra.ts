@@ -23,8 +23,7 @@ import { readBootRefusal } from './boot-refusal.js'
 import { bootRefusal } from '../config/migrate.js'
 import { isPlatform, jobsAttempt, jobsLaunchdRun, jobsList, jobsMarkDone, jobsRun, jobsSync } from './jobs.js'
 import { parseAttemptArgs } from '../shared/jobs.js'
-import { parseIdempotencyTtl } from '../shared/constants.js'
-import { ENGINES, ENGINE_PROFILES } from '../shared/engines/index.js'
+import { ENGINE_ALIAS_ENTRIES, parseIdempotencyTtl } from '../shared/constants.js'
 
 // ---------------------------------------------------------------------------
 // CLI entry point
@@ -159,7 +158,7 @@ Spawn options:
   --force-cleanup                      Remove worktree + branch on kill even with uncommitted/unpushed work (unpushed commits become unreachable)
 
 Model aliases:
-${ENGINES.flatMap(e => Object.entries(ENGINE_PROFILES[e].aliases).map(([k, v]) => `  ${k.padEnd(16)} → ${v} (${ENGINE_PROFILES[e].label})`)).join('\n')}
+${ENGINE_ALIAS_ENTRIES.map(({ alias, model, label }) => `  ${alias.padEnd(16)} → ${model} (${label})`).join('\n')}
 
 Global options:
   --daemon <name>                      Target a specific daemon (else CHAT_PLATFORM picks among several)

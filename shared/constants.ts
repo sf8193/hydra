@@ -114,6 +114,15 @@ export const engineAliasPattern = (engine: EngineName) => Object.keys(ENGINE_PRO
 export const MODEL_ALIAS_PATTERN = engineAliasPattern('claude')
 export const CODEX_MODEL_ALIAS_PATTERN = engineAliasPattern('codex')
 
+/** Every engine's chat aliases in engine order, built once from ENGINE_PROFILES. */
+export const ENGINE_ALIAS_ENTRIES: ReadonlyArray<{ alias: string; model: string; engine: EngineName; label: string }> =
+  (Object.entries(ENGINE_PROFILES) as Array<[EngineName, EngineProfile]>).flatMap(([engine, profile]) =>
+    Object.entries(profile.aliases).map(([alias, model]) => ({ alias, model, engine, label: profile.label })),
+  )
+export const ENGINE_ALIAS_KEYS: readonly string[] = ENGINE_ALIAS_ENTRIES.map(e => e.alias)
+/** Longest-first regex fragment matching any engine's chat alias. */
+export const ALL_ENGINE_ALIAS_PATTERN = [...ENGINE_ALIAS_KEYS].sort((a, b) => b.length - a.length).join('|')
+
 /** Look up a chat alias. Returns the full model ID or undefined.
  *  Lowercases input — router regex 'i' flag handles matching, this handles lookup. */
 function lookup<T>(table: Readonly<Record<string, T>>, key: string): T | undefined {
@@ -131,11 +140,11 @@ export function resolveLaunchModel(raw: string): string {
  * cannot place: that passes through unchanged and no check holds it against an engine.
  */
 export function engineOfModel(raw: string): EngineName | undefined {
-  const engines = Object.entries(ENGINE_PROFILES) as Array<[EngineName, EngineProfile]>
-  for (const [engine, profile] of engines) if (lookup(profile.aliases, raw.toLowerCase())) return engine
+  const fromAlias = resolveAnyEngineAlias(raw)
+  if (fromAlias) return fromAlias.engine
   const id = raw.replace(/\[1m\]$/, '')
   if (isKnownModel(id)) return 'claude'
-  return engines.find(([, profile]) => profile.idPrefix && id.startsWith(profile.idPrefix))?.[0]
+  return (Object.entries(ENGINE_PROFILES) as Array<[EngineName, EngineProfile]>).find(([, profile]) => profile.idPrefix && id.startsWith(profile.idPrefix))?.[0]
 }
 
 /**

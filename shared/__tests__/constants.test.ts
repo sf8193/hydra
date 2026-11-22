@@ -1,6 +1,6 @@
 import { describe, test, expect, afterEach } from 'bun:test'
 import type { EngineName } from '../engines/index.js'
-import { AGY_MODEL_ALIASES, engineAliasPattern, resolveAgyModelAlias, resolveAnyEngineAlias, engineOfModel, resolveLaunchSelection, ompProvider, OMP_MODEL_ALIASES, resolveOmpModelAlias, SESSION_LABELS, isSessionLabel, parseSessionLabel, resolveModelAlias, resolveCodexModelAlias, isKnownModel, contextWindowOf, withContextSuffix, canonicalModel, byteTmuxName, MODEL_ALIASES, MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, KNOWN_MODELS, normalizeReviewRounds, parseIdleTtl, MAX_IDLE_TTL_MS } from '../constants.js'
+import { AGY_MODEL_ALIASES, ALL_ENGINE_ALIAS_PATTERN, ENGINE_ALIAS_ENTRIES, ENGINE_ALIAS_KEYS, engineAliasPattern, resolveAgyModelAlias, resolveAnyEngineAlias, engineOfModel, resolveLaunchSelection, ompProvider, OMP_MODEL_ALIASES, resolveOmpModelAlias, SESSION_LABELS, isSessionLabel, parseSessionLabel, resolveModelAlias, resolveCodexModelAlias, isKnownModel, contextWindowOf, withContextSuffix, canonicalModel, byteTmuxName, MODEL_ALIASES, MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, KNOWN_MODELS, normalizeReviewRounds, parseIdleTtl, MAX_IDLE_TTL_MS } from '../constants.js'
 
 test('review rounds have a twenty-round default and hard cap', () => {
   expect(normalizeReviewRounds()).toBe(20)
@@ -409,5 +409,8 @@ describe('the engine alias tables', () => {
   test('no alias is in two tables, so the lookup order never decides an engine', () => {
     const keys = Object.values(tables).flatMap(t => Object.keys(t))
     expect(new Set(keys).size).toBe(keys.length)
+    expect(ENGINE_ALIAS_KEYS).toEqual(keys)
+    expect(ENGINE_ALIAS_ENTRIES.map(e => e.alias)).toEqual(keys)
+    expect(ALL_ENGINE_ALIAS_PATTERN.split('|').sort()).toEqual([...keys].sort())
   })
 })
