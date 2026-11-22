@@ -793,6 +793,11 @@ export class SlackGateway implements ChatGateway {
     return this.recentSentIds.has(id)
   }
 
+  // Every Slack thread reply carries the thread root as its referenceMessageId, and a root we posted is noted as sent: no reply here points at one message.
+  isReplyToUs(_msg: InboundMessage): boolean {
+    return false
+  }
+
   getThreadAnchor(threadId: string): { channelId: string; messageId: string } | null {
     const parts = threadId.split(':')
     if (parts.length < 2) return null

@@ -155,6 +155,11 @@ export async function admitTaggedChannel(msg: InboundMessage): Promise<boolean> 
   return true
 }
 
+/** Whether `msg` tags the bot or matches this platform's configured mention patterns. */
+export function mentionsUs(msg: InboundMessage): Promise<boolean> {
+  return gateway.isMentioned(msg, gateSettings()?.mentionPatterns)
+}
+
 export async function gate(msg: InboundMessage): Promise<GateResult> {
   if (gateSettings()?.off) return { action: 'drop' }
 
@@ -165,6 +170,6 @@ export async function gate(msg: InboundMessage): Promise<GateResult> {
   const policy = channelPolicy(msg)
   if (!policy) return { action: 'drop' }
   if (policy.allowFrom.length > 0 && !policy.allowFrom.includes(senderId)) return { action: 'drop' }
-  if (policy.requireMention && !(await gateway.isMentioned(msg, gateSettings()?.mentionPatterns))) return { action: 'drop' }
+  if (policy.requireMention && !(await mentionsUs(msg))) return { action: 'drop' }
   return { action: 'deliver' }
 }

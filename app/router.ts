@@ -4,10 +4,10 @@ import { reserveUserIngress } from './user-ingress.js'
 import { cacheSlackChannel, cacheSlackThread, cachedSlackChannel } from '../infra/artifacts.js'
 import { parseArchiveUrl } from '../shared/slack-conversation.js'
 import { refreshDashboard } from './dashboard.js'
-import { registry, threadRegistry } from '../sessions/registry.js'
+import { registry, threadRegistry, type SessionInfo } from '../sessions/registry.js'
 import { flagStranger, acknowledged } from './stranger.js'
 import { transport } from '../sessions/bridge-transport.js'
-import { operatorIds, gate, channelAllowed, channelPolicy, admitTaggedChannel, ackReactionOf } from '../sessions/access.js'
+import { operatorIds, gate, channelAllowed, channelPolicy, admitTaggedChannel, ackReactionOf, mentionsUs } from '../sessions/access.js'
 import type { DownloadedFile } from '../gateways/gateway.js'
 import type { InboundMessage } from '../gateways/gateway.js'
 import { transcribeDownloads, mergeTranscripts } from '../infra/transcription.js'
@@ -317,6 +317,16 @@ export function extractContextLinks(text: string): string[] {
   }
 
   return links
+}
+
+/**
+ * Whether a message in a session's thread is meant for the session: a listening thread, a message that opens with the
+ * session's name, a reply to one of ours, or a tag of the bot. Muted, the same message is dropped whoever sent it.
+ * The answers that need no await come first, so a listening thread's message reaches `deliverToSession` without yielding.
+ */
+function heardWithoutAsking(info: SessionInfo, msg: InboundMessage): boolean {
+  return (gateway.dmThreadsAreExclusive && msg.isDM) || info.listening
+    || msg.content.toLowerCase().startsWith(info.tmuxName) || gateway.isReplyToUs(msg)
 }
 
 async function deliverToSession(msg: InboundMessage, targetSessionId: string, before?: Promise<unknown>): Promise<void> {
@@ -1072,28 +1082,11 @@ gateway.onMessage(async (inbound: InboundMessage) => {
             }
           }
 
-          const alwaysRoute = gateway.dmThreadsAreExclusive && msg.isDM
-          const shouldRoute =
-            alwaysRoute ||
-            info.listening ||
-            msg.content.toLowerCase().startsWith(info.tmuxName) ||
-            (msg.referenceMessageId && gateway.wasSentByUs(msg.referenceMessageId))
-
-          if (shouldRoute) {
+          if (heardWithoutAsking(info, msg) || await mentionsUs(msg)) {
             info.lastActive = Date.now()
             registry.debouncedPersist()
             void deliverToSession(msg, mappedSession)
             return
-          }
-
-          if (msg.referenceMessageId) {
-            const mentioned = await gateway.isMentioned(msg)
-            if (mentioned) {
-              info.lastActive = Date.now()
-              registry.debouncedPersist()
-              void deliverToSession(msg, mappedSession)
-              return
-            }
           }
 
           return
@@ -1113,6 +1106,14 @@ gateway.onMessage(async (inbound: InboundMessage) => {
       void gateway.send(strangerThread, `Stranger danger: <@${senderId}> is not the operator. <@${operator}>, reply "yes" and I'll listen to them in this thread.`, { replyTo: msg.id }).catch(() => {})
     }
     return
+  }
+
+  // A muted thread stays muted for an admitted stranger: who may speak is settled above; whether this message is meant
+  // for the session is the same question for every sender.
+  if (strangerThread) {
+    const heldBy = registry.getByThread(strangerThread)
+    const held = heldBy ? registry.get(heldBy) : undefined
+    if (held && occupied(occupancy(held)) && !heardWithoutAsking(held, msg) && !(await mentionsUs(msg))) return
   }
 
   let chat_id = registry.resolveThreadId(msg)

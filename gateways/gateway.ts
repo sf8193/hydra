@@ -237,6 +237,11 @@ export interface ChatGateway {
   // Sent message tracking (for mention-by-reply detection)
   noteSent(id: string): void
   wasSentByUs(id: string): boolean
+  /**
+   * Whether `msg` is a reply to one of our messages: the platform's reply pointer names a message we sent. A gateway whose
+   * `referenceMessageId` is only the thread root (Slack) has no such pointer, so a message in a thread we opened is not a reply to us.
+   */
+  isReplyToUs(msg: InboundMessage): boolean
 
   // Session lifecycle visual — platform-specific rendering of lifecycle state
   updateSessionVisual?(threadId: string, opts: SessionVisualOpts): Promise<void>
