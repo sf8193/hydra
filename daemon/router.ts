@@ -14,7 +14,8 @@ import { transcribeDownloads, mergeTranscripts } from './transcription.js'
 
 import { handleSpawnIntercept, handleTemplateSpawn, handleKillIntercept, handleRestartIntercept, handleReconnectIntercept, handleCommandsIntercept } from './commands/global.js'
 import { handleRecoverIntercept } from './recovery.js'
-import { resolveModelAlias, resolveCodexModelAlias, resolveOmpModelAlias, resolveAgyModelAlias, extractModelPrefix, isDeleteReaction, MODEL_ALIAS_PATTERN, MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES, OMP_MODEL_ALIAS_PATTERN, AGY_MODEL_ALIAS_PATTERN, DEFAULT_REVIEW_ROUNDS } from '../shared/constants.js'
+import { resolveModelAlias, resolveCodexModelAlias, resolveEngineAlias, engineAliasPattern, extractModelPrefix, isDeleteReaction, MODEL_ALIAS_PATTERN, MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES, DEFAULT_REVIEW_ROUNDS } from '../shared/constants.js'
+import { ENGINES } from '../shared/engines/index.js'
 import { isForMain, noteMainChannel } from './main-session.js'
 import { handleMainHandoffIntercept } from './main-handoff.js'
 import { handleThreadKillIntercept, handleHandoffIntercept, handleDestroyIntercept, handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept, handlePeekIntercept } from './commands/thread.js'
@@ -67,22 +68,20 @@ const COMMAND_RE = new RegExp(
   `^(?:${COMMAND_PREFIXES.map(p => p.replace(/[.*+?^${}()|[\]\\\/]/g, '\\$&')).join('|')})(?:\\s|$)`, 'i',
 )
 const SPAWN_MODEL_RE = new RegExp(`^(?:new session|spawn)\\s+(${MODEL_ALIAS_PATTERN}):\\s*([\\s\\S]+)`, 'i')
-const SPAWN_CODEX_ALIAS_RE = new RegExp(`^(?:new session|spawn)\\s+(${CODEX_MODEL_ALIAS_PATTERN}):\\s*([\\s\\S]+)`, 'i')
 const SPAWN_CODEX_RE = /^(?:new session|spawn)\s+codex(?:\s+(\S+))?:\s*([\s\S]+)/i
-// omp aliases select the omp engine (`spawn omp-sonnet: topic`); exported for tests.
-export const SPAWN_OMP_ALIAS_RE = new RegExp(`^(?:new session|spawn)\\s+(${OMP_MODEL_ALIAS_PATTERN}):\\s*([\\s\\S]+)`, 'i')
-export const SPAWN_WT_OMP_MODEL_RE = new RegExp(`^(?:spawn-wt|/spawn-wt)\\s+(${OMP_MODEL_ALIAS_PATTERN}):\\s*(\\S+)\\s+([\\s\\S]+)`, 'i')
-export const BARE_OMP_ALIAS_RE = new RegExp(`^(${OMP_MODEL_ALIAS_PATTERN}):?$`, 'i')
-// agy aliases select the agy engine (`spawn neon: topic`), the same three forms.
-export const SPAWN_AGY_ALIAS_RE = new RegExp(`^(?:new session|spawn)\\s+(${AGY_MODEL_ALIAS_PATTERN}):\\s*([\\s\\S]+)`, 'i')
-export const SPAWN_WT_AGY_MODEL_RE = new RegExp(`^(?:spawn-wt|/spawn-wt)\\s+(${AGY_MODEL_ALIAS_PATTERN}):\\s*(\\S+)\\s+([\\s\\S]+)`, 'i')
-export const BARE_AGY_ALIAS_RE = new RegExp(`^(${AGY_MODEL_ALIAS_PATTERN}):?$`, 'i')
+// An alias of Codex, omp or agy selects both the model and the engine. It takes three chat forms: `spawn <alias>: topic`, `spawn-wt <alias>: repo topic`,
+// and a bare `<alias>` with no topic (answered with a hint). They are made for every engine in the list but Claude, whose aliases take the older forms below;
+// no alias is in two engines' profiles (shared/__tests__/constants.test.ts), so the order decides nothing. Exported for tests.
+const aliasForms = (pattern: string) => ({
+  spawn: new RegExp(`^(?:new session|spawn)\\s+(${pattern}):\\s*([\\s\\S]+)`, 'i'),
+  spawnWt: new RegExp(`^(?:spawn-wt|/spawn-wt)\\s+(${pattern}):\\s*(\\S+)\\s+([\\s\\S]+)`, 'i'),
+  bare: new RegExp(`^(${pattern}):?$`, 'i'),
+})
+export const ENGINE_ALIAS_FORMS = ENGINES.filter(e => e !== 'claude').map(engine => ({ engine, ...aliasForms(engineAliasPattern(engine)) }))
 const SPAWN_WT_MODEL_RE = new RegExp(`^(?:spawn-wt|/spawn-wt)\\s+(${MODEL_ALIAS_PATTERN}):\\s*(\\S+)\\s+([\\s\\S]+)`, 'i')
-const SPAWN_WT_CODEX_MODEL_RE = new RegExp(`^(?:spawn-wt|/spawn-wt)\\s+(${CODEX_MODEL_ALIAS_PATTERN}):\\s*(\\S+)\\s+([\\s\\S]+)`, 'i')
 const FORK_MODEL_RE = new RegExp(`^(?:fork|/fork)\\s+(${MODEL_ALIAS_PATTERN}):\\s*([\\s\\S]+)`, 'i')
 const FORK_CODEX_MODEL_RE = new RegExp(`^(?:fork|/fork)\\s+(${CODEX_MODEL_ALIAS_PATTERN}):\\s*([\\s\\S]+)`, 'i')
 const BARE_ALIAS_RE = new RegExp(`^(${MODEL_ALIAS_PATTERN}):?$`, 'i')
-const BARE_CODEX_ALIAS_RE = new RegExp(`^(${CODEX_MODEL_ALIAS_PATTERN}):?$`, 'i')
 const BARE_CODEX_RE = /^codex:?\s*$/i
 
 // Chat command patterns, matched in routeMessage. Exported for tests.
@@ -462,32 +461,12 @@ gateway.onMessage(async (msg: InboundMessage) => {
       }
     }
 
-    // "spawn sol: topic" — a Codex model alias selects both model and engine.
-    const spawnCodexAliasMatch = msg.content.match(SPAWN_CODEX_ALIAS_RE)
-    if (spawnCodexAliasMatch) {
-      const topic = spawnCodexAliasMatch[2].trim()
-      if (topic) {
-        void handleSpawnIntercept(msg, topic, resolveCodexModelAlias(spawnCodexAliasMatch[1]), 'codex')
-        return
-      }
-    }
-
-    // "spawn omp-sonnet: topic" — an omp alias selects both model and engine.
-    const spawnOmpAliasMatch = msg.content.match(SPAWN_OMP_ALIAS_RE)
-    if (spawnOmpAliasMatch) {
-      const topic = spawnOmpAliasMatch[2].trim()
-      if (topic) {
-        void handleSpawnIntercept(msg, topic, resolveOmpModelAlias(spawnOmpAliasMatch[1]), 'omp')
-        return
-      }
-    }
-
-    // "spawn neon: topic" — an agy alias selects both model and engine.
-    const spawnAgyAliasMatch = msg.content.match(SPAWN_AGY_ALIAS_RE)
-    if (spawnAgyAliasMatch) {
-      const topic = spawnAgyAliasMatch[2].trim()
-      if (topic) {
-        void handleSpawnIntercept(msg, topic, resolveAgyModelAlias(spawnAgyAliasMatch[1]), 'agy')
+    // "spawn sol: topic", "spawn omp-sonnet: topic", "spawn neon: topic" — an alias selects both model and engine.
+    for (const { engine, spawn } of ENGINE_ALIAS_FORMS) {
+      const aliasMatch = msg.content.match(spawn)
+      const topic = aliasMatch?.[2].trim()
+      if (aliasMatch && topic) {
+        void handleSpawnIntercept(msg, topic, resolveEngineAlias(engine, aliasMatch[1]), engine)
         return
       }
     }
@@ -528,7 +507,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
     if (spawnMatch) {
       const topic = spawnMatch[1].trim()
       // Catch "spawn sonnet:" (alias without topic) — don't spawn with "sonnet:" as topic
-      const bareAlias = topic.match(BARE_ALIAS_RE) || topic.match(BARE_CODEX_ALIAS_RE) || topic.match(BARE_OMP_ALIAS_RE) || topic.match(BARE_AGY_ALIAS_RE) || topic.match(BARE_CODEX_RE)
+      const bareAlias = topic.match(BARE_ALIAS_RE) || ENGINE_ALIAS_FORMS.map(({ bare }) => topic.match(bare)).find(Boolean) || topic.match(BARE_CODEX_RE)
       if (bareAlias) {
         const alias = bareAlias[1] || 'codex'
         void gateway.send(msg.channelId, `_\`spawn ${alias}:\` needs a topic — e.g. \`spawn ${alias}: describe the task\`_`, { replyTo: msg.id })
@@ -550,29 +529,10 @@ gateway.onMessage(async (msg: InboundMessage) => {
       }
     }
 
-    const spawnWtAgyModelMatch = msg.content.match(SPAWN_WT_AGY_MODEL_RE)
-    if (spawnWtAgyModelMatch) {
-      const [, alias, repo, topic] = spawnWtAgyModelMatch
-      if (repo && topic.trim()) {
-        void handleSpawnIntercept(msg, `wt:${repo.trim()} ${topic.trim()}`, resolveAgyModelAlias(alias), 'agy')
-        return
-      }
-    }
-
-    const spawnWtOmpModelMatch = msg.content.match(SPAWN_WT_OMP_MODEL_RE)
-    if (spawnWtOmpModelMatch) {
-      const [, alias, repo, topic] = spawnWtOmpModelMatch
-      if (repo && topic.trim()) {
-        void handleSpawnIntercept(msg, `wt:${repo.trim()} ${topic.trim()}`, resolveOmpModelAlias(alias), 'omp')
-        return
-      }
-    }
-
-    const spawnWtCodexModelMatch = msg.content.match(SPAWN_WT_CODEX_MODEL_RE)
-    if (spawnWtCodexModelMatch) {
-      const [, alias, repo, topic] = spawnWtCodexModelMatch
-      if (repo && topic.trim()) {
-        void handleSpawnIntercept(msg, `wt:${repo.trim()} ${topic.trim()}`, resolveCodexModelAlias(alias), 'codex')
+    for (const { engine, spawnWt } of ENGINE_ALIAS_FORMS) {
+      const wtMatch = msg.content.match(spawnWt)
+      if (wtMatch && wtMatch[2] && wtMatch[3].trim()) {
+        void handleSpawnIntercept(msg, `wt:${wtMatch[2].trim()} ${wtMatch[3].trim()}`, resolveEngineAlias(engine, wtMatch[1]), engine)
         return
       }
     }

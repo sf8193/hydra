@@ -5,7 +5,7 @@ import { listModifierKeys } from '../modifiers.js'
 import {
   SPAWN_RE, SPAWN_WT_RE, KILL_RE, LIST_RE, RESTART_RE, HEALTH_RE, RECONNECT_RE, COMMANDS_RE,
   THREAD_KILL_RE, DESTROY_RE, USAGE_RE, LISTEN_RE, PAUSE_RE, FORK_RE, FORKS_RE, REVIEW_RE, BUILD_RE, misplacedModelHint,
-  KEYS_RE, resolveTmuxKey, fetchSlackThreadSummary, warmContextLink, extractContextLinks, SPAWN_OMP_ALIAS_RE, SPAWN_WT_OMP_MODEL_RE, BARE_OMP_ALIAS_RE,
+  KEYS_RE, resolveTmuxKey, fetchSlackThreadSummary, warmContextLink, extractContextLinks, ENGINE_ALIAS_FORMS,
 } from '../router.js'
 
 // Suppress stderr
@@ -58,6 +58,7 @@ describe('spawn command', () => {
 // ---------------------------------------------------------------------------
 
 describe('omp spawn commands', () => {
+  const { spawn: SPAWN_OMP_ALIAS_RE, spawnWt: SPAWN_WT_OMP_MODEL_RE, bare: BARE_OMP_ALIAS_RE } = ENGINE_ALIAS_FORMS.find(f => f.engine === 'omp')!
   test('spawn omp-sonnet: topic, and new session omp-sonnet: topic', () => {
     const m = 'spawn omp-sonnet: fix the bug'.match(SPAWN_OMP_ALIAS_RE)
     expect([m?.[1], m?.[2]]).toEqual(['omp-sonnet', 'fix the bug'])

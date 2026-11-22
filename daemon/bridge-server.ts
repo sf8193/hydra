@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, unlinkSync, mkdirSync, chmodSync } from 'fs'
 import { createServer, type Socket } from 'net'
 import { dirname } from 'path'
-import { gateway, SOCK_PATH, STATE_DIR, PLATFORM } from './config.js'
+import { FRESH_START_MS, gateway, SOCK_PATH, STATE_DIR, PLATFORM } from './config.js'
 import { markDead, registry, threadRegistry, type SessionInfo } from './sessions.js'
 import { transport, type BridgeConn } from './bridge-transport.js'
 import { executeTool } from './bridge-dispatch.js'
@@ -116,9 +116,6 @@ const incumbentHolds = new Map<string, { until: number; socket: import('net').So
 // ---------------------------------------------------------------------------
 // Bridge protocol handler
 // ---------------------------------------------------------------------------
-
-/** A session registering this soon after its record was made (a first start, a resume or a refill) may be in Claude Code's startup: see settleThenFlush. */
-const FRESH_START_MS = 120_000
 
 /** Role of a registering bridge connection: 'control' (tool-only sidecar) or 'session'. */
 export function connectionRoleFor(msg: { connectionRole?: unknown }, info: SessionInfo | undefined): 'control' | 'session' {

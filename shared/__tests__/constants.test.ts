@@ -1,5 +1,6 @@
 import { describe, test, expect, afterEach } from 'bun:test'
-import { AGY_MODEL_ALIASES, AGY_MODEL_ALIAS_PATTERN, resolveAgyModelAlias, engineOfModel, resolveLaunchSelection, ompProvider, OMP_MODEL_ALIASES, OMP_MODEL_ALIAS_PATTERN, resolveOmpModelAlias, SESSION_LABELS, isSessionLabel, parseSessionLabel, resolveModelAlias, resolveCodexModelAlias, isKnownModel, contextWindowOf, withContextSuffix, canonicalModel, byteTmuxName, MODEL_ALIASES, MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, KNOWN_MODELS, normalizeReviewRounds, parseIdleTtl, MAX_IDLE_TTL_MS } from '../constants.js'
+import type { EngineName } from '../engines/index.js'
+import { AGY_MODEL_ALIASES, engineAliasPattern, resolveAgyModelAlias, engineOfModel, resolveLaunchSelection, ompProvider, OMP_MODEL_ALIASES, resolveOmpModelAlias, SESSION_LABELS, isSessionLabel, parseSessionLabel, resolveModelAlias, resolveCodexModelAlias, isKnownModel, contextWindowOf, withContextSuffix, canonicalModel, byteTmuxName, MODEL_ALIASES, MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, KNOWN_MODELS, normalizeReviewRounds, parseIdleTtl, MAX_IDLE_TTL_MS } from '../constants.js'
 
 test('review rounds have a twenty-round default and hard cap', () => {
   expect(normalizeReviewRounds()).toBe(20)
@@ -197,7 +198,7 @@ describe('omp model aliases', () => {
   })
 
   test('the pattern lists every alias', () => {
-    expect(OMP_MODEL_ALIAS_PATTERN.split('|').sort()).toEqual(Object.keys(OMP_MODEL_ALIASES).sort())
+    expect(engineAliasPattern('omp').split('|').sort()).toEqual(Object.keys(OMP_MODEL_ALIASES).sort())
   })
 })
 
@@ -388,6 +389,22 @@ describe('agy model aliases', () => {
   })
 
   test('the pattern lists every alias', () => {
-    expect(AGY_MODEL_ALIAS_PATTERN.split('|').sort()).toEqual(Object.keys(AGY_MODEL_ALIASES).sort())
+    expect(engineAliasPattern('agy').split('|').sort()).toEqual(Object.keys(AGY_MODEL_ALIASES).sort())
+  })
+})
+
+describe('the engine alias tables', () => {
+  const tables = { claude: MODEL_ALIASES, codex: CODEX_MODEL_ALIASES, omp: OMP_MODEL_ALIASES, agy: AGY_MODEL_ALIASES } as const
+  test('every alias belongs to the one engine whose table holds it, and resolves to that table\'s id', () => {
+    for (const [engine, table] of Object.entries(tables) as Array<[EngineName, Record<string, string>]>) {
+      for (const [alias, id] of Object.entries(table)) {
+        expect(engineOfModel(alias)).toBe(engine)
+        expect(resolveLaunchSelection(alias)).toEqual({ model: id, engine })
+      }
+    }
+  })
+  test('no alias is in two tables, so the lookup order never decides an engine', () => {
+    const keys = Object.values(tables).flatMap(t => Object.keys(t))
+    expect(new Set(keys).size).toBe(keys.length)
   })
 })

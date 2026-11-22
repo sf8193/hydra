@@ -8,7 +8,6 @@
 import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import type { SessionInfo } from '../sessions.js'
-import { ENGINE_CAPABILITIES } from '../../shared/engine-capabilities.js'
 import type {
   EngineAdapter, LaunchInput, LaunchResult, DeliveryResult, Notification, StopResult,
   ContextUsage, RecoveryPlan, RecoverySource, Turn,
@@ -16,23 +15,20 @@ import type {
 import { withoutIntents } from './engine-adapter.js'
 import type { BlockingState } from '../pane-probe.js'
 import { CLAUDE_WORKING_SILENCE_S, type ClaudeEngine } from './claude-engine.js'
-import { SOCK_PATH, PLATFORM, STATE_DIR } from '../config.js'
+import { FRESH_START_MS, SOCK_PATH, PLATFORM, SPAWN_LOGS_DIR, STATE_DIR } from '../config.js'
 import { removeSessionToken, removeSpawnPrompt, shq, writeSessionToken, writeSpawnPrompt } from '../launch-files.js'
 import { deliveryRefusal } from '../restricted.js'
 import { tmuxCreateSession, tmuxSync, tmuxWindowActivity } from '../tmux.js'
 import { SESSION_INSTRUCTIONS, contextWindowOf, formatNotification } from '../../shared/constants.js'
 import { withRaisedFdLimit } from '../../shared/spawn-env.js'
-import { isRestrictedPolicy } from '../policy-record.js'
 import { AGY_HOOKS_CONFIG, AGY_MCP_CONFIG, registerHydraHooks, registerHydraTools } from './agy-config.js'
 import { agyContextTokens, agyState, agyStateDir, agyStateFile, agyTurn } from './agy-session.js'
 
-const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
 /** A Gemini API key, if the operator keeps one: agy then runs in its API-key mode, else on its own login. Only this file's path is on a command line. */
 export const AGY_API_KEY_FILE = join(STATE_DIR, 'agy-api-key')
 const PASTE_DIR = join(STATE_DIR, 'agy-paste')
 const LANDED_WAIT_MS = 8_000
-// A session this young may still be on agy's boot, login or folder-trust screen: its first hook event (turn().live is null until then) says agy takes input.
-const FRESH_START_MS = 120_000
+// A session still in FRESH_START_MS may be on agy's boot, login or folder-trust screen: its first hook event (turn().live is null until then) says agy takes input.
 const READY_WAIT_MS = 60_000
 
 /** The `--settings` JSON for one launch (never saved by agy): the folder is trusted, so agy does not stop to ask, and a key file means API-key mode. */
@@ -43,7 +39,6 @@ export function agySettings(cwd: string, apiKeyMode: boolean): string {
 const collapse = (s: string) => s.replace(/\s+/g, '')
 
 export class AgyEngine implements EngineAdapter {
-  readonly limitsAccess = ENGINE_CAPABILITIES.agy.limitsAccess
   readonly provider = 'agy' as const
   readonly channel = 'engine' as const
   constructor(private readonly claude: ClaudeEngine, private readonly mcpConfig = AGY_MCP_CONFIG, private readonly hooksConfig = AGY_HOOKS_CONFIG) {}
@@ -51,9 +46,6 @@ export class AgyEngine implements EngineAdapter {
   async start(): Promise<void> {}
 
   async launch(input: LaunchInput): Promise<LaunchResult> {
-    // This engine cannot limit a session's access (limitsAccess); it would run one as the operator.
-    if (isRestrictedPolicy(input.policy)) throw new Error(`specialist ${input.policy.specialist} has restricted = true, which this engine cannot give: set engine = "claude", or set restricted = false`)
-    if (input.policy?.canOnlyWriteTo) throw new Error(`specialist ${input.policy.specialist} has can_only_write_to = "workdir", which this engine cannot give: set engine = "claude", or remove can_only_write_to`)
     const { sessionId, tmuxName } = input
     const model = input.model!   // doSpawnSession always gives agy one (its flash model when none is named)
     // Resume: agy continues the dead session's conversation (agy keeps conversations per folder: the caller launches in the folder the session had).

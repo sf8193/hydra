@@ -750,6 +750,13 @@ describe('spawn_session fork_from and read_only', () => {
     expect(await errorOf({ model: 'neon', read_only: true })).toContain('read_only is not enforced on agy sessions')
   })
 
+  test('fork_from and read_only are refused with a Codex model', async () => {
+    mk('fc-caller', 'fccaller')
+    mk('fc-src', 'fcsrc', { claudeSessionId: 'cl-src', worktreePath: dir, sessionMetadata: { model: 'claude-src-model', cwd: dir } as any })
+    expect(await errorOf({ model: 'gpt-5.1', fork_from: 'fcsrc' })).toContain('Codex sessions cannot be forked')
+    expect(await errorOf({ model: 'gpt-5.1', read_only: true })).toContain('read_only is not enforced on Codex sessions')
+  })
+
   test('a session name resolves to its fork plan, launched in its cwd on its model', async () => {
     mk('fs-caller', 'fscaller')
     mk('fs-src', 'fssrc', { claudeSessionId: 'cl-src', worktreePath: dir, sessionMetadata: { model: 'claude-src-model', cwd: dir } as any })

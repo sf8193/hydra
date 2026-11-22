@@ -299,7 +299,7 @@ describe('engine', () => {
   })
   test('omp is refused for a specialist, restricted or not, with its own one message', () => {
     for (const body of ['restricted = true\nengine = "omp"', 'engine = "omp"']) {
-      expect(errorsOf(spec(body))).toEqual([`specialists.ops.engine: omp cannot restrict a session's tools, so a specialist cannot use it; use claude or codex`])
+      expect(errorsOf(spec(body))).toEqual([`specialists.ops.engine: omp cannot restrict a session's tools, so a specialist cannot use it; use claude, codex, or agy`])
     }
   })
   test('agy runs an unrestricted specialist, named by engine or by model alias; restricted = true is refused as for codex', () => {

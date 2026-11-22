@@ -75,7 +75,7 @@ describe('can_only_write_to', () => {
     expect(errorsOf(spec('can_only_write_to = "workdir"\nengine = "claude"\nmodel = "sol"'))).toEqual([`specialists.ops.model: "sol" is a codex model, but engine = "claude": set engine = "codex", or use a model for claude`])
   })
   test('omp is refused with its own one message, not a second one for write confinement', () => {
-    const omp = `specialists.ops.engine: omp cannot restrict a session's tools, so a specialist cannot use it; use claude or codex`
+    const omp = `specialists.ops.engine: omp cannot restrict a session's tools, so a specialist cannot use it; use claude, codex, or agy`
     expect(errorsOf(spec('can_only_write_to = "workdir"\nengine = "omp"'))).toEqual([omp])
     expect(errorsOf(spec('can_only_write_to = "workdir"\nmodel = "omp-sol"'))).toEqual([omp.replace('.engine:', '.model:')])
   })

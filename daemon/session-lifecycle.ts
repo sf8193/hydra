@@ -32,6 +32,7 @@ import { AGY_MODEL_ALIASES, resolveLaunchSelection, spawnModel, withContextSuffi
 import type { SessionType, ToolBase, SessionLabel } from '../shared/constants.js'
 import { isRestricted, isRestrictedPolicy } from './policy-record.js'
 import { resolveEngine } from './engines/instances.js'
+import { engineLimitsAccess } from '../shared/engines/index.js'
 import type { EngineAdapter, ProviderId } from './engines/engine-adapter.js'
 import { resumeHomeOwner } from './engines/codex-engine-adapter.js'
 import { buildSpawnPrompt, buildForkPrompt, buildHandoffPrompt, buildResurrectPrompt } from './prompts/session.js'
@@ -1084,13 +1085,13 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     }
     policy = continuing ? (r.stored ?? r.current) : r.current
     // The engine comes from the thread's history, and `handoff <model>` can change it: only an engine that limits access can run a restricted or write-confined session.
-    if (isRestrictedPolicy(policy) && !resolveEngine(engine).limitsAccess) {
+    if (isRestrictedPolicy(policy) && !engineLimitsAccess(engine)) {
       throw new PolicyRefusal(`specialist ${policy.specialist} has restricted = true, which the ${engine} engine cannot give: set engine = "claude", or set restricted = false. ${remedy(sessionName)}`)
     }
     // The sandbox its servers run under is proven only on some macOS versions: refused here, where every start passes, never run on a guess.
     const unproven = macosRefusal(policy, sessionName)
     if (unproven) throw new PolicyRefusal(unproven)
-    if (policy?.canOnlyWriteTo && !resolveEngine(engine).limitsAccess) {
+    if (policy?.canOnlyWriteTo && !engineLimitsAccess(engine)) {
       throw new PolicyRefusal(`specialist ${policy.specialist} has can_only_write_to = "workdir", which the ${engine} engine cannot give (only Claude Code's own sandbox confines writes): set engine = "claude", or remove can_only_write_to. ${remedy(sessionName)}`)
     }
   } catch (err) {

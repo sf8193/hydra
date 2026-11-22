@@ -11,7 +11,6 @@ import { join } from 'path'
 import { codexSpawnEnv } from '../../shared/spawn-env.js'
 import { registry, type SessionInfo } from '../sessions.js'
 import type { BlockingState } from '../pane-probe.js'
-import { ENGINE_CAPABILITIES } from '../../shared/engine-capabilities.js'
 import type {
   EngineAdapter, LaunchInput, LaunchResult,
   DeliveryMode, DeliveryResult, Notification,
@@ -23,15 +22,13 @@ import { codexHomeDir as codexHomeDirFn, codexRoot, startCodexAppServer, stopCod
 import { parseContextPercent, safeSend } from '../util.js'
 import { tmuxCreateSession, tmuxHasSession, tmuxSync, tmuxTimedOut, tmuxWindowActivity } from '../tmux.js'
 import { sendTmuxKeys, type TmuxKeyAction } from '../codex-key-queue.js'
-import { SOCK_PATH, STATE_DIR } from '../config.js'
+import { SOCK_PATH, SPAWN_LOGS_DIR } from '../config.js'
 import { codexTurnOutcome, defaultTurnSources, isCodexWorking } from './codex-observation.js'
 import { codexPiggyback, type CodexPiggyback } from './codex-piggyback.js'
 import { isCodexReconnecting, reconnectCodexSessions } from './codex-runtime.js'
 import { replyContextLine } from '../reply-context.js'
-import { isRestrictedPolicy } from '../policy-record.js'
+import { shq } from '../launch-files.js'
 
-const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
-const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
 const execFileAsync = promisify(execFile)
 
 function registerCodexMcp(homeDir: string, sessionId: string, tmuxName: string): void {
@@ -61,7 +58,6 @@ export function resumeHomeOwner(records: Iterable<SessionInfo>, resumeCodex: { h
 export const codexLaunchProcess = { registerMcp: registerCodexMcp, start: startCodexAppServer, stop: stopCodexAppServer }
 
 export class CodexEngineAdapter implements EngineAdapter {
-  readonly limitsAccess = ENGINE_CAPABILITIES.codex.limitsAccess
   // Tests shorten these; production uses the defaults.
   static COMPOSER_DEADLINE_MS = 5000
   static COMPOSER_POLL_MS = 100
@@ -147,9 +143,6 @@ export class CodexEngineAdapter implements EngineAdapter {
   }
 
   async launch(input: LaunchInput): Promise<LaunchResult> {
-    // This engine cannot limit a session's access (limitsAccess); it would run one as the operator.
-    if (isRestrictedPolicy(input.policy)) throw new Error(`specialist ${input.policy.specialist} has restricted = true, which this engine cannot give: set engine = "claude", or set restricted = false`)
-    if (input.policy?.canOnlyWriteTo) throw new Error(`specialist ${input.policy.specialist} has can_only_write_to = "workdir", which this engine cannot give: set engine = "claude", or remove can_only_write_to`)
     const { sessionId, tmuxName, model, prompt, resumeCodex } = input
     // Resume reuses the ORIGINAL home: the rollout lives there, and a fresh home cannot see it.
     const codexHomeName = resumeCodex?.homeName ?? tmuxName
