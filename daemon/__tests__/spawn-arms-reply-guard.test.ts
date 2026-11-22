@@ -3,7 +3,7 @@ import { gateway } from '../../infra/config.js'
 import { doSpawnSession } from '../../app/session-lifecycle.js'
 import { registry, threadRegistry } from '../../sessions/registry.js'
 import { transport } from '../../sessions/bridge-transport.js'
-import { engines } from '../../engines/instances.js'
+import { engines } from '../../sessions/engine-instances.js'
 import { _pendingForTesting, _resetReplyGuardForTesting } from '../../app/reply-guard.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 

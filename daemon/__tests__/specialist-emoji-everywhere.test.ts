@@ -13,7 +13,7 @@ import { registry, threadRegistry, sessionEmoji, type SessionInfo } from '../../
 import { emojiOf, emojiOfName } from '../../sessions/anchor-state.js'
 import { transport } from '../../sessions/bridge-transport.js'
 import { _setHydraConfigForTesting } from '../../infra/hydra-config.js'
-import { engines } from '../../engines/instances.js'
+import { engines } from '../../sessions/engine-instances.js'
 import { handleListIntercept, handleUsageIntercept, __test as statusTest } from '../../app/commands/status.js'
 import { handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept, _setRecoveryDeps, _resetRecoveryDeps } from '../../app/commands/thread.js'
 import { handleSpawnIntercept } from '../../app/commands/global.js'
@@ -537,7 +537,7 @@ describe('no site reads the catalog glyph', () => {
         else if (/\.(ts|tsx|js|mjs)$/.test(e)) files.push(rel)
       }
     }
-    for (const dir of ['app', 'infra', 'engines', 'sessions', 'specialists', 'shared', 'gateways']) walk(dir)
+    for (const dir of ['app', 'infra', 'engines', 'sessions', 'protocols', 'specialists', 'shared', 'gateways']) walk(dir)
     files.push('daemon.ts')
     expect(files.length).toBeGreaterThan(50)   // the walk found the tree, not nothing
     const holders = files.filter(f => /\bsessionEmoji\b/.test(read(f))).map(f => relative('.', f)).sort()

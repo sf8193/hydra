@@ -5,8 +5,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { gateway, STATE_DIR } from '../../infra/config.js'
-import { registry, threadRegistry, SessionRegistry, type SessionInfo } from '../../sessions/registry.js'
-import { codexEngine, engines } from '../../engines/instances.js'
+import { registry, threadRegistry, SessionRegistry, engineRecords, type SessionInfo } from '../../sessions/registry.js'
+import { codexEngine, engines } from '../../sessions/engine-instances.js'
 import type { EngineAdapter } from '../../engines/engine-adapter.js'
 import { CodexEngineAdapter } from '../../engines/codex-engine-adapter.js'
 import { fakeCodexAdapter } from './test-harness.js'
@@ -14,7 +14,6 @@ import { getLastCodexMessage, isCodexTurnComplete, isCodexWorking, noteCodexTurn
 import { notePendingReply, _pendingForTesting } from '../../app/reply-guard.js'
 import { registerProtocol } from '../../sessions/protocol-registry.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
-import { engineRecords } from '../../engines/boot.js'
 import { reconnectCodexAfterDisconnect, reconnectCodexSessions, reconnectDeps } from '../../engines/codex-runtime.js'
 
 // The boot sweep over every Codex record in the registry.

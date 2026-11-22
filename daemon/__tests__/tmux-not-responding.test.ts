@@ -2,7 +2,7 @@
 // Every tmux call goes through infra/tmux.ts's seam, which times out here: no tmux is touched.
 import { describe, test, expect, afterEach } from 'bun:test'
 import { _setTmuxForTesting, TMUX_HOLD_MS } from '../../infra/tmux.js'
-import { engines } from '../../engines/instances.js'
+import { engines } from '../../sessions/engine-instances.js'
 import { CodexEngineAdapter } from '../../engines/codex-engine-adapter.js'
 import { ClaudeEngine } from '../../engines/claude-engine.js'
 import { killSession } from '../../app/session-lifecycle.js'

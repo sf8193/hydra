@@ -1,5 +1,5 @@
 // The engines hydra runs, one profile each (shared/engines/<engine>.ts). The engine type and the config's accepted `engine` values derive from this list, and the
-// adapter list (engines/instances.ts) must have a row for each. A profile holds an engine's label, what its sessions can be asked, and the aliases and id prefix that name its models: the loader reads it
+// adapter list (sessions/engine-instances.ts) must have a row for each. A profile holds an engine's label, what its sessions can be asked, and the aliases and id prefix that name its models: the loader reads it
 // (config cannot import the adapters) to refuse a specialist that asks for what its engine cannot give; the launch asks `engineLimitsAccess` (the engine comes from
 // thread history, and `handoff <model>` can change it); the spawn and respawn paths read the rest.
 

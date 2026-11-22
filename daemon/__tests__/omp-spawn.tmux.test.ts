@@ -9,7 +9,7 @@ import { handleSpawnIntercept } from '../../app/commands/global.js'
 import { handleResumeIntercept } from '../../app/commands/thread.js'
 import { killSession } from '../../app/session-lifecycle.js'
 import { startBridgeServer, socketServer } from '../../app/bridge-server.js'
-import { engines } from '../../engines/instances.js'
+import { engines } from '../../sessions/engine-instances.js'
 import { ompSessionDir } from '../../engines/omp-session.js'
 import { setHydra } from './test-hydra.js'
 

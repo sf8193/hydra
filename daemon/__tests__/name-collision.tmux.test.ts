@@ -13,7 +13,7 @@ import { initPhaseBudgets, _resetPhaseBudgetsForTesting } from '../../sessions/p
 import { transport } from '../../sessions/bridge-transport.js'
 import { tmuxNewSession } from '../../shared/spawn-env.js'
 import { killSession } from '../../app/session-lifecycle.js'
-import { engines } from '../../engines/instances.js'
+import { engines } from '../../sessions/engine-instances.js'
 import { gateway, STATE_DIR } from '../../infra/config.js'
 import { tmuxHasSession } from '../../infra/tmux.js'
 

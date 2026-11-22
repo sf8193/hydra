@@ -8,7 +8,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { handleCLIRequest } from '../../app/cli-handler.js'
 import { registry } from '../../sessions/registry.js'
-import { engines } from '../../engines/instances.js'
+import { engines } from '../../sessions/engine-instances.js'
 import { fakeCodexAdapter } from './test-harness.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { isSessionWorking, isSessionWorkingAsync, sessionLiveAsync } from '../../sessions/session-activity.js'
-import { engines } from '../../engines/instances.js'
+import { engines } from '../../sessions/engine-instances.js'
 import { CLAUDE_WORKING_SILENCE_S } from '../../engines/claude-engine.js'
 import { CODEX_WORKING_STALE_MS, defaultTurnSources, isCodexWorking, noteCodexTurnState } from '../../engines/codex-observation.js'
 import { liveStateOf } from '../../engines/claude-status.js'

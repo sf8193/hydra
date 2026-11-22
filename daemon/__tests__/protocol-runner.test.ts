@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, jest } from 'bun:test'
-import { engines } from '../../engines/instances.js'
+import { engines } from '../../sessions/engine-instances.js'
 import { protocol } from '../../protocols/dsl.js'
 import { onRunReply, onRunAdvance, onRunDisconnect, onRunReconnect, onRunExtend, startProtocolRun, __test } from '../../app/protocol-runner.js'
 import { transport } from '../../sessions/bridge-transport.js'

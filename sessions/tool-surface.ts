@@ -5,7 +5,7 @@ import { CONFINED_TOOLS as TYPED_CONFINED_TOOLS, BASE_TOOLS as TYPED_BASE_TOOLS,
 import type { ToolBase, Capability, DerivedCapability } from '../shared/constants.js'
 import { isRestricted } from '../shared/policy-record.js'
 import type { SessionInfo } from './registry.js'
-import { resolveEngine } from '../engines/instances.js'
+import { resolveEngine } from './engine-instances.js'
 import { specialistOf, boundAs, sendsToOf } from './specialists.js'
 import { currentHydraConfig, onHydraConfigLoad } from '../infra/hydra-config.js'
 import { slackConfigured } from '../config/types.js'

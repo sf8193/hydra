@@ -5,7 +5,7 @@ import { BridgeTransport, DEPARTING_NOTICE, setFlushGate } from '../../sessions/
 import { registry } from '../../sessions/registry.js'
 import { STATE_DIR } from '../../infra/config.js'
 import { on } from '../../infra/event-bus.js'
-import { engines } from '../../engines/instances.js'
+import { engines } from '../../sessions/engine-instances.js'
 import { ClaudeEngine } from '../../engines/claude-engine.js'
 import { fakeAdapter, fakeCodexAdapter } from './test-harness.js'
 
@@ -346,11 +346,11 @@ describe('has() matrix (adapter-policy T2)', () => {
   })
 })
 
-describe('engines/instances import (adapter-policy S2)', () => {
-  test('a fresh process imports instances.ts first and the Claude adapter is bound to a transport', () => {
+describe('sessions/engine-instances import (adapter-policy S2)', () => {
+  test('a fresh process imports engine-instances.ts first and the Claude adapter is bound to a transport', () => {
     // Subprocess: this file's module cache already holds bridge-transport, so
     // only a fresh process can catch a TDZ from an import cycle.
-    const code = "const { engines } = await import('./engines/instances.ts'); console.log(engines.claude.isConnected({ sessionId: 'nope' }))"
+    const code = "const { engines } = await import('./sessions/engine-instances.ts'); console.log(engines.claude.isConnected({ sessionId: 'nope' }))"
     const r = Bun.spawnSync(['bun', '-e', code], { cwd: join(import.meta.dir, '..', '..'), env: { ...process.env, DISCORD_BOT_TOKEN: 'test-token' } })
     expect(r.stderr.toString()).not.toContain('Error')
     expect(r.stdout.toString().trim()).toBe('false')

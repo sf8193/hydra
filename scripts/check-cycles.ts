@@ -10,7 +10,7 @@ import { fileURLToPath } from 'url'
 import { edges } from './check-layers.js'
 
 export const ALLOWED: readonly string[] = [
-  'engines/boot.ts sessions/bridge-transport.ts sessions/delivery-notice.ts sessions/registry.ts sessions/session-reachability.ts',
+  'sessions/bridge-transport.ts sessions/delivery-notice.ts sessions/registry.ts sessions/session-reachability.ts',
   'gateways/slack.ts infra/config.ts infra/hydra-config.ts infra/util.ts sessions/access.ts',
   'specialists/specialist-deliver.ts specialists/targets.ts',
 ]
