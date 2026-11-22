@@ -67,6 +67,11 @@ const COMMAND_PREFIXES = [
 const COMMAND_RE = new RegExp(
   `^(?:${COMMAND_PREFIXES.map(p => p.replace(/[.*+?^${}()|[\]\\\/]/g, '\\$&')).join('|')})(?:\\s|$)`, 'i',
 )
+/** `@bot spawn: x` is the command `spawn: x`: the bot's own leading tag is dropped before commands are matched. */
+function withoutLeadingTag(content: string, botId: string | null): string {
+  if (!botId) return content
+  return content.replace(new RegExp(`^<@!?${botId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}>\\s*`), '')
+}
 const SPAWN_MODEL_RE = new RegExp(`^(?:new session|spawn)\\s+(${MODEL_ALIAS_PATTERN}):\\s*([\\s\\S]+)`, 'i')
 const SPAWN_CODEX_RE = /^(?:new session|spawn)\s+codex(?:\s+(\S+))?:\s*([\s\S]+)/i
 // An alias of Codex, omp or agy selects both the model and the engine. It takes three chat forms: `spawn <alias>: topic`, `spawn-wt <alias>: repo topic`,
@@ -426,13 +431,17 @@ if (gateway.onReaction) {
 // Inbound message routing
 // ---------------------------------------------------------------------------
 
-gateway.onMessage(async (msg: InboundMessage) => {
-  if (msg.isBot) return
+gateway.onMessage(async (inbound: InboundMessage) => {
+  if (inbound.isBot) return
 
   // The one chokepoint: nothing below, operator command or not, acts in a place this daemon is not allowed in.
-  if (!channelAllowed(msg) && !(await admitTaggedChannel(msg))) return
-  const senderId = msg.authorId
+  if (!channelAllowed(inbound) && !(await admitTaggedChannel(inbound))) return
+  const senderId = inbound.authorId
   const isAllowed = operatorIds().includes(senderId)
+  // The operator's tagged command is the command: the command handlers see it without the tag. Everything after them
+  // (thread delivery, the gate) reads the message as it came, tag included: Slack finds the tag in the text.
+  const bare = withoutLeadingTag(inbound.content, gateway.botId)
+  let msg = isAllowed && COMMAND_RE.test(bare) ? { ...inbound, content: bare } : inbound
 
   if (!isAllowed && COMMAND_RE.test(msg.content)) {
     process.stderr.write(`daemon: command-shaped message from non-allowlisted sender ${senderId} ignored — only the operator may use commands\n`)
@@ -906,6 +915,8 @@ gateway.onMessage(async (msg: InboundMessage) => {
       }
 
     }
+
+    msg = inbound
 
     if (msg.isThread) {
       const resolvedThreadId = registry.resolveThreadId(msg)

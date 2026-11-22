@@ -155,3 +155,30 @@ test('a discord reaction place: guild channel, thread (parent), DM', () => {
   expect(reactionPlace(ch(ChannelType.PublicThread, true, OURS))).toEqual({ isDM: false, parentChannelId: OURS })
   expect(reactionPlace(ch(ChannelType.DM, false))).toEqual({ isDM: true, parentChannelId: null })
 })
+
+test('the operator\'s `@bot spawn: x` is the spawn command; the same words from someone else are not', async () => {
+  Object.defineProperty(gateway, 'botId', { value: '999', configurable: true })
+  const gated: string[] = []
+  const g = spyOn(access, 'gate').mockImplementation((async (m: any) => { gated.push(m.content); return { action: 'drop' } }) as any)
+  try {
+    await say(OURS, {}, '<@999> spawn: fix the bug')
+    expect(spawns).toHaveLength(1)
+    expect(spawns[0][1]).toBe('fix the bug')
+    expect(spawns[0][0].channelId).toBe(OURS)
+    // a stranger's tag is not stripped: it reaches the gate as typed
+    await onMessage({ id: 'm3', channelId: OURS, authorId: 'stranger', authorUsername: 's', content: '<@999> spawn: x', isBot: false, attachments: [], createdAt: new Date(), isThread: false, isDM: false, parentChannelId: null })
+    expect(spawns).toHaveLength(1)
+    expect(gated).toEqual(['<@999> spawn: x'])
+  } finally { g.mockRestore(); delete (gateway as any).botId }
+})
+
+test('a tagged operator message that is not a command reaches the gate with its tag: Slack reads the tag from the text', async () => {
+  Object.defineProperty(gateway, 'botId', { value: '999', configurable: true })
+  const gated: string[] = []
+  const g = spyOn(access, 'gate').mockImplementation((async (m: any) => { gated.push(m.content); return { action: 'drop' } }) as any)
+  try {
+    // 'status' is a command prefix, so the words after the tag pass the loose command match but no handler takes them
+    await say(OURS, {}, '<@999> status of the migration')
+  } finally { g.mockRestore(); delete (gateway as any).botId }
+  expect(gated).toEqual(['<@999> status of the migration'])
+})
