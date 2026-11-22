@@ -233,10 +233,8 @@ export function bootRefusal(stateDir: string, steps: MigrateStep[] = STEPS): str
   if (existsSync(join(stateDir, MIGRATE_JOURNAL))) return `refusing to start: a hydra migrate in ${stateDir} was interrupted after it committed; run 'hydra migrate' to finish it.`
   if (!hydraTomlInUse(stateDir)) {
     // access.json's channels and settings live in hydra.toml now: without one, they would be ignored.
-    // (A file that doesn't parse is left to the daemon, which moves it aside as before.)
-    let parses = true
-    try { accessOf(stateDir) } catch { parses = false }
-    return parses && steps.includes(accessStep) && accessStep.pending(stateDir)
+    // (A file that doesn't parse counts as pending: nothing else reads or moves it.)
+    return steps.includes(accessStep) && accessStep.pending(stateDir)
       ? `refusing to start: ${join(stateDir, 'access.json')} still holds channels or settings, and hydra.toml is not here to take them. Run 'hydra migrate' (it writes hydra.toml from it and retires it).`
       : undefined
   }

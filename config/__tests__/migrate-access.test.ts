@@ -106,8 +106,8 @@ describe('what is said, not lost', () => {
 })
 
 describe('an access.json that does not parse', () => {
-  test('with no hydra.toml the daemon starts and moves it aside as before; with one, the install is pending and refuses', () => {
-    expect(bootRefusal(state({ 'access.json': '{ nope' }).stateDir)).toBeUndefined()
+  test('refuses to start with or without hydra.toml: nothing else reads it, so a silent boot would have nobody in charge', () => {
+    expect(bootRefusal(state({ 'access.json': '{ nope' }).stateDir)).toContain("Run 'hydra migrate'")
     expect(bootRefusal(state({ 'hydra.toml': `operator = "me"\n[people.me]\naddresses = ["discord:${OP}"]\n`, 'access.json': '{ nope' }).stateDir)).toContain("Run 'hydra migrate'")
   })
 })

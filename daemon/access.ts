@@ -142,6 +142,8 @@ export async function admitTaggedChannel(msg: InboundMessage): Promise<boolean> 
   if (msg.isDM || !operatorIds().includes(msg.authorId)) return false
   // Only an explicit @-tag admits: a reply to the bot or a mentionPatterns match does not.
   if (!(await gateway.isMentioned({ ...msg, referenceMessageId: null }))) return false
+  // A tag that arrived just before this one may have admitted the channel while we awaited.
+  if (channelAllowed(msg)) return true
   const channelId = msg.parentChannelId ?? msg.channelId
   // operatorIds named the sender, so hydra.toml names an operator.
   const admitted = admitChannel(STATE_DIR, hydraLoadEnv(), PLATFORM, channelId, currentHydraConfig().operator!)

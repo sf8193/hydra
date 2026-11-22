@@ -64,6 +64,13 @@ describe('tag to admit, where hydra.toml governs', () => {
     expect(sent).toHaveLength(0)
     expect(await admitTaggedChannel(msg({ id: 'm3', channelId: BUSY_CH }))).toBe(true)
   })
+  test('two tags in a new channel at once admit it once; the second is delivered, not refused', async () => {
+    start(BASE)
+    const [a, b] = await Promise.all([admitTaggedChannel(msg()), admitTaggedChannel(msg({ id: 'm2' }))])
+    expect([a, b]).toEqual([true, true])
+    expect(readFileSync(hydraConfigPath(), 'utf8').split('.access]').length).toBe(2)
+    expect(sent).toEqual([])
+  })
   test('a tag in a thread admits the parent channel', async () => {
     start(BASE)
     expect(await admitTaggedChannel(msg({ channelId: '300000000000000010', parentChannelId: '300000000000000009' }))).toBe(true)
