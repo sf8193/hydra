@@ -94,7 +94,12 @@ export function defaultPlatform(chatPlatform: string | undefined, channelsDir: s
   return 'discord'
 }
 
-export function resolveConfig(platform?: string): HydraConfig {
+/**
+ * The config a command runs with. The state dir is, strongest first: an explicit `stateDirOpt` (the `--state-dir` flag: the caller named
+ * the directory); the explicit platform's own dir; HYDRA_STATE_DIR / DISCORD_STATE_DIR; the platform's default dir. The platform, when
+ * not given, comes from `defaultPlatform`.
+ */
+export function resolveConfig(platform?: string, stateDirOpt?: string): HydraConfig {
   // Ensure PATH includes common tool locations (mirrors env-setup.sh).
   // Critical for launchd context where PATH is minimal.
   const extraPaths = [
@@ -121,12 +126,14 @@ export function resolveConfig(platform?: string): HydraConfig {
     }
   }
 
-  // When platform is explicit, derive stateDir from it — env vars may belong to
-  // a different platform (e.g. a session spawned by the slack daemon running
-  // `hydra up discord` inherits HYDRA_STATE_DIR pointing at slack).
-  const stateDir = platformExplicit
-    ? platformStateDir(platform)
-    : process.env.HYDRA_STATE_DIR ?? process.env.DISCORD_STATE_DIR ?? platformStateDir(platform)
+  // An explicit --state-dir names the directory, so it wins. Failing that, when the platform is explicit, derive stateDir from it: env
+  // vars may belong to a different platform (e.g. a session spawned by the slack daemon running `hydra up discord` inherits
+  // HYDRA_STATE_DIR pointing at slack).
+  const stateDir = stateDirOpt
+    ? stateDirOpt
+    : platformExplicit
+      ? platformStateDir(platform)
+      : process.env.HYDRA_STATE_DIR ?? process.env.DISCORD_STATE_DIR ?? platformStateDir(platform)
 
   const { configDir, spawnCwd, spawnCwdBlank } = sourceStateDirEnv(stateDir)
 

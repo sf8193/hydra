@@ -162,7 +162,7 @@ ${Object.entries(MODEL_ALIASES).map(([k, v]) => `  ${k.padEnd(16)} → ${v}`).jo
 
 Global options:
   --daemon <name>                      Target a specific daemon (else CHAT_PLATFORM picks among several)
-  --state-dir <dir>                    Target the daemon (and jobs state) in this state dir: a worktree or test daemon
+  --state-dir <dir>                    Target the daemon (and jobs state) in this state dir: a worktree or test daemon. Beats a platform's default dir (config check, preflight, migrate take it with a platform); up, down, restart, watchdog, install and uninstall refuse it
   --json                               Output raw JSON
   -h, --help                           Show this help
 `
@@ -189,7 +189,8 @@ async function main(): Promise<void> {
     } else if (args[i] === '--daemon' && i + 1 < args.length) {
       daemonName = args[++i]
     } else if (args[i] === '--state-dir' && i + 1 < args.length) {
-      stateDirOpt = args[++i]
+      const given = args[++i]
+      stateDirOpt = given ? resolve(given) : given   // absolute once, so every command that reads it (the socket, jobs, resolveConfig) agrees; an empty value stays unset
     } else if (args[i] === '--json') {
       json = true
     } else {
@@ -289,6 +290,11 @@ async function main(): Promise<void> {
       console.error('error: platform is required (e.g. discord, slack)')
       process.exit(1)
     }
+    // These name a platform's tmux sessions and launchd job, not a state dir: with --state-dir they would act on the live daemon.
+    if (stateDirOpt && command !== 'preflight') {
+      console.error(`error: ${command} acts on the ${platform} daemon's tmux sessions and launchd job, which are named by platform and not by state dir, so --state-dir cannot apply to it (only preflight takes it here)`)
+      process.exit(1)
+    }
     switch (command) {
       case 'install': {
         const installOpts: InstallOpts = {}
@@ -307,7 +313,7 @@ async function main(): Promise<void> {
       case 'down': await lifecycleDown(platform); break
       case 'restart': await lifecycleRestart(platform, { validate: !filtered.includes('--fast'), dryRun: filtered.includes('--dry-run') }); break
       case 'watchdog': await lifecycleWatchdog(platform); break
-      case 'preflight': await lifecyclePreflight(platform); break
+      case 'preflight': await lifecyclePreflight(platform, stateDirOpt); break
     }
     process.exit(0)
   }
