@@ -8,7 +8,6 @@ import { normalizeReviewRounds } from '../../shared/constants.js'
 import type { ProviderId } from '../engines/engine-adapter.js'
 import reviewProto from '../../protocols/review.js'
 
-
 export async function handleReviewIntercept(msg: InboundMessage, rounds: number, topic?: string, model?: string, modifierNames?: string[], engine?: ProviderId): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '⚔️').catch(() => {})
 
@@ -70,8 +69,7 @@ export async function handleReviewIntercept(msg: InboundMessage, rounds: number,
   }
 
   try {
-    const proto = reviewProto
-    await startProtocolRun(proto, threadId, sessionId, {
+    await startProtocolRun(reviewProto, threadId, sessionId, {
       rounds: clampedRounds, topic, model, engine,
       modifiers: resolvedMods,
       strike: true,

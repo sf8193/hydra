@@ -6,7 +6,6 @@ import type { InboundMessage } from '../../gateways/gateway.js'
 import type { ProviderId } from '../engines/engine-adapter.js'
 import buildProto from '../../protocols/build.js'
 
-
 export async function handleBuildV2Intercept(msg: InboundMessage, rounds: number, task?: string, model?: string, engine?: ProviderId): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '🔨').catch(() => {})
 
@@ -36,8 +35,7 @@ export async function handleBuildV2Intercept(msg: InboundMessage, rounds: number
   const clampedRounds = Math.max(1, Math.min(rounds, 5))
 
   try {
-    const proto = buildProto
-    await startProtocolRun(proto, threadId, sessionId, { rounds: clampedRounds, task, model, engine, strike: true })
+    await startProtocolRun(buildProto, threadId, sessionId, { rounds: clampedRounds, task, model, engine, strike: true })
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err)
     await gateway.send(msg.channelId, `Build v2 failed to start: ${errMsg}`, { replyTo: msg.id })

@@ -6,7 +6,6 @@ import type { InboundMessage } from '../../gateways/gateway.js'
 import type { ProviderId } from '../engines/engine-adapter.js'
 import { selectDelegatedBuildProtocol } from '../../protocols/delegated-build-select.js'
 
-
 export async function handleDelegatedBuildIntercept(msg: InboundMessage, rounds: number, task?: string, model?: string, engine?: ProviderId, opts?: { skipClarify?: boolean }): Promise<void> {
   void gateway.react(msg.channelId, msg.id, opts?.skipClarify ? '⚡' : '📋').catch(() => {})
 
