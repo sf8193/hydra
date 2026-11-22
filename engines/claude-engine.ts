@@ -7,8 +7,8 @@ import { spawn } from 'child_process'
 import { existsSync, mkdirSync, readFileSync } from 'fs'
 import { join } from 'path'
 import type { SessionInfo, SessionMetadata } from '../sessions/registry.js'
-import { detectBlockingState as detectBlockingStateFn } from '../app/pane-probe.js'
-import type { BlockingState } from '../app/pane-probe.js'
+import { detectBlockingState as detectBlockingStateFn } from './claude-blocking.js'
+import type { BlockingState } from './engine-adapter.js'
 import type {
   EngineAdapter, ForkPlan, LaunchInput, LaunchResult,
   DeliveryResult, Notification,

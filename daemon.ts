@@ -66,7 +66,7 @@ import { announceRestartComplete } from './app/commands/global.js'
 import { deliverWatchdogAlert } from './app/watchdog-alert.js'
 import { autoRecoverAfterBoot } from './app/recovery.js'
 import { startJobsClock, stopJobsClock, realDeps } from './connectors/clock/jobs-clock.js'
-import { deliverToTarget } from './specialists/targets.js'
+import { deliverToTarget, targetDeps } from './specialists/targets.js'
 
 threadRegistry.boot(registry)
 reattachAdapters(resolveEngine)
@@ -143,7 +143,11 @@ import { debouncedRefreshListDisplay } from './app/commands/status.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './infra/artifacts.js'
 import type { ProviderId } from './engines/engine-adapter.js'
 registry.onPersist = refreshDashboard
+targetDeps.stuckState = confirmedStuckState
 
+if ('operators' in gateway) {
+  (gateway as any).operators = operatorIds
+}
 if ('homeTabHandler' in gateway) {
   (gateway as any).homeTabHandler = async (_userId: string) => {
     refreshDashboardNow()
@@ -251,7 +255,7 @@ import { jobsFromSchedules, schedulesAreSource } from './shared/schedules.js'
 import { readDaemonState } from './shared/jobs.js'
 import { pollActivityOnce } from './app/reply-guard.js'
 import { flushAllHeld } from './app/typed-delivery.js'
-import { probeAllSessions, mainStuckCause } from './app/pane-probe.js'
+import { probeAllSessions, mainStuckCause, confirmedStuckState } from './app/pane-probe.js'
 import { safeSend } from './infra/util.js'
 import { tmuxHasSession } from './infra/tmux.js'
 
@@ -333,7 +337,7 @@ async function startGateway(attempt = 0): Promise<void> {
   try {
     await gateway.start(TOKEN!)
     process.stderr.write(`daemon: ${PLATFORM} gateway started\n`)
-    await resolveDefaultChannel()
+    await resolveDefaultChannel(operatorIds())
     void announceRestartComplete()
     void deliverWatchdogAlert()
     void retryHydraConfigAlert()

@@ -18,7 +18,6 @@ const connectedSessions = new Set<string>()
 
 import { reportUsage, _setUsageAlertsIO, _resetUsageAlertsIO, type UsageReading } from '../../app/usage-alerts.js'
 import {
-  detectBlockingState,
   probeAllSessions,
   getThreadIntercept,
   clearInterceptsForSession,
@@ -39,8 +38,9 @@ import {
   mainStuckCause,
   sessionVerdict,
   type PaneProbeIO,
-  type BlockingState,
 } from '../../app/pane-probe.js'
+import { detectBlockingState } from '../../engines/claude-blocking.js'
+import type { BlockingState } from '../../engines/engine-adapter.js'
 import type { Occupancy } from '../../sessions/session-reachability.js'
 // Liveness is occupancy()'s answer, set per record; a stand-in's stamp (`deadAt`) is not consulted: a stamped record may still run.
 const occupancies = new Map<string, Occupancy>()

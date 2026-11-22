@@ -151,3 +151,7 @@ export async function vitalsSnapshot(): Promise<VitalsSnapshot> {
   const [procs, roots, pressure] = await Promise.all([psAll().catch(failed('ps')), paneRoots().catch(failed('tmux list-panes')), systemPressure()])
   return snapshotFrom(procs, roots, pressure)
 }
+
+// Engine-owned diagnostic state registers here to be pruned on the vitals tick
+// with the same gone-or-dead test as vitalsSamples.
+export const vitalsPruners: Array<(goneOrDead: (id: string) => boolean) => void> = []
