@@ -13,7 +13,7 @@ import { _setHydraConfigForTesting } from '../hydra-config.js'
 import { setSpecialistThread, _reloadSpecialists } from '../../specialists/specialists.js'
 import { loadHydraConfig } from '../../config/load.js'
 import { testLoadEnv } from '../../config/__tests__/load-env.js'
-import { engines } from '../engines/instances.js'
+import { engines } from '../../engines/instances.js'
 import type { HydraConfig } from '../../config/types.js'
 import type { SessionInfo } from '../sessions.js'
 

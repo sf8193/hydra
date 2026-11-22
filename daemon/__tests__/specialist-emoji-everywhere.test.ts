@@ -13,7 +13,7 @@ import { registry, threadRegistry, sessionEmoji, type SessionInfo } from '../ses
 import { emojiOf, emojiOfName } from '../anchor-state.js'
 import { transport } from '../bridge-transport.js'
 import { _setHydraConfigForTesting } from '../hydra-config.js'
-import { engines } from '../engines/instances.js'
+import { engines } from '../../engines/instances.js'
 import { handleListIntercept, handleUsageIntercept, __test as statusTest } from '../commands/status.js'
 import { handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept, _setRecoveryDeps, _resetRecoveryDeps } from '../commands/thread.js'
 import { handleSpawnIntercept } from '../commands/global.js'

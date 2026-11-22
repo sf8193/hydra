@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
 import { EventEmitter } from 'events'
-import { CodexEngine } from '../codex-engine.js'
+import { CodexEngine } from '../../engines/codex-engine.js'
 
 const originalWatchdogMs = (CodexEngine as any).WATCHDOG_MS
 afterEach(() => { (CodexEngine as any).WATCHDOG_MS = originalWatchdogMs })

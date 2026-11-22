@@ -5,7 +5,7 @@
 //   bun scripts/check-layers.ts --list     print the violations in ALLOWED's format
 //
 //   T0 core      shared/, config/, routing/, pure rules and prompts (no I/O of their own)
-//   T1 edges     gateways/, engines (daemon/engines/, codex-*, agy-hook), infra (config paths, tmux, util, files, host probes)
+//   T1 edges     gateways/, engines/, infra (config paths, tmux, util, files, host probes)
 //   T2 sessions  the registry, access, reachability, transport, specialist data
 //   T3 domain    specialists/ (delivery), connectors/, protocols/ (specs)
 //   T4 app       use cases and inbound handling: lifecycle, recovery, router, commands, protocol-runner, bridge-server...  (the default for daemon/)
@@ -20,7 +20,7 @@ export const TIER_NAMES = ['core', 'edges', 'sessions', 'domain', 'app', 'boot']
 
 const CORE_DAEMON = ['landing', 'notice-limit', 'context-lines', 'review-result', 'policy-record', 'protocol-types', 'state-machine']
 // modifiers and protocol-dsl read config or util, so they are not pure: edges (they move to protocols/ later).
-const EDGE_DAEMON = ['modifiers', 'protocol-dsl', 'boot-probe', 'codex-engine', 'codex-process', 'codex-rollout', 'codex-key-queue', 'codex-mcp-server', 'agy-hook', 'bridge-sync', 'bridge-tools']
+const EDGE_DAEMON = ['modifiers', 'protocol-dsl', 'boot-probe']
 const SESSIONS_DAEMON = ['sessions', 'access', 'hydra-config', 'session-reachability', 'bridge-transport', 'delivery-notice', 'ended-sessions', 'anchor-state', 'lineage', 'session-activity', 'phase-budget', 'idle-limit', 'protocol-registry', 'thread-route', 'main-session', 'reply-context', 'resume-health', 'cli-caller']
 
 /** The tier of a production file, by path. daemon/ files not named above are app (T4). */
@@ -28,7 +28,7 @@ export function tierOf(path: string): number | undefined {
   const top = path.split('/')[0]
   if (['shared', 'config', 'routing'].includes(top) || path.startsWith('daemon/prompts/') || path === 'throttled-queue.ts') return 0
   if (path === 'specialists/specialists.ts') return 2
-  if (top === 'infra' || top === 'gateways' || top === 'omp' || path.startsWith('daemon/engines/')) return 1
+  if (top === 'infra' || top === 'gateways' || top === 'omp' || top === 'engines') return 1
   if (['specialists', 'connectors', 'protocols'].includes(top)) return 3
   if (top === 'cli' || path === 'daemon.ts' || path === 'bridge.ts' || path === 'daemon/boot-probe.ts') return 5
   if (top === 'daemon') {
@@ -50,22 +50,22 @@ export const ALLOWED: readonly string[] = [
   'infra/cpu-watch.ts -> daemon/access.ts',
   'infra/cpu-watch.ts -> daemon/session-activity.ts',
   'infra/cpu-watch.ts -> daemon/sessions.ts',
-  'daemon/engines/agy-engine.ts -> daemon/restricted.ts',
-  'daemon/engines/boot.ts -> daemon/sessions.ts',
-  'daemon/engines/claude-engine.ts -> daemon/pane-probe.ts',
-  'daemon/engines/claude-engine.ts -> daemon/restricted.ts',
-  'daemon/engines/claude-engine.ts -> daemon/write-confinement.ts',
-  'daemon/engines/claude-verify.ts -> daemon/restricted.ts',
-  'daemon/engines/codex-engine-adapter.ts -> daemon/reply-context.ts',
-  'daemon/engines/codex-engine-adapter.ts -> daemon/restricted.ts',
-  'daemon/engines/codex-engine-adapter.ts -> daemon/sessions.ts',
-  'daemon/engines/codex-piggyback.ts -> daemon/bridge-transport.ts',
-  'daemon/engines/codex-piggyback.ts -> daemon/sessions.ts',
-  'daemon/engines/codex-runtime.ts -> daemon/anchor-state.ts',
-  'daemon/engines/codex-runtime.ts -> daemon/protocol-registry.ts',
-  'daemon/engines/codex-runtime.ts -> daemon/reply-guard.ts',
-  'daemon/engines/codex-runtime.ts -> daemon/sessions.ts',
-  'daemon/engines/instances.ts -> daemon/bridge-transport.ts',
+  'engines/agy-engine.ts -> daemon/restricted.ts',
+  'engines/boot.ts -> daemon/sessions.ts',
+  'engines/claude-engine.ts -> daemon/pane-probe.ts',
+  'engines/claude-engine.ts -> daemon/restricted.ts',
+  'engines/claude-engine.ts -> daemon/write-confinement.ts',
+  'engines/claude-verify.ts -> daemon/restricted.ts',
+  'engines/codex-engine-adapter.ts -> daemon/reply-context.ts',
+  'engines/codex-engine-adapter.ts -> daemon/restricted.ts',
+  'engines/codex-engine-adapter.ts -> daemon/sessions.ts',
+  'engines/codex-piggyback.ts -> daemon/bridge-transport.ts',
+  'engines/codex-piggyback.ts -> daemon/sessions.ts',
+  'engines/codex-runtime.ts -> daemon/anchor-state.ts',
+  'engines/codex-runtime.ts -> daemon/protocol-registry.ts',
+  'engines/codex-runtime.ts -> daemon/reply-guard.ts',
+  'engines/codex-runtime.ts -> daemon/sessions.ts',
+  'engines/instances.ts -> daemon/bridge-transport.ts',
   'infra/events.ts -> daemon/hydra-config.ts',
   'infra/host-health.ts -> daemon/hydra-config.ts',
   'infra/observability.ts -> daemon/session-reachability.ts',

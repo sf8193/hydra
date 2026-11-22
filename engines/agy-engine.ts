@@ -1,4 +1,4 @@
-// daemon/engines/agy-engine.ts
+// engines/agy-engine.ts
 //
 // agy (Google Antigravity CLI) engine adapter — a TUI in tmux, as for Claude and omp, so the operator can attach and work in the session.
 // There is no channel into agy: a message starts a turn only as text in the pane, so deliver pastes it (agy queues text that arrives
@@ -7,20 +7,20 @@
 
 import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import type { SessionInfo } from '../sessions.js'
+import type { SessionInfo } from '../daemon/sessions.js'
 import type {
   EngineAdapter, LaunchInput, LaunchResult, DeliveryResult, Notification, StopResult,
   ContextUsage, RecoveryPlan, RecoverySource, Turn,
 } from './engine-adapter.js'
 import { withoutIntents } from './engine-adapter.js'
-import type { BlockingState } from '../pane-probe.js'
+import type { BlockingState } from '../daemon/pane-probe.js'
 import { CLAUDE_WORKING_SILENCE_S, type ClaudeEngine } from './claude-engine.js'
-import { FRESH_START_MS, SOCK_PATH, PLATFORM, SPAWN_LOGS_DIR, STATE_DIR } from '../../infra/config.js'
-import { removeSessionToken, removeSpawnPrompt, shq, writeSessionToken, writeSpawnPrompt } from '../../infra/launch-files.js'
-import { deliveryRefusal } from '../restricted.js'
-import { tmuxCreateSession, tmuxSync, tmuxWindowActivity } from '../../infra/tmux.js'
-import { SESSION_INSTRUCTIONS, contextWindowOf, formatNotification } from '../../shared/constants.js'
-import { withRaisedFdLimit } from '../../shared/spawn-env.js'
+import { FRESH_START_MS, SOCK_PATH, PLATFORM, SPAWN_LOGS_DIR, STATE_DIR } from '../infra/config.js'
+import { removeSessionToken, removeSpawnPrompt, shq, writeSessionToken, writeSpawnPrompt } from '../infra/launch-files.js'
+import { deliveryRefusal } from '../daemon/restricted.js'
+import { tmuxCreateSession, tmuxSync, tmuxWindowActivity } from '../infra/tmux.js'
+import { SESSION_INSTRUCTIONS, contextWindowOf, formatNotification } from '../shared/constants.js'
+import { withRaisedFdLimit } from '../shared/spawn-env.js'
 import { AGY_HOOKS_CONFIG, AGY_MCP_CONFIG, registerHydraHooks, registerHydraTools } from './agy-config.js'
 import { agyContextTokens, agyState, agyStateDir, agyStateFile, agyTurn } from './agy-session.js'
 

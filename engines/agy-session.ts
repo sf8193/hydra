@@ -1,4 +1,4 @@
-// daemon/engines/agy-session.ts
+// engines/agy-session.ts
 //
 // What agy's own files say about a hydra session. agy-hook.ts writes <state>/agy-sessions/<session id>.json (the conversation, its transcript, working or idle);
 // the transcript is agy's JSONL, one step per line, and holds the turn's answer and each model call's token counts:
@@ -9,8 +9,8 @@
 
 import { readFileSync, statSync } from 'fs'
 import { join } from 'path'
-import { STATE_DIR } from '../../infra/config.js'
-import { readRange } from '../../infra/usage.js'
+import { STATE_DIR } from '../infra/config.js'
+import { readRange } from '../infra/usage.js'
 
 export const agyStateDir = () => join(STATE_DIR, 'agy-sessions')
 export const agyStateFile = (sessionId: string): string => join(agyStateDir(), `${sessionId}.json`)

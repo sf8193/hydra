@@ -1,6 +1,6 @@
 import type { ThreadSessionEntry } from '../daemon/sessions.js'
 import type { SessionLabel } from '../shared/constants.js'
-import { isForeignPlaceholder } from '../daemon/engines/history.js'
+import { isForeignPlaceholder } from '../engines/history.js'
 
 export const RESPAWN_RE = /^(?:respawn|\/respawn)(?:\s+([a-z][\w.-]*))?(?:\s+((?:\+\w+\s*)+))?(?::\s*([\s\S]*))?$/i
 

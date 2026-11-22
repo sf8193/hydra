@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { engines } from '../engines/instances.js'
+import { engines } from '../../engines/instances.js'
 import { executeTool } from '../bridge-dispatch.js'
 import { registry } from '../sessions.js'
 import { withFakeTmux } from './fake-tmux.js'

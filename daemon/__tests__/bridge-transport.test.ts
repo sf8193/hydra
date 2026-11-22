@@ -5,8 +5,8 @@ import { BridgeTransport, DEPARTING_NOTICE, setFlushGate } from '../bridge-trans
 import { registry } from '../sessions.js'
 import { STATE_DIR } from '../../infra/config.js'
 import { on } from '../../infra/event-bus.js'
-import { engines } from '../engines/instances.js'
-import { ClaudeEngine } from '../engines/claude-engine.js'
+import { engines } from '../../engines/instances.js'
+import { ClaudeEngine } from '../../engines/claude-engine.js'
 import { fakeAdapter, fakeCodexAdapter } from './test-harness.js'
 
 // Suppress stderr
@@ -350,7 +350,7 @@ describe('engines/instances import (adapter-policy S2)', () => {
   test('a fresh process imports instances.ts first and the Claude adapter is bound to a transport', () => {
     // Subprocess: this file's module cache already holds bridge-transport, so
     // only a fresh process can catch a TDZ from an import cycle.
-    const code = "const { engines } = await import('./daemon/engines/instances.ts'); console.log(engines.claude.isConnected({ sessionId: 'nope' }))"
+    const code = "const { engines } = await import('./engines/instances.ts'); console.log(engines.claude.isConnected({ sessionId: 'nope' }))"
     const r = Bun.spawnSync(['bun', '-e', code], { cwd: join(import.meta.dir, '..', '..'), env: { ...process.env, DISCORD_BOT_TOKEN: 'test-token' } })
     expect(r.stderr.toString()).not.toContain('Error')
     expect(r.stdout.toString().trim()).toBe('false')
@@ -613,7 +613,7 @@ describe('delivery paths (adapter-policy T7)', () => {
 // Review of S1–S2: has() short-circuits on bridges, so the adapter answer was untested.
 describe('ClaudeEngine.isConnected', () => {
   test('true exactly when its own transport holds a bridge for the session', async () => {
-    const { ClaudeEngine } = await import('../engines/claude-engine.js')
+    const { ClaudeEngine } = await import('../../engines/claude-engine.js')
     const t = new BridgeTransport()
     const claude = new ClaudeEngine(t)
     expect(claude.isConnected({ sessionId: 'iscon', threadId: 'other' } as any)).toBe(false)

@@ -1,7 +1,7 @@
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 
-import type { TmuxKeyAction } from './engines/engine-adapter.js'
+import type { TmuxKeyAction } from './engine-adapter.js'
 
 const execFileAsync = promisify(execFile)
 const inFlight = new Map<string, Promise<void>>()
@@ -14,7 +14,7 @@ export const keyTiming = { settleMs: 250 }
 // promise, and this target's queue behind it, pending for good.
 const KEY_EXEC = { timeout: 3_000, killSignal: 'SIGKILL' } as const
 
-export type { TmuxKeyAction } from './engines/engine-adapter.js'
+export type { TmuxKeyAction } from './engine-adapter.js'
 
 // Serialize complete actions, including raw controls, so nothing can land between
 // literal text and its trailing key. A failed action must not poison the tail.

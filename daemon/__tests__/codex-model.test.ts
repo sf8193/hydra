@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { CodexEngine, parseCodexContextUsage, selectDefaultCodexModel } from '../codex-engine.js'
+import { CodexEngine, parseCodexContextUsage, selectDefaultCodexModel } from '../../engines/codex-engine.js'
 import { EventEmitter } from 'events'
 import { fakeCodexAdapter } from './test-harness.js'
 

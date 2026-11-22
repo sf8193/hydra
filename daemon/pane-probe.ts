@@ -20,7 +20,7 @@ import { operatorIds } from './access.js'
 import { safeSend } from '../infra/util.js'
 import { transport } from './bridge-transport.js'
 import { byteTmuxName, claudeConfigDir } from '../shared/constants.js'
-import { blockedReason, readClaudeStatus, type ClaudeLiveStatus } from './engines/claude-status.js'
+import { blockedReason, readClaudeStatus, type ClaudeLiveStatus } from '../engines/claude-status.js'
 import { reportUsage, type UsageReading } from './usage-alerts.js'
 import { transcriptPathFor } from '../infra/usage.js'
 

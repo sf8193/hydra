@@ -3,8 +3,8 @@
 ## Scope
 
 - `daemon/router.ts`
-- `daemon/codex-engine.ts`
-- `daemon/engines/codex-engine-adapter.ts`
+- `engines/codex-engine.ts`
+- `engines/codex-engine-adapter.ts`
 - focused tests only
 
 ## Required behavior

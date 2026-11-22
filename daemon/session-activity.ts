@@ -6,7 +6,7 @@
 // lookup keeps the claim).
 
 import type { SessionInfo } from './sessions.js'
-import type { LiveState } from './engines/engine-adapter.js'
+import type { LiveState } from '../engines/engine-adapter.js'
 import { isTmuxRecentlyActive, isTmuxRecentlyActiveSync, tmuxSilentLongerThan, tmuxSilentLongerThanSync } from '../infra/tmux.js'
 
 function read(info: SessionInfo): { live: LiveState | null; limitS?: number; background?: boolean } {

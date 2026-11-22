@@ -4,7 +4,7 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { expectedLoad, mismatches, readLoaded, surplus, verifyDeps, verifyLaunch } from '../engines/claude-verify.js'
+import { expectedLoad, mismatches, readLoaded, surplus, verifyDeps, verifyLaunch } from '../../engines/claude-verify.js'
 import { BRIDGE_MCP_SERVER_KEY, bridgePluginCache } from '../../infra/plugin-manifest.js'
 import { serverToolRule } from '../restricted.js'
 import type { RestrictedPolicy } from '../restricted.js'

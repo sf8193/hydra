@@ -12,8 +12,8 @@ import { CAPABILITY_TOOLS } from '../shared/constants.js'
 import { SESSION_CATALOG, SESSION_NAMES } from '../shared/session-catalog.js'
 import type { SessionType, Capability, ToolName, SessionLabel } from '../shared/constants.js'
 import { recordPendingRetirement } from '../infra/retirement-journal.js'
-import { classifyPersisted } from './engines/boot.js'
-import type { EngineAdapter, ProviderId } from './engines/engine-adapter.js'
+import { classifyPersisted } from '../engines/boot.js'
+import type { EngineAdapter, ProviderId } from '../engines/engine-adapter.js'
 
 // ---------------------------------------------------------------------------
 // Types

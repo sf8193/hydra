@@ -344,7 +344,7 @@ describe('sessionEmoji', () => {
 describe('reattachAdapters', () => {
   test("every record gets its engine's adapter; a record without an engine gets Claude's", async () => {
     const { registry, reattachAdapters } = await import('../sessions.js')
-    const { engines, resolveEngine } = await import('../engines/instances.js')
+    const { engines, resolveEngine } = await import('../../engines/instances.js')
     // reattach walks the whole shared registry: put back what other files left there.
     const saved = [...registry.values()].map(i => [i, i.adapter] as const)
     const seeded = [['ra-claude', 'claude'], ['ra-codex', 'codex'], ['ra-none', undefined]] as const

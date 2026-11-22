@@ -1,8 +1,8 @@
-// daemon/engines/history.ts
+// engines/history.ts
 //
 // Engine facts read off thread history entries. Pure.
 
-import type { ThreadSessionEntry } from '../sessions.js'
+import type { ThreadSessionEntry } from '../daemon/sessions.js'
 import type { ProviderId } from './engine-adapter.js'
 
 // A legacy respawn accidentally passed the Codex placeholder to Claude. Such

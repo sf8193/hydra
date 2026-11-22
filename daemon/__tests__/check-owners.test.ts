@@ -83,7 +83,7 @@ describe('check-owners: raw tmux liveness and exec only in owners', () => {
     const asked = (path: string, line: string) => hits(path, line).filter(v => v.includes('tmux has-session outside infra/tmux.ts'))
     expect(asked('daemon/router.ts', "execFileSync('tmux', ['has-session', '-t', n])")).toHaveLength(1)
     expect(asked('daemon/router.ts', 'execSync(`tmux has-session -t ${n}`)')).toHaveLength(1)
-    expect(asked('daemon/engines/claude-engine.ts', "tmuxSync(['has-session', '-t', n], { ignoreHold: true })")).toHaveLength(1)
+    expect(asked('engines/claude-engine.ts', "tmuxSync(['has-session', '-t', n], { ignoreHold: true })")).toHaveLength(1)
     expect(asked('infra/tmux.ts', "tmuxSync(['has-session', '-t', name], opts)")).toEqual([])
     expect(asked('infra/util.ts', "tmuxSync(['has-session', '-t', name], opts)")).toHaveLength(1)
     expect(asked('cli/helpers.ts', "execFileSync('tmux', ['has-session', '-t', name])")).toEqual([])

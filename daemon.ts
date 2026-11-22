@@ -53,12 +53,12 @@ try {
 // DEFAULT_SESSION_CHANNEL is a live binding: resolveDefaultChannel fills it after boot.
 import { gateway, TOKEN, PLATFORM, STATE_DIR, CLAUDE_CONFIG, SOCK_PATH, heartbeatPath, DEFAULT_SESSION_CHANNEL, resolveDefaultChannel } from './infra/config.js'
 import { syncMods } from './shared/mods.js'
-import { syncDaemonBridge } from './daemon/bridge-sync.js'
+import { syncDaemonBridge } from './engines/bridge-sync.js'
 import { registry, threadRegistry, reattachAdapters } from './daemon/sessions.js'
 import { isPlainWorker } from './daemon/policy-record.js'
 import { emojiOfName } from './daemon/anchor-state.js'
-import { engines, resolveEngine } from './daemon/engines/instances.js'
-import { engineRecords } from './daemon/engines/boot.js'
+import { engines, resolveEngine } from './engines/instances.js'
+import { engineRecords } from './engines/boot.js'
 import { transport } from './daemon/bridge-transport.js'
 import { operatorIds, notifyOperator } from './daemon/access.js'
 import { setupPermissionHandler } from './daemon/permission.js'
@@ -142,7 +142,7 @@ startVitalsSnapshots((id) => transport.has(id), { alert: notifyOperator })
 import { refreshDashboard, refreshDashboardNow } from './daemon/dashboard.js'
 import { debouncedRefreshListDisplay } from './daemon/commands/status.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './infra/artifacts.js'
-import type { ProviderId } from './daemon/engines/engine-adapter.js'
+import type { ProviderId } from './engines/engine-adapter.js'
 registry.onPersist = refreshDashboard
 
 if ('homeTabHandler' in gateway) {

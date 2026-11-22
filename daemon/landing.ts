@@ -1,4 +1,4 @@
-import type { DeliveryResult } from './engines/engine-adapter.js'
+import type { DeliveryResult } from '../engines/engine-adapter.js'
 
 export type Landing =
   | { ok: true; status: 'delivered' | 'queued'; proof: 'socket_write' | 'persisted' | 'adapter' }

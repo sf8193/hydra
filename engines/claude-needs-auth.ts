@@ -1,4 +1,4 @@
-// daemon/engines/claude-needs-auth.ts
+// engines/claude-needs-auth.ts
 //
 // Claude Code keeps <config>/mcp-needs-auth-cache.json, an object keyed by MCP server
 // key ({ "plugin:discord:discord": { timestamp, id }, ... }). While an entry is fresh
@@ -14,7 +14,7 @@
 import { randomUUID } from 'crypto'
 import { readFile, rename, stat, unlink, writeFile } from 'fs/promises'
 import { join } from 'path'
-import { claudeConfigDir } from '../../shared/constants.js'
+import { claudeConfigDir } from '../shared/constants.js'
 
 export const NEEDS_AUTH_CACHE_FILE = 'mcp-needs-auth-cache.json'
 

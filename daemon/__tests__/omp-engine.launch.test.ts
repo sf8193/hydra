@@ -2,8 +2,8 @@ import { expect, test } from 'bun:test'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { OmpEngine } from '../engines/omp-engine.js'
-import { ompSessionDir } from '../engines/omp-session.js'
+import { OmpEngine } from '../../engines/omp-engine.js'
+import { ompSessionDir } from '../../engines/omp-session.js'
 
 // The omp launch command, with tmux faked (the real-omp proof needs HYDRA_OMP_E2E=1 and a model; this runs in CI).
 async function launchCommand(prompt: string, extra: object = {}): Promise<string> {

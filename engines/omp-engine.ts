@@ -1,4 +1,4 @@
-// daemon/engines/omp-engine.ts
+// engines/omp-engine.ts
 //
 // omp (oh-my-pi) engine adapter — Claude's model: a TUI in tmux, with the daemon bridge socket
 // spoken by an omp extension (omp/hydra-bridge.ts) instead of an MCP server. The tmux and bridge
@@ -6,22 +6,22 @@
 
 import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'fs'
 import { join } from 'path'
-import type { SessionInfo } from '../sessions.js'
+import type { SessionInfo } from '../daemon/sessions.js'
 import type {
   EngineAdapter, LaunchInput, LaunchResult, DeliveryResult, Notification, StopResult,
   ContextUsage, RecoveryPlan, RecoverySource, Turn,
 } from './engine-adapter.js'
-import type { BlockingState } from '../pane-probe.js'
+import type { BlockingState } from '../daemon/pane-probe.js'
 import type { ClaudeEngine } from './claude-engine.js'
-import { SOCK_PATH, PLATFORM, SPAWN_LOGS_DIR } from '../../infra/config.js'
-import { removeSessionToken, removeSpawnPrompt, shq, writeSessionToken, writeSpawnPrompt } from '../../infra/launch-files.js'
-import { tmuxCreateSession, tmuxWindowActivity } from '../../infra/tmux.js'
+import { SOCK_PATH, PLATFORM, SPAWN_LOGS_DIR } from '../infra/config.js'
+import { removeSessionToken, removeSpawnPrompt, shq, writeSessionToken, writeSpawnPrompt } from '../infra/launch-files.js'
+import { tmuxCreateSession, tmuxWindowActivity } from '../infra/tmux.js'
 import { ompContextTokens, ompSessionDir, ompTurn } from './omp-session.js'
-import { contextWindowOf, ompProvider } from '../../shared/constants.js'
-import { withRaisedFdLimit } from '../../shared/spawn-env.js'
+import { contextWindowOf, ompProvider } from '../shared/constants.js'
+import { withRaisedFdLimit } from '../shared/spawn-env.js'
 
-const EXTENSION = join(import.meta.dir, '..', '..', 'omp', 'hydra-bridge.ts')
-const OMP_CONFIG = join(import.meta.dir, '..', '..', 'omp', 'hydra-omp.yml')
+const EXTENSION = join(import.meta.dir, '..', 'omp', 'hydra-bridge.ts')
+const OMP_CONFIG = join(import.meta.dir, '..', 'omp', 'hydra-omp.yml')
 
 export class OmpEngine implements EngineAdapter {
   readonly provider = 'omp' as const
