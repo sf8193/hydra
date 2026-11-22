@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { isSessionWorking, isSessionWorkingAsync, sessionLiveAsync } from '../session-activity.js'
+import { isSessionWorking, isSessionWorkingAsync, sessionLiveAsync } from '../../sessions/session-activity.js'
 import { engines } from '../../engines/instances.js'
 import { CLAUDE_WORKING_SILENCE_S } from '../../engines/claude-engine.js'
 import { CODEX_WORKING_STALE_MS, defaultTurnSources, isCodexWorking, noteCodexTurnState } from '../../engines/codex-observation.js'
@@ -9,7 +9,7 @@ import { codexHomeDir } from '../../engines/codex-process.js'
 import { mkdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { withFakeTmux } from './fake-tmux.js'
-import type { SessionInfo } from '../sessions.js'
+import type { SessionInfo } from '../../sessions/registry.js'
 import type { LiveState } from '../../engines/engine-adapter.js'
 
 const withLive = (live: LiveState | null, extra: Partial<SessionInfo> = {}) =>

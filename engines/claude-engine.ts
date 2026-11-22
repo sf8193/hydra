@@ -6,7 +6,7 @@ import { randomUUID } from 'crypto'
 import { spawn } from 'child_process'
 import { existsSync, mkdirSync, readFileSync } from 'fs'
 import { join } from 'path'
-import type { SessionInfo, SessionMetadata } from '../daemon/sessions.js'
+import type { SessionInfo, SessionMetadata } from '../sessions/registry.js'
 import { detectBlockingState as detectBlockingStateFn } from '../daemon/pane-probe.js'
 import type { BlockingState } from '../daemon/pane-probe.js'
 import type {
@@ -16,7 +16,7 @@ import type {
   ContextUsage, RecoverySource, RecoveryPlan, Turn,
 } from './engine-adapter.js'
 import { withoutIntents } from './engine-adapter.js'
-import type { BridgeTransport } from '../daemon/bridge-transport.js'
+import type { BridgeTransport } from '../sessions/bridge-transport.js'
 import { parseContextFooter, type ContextFooter } from '../infra/util.js'
 import { tmuxCreateSession, tmuxHasSession, tmuxSessionState, tmuxSync, tmuxTimedOut, tmuxWindowActivity } from '../infra/tmux.js'
 import { claudeConfigDir, contextWindowOf, isKnownModel } from '../shared/constants.js'

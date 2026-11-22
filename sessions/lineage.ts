@@ -2,7 +2,7 @@
 // while the child lived (destroy it) its spawner keeps after the child ends. Two acts read it: destroying an ended thread
 // (destroy.ts endedDestroyRefusal) and spawning a new session into one (doSpawnSession).
 
-import { registry, threadRegistry } from './sessions.js'
+import { registry, threadRegistry } from './registry.js'
 import { isProtocolParticipant } from './protocol-registry.js'
 
 /**

@@ -1,5 +1,5 @@
 // Who is calling the daemon from a shell: what the CLI says of its caller on every request (cli/helpers.ts sendRequest), and the daemon
-// checks (daemon/cli-caller.ts).
+// checks (sessions/cli-caller.ts).
 //
 // Each session is launched with a token the daemon issued for it (HYDRA_SESSION_TOKEN: Claude and omp read it from a launch file, Codex has
 // it in its app-server's environment; never on a command line).

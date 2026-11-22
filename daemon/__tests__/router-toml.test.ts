@@ -1,8 +1,8 @@
 // The router's own reads of hydra.toml: the ack reaction on delivery, and a channel's thread_reply.
 import { afterAll, afterEach, beforeAll, beforeEach, expect, spyOn, test } from 'bun:test'
 import { gateway } from '../../infra/config.js'
-import { registry, threadRegistry } from '../sessions.js'
-import { _setHydraConfigForTesting } from '../hydra-config.js'
+import { registry, threadRegistry } from '../../sessions/registry.js'
+import { _setHydraConfigForTesting } from '../../infra/hydra-config.js'
 import type { HydraConfig } from '../../config/types.js'
 
 let onMessage: (msg: any) => Promise<void>

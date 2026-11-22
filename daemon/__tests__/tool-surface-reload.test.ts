@@ -8,14 +8,14 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { STATE_DIR } from '../../infra/config.js'
 import { socketServer } from '../bridge-server.js'
-import { registry } from '../sessions.js'
-import { _setHydraConfigForTesting } from '../hydra-config.js'
-import { setSpecialistThread, _reloadSpecialists } from '../../specialists/specialists.js'
+import { registry } from '../../sessions/registry.js'
+import { _setHydraConfigForTesting } from '../../infra/hydra-config.js'
+import { setSpecialistThread, _reloadSpecialists } from '../../sessions/specialists.js'
 import { loadHydraConfig } from '../../config/load.js'
 import { testLoadEnv } from '../../config/__tests__/load-env.js'
 import { engines } from '../../engines/instances.js'
 import type { HydraConfig } from '../../config/types.js'
-import type { SessionInfo } from '../sessions.js'
+import type { SessionInfo } from '../../sessions/registry.js'
 
 process.stderr.write = (() => true) as any
 

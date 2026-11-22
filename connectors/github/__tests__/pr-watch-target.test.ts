@@ -7,9 +7,9 @@ import {
   _pollForTesting, _pollAllForTesting, _setPortsForTesting, _setWatchForTesting, type WatchEntry,
 } from '../pr-watch.js'
 import { deliverToSession, targetDeps, type DeliverOutcome } from '../../../specialists/targets.js'
-import { registry, type SessionInfo } from '../../../daemon/sessions.js'
-import { transport } from '../../../daemon/bridge-transport.js'
-import { setSpecialist, removeSpecialist } from '../../../specialists/specialists.js'
+import { registry, type SessionInfo } from '../../../sessions/registry.js'
+import { transport } from '../../../sessions/bridge-transport.js'
+import { setSpecialist, removeSpecialist } from '../../../sessions/specialists.js'
 import { killSession } from '../../../daemon/session-lifecycle.js'
 import { gateway } from '../../../infra/config.js'
 import { reviveThreadForDelivery, reviveDeps } from '../../../daemon/recovery.js'

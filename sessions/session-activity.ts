@@ -5,7 +5,7 @@
 // its claim then lapses only when tmux confirms the pane has been silent past that window (a failed
 // lookup keeps the claim).
 
-import type { SessionInfo } from './sessions.js'
+import type { SessionInfo } from './registry.js'
 import type { LiveState } from '../engines/engine-adapter.js'
 import { isTmuxRecentlyActive, isTmuxRecentlyActiveSync, tmuxSilentLongerThan, tmuxSilentLongerThanSync } from '../infra/tmux.js'
 

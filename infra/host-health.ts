@@ -18,7 +18,7 @@ import type { MemoryPressure, ProcStat, SystemPressure } from './cpu-spin.js'
 import { formatPressure } from './cpu-spin.js'
 import type { Vitals } from '../config/types.js'
 import { VITALS_DEFAULTS } from '../config/load.js'
-import { currentHydraConfig } from '../daemon/hydra-config.js'
+import { currentHydraConfig } from './hydra-config.js'
 import { suspendedSince } from '../shared/resume.js'
 
 /** How many processes the memory alert lists. */

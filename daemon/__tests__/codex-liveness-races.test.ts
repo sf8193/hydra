@@ -5,7 +5,7 @@ import { EventEmitter } from 'events'
 import { CodexEngine } from '../../engines/codex-engine.js'
 import { classifyPersisted } from '../../engines/boot.js'
 import { fakeCodexAdapter } from './test-harness.js'
-import { registry } from '../sessions.js'
+import { registry } from '../../sessions/registry.js'
 import { reconnectCodexSessions, codexEngine } from '../../engines/codex-runtime.js'
 const tick = () => new Promise(r => setTimeout(r, 0))
 function setup(id='review') {

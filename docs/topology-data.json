@@ -93,14 +93,14 @@
       "desc": "Env, paths, .env loading, gateway instance"
     },
     {
-      "id": "daemon_sessions",
-      "label": "daemon/sessions.ts",
+      "id": "sessions_registry",
+      "label": "sessions/registry.ts",
       "layer": "core",
       "desc": "SessionRegistry, ThreadRegistry, session catalog"
     },
     {
-      "id": "daemon_bridge-transport",
-      "label": "daemon/bridge-transport.ts",
+      "id": "sessions_bridge-transport",
+      "label": "sessions/bridge-transport.ts",
       "layer": "core",
       "desc": "BridgeConn map, message queuing, flush"
     },
@@ -129,8 +129,8 @@
       "desc": "UNIVERSAL_TOOLS, computeToolsForSession — zero daemon imports (cycle guard)"
     },
     {
-      "id": "daemon_tool-surface",
-      "label": "daemon/tool-surface.ts",
+      "id": "sessions_tool-surface",
+      "label": "sessions/tool-surface.ts",
       "layer": "tools",
       "desc": "getToolsForSession, pushToolSurface — reads SessionInfo, bridges to bridge-tools"
     },
@@ -147,8 +147,8 @@
       "desc": "Unix socket server, bridge protocol, death detection, flap guard"
     },
     {
-      "id": "daemon_protocol-registry",
-      "label": "daemon/protocol-registry.ts",
+      "id": "sessions_protocol-registry",
+      "label": "sessions/protocol-registry.ts",
       "layer": "server",
       "desc": "Protocol registration, isThreadOccupied query, dispatch{Reconnect,Reply,Disconnect}"
     },
@@ -183,8 +183,8 @@
       "desc": "Post-reboot/crash recovery: recoverOne cascade, work-key dedup, autoRecoverAfterBoot"
     },
     {
-      "id": "daemon_anchor-state",
-      "label": "daemon/anchor-state.ts",
+      "id": "sessions_anchor-state",
+      "label": "sessions/anchor-state.ts",
       "layer": "lifecycle",
       "desc": "Thread anchor message visual state machine"
     },
@@ -195,8 +195,8 @@
       "desc": "Inbound routing, command interception, COMMAND_PREFIXES"
     },
     {
-      "id": "daemon_access",
-      "label": "daemon/access.ts",
+      "id": "sessions_access",
+      "label": "sessions/access.ts",
       "layer": "domain",
       "desc": "Access control, allowlists, maxChunkLimit"
     },
@@ -255,14 +255,14 @@
       "desc": "Reply guard: nudge sessions that go silent on user-authored messages"
     },
     {
-      "id": "daemon_phase-budget",
-      "label": "daemon/phase-budget.ts",
+      "id": "sessions_phase-budget",
+      "label": "sessions/phase-budget.ts",
       "layer": "domain",
       "desc": "Per-session max lifetime: nudge → grace → reap"
     },
     {
-      "id": "daemon_idle-limit",
-      "label": "daemon/idle-limit.ts",
+      "id": "sessions_idle-limit",
+      "label": "sessions/idle-limit.ts",
       "layer": "domain",
       "desc": "Ephemeral idle limit: persisted deadline, nudge → grace → reap"
     },
@@ -352,19 +352,19 @@
     ],
     [
       "daemon",
-      "daemon_sessions"
+      "sessions_registry"
     ],
     [
       "daemon",
-      "daemon_anchor-state"
+      "sessions_anchor-state"
     ],
     [
       "daemon",
-      "daemon_bridge-transport"
+      "sessions_bridge-transport"
     ],
     [
       "daemon",
-      "daemon_access"
+      "sessions_access"
     ],
     [
       "daemon",
@@ -388,11 +388,11 @@
     ],
     [
       "daemon",
-      "daemon_phase-budget"
+      "sessions_phase-budget"
     ],
     [
       "daemon",
-      "daemon_idle-limit"
+      "sessions_idle-limit"
     ],
     [
       "daemon",
@@ -455,31 +455,31 @@
       "shared_constants"
     ],
     [
-      "daemon_sessions",
+      "sessions_registry",
       "infra_config"
     ],
     [
-      "daemon_sessions",
+      "sessions_registry",
       "infra_util"
     ],
     [
-      "daemon_sessions",
+      "sessions_registry",
       "infra_tmux"
     ],
     [
-      "daemon_sessions",
+      "sessions_registry",
       "shared_constants"
     ],
     [
-      "daemon_bridge-transport",
+      "sessions_bridge-transport",
       "infra_config"
     ],
     [
-      "daemon_bridge-transport",
-      "daemon_sessions"
+      "sessions_bridge-transport",
+      "sessions_registry"
     ],
     [
-      "daemon_bridge-transport",
+      "sessions_bridge-transport",
       "infra_util"
     ],
     [
@@ -499,19 +499,19 @@
       "shared_tool-definitions"
     ],
     [
-      "daemon_tool-surface",
-      "daemon_sessions"
+      "sessions_tool-surface",
+      "sessions_registry"
     ],
     [
-      "daemon_tool-surface",
-      "daemon_bridge-transport"
+      "sessions_tool-surface",
+      "sessions_bridge-transport"
     ],
     [
-      "daemon_tool-surface",
+      "sessions_tool-surface",
       "engines_bridge-tools"
     ],
     [
-      "daemon_tool-surface",
+      "sessions_tool-surface",
       "shared_constants"
     ],
     [
@@ -520,15 +520,15 @@
     ],
     [
       "daemon_bridge-dispatch",
-      "daemon_sessions"
+      "sessions_registry"
     ],
     [
       "daemon_bridge-dispatch",
-      "daemon_bridge-transport"
+      "sessions_bridge-transport"
     ],
     [
       "daemon_bridge-dispatch",
-      "daemon_access"
+      "sessions_access"
     ],
     [
       "daemon_bridge-dispatch",
@@ -544,7 +544,7 @@
     ],
     [
       "daemon_bridge-dispatch",
-      "daemon_protocol-registry"
+      "sessions_protocol-registry"
     ],
     [
       "daemon_bridge-dispatch",
@@ -552,7 +552,7 @@
     ],
     [
       "daemon_bridge-dispatch",
-      "daemon_anchor-state"
+      "sessions_anchor-state"
     ],
     [
       "daemon_bridge-dispatch",
@@ -568,7 +568,7 @@
     ],
     [
       "daemon_bridge-dispatch",
-      "daemon_tool-surface"
+      "sessions_tool-surface"
     ],
     [
       "daemon_bridge-dispatch",
@@ -580,11 +580,11 @@
     ],
     [
       "daemon_bridge-server",
-      "daemon_sessions"
+      "sessions_registry"
     ],
     [
       "daemon_bridge-server",
-      "daemon_bridge-transport"
+      "sessions_bridge-transport"
     ],
     [
       "daemon_bridge-server",
@@ -604,15 +604,15 @@
     ],
     [
       "daemon_bridge-server",
-      "daemon_access"
+      "sessions_access"
     ],
     [
       "daemon_bridge-server",
-      "daemon_protocol-registry"
+      "sessions_protocol-registry"
     ],
     [
       "daemon_bridge-server",
-      "daemon_tool-surface"
+      "sessions_tool-surface"
     ],
     [
       "daemon_bridge-server",
@@ -624,7 +624,7 @@
     ],
     [
       "daemon_bridge-server",
-      "daemon_anchor-state"
+      "sessions_anchor-state"
     ],
     [
       "daemon_bridge-server",
@@ -648,31 +648,31 @@
     ],
     [
       "daemon_bridge-server",
-      "daemon_idle-limit"
+      "sessions_idle-limit"
     ],
     [
-      "daemon_protocol-registry",
-      "daemon_sessions"
-    ],
-    [
-      "daemon_permission",
-      "daemon_bridge-transport"
+      "sessions_protocol-registry",
+      "sessions_registry"
     ],
     [
       "daemon_permission",
-      "daemon_access"
+      "sessions_bridge-transport"
+    ],
+    [
+      "daemon_permission",
+      "sessions_access"
     ],
     [
       "daemon_cli-handler",
-      "daemon_sessions"
+      "sessions_registry"
     ],
     [
       "daemon_cli-handler",
-      "daemon_tool-surface"
+      "sessions_tool-surface"
     ],
     [
       "daemon_cli-handler",
-      "daemon_bridge-transport"
+      "sessions_bridge-transport"
     ],
     [
       "daemon_cli-handler",
@@ -700,7 +700,7 @@
     ],
     [
       "daemon_cli-handler",
-      "daemon_access"
+      "sessions_access"
     ],
     [
       "daemon_cli-handler",
@@ -720,7 +720,7 @@
     ],
     [
       "daemon_session-lifecycle",
-      "daemon_sessions"
+      "sessions_registry"
     ],
     [
       "daemon_session-lifecycle",
@@ -728,7 +728,7 @@
     ],
     [
       "daemon_session-lifecycle",
-      "daemon_bridge-transport"
+      "sessions_bridge-transport"
     ],
     [
       "daemon_session-lifecycle",
@@ -736,15 +736,15 @@
     ],
     [
       "daemon_session-lifecycle",
-      "daemon_tool-surface"
+      "sessions_tool-surface"
     ],
     [
       "daemon_session-lifecycle",
-      "daemon_phase-budget"
+      "sessions_phase-budget"
     ],
     [
       "daemon_session-lifecycle",
-      "daemon_idle-limit"
+      "sessions_idle-limit"
     ],
     [
       "daemon_session-lifecycle",
@@ -756,7 +756,7 @@
     ],
     [
       "daemon_session-lifecycle",
-      "daemon_anchor-state"
+      "sessions_anchor-state"
     ],
     [
       "daemon_session-lifecycle",
@@ -764,7 +764,7 @@
     ],
     [
       "daemon_session-lifecycle",
-      "daemon_access"
+      "sessions_access"
     ],
     [
       "daemon_session-lifecycle",
@@ -776,11 +776,11 @@
     ],
     [
       "daemon_recovery",
-      "daemon_sessions"
+      "sessions_registry"
     ],
     [
       "daemon_recovery",
-      "daemon_anchor-state"
+      "sessions_anchor-state"
     ],
     [
       "daemon_recovery",
@@ -804,19 +804,19 @@
     ],
     [
       "daemon_recovery",
-      "daemon_access"
+      "sessions_access"
     ],
     [
       "daemon_recovery",
       "shared_constants"
     ],
     [
-      "daemon_anchor-state",
+      "sessions_anchor-state",
       "infra_config"
     ],
     [
-      "daemon_anchor-state",
-      "daemon_sessions"
+      "sessions_anchor-state",
+      "sessions_registry"
     ],
     [
       "daemon_router",
@@ -828,15 +828,15 @@
     ],
     [
       "daemon_router",
-      "daemon_sessions"
+      "sessions_registry"
     ],
     [
       "daemon_router",
-      "daemon_bridge-transport"
+      "sessions_bridge-transport"
     ],
     [
       "daemon_router",
-      "daemon_access"
+      "sessions_access"
     ],
     [
       "daemon_router",
@@ -860,11 +860,11 @@
     ],
     [
       "daemon_router",
-      "daemon_protocol-registry"
+      "sessions_protocol-registry"
     ],
     [
       "daemon_router",
-      "daemon_anchor-state"
+      "sessions_anchor-state"
     ],
     [
       "daemon_router",
@@ -880,7 +880,7 @@
     ],
     [
       "daemon_router",
-      "daemon_idle-limit"
+      "sessions_idle-limit"
     ],
     [
       "daemon_router",
@@ -899,11 +899,11 @@
       "daemon_templates"
     ],
     [
-      "daemon_access",
+      "sessions_access",
       "infra_config"
     ],
     [
-      "daemon_access",
+      "sessions_access",
       "infra_util"
     ],
     [
@@ -916,7 +916,7 @@
     ],
     [
       "connectors_github_pr-watch",
-      "daemon_sessions"
+      "sessions_registry"
     ],
     [
       "connectors_github_pr-watch",
@@ -932,15 +932,15 @@
     ],
     [
       "daemon_dashboard",
-      "daemon_sessions"
+      "sessions_registry"
     ],
     [
       "daemon_dashboard",
-      "daemon_anchor-state"
+      "sessions_anchor-state"
     ],
     [
       "daemon_dashboard",
-      "daemon_bridge-transport"
+      "sessions_bridge-transport"
     ],
     [
       "daemon_dashboard",
@@ -948,7 +948,7 @@
     ],
     [
       "daemon_dashboard",
-      "daemon_access"
+      "sessions_access"
     ],
     [
       "daemon_dashboard",
@@ -972,23 +972,23 @@
     ],
     [
       "daemon_advance-nudge",
-      "daemon_bridge-transport"
+      "sessions_bridge-transport"
     ],
     [
       "daemon_advance-nudge",
-      "daemon_sessions"
+      "sessions_registry"
     ],
     [
       "daemon_advance-nudge",
-      "daemon_protocol-registry"
+      "sessions_protocol-registry"
     ],
     [
       "daemon_reply-guard",
-      "daemon_bridge-transport"
+      "sessions_bridge-transport"
     ],
     [
       "daemon_reply-guard",
-      "daemon_sessions"
+      "sessions_registry"
     ],
     [
       "daemon_reply-guard",
@@ -1003,44 +1003,44 @@
       "infra_tmux"
     ],
     [
-      "daemon_phase-budget",
-      "daemon_sessions"
+      "sessions_phase-budget",
+      "sessions_registry"
     ],
     [
-      "daemon_phase-budget",
-      "daemon_bridge-transport"
+      "sessions_phase-budget",
+      "sessions_bridge-transport"
     ],
     [
-      "daemon_phase-budget",
+      "sessions_phase-budget",
       "infra_util"
     ],
     [
-      "daemon_idle-limit",
-      "daemon_sessions"
+      "sessions_idle-limit",
+      "sessions_registry"
     ],
     [
-      "daemon_idle-limit",
-      "daemon_bridge-transport"
+      "sessions_idle-limit",
+      "sessions_bridge-transport"
     ],
     [
-      "daemon_idle-limit",
+      "sessions_idle-limit",
       "infra_util"
     ],
     [
-      "daemon_idle-limit",
+      "sessions_idle-limit",
       "infra_config"
     ],
     [
-      "daemon_idle-limit",
-      "daemon_protocol-registry"
+      "sessions_idle-limit",
+      "sessions_protocol-registry"
     ],
     [
-      "daemon_idle-limit",
+      "sessions_idle-limit",
       "shared_constants"
     ],
     [
       "daemon_session-health",
-      "daemon_sessions"
+      "sessions_registry"
     ],
     [
       "daemon_session-health",
@@ -1052,11 +1052,11 @@
     ],
     [
       "daemon_session-health",
-      "daemon_anchor-state"
+      "sessions_anchor-state"
     ],
     [
       "daemon_session-health",
-      "daemon_access"
+      "sessions_access"
     ],
     [
       "daemon_session-health",
@@ -1064,11 +1064,11 @@
     ],
     [
       "daemon_auto-handoff",
-      "daemon_sessions"
+      "sessions_registry"
     ],
     [
       "daemon_auto-handoff",
-      "daemon_tool-surface"
+      "sessions_tool-surface"
     ],
     [
       "daemon_auto-handoff",
@@ -1076,7 +1076,7 @@
     ],
     [
       "daemon_auto-handoff",
-      "daemon_bridge-transport"
+      "sessions_bridge-transport"
     ],
     [
       "daemon_auto-handoff",
@@ -1108,15 +1108,15 @@
     ],
     [
       "daemon_commands_global",
-      "daemon_sessions"
+      "sessions_registry"
     ],
     [
       "daemon_commands_global",
-      "daemon_anchor-state"
+      "sessions_anchor-state"
     ],
     [
       "daemon_commands_global",
-      "daemon_bridge-transport"
+      "sessions_bridge-transport"
     ],
     [
       "daemon_commands_global",
@@ -1140,15 +1140,15 @@
     ],
     [
       "daemon_commands_status",
-      "daemon_sessions"
+      "sessions_registry"
     ],
     [
       "daemon_commands_status",
-      "daemon_anchor-state"
+      "sessions_anchor-state"
     ],
     [
       "daemon_commands_status",
-      "daemon_bridge-transport"
+      "sessions_bridge-transport"
     ],
     [
       "daemon_commands_status",
@@ -1164,11 +1164,11 @@
     ],
     [
       "daemon_commands_thread",
-      "daemon_sessions"
+      "sessions_registry"
     ],
     [
       "daemon_commands_thread",
-      "daemon_bridge-transport"
+      "sessions_bridge-transport"
     ],
     [
       "daemon_commands_thread",
@@ -1176,7 +1176,7 @@
     ],
     [
       "daemon_commands_thread",
-      "daemon_anchor-state"
+      "sessions_anchor-state"
     ],
     [
       "daemon_commands_thread",
@@ -1208,11 +1208,11 @@
     ],
     [
       "daemon_commands_review",
-      "daemon_sessions"
+      "sessions_registry"
     ],
     [
       "daemon_commands_review",
-      "daemon_protocol-registry"
+      "sessions_protocol-registry"
     ],
     [
       "daemon_commands_review",
@@ -1224,7 +1224,7 @@
     ],
     [
       "daemon_commands_watch",
-      "daemon_sessions"
+      "sessions_registry"
     ],
     [
       "daemon_commands_watch",

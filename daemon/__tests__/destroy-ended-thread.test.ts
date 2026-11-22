@@ -9,18 +9,18 @@ import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } fr
 import { engines } from '../../engines/instances.js'
 import { executeTool } from '../bridge-dispatch.js'
 import { handleCLIRequest } from '../cli-handler.js'
-import { _setHydraConfigForTesting } from '../hydra-config.js'
+import { _setHydraConfigForTesting } from '../../infra/hydra-config.js'
 import { on } from '../../infra/event-bus.js'
-import { registry, threadRegistry } from '../sessions.js'
-import type { SessionInfo } from '../sessions.js'
+import { registry, threadRegistry } from '../../sessions/registry.js'
+import type { SessionInfo } from '../../sessions/registry.js'
 import type { HydraConfig } from '../../config/types.js'
 import { listWatches } from '../../connectors/github/pr-watch.js'
-import { setSpecialist, removeSpecialist } from '../../specialists/specialists.js'
+import { setSpecialist, removeSpecialist } from '../../sessions/specialists.js'
 import { gateway } from '../../infra/config.js'
-import { registerProtocol } from '../protocol-registry.js'
+import { registerProtocol } from '../../sessions/protocol-registry.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import { seedPrWatch } from './test-harness.js'
-import { sessionTokenHash } from '../cli-caller.js'
+import { sessionTokenHash } from '../../sessions/cli-caller.js'
 
 const PARENT_CH = 'parent-channel-det'
 const base = { connectors: {}, gateways: {}, slackApps: {}, people: {}, specialists: {}, places: {}, schedules: {}, rules: [] } as unknown as HydraConfig
@@ -289,7 +289,7 @@ describe('on: the session that spawned an ended session may destroy its thread',
       ended('kid', '9582', '9581')
       expect((await asTool(pm.sessionId, '9582')).isError).toBe(true)
       expect(deleted).toEqual([])
-    } finally { (await import('../protocol-registry.js'))._resetForTesting() }
+    } finally { (await import('../../sessions/protocol-registry.js'))._resetForTesting() }
   })
   test('a sibling, the child itself and a stranger are refused, and the refusal names who may', async () => {
     const pm = live('pm', '9521')

@@ -3,17 +3,17 @@
  */
 
 import { gateway, PLATFORM } from '../infra/config.js'
-import { registry, threadRegistry, type SessionInfo } from './sessions.js'
-import { emojiOf } from './anchor-state.js'
-import { transport } from './bridge-transport.js'
+import { registry, threadRegistry, type SessionInfo } from '../sessions/registry.js'
+import { emojiOf } from '../sessions/anchor-state.js'
+import { transport } from '../sessions/bridge-transport.js'
 import { formatDuration } from '../infra/util.js'
-import { operatorIds } from './access.js'
+import { operatorIds } from '../sessions/access.js'
 import { getWatchesBySession, type WatchEntry } from '../connectors/github/pr-watch.js'
 import { assembleContextLines } from '../infra/artifacts.js'
-import { sessionLiveAsync } from './session-activity.js'
+import { sessionLiveAsync } from '../sessions/session-activity.js'
 import { homeRecoverable, homeStatus, homeStatusAccessory, type HomeStatus } from '../infra/home-status.js'
 import { confirmedStuckState, homeActionable, type BlockingState } from './pane-probe.js'
-import { daemonPastOrphanGrace, occupancy, occupied } from './session-reachability.js'
+import { daemonPastOrphanGrace, occupancy, occupied } from '../sessions/session-reachability.js'
 import { timed } from '../shared/loop-watch.js'
 
 const DEBOUNCE_MS = 2000

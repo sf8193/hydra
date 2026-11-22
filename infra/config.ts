@@ -73,7 +73,7 @@ export const typedDeliveryUserIds = (): Set<string> =>
 
 /**
  * HYDRA_IDLE_REAP_DAYS: a positive number of days (`7`, `1.5`) after which an idle spawned
- * session is nudged, then ended, resumably (daemon/idle-limit.ts). Unset or malformed: off. Read per call.
+ * session is nudged, then ended, resumably (sessions/idle-limit.ts). Unset or malformed: off. Read per call.
  */
 export function idleReapMs(): number | undefined {
   const raw = (process.env.HYDRA_IDLE_REAP_DAYS || '').trim()
@@ -107,7 +107,7 @@ export let DEFAULT_SESSION_CHANNEL = process.env.DEFAULT_SESSION_CHANNEL ?? ''
 export async function resolveDefaultChannel(): Promise<void> {
   if (DEFAULT_SESSION_CHANNEL) return
   try {
-    const userId = (await import('../daemon/access.js')).operatorIds()[0]
+    const userId = (await import('../sessions/access.js')).operatorIds()[0]
     if (!userId) return
     if ('sendDM' in gateway) {
       const ch = await (gateway as any).app?.client?.conversations?.open({ users: userId })

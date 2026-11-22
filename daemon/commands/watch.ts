@@ -1,5 +1,5 @@
 import { gateway } from '../../infra/config.js'
-import { registry } from '../sessions.js'
+import { registry } from '../../sessions/registry.js'
 import { watchPr, unwatchPr, listWatches, formatWatchEntry, detectPrUrl, WATCH_ERRORS, type WatchOpts } from '../../connectors/github/pr-watch.js'
 import { reportError } from '../../infra/util.js'
 import type { InboundMessage } from '../../gateways/gateway.js'

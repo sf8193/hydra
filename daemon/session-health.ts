@@ -1,12 +1,12 @@
-import { markDead, registry, threadRegistry } from './sessions.js'
+import { markDead, registry, threadRegistry } from '../sessions/registry.js'
 import { gateway } from '../infra/config.js'
 import { fallbackDescription } from '../infra/util.js'
 import { formatContextPercent } from '../engines/engine-adapter.js'
-import { mainChannel, mainContext, mainTmux } from './main-session.js'
-import { refreshSessionVisual } from './anchor-state.js'
-import { bridgeWaitMs, occupancy } from './session-reachability.js'
-import { notifyOperator } from './access.js'
-import type { SessionInfo } from './sessions.js'
+import { mainChannel, mainContext, mainTmux } from '../sessions/main.js'
+import { refreshSessionVisual } from '../sessions/anchor-state.js'
+import { bridgeWaitMs, occupancy } from '../sessions/session-reachability.js'
+import { notifyOperator } from '../sessions/access.js'
+import type { SessionInfo } from '../sessions/registry.js'
 import { automaticHandoffSentence, autoHandoff } from './auto-handoff.js'
 import { CONTEXT_ALERT_LINES } from './context-lines.js'
 import { timed } from '../shared/loop-watch.js'
@@ -38,7 +38,7 @@ export function pollSessionsOnce(now: number): void {
     }
 
     // Orphan detection — tmux alive but bridge never connected past grace window.
-    // See also: daemon/resume-health.ts classifyResumeFailure, which checks
+    // See also: sessions/resume-health.ts classifyResumeFailure, which checks
     // the same condition at bridge-timeout time. Both paths must preserve.
     // Discovery retries every poll (claudeSessionId may become available later).
     // Alert fires once per orphan episode; clears when bridge reconnects.
