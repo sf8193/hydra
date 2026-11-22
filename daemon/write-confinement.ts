@@ -7,7 +7,7 @@
 //   permissions.deny                              the operator's optional command deny list.
 //   mcp config                                    the listed servers, started with their own browser profile and download folders.
 //
-// What it does not do is said in config/write-confinement.ts (the warning) and in docs/slack.md: reads, network, MCP servers' own writes and the
+// What it does not do is said in config/write-confinement.ts (the warning) and in docs/specialists.md: reads, network, MCP servers' own writes and the
 // operator's credentials stay open. MCP servers and the browser run outside Claude Code's sandbox.
 
 import { spawnSync } from 'child_process'

@@ -123,8 +123,7 @@ speaks_as = "app:sales"               # the Slack app whose bot posts for it whe
 # A specialist other people talk to, restricted: it knows only its workdir, uses only the tools and servers it lists, and answers only its own
 # conversation. `restricted = false` (the default) is the operator's account, with every tool and server they have. A workdir must be a folder
 # of its own (not $HOME, not a git work tree, no symlinks out). `restricted`, `can_only_write_to`, `deny_commands`, `tools`, `mcp_servers` and `sends_to` are refused in [defaults.specialist] and in `hydra
-# config add` fragments. Each new start is checked against this, from Claude Code's own debug file (docs/slack.md, "A specialist other people talk to",
-# which shows the same kind of specialist as a file of its own, named `ops`). Its `.env` variables are read when the daemon starts.
+# config add` fragments. Each new start is checked against this, from Claude Code's own debug file (docs/specialists.md). Its `.env` variables are read when the daemon starts.
 [specialists.helpdesk]
 workdir = "~/agents/helpdesk"
 pinned_to = ["app:sales"]             # pinned, because the `sales` app is pinned by deals: an unpinned specialist would lose it (hydra.toml warns)

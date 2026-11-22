@@ -2,7 +2,7 @@
 // settings (confined-shell-probe.ts): what the confined Bash can and cannot do to a folder so marked. Off unless asked, because it runs the real claude:
 //   HYDRA_LIVE_CLAUDE=1 scripts/test.sh --isolate daemon/__tests__/write-confinement-inbox.live.test.ts
 // Result (Claude Code 2.1.326, macOS 15): the shell is refused create, overwrite, delete, rename and swap of the folder, and still reads it and writes elsewhere in the workdir;
-// that also stops the specialist clearing a full folder, so hydra does not use it (docs/slack.md). Everything is in a throwaway HOME. Each line printed is the evidence.
+// that also stops the specialist clearing a full folder, so hydra does not use it. Everything is in a throwaway HOME. Each line printed is the evidence.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
