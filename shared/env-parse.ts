@@ -1,5 +1,3 @@
-import { readFileSync } from 'fs'
-
 /** Parse a single .env line into [key, value], handling `export`, quotes, and inline comments. */
 export function parseEnvLine(line: string): [string, string] | null {
   const m = line.trim().match(/^(?:export\s+)?(\w+)=(.*)$/)
@@ -22,7 +20,7 @@ export function parseEnvLine(line: string): [string, string] | null {
 // Every name a sourced .env file set, whether or not the process already had it: what the files contribute to a session's environment.
 const sourced = new Set<string>()
 
-/** The names the .env files given to sourceEnvFiles hold, in this process. */
+/** The names the .env files sourced in this process hold (sourceEnvText). */
 export function sourcedEnvNames(): string[] {
   return [...sourced]
 }
@@ -32,20 +30,12 @@ export function _resetSourcedEnvNamesForTesting(): void {
   sourced.clear()
 }
 
-/** Backfill process.env from .env files. A var already set to blank or
- *  whitespace counts as absent, so a blank inherited value self-heals. */
-export function sourceEnvFiles(paths: string[]): void {
-  for (const path of paths) {
-    let body: string
-    try { body = readFileSync(path, 'utf8') } catch (err) {
-      const code = (err as { code?: string }).code
-      if (code !== 'ENOENT') process.stderr.write(`hydra: cannot read ${path} (${code}) — falling back to defaults\n`)
-      continue
-    }
-    for (const line of body.split('\n')) {
-      const parsed = parseEnvLine(line)
-      if (parsed) sourced.add(parsed[0])
-      if (parsed && (process.env[parsed[0]] ?? '').trim() === '') process.env[parsed[0]] = parsed[1]
-    }
+/** Backfill process.env from one .env file's text. A var already set to blank or whitespace counts as absent, so a
+ *  blank inherited value self-heals. Reading the files: sourceEnvFiles (infra/env-files.ts). */
+export function sourceEnvText(body: string): void {
+  for (const line of body.split('\n')) {
+    const parsed = parseEnvLine(line)
+    if (parsed) sourced.add(parsed[0])
+    if (parsed && (process.env[parsed[0]] ?? '').trim() === '') process.env[parsed[0]] = parsed[1]
   }
 }

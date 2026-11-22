@@ -3,7 +3,8 @@ import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSyn
 import { homedir, tmpdir } from 'os'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
-import { _resetSourcedEnvNamesForTesting, parseEnvLine, sourceEnvFiles } from '../env-parse.js'
+import { _resetSourcedEnvNamesForTesting, parseEnvLine } from '../env-parse.js'
+import { sourceEnvFiles } from '../../infra/env-files.js'
 import { scrubTokenVarsNamedIn } from '../../config/token-vars.js'
 import {
   STATE_ENV_KEEP, STATE_ENV_KEEP_PREFIXES, NEW_SESSION_TIMEOUT_MS, SCRUBBED_SPAWN_VARS, TMUX_PANE_FD_LIMIT, NEVER_SCRUBBED, NEVER_SCRUBBED_PREFIXES,

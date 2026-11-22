@@ -52,7 +52,7 @@ try {
 
 // DEFAULT_SESSION_CHANNEL is a live binding: resolveDefaultChannel fills it after boot.
 import { gateway, TOKEN, PLATFORM, STATE_DIR, CLAUDE_CONFIG, SOCK_PATH, heartbeatPath, DEFAULT_SESSION_CHANNEL, resolveDefaultChannel } from './infra/config.js'
-import { syncMods } from './shared/mods.js'
+import { syncMods } from './infra/mods.js'
 import { syncDaemonBridge } from './engines/bridge-sync.js'
 import { registry, threadRegistry, reattachAdapters, engineRecords } from './sessions/registry.js'
 import { isPlainWorker } from './shared/policy-record.js'
@@ -129,9 +129,10 @@ backfillAnchorChannelIds().catch(err => {
 
 import { startLoopWatch, timed, pendingGap, heldNotAsleep } from './shared/loop-watch.js'
 import { createResumeDetector, installResumeDetector } from './shared/resume.js'
+import { sysctlLastSleep } from './infra/last-sleep.js'
 // The loop watch hands each unexplained gap to the resume detector, which every age-based alarm reads; a gap the OS
 // says was no sleep comes back to the watch as a stall, alerted under its limit.
-const resumes = createResumeDetector({ pendingGap, onStalled: heldNotAsleep })
+const resumes = createResumeDetector({ lastSleep: sysctlLastSleep, pendingGap, onStalled: heldNotAsleep })
 installResumeDetector(resumes)
 startLoopWatch({ alert: notifyOperator, onResume: (gapMs, at, servedAt) => { resumes.noteResume(gapMs, at, servedAt); emit('clock:resumed', { at, gapMs }) } })
 
@@ -292,7 +293,7 @@ gateway.onReconnectAfterOutage = sendRecoveryReport
 setupPermissionHandler(gateway)
 
 // ---------------------------------------------------------------------------
-// Mods — copy mod/ and mods.local/* where every session loads them (shared/mods.ts)
+// Mods — copy mod/ and mods.local/* where every session loads them (infra/mods.ts)
 // ---------------------------------------------------------------------------
 
 process.stderr.write(`daemon: synced mods into ${STATE_DIR}/mods: ${syncMods(import.meta.dir, STATE_DIR).join(', ')}\n`)

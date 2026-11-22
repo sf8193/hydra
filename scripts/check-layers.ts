@@ -4,7 +4,7 @@
 //   bun scripts/check-layers.ts            check
 //   bun scripts/check-layers.ts --list     print the violations in ALLOWED's format
 //
-//   T0 core      shared/, config/, routing/, pure rules, prompts and types (no I/O of their own)
+//   T0 core      shared/, config/, routing/, pure rules, prompts and types (no I/O of their own; check-rules.ts io-in-core refuses the imports and calls that do it)
 //   T1 edges     gateways/, engines/, infra (config paths, tmux, util, files, host probes)
 //   T2 sessions  the registry, access, reachability, transport, specialist data
 //   T3 domain    specialists/ (delivery), connectors/, protocols/ (specs)

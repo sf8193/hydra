@@ -3,11 +3,11 @@ import { homedir } from 'os'
 import { basename, join } from 'path'
 
 import type { ChatGateway } from '../gateways/gateway.js'
-import { sourceEnvFiles } from '../shared/env-parse.js'
+import { sourceEnvFiles } from './env-files.js'
 import { captureSpawnVars, capturedSpawnVars } from '../shared/spawn-env.js'
 import { scrubTokenVarsInFile } from '../config/token-vars.js'
 import { claudeConfigDir, DISCORD_GATEWAY_TOKEN_ENV, platformStateDir, SLACK_GATEWAY_TOKEN_ENVS } from '../shared/constants.js'
-import { isUnder } from '../shared/path-containment.js'
+import { isUnder } from './path-containment.js'
 
 // ---------------------------------------------------------------------------
 // Paths & env

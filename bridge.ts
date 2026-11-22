@@ -24,7 +24,8 @@ import { readFileSync, existsSync } from 'fs'
 import { fileURLToPath } from 'url'
 
 import { ToolsWaiterSet, type ToolsWaiter } from './shared/tools-waiters.js'
-import { appendBridgeLife, bridgeLifePath, type BridgeLifeEvent } from './shared/bridge-life.js'
+import { bridgeLifePath, type BridgeLifeEvent } from './shared/bridge-life.js'
+import { appendBridgeLife } from './infra/bridge-life-file.js'
 import { BRIDGE_SHUTDOWN_GRACE_MS, LONG_TOOL_TIMEOUTS_MS, SESSION_INSTRUCTIONS } from './shared/constants.js'
 import { RESUME_GAP_MS } from './shared/loop-watch.js'
 
