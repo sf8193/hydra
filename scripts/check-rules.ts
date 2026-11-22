@@ -102,15 +102,9 @@ export const RULES: readonly Rule[] = [
     // Tier 0 (shared/, config/, routing/): what the tiers above build on, so it stays pure. Every other tier may do I/O.
     scope: path => tierOf(path) === 0,
     allowed: [
-      // config/: hydra.toml's loader and its readers (load, watch, token-vars), which move when load does: its reads become one
-      // infra loader handing a pure validate a snapshot. admit and append write hydra.toml, and sessions/access.ts, which
-      // other work in progress holds, imports them.
+      // config/: admit and append write hydra.toml, and sessions/access.ts, which other work in progress holds, imports them.
       "admit.ts: from 'fs'",
       "append.ts: from 'fs'",
-      "load.ts: Bun.spawnSync",
-      "load.ts: from 'fs'",
-      "token-vars.ts: from 'fs'",
-      "watch.ts: from 'fs'",
       // routing/: the guard runs the operator's guard command.
       "guard.ts: from 'child_process'",
       // shared/: atomic-write moves with config/append, which uses it. main-record's importers are sessions/main.ts and

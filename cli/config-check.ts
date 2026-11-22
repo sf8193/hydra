@@ -3,15 +3,16 @@
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { resolveConfig, statePlatform } from './helpers.js'
-import { formatIssues, loadHydraConfig, systemEnv } from '../config/load.js'
+import { formatIssues, loadHydraConfig } from '../config/load.js'
+import { systemEnv } from '../infra/load-env.js'
 import { answersLines } from '../routing/route.js'
 import { SESSION_NAMES } from '../shared/session-catalog.js'
 import { isKnownModel, resolveLaunchModel } from '../shared/constants.js'
 
 export function configCheckCommand(platformArg: string | undefined, stateDirOpt: string | undefined): number {
   if (platformArg && platformArg !== 'discord' && platformArg !== 'slack') { console.error(`error: platform must be discord or slack, not "${platformArg}"`); return 1 }
-  const cfg = resolveConfig(platformArg)
-  const stateDir = stateDirOpt ?? cfg.stateDir
+  const cfg = resolveConfig(platformArg, stateDirOpt)
+  const stateDir = cfg.stateDir
   const platform = statePlatform(stateDir, platformArg, cfg.platform)
   const path = join(stateDir, 'hydra.toml')
   if (!existsSync(path)) { console.log(`${path}: none: no operator, so every DM is dropped (hydra migrate ${platform} --operator <your user id>)`); return 0 }

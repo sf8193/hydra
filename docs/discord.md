@@ -45,24 +45,17 @@ EOF
 
 Then run `claude` once in a terminal. Accept the onboarding screens and log in, or a detached bot hangs on them. `hydra preflight` warns if this is missing.
 
-## 6. Start
+## 6. Install, name yourself the operator, start
+
+Find your Discord user id (Settings → Advanced → Developer Mode, then right-click yourself → Copy User ID). In this order:
 
 ```bash
 bun cli/hydra.ts install discord --cwd ~/your/project   # launchd watchdog, `hydra` CLI, preflight
+hydra migrate discord --operator <your user id>          # writes hydra.toml with you as operator
 hydra up discord                                          # daemon + bot
 ```
 
-Fix every ✗ that preflight reports before `hydra up`. See [ONBOARDING_TIPS.md](ONBOARDING_TIPS.md) for the gotcha behind each step.
-
-## 7. Name yourself the operator
-
-Find your Discord user id (Settings → Advanced → Developer Mode, then right-click yourself → Copy User ID). With the daemon stopped, run:
-
-```
-hydra migrate discord --operator <your user id>
-```
-
-That writes `hydra.toml` with you as `operator`. The bot only accepts commands from the operator, and drops DMs from anyone else (there is no pairing). Then start it with `hydra up discord`.
+Fix every ✗ that preflight reports before `hydra up`. Without the `migrate` step the bot is up but drops every DM (`hydra config check` says so); there is no pairing. See [ONBOARDING_TIPS.md](ONBOARDING_TIPS.md) for the gotcha behind each step.
 
 To let the bot into a channel, tag it there as the operator: it adds the channel to `hydra.toml` and runs your message. Add another person with `hydra people add <name> discord:<id>`.
 

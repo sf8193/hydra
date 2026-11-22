@@ -1,5 +1,5 @@
-import { existsSync, statSync, lstatSync, unlinkSync, readFileSync, writeFileSync, readdirSync, mkdirSync, rmSync } from 'fs'
-import { join, dirname } from 'path'
+import { existsSync, statSync, lstatSync, unlinkSync, readFileSync, writeFileSync, readdirSync, mkdirSync, rmSync, readlinkSync, realpathSync } from 'fs'
+import { join, dirname, resolve } from 'path'
 import { homedir, tmpdir } from 'os'
 import { execSync, execFileSync } from 'child_process'
 
@@ -510,8 +510,28 @@ export function tomlNamesOperator(path: string): boolean {
   try { return typeof (Bun.TOML.parse(readFileSync(path, 'utf8')) as { operator?: unknown }).operator === 'string' } catch { return false }
 }
 
-export async function lifecyclePreflight(platform: string): Promise<void> {
-  const cfg = resolveConfig(platform)
+/**
+ * What one plugin version's server.ts says about the bridge, judged from the checkout preflight runs from (`bridgeSrc`). The link
+ * belongs to the checkout the daemon runs, which is not always this one (a worktree): a link to another checkout is a warning that
+ * this checkout is not the installed one, never a fix, since following one would point every new session of the running daemon at
+ * this checkout. A link that is missing, dangling or a copy is the daemon's to repair: it relinks to its own checkout at boot and
+ * before each spawn.
+ */
+export function bridgeLinkVerdict(version: string, serverTs: string, bridgeSrc: string): { level: 'ok' | 'warn' | 'bad'; msg: string } {
+  if (isLinkedTo(serverTs, bridgeSrc)) return { level: 'ok', msg: `${version}/server.ts links to bridge.ts` }
+  let target: string | undefined
+  try { target = lstatSync(serverTs).isSymbolicLink() ? resolve(dirname(serverTs), readlinkSync(serverTs)) : undefined } catch {}
+  const relink = 'start or restart the daemon: it relinks to its own checkout'
+  if (target === undefined) return { level: 'bad', msg: existsSync(serverTs) ? `${serverTs} is not a link (a copy breaks every new bridge); ${relink}` : `${serverTs} is missing; ${relink}` }
+  let real: string | undefined
+  try { real = realpathSync(target) } catch {}
+  if (real === undefined) return { level: 'bad', msg: `${serverTs} links to ${target}, which is not there; ${relink}` }
+  try { if (real === realpathSync(bridgeSrc)) return { level: 'ok', msg: `${version}/server.ts links to bridge.ts` } } catch {}
+  return { level: 'warn', msg: `${serverTs} links to ${target}: this checkout is not the installed one, so this preflight checks this checkout, not the code the running daemon starts sessions from` }
+}
+
+export async function lifecyclePreflight(platform: string, stateDirOpt?: string): Promise<void> {
+  const cfg = resolveConfig(platform, stateDirOpt)
   let fail = false
   let warn = false
 
@@ -570,7 +590,7 @@ export async function lifecyclePreflight(platform: string): Promise<void> {
   if (tomlNamesOperator(tomlPath)) {
     ok('hydra.toml names an operator')
   } else {
-    wrn(`no operator in ${tomlPath}, so every DM is dropped — run: hydra migrate ${cfg.platform} --operator <your user id>`)
+    wrn(`no operator in ${tomlPath}, so every DM is dropped — run: hydra ${stateDirOpt ? `--state-dir ${shq(cfg.stateDir)} ` : ''}migrate ${cfg.platform} --operator <your user id>`)
   }
 
   const bridgeDir = bridgePluginCache(cfg.configDir)
@@ -582,8 +602,8 @@ export async function lifecyclePreflight(platform: string): Promise<void> {
     // A copy of bridge.ts cannot find ./shared/*: every bridge started from it dies at load.
     for (const v of versions) {
       const serverTs = join(bridgeDir, v, 'server.ts')
-      if (isLinkedTo(serverTs, bridgeSrc)) ok(`${v}/server.ts links to bridge.ts`)
-      else bad(`${serverTs} is not a link to ${bridgeSrc} (a copy breaks every new bridge). Fix: ln -sfn ${shq(bridgeSrc)} ${shq(serverTs)}, or restart the daemon`)
+      const verdict = bridgeLinkVerdict(v, serverTs, bridgeSrc)
+      if (verdict.level === 'ok') ok(verdict.msg); else if (verdict.level === 'warn') wrn(verdict.msg); else bad(verdict.msg)
     }
   } catch {
     bad(`bridge plugin NOT in ${cfg.configDir} — sessions can't reach the daemon. Install: claude plugin install discord@claude-plugins-official`)

@@ -3,7 +3,6 @@
 // A token variable is one hydra holds for its own use: a Slack app's tokens, the Discord gateway's bot token, and each
 // [mcp_servers.*] `token_env` (held for the server hydra starts, which gets its own and nothing else's).
 
-import { readFileSync } from 'fs'
 import type { HydraConfig } from './types.js'
 import { ENV_NAME_RE, registerSpawnVars, type SpawnVarRefusal } from '../shared/spawn-env.js'
 
@@ -66,11 +65,4 @@ export function scanTokenEnvNames(text: string): string[] {
 /** Keeps the token variables a hydra.toml's text names from every session this process starts, whether or not it loads. */
 export function scrubTokenVarsNamedIn(text: string): SpawnVarRefusal[] {
   return registerSpawnVars(scanTokenEnvNames(text)).refused
-}
-
-/** The same, for the file at `path`; a missing or unreadable file names nothing. */
-export function scrubTokenVarsInFile(path: string): SpawnVarRefusal[] {
-  let text: string
-  try { text = readFileSync(path, 'utf8') } catch { return [] }
-  return scrubTokenVarsNamedIn(text)
 }

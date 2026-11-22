@@ -15,11 +15,11 @@
 2. **State dir** — create `~/.claude/channels/<platform>/.env` (token, `CHAT_PLATFORM`, `SPAWN_CWD`, `DEFAULT_SESSION_CHANNEL`).
    - `SPAWN_CWD` **must be an existing directory** — a missing cwd fails every spawn silently.
 
-3. **Operator + onboarding flags** — run `hydra migrate <platform> --operator <your user id>` (required for commands, not just replies: an install with no operator drops every DM). Seed `$CLAUDE_CONFIG_DIR/.claude.json` with `hasCompletedOnboarding` + `bypassPermissionsModeAccepted`. `hydra preflight` checks both.
+3. **Onboarding flags** — seed `$CLAUDE_CONFIG_DIR/.claude.json` with `hasCompletedOnboarding` + `bypassPermissionsModeAccepted`. `hydra preflight` checks both.
 
 4. **Auth** — set `CLAUDE_CODE_OAUTH_TOKEN` or log in once via `tmux attach`. For detached environments that can't read the keychain, set `HYDRA_AUTH=keychain`.
 
-5. **Install + up** — `hydra install <platform> --cwd <existing-dir>`; `hydra preflight <platform>`; `hydra up <platform>`.
+5. **Install, operator, up** — in this order: `hydra install <platform> --cwd <existing-dir>`; `hydra migrate <platform> --operator <your user id>` (required for commands, not just replies: an install with no operator drops every DM); `hydra preflight <platform>`; `hydra up <platform>`.
 
 6. **Verify inbound end-to-end** — do not trust "connected":
    - `grep -E "main bridge connected|running tmux new-session" ~/hydra-<platform>-daemon.log`

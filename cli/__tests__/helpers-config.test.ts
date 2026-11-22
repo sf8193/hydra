@@ -1,9 +1,11 @@
 import { test, expect, describe, beforeAll, beforeEach, afterEach } from 'bun:test'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync, existsSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir, homedir } from 'node:os'
 import { resolveConfig, defaultPlatform, pickSocket, sourceStateDirEnv, buildDaemonEnvs, printResponse, byteModel } from '../helpers.js'
 import { SCRUBBED_SPAWN_VARS } from '../../shared/spawn-env.js'
+import { watchdogCovers } from '../migrate.js'
+import { platformStateDir } from '../../shared/constants.js'
 import type { HydraConfig } from '../helpers.js'
 
 let savedEnv: NodeJS.ProcessEnv
@@ -347,5 +349,79 @@ describe('pickSocket: which daemon a command talks to', () => {
     expect(() => pickSocket({ ...both, extra: '/e.sock' }, undefined, 'discord')).not.toThrow()
     expect(() => pickSocket({ slack: '/s.sock', other: '/o.sock' }, undefined, 'discord')).toThrow('daemon "discord" not found\ndiscovered: slack, other')
     expect(() => pickSocket(both, undefined, 'github')).toThrow('CHAT_PLATFORM must be discord or slack, not "github"')
+  })
+})
+
+describe('resolveConfig: an explicit state dir', () => {
+  test('beats the platform default, for either platform, and is what the socket and .env come from', () => {
+    writeEnv('CLAUDE_CONFIG_DIR=/tmp/from-the-dir\n')
+    for (const platform of ['discord', 'slack']) {
+      const c = resolveConfig(platform, stateDir)
+      expect(c.stateDir).toBe(stateDir)
+      expect(c.sockPath).toBe(join(stateDir, 'daemon.sock'))
+      expect(c.configDir).toBe('/tmp/from-the-dir')
+      expect(c.platform).toBe(platform)
+    }
+  })
+
+  test('beats HYDRA_STATE_DIR and DISCORD_STATE_DIR, with or without a platform', () => {
+    process.env.HYDRA_STATE_DIR = '/tmp/other-daemon'
+    process.env.DISCORD_STATE_DIR = '/tmp/another'
+    expect(resolveConfig('discord', stateDir).stateDir).toBe(stateDir)
+    expect(resolveConfig(undefined, stateDir).stateDir).toBe(stateDir)
+  })
+
+  test('without one, an explicit platform still beats an inherited HYDRA_STATE_DIR (another platform\'s daemon)', () => {
+    process.env.HYDRA_STATE_DIR = stateDir
+    expect(resolveConfig('discord').stateDir).toBe(join(homedir(), '.claude', 'channels', 'discord'))
+    expect(resolveConfig(undefined, undefined).stateDir).toBe(stateDir)
+  })
+})
+
+describe('hydra --state-dir with a platform, as the CLI runs it', () => {
+  const run = (...argsAndEnv: (string | Record<string, string>)[]) => {
+    const env = typeof argsAndEnv.at(-1) === 'object' ? argsAndEnv.pop() as Record<string, string> : {}
+    const args = argsAndEnv as string[]
+    const p = Bun.spawnSync(['bun', join(import.meta.dir, '..', 'hydra.ts'), '--state-dir', stateDir, ...args], { cwd: join(import.meta.dir, '..', '..'), env: { ...process.env, ...env } })
+    return { code: p.exitCode, out: p.stdout.toString() + p.stderr.toString() }
+  }
+
+  test('up, down, restart, watchdog, install and uninstall refuse: they act on the platform\'s tmux sessions and launchd job, not the dir', () => {
+    // A platform name no live tmux session or launchd job carries, so were the guard ever lost these would find nothing real to act on.
+    for (const command of ['up', 'down', 'restart', 'watchdog', 'install', 'uninstall']) {
+      const r = run(command, TEST_PLATFORM)
+      expect(r.code).toBe(1)
+      expect(r.out).toContain(`error: ${command} acts on the ${TEST_PLATFORM} daemon's tmux sessions and launchd job`)
+      expect(r.out).toContain('--state-dir cannot apply')
+    }
+  })
+
+  test('a relative --state-dir is made absolute once, so config check names the same dir everywhere', () => {
+    writeFileSync(join(stateDir, 'hydra.toml'), 'operator = "ghost"\n')
+    const p = Bun.spawnSync(['bun', join(import.meta.dir, '..', 'hydra.ts'), '--state-dir', '.', 'config', 'check', 'discord'], { cwd: stateDir, env: process.env })
+    expect(p.stdout.toString()).toContain(`${realpathSync(stateDir)}/hydra.toml: doesn't load`)
+  })
+
+  test('preflight reports the flag\'s dir, not the platform\'s', () => {
+    const r = run('preflight', 'discord')
+    expect(r.out).toContain(`state dir : ${stateDir}`)
+    expect(r.out).toContain(`.env missing at ${join(stateDir, '.env')}`)
+    expect(r.out).not.toContain(join(homedir(), '.claude', 'channels', 'discord'))
+  }, 60_000)
+
+  test('config check reads the flag\'s hydra.toml', () => {
+    writeFileSync(join(stateDir, 'hydra.toml'), 'operator = "ghost"\n')
+    const r = run('config', 'check', 'discord')
+    expect(r.code).toBe(1)
+    expect(r.out).toContain(`${join(stateDir, 'hydra.toml')}: doesn't load`)
+  })
+})
+
+describe('migrate with --state-dir: a platform watchdog guards only that platform\'s own dir', () => {
+  test('no flag, or the platform\'s own dir: guarded; any other dir: not', () => {
+    expect(watchdogCovers(undefined, 'discord')).toBe(true)
+    expect(watchdogCovers(platformStateDir('discord'), 'discord')).toBe(true)
+    expect(watchdogCovers(stateDir, 'discord')).toBe(false)
+    expect(watchdogCovers(platformStateDir('slack'), 'discord')).toBe(false)
   })
 })

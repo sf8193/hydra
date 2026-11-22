@@ -18,6 +18,7 @@ import { buildSocketApp, parseAuth, unfurlFields } from '../shared/slack-client.
 import { parseHomeStatusClick } from '../infra/home-status.js'
 import { linkPreviewsOff } from '../shared/link-previews.js'
 import { archiveUrl } from '../shared/slack-conversation.js'
+import { SlackEventDedupe } from './slack-event-dedupe.js'
 import type {
   ChatGateway,
   InboundMessage,
@@ -133,6 +134,8 @@ export class SlackGateway implements ChatGateway {
   private buttonClickHandler: ((click: ButtonClick) => void) | null = null
   private reactionHandler: ((event: ReactionEvent) => Promise<void>) | null = null
   private recentSentIds = new Set<string>()
+  /** A tag in a channel the bot is in arrives as `message` and as `app_mention`: one is delivered. */
+  private eventDedupe = new SlackEventDedupe()
   private visualApi: webApi.WebClient | null = null
   private visualsUnavailable = false
   private appliedVisuals = new Map<string, string>()
@@ -211,6 +214,8 @@ export class SlackGateway implements ChatGateway {
       if (!('user' in message) || !message.user) return
 
       const msg = message as GenericMessageEvent
+      // The same message may also arrive as an app_mention; the one delivered is this one, which carries the files.
+      if (!this.eventDedupe.claimMessage(SlackEventDedupe.key(msg.channel, msg.ts))) return
 
       // Fetch user info for username
       let username = msg.user
@@ -288,40 +293,12 @@ export class SlackGateway implements ChatGateway {
       )
     })
 
-    // Handle app_mention events (for @mentions in channels where the bot isn't a member)
-    this.app.event('app_mention', async ({ event, client }) => {
+    // Handle app_mention events: the one event for a tag where the bot is not in the channel; where it is, the `message` copy is delivered instead
+    this.app.event('app_mention', ({ event, client }) => {
       this.touchHeartbeat()
       if (!this.messageHandler) return
-
-      let username = event.user
-      try {
-        const userInfo = await client.users.info({ user: event.user })
-        username = userInfo.user?.profile?.display_name || userInfo.user?.real_name || userInfo.user?.name || event.user
-      } catch {}
-
-      // app_mention doesn't have the same shape as GenericMessageEvent,
-      // but we can normalize it similarly
-      const normalized: InboundMessage = {
-        id: event.ts,
-        channelId: event.channel,
-        authorId: event.user,
-        authorUsername: username,
-        content: event.text ?? '',
-        isDM: false,
-        isThread: !!event.thread_ts && event.thread_ts !== event.ts,
-        isBot: false,
-        parentChannelId: event.thread_ts ? event.channel : null,
-        hasExistingThread: false,
-        existingThreadId: (!!event.thread_ts && event.thread_ts !== event.ts) ? `${event.channel}:${event.thread_ts}` : null,
-        referenceMessageId: event.thread_ts ?? null,
-        effectiveThreadId: (!!event.thread_ts && event.thread_ts !== event.ts) ? `${event.channel}:${event.thread_ts}` : null,
-        attachments: [],
-        createdAt: new Date(parseFloat(event.ts) * 1000),
-      }
-
-      this.messageHandler(normalized).catch(e =>
-        process.stderr.write(`slack gateway: app_mention handler error: ${e}\n`),
-      )
+      // Where the bot is in the channel the `message` copy follows (with files): the mention waits for it, and is delivered alone only if none comes.
+      this.eventDedupe.holdMention(SlackEventDedupe.key(event.channel, event.ts), () => void this.deliverMention(event, client))
     })
 
     // Handle button interactions (Block Kit actions)
@@ -405,6 +382,7 @@ export class SlackGateway implements ChatGateway {
   }
 
   async stop(): Promise<void> {
+    this.eventDedupe.clear()
     this.sup.stop()
     if (this.app) {
       await this.app.stop()
@@ -969,6 +947,40 @@ export class SlackGateway implements ChatGateway {
     })
   }
 
+  /** An app_mention as an InboundMessage (it has no files, and no thread of its own), delivered to the daemon. */
+  private async deliverMention(event: { ts: string; channel: string; user?: string; text?: string; thread_ts?: string; bot_id?: string }, client: any): Promise<void> {
+    const handler = this.messageHandler
+    if (!handler) return
+    const user = event.user ?? ''
+    let username = user
+    try {
+      const userInfo = await client.users.info({ user })
+      username = userInfo.user?.profile?.display_name || userInfo.user?.real_name || userInfo.user?.name || user
+    } catch {}
+    const isThread = !!event.thread_ts && event.thread_ts !== event.ts
+    const threadId = isThread ? `${event.channel}:${event.thread_ts}` : null
+    const normalized: InboundMessage = {
+      id: event.ts,
+      channelId: event.channel,
+      authorId: user,
+      authorUsername: username,
+      content: event.text ?? '',
+      isDM: false,
+      isThread,
+      isBot: !!event.bot_id,
+      parentChannelId: event.thread_ts ? event.channel : null,
+      hasExistingThread: false,
+      existingThreadId: threadId,
+      referenceMessageId: event.thread_ts ?? null,
+      effectiveThreadId: threadId,
+      attachments: [],
+      createdAt: new Date(parseFloat(event.ts) * 1000),
+    }
+    handler(normalized).catch(e =>
+      process.stderr.write(`slack gateway: app_mention handler error: ${e}\n`),
+    )
+  }
+
   // --- Internal helpers ---
 
   private async normalizeMessage(msg: GenericMessageEvent, username: string, client: any): Promise<InboundMessage> {
@@ -993,7 +1005,8 @@ export class SlackGateway implements ChatGateway {
       content: msg.text ?? '',
       isDM,
       isThread,
-      isBot: false,
+      // A post by an app carries its bot_id. (A plain `bot_message` is dropped by the handler before this; this covers the rest, a file_share by an app for one.)
+      isBot: !!msg.bot_id,
       parentChannelId: isThread ? msg.channel : null,
       hasExistingThread: false,
       existingThreadId: isThread ? `${msg.channel}:${msg.thread_ts}` : null,

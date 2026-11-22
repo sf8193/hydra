@@ -7,7 +7,7 @@ import { createServer as createTcpServer, createServer, type Server } from 'net'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { offLimitRoots, type PrivateRoot } from '../restricted-workdir.js'
-import { nearestRealpath, systemEnv } from '../load.js'
+import { nearestRealpath, systemEnv } from '../../infra/load-env.js'
 import { SANDBOX_EXEC, sandboxIssues, sandboxProfile, sandboxedServer, unquotablePath, type ServerFolders } from '../server-sandbox.js'
 
 const HAVE = process.platform === 'darwin' && existsSync(SANDBOX_EXEC)

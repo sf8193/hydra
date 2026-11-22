@@ -32,7 +32,15 @@ test('a message link has the shape Slack writes: https, a slack.com host, p + te
   const ts = { channel: 'C0CF2698RQC', ts: '1794969983.366379' }
   expect(parseArchiveUrl('https://angellist.slack.com/archives/D0BN3LP8ASV/p1794969983366379', true)).toEqual({ channel: 'D0BN3LP8ASV', ts: '1794969983.366379' })
   // a thread reply keeps its own ts (the query names the parent)
-  expect(parseArchiveUrl('https://acme.slack.com/archives/C0CF2698RQC/p1794969986907669?thread_ts=1794969983.366379&cid=C0CF2698RQC', true)).toEqual({ channel: 'C0CF2698RQC', ts: '1794969986.907669' })
+  expect(parseArchiveUrl('https://acme.slack.com/archives/C0CF2698RQC/p1794969986907669?thread_ts=1794969983.366379&cid=C0CF2698RQC', true)).toEqual({ channel: 'C0CF2698RQC', ts: '1794969986.907669', threadTs: '1794969983.366379' })
+  // The query's order does not matter; a thread_ts in the fragment is no thread_ts.
+  expect(parseArchiveUrl('https://acme.slack.com/archives/C0CF2698RQC/p1794969986907669?cid=C0CF2698RQC&thread_ts=1794969983.366379', true)?.threadTs).toBe('1794969983.366379')
+  expect(parseArchiveUrl('https://acme.slack.com/archives/C0CF2698RQC/p1794969986907669#x&thread_ts=1794969983.366379', true)).toEqual({ channel: 'C0CF2698RQC', ts: '1794969986.907669' })
+  // A thread's own first message, linked with its own ts as thread_ts, is that thread.
+  expect(parseArchiveUrl('https://acme.slack.com/archives/C0CF2698RQC/p1794969983366379?thread_ts=1794969983.366379', true)?.threadTs).toBe('1794969983.366379')
+  // A malformed thread_ts is dropped, not passed on; a channel link has no message, so no thread.
+  expect(parseArchiveUrl('https://acme.slack.com/archives/C0CF2698RQC/p1794969986907669?thread_ts=junk', true)).toEqual({ channel: 'C0CF2698RQC', ts: '1794969986.907669' })
+  expect(parseArchiveUrl('https://acme.slack.com/archives/C0CF2698RQC?thread_ts=1794969983.366379')).toEqual({ channel: 'C0CF2698RQC' })
   expect(parseArchiveUrl('https://acme.slack.com/archives/C0CF2698RQC/p1794969983366379#x', true)).toEqual(ts)
   // an Enterprise Grid host is a Slack host
   expect(parseArchiveUrl('https://grid-acme.enterprise.slack.com/archives/C0CF2698RQC/p1794969983366379', true)).toEqual(ts)
