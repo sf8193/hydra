@@ -150,7 +150,7 @@ How apps are declared, how a message is routed to one, what each app hears, repl
 3. **Restart the daemon:** it reads the tokens from its environment when it starts. The app connects when hydra.toml loads, with no restart, if its token variables are already in the daemon's environment.
 4. **Invite the bot** to the channels it should hear. For a channel more than one app is in, `default_app` says which answers an untagged message; `pinned_to` on a specialist pins it to an app.
 5. **Add the membership events to every existing app.** A second app changes the first: add `member_joined_channel` and `member_left_channel` under Event Subscriptions of each app that already exists (`hydra slack manifest <app>` lists them) and reinstall each, so a join or a leave is noticed at once. Until you do, hydra alerts once, naming the app, when an invite goes unreported, and a join is noticed only when a tag asks or within ten minutes.
-6. **Check:** `hydra route --person <person:id> --place <place> --app <app:id>`, then `hydra health` (the new app's line, with its scope status; see the [runbook](slack-connector.md#runbook-reading-hydra-health) if it is not `up`).
+6. **Check:** `hydra route --person <person:id> --place <place> --app <app:id>`, then `hydra health` (the new app's line, with its scope status; see the [runbook](slack-connector.md#health-and-alerts-per-app) if it is not `up`).
 
 ## Specialists
 
