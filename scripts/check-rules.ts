@@ -72,7 +72,6 @@ export const RULES: readonly Rule[] = [
     owners: ['engines/', 'config/', 'cli/'],
     allowed: [
       "auto-handoff.ts: info.engine !== 'claude'",
-      "bridge-dispatch.ts: source.engine === 'codex'",
       "bridge-server.ts: (info.engine ?? 'claude') === 'claude'",
       "bridge-server.ts: info?.engine === 'claude'",
       "reply-guard.ts: (info.engine ?? 'claude') === 'claude'",
