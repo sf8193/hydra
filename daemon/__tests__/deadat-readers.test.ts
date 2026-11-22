@@ -1,4 +1,4 @@
-// Ratchet: whether a session is dead is occupancy()'s question (session-reachability.ts), never a read of
+// Ratchet: whether a session is dead is occupancy()'s question (sessions/occupancy.ts), never a read of
 // `deadAt`. `deadAt` is history: when a death was written. The files below may touch it, for the reason given,
 // and only on the lines listed, by their text (trimmed, comments excluded). A new or changed line, or a new
 // file, fails here: ask occupancy() instead, or, if it really is history, list it under its reason.
@@ -82,13 +82,18 @@ const ALLOWED: Record<string, { why: string; lines: string[] }> = {
       "if (!s || s.deadAt) return",
     ],
   },
-  'sessions/session-reachability.ts': {
-    why: 'occupancy() itself: a stamp over a running session reads orphaned, unless a record not given up on holds its name; and resolveSendTarget, which ranks a name\'s past threads by when it died',
+  'sessions/occupancy.ts': {
+    why: 'occupancy itself: a stamp over a running session reads orphaned, unless a record not given up on holds its name',
     lines: [
       "deadAt?: number",
       "givenUp: !!info.deadAt,",
       "if (!info.deadAt) return false",
       "for (const s of records) if (s.sessionId !== info.sessionId && s.tmuxName === info.tmuxName && !s.deadAt) return true",
+    ],
+  },
+  'sessions/session-reachability.ts': {
+    why: 'resolveSendTarget ranks a name\'s past threads by when it died',
+    lines: [
       "if (s.tmuxName === targetName && s.deadAt) note(s.threadId, s.deadAt)",
     ],
   },

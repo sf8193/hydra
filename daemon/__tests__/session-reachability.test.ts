@@ -1,15 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test'
 
-import {
-  ORPHAN_GRACE_MS,
-  _setDaemonStartedAtForTesting,
-  blocksRecovery,
-  bridgeWaitMs,
-  classifyOccupancy,
-  daemonPastOrphanGrace,
-  occupancy,
-  occupied,
-} from '../../sessions/session-reachability.js'
+import { occupancy } from '../../sessions/session-reachability.js'
+import { ORPHAN_GRACE_MS, _setDaemonStartedAtForTesting, blocksRecovery, bridgeWaitMs, classifyOccupancy, daemonPastOrphanGrace, occupied } from '../../sessions/occupancy.js'
 import { engines } from '../../sessions/engine-instances.js'
 import { markDead, registry, threadRegistry, type SessionInfo } from '../../sessions/registry.js'
 import { transport } from '../../sessions/bridge-transport.js'

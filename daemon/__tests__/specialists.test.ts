@@ -19,7 +19,7 @@ import { _setRecoveryDeps, _resetRecoveryDeps } from '../../app/recovery.js'
 import { handleResumeIntercept } from '../../app/commands/thread.js'
 import { fakeAdapter } from '../../daemon/__tests__/test-harness.js'
 import { getIdempotencyEntry } from '../../infra/idempotency.js'
-import { _setDaemonStartedAtForTesting } from '../../sessions/session-reachability.js'
+import { _setDaemonStartedAtForTesting } from '../../sessions/occupancy.js'
 import { _setHydraConfigForTesting, currentHydraConfig } from '../../infra/hydra-config.js'
 
 process.stderr.write = (() => true) as any

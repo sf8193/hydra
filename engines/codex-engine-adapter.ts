@@ -197,8 +197,6 @@ export class CodexEngineAdapter implements EngineAdapter {
   // Every delivery is a priced turn, so the intents decide whether it gets one.
   deliver(info: SessionInfo, msg: Notification): Promise<DeliveryResult> {
     if (msg.optional === true) return Promise.resolve({ status: 'rejected', retryable: false, reason: 'optional delivery dropped for codex' })
-    // Accepting into a dead session's queue would lose it silently.
-    if (!this.isAlive(info)) return Promise.resolve({ status: 'rejected', retryable: false, reason: 'session is dead — resume or respawn' })
     // Ride the next turn the user creates instead of paying for a standalone
     // one, CI failures and changes-requested included — Sam's call
     // (2026-09-15): the 1h backstop bounds the delay, no urgency carve-out.

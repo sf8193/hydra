@@ -15,7 +15,7 @@ describe('deliverToAdapter: the one drift gate in front of every engine', () => 
   test('a refusal from the gate is a non-retryable rejection, and the engine is never called', async () => {
     let called = 0
     setDeliveryGate(() => 'policy drifted')
-    const r = await deliverToAdapter(info(async () => { called++; return { status: 'accepted', via: 'x' } }), note)
+    const r = await deliverToAdapter(info(async () => { called++; return { status: 'accepted', via: 'x' } }), note, true)
     expect(r).toEqual({ status: 'rejected', retryable: false, reason: 'policy drifted' })
     expect(called).toBe(0)
   })
@@ -23,7 +23,7 @@ describe('deliverToAdapter: the one drift gate in front of every engine', () => 
   test('with no gate set nothing is delivered', async () => {
     let called = 0
     setDeliveryGate(undefined)
-    const r = await deliverToAdapter(info(async () => { called++; return { status: 'accepted', via: 'x' } }), note)
+    const r = await deliverToAdapter(info(async () => { called++; return { status: 'accepted', via: 'x' } }), note, true)
     expect(r).toMatchObject({ status: 'rejected', retryable: false })
     expect(called).toBe(0)
   })
@@ -38,7 +38,7 @@ describe('deliverToAdapter: the one drift gate in front of every engine', () => 
 
   test('no refusal: the engine answers', async () => {
     setDeliveryGate(() => undefined)
-    expect(await deliverToAdapter(info(async () => ({ status: 'accepted', via: 'x' })), note)).toEqual({ status: 'accepted', via: 'x' })
+    expect(await deliverToAdapter(info(async () => ({ status: 'accepted', via: 'x' })), note, true)).toEqual({ status: 'accepted', via: 'x' })
   })
 
   test('no production file calls adapter.deliver except deliverToAdapter, so no route skips the gate', () => {

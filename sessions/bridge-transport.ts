@@ -6,6 +6,7 @@ import { registry, type SessionInfo } from './registry.js'
 import { atomicWriteFileSync } from '../infra/util.js'
 import { emit } from '../infra/event-bus.js'
 import './delivery-notice.js'
+import { deliverable, occupancyOf } from './occupancy.js'
 import { withoutIntents, type DeliveryResult, type Notification } from '../engines/engine-adapter.js'
 
 // ---------------------------------------------------------------------------
@@ -41,11 +42,16 @@ function gateReason(info: SessionInfo): string | undefined {
 
 /**
  * The one way to hand a message to a session's engine: the drift gate first (a session whose policy no longer matches hydra.toml, or that
- * was never verified, is not delivered to), then the adapter. Every adapter delivery goes through here, so no engine checks it (a session with no adapter, such as main, is not one).
+ * was never verified, is not delivered to), then `deliverable` (an orphaned or dead session is refused, not queued behind a bridge that
+ * will never read it), then the adapter. Every adapter delivery goes through here, so no engine checks either (a session with no adapter,
+ * such as main, is not one). `connected` is the caller's transport's answer to `has`.
  */
-export function deliverToAdapter(info: SessionInfo, msg: Notification): Promise<DeliveryResult> {
+export function deliverToAdapter(info: SessionInfo, msg: Notification, connected: boolean): Promise<DeliveryResult> {
   const refused = gateReason(info)
-  return refused ? Promise.resolve({ status: 'rejected', retryable: false, reason: refused }) : info.adapter.deliver(info, msg)
+  if (refused) return Promise.resolve({ status: 'rejected', retryable: false, reason: refused })
+  const can = deliverable(occupancyOf(info, connected))
+  if (!can.ok) return Promise.resolve({ status: 'rejected', retryable: false, reason: `${info.tmuxName} is ${can.reason}` })
+  return info.adapter.deliver(info, msg)
 }
 
 /** Set (`true`) on the message that asks main to write a handoff letter: it means something only to the daemon run that asked, which holds the request's state. */
@@ -187,7 +193,7 @@ export class BridgeTransport {
       return result
     }
     try {
-      return deliverToAdapter(info, msg as Notification).then(complete, err => complete({ status: 'unknown', reason: String(err) }))
+      return deliverToAdapter(info, msg as Notification, this.has(sessionId)).then(complete, err => complete({ status: 'unknown', reason: String(err) }))
     } catch (err) {
       return Promise.resolve(complete({ status: 'unknown', reason: String(err) }))
     }

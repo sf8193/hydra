@@ -3,7 +3,7 @@
 %% under one lock per target; (c) `deliver --thread T --revive` asks for it; (d) every target resolves to a session and
 %% lands through deliverToSession (targets.ts).
 flowchart TD
-  subgraph A["(a) occupancy(info): session-reachability.ts"]
+  subgraph A["(a) occupancy(info): session-reachability.ts, rules in occupancy.ts"]
     A0{"record?"} -- no --> AN[none]
     A0 -- yes --> A1{"transport.has?<br/>(Codex: = isAlive)"}
     A1 -- yes --> AR[connected]
@@ -106,7 +106,7 @@ flowchart TD
     TR -- "a thread id" --> TT["toThread (c)"]
     TR -- "anything else" --> T8["exit 8: no such specialist"]
     TK -- "spawn" --> TF["a fresh session from the recipe (idle → reaped when quiet)"]
-    TS & TT & TF --> LS["deliverToSession: dead 3 · orphaned 4 · booting 5 (unless queued)<br/>connected but stuck on a dialog → 5 'stuck: kind'<br/>→ adapter.deliver"]
+    TS & TT & TF --> LS["deliverToSession: deliverable? dead 3 · orphaned 4 · booting 5 (unless queued)<br/>connected but stuck on a dialog → 5 'stuck: kind'<br/>→ adapter.deliver"]
     LS --> TO["landed: key kept · else key released"]
     ST["send_to_thread(target = a specialist)"] --> TS
     SET["specialist set / rm"] --> SL["withTargetLock(name)"] --> SG{"set --thread elsewhere while the old thread is occupied?"}

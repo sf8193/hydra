@@ -4,7 +4,7 @@ import { safeSend } from '../infra/util.js'
 import { confirmedStuckState, isBlockingKind, resolveStuckFromHome } from './pane-probe.js'
 import { handleResumeIntercept } from './commands/thread.js'
 import { refreshDashboardNow } from './dashboard.js'
-import { daemonPastOrphanGrace } from '../sessions/session-reachability.js'
+import { daemonPastOrphanGrace } from '../sessions/occupancy.js'
 import { homeRecoverable } from '../infra/home-status.js'
 
 const liveDeps = {

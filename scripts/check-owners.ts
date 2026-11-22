@@ -47,17 +47,17 @@ export const RULES: Rule[] = [
     name: 'raw tmux liveness (tmuxHasSession, tmuxSessionState)',
     pattern: /\btmux(?:HasSession|SessionState)\b/g,
     skipLine: l => /^import\b/.test(l) || /\bfunction tmux(?:HasSession|SessionState)\b/.test(l),
-    // Existing owners. New code asks occupancy() (session-reachability.ts): for Codex, tmux is only an anchor.
+    // Existing owners. New code asks occupancy() (session-reachability.ts, rules in occupancy.ts): for Codex, tmux is only an anchor.
     // bridge-server, cli-handler and sessions ask tmux itself: a death check, `hydra status`'s tmux line, and
     // restoring records at load, before occupancy can be asked.
     allowed: [
       'daemon.ts', 'infra/tmux.ts', 'app/bridge-dispatch.ts', 'app/commands/thread.ts',
       'engines/claude-engine.ts', 'engines/codex-engine-adapter.ts', 'app/recovery.ts',
-      'app/session-lifecycle.ts', 'sessions/session-reachability.ts', 'app/bridge-server.ts', 'app/cli-handler.ts',
+      'app/session-lifecycle.ts', 'sessions/occupancy.ts', 'app/bridge-server.ts', 'app/cli-handler.ts',
       'sessions/registry.ts',
     ],
     tests: false, ts: true,
-    why: 'liveness is occupancy() in session-reachability.ts (the adapter decides)',
+    why: 'liveness is occupancy() (sessions/occupancy.ts; the adapter decides)',
   },
   {
     name: 'tmux has-session outside infra/tmux.ts',

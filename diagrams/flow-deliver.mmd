@@ -68,21 +68,17 @@ sequenceDiagram
         end
     end
 
-    Note over handler: occupancy(info)<br/>(session-reachability.ts, one 90s grace)
+    Note over handler: occupancy(info)<br/>(session-reachability.ts, rules and deliverable in occupancy.ts, one 90s grace)
 
     alt dead
         handler-->>cli: {exitCode: 3, "session gone"}
     else starting (within grace window)
         handler-->>cli: {exitCode: 5, "retry in ~30s"}
     else orphaned (bridge disconnected)
-        alt --queue
-            Note over handler: fall through to queue path
-        else default
-            handler-->>cli: {exitCode: 4, "orphaned"}
-        end
+        handler-->>cli: {exitCode: 4, "orphaned"}<br/>(queue flag or not: nothing would read a queue)
     end
 
-    Note over handler: connected (or --queue with orphan)
+    Note over handler: connected (or booting with --queue)
 
     alt codex session (adapter routing)
         handler->>cc: adapter.deliver(info, message, meta)

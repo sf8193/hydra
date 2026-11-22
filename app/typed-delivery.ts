@@ -13,7 +13,8 @@
 // A message is never dropped: every failure falls back to the channel path.
 
 import { typedDeliveryUserIds, typedDeliveryMode, typedDeliveryHoldMaxMs, PLATFORM, type TypedDeliveryMode } from '../infra/config.js'
-import { occupancy, type Occupancy } from '../sessions/session-reachability.js'
+import { occupancy } from '../sessions/session-reachability.js'
+import { deliverable, type Occupancy } from '../sessions/occupancy.js'
 import { pasteTypedInput } from './pane-probe.js'
 import { isSessionWorkingAsync } from '../sessions/session-activity.js'
 import { registry } from '../sessions/registry.js'
@@ -124,7 +125,7 @@ export function _heldCount(sessionId: string): number { return held.get(sessionI
 const drifted = (info: SessionInfo): boolean => { try { return unverified(info) || sessionDrift(info).drift.length > 0 } catch { return true } }
 
 const claudeLive = (info: SessionInfo | undefined): info is SessionInfo =>
-  !!info && deps.occupancy(info) !== 'dead' && info.engine === 'claude' && !drifted(info)
+  !!info && deliverable(deps.occupancy(info)).ok && info.engine === 'claude' && !drifted(info)
 
 /** Release one held message: channel when asked, else paste with the channel as fallback. */
 async function release(info: SessionInfo | undefined, h: Held, how: 'channel' | 'paste', reason: 'idle' | 'max-hold' | 'death'): Promise<void> {

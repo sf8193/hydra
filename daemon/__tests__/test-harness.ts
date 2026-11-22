@@ -104,12 +104,12 @@ export class TestHarness {
         sessionId: sid,
         topic: `${proto.display} ${proto.roles[role]}`,
         threadId,
-        createdAt: Date.now(),
+        get createdAt() { return Date.now() },
         lastActive: Date.now(),
         tmuxName: role,
         listening: false,
         engine: 'claude',
-        adapter: engines.claude,
+        adapter: runningClaude,
         sessionType: role === ownerRole ? 'thread_owner' : 'thread_guest',
       }
       registry.set(sid, info)
@@ -178,12 +178,12 @@ export class TestHarness {
       sessionId: ownerSid,
       topic: `${proto.display} ${proto.roles[ownerRole]}`,
       threadId,
-      createdAt: Date.now(),
+      get createdAt() { return Date.now() },
       lastActive: Date.now(),
       tmuxName: ownerRole,
       listening: false,
       engine: 'claude',
-      adapter: engines.claude,
+      adapter: runningClaude,
       sessionType: 'thread_owner',
       ...(opts.ownerLabel && { label: opts.ownerLabel }),
     })
@@ -299,12 +299,12 @@ export class TestHarness {
           sessionId: sid,
           topic,
           threadId: spawnOpts?.joinThread ?? harness.run.threadId,
-          createdAt: Date.now(),
+          get createdAt() { return Date.now() },
           lastActive: Date.now(),
           tmuxName: `resumed-${sid.slice(14)}`,
           listening: false,
           engine: 'claude',
-          adapter: engines.claude,
+          adapter: runningClaude,
           sessionType: spawnOpts?.joinThread ? 'thread_guest' : 'thread_owner',
           ...resolveSpawnLabel(topic, spawnOpts?.label, spawnOpts?.inheritedLabel),
         }
@@ -448,6 +448,12 @@ export function createStartedHarness(proto: Protocol, opts?: HarnessOpts): Promi
  * every record; override anything else per test. isConnected defaults to the
  * Claude answer (session bridge on the singleton transport).
  */
+/**
+ * The real Claude adapter reporting its pane alive. A harness session has no bridge and its `createdAt` follows the test's clock, so it stays
+ * booting however far the test ticks: it takes a message, and the real delivery queues it for tests to read.
+ */
+export const runningClaude = Object.assign(Object.create(engines.claude), { isAlive: () => true }) as typeof engines.claude
+
 export function fakeAdapter(overrides: Record<string, unknown> = {}): EngineAdapter {
   return {
     provider: 'claude',

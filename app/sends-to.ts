@@ -17,7 +17,6 @@ import { noteLine } from '../infra/quiet-send.js'
 import { RESTRICTED_SEND_TYPES, type SendType } from '../shared/tool-definitions.js'
 import { currentHydraConfig } from '../infra/hydra-config.js'
 import { gateway } from '../infra/config.js'
-import { occupancy } from '../sessions/session-reachability.js'
 import { specialistOf, sendsToOf } from '../sessions/specialists.js'
 import { ensureSpecialist } from './specialist-deliver.js'
 import { deliverToSession } from './targets.js'
@@ -39,8 +38,7 @@ export const sendDeps = {
   },
   /** Lands the envelope on the specialist's session, filling it first if nobody is home; says which thread it sits in. Throws when it cannot. */
   land: async (from: string, target: string, envelope: string): Promise<{ threadId?: string } | void> => {
-    const { info, spawned } = await ensureSpecialist(target, `sends_to:${from}`)
-    if (!spawned && occupancy(info) === 'orphaned') throw new Error(`${info.tmuxName} is orphaned (running, bridge not connected)`)
+    const { info } = await ensureSpecialist(target, `sends_to:${from}`)
     // chat_id: the receiver's own thread, which is what its tools hold a call to when it answers.
     const r = await deliverToSession(info, envelope, { initiator: `sends_to:${from}`, queue: true, source: 'sends_to', meta: { chat_id: info.threadId, specialist: target } })
     if (!r.ok) throw new Error(r.reason)

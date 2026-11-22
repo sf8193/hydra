@@ -16,7 +16,7 @@ import { _setHydraConfigForTesting } from '../../infra/hydra-config.js'
 import { hydra } from '../../connectors/slack/__tests__/slack-config.js'
 import { deliverForSlack } from '../../connectors/slack/runtime.js'
 import { fakeAdapter } from '../../daemon/__tests__/test-harness.js'
-import { _setDaemonStartedAtForTesting } from '../../sessions/session-reachability.js'
+import { _setDaemonStartedAtForTesting } from '../../sessions/occupancy.js'
 import * as targetsModule from '../../app/targets.js'
 import { bindSlackDelivery } from '../../connectors/slack/runtime.js'
 bindSlackDelivery(targetsModule)

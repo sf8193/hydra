@@ -6,7 +6,7 @@ import { registry, threadRegistry, type SessionInfo } from '../../sessions/regis
 import { transport } from '../../sessions/bridge-transport.js'
 import { _setRecoveryDeps, _resetRecoveryDeps, reviveDeps } from '../../app/recovery.js'
 import { _resetBackoff } from '../../infra/recovery-backoff.js'
-import { _setDaemonStartedAtForTesting } from '../../sessions/session-reachability.js'
+import { _setDaemonStartedAtForTesting } from '../../sessions/occupancy.js'
 import { fakeAdapter } from './test-harness.js'
 import { removeSpecialist, setSpecialist } from '../../sessions/specialists.js'
 import { getBackoff } from '../../infra/recovery-backoff.js'
