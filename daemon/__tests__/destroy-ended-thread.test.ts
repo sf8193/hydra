@@ -84,7 +84,7 @@ afterEach(() => {
 /** A thread whose session ended: its record lists the session, none is in the registry. */
 function ended(name: string, threadId: string, spawnerThreadId?: string, hydraMade = true): void {
   threadRegistry.threads.set(threadId, { threadId, topic: 't', respawnCount: 0, createdAt: 1, lastActive: 1, totalMessages: 0, ...(hydraMade && { hydraMade }),
-    sessionHistory: [{ sessionId: `gone-${name}`, tmuxName: name, originType: 'spawn', startedAt: 1, endedAt: 2, messageCount: 0, ...(spawnerThreadId && { spawnerThreadId }) }] })
+    sessionHistory: [{ sessionId: `gone-${name}`, tmuxName: name, originType: 'spawn', engine: 'claude', startedAt: 1, endedAt: 2, messageCount: 0, ...(spawnerThreadId && { spawnerThreadId }) }] })
   threadsSeeded.add(threadId)
 }
 function live(name: string, threadId: string): SessionInfo {
@@ -339,7 +339,7 @@ describe('on: the session that spawned an ended session may destroy its thread',
     expect(deleted).toEqual([])
   })
   test('the spawner is recorded at spawn: its thread id, kept across a handoff', async () => {
-    const { recordSpawnFor } = { recordSpawnFor: (t: string, sp?: string) => threadRegistry.recordSpawn(t, { topic: 't', respawnCount: 0, sessionId: `s-${t}`, tmuxName: 'k', originType: 'spawn', label: undefined, ...(sp && { spawnerThreadId: sp }) }) }
+    const { recordSpawnFor } = { recordSpawnFor: (t: string, sp?: string) => threadRegistry.recordSpawn(t, { topic: 't', respawnCount: 0, sessionId: `s-${t}`, tmuxName: 'k', originType: 'spawn', engine: 'claude', label: undefined, ...(sp && { spawnerThreadId: sp }) }) }
     recordSpawnFor('9561', '9560'); threadsSeeded.add('9561')
     expect(threadRegistry.get('9561')!.sessionHistory.at(-1)!.spawnerThreadId).toBe('9560')
     recordSpawnFor('9562'); threadsSeeded.add('9562')

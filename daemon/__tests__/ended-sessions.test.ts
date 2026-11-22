@@ -15,7 +15,7 @@ const NOW = Date.UTC(2026, 10, 18, 12)
 const thread = (id: string, over: Partial<ThreadMetadata> & { name?: string; endedAt?: number | null } = {}): ThreadMetadata => ({
   threadId: id, topic: over.topic ?? `topic of ${id}`, ...(over.description && { description: over.description }), threadUrl: `https://chat.example/t/${id}`,
   respawnCount: 0, createdAt: NOW - 30 * DAY, lastActive: NOW - DAY, totalMessages: over.totalMessages ?? 7,
-  sessionHistory: [{ sessionId: `s-${id}`, tmuxName: over.name ?? `n-${id}`, originType: 'spawn', startedAt: NOW - 20 * DAY, ...(over.endedAt !== null && { endedAt: over.endedAt ?? NOW - 2 * DAY }), messageCount: 7 }],
+  sessionHistory: [{ sessionId: `s-${id}`, tmuxName: over.name ?? `n-${id}`, originType: 'spawn', engine: 'claude', startedAt: NOW - 20 * DAY, ...(over.endedAt !== null && { endedAt: over.endedAt ?? NOW - 2 * DAY }), messageCount: 7 }],
 })
 
 const added: string[] = []

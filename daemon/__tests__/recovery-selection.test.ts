@@ -33,7 +33,7 @@ test('does not replay a display placeholder as a model ID', () => {
 // is empty by the time a clean kill has run.
 describe('deadSessionLabel', () => {
   const entry = (over: Partial<ThreadSessionEntry> = {}): ThreadSessionEntry => ({
-    sessionId: 's', tmuxName: 'x', originType: 'spawn', startedAt: 1, messageCount: 0, ...over,
+    sessionId: 's', tmuxName: 'x', originType: 'spawn', engine: 'claude', startedAt: 1, messageCount: 0, ...over,
   })
 
   test('prefers the durable history entry over a live registry record', () => {
@@ -62,28 +62,24 @@ describe('deadSessionLabel', () => {
   })
 })
 
-// B7/B11: which engine ran the dead session (PR-IDENT will stop using the id as a discriminator).
+// Which engine ran the dead session: the one its history entry recorded at spawn.
 describe('recoveryEngine', () => {
-  test('the record engine wins over the history id', () => {
-    expect(recoveryEngine({ codexThreadId: 'T' }, { engine: 'claude' })).toBe('claude')
-    expect(recoveryEngine({}, { engine: 'codex' })).toBe('codex')
-    expect(recoveryEngine({ engine: 'codex' }, { engine: 'claude' })).toBe('claude')
+  test('the history entry\'s engine wins over the current record\'s; the record stands in only for a thread with no entry', () => {
+    expect(recoveryEngine({ engine: 'codex' }, { engine: 'claude' })).toBe('codex')
+    expect(recoveryEngine({ engine: 'claude' }, { engine: 'agy' })).toBe('claude')
+    expect(recoveryEngine(undefined, { engine: 'agy' })).toBe('agy')
   })
 
-  test('no record: the engine the history entry recorded wins over the codexThreadId guess', () => {
-    expect(recoveryEngine({ engine: 'codex' }, undefined)).toBe('codex') // no codexThreadId: the old guess said Claude
-    expect(recoveryEngine({ engine: 'codex' }, {})).toBe('codex')
-    expect(recoveryEngine({ engine: 'omp' }, undefined)).toBe('omp')
-    expect(recoveryEngine({ engine: 'claude', codexThreadId: 'T' }, undefined)).toBe('claude')
+  test('no record: the engine the history entry recorded', () => {
+    for (const engine of ['claude', 'codex', 'agy', 'omp'] as const) {
+      expect(recoveryEngine({ engine }, undefined)).toBe(engine)
+      expect(recoveryEngine({ engine }, {})).toBe(engine)
+    }
   })
 
-  test('no record engine: a history codexThreadId means Codex', () => {
-    expect(recoveryEngine({ codexThreadId: 'T' }, undefined)).toBe('codex')
-    expect(recoveryEngine({ codexThreadId: 'T' }, {})).toBe('codex')
-  })
-
-  test('otherwise Claude', () => {
-    expect(recoveryEngine({}, undefined)).toBe('claude')
+  test('a thread with no history is a fresh start: the specialist\'s declared engine, else Claude', () => {
+    expect(recoveryEngine(undefined, undefined, 'omp')).toBe('omp')
     expect(recoveryEngine(undefined, undefined)).toBe('claude')
+    expect(recoveryEngine({ engine: 'codex' }, undefined, 'omp'), 'history is never overridden by the declared engine').toBe('codex')
   })
 })

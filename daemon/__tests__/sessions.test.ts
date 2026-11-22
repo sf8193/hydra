@@ -167,7 +167,7 @@ describe('SessionRegistry.pickSessionName reuse', () => {
 })
 
 describe('a new session gets the least recently used name', () => {
-  const entry = (tmuxName: string, startedAt: number, endedAt?: number) => ({ sessionId: `sid-${tmuxName}-${startedAt}`, tmuxName, originType: 'spawn' as const, startedAt, messageCount: 0, ...(endedAt !== undefined && { endedAt }) })
+  const entry = (tmuxName: string, startedAt: number, endedAt?: number) => ({ sessionId: `sid-${tmuxName}-${startedAt}`, tmuxName, originType: 'spawn' as const, engine: 'claude' as const, startedAt, messageCount: 0, ...(endedAt !== undefined && { endedAt }) })
 
   test('lastUsedByName: the latest end of a name across threads; an entry with no end counts from its start', () => {
     const tr = new ThreadRegistry()

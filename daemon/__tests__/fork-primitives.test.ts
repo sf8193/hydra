@@ -216,7 +216,7 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
     const NOW = Date.now()
     /** A closed history entry for `name`, ended `endedAgo` ms ago. */
     const ended = (name: string, endedAgo: number) => {
-      threadRegistry.recordSpawn(NAME_THREAD, { topic: 'old', respawnCount: 0, sessionId: `lru-${name}`, tmuxName: name, originType: 'spawn', model: 'm', label: undefined })
+      threadRegistry.recordSpawn(NAME_THREAD, { topic: 'old', respawnCount: 0, sessionId: `lru-${name}`, tmuxName: name, originType: 'spawn', engine: 'claude', model: 'm', label: undefined })
       const e = threadRegistry.get(NAME_THREAD)!.sessionHistory.find(h => h.tmuxName === name)!
       e.startedAt = NOW - endedAgo - 1000; e.endedAt = NOW - endedAgo
     }
@@ -789,7 +789,7 @@ describe('spawn_session fork_from and read_only', () => {
     writeFileSync(join(projectDir, `${claudeSessionId}.jsonl`), JSON.stringify({ type: 'user', cwd: dir }) + '\n')
     threadRegistry.threads.set(threadId, {
       threadId, topic: 't', respawnCount: 0, createdAt: 1, lastActive: 1, totalMessages: 0,
-      sessionHistory: [{ sessionId: `${name}-sid`, tmuxName: name, originType: 'spawn', startedAt: 1, endedAt: 2, messageCount: 0, claudeSessionId, model: 'claude-hist' }, ...extra as ThreadSessionEntry[]],
+      sessionHistory: [{ sessionId: `${name}-sid`, tmuxName: name, originType: 'spawn', engine: 'claude', startedAt: 1, endedAt: 2, messageCount: 0, claudeSessionId, model: 'claude-hist' }, ...extra as ThreadSessionEntry[]],
     } as any)
   }
 

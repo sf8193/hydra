@@ -87,7 +87,7 @@ function seed(engine: 'claude' | 'codex', extra: Partial<SessionInfo> = {}): Ses
   seededThreads.add(info.threadId)
   threadRegistry.recordSpawn(info.threadId, {
     topic: 'topic', respawnCount: 0, sessionId: info.sessionId, tmuxName: info.tmuxName,
-    originType: 'spawn', label: undefined,
+    originType: 'spawn', engine: 'claude', label: undefined,
   })
   // Discovery would succeed for this pane if anyone asked.
   tmux.pid(info.tmuxName, PID)

@@ -43,7 +43,7 @@ function fakeThreads(history: Record<string, string[]>) {
       sessionHistory: names.map((entry, i) => {
         const [tmuxName, at] = entry.split('@')
         return {
-          sessionId: `h-${threadId}-${i}`, tmuxName, originType: 'spawn' as const,
+          sessionId: `h-${threadId}-${i}`, tmuxName, originType: 'spawn' as const, engine: 'claude' as const,
           startedAt: at ? Number(at) : i, messageCount: 0,
         }
       }),
