@@ -166,11 +166,13 @@ function windowActivitySync(name: string): number | null {
 // async: outside the hold, never blocks the loop.
 async function windowActivity(name: string): Promise<number | null> {
   try {
-    const { stdout } = await new Promise<{ stdout: string }>((resolve, reject) => {
-      // SIGKILL: a child that ignored the default SIGTERM would leave this pending past its timeout.
-      execFile('tmux', windowActivityArgs(name),
-        { encoding: 'utf8', timeout: TMUX_TIMEOUT_MS, killSignal: 'SIGKILL' }, (err, stdout) => err ? reject(err) : resolve({ stdout }))
-    })
+    const stdout = tmuxExec !== execFileSync
+      ? String(tmuxExec('tmux', windowActivityArgs(name), { encoding: 'utf8', stdio: 'pipe', timeout: TMUX_TIMEOUT_MS, killSignal: 'SIGKILL' }))
+      : (await new Promise<{ stdout: string }>((resolve, reject) => {
+          // SIGKILL: a child that ignored the default SIGTERM would leave this pending past its timeout.
+          execFile('tmux', windowActivityArgs(name),
+            { encoding: 'utf8', timeout: TMUX_TIMEOUT_MS, killSignal: 'SIGKILL' }, (err, stdout) => err ? reject(err) : resolve({ stdout }))
+        })).stdout
     const epoch = parseInt(stdout.trim(), 10)
     return isNaN(epoch) ? null : epoch
   } catch { return null }
