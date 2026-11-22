@@ -2,7 +2,7 @@
 // seam, so no tmux is touched.
 import { describe, test, expect, afterEach, spyOn } from 'bun:test'
 import { execFileSync } from 'child_process'
-import { hasFreeze, tmuxCreateSession, tmuxHasSession, tmuxSessionState, tmuxServerState, tmuxSync, tmuxWindowActivity, _setTmuxForTesting, TMUX_TIMEOUT_MS, TMUX_HOLD_MS } from '../tmux.js'
+import { hasFreeze, tmuxCreateSession, tmuxHasSession, tmuxSessionState, tmuxServerState, tmuxSync, tmuxWindowActivity, _setTmuxForTesting, TMUX_TIMEOUT_MS, TMUX_HOLD_MS } from '../../infra/tmux.js'
 
 describe('tmuxSync and the hold', () => {
   afterEach(() => _setTmuxForTesting())

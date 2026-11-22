@@ -2,7 +2,7 @@ import { describe, test, expect, afterEach } from 'bun:test'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { threadRegistry } from '../sessions.js'
-import { STATE_DIR } from '../config.js'
+import { STATE_DIR } from '../../infra/config.js'
 
 const cleanups: Array<() => void> = []
 afterEach(() => { while (cleanups.length) { try { cleanups.pop()!() } catch {} } })

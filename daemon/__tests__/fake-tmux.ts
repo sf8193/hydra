@@ -13,7 +13,7 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { projectDirName } from '../usage.js'
+import { projectDirName } from '../../infra/usage.js'
 
 const TMUX = `#!/bin/sh
 D=$(dirname "$0")

@@ -2,10 +2,10 @@
 // unfurl_media, Discord's suppress-embeds flag. A place that does not say keeps today's call, byte for byte.
 import { afterEach, describe, expect, test } from 'bun:test'
 import { MessageFlags } from 'discord.js'
-import { DiscordGateway } from '../discord'
-import { SlackGateway } from '../slack'
-import { placeKey } from '../../config/types'
-import { linkPreviewsOff, linksPreviewed, placesFor, registerPreviewConfig, registerSlackChannelNames } from '../../shared/link-previews'
+import { DiscordGateway } from '../discord.js'
+import { SlackGateway } from '../slack.js'
+import { placeKey } from '../../config/types.js'
+import { linkPreviewsOff, linksPreviewed, placesFor, registerPreviewConfig, registerSlackChannelNames } from '../../shared/link-previews.js'
 
 const places = (p: Record<string, boolean | 'single'>) => ({ places: Object.fromEntries(Object.entries(p).map(([k, linkPreviews]) => [k, { files: false, messages: 'addressed', bots: false, linkPreviews }])) }) as any
 afterEach(() => { registerPreviewConfig(() => undefined); registerSlackChannelNames(() => undefined) })

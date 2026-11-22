@@ -2,7 +2,7 @@ import { test, expect } from 'bun:test'
 import { mkdtempSync, readFileSync, readdirSync, writeFileSync, utimesSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { oneLine, partyLink, quietSend, shouldQuiet, spillIfLong, noteLine, SPILL_THRESHOLD } from '../quiet-send.js'
+import { oneLine, partyLink, quietSend, shouldQuiet, spillIfLong, noteLine, SPILL_THRESHOLD } from '../../infra/quiet-send.js'
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'quiet-'))
 const big = () => Array.from({ length: 1000 }, (_, i) => `line ${i}`).join('\n')

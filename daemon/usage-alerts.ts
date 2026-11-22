@@ -14,8 +14,8 @@
 
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { STATE_DIR, PLATFORM, DEFAULT_SESSION_CHANNEL } from './config.js'
-import { atomicWriteFileSync, formatDuration, safeSend } from './util.js'
+import { STATE_DIR, PLATFORM, DEFAULT_SESSION_CHANNEL } from '../infra/config.js'
+import { atomicWriteFileSync, formatDuration, safeSend } from '../infra/util.js'
 
 export type UsageKind = 'five_hour' | 'seven_day'
 export type UsageSource = 'claude' | 'pane'

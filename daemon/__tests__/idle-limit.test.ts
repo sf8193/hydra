@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach, jest } from 'bun:test'
 import { touchIdleLimit, resumeIdleLimit, clearIdleLimit, initIdleLimits, idleTtlMs, awaitingReply, busyFrom, IDLE_GRACE_MS, _idleTimersForTesting, _resetIdleLimitsForTesting } from '../idle-limit.js'
-import { idleReapMs } from '../config.js'
+import { idleReapMs } from '../../infra/config.js'
 import { setSpecialist, removeSpecialist } from '../../specialists/specialists.js'
 import { registerProtocol, _resetForTesting as resetProtocols } from '../protocol-registry.js'
 import { transport } from '../bridge-transport.js'

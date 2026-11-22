@@ -2,8 +2,8 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { parsePs, type ProcStat } from '../cpu-spin.js'
-import { childrenIndex, paneVitals, parsePaneRoots, snapshotFrom } from '../vitals-snapshot.js'
+import { parsePs, type ProcStat } from '../../infra/cpu-spin.js'
+import { childrenIndex, paneVitals, parsePaneRoots, snapshotFrom } from '../../infra/vitals-snapshot.js'
 
 describe('pane vitals from one process snapshot', () => {
   // `ps -A -o pid=,ppid=,rss=,etime=,time=,comm=`, deliberately out of pid order. A spawn's pane is a
@@ -82,7 +82,7 @@ describe('a snapshot whose ps failed', () => {
 // reach through session-activity/util is pinned behaviourally in cpu-watch-idle.test.ts. The one sync
 // spawn left in these files is tailSpawnLog's `tail`, run per session death, not on the tick.
 test('no sync spawn in the vitals modules', () => {
-  const src = (f: string) => readFileSync(join(import.meta.dir, '..', f), 'utf8')
+  const src = (f: string) => readFileSync(join(import.meta.dir, '..', '..', 'infra', f), 'utf8')
   const SYNC_SPAWN = /\b(?:spawnSync|execFileSync|execSync)\b/g
   expect(src('vitals-snapshot.ts')).not.toMatch(SYNC_SPAWN)
   const obs = src('observability.ts')

@@ -174,7 +174,7 @@ export interface ChatGateway {
    * Optional: how this platform shows outbound markdown it does not render itself (Discord: tables as pictures, box art
    * fenced). Calls `post` once with the text to send and any files it made, at most `maxFiles` of them (0 for an edit,
    * which cannot add files), and removes those files once `post` settles. A gateway without it posts text as written.
-   * The daemon calls it through withOutbound (daemon/util.ts) before it chunks the text.
+   * The daemon calls it through withOutbound (infra/util.ts) before it chunks the text.
    */
   shapeOutbound?<R>(text: string, maxFiles: number, post: (out: Outbound) => Promise<R>): Promise<R>
   send(channelId: string, text: string, opts?: {

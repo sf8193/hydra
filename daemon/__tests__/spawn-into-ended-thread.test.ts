@@ -9,7 +9,7 @@
 //  - a session the lineage's owner spawns into the thread continues that lineage: the owner may still destroy it, live or ended. One that
 //    main or the operator spawns in is not hydra-made for: neither the live nor the ended destroy deletes the thread through it.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
-import { gateway } from '../config.js'
+import { gateway } from '../../infra/config.js'
 import { doSpawnSession } from '../session-lifecycle.js'
 import { registry, threadRegistry, type SessionInfo, type SpawnOpts } from '../sessions.js'
 import { transport } from '../bridge-transport.js'

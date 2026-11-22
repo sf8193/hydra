@@ -1,5 +1,5 @@
-import type { LiveState } from './engines/engine-adapter.js'
-import type { BlockingKind, BlockingState } from './pane-probe.js'
+import type { LiveState } from '../daemon/engines/engine-adapter.js'
+import type { BlockingKind, BlockingState } from '../daemon/pane-probe.js'
 import { HOME_STATUS_ACTION_PREFIX } from '../shared/constants.js'
 
 export type HomeStatusInputs = {

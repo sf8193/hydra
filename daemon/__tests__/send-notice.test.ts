@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test'
-import { gateway } from '../config.js'
+import { gateway } from '../../infra/config.js'
 import { registry } from '../sessions.js'
 import type { SessionInfo } from '../sessions.js'
 import { transport } from '../bridge-transport.js'

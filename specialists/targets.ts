@@ -9,11 +9,11 @@
  */
 import { registry, threadRegistry, type SessionInfo } from '../daemon/sessions.js'
 import { transport } from '../daemon/bridge-transport.js'
-import { gateway } from '../daemon/config.js'
+import { gateway } from '../infra/config.js'
 import { occupancy, occupied, ORPHAN_GRACE_MS, bridgeWaitMs } from '../daemon/session-reachability.js'
 import { confirmedStuckState } from '../daemon/pane-probe.js'
 import { landingOf } from '../daemon/landing.js'
-import { checkIdempotency, clearIdempotency, registerIdempotency, DELIVER_IDEMPOTENCY_TTL_MS } from '../daemon/idempotency.js'
+import { checkIdempotency, clearIdempotency, registerIdempotency, DELIVER_IDEMPOTENCY_TTL_MS } from '../infra/idempotency.js'
 import { DELIVER_MAX_MESSAGE_BYTES, parseIdleTtl } from '../shared/constants.js'
 import { getSpecialist, specialistForThread, withTargetLock, type Specialist } from './specialists.js'
 import { currentHydraConfig } from '../daemon/hydra-config.js'

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, expect, spyOn, test } from 'bun:test'
 import { readFileSync, rmSync, writeFileSync } from 'fs'
-import { gateway } from '../config.js'
+import { gateway } from '../../infra/config.js'
 import * as access from '../access.js'
 import { hydraConfigPath, reloadHydraConfig, startHydraConfig, stopHydraConfig } from '../hydra-config.js'
 import { testLoadEnv } from '../../config/__tests__/load-env.js'

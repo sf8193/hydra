@@ -1,7 +1,7 @@
-import { PLATFORM, STATE_DIR } from './config.js'
+import { PLATFORM, STATE_DIR } from '../infra/config.js'
 import { byteTmuxName } from '../shared/constants.js'
 import { readMainRecord } from '../shared/main-record.js'
-import { tmuxSync } from './tmux.js'
+import { tmuxSync } from '../infra/tmux.js'
 import { claudeEngine } from './engines/instances.js'
 import type { InboundMessage } from '../gateways/gateway.js'
 

@@ -5,7 +5,7 @@ import { systemEnv } from '../../config/load.js'
 import { PROVEN_MACOS_MAJORS, SANDBOX_EXEC } from '../../config/server-sandbox.js'
 import { offLimitRoots } from '../../config/restricted-workdir.js'
 import type { LoadEnv } from '../../config/types.js'
-import { CLAUDE_CONFIG, STATE_DIR, PLATFORM } from '../config.js'
+import { CLAUDE_CONFIG, STATE_DIR, PLATFORM } from '../../infra/config.js'
 import { SESSION_NAMES } from '../sessions.js'
 import type { RestrictedConfigInput } from '../engines/claude-engine.js'
 

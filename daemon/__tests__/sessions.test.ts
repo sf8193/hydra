@@ -1,9 +1,9 @@
 import { describe, test, expect } from 'bun:test'
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { STATE_DIR } from '../config.js'
+import { STATE_DIR } from '../../infra/config.js'
 import { SessionRegistry, ThreadRegistry, SESSION_NAMES, sessionEmoji, ensureSessionType, type SessionInfo, type ThreadMetadata } from '../sessions.js'
-import { _setTmuxForTesting } from '../tmux.js'
+import { _setTmuxForTesting } from '../../infra/tmux.js'
 
 // Suppress stderr
 process.stderr.write = (() => true) as any

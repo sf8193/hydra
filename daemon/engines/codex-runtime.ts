@@ -15,13 +15,13 @@ import { dispatchDisconnect } from '../protocol-registry.js'
 import { handleSilenceEvent, noteActivityForSession } from '../reply-guard.js'
 import { appendFileSync } from 'fs'
 import { join } from 'path'
-import { STATE_DIR } from '../config.js'
-import { safeSend } from '../util.js'
+import { STATE_DIR } from '../../infra/config.js'
+import { safeSend } from '../../infra/util.js'
 import { noteCodexMessage, noteCodexTurnState } from './codex-observation.js'
 import { codexPiggyback } from './codex-piggyback.js'
 import { refreshSessionVisual } from '../anchor-state.js'
 import type { EngineAdapter } from './engine-adapter.js'
-import { markYourTurn } from '../home-status.js'
+import { markYourTurn } from '../../infra/home-status.js'
 
 // reconnect is Codex-internal: not on EngineAdapter, but on every Codex record's adapter.
 // A typed guard rather than instanceof: test fixtures stand in duck-typed adapters.

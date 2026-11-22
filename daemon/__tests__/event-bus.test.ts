@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { on, emit, getSubscriptions, _resetForTesting } from '../event-bus.js'
+import { on, emit, getSubscriptions, _resetForTesting } from '../../infra/event-bus.js'
 
 let originalStderrWrite: typeof process.stderr.write
 

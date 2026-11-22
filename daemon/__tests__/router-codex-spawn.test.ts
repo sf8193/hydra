@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, expect, spyOn, test } from 'bun:test'
-import { gateway } from '../config.js'
+import { gateway } from '../../infra/config.js'
 import * as global from '../commands/global.js'
 import { setHydra } from './test-hydra.js'
 

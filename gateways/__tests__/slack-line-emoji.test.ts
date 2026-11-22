@@ -1,12 +1,12 @@
 // What the gateways say about the emoji a Slack line shows (`[slack] line_emoji`), and Discord's no-preview send that keeps its links bare.
 import { describe, expect, test } from 'bun:test'
 import { MessageFlags } from 'discord.js'
-import { DiscordGateway } from '../discord'
-import { SlackGateway } from '../slack'
-import { loadHydraConfig } from '../../config/load'
-import { testLoadEnv } from '../../config/__tests__/load-env'
-import { registerPreviewConfig } from '../../shared/link-previews'
-import { BASE } from '../../connectors/slack/__tests__/slack-config'
+import { DiscordGateway } from '../discord.js'
+import { SlackGateway } from '../slack.js'
+import { loadHydraConfig } from '../../config/load.js'
+import { testLoadEnv } from '../../config/__tests__/load-env.js'
+import { registerPreviewConfig } from '../../shared/link-previews.js'
+import { BASE } from '../../connectors/slack/__tests__/slack-config.js'
 
 const CUSTOM = '<:slack:1573045794259603566>'
 

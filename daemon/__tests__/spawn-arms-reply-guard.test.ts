@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test'
-import { gateway } from '../config.js'
+import { gateway } from '../../infra/config.js'
 import { doSpawnSession } from '../session-lifecycle.js'
 import { registry, threadRegistry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'

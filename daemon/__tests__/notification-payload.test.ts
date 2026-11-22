@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { InboundMessage } from '../../gateways/gateway.js'
-import { gateway } from '../config.js'
-import { INBOX_DIR } from '../config.js'
+import { gateway } from '../../infra/config.js'
+import { INBOX_DIR } from '../../infra/config.js'
 import { buildNotificationPayload } from '../router.js'
 
 const CHANNEL = 'D0BE3RB4Y00'

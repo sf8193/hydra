@@ -9,7 +9,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { __test as statusTest, handleListIntercept } from '../commands/status.js'
 import { registry } from '../sessions.js'
 import type { SessionInfo } from '../sessions.js'
-import { gateway } from '../config.js'
+import { gateway } from '../../infra/config.js'
 import { fakeAdapter } from './test-harness.js'
 
 if (!statusTest) throw new Error('status.__test only available under NODE_ENV=test')

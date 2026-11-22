@@ -1,5 +1,5 @@
 // `hydra events [--kind route|bind|unbind] [--since <dur>] [--conversation <id>] [--by <actor>] [--to <place>] [--limit <n>] [--json]`: what the daemon decided, from the event
-// stream it writes (daemon/events.ts). Reads the day files directly, so it works with the daemon down. One line each, oldest first.
+// stream it writes (infra/events.ts). Reads the day files directly, so it works with the daemon down. One line each, oldest first.
 
 import { existsSync, readFileSync, readdirSync } from 'fs'
 import { join } from 'path'

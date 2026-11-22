@@ -4,7 +4,7 @@
 import { describe, test, expect, afterAll, beforeAll } from 'bun:test'
 import { rmSync } from 'fs'
 import { join } from 'path'
-import { STATE_DIR } from '../../../daemon/config.js'
+import { STATE_DIR } from '../../../infra/config.js'
 import { registry } from '../../../daemon/sessions.js'
 import { _setHydraConfigForTesting } from '../../../daemon/hydra-config.js'
 import { noteDeclaredRestrictions } from '../../../daemon/tool-surface.js'

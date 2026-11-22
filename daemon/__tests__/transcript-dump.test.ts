@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { formatTranscript } from '../transcript-dump.js'
+import { formatTranscript } from '../../infra/transcript-dump.js'
 
 const entries = [
   { ts: '2026-07-08T20:00:00Z', author: 'me', content: '**Adversarial Review** — 3 rounds\nA critic will challenge.' },

@@ -35,7 +35,7 @@ export const SCRUBBED_SPAWN_VARS = [
   // operator. Names hydra.toml declares as tokens (Slack apps, the Discord gateway, each [mcp_servers.*] token_env) are added to these by registerSpawnVars.
   'SLOPBOT_SLACK_APP_TOKEN', 'SLOPBOT_SLACK_BOT_TOKEN',
   'HYDRA_SLACK_APP_TOKEN', 'HYDRA_SLACK_BOT_TOKEN', 'HYDRA_SLACK_USER_TOKEN',
-  // The chat gateway's own tokens (daemon/config.ts reads them from capturedSpawnVars): the daemon alone connects to the chat service,
+  // The chat gateway's own tokens (infra/config.ts reads them from capturedSpawnVars): the daemon alone connects to the chat service,
   // and a session reaches it only through the daemon's socket.
   'DISCORD_BOT_TOKEN', 'SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN',
 ] as const

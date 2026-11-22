@@ -3,7 +3,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } fr
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { gateway } from '../config.js'
+import { gateway } from '../../infra/config.js'
 import { _resetRefusalNotices, _resetVerifyBackoff, doSpawnSession } from '../session-lifecycle.js'
 import { registry, threadRegistry, type SessionInfo } from '../sessions.js'
 import { transport } from '../bridge-transport.js'

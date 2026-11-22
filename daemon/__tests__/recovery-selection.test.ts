@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { recoveryEntry, recoveryModel, deadSessionLabel, RESPAWN_RE } from '../recovery-selection.js'
+import { recoveryEntry, recoveryModel, deadSessionLabel, RESPAWN_RE } from '../../infra/recovery-selection.js'
 import { recoveryEngine } from '../engines/history.js'
 import type { ThreadSessionEntry } from '../sessions.js'
 

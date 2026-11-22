@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
-import { gateway, STATE_DIR } from '../config.js'
+import { gateway, STATE_DIR } from '../../infra/config.js'
 import { registry, threadRegistry } from '../sessions.js'
 import { emitSessionDeath, killSession } from '../session-lifecycle.js'
 import { removeSpecialist, setSpecialist } from '../../specialists/specialists.js'

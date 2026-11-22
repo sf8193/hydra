@@ -1,10 +1,10 @@
 // Where a post to a session's thread really goes. A thread id the gateway cannot address (a record that stored a session
 // id or a name as its thread) would fail every post forever; a session that has no thread of its own is reached through
 // the thread it reports to. One home for that rule: spawn, posts, visuals and relay links all ask here.
-import { gateway } from './config.js'
+import { gateway } from '../infra/config.js'
 import { parentSessionOf, registry } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
-import { tellOnce } from './util.js'
+import { tellOnce } from '../infra/util.js'
 
 const MAX_HOPS = 8
 

@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'bun:test'
-import { chunk, formatDuration, fallbackDescription, transformProtocolTag, formatSpawnLine, parseDuration, extractPhaseBudget, extractWorktreeTarget, parseSpawnTopic, safeEdit, resolveSpawnLabel, parseContextPercent, parseContextFooter } from '../util.js'
+import { chunk, formatDuration, fallbackDescription, transformProtocolTag, formatSpawnLine, parseDuration, extractPhaseBudget, extractWorktreeTarget, parseSpawnTopic, safeEdit, resolveSpawnLabel, parseContextPercent, parseContextFooter } from '../../infra/util.js'
 import { parseSessionLabel } from '../../shared/constants.js'
-import { gateway } from '../config.js'
+import { gateway } from '../../infra/config.js'
 
 // Suppress stderr
 process.stderr.write = (() => true) as any
