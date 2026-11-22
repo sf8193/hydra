@@ -170,7 +170,7 @@ What a restricted or write-confined specialist can and cannot do, and how to dec
 
 ## Message formatting
 
-*Slack gateway.* Plain replies are sent via Slack's `markdown_text` field, so the bot can use the **full GitHub-flavored Markdown palette** and it renders natively:
+*Slack gateway and Slack connector.* Plain replies (the gateway's, and a specialist's reply or edit through the connector) are sent via Slack's `markdown_text` field, so the bot can use the **full GitHub-flavored Markdown palette** and it renders natively:
 
 - **bold** (`**x**`), _italic_ (`_x_`), ~strike~ (`~~x~~`), `inline code`
 - fenced ```code blocks```, `> blockquotes`, `---` dividers
