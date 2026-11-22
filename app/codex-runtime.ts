@@ -1,6 +1,6 @@
 /**
- * Codex runtime — the CodexEngine singleton, its events wired into the daemon
- * at module init, and the boot sweep the Codex adapter's start() runs.
+ * Codex runtime — the CodexEngine's events wired into the daemon at module
+ * init (daemon.ts imports this), and the boot sweep daemon.ts runs.
  *
  * Codex app-servers outlive their replaceable tmux TUIs. This module owns the
  * engine event plumbing and reconnects transiently lost daemon connections.
@@ -9,7 +9,9 @@
  * start() behaves exactly as one after it.
  */
 
-import { CodexEngine, type ReconciledTurn } from './codex-engine.js'
+import type { ReconciledTurn } from '../engines/codex-engine.js'
+import { codexEngine } from '../sessions/engine-instances.js'
+import { codexReconnecting as reconnecting } from '../engines/codex-reconnecting.js'
 import { markDead, registry, threadRegistry, type SessionInfo } from '../sessions/registry.js'
 import { dispatchDisconnect } from '../sessions/protocol-registry.js'
 import { handleSilenceEvent, noteActivityForSession } from '../app/reply-guard.js'
@@ -17,10 +19,10 @@ import { appendFileSync } from 'fs'
 import { join } from 'path'
 import { STATE_DIR } from '../infra/config.js'
 import { safeSend } from '../infra/util.js'
-import { noteCodexMessage, noteCodexTurnState } from './codex-observation.js'
+import { noteCodexMessage, noteCodexTurnState } from '../engines/codex-observation.js'
 import { codexPiggyback } from '../sessions/codex-piggyback.js'
 import { refreshSessionVisual } from '../sessions/anchor-state.js'
-import type { EngineAdapter } from './engine-adapter.js'
+import type { EngineAdapter } from '../engines/engine-adapter.js'
 import { markYourTurn } from '../infra/home-status.js'
 
 // reconnect is Codex-internal: not on EngineAdapter, but on every Codex record's adapter.
@@ -35,10 +37,8 @@ function reconnectOf(info: SessionInfo): Promise<boolean> {
 }
 
 // ---------------------------------------------------------------------------
-// Singleton
+// Surface repair
 // ---------------------------------------------------------------------------
-
-export const codexEngine = new CodexEngine()
 
 export const CODEX_SURFACE_REPAIR_DELAYS_MS = [1_000, 3_000] as const
 
@@ -53,7 +53,7 @@ export function scheduleCodexSurfaceRepairs(
   for (const delay of CODEX_SURFACE_REPAIR_DELAYS_MS) {
     deps.schedule(() => {
       const current = deps.get(sessionId)
-      if (!current || current.deadAt || current.engine !== 'codex') return
+      if (!current || current.deadAt) return
       deps.ensure(current)
     }, delay)
   }
@@ -149,10 +149,6 @@ function logContextUsageSample(sessionId: string, tmuxName: string, usage: { use
   }
 }
 
-const reconnecting = new Set<string>()
-/** The runtime is reconnecting this session: alive, in grace (see CodexEngineAdapter.isAlive). */
-export const isCodexReconnecting = (sessionId: string): boolean => reconnecting.has(sessionId)
-
 // The one place a Codex record dies (reconnect exhaustion, or a failed boot probe).
 // After it, isAlive is false and deadAt records the verdict. Queued input is dropped
 // with a notice (Sam, 2026-09-28); piggyback items may be lost.
@@ -195,7 +191,7 @@ export async function reconnectCodexAfterDisconnect(
   for (const delay of delays) {
     await deps.wait(delay)
     const info = deps.get(sessionId)
-    if (!info || info.engine !== 'codex' || !info.codexThreadId || !info.adapter) return false
+    if (!info || !info.codexThreadId || !info.adapter) return false
     try {
       const ok = await reconnectOf(info)
       if (deps.get(sessionId) !== info) return false // replaced/removed meanwhile (invariant 10)
@@ -275,4 +271,13 @@ export async function reconnectCodexSessions(records: readonly SessionInfo[]): P
   }
   registry.persist()
   if (reconnected > 0) process.stderr.write(`codex-bootstrap: reconnected ${reconnected} codex session(s)\n`)
+}
+
+/** The boot sweep, logging how it ended. Never rejects. */
+export function startCodexRuntime(records: readonly SessionInfo[]): Promise<void> {
+  return reconnectCodexSessions(records).then(() => {
+    process.stderr.write('daemon: codex reconnection sweep complete\n')
+  }).catch(err => {
+    process.stderr.write(`daemon: codex reconnection failed: ${err}\n`)
+  })
 }

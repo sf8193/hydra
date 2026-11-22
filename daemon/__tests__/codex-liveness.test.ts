@@ -4,7 +4,9 @@
 
 import { describe, test, expect, afterEach } from 'bun:test'
 import { fakeCodexAdapter } from './test-harness.js'
-import { isCodexReconnecting, reconnectCodexSessions, reconnectDeps } from '../../engines/codex-runtime.js'
+import { reconnectCodexSessions, reconnectDeps } from '../../app/codex-runtime.js'
+import { codexReconnecting } from '../../engines/codex-reconnecting.js'
+const isCodexReconnecting = (id: string) => codexReconnecting.has(id)
 import { engines } from '../../sessions/engine-instances.js'
 import { occupancy, occupied } from '../../sessions/session-reachability.js'
 const isAlive = (info: any) => occupied(occupancy(info))
@@ -119,7 +121,7 @@ describe('reconnect verdicts (step 2)', () => {
   })
 
   test('exhaustion: the session reads dead before the protocol layer is told', async () => {
-    const { codexEngine } = await import('../../engines/codex-runtime.js')
+    const { codexEngine } = await import('../../sessions/engine-instances.js')
     const { registerProtocol } = await import('../../sessions/protocol-registry.js')
     const a = codex(false) as any
     a.reconnect = async () => false

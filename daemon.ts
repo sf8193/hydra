@@ -58,6 +58,7 @@ import { registry, threadRegistry, reattachAdapters, engineRecords } from './ses
 import { isPlainWorker } from './shared/policy-record.js'
 import { emojiOfName } from './sessions/anchor-state.js'
 import { engines, resolveEngine } from './sessions/engine-instances.js'
+import { startCodexRuntime } from './app/codex-runtime.js'
 import { transport } from './sessions/bridge-transport.js'
 import { operatorIds, notifyOperator } from './sessions/access.js'
 import { setupPermissionHandler } from './app/permission.js'
@@ -110,6 +111,8 @@ for (const adapter of Object.values(engines)) {
     process.stderr.write(`daemon: ${adapter.provider} start failed: ${err}\n`)
   })
 }
+// Codex: reconnect the live records to their app-server sockets.
+void startCodexRuntime(engineRecords(engines.codex))
 
 import { logSubscriptions, emit } from './infra/event-bus.js'
 queueMicrotask(logSubscriptions)

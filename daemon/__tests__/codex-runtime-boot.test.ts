@@ -14,10 +14,10 @@ import { getLastCodexMessage, isCodexTurnComplete, isCodexWorking, noteCodexTurn
 import { notePendingReply, _pendingForTesting } from '../../app/reply-guard.js'
 import { registerProtocol } from '../../sessions/protocol-registry.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
-import { reconnectCodexAfterDisconnect, reconnectCodexSessions, reconnectDeps } from '../../engines/codex-runtime.js'
+import { reconnectCodexAfterDisconnect, reconnectCodexSessions, reconnectDeps, startCodexRuntime } from '../../app/codex-runtime.js'
 
 // The boot sweep over every Codex record in the registry.
-const sweep = (adapter: CodexEngineAdapter) => adapter.start(engineRecords(adapter))
+const sweep = (adapter: CodexEngineAdapter) => startCodexRuntime(engineRecords(adapter))
 
 const tick = (ms = 0) => new Promise(r => setTimeout(r, ms))
 const ids: string[] = []
@@ -122,7 +122,7 @@ describe('T0.7 boot sweep', () => {
   })
 })
 
-// S0.7: start() owns the logging daemon.ts:79-83 did, and never rejects.
+// S0.7: startCodexRuntime owns the logging daemon.ts:79-83 did, and never rejects.
 describe('Codex start: outcome logging', () => {
   async function stderrOf(fn: () => Promise<unknown>): Promise<string[]> {
     const lines: string[] = [], orig = process.stderr.write
@@ -137,14 +137,14 @@ describe('Codex start: outcome logging', () => {
     const info = put({ sessionId: 't07-throw', adapter })
     adapter.reconnect = async () => { throw new Error('boom') }
     let settled = 'pending'
-    const lines = await stderrOf(() => adapter.start([info]).then(() => { settled = 'resolved' }, () => { settled = 'rejected' }))
+    const lines = await stderrOf(() => startCodexRuntime([info]).then(() => { settled = 'resolved' }, () => { settled = 'rejected' }))
     expect(settled).toBe('resolved')
     expect(lines).toContain('codex-bootstrap: reconnect threw for t07-throw: Error: boom\n')
   })
 
   test('a finished sweep logs completion, also with no records', async () => {
     const adapter = fakeCodexAdapter()
-    expect(await stderrOf(() => adapter.start([]))).toEqual(['daemon: codex reconnection sweep complete\n'])
+    expect(await stderrOf(() => startCodexRuntime([]))).toEqual(['daemon: codex reconnection sweep complete\n'])
   })
 })
 

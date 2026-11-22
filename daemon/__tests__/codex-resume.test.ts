@@ -462,7 +462,7 @@ describe('stale Codex reconnect', () => {
   })
 
   test('reconnectCodexAfterDisconnect: replaced record is not revived or given a surface', async () => {
-    const { reconnectCodexAfterDisconnect } = await import('../../engines/codex-runtime.js')
+    const { reconnectCodexAfterDisconnect } = await import('../../app/codex-runtime.js')
     let current: any
     let ensured = 0, persisted = 0, failed = 0
     const A: any = { sessionId: 'sid', engine: 'codex', tmuxName: 'r16a', codexThreadId: 'T', deadAt: 1,
