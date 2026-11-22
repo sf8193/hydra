@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { STATE_DIR, gateway } from '../../infra/config.js'
-import { BridgeTransport, transport } from '../../sessions/bridge-transport.js'
+import { BridgeTransport, transport, deliverToAdapter } from '../../sessions/bridge-transport.js'
 import { registry } from '../../sessions/registry.js'
 import { engines } from '../../sessions/engine-instances.js'
 import { CodexEngineAdapter } from '../../engines/codex-engine-adapter.js'
@@ -129,7 +129,7 @@ describe('every engine is held to it: a Codex session in a specialist\'s thread'
     configure(); watch()
     const info = { ...session('cx1', { engine: 'codex' }), adapter }
     flip()
-    const r = await adapter.deliver(info as any, { type: 'notification', content: 'hello' })
+    const r = await deliverToAdapter(info as any, { type: 'notification', content: 'hello' })
     expect(r).toMatchObject({ status: 'rejected', retryable: false })
     expect((r as any).reason).toContain(REMEDY(info.tmuxName))
     expect((r as any).reason).toContain('restricted: false -> true')

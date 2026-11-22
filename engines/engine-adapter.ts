@@ -2,7 +2,7 @@
 //
 // Provider-neutral interface for engine adapters. Each engine (Claude, Codex)
 // implements this interface. The adapter instance lives on SessionInfo so
-// callers just call info.adapter.deliver(...) — no dispatch logic needed.
+// callers go through deliverToAdapter (sessions/bridge-transport.ts) — no dispatch logic needed.
 
 import type { SessionInfo, SpawnOpts } from '../sessions/registry.js'
 import type { LaunchPolicy, RestrictedPolicy } from '../app/restricted.js'

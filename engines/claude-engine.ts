@@ -29,7 +29,7 @@ import { gateway } from '../infra/config.js'
 import { SESSION_IDENTITY_VARS, capturedSpawnVars, stateEnvUnsets, scrubbedSpawnEnv, withRaisedFdLimit } from '../shared/spawn-env.js'
 import { modsExport } from '../infra/mods.js'
 import { BRIDGE_CHANNEL_FLAG, BRIDGE_MCP_SERVER_KEY, BRIDGE_PLUGIN_ID, BRIDGE_TOOLS_PERMISSION, BUILTIN_TOOL_PLUGIN_IDS } from '../infra/plugin-manifest.js'
-import { deliveryRefusal, type LaunchPolicy, missingTokenRefusal, PolicyRefusal, remedy, RESTRICTED_MODS, RESTRICTED_PREAMBLE, sandboxInputs, serverToolRule, type RestrictedPolicy } from '../app/restricted.js'
+import { type LaunchPolicy, missingTokenRefusal, PolicyRefusal, remedy, RESTRICTED_MODS, RESTRICTED_PREAMBLE, sandboxInputs, serverToolRule, type RestrictedPolicy } from '../app/restricted.js'
 import { verifyConfinement as verifyConfinementLoaded, verifyLaunch as verifyLoaded, type Verdict } from './claude-verify.js'
 import { removeSessionToken, removeSpawnPrompt, shq, writeSessionToken, writeSpawnPrompt } from '../infra/launch-files.js'
 import { makeServerTmpDirs, removeRestrictedFiles, serverTmpDir, serverTmpRoot, writeRestrictedFiles } from '../infra/restricted-files.js'
@@ -521,9 +521,6 @@ export class ClaudeEngine implements EngineAdapter {
 
   // No await before the write: callers rely on it having happened on return.
   async deliver(info: SessionInfo, msg: Notification): Promise<DeliveryResult> {
-    // Every delivery to a Claude session passes here: one that no longer matches what hydra.toml gives its specialist is not delivered to.
-    const refused = deliveryRefusal(info)
-    if (refused) return { status: 'rejected', retryable: false, reason: refused }
     const r = this.transport.writeOrQueue(info.sessionId, withoutIntents(msg))
     return r === 'written' ? { status: 'accepted', via: 'bridge-socket' }
       : r === 'queued' ? { status: 'accepted', via: 'queued' }

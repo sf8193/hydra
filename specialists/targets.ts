@@ -8,7 +8,7 @@
  * id, an explicit `revive`.
  */
 import { registry, threadRegistry, type SessionInfo } from '../sessions/registry.js'
-import { transport } from '../sessions/bridge-transport.js'
+import { transport, deliverToAdapter } from '../sessions/bridge-transport.js'
 import { gateway } from '../infra/config.js'
 import { occupancy, occupied, ORPHAN_GRACE_MS, bridgeWaitMs } from '../sessions/session-reachability.js'
 import type { BlockingState } from '../engines/engine-adapter.js'
@@ -120,7 +120,7 @@ export async function deliverToSession(info: SessionInfo, text: string, opts: { 
   }
   let result: DeliveryResult
   try {
-    result = await info.adapter.deliver(info, notification)
+    result = await deliverToAdapter(info, notification)
   } catch (err) {
     result = { status: 'unknown', reason: String(err) }
   }

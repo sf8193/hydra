@@ -4,7 +4,7 @@ import { STATE_DIR } from '../infra/config.js'
 import { registry } from './registry.js'
 import { atomicWriteFileSync } from '../infra/util.js'
 import { on } from '../infra/event-bus.js'
-import { reportDeliveryFailure } from './bridge-transport.js'
+import { deliverToAdapter, reportDeliveryFailure } from './bridge-transport.js'
 import type { DeliveryResult } from '../engines/engine-adapter.js'
 
 type PiggybackState = {
@@ -141,7 +141,7 @@ export class CodexPiggyback {
       if (outcome.status !== 'accepted') reportDeliveryFailure(sessionId, outcome)
     }
     try {
-      void info.adapter.deliver(info, { type: 'notification', content: prefix.items.join('\n\n'), meta, deferUntilTurnComplete: true }).then(complete, err => {
+      void deliverToAdapter(info, { type: 'notification', content: prefix.items.join('\n\n'), meta, deferUntilTurnComplete: true }).then(complete, err => {
         complete({ status: 'unknown', reason: String(err) })
       })
     } catch (err) {
