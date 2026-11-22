@@ -16,6 +16,7 @@ import { handleSpawnIntercept } from '../../app/commands/global.js'
 import { doSpawnSession } from '../../app/session-lifecycle.js'
 import { dedupForRecovery } from '../../app/recovery.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
+import { codexAdapter } from './codex-adapter.js'
 
 const codex = (connected: boolean) => {
   const a = fakeCodexAdapter({ isConnected: () => connected }) as any
@@ -206,14 +207,14 @@ describe('gate 5: dashboard rows', () => {
       writeFileSync(script, `
         const { registry } = await import(${JSON.stringify(join(root, 'sessions/registry.ts'))})
         const { gateway } = await import(${JSON.stringify(join(root, 'infra/config.ts'))})
-        const { CodexEngineAdapter } = await import(${JSON.stringify(join(root, 'engines/codex-engine-adapter.ts'))})
+        const { codexAdapter } = await import(${JSON.stringify(join(root, 'daemon/__tests__/codex-adapter.ts'))})
         const { refreshDashboardNow } = await import(${JSON.stringify(join(root, 'app/dashboard.ts'))})
         const { startHydraConfig } = await import(${JSON.stringify(join(root, 'infra/hydra-config.ts'))})
         startHydraConfig()
         const recs = ${JSON.stringify(recs)}
         const names = recs.map(r => r.tmuxName)
         for (const [i, r] of recs.entries()) {
-          const adapter = r.kind === 'plain' ? undefined : new CodexEngineAdapter({ isConnected: () => r.kind === 'codex-up' })
+          const adapter = r.kind === 'plain' ? undefined : codexAdapter({ isConnected: () => r.kind === 'codex-up' })
           registry.set('s' + i, { sessionId: 's' + i, tmuxName: r.tmuxName, threadId: 't' + i, topic: r.tmuxName, createdAt: Date.now(), lastActive: Date.now(), sessionType: 'thread_owner', ...(adapter && { adapter, engine: 'codex' }) })
         }
         gateway.publishHomeTab = async (_u, blocks) => {

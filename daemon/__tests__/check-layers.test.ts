@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { execFileSync } from 'child_process'
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { ALLOWED, edges, tierOf, violations } from '../../scripts/check-layers.js'
+import { edges, tierOf, violations } from '../../scripts/check-layers.js'
 
 const file = (path: string, ...lines: string[]) => ({ path, text: lines.join('\n') })
 
@@ -70,6 +70,5 @@ describe('check-layers', () => {
     const root = join(import.meta.dir, '..', '..')
     const paths = execFileSync('git', ['ls-files', '*.ts'], { cwd: root, encoding: 'utf8' }).split('\n').filter(Boolean)
     expect(violations(paths.map(path => ({ path, text: readFileSync(join(root, path), 'utf8') })))).toEqual([])
-    expect(ALLOWED.length).toBeGreaterThan(0)
   })
 })

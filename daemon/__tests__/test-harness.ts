@@ -15,6 +15,7 @@ import { tmuxHasSession } from '../../infra/tmux.js'
 import { CodexEngineAdapter } from '../../engines/codex-engine-adapter.js'
 import { _setWatchForTesting, type WatchEntry } from '../../connectors/github/pr-watch.js'
 import type { CodexPiggyback } from '../../sessions/codex-piggyback.js'
+import { codexAdapter } from './codex-adapter.js'
 
 if (!__test) throw new Error('TestHarness requires NODE_ENV=test')
 const { runs, threadToRun, sessionToRun, resetTimeout: armTimeout, WARNING_BEFORE_TIMEOUT_MS, TOTAL_PHASE_CAP_FACTOR: _CAP, setLifecycle, resetLifecycle } = __test
@@ -498,7 +499,7 @@ export function fakeCodexProc() {
 
 /** A real CodexEngineAdapter over fakeCodexEngine and (by default) fakeCodexProc. */
 export function fakeCodexAdapter(engineOverrides: Record<string, unknown> = {}, proc?: unknown, piggyback?: CodexPiggyback): CodexEngineAdapter {
-  return new CodexEngineAdapter(fakeCodexEngine(engineOverrides) as any, (proc ?? fakeCodexProc()) as any, piggyback)
+  return codexAdapter(fakeCodexEngine(engineOverrides) as any, (proc ?? fakeCodexProc()) as any, piggyback)
 }
 
 /** A PR watch that delivers to `threadId` (revived when its session is dead), seeded without the network. */

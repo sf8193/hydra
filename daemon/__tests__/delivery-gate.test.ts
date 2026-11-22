@@ -14,6 +14,7 @@ import type { LaunchPolicy } from '../../shared/launch-policy.js'
 import '../../app/restricted.js'   // sets the delivery gate, as app/bridge-server.ts does in the daemon
 import { threadNotices } from '../../shared/notice-limit.js'
 import type { HydraConfig, Specialist } from '../../config/types.js'
+import { codexAdapter } from './codex-adapter.js'
 
 process.stderr.write = (() => true) as any
 
@@ -125,7 +126,7 @@ describe('a queued message is not flushed to a session whose policy drifted', ()
 })
 
 describe('every engine is held to it: a Codex session in a specialist\'s thread', () => {
-  const adapter = new CodexEngineAdapter({} as any)
+  const adapter = codexAdapter({} as any)
   test('after hydra.toml says workdir, a message to a Codex session born as operator is refused with the remedy', async () => {
     configure(); watch()
     const info = { ...session('cx1', { engine: 'codex' }), adapter }

@@ -30,7 +30,7 @@ const ALLOWED: Record<string, { why: string; lines: string[] }> = {
   'engines/codex-engine-adapter.ts': {
     why: 'a Codex home is claimed by records its runtime has not given up on',
     lines: [
-      "const claimed = [...registry.values()].some(s => s !== info && !s.deadAt && s.engine === 'codex' && (s.codexHomeName ?? s.tmuxName) === home)",
+      "const claimed = [...this.registry.values()].some(s => s !== info && !s.deadAt && s.engine === 'codex' && (s.codexHomeName ?? s.tmuxName) === home)",
     ],
   },
   'sessions/codex-piggyback.ts': {

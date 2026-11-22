@@ -15,6 +15,7 @@ import { notePendingReply, _pendingForTesting } from '../../app/reply-guard.js'
 import { registerProtocol } from '../../sessions/protocol-registry.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import { reconnectCodexAfterDisconnect, reconnectCodexSessions, reconnectDeps, startCodexRuntime } from '../../app/codex-runtime.js'
+import { codexAdapter } from './codex-adapter.js'
 
 // The boot sweep over every Codex record in the registry.
 const sweep = (adapter: CodexEngineAdapter) => startCodexRuntime(engineRecords(adapter))
@@ -88,7 +89,7 @@ describe('T0.7 boot sweep', () => {
 
   test('success refreshes history and the surface; failure finalises (history closed) without dispatch; dead skipped; sequential', async () => {
     const order: string[] = []
-    const adapter = new CodexEngineAdapter(engineFor(new Set(['t07-a', 't07-b']), order) as any) as any
+    const adapter = codexAdapter(engineFor(new Set(['t07-a', 't07-b']), order) as any) as any
     const surfaced: string[] = []
     adapter.surface = (i: SessionInfo) => { surfaced.push(i.sessionId); return null }
     const mk = (sid: string, over: Partial<SessionInfo> = {}) => {

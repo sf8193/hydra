@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { CodexEngineAdapter } from '../../engines/codex-engine-adapter.js'
+import { codexAdapter } from './codex-adapter.js'
 
 // Fake engine: connected only once connect() resolves with a thread.
 function fakeEngine(log: string[]) {
@@ -15,7 +16,7 @@ function fakeEngine(log: string[]) {
 
 function adapterWith(log: string[], surface: (info: any, engine: any) => boolean) {
   const engine = fakeEngine(log)
-  const adapter = new CodexEngineAdapter(engine as any) as any
+  const adapter = codexAdapter(engine as any) as any
   adapter.startAppServer = () => { log.push('start'); return '/tmp/spawn.log' }
   adapter.surface = (info: any) => {
     log.push(`surface:${info.codexThreadId}:${engine.isConnected() ? 'connected' : 'disconnected'}`)

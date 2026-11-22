@@ -10,6 +10,7 @@ import { withFakeTmux } from './fake-tmux.js'
 import { checkSessionDeath, deathCheckIO } from '../../app/bridge-server.js'
 import { registry, threadRegistry } from '../../sessions/registry.js'
 import type { SessionInfo } from '../../sessions/registry.js'
+import { codexAdapter } from './codex-adapter.js'
 
 let seq = 0
 function session(extra: Partial<SessionInfo> = {}): SessionInfo {
@@ -39,7 +40,7 @@ describe('stop on a tmux that does not answer', () => {
 
   test('codex: a kill-session that times out is uncertain, never stopped', async () => {
     hungTmux()
-    const adapter = new CodexEngineAdapter({ disconnect: () => {} } as any, { stop: () => true } as any)
+    const adapter = codexAdapter({ disconnect: () => {} } as any, { stop: () => true } as any)
     expect(await adapter.stop(session({ engine: 'codex' }))).toEqual({ status: 'uncertain', reason: 'tmux not responding' })
   })
 })

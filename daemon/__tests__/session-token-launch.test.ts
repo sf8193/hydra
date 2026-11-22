@@ -17,6 +17,7 @@ import { callerClaim, SESSION_TOKEN_VAR } from '../../shared/caller.js'
 import { codexSpawnEnv, SESSION_IDENTITY_VARS } from '../../shared/spawn-env.js'
 import { macLike } from './sandbox-host.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
+import { codexAdapter } from './codex-adapter.js'
 
 process.stderr.write = (() => true) as any
 
@@ -65,7 +66,7 @@ describe('Codex: in its app-server\'s environment', () => {
     const starts: Array<{ sessionToken?: string }> = []
     const engine = { queueTurn: () => true, connect: async () => ({ threadId: 'th', model: 'm' }), disconnect: () => {}, isConnected: () => true }
     const proc = { registerMcp: () => {}, start: (o: { sessionToken?: string }) => { starts.push(o); return 1 }, stop: () => true }
-    const adapter = new CodexEngineAdapter(engine as any, proc as any) as any
+    const adapter = codexAdapter(engine as any, proc as any) as any
     adapter.surface = () => null
     await adapter.launch({ ...base, model: 'm' })
     expect(starts.map(o => o.sessionToken)).toEqual([TOKEN])
