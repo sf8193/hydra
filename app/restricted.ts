@@ -13,12 +13,10 @@
 // A start that cannot read its policy refuses, in the thread, with the cause and the fix. It never falls back to the
 // operator's account or to the operator's spawn directory.
 
-import { createHash } from 'crypto'
 import { isAbsolute } from 'path'
 import { currentHydraConfig } from '../infra/hydra-config.js'
 import { specialistOf } from '../sessions/specialists.js'
 import { declaredSpecialist, type HydraConfig, type LoadEnv } from '../config/types.js'
-import { offLimitRoots, type PrivateRoot } from '../config/restricted-workdir.js'
 import { readDenyRoots } from '../config/write-confinement.js'
 import { macosGateIssue, unprovenMacos } from '../config/server-sandbox.js'
 import { hydraLoadEnv, onHydraConfigLoad } from '../infra/hydra-config.js'

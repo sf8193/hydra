@@ -24,7 +24,7 @@ import { projectDirName, projectsRoot, transcriptContext, transcriptPathFor } fr
 import { claudeTurnOutcome } from './claude-transcript.js'
 import { readClaudeStatus } from './claude-status.js'
 import { defaultTurnSources } from './codex-observation.js'
-import { CLAUDE_CONFIG, ENV_FILE, SOCK_PATH, PLATFORM, SPAWN_LOGS_DIR, STATE_DIR } from '../infra/config.js'
+import { CLAUDE_CONFIG, SOCK_PATH, PLATFORM, SPAWN_LOGS_DIR, STATE_DIR } from '../infra/config.js'
 import { gateway } from '../infra/config.js'
 import { SESSION_IDENTITY_VARS, capturedSpawnVars, stateEnvUnsets, scrubbedSpawnEnv, withRaisedFdLimit } from '../shared/spawn-env.js'
 import { modsExport } from '../infra/mods.js'
@@ -127,7 +127,7 @@ function writeConfinementConfig(w: NonNullable<LaunchPolicy['canOnlyWriteTo']>, 
   const policy = { specialist, ...w }
   const refusal = claudeVersionRefusal(policy, tmuxName)
   if (refusal) throw new PolicyRefusal(refusal)
-  const mcp = confinementMcp(policy, tmuxName, process.env, capturedSpawnVars(), ENV_FILE)
+  const mcp = confinementMcp(policy, process.env, capturedSpawnVars())
   // The bridge is allowed by the exact command it runs, one per synced plugin folder: with none, the session could never reach its thread, so nothing starts.
   const bridgeCommands = bridgeServerCommands(CLAUDE_CONFIG)
   if (bridgeCommands.length === 0) throw new PolicyRefusal(`specialist ${specialist}: hydra's bridge plugin is not synced under ${CLAUDE_CONFIG}/plugins/cache/claude-plugins-official/discord/, so a session's server allowlist could not admit it and it would have no way to its thread. No session starts until the daemon has synced it (it does at boot); then ${remedy(tmuxName)}`)

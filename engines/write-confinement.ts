@@ -75,7 +75,7 @@ export function confinementRules(policy: Pick<ConfinementPolicy, 'denyCommands' 
 }
 
 /** The MCP config a write-confined launch passes: the listed servers, each with its own browser folders, the `token_env` variables, and nothing else of the daemon's environment. */
-export function confinementMcp(policy: ConfinementPolicy, sessionName: string, env: NodeJS.ProcessEnv, held: Readonly<Record<string, string>>, envFile: string): object {
+export function confinementMcp(policy: ConfinementPolicy, env: NodeJS.ProcessEnv, held: Readonly<Record<string, string>>): object {
   return {
     mcpServers: Object.fromEntries(policy.servers.map(s => [s.name, {
       type: 'stdio',

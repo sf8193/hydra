@@ -173,7 +173,7 @@ describe('the settings', () => {
   // Claude Code 2.1.326 matches a stdio server by its full command once any serverCommand entry (the bridge's) exists: a name no longer admits it. See #772.
   test('the allowlist admits the MCP config it ships with: every server\'s command, as the config runs it, is an entry', () => {
     const policy = { specialist: 's', workdir: '/w', denyCommands: [], cannotRead: [], servers: [server, { ...server, name: 'second', command: 'npx', profileArgs: ['-y', 'pkg', '--out', '{download_dir}'] }], browserProfile: '/w/p1' }
-    const mcp: any = confinementMcp(policy, 's', { BR_TOKEN: 't' }, {}, '/env')
+    const mcp: any = confinementMcp(policy, { BR_TOKEN: 't' }, {})
     const entries = new Set(((confinementSettings({ ...policy, bridgeCommands: [['bun', 'run', 'x']] }) as any).allowedMcpServers as any[]).map(e => JSON.stringify(e.serverCommand)))
     expect(Object.keys(mcp.mcpServers)).toEqual(['browser', 'second'])
     for (const [name, c] of Object.entries<any>(mcp.mcpServers)) expect([name, entries.has(JSON.stringify([c.command, ...c.args]))]).toEqual([name, true])
