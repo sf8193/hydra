@@ -402,7 +402,7 @@ export async function lifecycleWatchdog(platform: string): Promise<void> {
     if (line) {
       appendLog(cfg.watchdogLog, `${reason}, but not restarting: ${line}`)
       // Once: noteBootRefusal returns the line only the first time. The bot is silent in chat, so say it there.
-      const failed = await alertOperator(cfg.stateDir, platform, `hydra on ${platform} can't start: ${line}`)
+      const failed = await alertOperator(cfg.stateDir, platform, `hydra on ${platform} can't start: ${line}\n\nOr paste this message to Claude Code in the hydra checkout and ask it to walk you through the migration (it should start with hydra migrate ${platform} --dry-run).`)
       if (failed) appendLog(cfg.watchdogLog, `could not tell the operator: ${failed}`)
     }
     return

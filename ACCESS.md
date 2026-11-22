@@ -57,6 +57,8 @@ An old install keeps working until its daemon next starts. On start the daemon r
 
 `hydra migrate` keeps the old file as `access.json.migrated` (`access.json.2.migrated` if one exists). To roll back, `hydra down <platform>`, put that file back as `access.json`, and delete `hydra.toml`.
 
+To have Claude Code do it: open it in the hydra checkout and say "migrate hydra for <platform> per ACCESS.md, dry run first". Paste the refusal message if you have one. Keep the `--dry-run` step: read what it prints before the real run.
+
 If a daemon refuses to start, `hydra up` and `hydra restart` print why and change nothing. A daemon started another way writes `boot-refused.json` in the state dir, which `hydra health` shows. The watchdog also tells the operator once in a direct message.
 
 ## What went away
