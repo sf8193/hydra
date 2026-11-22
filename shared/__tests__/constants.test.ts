@@ -391,3 +391,19 @@ describe('agy model aliases', () => {
     expect(AGY_MODEL_ALIAS_PATTERN.split('|').sort()).toEqual(Object.keys(AGY_MODEL_ALIASES).sort())
   })
 })
+
+describe('the engine alias tables', () => {
+  const tables = { claude: MODEL_ALIASES, codex: CODEX_MODEL_ALIASES, omp: OMP_MODEL_ALIASES, agy: AGY_MODEL_ALIASES } as const
+  test('every alias belongs to the one engine whose table holds it, and resolves to that table\'s id', () => {
+    for (const [engine, table] of Object.entries(tables)) {
+      for (const [alias, id] of Object.entries(table)) {
+        expect(engineOfModel(alias)).toBe(engine as keyof typeof tables)
+        expect(resolveLaunchSelection(alias)).toEqual({ model: id, engine })
+      }
+    }
+  })
+  test('no alias is in two tables, so the lookup order never decides an engine', () => {
+    const keys = Object.values(tables).flatMap(t => Object.keys(t))
+    expect(new Set(keys).size).toBe(keys.length)
+  })
+})
