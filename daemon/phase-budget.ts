@@ -12,7 +12,7 @@
 import { registry, type SessionInfo } from './sessions.js'
 import { occupancy } from './session-reachability.js'
 import { transport } from './bridge-transport.js'
-import { safeSend } from './util.js'
+import { safeSend } from '../infra/util.js'
 
 export const PHASE_BUDGET_GRACE_MS = 5 * 60 * 1000
 

@@ -1,8 +1,8 @@
 import { describe, test, expect, afterEach } from 'bun:test'
-import { createHostHealth, topByRss, RETRY_UNDELIVERED_MS, type HostReading } from '../host-health.js'
+import { createHostHealth, topByRss, RETRY_UNDELIVERED_MS, type HostReading } from '../../infra/host-health.js'
 import { createResumeDetector, installResumeDetector } from '../../shared/resume.js'
 import { VITALS_DEFAULTS } from '../../config/load.js'
-import type { ProcStat, SystemPressure } from '../cpu-spin.js'
+import type { ProcStat, SystemPressure } from '../../infra/cpu-spin.js'
 import type { Vitals } from '../../config/types.js'
 
 const MIN = 60_000

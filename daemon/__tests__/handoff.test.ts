@@ -4,7 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { executeTool } from '../bridge-dispatch.js'
 import { registry } from '../sessions.js'
-import { gateway, STATE_DIR } from '../config.js'
+import { gateway, STATE_DIR } from '../../infra/config.js'
 import { HANDOFF_TEMPLATE_DIR } from '../handoff-templates.js'
 import { requestHandoff } from '../session-lifecycle.js'
 import { mkSession as mk, waitFor, withHandoffThread, type HandoffThread } from './handoff-thread.js'
@@ -271,7 +271,7 @@ test('arriving {{from_session}}: the predecessor\'s claude session id, empty whe
 
 test('arriving {{from_transcript}}: the predecessor\'s transcript path when it exists, empty when the id is unknown', async () => {
   const { handoffArrival } = await import('../session-lifecycle.js')
-  const { projectsRoot } = await import('../usage.js')
+  const { projectsRoot } = await import('../../infra/usage.js')
   const projectDir = join(projectsRoot(), '-tmp-handoff-fixture')
   const transcript = join(projectDir, 'pred-1.jsonl')
   const file = join(HANDOFF_TEMPLATE_DIR, 'arriving.md')

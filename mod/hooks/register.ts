@@ -24,7 +24,7 @@ export function register(on: On) {
   })
 
   // An observer of each measurement: it goes on first.
-  // - Context fill goes in the status line as `ctx: N%`, the shape daemon/util.ts's footer reader takes first: Claude
+  // - Context fill goes in the status line as `ctx: N%`, the shape infra/util.ts's footer reader takes first: Claude
   //   Code's own used percentage. Every session hydra launches loads this mod, so none needs a statusline script. The
   //   daemon computes the same figure from the transcript, so the two agree while the session runs on its launch model.
   //   A context with no fill (a new conversation) clears the line, so the daemon's fallback never reads a stale one.

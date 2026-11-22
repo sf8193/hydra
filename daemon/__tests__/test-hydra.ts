@@ -1,5 +1,5 @@
 // A test's stand-in for hydra.toml: who the operator is on this platform, and which channels the daemon admits.
-import { PLATFORM } from '../config.js'
+import { PLATFORM } from '../../infra/config.js'
 import { _setHydraConfigForTesting } from '../hydra-config.js'
 import { loadHydraConfig } from '../../config/load.js'
 import { testLoadEnv } from '../../config/__tests__/load-env.js'

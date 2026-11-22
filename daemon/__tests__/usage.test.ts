@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync 
 import { randomUUID } from 'crypto'
 import { tmpdir } from 'os'
 import { join, sep } from 'path'
-import { projectDirName, projectDirNames, projectsRoot, transcriptPathFor } from '../usage.js'
+import { projectDirName, projectDirNames, projectsRoot, transcriptPathFor } from '../../infra/usage.js'
 import { plantTranscript, uniqueClaudeId } from './projects-fixture.js'
 import { claudeConfigDir } from '../../shared/constants.js'
 import { TEST_STATE_DIR } from '../../test-setup.js'

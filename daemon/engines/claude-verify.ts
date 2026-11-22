@@ -19,7 +19,7 @@
 // refuses at once), then judge. A file that never appears, or never completes, within the deadline refuses.
 
 import { readFileSync } from 'fs'
-import { BRIDGE_MCP_SERVER_KEY, BRIDGE_PLUGIN_ID, BRIDGE_TOOLS_PERMISSION, bridgePluginCache } from '../plugin-manifest.js'
+import { BRIDGE_MCP_SERVER_KEY, BRIDGE_PLUGIN_ID, BRIDGE_TOOLS_PERMISSION, bridgePluginCache } from '../../infra/plugin-manifest.js'
 import { HYDRA_MOD, serverToolRule, type RestrictedPolicy } from '../restricted.js'
 import { claudeConfigDir } from '../../shared/constants.js'
 

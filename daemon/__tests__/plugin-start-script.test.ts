@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { startWithoutInstall } from '../plugin-manifest.js'
+import { startWithoutInstall } from '../../infra/plugin-manifest.js'
 
 describe('startWithoutInstall', () => {
   test('drops the leading bun install from the published start script', () => {
@@ -32,7 +32,7 @@ describe('ensureBridgeReady', () => {
   const okInstall = (calls: string[]) => async (cwd: string) => { calls.push(cwd); mkdirSync(join(cwd, 'node_modules'), { recursive: true }) }
 
   test('cold dir: installs once, writes the marker, lifts only the start script', async () => {
-    const { ensureBridgeReady, DEPS_MARKER } = await import('../plugin-manifest.js')
+    const { ensureBridgeReady, DEPS_MARKER } = await import('../../infra/plugin-manifest.js')
     const d = dir(); const calls: string[] = []
     expect(await ensureBridgeReady(d, okInstall(calls))).toBe(true)
     expect(calls).toEqual([d])
@@ -43,7 +43,7 @@ describe('ensureBridgeReady', () => {
   })
 
   test('failed install: throws, leaves the published start script, no marker, retried next boot', async () => {
-    const { ensureBridgeReady, DEPS_MARKER } = await import('../plugin-manifest.js')
+    const { ensureBridgeReady, DEPS_MARKER } = await import('../../infra/plugin-manifest.js')
     const d = dir()
     const failing = async (cwd: string) => { mkdirSync(join(cwd, 'node_modules'), { recursive: true }); throw new Error('ETIMEDOUT\nregistry unreachable') }
     await expect(ensureBridgeReady(d, failing)).rejects.toThrow('registry unreachable')
@@ -55,7 +55,7 @@ describe('ensureBridgeReady', () => {
   })
 
   test('no package.json: skipped, nothing installed', async () => {
-    const { ensureBridgeReady } = await import('../plugin-manifest.js')
+    const { ensureBridgeReady } = await import('../../infra/plugin-manifest.js')
     const d = mkdtempSync(join(tmpdir(), 'hydra-bridge-ready-'))
     const calls: string[] = []
     expect(await ensureBridgeReady(d, okInstall(calls))).toBe(false)

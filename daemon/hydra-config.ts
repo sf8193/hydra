@@ -3,7 +3,7 @@
 // A failed load keeps the last good config, and the alert the caller passes hears it.
 
 import { join } from 'path'
-import { CLAUDE_CONFIG, STATE_DIR, PLATFORM } from './config.js'
+import { CLAUDE_CONFIG, STATE_DIR, PLATFORM } from '../infra/config.js'
 import { SESSION_NAMES } from './sessions.js'
 import { EMPTY_CONFIG, formatIssues, systemEnv } from '../config/load.js'
 import { scrubTokenVarsNamedIn, tokenEnvNames } from '../config/token-vars.js'

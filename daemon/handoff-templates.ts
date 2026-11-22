@@ -1,6 +1,6 @@
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { STATE_DIR } from './config.js'
+import { STATE_DIR } from '../infra/config.js'
 
 // Local handoff text: <STATE_DIR>/actions/handoff/{departing,arriving,notice,converge}.md — uncommitted, read
 // each time it is used (a handoff, or a converge nudge) so an edit works without a restart. `departing`

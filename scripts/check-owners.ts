@@ -40,7 +40,7 @@ export const RULES: Rule[] = [
   {
     name: 'git branch delete / worktree remove|prune',
     pattern: /\bgit\b[^;]{0,60}?\b(?:branch\b[^;]{0,40}?(?:\s-[dD]|--delete)\b|worktree\s+(?:remove|prune)\b)/g,
-    allowed: ['daemon/worktree-manager.ts'], tests: false, ts: false,
+    allowed: ['infra/worktree-manager.ts'], tests: false, ts: false,
     why: 'deleting work goes through workAtRisk in worktree-manager',
   },
   {
@@ -51,7 +51,7 @@ export const RULES: Rule[] = [
     // bridge-server, cli-handler and sessions ask tmux itself: a death check, `hydra status`'s tmux line, and
     // restoring records at load, before occupancy can be asked.
     allowed: [
-      'daemon.ts', 'daemon/tmux.ts', 'daemon/bridge-dispatch.ts', 'daemon/commands/thread.ts',
+      'daemon.ts', 'infra/tmux.ts', 'daemon/bridge-dispatch.ts', 'daemon/commands/thread.ts',
       'daemon/engines/claude-engine.ts', 'daemon/engines/codex-engine-adapter.ts', 'daemon/recovery.ts',
       'daemon/session-lifecycle.ts', 'daemon/session-reachability.ts', 'daemon/bridge-server.ts', 'daemon/cli-handler.ts',
       'daemon/sessions.ts',
@@ -60,33 +60,33 @@ export const RULES: Rule[] = [
     why: 'liveness is occupancy() in session-reachability.ts (the adapter decides)',
   },
   {
-    name: 'tmux has-session outside daemon/tmux.ts',
+    name: 'tmux has-session outside infra/tmux.ts',
     pattern: /\bhas-session\b/g,
-    // The daemon asks whether a session exists only through daemon/tmux.ts (tmuxSessionState and its readers),
+    // The daemon asks whether a session exists only through infra/tmux.ts (tmuxSessionState and its readers),
     // so a slow tmux reads the same everywhere. The CLI files and the recovery script are their own processes.
-    allowed: ['daemon/tmux.ts', 'cli/helpers.ts', 'scripts/check-codex-recovery.ts'],
+    allowed: ['infra/tmux.ts', 'cli/helpers.ts', 'scripts/check-codex-recovery.ts'],
     tests: false, ts: true,
-    why: 'ask tmuxSessionState / tmuxHasSession (daemon/tmux.ts) or occupancy, not has-session',
+    why: 'ask tmuxSessionState / tmuxHasSession (infra/tmux.ts) or occupancy, not has-session',
   },
   {
     name: 'raw tmux kill-session|window|pane exec',
     pattern: /\btmux\b[^;]{0,40}?\b(?:kill-session|kill-window|kill-pane)\b/g,
-    allowed: ['daemon/tmux.ts', 'cli/helpers.ts', 'cli/peek.ts', 'scripts/check-codex-recovery.ts'],
+    allowed: ['infra/tmux.ts', 'cli/helpers.ts', 'cli/peek.ts', 'scripts/check-codex-recovery.ts'],
     tests: false, ts: true,
     why: "kill through tmuxSync or the adapter's stop, not another exec site",
   },
   {
     name: 'raw sync tmux exec',
     pattern: /\b(?:execFileSync|execSync|spawnSync)\s+tmux\b/g,
-    // The daemon runs tmux synchronously only through tmuxSync (daemon/tmux.ts): killed at its timeout, so a hung
+    // The daemon runs tmux synchronously only through tmuxSync (infra/tmux.ts): killed at its timeout, so a hung
     // server can't hold the loop. Session creation has its own owner, spawn-env's tmuxNewSession, which bounds
     // itself. The CLI files and the recovery script are their own processes; test-setup kills the suite's server.
     allowed: [
-      'daemon/tmux.ts', 'cli/helpers.ts', 'cli/peek.ts', 'cli/lifecycle.ts', 'cli/hydra.ts',
+      'infra/tmux.ts', 'cli/helpers.ts', 'cli/peek.ts', 'cli/lifecycle.ts', 'cli/hydra.ts',
       'scripts/check-codex-recovery.ts', 'test-setup.ts',
     ],
     tests: false, ts: true,
-    why: 'run tmux through tmuxSync in daemon/tmux.ts (bounded, SIGKILL), not a raw sync exec',
+    why: 'run tmux through tmuxSync in infra/tmux.ts (bounded, SIGKILL), not a raw sync exec',
   },
 ]
 

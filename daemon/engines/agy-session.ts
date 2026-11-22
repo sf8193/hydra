@@ -9,8 +9,8 @@
 
 import { readFileSync, statSync } from 'fs'
 import { join } from 'path'
-import { STATE_DIR } from '../config.js'
-import { readRange } from '../usage.js'
+import { STATE_DIR } from '../../infra/config.js'
+import { readRange } from '../../infra/usage.js'
 
 export const agyStateDir = () => join(STATE_DIR, 'agy-sessions')
 export const agyStateFile = (sessionId: string): string => join(agyStateDir(), `${sessionId}.json`)

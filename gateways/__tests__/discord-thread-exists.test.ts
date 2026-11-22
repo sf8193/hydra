@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { DiscordGateway } from '../discord'
+import { DiscordGateway } from '../discord.js'
 
 function gatewayFailingWith(err: unknown) {
   const gw = Object.create(DiscordGateway.prototype) as DiscordGateway

@@ -1,6 +1,6 @@
 import { markDead, registry, threadRegistry } from './sessions.js'
-import { gateway } from './config.js'
-import { fallbackDescription } from './util.js'
+import { gateway } from '../infra/config.js'
+import { fallbackDescription } from '../infra/util.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
 import { mainChannel, mainContext, mainTmux } from './main-session.js'
 import { refreshSessionVisual } from './anchor-state.js'

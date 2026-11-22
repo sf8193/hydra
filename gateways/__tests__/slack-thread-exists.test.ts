@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { SlackGateway } from '../slack'
+import { SlackGateway } from '../slack.js'
 
 function gatewayWith(fail: unknown) {
   const calls: { method: string; args: any }[] = []

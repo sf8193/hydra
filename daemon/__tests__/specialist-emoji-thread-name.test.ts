@@ -1,7 +1,7 @@
 // A specialist's `emoji` is the glyph its sessions wear in their thread names. Every name goes through `emojiOf` (the first name at spawn
 // and every refresh after it), so these drive `refreshSessionVisual` and read the name the Discord and Slack gateways would set.
 import { describe, test, expect, afterEach } from 'bun:test'
-import { gateway } from '../config.js'
+import { gateway } from '../../infra/config.js'
 import { registry, sessionEmoji } from '../sessions.js'
 import { refreshSessionVisual, emojiOf } from '../anchor-state.js'
 import { _setHydraConfigForTesting } from '../hydra-config.js'

@@ -50,7 +50,7 @@ const ALLOWED: Record<string, { why: string; lines: string[] }> = {
       "delete info.deadAt",
     ],
   },
-  'observability.ts': {
+  'infra/observability.ts': {
     why: 'a vitals sample is dropped once the autopsy has read it, which is when the death is written',
     lines: [
       "const goneOrDead = (id: string) => { const s = registry.get(id); return !s || !!s.deadAt }",
@@ -110,14 +110,17 @@ const ALLOWED: Record<string, { why: string; lines: string[] }> = {
 
 const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
 const DAEMON = join(import.meta.dir, '..')
+const INFRA = join(import.meta.dir, '..', '..', 'infra')   // moved out of daemon/: its keys are prefixed infra/
 
 describe('deadAt readers', () => {
   test('only the allowed files touch deadAt, each on its listed lines', () => {
     const found: Record<string, string[]> = {}
-    for (const f of new Glob('**/*.ts').scanSync(DAEMON)) {
-      if (f.startsWith('__tests__/')) continue
-      const lines = strip(readFileSync(join(DAEMON, f), 'utf8')).split('\n').filter(l => /\bdeadAt\b/.test(l)).map(l => l.trim())
-      if (lines.length) found[f] = lines
+    for (const [dir, prefix] of [[DAEMON, ''], [INFRA, 'infra/']] as const) {
+      for (const f of new Glob('**/*.ts').scanSync(dir)) {
+        if (f.startsWith('__tests__/')) continue
+        const lines = strip(readFileSync(join(dir, f), 'utf8')).split('\n').filter(l => /\bdeadAt\b/.test(l)).map(l => l.trim())
+        if (lines.length) found[prefix + f] = lines
+      }
     }
     const expected = Object.fromEntries(Object.entries(ALLOWED).map(([f, a]) => [f, a.lines]))
     expect(found, 'a deadAt read decides liveness only in occupancy(): ask it instead, or allow a history read with its reason').toEqual(expected)

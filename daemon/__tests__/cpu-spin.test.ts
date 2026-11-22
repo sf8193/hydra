@@ -2,9 +2,9 @@ import { describe, test, expect } from 'bun:test'
 import {
   parsePs, createCpuMeter, createSpinTracker, hotProcess, parseSwapUsage, parseMeminfoSwap, parseMemoryPressure, createHostIdleMeter,
   formatPressure, formatSpinAlert, formatCpuSummary, claudeAncestor, startedAt,
-} from '../cpu-spin.js'
+} from '../../infra/cpu-spin.js'
 import { parseCpuTime } from '../../shared/constants.js'
-import { systemPressure } from '../vitals-snapshot.js'
+import { systemPressure } from '../../infra/vitals-snapshot.js'
 
 describe('parseCpuTime', () => {
   test('macOS mmm:ss.cc — minutes are not capped at 59', () => {

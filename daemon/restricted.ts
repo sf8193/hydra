@@ -26,7 +26,7 @@ import type { SessionInfo } from './sessions.js'
 import { isRestricted, isRestrictedPolicy } from './policy-record.js'
 import { refusalNoticeKey, threadNotices } from './notice-limit.js'
 import { setFlushGate } from './bridge-transport.js'
-import { safeSend } from './util.js'
+import { safeSend } from '../infra/util.js'
 
 export type PolicyServer = { name: string; command: string; tokenEnv: string[]; tools: string[] }
 

@@ -107,7 +107,7 @@ export let DEFAULT_SESSION_CHANNEL = process.env.DEFAULT_SESSION_CHANNEL ?? ''
 export async function resolveDefaultChannel(): Promise<void> {
   if (DEFAULT_SESSION_CHANNEL) return
   try {
-    const userId = (await import('./access.js')).operatorIds()[0]
+    const userId = (await import('../daemon/access.js')).operatorIds()[0]
     if (!userId) return
     if ('sendDM' in gateway) {
       const ch = await (gateway as any).app?.client?.conversations?.open({ users: userId })

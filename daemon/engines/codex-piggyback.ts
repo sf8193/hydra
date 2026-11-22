@@ -1,9 +1,9 @@
 import { readFileSync, unlinkSync } from 'fs'
 import { join } from 'path'
-import { STATE_DIR } from '../config.js'
+import { STATE_DIR } from '../../infra/config.js'
 import { registry } from '../sessions.js'
-import { atomicWriteFileSync } from '../util.js'
-import { on } from '../event-bus.js'
+import { atomicWriteFileSync } from '../../infra/util.js'
+import { on } from '../../infra/event-bus.js'
 import { reportDeliveryFailure } from '../bridge-transport.js'
 import type { DeliveryResult } from './engine-adapter.js'
 

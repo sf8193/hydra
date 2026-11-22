@@ -19,7 +19,7 @@ completion. Peek is deliberately irrelevant to turn ownership.
 ## Constraints and rejected ideas
 
 - Do not touch existing unrelated dirty files: `daemon.ts`,
-  `daemon/plugin-manifest.ts`, `scripts/jev-routing-backtest.ts`, or
+  `infra/plugin-manifest.ts`, `scripts/jev-routing-backtest.ts`, or
   `scripts/jev-swebench-eval.ts`.
 - Do not use automatic steer for normal comments or TUI output for idleness.
 - Do not silently evict user messages or blindly retry unknown starts.

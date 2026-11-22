@@ -1,6 +1,6 @@
 import { registry } from './sessions.js'
 import { isToolAllowed } from './tool-surface.js'
-import { autoHandoffOn, envPercent } from './config.js'
+import { autoHandoffOn, envPercent } from '../infra/config.js'
 import type { SessionInfo } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { isSessionWorking } from './session-activity.js'
@@ -12,7 +12,7 @@ import { currentHydraConfig } from './hydra-config.js'
 import { declaredSpecialist, handoffProtocolOf, type HandoffProtocol } from '../config/types.js'
 import { specialistOf } from '../specialists/specialists.js'
 import { killAndRespawn, NotReplaced } from '../specialists/specialist-deliver.js'
-import { safeSend } from './util.js'
+import { safeSend } from '../infra/util.js'
 import { CACHE_HANDOFF_LINE, FULL_HANDOFF_DEFAULT_LINE } from './context-lines.js'
 
 // Cache handoff, opt-in with AUTO_HANDOFF_CACHE=1: a Claude session at 50%+ context that nobody has touched for 50 minutes

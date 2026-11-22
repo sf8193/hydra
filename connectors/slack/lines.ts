@@ -1,6 +1,6 @@
-// The lines a session's own chat thread shows about its Slack traffic, the way it shows session-to-session sends (daemon/quiet-send.ts):
+// The lines a session's own chat thread shows about its Slack traffic, the way it shows session-to-session sends (infra/quiet-send.ts):
 // 📨 for a message an approved person tagged it with, 📤 for a reply it posted into Slack. Quiet subtext, posted only in the session's thread, never into Slack.
-import { noteLine, oneLine } from '../../daemon/quiet-send.js'
+import { noteLine, oneLine } from '../../infra/quiet-send.js'
 import { DEFAULT_LINE_EMOJI } from '../../shared/slack-lines.js'
 import type { ChatGateway } from '../../gateways/gateway.js'
 

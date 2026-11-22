@@ -1,12 +1,12 @@
 // The production router: an operator's message in a specialist's own thread while no session is home there.
 // It is held for the specialist, the specialist is started by the rule, and the message lands in its session: never main's.
 import { afterAll, afterEach, beforeAll, beforeEach, expect, spyOn, test } from 'bun:test'
-import { gateway } from '../config.js'
+import { gateway } from '../../infra/config.js'
 import * as access from '../access.js'
 import { registry, type SessionInfo } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { _setRecoveryDeps, _resetRecoveryDeps, reviveDeps } from '../recovery.js'
-import { _resetBackoff } from '../recovery-backoff.js'
+import { _resetBackoff } from '../../infra/recovery-backoff.js'
 import { _setDaemonStartedAtForTesting } from '../session-reachability.js'
 import { setSpecialistThread } from '../../specialists/specialists.js'
 import { _forgetMemory, _resetHeld, heldCount, MAX_HOLD_MS, restoreHeld, RETRY_MS, specialistThreadDeps } from '../specialist-thread.js'
