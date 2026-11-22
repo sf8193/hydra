@@ -9,7 +9,7 @@ sequenceDiagram
     participant bridge as bridge.ts
     participant cc as Claude Code<br/>session
 
-    Note over info: Identity fields:<br/>sessionType: master_orchestrator / thread_owner / thread_guest / factory_builder<br/>capabilities: Capability[] (additive grants: protocol_context, factory)<br/>toolDescriptions: Record (phase-specific)<br/>toolInputSchemas: Record (phase-specific)
+    Note over info: Identity fields:<br/>sessionType: master_orchestrator / thread_owner / thread_guest<br/>capabilities: Capability[] (additive grants, e.g. protocol_context)<br/>toolDescriptions: Record (phase-specific)<br/>toolInputSchemas: Record (phase-specific)
 
     Note over compute: Pure function:<br/>BASE_TOOLS[sessionType] ∪ CAPABILITY_TOOLS[each capability]<br/>→ filter UNIVERSAL_TOOLS<br/>→ apply description + schema overrides
 
@@ -39,17 +39,6 @@ sequenceDiagram
         end
     end
 
-    rect rgb(240, 255, 240)
-        Note over info,cc: FACTORY PHASE TRANSITION
-        Note over info: transitionFactoryPhase → setFactoryTools
-        info->>info: Description-only: factory_done description<br/>changes per phase (building / reviewing / awaiting_pm)
-        surface->>compute: (type, caps, overrides?)
-        compute-->>surface: tool list
-        surface->>transport: {type: tools_update, tools}
-        transport->>bridge: tools_update
-        bridge->>cc: notifications/tools/list_changed
-    end
-
     rect rgb(248, 240, 255)
         Note over info,cc: BRIDGE RECONNECT — no derivation
         Note over info: SessionInfo already correct<br/>(written at last transition, persisted)
@@ -65,13 +54,6 @@ sequenceDiagram
         Note over info: clearProtocolOverrides(info)
         info->>info: removeCapability('protocol_context')<br/>+ removeToolDescriptions('advance', 'extend_phase')<br/>+ removeToolInputSchemas('advance')
         surface->>transport: tools_update (restored to base set)
-    end
-
-    rect rgb(245, 245, 245)
-        Note over info,cc: FACTORY CLEANUP
-        Note over info: clearFactoryIdentity(info)
-        info->>info: sessionType → thread_owner<br/>+ removeToolDescriptions('factory_done')
-        surface->>transport: tools_update (session restored to thread_owner base)
     end
 
     rect rgb(255, 250, 230)
