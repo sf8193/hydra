@@ -418,9 +418,12 @@ export type PlaceOptions = {
    * Absent: the app named `default` if it is there, else the first app in hydra.toml order that is.
    */
   defaultApp?: string
-  /** A channel the daemon admits: who may talk to it there. Absent: the gate does not admit the place. */
-  access?: PlaceAccess
-  /** With `access`: whether a session posts its replies in a thread of the message. */
+}
+
+/** A channel the daemon admits (`[places."<id>".access]`): who may talk to it, and how a session answers there. */
+export type ChannelGate = {
+  access: PlaceAccess
+  /** Whether a session posts its replies in a thread of the message. */
   threadReply?: boolean
 }
 
@@ -537,6 +540,8 @@ export type HydraConfig = {
   slackLineEmoji?: string
   people: Record<string, Person>
   specialists: Record<string, Specialist>
+  /** The channels the daemon admits, by `placeKey`: an exact key, never a wildcard. Absent when none. Not `places`: a channel that only has access is not named for the connectors. */
+  channels?: Record<string, ChannelGate>
   /** Per-place options, keyed by `placeKey`: read through `optionsOf` / `optionsAt`, which put a specific entry before a wildcard one. */
   places: Record<string, PlaceOptions>
   schedules: Record<string, Schedule>

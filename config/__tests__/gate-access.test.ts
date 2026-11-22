@@ -1,6 +1,8 @@
 // The gate's end state in hydra.toml: [places."<id>".access] admits a channel, [gateways.<platform>] holds platform-wide gate settings.
 import { describe, expect, test } from 'bun:test'
 import { loadHydraConfig } from '../load.js'
+import { namedPlace } from '../../connectors/slack/watch.js'
+import { placeOf } from '../types.js'
 import { testLoadEnv } from './load-env.js'
 
 const env = { ...testLoadEnv({ home: '/home/op', sessionNames: [] }), isDir: () => true }
@@ -13,14 +15,14 @@ describe('access table', () => {
   test('a table with allow loads; mention defaults to true and listen stays unset', () => {
     const r = load(access('allow = ["op", "alice"]'))
     expect(errors(r)).toEqual([])
-    if (r.ok) expect(r.config.places['slack:C0123ABC'].access).toEqual({ mention: true, allow: ['op', 'alice'] })
+    if (r.ok) expect(r.config.channels?.['slack:C0123ABC']?.access).toEqual({ mention: true, allow: ['op', 'alice'] })
     const withListen = load(access('allow = ["op"]\nlisten = false'))
-    if (withListen.ok) expect(withListen.config.places['slack:C0123ABC'].access).toEqual({ mention: true, allow: ['op'], listen: false })
+    if (withListen.ok) expect(withListen.config.channels?.['slack:C0123ABC']?.access).toEqual({ mention: true, allow: ['op'], listen: false })
     else throw new Error(errors(withListen).join('\n'))
   })
   test('allow = ["anyone"] is the explicit open channel', () => {
     const r = load(access('allow = ["anyone"]\nmention = false\nlisten = true'))
-    if (r.ok) expect(r.config.places['slack:C0123ABC'].access).toEqual({ mention: false, allow: 'anyone', listen: true })
+    if (r.ok) expect(r.config.channels?.['slack:C0123ABC']?.access).toEqual({ mention: false, allow: 'anyone', listen: true })
     else throw new Error(errors(r).join('\n'))
   })
   test('a missing allow is an error: nobody may mean "everyone" by leaving it out', () => {
@@ -51,11 +53,33 @@ describe('access table', () => {
   })
   test('thread_reply is kept with an access table, and an error without one', () => {
     const r = load('[places."slack:C0123ABC"]\nthread_reply = true\n[places."slack:C0123ABC".access]\nallow = ["op"]\n')
-    if (r.ok) expect(r.config.places['slack:C0123ABC'].threadReply).toBe(true)
+    if (r.ok) expect(r.config.channels?.['slack:C0123ABC']?.threadReply).toBe(true)
     else throw new Error(errors(r).join('\n'))
   })
   test('thread_reply without an access table is an error', () => {
     expect(errors(load('[places."slack:C0123ABC"]\nthread_reply = true\n'))[0]).toContain('needs an access table')
+  })
+})
+
+describe('a channel that only has access is not named for the connectors', () => {
+  const at = [placeOf('slack', 'channel', 'C0123ABC')]
+  test('an access-only place is admitted but has no [places] entry, so the Slack connector does not hear it', () => {
+    const r = load(access('allow = ["anyone"]'))
+    if (!r.ok) throw new Error(errors(r).join('\n'))
+    expect(r.config.channels?.['slack:C0123ABC']).toBeDefined()
+    expect(r.config.places['slack:C0123ABC']).toBeUndefined()
+    expect(namedPlace({ hydra: r.config }, at)).toBe(false)
+  })
+  test('an empty place table beside the access table is not named either', () => {
+    const r = load(`[places."slack:C0123ABC"]\n${access('allow = ["anyone"]')}`)
+    if (!r.ok) throw new Error(errors(r).join('\n'))
+    expect(r.config.places['slack:C0123ABC']).toBeUndefined()
+  })
+  test('the same place with a connector key is both admitted and named', () => {
+    const r = load(`[places."slack:C0123ABC"]\nack = "eyes"\n${access('allow = ["anyone"]')}`)
+    if (!r.ok) throw new Error(errors(r).join('\n'))
+    expect(r.config.channels?.['slack:C0123ABC']).toBeDefined()
+    expect(namedPlace({ hydra: r.config }, at)).toBe(true)
   })
 })
 

@@ -14,7 +14,8 @@ const spies: Array<{ mockRestore(): void }> = []
 const config = (): HydraConfig => ({
   operator: 'op', connectors: {}, gateways: {}, slackApps: {}, specialists: {}, schedules: {}, rules: [],
   gateSettings: { discord: { off: false, ackReaction: '🔔' } },
-  places: { 'discord:ch': { files: false, messages: 'addressed', bots: false, reactions: 'off', linkPreviews: true, threadReply: true, access: { mention: false, allow: 'anyone' } } },
+  places: {},
+  channels: { 'discord:ch': { threadReply: true, access: { mention: false, allow: 'anyone' } } },
   people: { op: { id: 'op', addresses: ['discord:op'], roles: [], name: 'op' } },
 })
 

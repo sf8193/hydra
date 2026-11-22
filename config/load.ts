@@ -21,7 +21,7 @@ import { invalidSpecialistName } from '../shared/specialist-name.js'
 import { bareOf, readTarget, spelled } from '../shared/target-kind.js'
 import { readValue, spelledApp, spelledPerson, spelledRole, whoSpelled } from '../shared/value-kind.js'
 import {
-  BUILTIN_ROLES, DEFAULT_SLACK_APP, SLACK_APP_ID_RE, homePlaceOf, isCatchAll, isChannelName, isDmPlace, isEvery, namesDmWithOthers, optionsOf, parsePlace, placeKey, placeShadows, placesAnsweredBy, samePlace, type Address, type ConfigIssue, type Connectors, type GateSettings, type Gateways, type Guard, type HydraConfig, type LoadEnv, type LoadResult, type MainOptions,
+  BUILTIN_ROLES, DEFAULT_SLACK_APP, SLACK_APP_ID_RE, homePlaceOf, isCatchAll, isChannelName, isDmPlace, isEvery, namesDmWithOthers, optionsOf, parsePlace, placeKey, placeShadows, placesAnsweredBy, samePlace, type Address, type ChannelGate, type ConfigIssue, type Connectors, type GateSettings, type Gateways, type Guard, type HydraConfig, type LoadEnv, type LoadResult, type MainOptions,
   type McpServer, type WorkdirScan, type Person, type Place, type PlaceAccess, type PlaceOptions, type Platform, type Rule, type Schedule, type SlackApp, type Specialist, type Vitals,
   MAX_ALERT_AFTER_MS, NEEDS, RUNNERS, SESSIONS_MODES, WORKDIR_TOOLS, type Need, HANDOFF_PROTOCOLS, type HandoffProtocol, type HandoffWithoutTool,
 } from './types.js'
@@ -924,14 +924,16 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     return { mention, allow: names, ...(listen !== undefined && { listen }) }
   }
 
+  const CONNECTOR_KEYS = ['ack', 'files', 'messages', 'bots', 'reactions', 'default_app', 'link_previews']
   const places: Record<string, PlaceOptions> = {}
+  const channels: Record<string, ChannelGate> = {}
   for (const [rawPlace, raw] of Object.entries(table(doc.places, 'places') ?? {})) {
     const path = `places."${rawPlace}"`
     const p = place(rawPlace, path)
     const t = table(raw, path)
     if (!p || !t) continue
     if (has(places, placeKey(p))) { error(path, `${placeKey(p)} is already set: places compare without case on GitHub`); continue }
-    unknownKeys(t, ['ack', 'files', 'messages', 'bots', 'reactions', 'default_app', 'link_previews', 'thread_reply', 'access'], path)
+    unknownKeys(t, [...CONNECTOR_KEYS, 'thread_reply', 'access'], path)
     const ack = str(t, 'ack', path)
     const ackWhy = ack === undefined ? undefined : reactionNameProblem(ack)
     if (ackWhy) error(join2(path, 'ack'), ackWhy)
@@ -949,9 +951,10 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     const access = placeAccess(p, t, path)
     const threadReply = bool(t, 'thread_reply', path)
     if (threadReply !== undefined && !Object.hasOwn(t, 'access')) error(join2(path, 'thread_reply'), 'needs an access table: it applies only to a channel hydra admits')
+    if (access) channels[placeKey(p)] = { access, ...(threadReply !== undefined && { threadReply }) }
+    // A place that only says who the daemon hears is not named for the connectors: it has no [places] entry.
+    if (access && !CONNECTOR_KEYS.some(k => Object.hasOwn(t, k))) continue
     places[placeKey(p)] = {
-      ...(access && { access }),
-      ...(threadReply !== undefined && { threadReply }),
       ...(ack !== undefined && !ackWhy && { ack }),
       ...(defaultApp !== undefined && { defaultApp }),
       files: bool(t, 'files', path) ?? false,
@@ -1352,7 +1355,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   }
 
   if (errors.length) return { ok: false, errors, warnings }
-  return { ok: true, config: { ...(operator && { operator }), ...(main && { main }), connectors, gateways, ...(Object.keys(gateSettings).length && { gateSettings }), slackApps, ...(slackLineEmoji && { slackLineEmoji }), people, specialists, places, schedules, rules, ...(Object.keys(mcpServers).length && { mcpServers }), ...(offLimits.length && { offLimits }), ...(allowUnprovenMacos && { allowUnprovenMacos }), ...(allowThreadDestroy && { allowThreadDestroy }), ...(guard && { guard }), ...(vitals && { vitals }), ...(events && { events }) }, warnings }
+  return { ok: true, config: { ...(operator && { operator }), ...(main && { main }), connectors, gateways, ...(Object.keys(gateSettings).length && { gateSettings }), ...(Object.keys(channels).length && { channels }), slackApps, ...(slackLineEmoji && { slackLineEmoji }), people, specialists, places, schedules, rules, ...(Object.keys(mcpServers).length && { mcpServers }), ...(offLimits.length && { offLimits }), ...(allowUnprovenMacos && { allowUnprovenMacos }), ...(allowThreadDestroy && { allowThreadDestroy }), ...(guard && { guard }), ...(vitals && { vitals }), ...(events && { events }) }, warnings }
 }
 
 /** The program a `sh -c` command runs: past any leading VAR=value, with one level of quotes removed. */

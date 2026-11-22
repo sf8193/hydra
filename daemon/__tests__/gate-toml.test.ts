@@ -11,14 +11,15 @@ import { planMigrate } from '../../config/migrate.js'
 import { loadHydraConfig } from '../../config/load.js'
 import { testLoadEnv } from '../../config/__tests__/load-env.js'
 import { operatorIds } from '../access.js'
-import type { GateSettings, PlaceAccess, PlaceOptions } from '../../config/types.js'
+import type { ChannelGate, GateSettings, PlaceAccess, PlaceOptions } from '../../config/types.js'
 import type { HydraConfig } from '../../config/types.js'
 import type { InboundMessage } from '../../gateways/gateway.js'
 
 // The suite runs as the discord platform (CHAT_PLATFORM unset).
-const place = (access?: PlaceAccess, more: Partial<PlaceOptions> = {}): PlaceOptions => ({ files: false, messages: 'addressed', bots: false, reactions: 'off', linkPreviews: true, ...(access && { access }), ...more })
-const config = (places: Record<string, PlaceOptions> = {}, gateSettings?: GateSettings): HydraConfig => ({
-  operator: 'op', connectors: {}, gateways: {}, slackApps: {}, specialists: {}, schedules: {}, rules: [], places,
+const place = (): PlaceOptions => ({ files: false, messages: 'addressed', bots: false, reactions: 'off', linkPreviews: true })
+const chan = (access: PlaceAccess, threadReply?: boolean): ChannelGate => ({ access, ...(threadReply !== undefined && { threadReply }) })
+const config = (channels: Record<string, ChannelGate> = {}, gateSettings?: GateSettings, places: Record<string, PlaceOptions> = {}): HydraConfig => ({
+  operator: 'op', connectors: {}, gateways: {}, slackApps: {}, specialists: {}, schedules: {}, rules: [], places, channels,
   ...(gateSettings && { gateSettings: { discord: gateSettings } }),
   people: {
     op: { id: 'op', addresses: ['discord:100'], roles: [], name: 'op' },
@@ -33,17 +34,17 @@ afterEach(() => { _setHydraConfigForTesting(undefined); rmSync(ACCESS_FILE, { fo
 
 describe('channels from hydra.toml', () => {
   test('a place with an access table admits the channel without access.json, and a thread uses its parent', () => {
-    _setHydraConfigForTesting(config({ 'discord:C1': place({ mention: false, allow: 'anyone' }) }))
+    _setHydraConfigForTesting(config({ 'discord:C1': chan({ mention: false, allow: 'anyone' }) }))
     expect(channelAllowed({ groups: {} }, msg('999'))).toBe(true)
     expect(channelAllowed({ groups: {} }, msg('999', 'T9', 'C1'))).toBe(true)
     expect(channelAllowed({ groups: {} }, msg('999', 'C2'))).toBe(false)
   })
   test('a place without an access table does not admit, and a wildcard place never does', () => {
-    _setHydraConfigForTesting(config({ 'discord:C1': place(), 'discord:*': place({ mention: false, allow: 'anyone' }) }))
+    _setHydraConfigForTesting(config({}, undefined, { 'discord:C1': place(), 'discord:*': place() }))
     expect(channelAllowed({ groups: {} }, msg('999'))).toBe(false)
   })
   test('hydra.toml wins over access.json for the same channel', () => {
-    _setHydraConfigForTesting(config({ 'discord:C1': place({ mention: false, allow: ['op'] }) }))
+    _setHydraConfigForTesting(config({ 'discord:C1': chan({ mention: false, allow: ['op'] }) }))
     const access = { groups: { C1: { requireMention: true, allowFrom: ['777'] } } }
     expect(channelPolicy(access, msg('100'))).toEqual({ requireMention: false, allowFrom: ['100'] })
   })
@@ -55,44 +56,44 @@ describe('channels from hydra.toml', () => {
 
 describe('allow', () => {
   test('named people are heard, anyone else is dropped', async () => {
-    _setHydraConfigForTesting(config({ 'discord:C1': place({ mention: false, allow: ['alice'] }) }))
+    _setHydraConfigForTesting(config({ 'discord:C1': chan({ mention: false, allow: ['alice'] }) }))
     expect((await gate(msg('200'))).action).toBe('deliver')
     expect((await gate(msg('999'))).action).toBe('drop')
   })
   test('people with no address on this platform leave the channel hearing nobody, not everybody', async () => {
-    _setHydraConfigForTesting(config({ 'discord:C1': place({ mention: false, allow: ['slacker'] }) }))
+    _setHydraConfigForTesting(config({ 'discord:C1': chan({ mention: false, allow: ['slacker'] }) }))
     expect((await gate(msg('999'))).action).toBe('drop')
     expect((await gate(msg('100'))).action).toBe('drop')
   })
   test('only this platform\'s addresses count: another platform\'s address is never read as an id', async () => {
-    _setHydraConfigForTesting(config({ 'discord:C1': place({ mention: false, allow: ['alice'] }) }))
+    _setHydraConfigForTesting(config({ 'discord:C1': chan({ mention: false, allow: ['alice'] }) }))
     // slack:U0ALICE minus the discord: prefix length would read as ALICE
     expect((await gate(msg('ALICE'))).action).toBe('drop')
   })
   test('thread_reply reaches the channel policy', () => {
-    _setHydraConfigForTesting(config({ 'discord:C1': place({ mention: true, allow: 'anyone' }, { threadReply: true }) }))
+    _setHydraConfigForTesting(config({ 'discord:C1': chan({ mention: true, allow: 'anyone' }, true) }))
     expect(channelPolicy({ groups: {} }, msg('999'))?.threadReply).toBe(true)
   })
   test('a config that names no operator does not govern: its channels and gateway settings are ignored', async () => {
-    _setHydraConfigForTesting({ ...config({ 'discord:C1': place({ mention: false, allow: 'anyone' }) }, { off: true, ackReaction: 'x', listen: true }), operator: undefined })
+    _setHydraConfigForTesting({ ...config({ 'discord:C1': chan({ mention: false, allow: 'anyone' }) }, { off: true, ackReaction: 'x', listen: true }), operator: undefined })
     expect(channelAllowed({ groups: {} }, msg('999'))).toBe(false)
     expect(ackReactionOf({})).toBeUndefined()
     expect(defaultListenOf({})).toBe(false)
     expect((await gate(msg('100'))).action).toBe('drop')
   })
   test('anyone hears whoever tags', async () => {
-    _setHydraConfigForTesting(config({ 'discord:C1': place({ mention: false, allow: 'anyone' }) }))
+    _setHydraConfigForTesting(config({ 'discord:C1': chan({ mention: false, allow: 'anyone' }) }))
     expect((await gate(msg('999'))).action).toBe('deliver')
   })
 })
 
 describe('gateway settings', () => {
   test('off drops every message, a channel\'s too', async () => {
-    _setHydraConfigForTesting(config({ 'discord:C1': place({ mention: false, allow: 'anyone' }) }, { off: true }))
+    _setHydraConfigForTesting(config({ 'discord:C1': chan({ mention: false, allow: 'anyone' }) }, { off: true }))
     expect((await gate(msg('100'))).action).toBe('drop')
   })
   test('mention_patterns reach the mention check, ahead of access.json\'s', async () => {
-    _setHydraConfigForTesting(config({ 'discord:C1': place({ mention: true, allow: 'anyone' }) }, { off: false, mentionPatterns: ['hey bot'] }))
+    _setHydraConfigForTesting(config({ 'discord:C1': chan({ mention: true, allow: 'anyone' }) }, { off: false, mentionPatterns: ['hey bot'] }))
     writeAccess({ mentionPatterns: ['old'] })
     const spy = spyOn(gateway, 'isMentioned').mockResolvedValue(true)
     try {
@@ -113,7 +114,7 @@ describe('gateway settings', () => {
 
 describe('listen state', () => {
   test('a place\'s access.listen beats the group and the defaults; silence falls through', () => {
-    _setHydraConfigForTesting(config({ 'discord:C1': place({ mention: true, allow: 'anyone', listen: false }) }, { off: false, listen: true }))
+    _setHydraConfigForTesting(config({ 'discord:C1': chan({ mention: true, allow: 'anyone', listen: false }) }, { off: false, listen: true }))
     const access = { groups: { C1: { defaultListen: true }, C2: { defaultListen: false } }, defaultListen: true }
     expect(resolveListenStatePure('C1', access)).toBe(false)
     expect(resolveListenStatePure('T1', access, undefined, 'C1')).toBe(false)

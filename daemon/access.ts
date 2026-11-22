@@ -2,7 +2,9 @@ import { readFileSync, writeFileSync, readdirSync, rmSync, renameSync, mkdirSync
 import { randomBytes } from 'crypto'
 import { join } from 'path'
 import { STATE_DIR, ACCESS_FILE, APPROVED_DIR, STATIC, gateway, DEFAULT_SESSION_CHANNEL, PLATFORM } from './config.js'
-import { currentHydraConfig, hydraConfigInUse } from './hydra-config.js'
+import { currentHydraConfig, hydraConfigInUse, hydraLoadEnv, reloadHydraConfig } from './hydra-config.js'
+import { admitChannel } from '../config/admit.js'
+import { BUSY } from '../config/append.js'
 import { chunk, safeSend } from './util.js'
 import type { GateSettings } from '../config/types.js'
 import type { InboundMessage } from '../gateways/gateway.js'
@@ -84,8 +86,8 @@ function tomlPolicy(channelId: string): GroupPolicy | undefined {
   if (!hydraConfigInUse()) return undefined
   const cfg = currentHydraConfig()
   const key = `${PLATFORM}:${channelId}`
-  const place = cfg.places[key]
-  if (!place?.access) return undefined
+  const place = cfg.channels?.[key]
+  if (!place) return undefined
   const prefix = `${PLATFORM}:`
   const ids = place.access.allow === 'anyone' ? [] : place.access.allow.flatMap(n => cfg.people[n].addresses.filter(a => a.startsWith(prefix)).map(a => a.slice(prefix.length)))
   return {
@@ -221,15 +223,35 @@ export function channelAllowed(access: Pick<Access, 'groups'>, place: Place): bo
   return place.isDM || channelPolicy(access, place) !== undefined
 }
 
+/** Channels where an admit was refused and the operator told, so each hears it once. */
+const refusedAdmits = new Set<string>()
+
 /**
  * The operator tagging this bot in a channel it has no policy for admits that channel: mention-only at the top level, session threads started there listen untagged.
- * True when it did. Anyone else's tag, and a static config, admit nothing.
+ * Where hydra.toml governs it is written there and the same message goes on; a write it refuses is said to the operator once per channel and admits nothing.
+ * True when it admitted. Anyone else's tag, and a static config, admit nothing.
  */
 export async function admitTaggedChannel(access: Access, msg: InboundMessage): Promise<boolean> {
   if (STATIC || msg.isDM || !operatorIds(access).includes(msg.authorId)) return false
   // Only an explicit @-tag admits: a reply to the bot or a mentionPatterns match does not.
   if (!(await gateway.isMentioned({ ...msg, referenceMessageId: null }))) return false
-  access.groups[msg.parentChannelId ?? msg.channelId] = { requireMention: true, allowFrom: [msg.authorId], defaultListen: true }
+  const channelId = msg.parentChannelId ?? msg.channelId
+  if (hydraConfigInUse()) {
+    // operatorIds named the sender, so hydra.toml names an operator.
+    const admitted = admitChannel(STATE_DIR, hydraLoadEnv(), PLATFORM, channelId, currentHydraConfig().operator!)
+    if (!admitted.ok) {
+      // A busy lock passes in a moment: it does not use up the channel's one telling.
+      if (admitted.error !== BUSY && !refusedAdmits.has(channelId)) {
+        refusedAdmits.add(channelId)
+        void gateway.send(msg.channelId, `I can't add this channel to hydra.toml, so I did nothing here: ${admitted.error}\nFix that, then tag me again.`, { replyTo: msg.id }).catch(() => {})
+      }
+      return false
+    }
+    refusedAdmits.delete(channelId)
+    reloadHydraConfig()
+    return true
+  }
+  access.groups[channelId] = { requireMention: true, allowFrom: [msg.authorId], defaultListen: true }
   saveAccess(access)
   return true
 }
