@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test'
 import { gateway } from '../../infra/config.js'
-import { doSpawnSession } from '../session-lifecycle.js'
+import { doSpawnSession } from '../../app/session-lifecycle.js'
 import { registry, threadRegistry } from '../../sessions/registry.js'
 import { transport } from '../../sessions/bridge-transport.js'
-import { engines } from '../../engines/instances.js'
-import { _pendingForTesting, _resetReplyGuardForTesting } from '../reply-guard.js'
+import { engines } from '../../sessions/engine-instances.js'
+import { _pendingForTesting, _resetReplyGuardForTesting } from '../../app/reply-guard.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 
 process.stderr.write = (() => true) as any

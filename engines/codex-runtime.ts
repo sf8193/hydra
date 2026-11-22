@@ -12,7 +12,7 @@
 import { CodexEngine, type ReconciledTurn } from './codex-engine.js'
 import { markDead, registry, threadRegistry, type SessionInfo } from '../sessions/registry.js'
 import { dispatchDisconnect } from '../sessions/protocol-registry.js'
-import { handleSilenceEvent, noteActivityForSession } from '../daemon/reply-guard.js'
+import { handleSilenceEvent, noteActivityForSession } from '../app/reply-guard.js'
 import { appendFileSync } from 'fs'
 import { join } from 'path'
 import { STATE_DIR } from '../infra/config.js'

@@ -3,10 +3,10 @@
 // killed. A joined or made thread that is not addressable fails before anything is made, or cleans up what was.
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
 import { gateway } from '../../infra/config.js'
-import { doSpawnSession } from '../session-lifecycle.js'
+import { doSpawnSession } from '../../app/session-lifecycle.js'
 import { registry, threadRegistry } from '../../sessions/registry.js'
 import { transport } from '../../sessions/bridge-transport.js'
-import { engines } from '../../engines/instances.js'
+import { engines } from '../../sessions/engine-instances.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import { fakeAdapter } from './test-harness.js'
 

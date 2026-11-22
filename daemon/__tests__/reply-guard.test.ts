@@ -15,10 +15,10 @@ import {
   _resetDeps,
   pollActivityOnce,
   sessionsWithPendingReplies,
-} from '../reply-guard.js'
-import { probeByteTmuxName } from '../pane-probe.js'
+} from '../../app/reply-guard.js'
+import { probeByteTmuxName } from '../../app/pane-probe.js'
 import { fakeAdapter } from './test-harness.js'
-import { engines } from '../../engines/instances.js'
+import { engines } from '../../sessions/engine-instances.js'
 import { withFakeTmux } from './fake-tmux.js'
 import type { SessionInfo } from '../../sessions/registry.js'
 import type { ConversationForensics } from '../../sessions/observability.js'

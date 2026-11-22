@@ -5,7 +5,7 @@ import { on } from '../infra/event-bus.js'
 import { registry } from './registry.js'
 import { safeSend } from '../infra/util.js'
 import { engineLabel } from '../shared/engines/index.js'
-import { refusalNoticeKey, threadNotices } from '../daemon/notice-limit.js'
+import { refusalNoticeKey, threadNotices } from '../shared/notice-limit.js'
 
 on('delivery:failed', ({ sessionId, status, reason, messageId }) => {
   const info = registry.get(sessionId)

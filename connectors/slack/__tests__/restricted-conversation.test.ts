@@ -7,9 +7,9 @@ import { STATE_DIR } from '../../../infra/config.js'
 import { registry } from '../../../sessions/registry.js'
 import { setSpecialistThread, _reloadSpecialists } from '../../../sessions/specialists.js'
 import { _setHydraConfigForTesting } from '../../../infra/hydra-config.js'
-import { restrictedRefusal, PLACE_USE } from '../../../daemon/bridge-dispatch.js'
+import { restrictedRefusal, PLACE_USE } from '../../../app/bridge-dispatch.js'
 import { ownConversationRefusal, getConversationTable, slackRuntimeDeps, stopSlackListener } from '../runtime.js'
-import { TOP_LEVEL } from '../conversation.js'
+import { TOP_LEVEL } from '../../../shared/slack-conversation.js'
 import { TWO_APPS, hydra, view } from './slack-config.js'
 
 process.stderr.write = (() => true) as any

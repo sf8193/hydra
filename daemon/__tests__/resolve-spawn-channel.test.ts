@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { resolveSpawnChannel } from '../session-lifecycle.js'
+import { resolveSpawnChannel } from '../../app/session-lifecycle.js'
 
 const DEFAULT_CHANNEL = 'default-channel-000'
 

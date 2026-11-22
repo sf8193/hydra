@@ -104,7 +104,7 @@ describe('with an emoji, it takes the default glyph, in the one position', () =>
 describe('no thread name is built from the default emoji alone', () => {
   // The first name is a template in doSpawnSession (it runs before a record exists, so a test cannot drive it); pin that it takes its glyph from emojiOf.
   test('the spawn-time thread name uses emojiOf', async () => {
-    const src = await Bun.file(new URL('../session-lifecycle.ts', import.meta.url)).text()
+    const src = await Bun.file(new URL('../../app/session-lifecycle.ts', import.meta.url)).text()
     expect(src).toMatch(/const threadName = `\$\{emojiOf\(/)
     expect(src).not.toMatch(/threadName = `\$\{sessionEmoji\(/)
   })
@@ -112,7 +112,7 @@ describe('no thread name is built from the default emoji alone', () => {
 
 describe('hydra specialist show', () => {
   test('lists the emoji of a specialist that sets one, and only then', async () => {
-    const { handleCLIRequest } = await import('../cli-handler.js')
+    const { handleCLIRequest } = await import('../../app/cli-handler.js')
     const show = async (name: string) => (await handleCLIRequest({ type: 'cli', command: 'specialist', id: `show-${name}`, params: { action: 'show', name } }) as any).data
     configure(decl('ops', { emoji: '🔐' }), decl('crm'))
     expect(await show('ops')).toMatchObject({ emoji: '🔐' })

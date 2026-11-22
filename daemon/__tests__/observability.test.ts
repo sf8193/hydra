@@ -5,9 +5,9 @@ import { tmpdir } from 'os'
 import { trimSpawnLog, trimDaemonLog, buildCrashNotice, buildAutopsy, readConversationForensics, vitalsHeader, type ConversationForensics } from '../../sessions/observability.js'
 import { claudeTurnOutcome } from '../../engines/claude-transcript.js'
 import { codexTurnOutcome, defaultTurnSources, type TurnSources } from '../../engines/codex-observation.js'
-import { engines } from '../../engines/instances.js'
+import { engines } from '../../sessions/engine-instances.js'
 import type { SessionInfo } from '../../sessions/registry.js'
-import { nextResumeCount } from '../session-lifecycle.js'
+import { nextResumeCount } from '../../app/session-lifecycle.js'
 
 const tmp = mkdtempSync(join(tmpdir(), 'obs-test-'))
 const paths: string[] = []
@@ -640,7 +640,7 @@ describe('turnOutcome composition', () => {
 describe('defaultTurnOutcome routing', () => {
   const T = Date.now()
   test('Codex adapter: live-source Codex composition (flag set → confirmed, Codex text)', async () => {
-    const { defaultTurnOutcome } = await import('../reply-guard.js')
+    const { defaultTurnOutcome } = await import('../../app/reply-guard.js')
     const saved = { ...defaultTurnSources }
     Object.assign(defaultTurnSources, {
       isCodexTurnComplete: () => true,
@@ -656,7 +656,7 @@ describe('defaultTurnOutcome routing', () => {
   })
 
   test('with an adapter: routed to the adapter', async () => {
-    const { defaultTurnOutcome } = await import('../reply-guard.js')
+    const { defaultTurnOutcome } = await import('../../app/reply-guard.js')
     const answer = { confirmedComplete: true, answer: () => 'from adapter' }
     const o = defaultTurnOutcome({ sessionId: 'a', engine: 'claude', adapter: { turn: () => answer } } as any, T)
     expect(o).toBe(answer)

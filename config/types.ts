@@ -252,7 +252,7 @@ type SpecialistBase = {
 /**
  * When and how its sessions are replaced, for a specialist whose sessions have no handoff tool (restricted, write-confined): they cannot
  * write a letter, so a line (`handoffAtPct`) comes only with `kill_and_respawn`. On every specialist, `handoffAtPct` (toml `handoff_at_pct`)
- * is the context percent (1-99) at which an idle session of it is replaced (daemon/auto-handoff.ts), whatever AUTO_HANDOFF_FULL and
+ * is the context percent (1-99) at which an idle session of it is replaced (app/auto-handoff.ts), whatever AUTO_HANDOFF_FULL and
  * AUTO_HANDOFF_FULL_PCT say, read on each health poll and not part of the launch policy; absent, the env vars decide.
  * `handoffProtocol` absent is `letter`.
  */
@@ -347,6 +347,17 @@ export function handoffProtocolOf(specialist: Specialist | undefined): HandoffPr
 
 /** The app named `default`, used where nothing names an app. */
 export const DEFAULT_SLACK_APP = 'default'
+
+/**
+ * What the app is called and says it does when `display_name` or `description` is unset. With an operator token the
+ * description says so: the app then reads threads as its installer.
+ * An app other than `default` is called by its id. Every message names an app by this name too (`appName`).
+ */
+export const SLACK_APP_DEFAULTS = {
+  name: 'hydra',
+  description: 'Answers the Slack threads it is tagged in, and its DMs, using Claude.',
+  operatorTokenNote: ' It can also read the threads, DMs and group DMs its installer can see.',
+} as const
 
 /** The Slack app hydra connects (`default`), or undefined when hydra.toml declares none. */
 export function defaultSlackApp(config: Pick<HydraConfig, 'slackApps'>): SlackApp | undefined {

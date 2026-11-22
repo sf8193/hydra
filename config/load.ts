@@ -14,14 +14,13 @@ import { ALLOW_UNPROVEN_MACOS, macosGateIssue, sandboxIssues, unquotablePath } f
 import { ENGINES, ENGINE_PROFILES, engineLabel, engineLimitsAccess } from '../shared/engines/index.js'
 import { CAN_ONLY_WRITE_TO_VALUES, KNOWN_BUILTIN_TOOLS, browserDownloadDir, browserProfileDir, browserProfileProblem, browserProfilesOverlap, canonicalFolder, confinementWarning, hasPlaceholder, managedMcpNameClashes, readDenyRoots, unknownPlaceholders, unreadableWorkdir } from './write-confinement.js'
 import { noSuchApp, pinnersOf, speaksAsOf, whyNotServed } from './pins.js'
-import { SLACK_APP_DEFAULTS } from '../connectors/slack/app.js'
 import { emojiProblem, reactionNameProblem } from '../shared/emoji.js'
 import { lineEmojiProblem } from '../shared/slack-lines.js'
 import { invalidSpecialistName } from '../shared/specialist-name.js'
 import { bareOf, readTarget, spelled } from '../shared/target-kind.js'
 import { readValue, spelledApp, spelledPerson, spelledRole, whoSpelled } from '../shared/value-kind.js'
 import {
-  BUILTIN_ROLES, DEFAULT_SLACK_APP, SLACK_APP_ID_RE, homePlaceOf, isCatchAll, isChannelName, isDmPlace, isEvery, namesDmWithOthers, optionsOf, parsePlace, placeKey, placeShadows, placesAnsweredBy, samePlace, type Address, type ChannelGate, type ConfigIssue, type Connectors, type GateSettings, type Gateways, type Guard, type HydraConfig, type LoadEnv, type LoadResult, type MainOptions,
+  BUILTIN_ROLES, DEFAULT_SLACK_APP, SLACK_APP_DEFAULTS, SLACK_APP_ID_RE, homePlaceOf, isCatchAll, isChannelName, isDmPlace, isEvery, namesDmWithOthers, optionsOf, parsePlace, placeKey, placeShadows, placesAnsweredBy, samePlace, type Address, type ChannelGate, type ConfigIssue, type Connectors, type GateSettings, type Gateways, type Guard, type HydraConfig, type LoadEnv, type LoadResult, type MainOptions,
   type McpServer, type WorkdirScan, type Person, type Place, type PlaceAccess, type PlaceOptions, type Platform, type Rule, type Schedule, type SlackApp, type Specialist, type Vitals,
   MAX_ALERT_AFTER_MS, NEEDS, RUNNERS, SESSIONS_MODES, WORKDIR_TOOLS, type Need, HANDOFF_PROTOCOLS, type HandoffProtocol, type HandoffWithoutTool,
 } from './types.js'

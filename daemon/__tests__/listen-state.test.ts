@@ -1,5 +1,5 @@
 import { afterEach, describe, test, expect } from 'bun:test'
-import { resolveListenStatePure } from '../session-lifecycle.js'
+import { resolveListenStatePure } from '../../app/session-lifecycle.js'
 import { _setHydraConfigForTesting } from '../../infra/hydra-config.js'
 import { setHydra } from './test-hydra.js'
 

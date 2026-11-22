@@ -1,7 +1,7 @@
 // The Slack app hydra runs as: every scope and event it uses, and the manifest that creates it from hydra.toml.
 // A leaf: the CLI reads it without loading Bolt or the daemon.
 
-import type { SlackApp } from '../../config/types.js'
+import { SLACK_APP_DEFAULTS, type SlackApp } from '../../config/types.js'
 
 export type ScopeNeed = { option: string; any: readonly string[] }
 
@@ -45,17 +45,6 @@ export const SLACK_APP_NEEDS = {
     private: { option: 'telling which apps are in a private channel (several apps declared)', any: ['groups:read'] } as ScopeNeed,
     botEvents: ['member_joined_channel', 'member_left_channel'],
   },
-} as const
-
-/**
- * What the app is called and says it does when `display_name` or `description` is unset. With an operator token the
- * description says so: the app then reads threads as its installer.
- * An app other than `default` is called by its id. Every message names an app by this name too (`appName`).
- */
-export const SLACK_APP_DEFAULTS = {
-  name: 'hydra',
-  description: 'Answers the Slack threads it is tagged in, and its DMs, using Claude.',
-  operatorTokenNote: ' It can also read the threads, DMs and group DMs its installer can see.',
 } as const
 
 /**

@@ -234,9 +234,9 @@ Global options: `--daemon <name>` (target specific daemon), `--json` (raw JSON o
 | `cli/helpers.ts` | Socket communication, config resolution, `sendRequest` (10s timeout) |
 | `cli/lifecycle.ts` | `up`/`down`/`restart`/`kill` orchestration |
 | `cli/peek.ts` | Peek UI (tmux link-window) |
-| `daemon/cli-handler.ts` | Daemon-side request dispatch |
+| `app/cli-handler.ts` | Daemon-side request dispatch |
 | `infra/idempotency.ts` | Idempotency state machine |
-| `daemon/session-lifecycle.ts` | `doSpawnSession` primitive |
+| `app/session-lifecycle.ts` | `doSpawnSession` primitive |
 | `sessions/session-reachability.ts` | Reachability classification (used by deliver) |
 | `shared/constants.ts` | Model aliases |
 | `diagrams/flow-deliver.mmd` | Deliver flow diagram |

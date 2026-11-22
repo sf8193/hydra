@@ -5,7 +5,7 @@ import { join } from 'path'
 import { STATE_DIR, STATE_WRITABLE } from '../infra/config.js'
 import { emit } from '../infra/event-bus.js'
 import { removeLaunchFiles } from '../infra/launch-files.js'
-import type { LaunchPolicy } from '../daemon/restricted.js'
+import type { LaunchPolicy } from '../app/restricted.js'
 import { atomicWriteFileSync, baseNameFromBranch } from '../infra/util.js'
 import { tmuxSessionState, tmuxSync } from '../infra/tmux.js'
 import { CAPABILITY_TOOLS } from '../shared/constants.js'
@@ -604,6 +604,11 @@ export class SessionRegistry {
 }
 
 export const registry = new SessionRegistry()
+
+// The records an engine's start() receives at boot: those it is the adapter of.
+export function engineRecords(adapter: EngineAdapter): SessionInfo[] {
+  return [...registry.values()].filter(r => r.adapter === adapter)
+}
 
 /**
  * Reattach engine adapter instances to all loaded sessions.

@@ -27,7 +27,7 @@ process.env.CLAUDE_CONFIG_DIR = join(root, '.claude')
 process.env.SPAWN_CWD = root
 process.env.PATH = join(root, 'bin') + ':' + process.env.PATH
 const repo = new URL('..', import.meta.url).pathname.replace(/\/$/, '')
-const { gateway } = await import(repo + '/daemon/config.ts')
+const { gateway } = await import(repo + '/infra/config.ts')
 const sent: string[] = []
 Object.assign(gateway, {
  send: async (_id: string, text: string) => { sent.push(text); return { id: 'test-message' } },
@@ -36,11 +36,11 @@ Object.assign(gateway, {
  fetchChannel: async () => ({ isThread: true, parentId: 'parent', type: 'thread' }),
  getThreadStarterInfo: async () => null, updateSessionVisual: async () => {}, renameThread: async () => {},
 })
-const { registry, threadRegistry } = await import(repo + '/daemon/sessions.ts')
-const { doSpawnSession, killSession } = await import(repo + '/daemon/session-lifecycle.ts')
-const { codexEngine, reconnectCodexAfterDisconnect } = await import(repo + '/daemon/engines/codex-runtime.ts')
-const { handleResumeIntercept, handleRespawnIntercept } = await import(repo + '/daemon/commands/thread.ts')
-const { codexHomeDir, stopCodexAppServer } = await import(repo + '/daemon/codex-process.ts')
+const { registry, threadRegistry } = await import(repo + '/sessions/registry.ts')
+const { doSpawnSession, killSession } = await import(repo + '/app/session-lifecycle.ts')
+const { codexEngine, reconnectCodexAfterDisconnect } = await import(repo + '/engines/codex-runtime.ts')
+const { handleResumeIntercept, handleRespawnIntercept } = await import(repo + '/app/commands/thread.ts')
+const { codexHomeDir, stopCodexAppServer } = await import(repo + '/engines/codex-process.ts')
 const starts: {id: string, text: string}[] = []
 // Real app-server lifecycle/RPC, but no model turns for command checks.
 const startTurn = codexEngine.startTurn.bind(codexEngine)
@@ -93,7 +93,7 @@ try {
    try { return await request(...args) }
    catch (err) { console.error('RPC failed:', args[1], String(err)); throw err }
  }
- const { resolveEngine: providerFor } = await import(repo + '/daemon/engines/instances.ts')
+ const { resolveEngine: providerFor } = await import(repo + '/sessions/engine-instances.ts')
  assert(await providerFor('codex').interruptExecution(providerFor('codex').executionRef(info)))
  assert(!starts.some(s => s.text.startsWith('ROUND_3')))
  console.log('PASS retirement fences and discards queued handoff')

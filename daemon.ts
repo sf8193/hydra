@@ -54,18 +54,17 @@ try {
 import { gateway, TOKEN, PLATFORM, STATE_DIR, CLAUDE_CONFIG, SOCK_PATH, heartbeatPath, DEFAULT_SESSION_CHANNEL, resolveDefaultChannel } from './infra/config.js'
 import { syncMods } from './shared/mods.js'
 import { syncDaemonBridge } from './engines/bridge-sync.js'
-import { registry, threadRegistry, reattachAdapters } from './sessions/registry.js'
-import { isPlainWorker } from './daemon/policy-record.js'
+import { registry, threadRegistry, reattachAdapters, engineRecords } from './sessions/registry.js'
+import { isPlainWorker } from './shared/policy-record.js'
 import { emojiOfName } from './sessions/anchor-state.js'
-import { engines, resolveEngine } from './engines/instances.js'
-import { engineRecords } from './engines/boot.js'
+import { engines, resolveEngine } from './sessions/engine-instances.js'
 import { transport } from './sessions/bridge-transport.js'
 import { operatorIds, notifyOperator } from './sessions/access.js'
-import { setupPermissionHandler } from './daemon/permission.js'
-import { socketServer, startBridgeServer } from './daemon/bridge-server.js'
-import { announceRestartComplete } from './daemon/commands/global.js'
-import { deliverWatchdogAlert } from './daemon/watchdog-alert.js'
-import { autoRecoverAfterBoot } from './daemon/recovery.js'
+import { setupPermissionHandler } from './app/permission.js'
+import { socketServer, startBridgeServer } from './app/bridge-server.js'
+import { announceRestartComplete } from './app/commands/global.js'
+import { deliverWatchdogAlert } from './app/watchdog-alert.js'
+import { autoRecoverAfterBoot } from './app/recovery.js'
 import { startJobsClock, stopJobsClock, realDeps } from './connectors/clock/jobs-clock.js'
 import { deliverToTarget } from './specialists/targets.js'
 
@@ -117,9 +116,9 @@ queueMicrotask(logSubscriptions)
 
 import { initPhaseBudgets } from './sessions/phase-budget.js'
 import { initIdleLimits } from './sessions/idle-limit.js'
-import { killSession, backfillAnchorChannelIds, doSpawnSession } from './daemon/session-lifecycle.js'
-import { runHomeStatusAction } from './daemon/home-actions.js'
-import { parseTemplateTopic, buildTemplateSpawnOpts, runTemplateAction, getTemplate } from './daemon/templates.js'
+import { killSession, backfillAnchorChannelIds, doSpawnSession } from './app/session-lifecycle.js'
+import { runHomeStatusAction } from './app/home-actions.js'
+import { parseTemplateTopic, buildTemplateSpawnOpts, runTemplateAction, getTemplate } from './app/templates.js'
 import { resolveModelAlias } from './shared/constants.js'
 initPhaseBudgets((info, reason) => killSession(info, reason, { ended: 'killed by hydra' }))
 initIdleLimits((info, reason, opts) => killSession(info, reason, { ...opts, ended: 'killed by hydra' }))
@@ -139,8 +138,8 @@ startLoopWatch({ alert: notifyOperator, onResume: (gapMs, at, servedAt) => { res
 import { startVitalsSnapshots } from './sessions/observability.js'
 startVitalsSnapshots((id) => transport.has(id), { alert: notifyOperator })
 
-import { refreshDashboard, refreshDashboardNow } from './daemon/dashboard.js'
-import { debouncedRefreshListDisplay } from './daemon/commands/status.js'
+import { refreshDashboard, refreshDashboardNow } from './app/dashboard.js'
+import { debouncedRefreshListDisplay } from './app/commands/status.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './infra/artifacts.js'
 import type { ProviderId } from './engines/engine-adapter.js'
 registry.onPersist = refreshDashboard
@@ -242,17 +241,17 @@ if ('homeSpawnHandler' in gateway) {
 }
 
 // Importing router wires up gateway.onMessage / onThreadDelete / onMessageDelete
-import { warmContextLink } from './daemon/router.js'
-import { restoreHeld } from './daemon/specialist-thread.js'
+import { warmContextLink } from './app/router.js'
+import { restoreHeld } from './app/specialist-thread.js'
 import { startPrWatcher, backfillTitles, fetchPrTitle, parsePrUrl } from './connectors/github/pr-watch.js'
 import { startConversationTable, stopConversationTable, startSlackListener } from './connectors/slack/runtime.js'
 import { pruneEvents } from './infra/events.js'
 import { startHydraConfig, stopHydraConfig, retryHydraConfigAlert, currentHydraConfig, onHydraConfigLoad, reloadHydraConfig, hydraConfigLoadedOk } from './infra/hydra-config.js'
 import { jobsFromSchedules, schedulesAreSource } from './shared/schedules.js'
 import { readDaemonState } from './shared/jobs.js'
-import { pollActivityOnce } from './daemon/reply-guard.js'
-import { flushAllHeld } from './daemon/typed-delivery.js'
-import { probeAllSessions, mainStuckCause } from './daemon/pane-probe.js'
+import { pollActivityOnce } from './app/reply-guard.js'
+import { flushAllHeld } from './app/typed-delivery.js'
+import { probeAllSessions, mainStuckCause } from './app/pane-probe.js'
 import { safeSend } from './infra/util.js'
 import { tmuxHasSession } from './infra/tmux.js'
 
@@ -482,11 +481,11 @@ void (async () => {
 // Session health — crash detection, orphan detection, context alerts
 // ---------------------------------------------------------------------------
 
-import { startSessionHealthPoll } from './daemon/session-health.js'
+import { startSessionHealthPoll } from './app/session-health.js'
 startSessionHealthPoll()
 
 // Reply guard: poll session activity every 20s (see pollActivityOnce). The same tick releases
-// typed-delivery messages held for an idle session (daemon/typed-delivery.ts): no timer of its own.
+// typed-delivery messages held for an idle session (app/typed-delivery.ts): no timer of its own.
 setInterval(() => timed('reply-guard', () => {
   pollActivityOnce(Math.floor(Date.now() / 1000))
   void flushAllHeld()

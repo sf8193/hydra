@@ -7,7 +7,7 @@ import { planMigrate, applyMigrate } from '../migrate.js'
 import { loadHydraConfig } from '../load.js'
 import { route } from '../../routing/route.js'
 import { mustParsePlace, type HydraConfig } from '../types.js'
-import { SLACK_APP_DEFAULTS } from '../../connectors/slack/app.js'
+import { SLACK_APP_DEFAULTS } from '../types.js'
 import { testLoadEnv, answeredKeys, ruleKeys } from './load-env.js'
 
 /** What `hydra migrate` would write: the step's tables, plus an operator and the workdirs specialists.json supplies. */

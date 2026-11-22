@@ -3,7 +3,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test'
 import { gateway } from '../../infra/config.js'
 import { registry } from '../../sessions/registry.js'
-import { backfillAnchorChannelIds } from '../session-lifecycle.js'
+import { backfillAnchorChannelIds } from '../../app/session-lifecycle.js'
 import { refreshSessionVisual } from '../../sessions/anchor-state.js'
 import { safeSend } from '../../infra/util.js'
 import { routeThreadId, reportUnaddressableThreads } from '../../sessions/thread-route.js'

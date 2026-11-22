@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import { archiveUrl, parseArchiveUrl } from '../conversation.js'
+import { archiveUrl, parseArchiveUrl } from '../../../shared/slack-conversation.js'
 import { slackConversationLink, slackRuntimeDeps } from '../runtime.js'
 
 const WS = 'https://acme.slack.com'

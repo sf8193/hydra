@@ -1,10 +1,10 @@
 import { parseDuration } from '../infra/util.js'
-import { createStateMachine, type TransitionTable } from './state-machine.js'
-import type { PhaseBehaviorFn, RunState } from './protocol-types.js'
-import { mechanicsBlock } from './prompts/mechanics.js'
+import { createStateMachine, type TransitionTable } from '../shared/state-machine.js'
+import type { PhaseBehaviorFn, RunState } from '../shared/protocol-types.js'
+import { mechanicsBlock } from '../shared/prompts/mechanics.js'
 import { CAPABILITY_TOOLS, type Capability } from '../shared/constants.js'
 
-export type { PhaseBehaviorFn, RunState, BehaviorContext } from './protocol-types.js'
+export type { PhaseBehaviorFn, RunState, BehaviorContext } from '../shared/protocol-types.js'
 export { mechanicsBlock }
 
 // ---------------------------------------------------------------------------

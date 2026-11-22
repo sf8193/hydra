@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach, jest } from 'bun:test'
-import { engines } from '../../engines/instances.js'
-import { protocol } from '../protocol-dsl.js'
-import { onRunReply, onRunAdvance, onRunDisconnect, onRunReconnect, onRunExtend, startProtocolRun, __test } from '../protocol-runner.js'
+import { engines } from '../../sessions/engine-instances.js'
+import { protocol } from '../../protocols/dsl.js'
+import { onRunReply, onRunAdvance, onRunDisconnect, onRunReconnect, onRunExtend, startProtocolRun, __test } from '../../app/protocol-runner.js'
 import { transport } from '../../sessions/bridge-transport.js'
 import { registry } from '../../sessions/registry.js'
 import { fakeAdapter as harnessFakeAdapter, TestHarness } from './test-harness.js'
@@ -475,8 +475,8 @@ describe('spike protocol structure', () => {
 // Completion event construction — integration tests
 // ---------------------------------------------------------------------------
 
-import { protocolEvents, cancelRun } from '../protocol-runner.js'
-import type { CompletionEvent } from '../protocol-types.js'
+import { protocolEvents, cancelRun } from '../../app/protocol-runner.js'
+import type { CompletionEvent } from '../../shared/protocol-types.js'
 
 describe('completion event — cancelRun', () => {
   test('cancel during round 1 reports 0 completed rounds', async () => {
@@ -595,7 +595,7 @@ describe('protocol runner — health monitor', () => {
   })
 
   test('health monitor clears on run cancellation', async () => {
-    const { cancelRun } = await import('../protocol-runner.js')
+    const { cancelRun } = await import('../../app/protocol-runner.js')
     const run = createTestRun()
     await onRunAdvance('test-critic', 'Finding #1', 'approve')
     expect(run._healthMonitor).toBeDefined()

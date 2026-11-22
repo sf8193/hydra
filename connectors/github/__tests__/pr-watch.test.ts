@@ -1,7 +1,7 @@
 import { describe, test, expect, afterEach, beforeEach } from 'bun:test'
 import { gateway } from '../../../infra/config.js'
 import { parsePrUrl, maxId, WATCH_ERRORS, watchPr, unwatchPr, listWatches, parsePersistedWatches, applyCheckResult, formatWatchEntry, selectNewReviews, _setWatchForTesting, type WatchEntry, type CheckResult } from '../pr-watch.js'
-import { parseWatchCommand } from '../../../daemon/commands/watch.js'
+import { parseWatchCommand } from '../../../app/commands/watch.js'
 import { UNIVERSAL_TOOLS } from '../../../shared/tool-definitions.js'
 import { registry } from '../../../sessions/registry.js'
 import { transport } from '../../../sessions/bridge-transport.js'

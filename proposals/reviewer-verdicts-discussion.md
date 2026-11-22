@@ -6,8 +6,8 @@ Proposed three critic verdicts. `approve` closes early; `request_changes` sends 
 
 ## Independent peer — 1
 
-1. `decision.finalEvent` overrides the chosen verdict at the round cap (`daemon/protocol-runner.ts:1083-1088`). Do not use it for review, or add per-option final routing.
-2. A terminal `unresolved` phase reached by `advance()` produces `outcome: complete` (`daemon/protocol-runner.ts:1023-1025`). Factory currently treats every complete review as acceptable (`daemon/factory.ts:1583-1605`). Carry a separate result and gate acceptance.
+1. `decision.finalEvent` overrides the chosen verdict at the round cap (`app/protocol-runner.ts:1083-1088`). Do not use it for review, or add per-option final routing.
+2. A terminal `unresolved` phase reached by `advance()` produces `outcome: complete` (`app/protocol-runner.ts:1023-1025`). Factory currently treats every complete review as acceptable (`daemon/factory.ts:1583-1605`). Carry a separate result and gate acceptance.
 3. `cleanup` timeout completes without an owner post (`protocols/review.ts:23`). Conditional approval needs a dedicated owner phase whose timeout cancels.
 4. The owner needs `applied` and `unable` outcomes when handling conditional changes. The last critic verdict alone cannot distinguish these results.
 5. `CompletionEvent` should expose the terminal phase. A shared classifier should use `via`, terminal phase, and critic verdict, and both standalone review and factory must show the result.

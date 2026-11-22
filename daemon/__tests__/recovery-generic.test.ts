@@ -4,8 +4,8 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { gateway } from '../../infra/config.js'
 import { registry, threadRegistry, type SessionInfo } from '../../sessions/registry.js'
-import { engines } from '../../engines/instances.js'
-import { handleRecoverIntercept, autoRecoverAfterBoot, _setRecoveryDeps, _resetRecoveryDeps } from '../recovery.js'
+import { engines } from '../../sessions/engine-instances.js'
+import { handleRecoverIntercept, autoRecoverAfterBoot, _setRecoveryDeps, _resetRecoveryDeps } from '../../app/recovery.js'
 import { _setTmuxForTesting, TMUX_HOLD_MS } from '../../infra/tmux.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 

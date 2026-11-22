@@ -6,8 +6,8 @@ import { join } from 'path'
 delete process.env.BYTE_SESSION_NAME
 const { gateway, STATE_DIR } = await import('../../infra/config.js')
 const { writeMainRecord } = await import('../../shared/main-record.js')
-const { handleUsageIntercept } = await import('../commands/status.js')
-const { handlePeekIntercept } = await import('../commands/thread.js')
+const { handleUsageIntercept } = await import('../../app/commands/status.js')
+const { handlePeekIntercept } = await import('../../app/commands/thread.js')
 const { mainAlive, mainContext, mainLaunchModel } = await import('../../sessions/main.js')
 const { withFakeTmux } = await import('./fake-tmux.js')
 const { projectDirName, projectsRoot } = await import('../../infra/usage.js')

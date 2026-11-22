@@ -65,7 +65,7 @@ daemon entrypoint compiles.
 
 ### Step 2 — router ingress serialization
 
-Files: `daemon/router.ts` and focused router/transport tests. Route both ordinary
+Files: `app/router.ts` and focused router/transport tests. Route both ordinary
 message paths through per-session ingress reservation and next-turn delivery;
 capture `!` interrupt promise before its serialized enrichment task.
 

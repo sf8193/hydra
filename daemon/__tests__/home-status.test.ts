@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { homeStatus, homeStatusAccessory, parseHomeStatusClick, markUserMessaged, markYourTurn, type HomeStatus, type HomeStatusInputs } from '../../infra/home-status.js'
-import { __test as dashboardTest } from '../dashboard.js'
+import { __test as dashboardTest } from '../../app/dashboard.js'
 import { HOME_STATUS_ACTION_PREFIX } from '../../shared/constants.js'
 
 const idle: HomeStatusInputs = { connected: true, live: 'idle', working: false, stuck: null }

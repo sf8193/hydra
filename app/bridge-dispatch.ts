@@ -17,14 +17,14 @@ import { tmuxHasSession } from '../infra/tmux.js'
 import { occupancy, occupied } from '../sessions/session-reachability.js'
 import { endedSessions, endedWithinDays } from '../sessions/ended-sessions.js'
 import { formatContextPercent, type DeliveryResult } from '../engines/engine-adapter.js'
-import { resolveEngine } from '../engines/instances.js'
+import { resolveEngine } from '../sessions/engine-instances.js'
 import { dispatchAdvance, finishPrivateProtocolChildLaunch, isProtocolParticipant, markPrivateProtocolChildLaunching, protocolChildRequiresPrivate, protocolSpawnRequiresPrivate, registerProtocolChild, registerProtocolChildResult } from '../sessions/protocol-registry.js'
 import { watchPr, unwatchPr, listWatches, getWatchesBySession, formatWatchEntry, detectPrUrl, WATCH_ERRORS } from '../connectors/github/pr-watch.js'
 import { fileArgTools, snapshotConfinedFiles } from './write-confinement.js'
 import { attachmentTarget } from './attachment-target.js'
 import { fileRefusal } from '../config/write-confinement.js'
 import { bindConversation, unbindConversation, formatConversationsFor, replyInConversation, editInConversation, deleteInConversation, fetchInConversation, ownConversationRefusal, type OwnUse } from '../connectors/slack/runtime.js'
-import { parseArchiveUrl } from '../connectors/slack/conversation.js'
+import { parseArchiveUrl } from '../shared/slack-conversation.js'
 import { refreshSessionVisual, emojiOf, emojiOfName } from '../sessions/anchor-state.js'
 import { refreshDashboard } from './dashboard.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from '../infra/artifacts.js'
@@ -437,7 +437,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       }
 
       case 'download_attachment': {
-        // The one answer for where this session's files go (daemon/attachment-target.ts); a confined session with no record gets a refusal.
+        // The one answer for where this session's files go (app/attachment-target.ts); a confined session with no record gets a refusal.
         const { dir, limits } = attachmentTarget(callerSessionId)
         const results = await gateway.downloadAttachments(
           args.chat_id as string,

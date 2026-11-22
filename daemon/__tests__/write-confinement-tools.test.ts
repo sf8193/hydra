@@ -2,14 +2,14 @@
 // tools a restricted session keeps (BASE_TOOLS.restricted, never a second list), minus send_to_thread, and uses them only in its own conversation:
 // no tool that starts, reaches, lists, reads or ends another session, and none that reads another conversation.
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
-import { executeTool } from '../bridge-dispatch.js'
+import { executeTool } from '../../app/bridge-dispatch.js'
 import { gateway } from '../../infra/config.js'
 import { registry } from '../../sessions/registry.js'
 import { getToolsForSession, isToolAllowed } from '../../sessions/tool-surface.js'
 import { UNIVERSAL_TOOLS } from '../../shared/tool-definitions.js'
 import { BASE_TOOLS } from '../../shared/constants.js'
-import { confinementIdFor } from '../restricted.js'
-import { confinementSettings } from '../write-confinement.js'
+import { confinementIdFor } from '../../app/restricted.js'
+import { confinementSettings } from '../../app/write-confinement.js'
 
 process.stderr.write = (() => true) as any
 

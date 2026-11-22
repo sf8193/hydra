@@ -27,55 +27,52 @@ graph TD
   subgraph tools["Tools"]
     engines_bridge-tools["bridge-tools.ts"]
     sessions_tool-surface["tool-surface.ts"]
-    daemon_bridge-dispatch["bridge-dispatch.ts"]
+    app_bridge-dispatch["bridge-dispatch.ts"]
   end
 
   subgraph server["Server"]
-    daemon_bridge-server["bridge-server.ts"]
+    app_bridge-server["bridge-server.ts"]
     sessions_protocol-registry["protocol-registry.ts"]
-    daemon_main-guard["main-guard.ts"]
-    daemon_permission["permission.ts"]
-    daemon_cli-handler["cli-handler.ts"]
+    app_main-guard["main-guard.ts"]
+    app_permission["permission.ts"]
+    app_cli-handler["cli-handler.ts"]
   end
 
   subgraph lifecycle["Lifecycle"]
-    daemon_session-lifecycle["session-lifecycle.ts"]
-    daemon_recovery["recovery.ts"]
+    app_session-lifecycle["session-lifecycle.ts"]
+    app_recovery["recovery.ts"]
     sessions_anchor-state["anchor-state.ts"]
   end
 
   subgraph domain["Domain"]
-    daemon_router["router.ts"]
+    app_router["router.ts"]
     sessions_access["access.ts"]
-    daemon_templates["templates.ts"]
+    app_templates["templates.ts"]
     connectors_github_pr-watch["pr-watch.ts"]
     connectors_clock_jobs-clock["jobs-clock.ts"]
-    daemon_dashboard["dashboard.ts"]
+    app_dashboard["dashboard.ts"]
     infra_idempotency["idempotency.ts"]
-    daemon_state-machine["state-machine.ts"]
+    shared_state-machine["state-machine.ts"]
     infra_transcript-dump["transcript-dump.ts"]
-    daemon_advance-nudge["advance-nudge.ts"]
-    daemon_reply-guard["reply-guard.ts"]
+    app_advance-nudge["advance-nudge.ts"]
+    app_reply-guard["reply-guard.ts"]
     sessions_phase-budget["phase-budget.ts"]
     sessions_idle-limit["idle-limit.ts"]
-    daemon_session-health["session-health.ts"]
-    daemon_auto-handoff["auto-handoff.ts"]
-    daemon_usage-alerts["usage-alerts.ts"]
+    app_session-health["session-health.ts"]
+    app_auto-handoff["auto-handoff.ts"]
+    app_usage-alerts["usage-alerts.ts"]
   end
 
   subgraph protocols["Protocols"]
-    daemon_build["build.ts"]
-    daemon_design["design.ts"]
+    protocols_build["build.ts"]
   end
 
   subgraph commands["Commands"]
-    daemon_commands_global["global.ts"]
-    daemon_commands_status["status.ts"]
-    daemon_commands_thread["thread.ts"]
-    daemon_commands_review["review.ts"]
-    daemon_commands_build["build.ts"]
-    daemon_commands_design["design.ts"]
-    daemon_commands_watch["watch.ts"]
+    app_commands_global["global.ts"]
+    app_commands_status["status.ts"]
+    app_commands_thread["thread.ts"]
+    app_commands_review["review.ts"]
+    app_commands_watch["watch.ts"]
   end
 
   daemon --> infra_config
@@ -83,24 +80,24 @@ graph TD
   daemon --> sessions_anchor-state
   daemon --> sessions_bridge-transport
   daemon --> sessions_access
-  daemon --> daemon_permission
-  daemon --> daemon_bridge-server
-  daemon --> daemon_commands_global
-  daemon --> daemon_recovery
+  daemon --> app_permission
+  daemon --> app_bridge-server
+  daemon --> app_commands_global
+  daemon --> app_recovery
   daemon --> connectors_clock_jobs-clock
   daemon --> sessions_phase-budget
   daemon --> sessions_idle-limit
-  daemon --> daemon_session-lifecycle
-  daemon --> daemon_templates
+  daemon --> app_session-lifecycle
+  daemon --> app_templates
   daemon --> shared_constants
-  daemon --> daemon_dashboard
-  daemon --> daemon_commands_status
-  daemon --> daemon_router
+  daemon --> app_dashboard
+  daemon --> app_commands_status
+  daemon --> app_router
   daemon --> connectors_github_pr-watch
-  daemon --> daemon_reply-guard
+  daemon --> app_reply-guard
   daemon --> infra_util
   daemon --> infra_tmux
-  daemon --> daemon_session-health
+  daemon --> app_session-health
   bridge --> shared_constants
   cli_hydra --> shared_constants
   shared_constants --> shared_tool-definitions
@@ -120,128 +117,128 @@ graph TD
   sessions_tool-surface --> sessions_bridge-transport
   sessions_tool-surface --> engines_bridge-tools
   sessions_tool-surface --> shared_constants
-  daemon_bridge-dispatch --> infra_config
-  daemon_bridge-dispatch --> sessions_registry
-  daemon_bridge-dispatch --> sessions_bridge-transport
-  daemon_bridge-dispatch --> sessions_access
-  daemon_bridge-dispatch --> daemon_session-lifecycle
-  daemon_bridge-dispatch --> infra_util
-  daemon_bridge-dispatch --> infra_tmux
-  daemon_bridge-dispatch --> sessions_protocol-registry
-  daemon_bridge-dispatch --> connectors_github_pr-watch
-  daemon_bridge-dispatch --> sessions_anchor-state
-  daemon_bridge-dispatch --> daemon_dashboard
-  daemon_bridge-dispatch --> shared_tool-definitions
-  daemon_bridge-dispatch --> shared_constants
-  daemon_bridge-dispatch --> sessions_tool-surface
-  daemon_bridge-dispatch --> daemon_usage-alerts
-  daemon_bridge-server --> infra_config
-  daemon_bridge-server --> sessions_registry
-  daemon_bridge-server --> sessions_bridge-transport
-  daemon_bridge-server --> daemon_bridge-dispatch
-  daemon_bridge-server --> shared_constants
-  daemon_bridge-server --> daemon_permission
-  daemon_bridge-server --> daemon_session-lifecycle
-  daemon_bridge-server --> sessions_access
-  daemon_bridge-server --> sessions_protocol-registry
-  daemon_bridge-server --> sessions_tool-surface
-  daemon_bridge-server --> daemon_advance-nudge
-  daemon_bridge-server --> daemon_reply-guard
-  daemon_bridge-server --> sessions_anchor-state
-  daemon_bridge-server --> daemon_cli-handler
-  daemon_bridge-server --> connectors_github_pr-watch
-  daemon_bridge-server --> daemon_main-guard
-  daemon_bridge-server --> infra_util
-  daemon_bridge-server --> infra_tmux
-  daemon_bridge-server --> sessions_idle-limit
+  app_bridge-dispatch --> infra_config
+  app_bridge-dispatch --> sessions_registry
+  app_bridge-dispatch --> sessions_bridge-transport
+  app_bridge-dispatch --> sessions_access
+  app_bridge-dispatch --> app_session-lifecycle
+  app_bridge-dispatch --> infra_util
+  app_bridge-dispatch --> infra_tmux
+  app_bridge-dispatch --> sessions_protocol-registry
+  app_bridge-dispatch --> connectors_github_pr-watch
+  app_bridge-dispatch --> sessions_anchor-state
+  app_bridge-dispatch --> app_dashboard
+  app_bridge-dispatch --> shared_tool-definitions
+  app_bridge-dispatch --> shared_constants
+  app_bridge-dispatch --> sessions_tool-surface
+  app_bridge-dispatch --> app_usage-alerts
+  app_bridge-server --> infra_config
+  app_bridge-server --> sessions_registry
+  app_bridge-server --> sessions_bridge-transport
+  app_bridge-server --> app_bridge-dispatch
+  app_bridge-server --> shared_constants
+  app_bridge-server --> app_permission
+  app_bridge-server --> app_session-lifecycle
+  app_bridge-server --> sessions_access
+  app_bridge-server --> sessions_protocol-registry
+  app_bridge-server --> sessions_tool-surface
+  app_bridge-server --> app_advance-nudge
+  app_bridge-server --> app_reply-guard
+  app_bridge-server --> sessions_anchor-state
+  app_bridge-server --> app_cli-handler
+  app_bridge-server --> connectors_github_pr-watch
+  app_bridge-server --> app_main-guard
+  app_bridge-server --> infra_util
+  app_bridge-server --> infra_tmux
+  app_bridge-server --> sessions_idle-limit
   sessions_protocol-registry --> sessions_registry
-  daemon_permission --> sessions_bridge-transport
-  daemon_permission --> sessions_access
-  daemon_cli-handler --> sessions_registry
-  daemon_cli-handler --> sessions_tool-surface
-  daemon_cli-handler --> sessions_bridge-transport
-  daemon_cli-handler --> daemon_session-lifecycle
-  daemon_cli-handler --> infra_util
-  daemon_cli-handler --> infra_tmux
-  daemon_cli-handler --> shared_constants
-  daemon_cli-handler --> infra_idempotency
-  daemon_cli-handler --> infra_config
-  daemon_cli-handler --> sessions_access
-  daemon_cli-handler --> connectors_clock_jobs-clock
-  daemon_session-lifecycle --> infra_config
-  daemon_session-lifecycle --> infra_util
-  daemon_session-lifecycle --> infra_tmux
-  daemon_session-lifecycle --> sessions_registry
-  daemon_session-lifecycle --> daemon_reply-guard
-  daemon_session-lifecycle --> sessions_bridge-transport
-  daemon_session-lifecycle --> engines_bridge-tools
-  daemon_session-lifecycle --> sessions_tool-surface
-  daemon_session-lifecycle --> sessions_phase-budget
-  daemon_session-lifecycle --> sessions_idle-limit
-  daemon_session-lifecycle --> shared_constants
-  daemon_session-lifecycle --> infra_usage
-  daemon_session-lifecycle --> sessions_anchor-state
-  daemon_session-lifecycle --> connectors_github_pr-watch
-  daemon_session-lifecycle --> sessions_access
-  daemon_session-lifecycle --> infra_worktree-manager
-  daemon_recovery --> infra_config
-  daemon_recovery --> sessions_registry
-  daemon_recovery --> sessions_anchor-state
-  daemon_recovery --> daemon_session-lifecycle
-  daemon_recovery --> infra_util
-  daemon_recovery --> infra_tmux
-  daemon_recovery --> connectors_github_pr-watch
-  daemon_recovery --> infra_worktree-manager
-  daemon_recovery --> sessions_access
-  daemon_recovery --> shared_constants
+  app_permission --> sessions_bridge-transport
+  app_permission --> sessions_access
+  app_cli-handler --> sessions_registry
+  app_cli-handler --> sessions_tool-surface
+  app_cli-handler --> sessions_bridge-transport
+  app_cli-handler --> app_session-lifecycle
+  app_cli-handler --> infra_util
+  app_cli-handler --> infra_tmux
+  app_cli-handler --> shared_constants
+  app_cli-handler --> infra_idempotency
+  app_cli-handler --> infra_config
+  app_cli-handler --> sessions_access
+  app_cli-handler --> connectors_clock_jobs-clock
+  app_session-lifecycle --> infra_config
+  app_session-lifecycle --> infra_util
+  app_session-lifecycle --> infra_tmux
+  app_session-lifecycle --> sessions_registry
+  app_session-lifecycle --> app_reply-guard
+  app_session-lifecycle --> sessions_bridge-transport
+  app_session-lifecycle --> engines_bridge-tools
+  app_session-lifecycle --> sessions_tool-surface
+  app_session-lifecycle --> sessions_phase-budget
+  app_session-lifecycle --> sessions_idle-limit
+  app_session-lifecycle --> shared_constants
+  app_session-lifecycle --> infra_usage
+  app_session-lifecycle --> sessions_anchor-state
+  app_session-lifecycle --> connectors_github_pr-watch
+  app_session-lifecycle --> sessions_access
+  app_session-lifecycle --> infra_worktree-manager
+  app_recovery --> infra_config
+  app_recovery --> sessions_registry
+  app_recovery --> sessions_anchor-state
+  app_recovery --> app_session-lifecycle
+  app_recovery --> infra_util
+  app_recovery --> infra_tmux
+  app_recovery --> connectors_github_pr-watch
+  app_recovery --> infra_worktree-manager
+  app_recovery --> sessions_access
+  app_recovery --> shared_constants
   sessions_anchor-state --> infra_config
   sessions_anchor-state --> sessions_registry
-  daemon_router --> infra_config
-  daemon_router --> daemon_dashboard
-  daemon_router --> sessions_registry
-  daemon_router --> sessions_bridge-transport
-  daemon_router --> sessions_access
-  daemon_router --> daemon_commands_global
-  daemon_router --> daemon_recovery
-  daemon_router --> shared_constants
-  daemon_router --> daemon_commands_thread
-  daemon_router --> daemon_commands_review
-  daemon_router --> sessions_protocol-registry
-  daemon_router --> sessions_anchor-state
-  daemon_router --> daemon_commands_status
-  daemon_router --> daemon_commands_watch
-  daemon_router --> daemon_session-lifecycle
-  daemon_router --> sessions_idle-limit
-  daemon_router --> daemon_permission
-  daemon_router --> daemon_reply-guard
-  daemon_router --> infra_util
-  daemon_router --> daemon_templates
+  app_router --> infra_config
+  app_router --> app_dashboard
+  app_router --> sessions_registry
+  app_router --> sessions_bridge-transport
+  app_router --> sessions_access
+  app_router --> app_commands_global
+  app_router --> app_recovery
+  app_router --> shared_constants
+  app_router --> app_commands_thread
+  app_router --> app_commands_review
+  app_router --> sessions_protocol-registry
+  app_router --> sessions_anchor-state
+  app_router --> app_commands_status
+  app_router --> app_commands_watch
+  app_router --> app_session-lifecycle
+  app_router --> sessions_idle-limit
+  app_router --> app_permission
+  app_router --> app_reply-guard
+  app_router --> infra_util
+  app_router --> app_templates
   sessions_access --> infra_config
   sessions_access --> infra_util
-  daemon_templates --> shared_constants
+  app_templates --> shared_constants
   connectors_github_pr-watch --> infra_config
   connectors_github_pr-watch --> sessions_registry
   connectors_github_pr-watch --> infra_util
   connectors_github_pr-watch --> shared_constants
-  daemon_dashboard --> infra_config
-  daemon_dashboard --> sessions_registry
-  daemon_dashboard --> sessions_anchor-state
-  daemon_dashboard --> sessions_bridge-transport
-  daemon_dashboard --> infra_util
-  daemon_dashboard --> sessions_access
-  daemon_dashboard --> connectors_github_pr-watch
+  app_dashboard --> infra_config
+  app_dashboard --> sessions_registry
+  app_dashboard --> sessions_anchor-state
+  app_dashboard --> sessions_bridge-transport
+  app_dashboard --> infra_util
+  app_dashboard --> sessions_access
+  app_dashboard --> connectors_github_pr-watch
   infra_idempotency --> infra_config
   infra_idempotency --> infra_util
   infra_transcript-dump --> infra_config
   infra_transcript-dump --> infra_util
-  daemon_advance-nudge --> sessions_bridge-transport
-  daemon_advance-nudge --> sessions_registry
-  daemon_advance-nudge --> sessions_protocol-registry
-  daemon_reply-guard --> sessions_bridge-transport
-  daemon_reply-guard --> sessions_registry
-  daemon_reply-guard --> infra_config
-  daemon_reply-guard --> infra_util
-  daemon_reply-guard --> infra_tmux
+  app_advance-nudge --> sessions_bridge-transport
+  app_advance-nudge --> sessions_registry
+  app_advance-nudge --> sessions_protocol-registry
+  app_reply-guard --> sessions_bridge-transport
+  app_reply-guard --> sessions_registry
+  app_reply-guard --> infra_config
+  app_reply-guard --> infra_util
+  app_reply-guard --> infra_tmux
   sessions_phase-budget --> sessions_registry
   sessions_phase-budget --> sessions_bridge-transport
   sessions_phase-budget --> infra_util
@@ -251,52 +248,52 @@ graph TD
   sessions_idle-limit --> infra_config
   sessions_idle-limit --> sessions_protocol-registry
   sessions_idle-limit --> shared_constants
-  daemon_session-health --> sessions_registry
-  daemon_session-health --> infra_config
-  daemon_session-health --> infra_util
-  daemon_session-health --> sessions_anchor-state
-  daemon_session-health --> sessions_access
-  daemon_session-health --> daemon_auto-handoff
-  daemon_auto-handoff --> sessions_registry
-  daemon_auto-handoff --> sessions_tool-surface
-  daemon_auto-handoff --> infra_config
-  daemon_auto-handoff --> sessions_bridge-transport
-  daemon_auto-handoff --> daemon_permission
-  daemon_auto-handoff --> daemon_session-lifecycle
-  daemon_auto-handoff --> infra_util
+  app_session-health --> sessions_registry
+  app_session-health --> infra_config
+  app_session-health --> infra_util
+  app_session-health --> sessions_anchor-state
+  app_session-health --> sessions_access
+  app_session-health --> app_auto-handoff
+  app_auto-handoff --> sessions_registry
+  app_auto-handoff --> sessions_tool-surface
+  app_auto-handoff --> infra_config
+  app_auto-handoff --> sessions_bridge-transport
+  app_auto-handoff --> app_permission
+  app_auto-handoff --> app_session-lifecycle
+  app_auto-handoff --> infra_util
   infra_usage --> shared_constants
-  daemon_usage-alerts --> infra_config
-  daemon_usage-alerts --> infra_util
-  daemon_commands_global --> infra_config
-  daemon_commands_global --> sessions_registry
-  daemon_commands_global --> sessions_anchor-state
-  daemon_commands_global --> sessions_bridge-transport
-  daemon_commands_global --> daemon_session-lifecycle
-  daemon_commands_global --> infra_util
-  daemon_commands_global --> daemon_commands_status
-  daemon_commands_global --> daemon_templates
-  daemon_commands_status --> infra_config
-  daemon_commands_status --> sessions_registry
-  daemon_commands_status --> sessions_anchor-state
-  daemon_commands_status --> sessions_bridge-transport
-  daemon_commands_status --> infra_util
-  daemon_commands_status --> connectors_github_pr-watch
-  daemon_commands_thread --> infra_config
-  daemon_commands_thread --> sessions_registry
-  daemon_commands_thread --> sessions_bridge-transport
-  daemon_commands_thread --> daemon_session-lifecycle
-  daemon_commands_thread --> sessions_anchor-state
-  daemon_commands_thread --> daemon_commands_status
-  daemon_commands_thread --> infra_util
-  daemon_commands_thread --> infra_tmux
-  daemon_commands_thread --> daemon_templates
-  daemon_commands_thread --> daemon_auto-handoff
-  daemon_commands_thread --> daemon_recovery
-  daemon_commands_review --> infra_config
-  daemon_commands_review --> sessions_registry
-  daemon_commands_review --> sessions_protocol-registry
-  daemon_commands_review --> shared_constants
-  daemon_commands_watch --> infra_config
-  daemon_commands_watch --> sessions_registry
-  daemon_commands_watch --> connectors_github_pr-watch
-  daemon_commands_watch --> infra_util
+  app_usage-alerts --> infra_config
+  app_usage-alerts --> infra_util
+  app_commands_global --> infra_config
+  app_commands_global --> sessions_registry
+  app_commands_global --> sessions_anchor-state
+  app_commands_global --> sessions_bridge-transport
+  app_commands_global --> app_session-lifecycle
+  app_commands_global --> infra_util
+  app_commands_global --> app_commands_status
+  app_commands_global --> app_templates
+  app_commands_status --> infra_config
+  app_commands_status --> sessions_registry
+  app_commands_status --> sessions_anchor-state
+  app_commands_status --> sessions_bridge-transport
+  app_commands_status --> infra_util
+  app_commands_status --> connectors_github_pr-watch
+  app_commands_thread --> infra_config
+  app_commands_thread --> sessions_registry
+  app_commands_thread --> sessions_bridge-transport
+  app_commands_thread --> app_session-lifecycle
+  app_commands_thread --> sessions_anchor-state
+  app_commands_thread --> app_commands_status
+  app_commands_thread --> infra_util
+  app_commands_thread --> infra_tmux
+  app_commands_thread --> app_templates
+  app_commands_thread --> app_auto-handoff
+  app_commands_thread --> app_recovery
+  app_commands_review --> infra_config
+  app_commands_review --> sessions_registry
+  app_commands_review --> sessions_protocol-registry
+  app_commands_review --> shared_constants
+  app_commands_watch --> infra_config
+  app_commands_watch --> sessions_registry
+  app_commands_watch --> connectors_github_pr-watch
+  app_commands_watch --> infra_util

@@ -5,9 +5,9 @@ import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { gateway, STATE_DIR } from '../../infra/config.js'
 import { registry, threadRegistry } from '../../sessions/registry.js'
-import { emitSessionDeath, killSession } from '../session-lifecycle.js'
+import { emitSessionDeath, killSession } from '../../app/session-lifecycle.js'
 import { removeSpecialist, setSpecialist } from '../../sessions/specialists.js'
-import { _forgetMemory, _resetHeld, heldCount, holdForSpecialist, restoreHeld, setHeldDelivery, specialistThreadDeps } from '../specialist-thread.js'
+import { _forgetMemory, _resetHeld, heldCount, holdForSpecialist, restoreHeld, setHeldDelivery, specialistThreadDeps } from '../../app/specialist-thread.js'
 import type { SessionInfo } from '../../sessions/registry.js'
 
 process.stderr.write = (() => true) as any

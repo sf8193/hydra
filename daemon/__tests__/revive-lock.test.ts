@@ -1,7 +1,7 @@
 // The target lock (specialists.ts) as the one serializer of "who is home" decisions, and the boot loader
 // writing a death's endedAt alongside its deadAt.
 import { expect, test } from 'bun:test'
-import { handOff, handoffIO } from '../session-lifecycle.js'
+import { handOff, handoffIO } from '../../app/session-lifecycle.js'
 import { registry, ThreadRegistry, type SessionInfo } from '../../sessions/registry.js'
 import { withThreadLock } from '../../sessions/specialists.js'
 

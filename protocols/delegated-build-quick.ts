@@ -1,5 +1,5 @@
-import { protocol, protocolSeed } from '../daemon/protocol-dsl.js'
-import { request } from '../daemon/prompts/request.js'
+import { protocol, protocolSeed } from './dsl.js'
+import { request } from '../shared/prompts/request.js'
 
 // The original delegated-build graph, preserved as the explicitly quick path.
 export default protocol('delegated-build-quick', {

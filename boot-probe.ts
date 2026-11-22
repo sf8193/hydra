@@ -22,13 +22,13 @@ const PROBE_SOCK: string = process.env.HYDRA_PROBE_SOCK
 // imports, missing exports, top-level evaluation errors) surface here — the
 // exact class of failure that compile checks miss.
 try {
-  await import('../infra/config.js')
-  await import('../sessions/registry.js')
-  await import('../sessions/bridge-transport.js')
-  await import('./bridge-dispatch.js')
-  await import('./bridge-server.js')
-  await import('./session-lifecycle.js')
-  await import('./router.js')
+  await import('./infra/config.js')
+  await import('./sessions/registry.js')
+  await import('./sessions/bridge-transport.js')
+  await import('./app/bridge-dispatch.js')
+  await import('./app/bridge-server.js')
+  await import('./app/session-lifecycle.js')
+  await import('./app/router.js')
 } catch (err) {
   process.stderr.write(`boot-probe: FAILED — ${err}\n`)
   process.exit(1)

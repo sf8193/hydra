@@ -1,4 +1,4 @@
-// A hydra.toml reload reaches the tool list a running session holds. `sends_to` is read live (daemon/sends-to.ts judges every send),
+// A hydra.toml reload reaches the tool list a running session holds. `sends_to` is read live (app/sends-to.ts judges every send),
 // so the list must follow it: a restricted session born with no target gains send_to_thread when a reload adds one, and loses it when
 // a reload empties the list. Only a session whose list changed is told; the others hear nothing.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
@@ -7,13 +7,13 @@ import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { STATE_DIR } from '../../infra/config.js'
-import { socketServer } from '../bridge-server.js'
+import { socketServer } from '../../app/bridge-server.js'
 import { registry } from '../../sessions/registry.js'
 import { _setHydraConfigForTesting } from '../../infra/hydra-config.js'
 import { setSpecialistThread, _reloadSpecialists } from '../../sessions/specialists.js'
 import { loadHydraConfig } from '../../config/load.js'
 import { testLoadEnv } from '../../config/__tests__/load-env.js'
-import { engines } from '../../engines/instances.js'
+import { engines } from '../../sessions/engine-instances.js'
 import type { HydraConfig } from '../../config/types.js'
 import type { SessionInfo } from '../../sessions/registry.js'
 

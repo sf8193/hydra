@@ -10,7 +10,7 @@ import {
   occupancy,
   occupied,
 } from '../../sessions/session-reachability.js'
-import { engines } from '../../engines/instances.js'
+import { engines } from '../../sessions/engine-instances.js'
 import { markDead, registry, threadRegistry, type SessionInfo } from '../../sessions/registry.js'
 import { transport } from '../../sessions/bridge-transport.js'
 import { withFakeTmux } from './fake-tmux.js'

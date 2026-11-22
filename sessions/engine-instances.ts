@@ -1,10 +1,10 @@
-import { codexEngine } from './codex-runtime.js'
-import { transport } from '../sessions/bridge-transport.js'
-import { ClaudeEngine } from './claude-engine.js'
-import { CodexEngineAdapter } from './codex-engine-adapter.js'
-import { OmpEngine } from './omp-engine.js'
-import { AgyEngine } from './agy-engine.js'
-import type { EngineAdapter, ProviderId } from './engine-adapter.js'
+import { codexEngine } from '../engines/codex-runtime.js'
+import { transport } from './bridge-transport.js'
+import { ClaudeEngine } from '../engines/claude-engine.js'
+import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
+import { OmpEngine } from '../engines/omp-engine.js'
+import { AgyEngine } from '../engines/agy-engine.js'
+import type { EngineAdapter, ProviderId } from '../engines/engine-adapter.js'
 
 export { codexEngine }
 
