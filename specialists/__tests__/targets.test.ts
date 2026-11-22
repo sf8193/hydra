@@ -17,6 +17,9 @@ import { hydra } from '../../connectors/slack/__tests__/slack-config.js'
 import { deliverForSlack } from '../../connectors/slack/runtime.js'
 import { fakeAdapter } from '../../daemon/__tests__/test-harness.js'
 import { _setDaemonStartedAtForTesting } from '../../sessions/session-reachability.js'
+import { bindRecovery } from '../recovery-port.js'
+import { recoveryPort } from '../../app/recovery.js'
+bindRecovery(recoveryPort)
 
 process.stderr.write = (() => true) as any
 

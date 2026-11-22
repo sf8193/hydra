@@ -8,21 +8,23 @@ import { registry, threadRegistry, type SessionInfo, type ThreadMetadata } from 
 import { transport } from '../../sessions/bridge-transport.js'
 import { STATE_DIR } from '../../infra/config.js'
 import { handoffIO } from '../../app/session-lifecycle.js'
-import { _setRecoveryDeps, _resetRecoveryDeps } from '../../app/recovery.js'
+import { _setRecoveryDeps, _resetRecoveryDeps, recoveryPort, reviveDeps } from '../../app/recovery.js'
+import { bindRecovery } from '../recovery-port.js'
 import { _resetBackoff } from '../../infra/recovery-backoff.js'
 import { _setHydraConfigForTesting } from '../../infra/hydra-config.js'
 import { fakeAdapter } from '../../daemon/__tests__/test-harness.js'
 import { _resetHeld, holdForSpecialist, setHeldDelivery } from '../../app/specialist-thread.js'
-import { ensureSpecialist, killAndRespawn, NotReplaced, specialistDeps } from '../specialist-deliver.js'
+import { ensureSpecialist, killAndRespawn, NotReplaced } from '../specialist-deliver.js'
 import { setSpecialistThread } from '../../sessions/specialists.js'
 import type { HydraConfig, Specialist } from '../../config/types.js'
+bindRecovery(recoveryPort)
 
 process.stderr.write = (() => true) as any
 
 let n = 0
 const sessions: string[] = []
 const threads: string[] = []
-const realDeps = { ...specialistDeps }
+const realDeps = { ...reviveDeps }
 const realIO = { ...handoffIO }
 
 /** What each tier was asked to do: a resume or a fork here would bring the old conversation back. */
@@ -65,7 +67,7 @@ async function spawn(topic: string, _chat: unknown, _msg: unknown, opts: Record<
 beforeEach(() => {
   resumes = []; spawns = []; kills = []; failSpawn = false; duringKill = undefined; atKill = undefined
   _resetHeld()
-  specialistDeps.threadExists = async () => true
+  reviveDeps.threadExists = async () => true
   _setRecoveryDeps({
     tryResume: (async (dead: unknown) => { resumes.push(dead); return null }) as any,
     // The fork tier and the respawn tier both land here; a fork names forkFrom.
@@ -85,7 +87,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  Object.assign(specialistDeps, realDeps)
+  Object.assign(reviveDeps, realDeps)
   Object.assign(handoffIO, realIO)
   _resetRecoveryDeps()
   _resetBackoff()

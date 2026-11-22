@@ -5,7 +5,7 @@ import { join } from 'path'
 import { handleCLIRequest, type CLIRequest } from '../../app/cli-handler.js'
 import { registry, threadRegistry } from '../../sessions/registry.js'
 import { transport } from '../../sessions/bridge-transport.js'
-import { specialistDeps } from '../specialist-deliver.js'
+import { bindRecovery } from '../recovery-port.js'
 import { conversationSessionName, deliverToTarget, toSession, toThread } from '../targets.js'
 import { executeTool } from '../../app/bridge-dispatch.js'
 import { _resetDelivery, _setDeliveryDeps, deliverUserMessage } from '../../app/typed-delivery.js'
@@ -15,12 +15,13 @@ import { bornPolicy, deliveryRefusal } from '../../app/restricted.js'
 import { type LaunchPolicy } from '../../shared/launch-policy.js'
 import { gateway } from '../../infra/config.js'
 import { _resetBackoff, _reloadBackoff, backoffClock, getBackoff, BACKOFF_BASE_MS as SPAWN_BACKOFF_BASE_MS, BACKOFF_STALE_MS } from '../../infra/recovery-backoff.js'
-import { _setRecoveryDeps, _resetRecoveryDeps } from '../../app/recovery.js'
+import { _setRecoveryDeps, _resetRecoveryDeps, recoveryPort, reviveDeps } from '../../app/recovery.js'
 import { handleResumeIntercept } from '../../app/commands/thread.js'
 import { fakeAdapter } from '../../daemon/__tests__/test-harness.js'
 import { getIdempotencyEntry } from '../../infra/idempotency.js'
 import { _setDaemonStartedAtForTesting } from '../../sessions/session-reachability.js'
 import { _setHydraConfigForTesting, currentHydraConfig } from '../../infra/hydra-config.js'
+bindRecovery(recoveryPort)
 
 process.stderr.write = (() => true) as any
 
@@ -35,13 +36,13 @@ describe('specialists', () => {
     expect(getSpecialist('comet')).toBeUndefined()
   })
 
-  const realDeps = { ...specialistDeps }
+  const realDeps = { ...reviveDeps }
   const realClock = { ...backoffClock }
   const names: string[] = []
   const sessions: string[] = []
   const threads: string[] = []
   afterEach(() => {
-    Object.assign(specialistDeps, realDeps)
+    Object.assign(reviveDeps, realDeps)
     Object.assign(backoffClock, realClock)
     _setDaemonStartedAtForTesting(undefined)
     _resetBackoff()
@@ -371,7 +372,7 @@ describe('specialists', () => {
 
   test('when the platform says the thread is gone the specialist moves to the fresh thread the spawn opened', async () => {
     fakeSpawn()
-    specialistDeps.threadExists = async () => false
+    reviveDeps.threadExists = async () => false
     const name = specialist('thread-deleted', { channel: 'chan-1' })
     const res = await deliver(name)
     expect(res.ok).toBe(true)
@@ -382,7 +383,7 @@ describe('specialists', () => {
 
   test('a gone thread with no channel, no kickoff, and unknown specialist each fail clearly and spawn nothing', async () => {
     const calls = fakeSpawn()
-    specialistDeps.threadExists = async () => false
+    reviveDeps.threadExists = async () => false
     expect(await deliver(specialist('thread-gone'))).toMatchObject({ ok: false, error: expect.stringContaining('no channel') })
     expect(await deliver(specialist('thread-gone-2', { kickoff: undefined, channel: 'c' }))).toMatchObject({ ok: false, error: expect.stringContaining('no kickoff: set one with `hydra specialist set') })
     expect(await deliver('no-such-specialist')).toMatchObject({ ok: false, exitCode: 8, error: 'no such specialist: no-such-specialist' })
@@ -413,7 +414,7 @@ describe('specialists', () => {
     expect(getIdempotencyEntry(key)?.status).toBe('completed')
     expect(await deliver(name, { idempotencyKey: key })).toMatchObject({ ok: false, exitCode: 2 })
 
-    specialistDeps.threadExists = async () => false
+    reviveDeps.threadExists = async () => false
     const failing = specialist('thread-fails')
     const k2 = `specialist-idem-${++n}`
     expect((await deliver(failing, { idempotencyKey: k2 })).ok).toBe(false)
@@ -725,7 +726,7 @@ describe('specialists', () => {
 
   test('a thread Discord no longer has moves the specialist to its channel; without a channel it fails', async () => {
     const calls = fakeSpawn()
-    specialistDeps.threadExists = async () => false
+    reviveDeps.threadExists = async () => false
     threads.push('thread-del', 'thread-del2')
     threadRegistry.set('thread-del', { threadId: 'thread-del', sessionHistory: [] } as any)
     threadRegistry.set('thread-del2', { threadId: 'thread-del2', sessionHistory: [] } as any)
@@ -915,7 +916,7 @@ describe('specialists', () => {
 
   test('M2: a specialist moved to a new thread keeps its dead session\'s worktree', async () => {
     const calls = fakeSpawn()
-    specialistDeps.threadExists = async () => false
+    reviveDeps.threadExists = async () => false
     const wt = mkdtempSync(join(tmpdir(), 'specialist-wt-'))
     try {
       const name = specialist('thread-m2', { channel: 'c' })
@@ -929,7 +930,7 @@ describe('specialists', () => {
   test('L3: while a specialist backs off, a delivery never asks the platform about its thread', async () => {
     setSpawn(async () => { throw new Error('boom') })
     let asked = 0
-    specialistDeps.threadExists = async () => { asked++; return true }
+    reviveDeps.threadExists = async () => { asked++; return true }
     const name = specialist('thread-l3a', { channel: 'c' })
     await deliver(name)
     asked = 0

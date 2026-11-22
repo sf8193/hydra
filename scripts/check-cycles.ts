@@ -11,7 +11,6 @@ import { edges } from './check-layers.js'
 
 export const ALLOWED: readonly string[] = [
   'sessions/bridge-transport.ts sessions/delivery-notice.ts sessions/registry.ts sessions/session-reachability.ts',
-  'specialists/specialist-deliver.ts specialists/targets.ts',
 ]
 
 /** Each cycle group as its sorted files joined by a space (Tarjan's strongly connected components of size 2 or more). */

@@ -1,7 +1,7 @@
 import { registry, repointChildren, threadRegistry } from '../sessions/registry.js'
 import type { SessionInfo } from '../sessions/registry.js'
 import { transport } from '../sessions/bridge-transport.js'
-import { backoffRefusal, reviveDeps, reviveThread, threadStub } from '../app/recovery.js'
+import { recovery } from './recovery-port.js'
 import { backoffClock, getBackoff } from '../infra/recovery-backoff.js'
 import { occupancy, occupied } from '../sessions/session-reachability.js'
 import { pushToolSurface } from '../sessions/tool-surface.js'
@@ -9,18 +9,14 @@ import { resumeIdleLimit } from '../sessions/idle-limit.js'
 import { parseIdleTtl } from '../shared/constants.js'
 import { conversationSpecialistOf, getSpecialist, setSpecialistThread, readKickoff, declaredInToml, specialistOf, declaredEngineOf, withTargetLock, type Specialist } from '../sessions/specialists.js'
 import { safeSend } from '../infra/util.js'
-import { endForFreshStart } from '../app/session-lifecycle.js'
 import { currentHydraConfig } from '../infra/hydra-config.js'
 import { declaredSpecialist } from '../config/types.js'
-import { conversationRecipe } from './targets.js'
+import { gateway } from '../infra/config.js'
 
 /** A refusal that carries the CLI exit code a caller should see. Nothing was started. */
 export class SpecialistError extends Error {
   constructor(message: string, readonly exit?: number) { super(message) }
 }
-
-/** Test seam: the thread check (recovery.ts's). The spawn is `_setRecoveryDeps`, the clock recovery-backoff.ts's. */
-export const specialistDeps = reviveDeps
 
 function liveOccupant(threadId: string | undefined): SessionInfo | undefined {
   const id = threadId ? registry.getByThread(threadId) : undefined
@@ -60,17 +56,17 @@ async function fill(name: string, specialist: Specialist, initiator: string | un
   const holder = [...registry.values()].find(i => i.tmuxName === name && i.threadId !== specialist.threadId && occupied(occupancy(i)))
   if (holder) throw new SpecialistError(`specialist "${name}": a session named ${name} is running in thread ${holder.threadId}, not the specialist's thread${specialist.threadId ? ` (${specialist.threadId})` : ''}; kill it, or point the specialist at it with 'hydra specialist set ${name} --thread ${holder.threadId}'`, 3)
   if (!opts.ignoreBackoff) {
-    const refusal = backoffRefusal(key)
+    const refusal = recovery().backoffRefusal(key)
     if (refusal) throw new SpecialistError(`specialist "${name}": ${refusal.reason}`, 6)
   }
-  const onPlatform = !!specialist.threadId && await specialistDeps.threadExists(specialist.threadId)
+  const onPlatform = !!specialist.threadId && await recovery().threadExists(specialist.threadId)
   if (!onPlatform && !specialist.channel) {
     throw new SpecialistError(specialist.threadId
       ? `specialist "${name}": thread ${specialist.threadId} is gone and the specialist has no channel to open a new one in`
       : `specialist "${name}" has no thread and no channel to open one in`, 3)
   }
-  const thread = (specialist.threadId && threadRegistry.get(specialist.threadId)) || threadStub(specialist.threadId ?? '', name)
-  const outcome = await reviveThread({
+  const thread = (specialist.threadId && threadRegistry.get(specialist.threadId)) || recovery().threadStub(specialist.threadId ?? '', name)
+  const outcome = await recovery().reviveThread({
     thread,
     ...(!onPlatform && { newThreadIn: specialist.channel }),
     respawnTopic: () => {
@@ -133,7 +129,7 @@ export async function killAndRespawn(info: SessionInfo): Promise<SessionInfo> {
     if (registry.get(info.sessionId) !== info) throw new NotReplaced(`${info.tmuxName} is already being replaced (or gone)`, 5)
     const specialist = recipe ? { ...recipe, threadId: info.threadId } : getSpecialist(name)
     if (!specialist) throw new NotReplaced(`no such specialist: ${name}`, 8)
-    if (!await endForFreshStart(info)) throw new NotReplaced(`${info.tmuxName} has no history entry in its thread to mark as restarted fresh, so it was left running`)
+    if (!await recovery().endForFreshStart(info)) throw new NotReplaced(`${info.tmuxName} has no history entry in its thread to mark as restarted fresh, so it was left running`)
     const { info: next } = await fill(name, specialist, `specialist:${declared.id}`, { ignoreBackoff: true, unstored: !!recipe, key })
     repointChildren(info, next.sessionId)
     return next
@@ -186,4 +182,19 @@ export function specialistStatus(name: string): { occupant?: { session: string; 
     ...(live && { occupant: { session: live.tmuxName, connected: transport.has(live.sessionId) } }),
     ...(b && wait > 0 && { refillBackoff: { failures: b.failures, retryInSec: wait, lastError: b.lastError } }),
   }
+}
+
+/**
+ * What a per-conversation specialist's conversation sessions are made from: the specialist without its own thread (its channel, or its
+ * thread's channel; its kickoff, model, and `idle`, else hydra.toml's). Undefined when no such specialist is declared.
+ */
+export async function conversationRecipe(to: string): Promise<Specialist | undefined> {
+  const base = getSpecialist(to)
+  if (!base) return undefined
+  const s = currentHydraConfig().specialists[to]
+  const { threadId: shared, ...recipe } = base
+  // A specialist declared by its thread alone opens its conversations' threads beside it, in that thread's channel.
+  if (!recipe.channel && shared) recipe.channel = await gateway.fetchChannel(shared).then(c => c.parentId ?? undefined, () => undefined)
+  if (!recipe.idle && s?.idleMs) recipe.idle = `${Math.max(1, Math.round(s.idleMs / 60_000))}m`
+  return recipe
 }

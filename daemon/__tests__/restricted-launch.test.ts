@@ -8,7 +8,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { gateway, STATE_DIR } from '../../infra/config.js'
 import { setSpecialistThread, _reloadSpecialists, kickoffHash } from '../../sessions/specialists.js'
-import { specialistDeps } from '../../specialists/specialist-deliver.js'
+import { bindRecovery } from '../../specialists/recovery-port.js'
 import { specialistThreadDeps } from '../../app/specialist-thread.js'
 import { toThread } from '../../specialists/targets.js'
 import { _resetBackoff, activeBackoff } from '../../infra/recovery-backoff.js'
@@ -20,7 +20,7 @@ import { transport } from '../../sessions/bridge-transport.js'
 import { engines } from '../../sessions/engine-instances.js'
 import { ClaudeEngine } from '../../engines/claude-engine.js'
 import type { LaunchInput } from '../../engines/engine-adapter.js'
-import { _resetRecoveryDeps, _setRecoveryDeps, reviveThread } from '../../app/recovery.js'
+import { _resetRecoveryDeps, _setRecoveryDeps, recoveryPort, reviveDeps, reviveThread } from '../../app/recovery.js'
 import { _setHydraConfigForTesting, _setLoadEnvForTesting } from '../../infra/hydra-config.js'
 import { bornPolicy, deliveryRefusal, isVerifying, verifyBackoff, resolvePolicy, unverified } from '../../app/restricted.js'
 import { PolicyRefusal, type LaunchPolicy } from '../../shared/launch-policy.js'
@@ -29,6 +29,7 @@ import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import { debugLogFor, verifyLaunchesAgainst } from './verified-launch.js'
 import { verifyDeps, verifyLaunch as verifyLoaded } from '../../engines/claude-verify.js'
 import type { HydraConfig, RestrictedSpecialist, Specialist } from '../../config/types.js'
+bindRecovery(recoveryPort)
 
 process.stderr.write = (() => true) as any
 
@@ -430,15 +431,15 @@ describe('a kickoff change starts fresh', () => {
     const dead = ran()
     registry.delete(dead.sessionId)
     setSpecialistThread('ops', THREAD)
-    const real = specialistDeps.threadExists
-    specialistDeps.threadExists = async () => true
+    const real = reviveDeps.threadExists
+    reviveDeps.threadExists = async () => true
     try {
       await specialistThreadDeps.ensure('ops', 'held-message')   // what holdForSpecialist runs to start the specialist
       resumedNothing()
       expect(launches).toHaveLength(1)
       expect(launches[0].prompt).toContain(NEW)
       expect(live().kickoffHash).toBe(kickoffHash(NEW))
-    } finally { specialistDeps.threadExists = real; rmSync(join(STATE_DIR, 'specialist-threads.json'), { force: true }); _reloadSpecialists() }
+    } finally { reviveDeps.threadExists = real; rmSync(join(STATE_DIR, 'specialist-threads.json'), { force: true }); _reloadSpecialists() }
   })
   test('an unreadable kickoff does not stop a resume', async () => {
     ran()

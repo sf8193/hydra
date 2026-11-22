@@ -10,7 +10,8 @@ import { gateway } from '../infra/config.js'
 import { markDead, registry, repointChildren, threadRegistry } from '../sessions/registry.js'
 import { emojiOfName } from '../sessions/anchor-state.js'
 import type { ThreadMetadata, ThreadSessionEntry, SessionInfo, SessionWorktree, SpawnOpts, SpawnResult } from '../sessions/registry.js'
-import { carryOver, doSpawnSession, killSession, restoreIfNotStarted, tryResume, tryRespawn, RECOVERY_REVERIFY_GUARD } from './session-lifecycle.js'
+import type { RecoveryPort } from '../specialists/recovery-port.js'
+import { carryOver, doSpawnSession, endForFreshStart, killSession, restoreIfNotStarted, tryResume, tryRespawn, RECOVERY_REVERIFY_GUARD } from './session-lifecycle.js'
 import { baseNameFromBranch, safeSend } from '../infra/util.js'
 import { tmuxSessionState, TMUX_HOLD_MS } from '../infra/tmux.js'
 import { occupancy, occupied } from '../sessions/session-reachability.js'
@@ -789,4 +790,11 @@ async function revive(deadInfos: SessionInfo[], gapMs: number | undefined): Prom
   } finally {
     recoveryInProgress = false
   }
+}
+
+/** What specialist delivery (below this layer) calls back into; daemon.ts binds it at boot. */
+export const recoveryPort: RecoveryPort = {
+  reviveThread, reviveThreadForDelivery, backoffRefusal, threadStub, endForFreshStart,
+  threadExists: threadId => reviveDeps.threadExists(threadId),
+  doSpawnSession: (...args) => currentRecoveryDeps().doSpawnSession(...args),
 }

@@ -10,6 +10,9 @@ import { _setDaemonStartedAtForTesting } from '../../sessions/session-reachabili
 import { fakeAdapter } from './test-harness.js'
 import { removeSpecialist, setSpecialist } from '../../sessions/specialists.js'
 import { getBackoff } from '../../infra/recovery-backoff.js'
+import { bindRecovery } from '../../specialists/recovery-port.js'
+import { recoveryPort } from '../../app/recovery.js'
+bindRecovery(recoveryPort)
 
 process.stderr.write = (() => true) as any
 

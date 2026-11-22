@@ -19,6 +19,9 @@ import type { LaunchInput, ProviderId } from '../../engines/engine-adapter.js'
 import { _resetRecoveryDeps, reviveThread } from '../../app/recovery.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import { engineOfModel, resolveLaunchSelection } from '../../shared/constants.js'
+import { bindRecovery } from '../../specialists/recovery-port.js'
+import { recoveryPort } from '../../app/recovery.js'
+bindRecovery(recoveryPort)
 
 process.stderr.write = (() => true) as any
 

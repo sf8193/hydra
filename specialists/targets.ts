@@ -9,15 +9,14 @@
  */
 import { registry, threadRegistry, type SessionInfo } from '../sessions/registry.js'
 import { transport, deliverToAdapter } from '../sessions/bridge-transport.js'
-import { gateway } from '../infra/config.js'
 import { occupancy, occupied, ORPHAN_GRACE_MS, bridgeWaitMs } from '../sessions/session-reachability.js'
 import type { BlockingState, DeliveryResult } from '../engines/engine-adapter.js'
 import { checkIdempotency, clearIdempotency, registerIdempotency, DELIVER_IDEMPOTENCY_TTL_MS } from '../infra/idempotency.js'
 import { DELIVER_MAX_MESSAGE_BYTES, parseIdleTtl } from '../shared/constants.js'
 import { getSpecialist, specialistForThread, withTargetLock, type Specialist } from '../sessions/specialists.js'
 import { currentHydraConfig } from '../infra/hydra-config.js'
-import { ensureSpecialist, SpecialistError } from './specialist-deliver.js'
-import { currentRecoveryDeps, reviveThreadForDelivery } from '../app/recovery.js'
+import { conversationRecipe, ensureSpecialist, SpecialistError } from './specialist-deliver.js'
+import { recovery } from './recovery-port.js'
 import { readTarget, spelledTo, TARGET_FORMS, type TargetValue } from '../shared/target-kind.js'
 import { STUCK_PREFIX } from '../shared/exit-codes.js'
 
@@ -219,7 +218,7 @@ export async function toThread(threadId: string, text: string, opts: DeliverOpts
   if (owner) return toSpecialist(owner, text, opts)
   let revived = false
   if (revive) {
-    const r = await reviveThreadForDelivery(threadId, opts.initiator, opts.wanted)
+    const r = await recovery().reviveThreadForDelivery(threadId, opts.initiator, opts.wanted)
     if (!r.ok) return r
     revived = r.revived
   }
@@ -324,21 +323,6 @@ async function toConversation(to: string, conversation: string, text: string, op
   }
 }
 
-/**
- * What a per-conversation specialist's conversation sessions are made from: the specialist without its own thread (its channel, or its
- * thread's channel; its kickoff, model, and `idle`, else hydra.toml's). Undefined when no such specialist is declared.
- */
-export async function conversationRecipe(to: string): Promise<Specialist | undefined> {
-  const base = getSpecialist(to)
-  if (!base) return undefined
-  const s = currentHydraConfig().specialists[to]
-  const { threadId: shared, ...recipe } = base
-  // A specialist declared by its thread alone opens its conversations' threads beside it, in that thread's channel.
-  if (!recipe.channel && shared) recipe.channel = await gateway.fetchChannel(shared).then(c => c.parentId ?? undefined, () => undefined)
-  if (!recipe.idle && s?.idleMs) recipe.idle = `${Math.max(1, Math.round(s.idleMs / 60_000))}m`
-  return recipe
-}
-
 /** A specialist always queues: whoever is home (or is filled now, by the rule) gets it once its bridge is up. */
 async function toSpecialist(name: string, text: string, opts: DeliverOpts, unstored?: Specialist): Promise<DeliverOutcome> {
   const { info, spawned } = await ensureSpecialist(name, opts.initiator, unstored)
@@ -356,7 +340,7 @@ function occupantOf(threadId: string): SessionInfo | undefined {
 async function spawnFresh(r: Recipe, initiator: string): Promise<SessionInfo> {
   const kickoff = r.kickoffFile ? (await Bun.file(r.kickoffFile).text()).trim() : r.kickoff!
   const idle = r.idle ? parseIdleTtl(r.idle) : null
-  const result = await currentRecoveryDeps().doSpawnSession(kickoff, r.channel, undefined, {
+  const result = await recovery().doSpawnSession(kickoff, r.channel, undefined, {
     initiator, ...(r.model && { model: r.model }), ...(idle && { ephemeral: true, idleTtlMs: idle }),
   })
   const info = registry.get(result.sessionId)

@@ -12,6 +12,9 @@ import { setSpecialistThread } from '../../sessions/specialists.js'
 import { _forgetMemory, _resetHeld, heldCount, MAX_HOLD_MS, restoreHeld, RETRY_MS, specialistThreadDeps } from '../../app/specialist-thread.js'
 import { fakeAdapter } from './test-harness.js'
 import { setHydra } from './test-hydra.js'
+import { bindRecovery } from '../../specialists/recovery-port.js'
+import { recoveryPort } from '../../app/recovery.js'
+bindRecovery(recoveryPort)
 
 process.stderr.write = (() => true) as any
 

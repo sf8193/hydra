@@ -64,7 +64,8 @@ import { setupPermissionHandler } from './app/permission.js'
 import { socketServer, startBridgeServer } from './app/bridge-server.js'
 import { announceRestartComplete } from './app/commands/global.js'
 import { deliverWatchdogAlert } from './app/watchdog-alert.js'
-import { autoRecoverAfterBoot } from './app/recovery.js'
+import { autoRecoverAfterBoot, recoveryPort } from './app/recovery.js'
+import { bindRecovery } from './specialists/recovery-port.js'
 import { startJobsClock, stopJobsClock, realDeps } from './connectors/clock/jobs-clock.js'
 import { deliverToTarget, targetDeps } from './specialists/targets.js'
 
@@ -145,6 +146,7 @@ import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle }
 import type { ProviderId } from './engines/engine-adapter.js'
 registry.onPersist = refreshDashboard
 targetDeps.stuckState = confirmedStuckState
+bindRecovery(recoveryPort)
 
 if ('operators' in gateway) {
   (gateway as any).operators = operatorIds

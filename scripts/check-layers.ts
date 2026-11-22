@@ -39,9 +39,6 @@ export const ALLOWED: readonly string[] = [
   'engines/codex-runtime.ts -> sessions/codex-piggyback.ts',
   'engines/codex-runtime.ts -> sessions/protocol-registry.ts',
   'engines/codex-runtime.ts -> sessions/registry.ts',
-  'specialists/specialist-deliver.ts -> app/recovery.ts',
-  'specialists/specialist-deliver.ts -> app/session-lifecycle.ts',
-  'specialists/targets.ts -> app/recovery.ts',
 ]
 
 const skip = (p: string) => !p.endsWith('.ts') || p.endsWith('.d.ts') || p.endsWith('.test.ts') || /(^|\/)(__tests__|node_modules|docs|scripts|mods\.local|mod)\//.test(p) || p === 'test-setup.ts'
