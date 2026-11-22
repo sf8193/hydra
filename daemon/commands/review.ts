@@ -6,13 +6,8 @@ import { resolveModifiers, partitionFlagModifiers, listLensNames } from '../modi
 import type { InboundMessage } from '../../gateways/gateway.js'
 import { normalizeReviewRounds } from '../../shared/constants.js'
 import type { ProviderId } from '../engines/engine-adapter.js'
+import reviewProto from '../../protocols/review.js'
 
-let reviewProto: typeof import('../../protocols/review.js')['default'] | null = null
-
-async function getReviewProto() {
-  if (!reviewProto) reviewProto = (await import('../../protocols/review.js')).default
-  return reviewProto
-}
 
 export async function handleReviewIntercept(msg: InboundMessage, rounds: number, topic?: string, model?: string, modifierNames?: string[], engine?: ProviderId): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '⚔️').catch(() => {})
@@ -75,7 +70,7 @@ export async function handleReviewIntercept(msg: InboundMessage, rounds: number,
   }
 
   try {
-    const proto = await getReviewProto()
+    const proto = reviewProto
     await startProtocolRun(proto, threadId, sessionId, {
       rounds: clampedRounds, topic, model, engine,
       modifiers: resolvedMods,
