@@ -41,6 +41,13 @@ describe('check-layers', () => {
     expect(violations([dyn, file('daemon/router.ts', 'export const x = 1')], [])).toHaveLength(1)
   })
 
+  test('a side-effect import, a .ts specifier and a directory import are edges too', () => {
+    const lower = (line: string) => [file('shared/a.ts', line), file('daemon/router.ts', 'export const x = 1'), file('daemon/index.ts', 'export const y = 1')]
+    expect(edges(lower("import '../daemon/router.js'"))).toEqual(['shared/a.ts -> daemon/router.ts'])
+    expect(edges(lower("import { x } from '../daemon/router.ts'"))).toEqual(['shared/a.ts -> daemon/router.ts'])
+    expect(edges(lower("import { y } from '../daemon'"))).toEqual(['shared/a.ts -> daemon/index.ts'])
+  })
+
   test('an allowed upward import passes, and an entry that no longer matches is an error so the list only shrinks', () => {
     const files = [file('shared/a.ts', "import { x } from '../daemon/router.js'"), file('daemon/router.ts', 'export const x = 1')]
     expect(violations(files, ['shared/a.ts -> daemon/router.ts'])).toEqual([])

@@ -90,7 +90,7 @@ const skip = (p: string) => !p.endsWith('.ts') || p.endsWith('.d.ts') || p.endsW
 
 function resolveLocal(from: string, spec: string, files: Set<string>): string | undefined {
   if (!spec.startsWith('.')) return undefined
-  const base = join(dirname(from), spec.replace(/\.js$/, ''))
+  const base = join(dirname(from), spec.replace(/\.(js|ts)$/, ''))
   return [base + '.ts', join(base, 'index.ts')].map(p => resolve('/', p).slice(1)).find(p => files.has(p))
 }
 
@@ -102,7 +102,7 @@ export function edges(files: Array<{ path: string; text: string }>): string[] {
   for (const { path, text } of files) {
     if (!paths.has(path)) continue
     const code = transpiler.transformSync(text)
-    for (const m of code.matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*|^\s*import\s+)["']([^"']+)["']/gm)) {
+    for (const m of code.matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*|^\s*import\s*)["']([^"']+)["']/gm)) {
       const to = resolveLocal(path, m[1], paths)
       if (to && to !== path) out.push(`${path} -> ${to}`)
     }
