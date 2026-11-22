@@ -34,12 +34,17 @@ export type BridgeConn = {
 let flushGate: ((info: SessionInfo) => string | undefined) | undefined
 export function setFlushGate(gate: ((info: SessionInfo) => string | undefined) | undefined): void { flushGate = gate }
 
+/** Why this session may not be delivered to, or undefined. No gate set (app/restricted.ts has not loaded) refuses: a delivery and a queue flush both fail closed. */
+function gateReason(info: SessionInfo): string | undefined {
+  return flushGate ? flushGate(info) : 'the delivery gate is not set (app/restricted.ts sets it when it loads)'
+}
+
 /**
  * The one way to hand a message to a session's engine: the drift gate first (a session whose policy no longer matches hydra.toml, or that
  * was never verified, is not delivered to), then the adapter. Every adapter delivery goes through here, so no engine checks it (a session with no adapter, such as main, is not one).
  */
 export function deliverToAdapter(info: SessionInfo, msg: Notification): Promise<DeliveryResult> {
-  const refused = flushGate ? flushGate(info) : 'the delivery gate is not set (app/restricted.ts sets it when it loads)'
+  const refused = gateReason(info)
   return refused ? Promise.resolve({ status: 'rejected', retryable: false, reason: refused }) : info.adapter.deliver(info, msg)
 }
 
@@ -233,7 +238,7 @@ export class BridgeTransport {
     // was never verified, or that started before hydra verified starts), its notifications are dropped here (the thread is told why
     // and the remedy), the rest goes. A dropped notification is not redelivered: the sender sees the thread's notice.
     const info = registry.get(sessionId)
-    const refused = info?.adapter ? flushGate?.(info) : undefined
+    const refused = info?.adapter ? gateReason(info) : undefined
     const sendable = refused ? queue.filter(m => m.type !== 'notification') : queue
     if (refused) process.stderr.write(`daemon: dropped ${queue.length - sendable.length} queued message(s) for ${sessionId}: ${refused}\n`)
     process.stderr.write(`daemon: flushing ${sendable.length} queued message(s) for ${sessionId}\n`)

@@ -542,6 +542,21 @@ describe('delivery paths (adapter-policy T7)', () => {
     } finally { setFlushGate(() => undefined) }
   })
 
+  test('with no gate set a flush drops the queued notifications, as a delivery is refused', () => {
+    claude('t7-c11')
+    const a = { type: 'tools_update', n: 'a' }, x = { type: 'notification', content: 'x' }
+    for (const m of [a, x]) t.sendOrQueue('t7-c11', m)
+    setFlushGate(undefined)
+    try {
+      const { socket } = socketOn(t, 't7-c11')
+      const out: string[] = []
+      socket.write = (d: string) => { out.push(d); return true }
+      t.flushQueue('t7-c11')
+      expect(out.map(o => JSON.parse(o).n)).toEqual(['a'])
+      expect(logged.filter(l => l.includes('dropped 1 queued message(s) for t7-c11'))).toHaveLength(1)
+    } finally { setFlushGate(() => undefined) }
+  })
+
   test("main: a departing notice queued before a restart is dropped at restore; the successor prompt and an ordinary message queued with it are kept, in order", () => {
     const notice = { type: 'notification', content: 'write the letter', [DEPARTING_NOTICE]: true }
     const successor = { type: 'notification', content: 'continue from the letter' }
