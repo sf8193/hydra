@@ -35,9 +35,21 @@ export function shouldAlertOperator(stateDir: string, reason: string): boolean {
   return m.reason !== reason || (!m.alerted && (m.alertTries ?? 0) < ALERT_TRIES)
 }
 
-/** Records one send: `ok` stops the retries. Call after noteBootRefusal, which keeps these fields for the same reason. */
-export function noteOperatorAlert(stateDir: string, reason: string, ok: boolean): void {
+/**
+ * Records that a send is about to be tried, before it is: the count is what stops the retries, so a state dir that cannot be
+ * written (the count would never persist) returns false and nothing is sent, instead of a DM on every tick.
+ */
+export function startOperatorAlert(stateDir: string, reason: string): boolean {
   const m = read(stateDir)
   const same = m.reason === reason
-  try { writeFileSync(join(stateDir, BOOT_REFUSED_FILE), JSON.stringify({ ...(same && m), reason, alerted: ok, alertTries: (same ? m.alertTries ?? 0 : 0) + 1 }) + '\n') } catch {}
+  try {
+    writeFileSync(join(stateDir, BOOT_REFUSED_FILE), JSON.stringify({ ...(same && m), reason, alerted: false, alertTries: (same ? m.alertTries ?? 0 : 0) + 1 }) + '\n')
+    return true
+  } catch { return false }
+}
+
+/** The DM went out: stop the retries. */
+export function finishOperatorAlert(stateDir: string): void {
+  const m = read(stateDir)
+  try { writeFileSync(join(stateDir, BOOT_REFUSED_FILE), JSON.stringify({ ...m, alerted: true }) + '\n') } catch {}
 }

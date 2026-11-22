@@ -4,7 +4,7 @@
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { HYDRA_TOML } from '../config/migrate.js'
-import { noteOperatorAlert, shouldAlertOperator } from './boot-refusal.js'
+import { finishOperatorAlert, shouldAlertOperator, startOperatorAlert } from './boot-refusal.js'
 import { readEnvFileValue } from './helpers.js'
 
 const envToken = (stateDir: string, key: string): string | undefined => readEnvFileValue(join(stateDir, '.env'), key)?.trim() || undefined
@@ -61,7 +61,8 @@ export async function alertOperatorOnce(
   log: (line: string) => void, send: typeof alertOperator = alertOperator,
 ): Promise<void> {
   if (!shouldAlertOperator(stateDir, reason)) return
+  if (!startOperatorAlert(stateDir, reason)) return log(`could not tell the operator: ${stateDir} is not writable, so the DM would repeat every tick`)
   const failed = await send(stateDir, platform, text)
-  noteOperatorAlert(stateDir, reason, !failed)
   if (failed) log(`could not tell the operator: ${failed}`)
+  else finishOperatorAlert(stateDir)
 }

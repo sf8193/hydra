@@ -1,10 +1,11 @@
 // The operator hears a refused boot in a DM, once, even though the daemon is not running: the web API with the bot token, no gateway.
 import { afterEach, describe, expect, spyOn, test } from 'bun:test'
-import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { alertOperator, alertOperatorOnce, operatorId } from '../boot-refusal-alert.js'
 import { noteBootRefusal } from '../boot-refusal.js'
+import { BOOT_REFUSED_FILE } from '../../config/migrate.js'
 
 let dir: string
 const state = (files: Record<string, string>) => {
@@ -84,6 +85,15 @@ describe('alertOperatorOnce (the watchdog tick)', () => {
     for (let i = 0; i < 8; i++) await tick(d, async () => { sends++; return 'not_authed' }, log)
     expect(sends).toBe(5)
     expect(log[0]).toBe('could not tell the operator: not_authed')
+  })
+  test('a state dir that cannot be written sends nothing: the count that stops the retries could not persist', async () => {
+    const d = state({}); let sends = 0; const log: string[] = []
+    noteBootRefusal(d, 'why', 1)
+    const marker = join(d, BOOT_REFUSED_FILE)
+    chmodSync(marker, 0o400)
+    try { await alertOperatorOnce(d, 'slack', 'why', 't', m => log.push(m), (async () => { sends++; return undefined }) as any) } finally { chmodSync(marker, 0o600) }
+    expect(sends).toBe(0)
+    expect(log[0]).toContain('not writable')
   })
   test('a new reason is a new DM', async () => {
     const d = state({}); let sends = 0
