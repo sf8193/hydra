@@ -11,6 +11,7 @@ let handler: (msg: any) => Promise<void>
 const spawns: any[][] = []
 const handoffs: any[][] = []
 const respawns: any[][] = []
+const forks: any[][] = []
 const sent: string[] = []
 const spies: Array<{ mockRestore(): void }> = []
 
@@ -21,10 +22,11 @@ beforeAll(async () => {
   spies.push(spyOn(global, 'handleSpawnIntercept').mockImplementation((async (...args: any[]) => { spawns.push(args) }) as any))
   spies.push(spyOn(thread, 'handleHandoffIntercept').mockImplementation((async (...args: any[]) => { handoffs.push(args) }) as any))
   spies.push(spyOn(thread, 'handleRespawnIntercept').mockImplementation((async (...args: any[]) => { respawns.push(args) }) as any))
+  spies.push(spyOn(thread, 'handleForkIntercept').mockImplementation((async (...args: any[]) => { forks.push(args) }) as any))
   await import('../../app/router.js')
 })
 afterAll(() => { for (const s of spies) s.mockRestore() })
-beforeEach(() => { spawns.length = 0; handoffs.length = 0; respawns.length = 0; sent.length = 0 })
+beforeEach(() => { spawns.length = 0; handoffs.length = 0; respawns.length = 0; forks.length = 0; sent.length = 0 })
 
 const say = (content: string, opts: { isThread?: boolean } = {}) =>
   handler({ id: 'm1', channelId: opts.isThread ? 't1' : 'c1', ...(opts.isThread ? { parentChannelId: 'c1' } : {}), authorId: 'u1', authorUsername: 'u', content, isBot: false, isDM: false, isThread: !!opts.isThread, attachments: [], createdAt: new Date() })
@@ -87,4 +89,24 @@ test('respawn neon routes to handleRespawnIntercept with the agy model and engin
   expect(respawns).toHaveLength(1)
   expect(respawns[0][3]).toEqual({ model: 'gemini-4-neon-high', engine: 'agy' })
   expect(sent).toEqual([])
+})
+
+test('a bot-tagged spawn neon: strips the leading mention and spawns agy', async () => {
+  Object.defineProperty(gateway, 'botId', { value: '999', configurable: true })
+  try {
+    await say('<@999> spawn neon: fix the bug')
+    expect(spawns).toHaveLength(1)
+    expect(spawns[0].slice(1, 2)).toEqual(['fix the bug'])
+    expect(spawns[0].slice(2)).toEqual(['gemini-4-neon-high', 'agy'])
+  } finally {
+    delete (gateway as any).botId
+  }
+})
+
+test('fork neon: and fork omp-sonnet: route with the alias model and engine', async () => {
+  await say('fork neon: continue docs', { isThread: true })
+  await say('fork omp-sonnet: continue docs', { isThread: true })
+  expect(forks).toHaveLength(2)
+  expect(forks[0].slice(1)).toEqual(['continue docs', 'gemini-4-neon-high', { engine: 'agy' }])
+  expect(forks[1].slice(1)).toEqual(['continue docs', 'claude-sonnet-5-5[1m]', { engine: 'omp' }])
 })
