@@ -47,6 +47,10 @@ jobs:
       - name: Layers
         run: bun scripts/check-layers.ts
 
+      # The docs stay short: README and each guide under a cap (scripts/check-docs-size.ts).
+      - name: Docs size
+        run: bun scripts/check-docs-size.ts
+
       # No new import cycles (scripts/check-cycles.ts); today's three are listed there and the list only shrinks.
       - name: Cycles
         run: bun scripts/check-cycles.ts

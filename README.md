@@ -87,7 +87,7 @@ bun cli/hydra.ts up discord
 ## Docs
 
 - [Concepts](docs/concepts.md): the words hydra uses and how the pieces connect.
-- [Reference](docs/reference.md): CLI, configuration, tools, sessions, troubleshooting, files.
+- [Reference](docs/reference.md): CLI, configuration, tools, sessions, troubleshooting.
 - [Access control](ACCESS.md): who the bot hears, and upgrading from `access.json`.
 - [Discord](docs/discord.md) and [Slack](docs/slack.md) setup; [Slack connector](docs/slack-connector.md), [specialists](docs/specialists.md), [schedules](docs/schedules.md), [handoff](docs/handoff.md).
 - Every `hydra.toml` key: [`hydra.example.toml`](hydra.example.toml). Every command: `hydra --help`.
