@@ -1,5 +1,5 @@
 // What each engine can do or is called, one row per engine. The loader reads it (config cannot import the adapters) to refuse a specialist that asks for what
-// its engine cannot give; each engine adapter reads its own row into `limitsAccess`, which the launch asks (the engine comes from thread history, and
+// its engine cannot give; the launch asks `engineLimitsAccess` (the engine comes from thread history, and
 // `handoff <model>` can change it). The spawn and respawn paths read the rest, so no caller names an engine to decide one of these.
 
 export type EngineCapabilities = {

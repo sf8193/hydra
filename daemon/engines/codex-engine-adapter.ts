@@ -144,7 +144,7 @@ export class CodexEngineAdapter implements EngineAdapter {
   }
 
   async launch(input: LaunchInput): Promise<LaunchResult> {
-    // This engine cannot limit a session's access (limitsAccess); it would run one as the operator.
+    // This engine cannot limit a session's access (see ENGINE_CAPABILITIES); it would run one as the operator.
     if (isRestrictedPolicy(input.policy)) throw new Error(`specialist ${input.policy.specialist} has restricted = true, which this engine cannot give: set engine = "claude", or set restricted = false`)
     if (input.policy?.canOnlyWriteTo) throw new Error(`specialist ${input.policy.specialist} has can_only_write_to = "workdir", which this engine cannot give: set engine = "claude", or remove can_only_write_to`)
     const { sessionId, tmuxName, model, prompt, resumeCodex } = input
