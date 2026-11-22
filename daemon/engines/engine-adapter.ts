@@ -7,13 +7,14 @@
 import type { SessionInfo, SpawnOpts } from '../sessions.js'
 import type { LaunchPolicy, RestrictedPolicy } from '../restricted.js'
 import type { BlockingState } from '../pane-probe.js'
+import type { EngineName } from '../../shared/engine-capabilities.js'
 export type { BlockingState } from '../pane-probe.js'
 
 // ---------------------------------------------------------------------------
 // Provider identity
 // ---------------------------------------------------------------------------
 
-export type ProviderId = 'claude' | 'codex' | 'omp' | 'agy'
+export type ProviderId = EngineName
 
 // ---------------------------------------------------------------------------
 // Delivery
