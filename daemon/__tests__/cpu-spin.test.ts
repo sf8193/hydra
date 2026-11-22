@@ -104,12 +104,42 @@ describe('spin classifier', () => {
     expect(t.observe('a', hot)).toEqual({ spinning: 'bridge', newly: false })
   })
 
-  test('a cool sample ends the episode; the next one alerts again', () => {
+  test('one cool reading inside an episode neither ends it nor re-arms its alert', () => {
     const t = createSpinTracker(90, 2)
     t.observe('a', hot); t.observe('a', hot)
-    expect(t.observe('a', cool).spinning).toBeNull()
-    t.observe('a', hot)
+    expect(t.observe('a', cool)).toEqual({ spinning: null, newly: false })   // the dip itself reads as not spinning
+    expect(t.observe('a', hot)).toEqual({ spinning: 'bridge', newly: false })
+    expect(t.observe('a', cool).newly).toBe(false)
+    expect(t.observe('a', hot).newly).toBe(false)
+  })
+
+  test('`needed` cool readings in a row end the episode; the next spin alerts again', () => {
+    const t = createSpinTracker(90, 2)
+    t.observe('a', hot); t.observe('a', hot)
+    t.observe('a', cool); t.observe('a', cool)
+    expect(t.observe('a', hot)).toEqual({ spinning: null, newly: false })     // a fresh streak, below `needed`
     expect(t.observe('a', hot)).toEqual({ spinning: 'bridge', newly: true })
+  })
+
+  test('not idle and unsampled readings count as cool for an episode', () => {
+    const t = createSpinTracker(90, 2)
+    t.observe('a', hot); t.observe('a', hot)
+    t.observe('a', { ...hot, idle: false }); t.observe('a', { idle: true })
+    t.observe('a', hot)
+    expect(t.observe('a', hot).newly).toBe(true)
+  })
+
+  test('before an episode starts, one cool reading resets the streak', () => {
+    const t = createSpinTracker(90, 2)
+    t.observe('a', hot); t.observe('a', cool)
+    expect(t.observe('a', hot).spinning).toBeNull()
+  })
+
+  test('a change of hot process ends the episode at once, even mid-dip', () => {
+    const t = createSpinTracker(90, 2)
+    t.observe('a', hot); t.observe('a', hot); t.observe('a', cool)
+    t.observe('a', { ...hot, bridgePid: 8 })
+    expect(t.observe('a', { ...hot, bridgePid: 8 })).toEqual({ spinning: 'bridge', newly: true })
   })
 
   test('the streak follows one process: a different bridge pid, or bridge then Claude, starts over', () => {

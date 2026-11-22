@@ -80,27 +80,35 @@ export function hotProcess(r: CpuReading, threshold = SPIN_CPU_PERCENT): SpinWho
 }
 
 /**
- * Spinning = idle and the same process hot for `needed` readings in a row. A reading that is not hot
- * (or not idle, or unsampled) ends the episode, and so does a change of hot process (bridge to Claude,
- * or a different bridge pid): what gets alerted, or killed, is the process that was hot every time.
- * `newly` is true once per episode, so an alert built on it does not repeat every tick.
+ * Spinning = idle and the same process hot for `needed` readings in a row. That starts an episode, and
+ * `newly` is true once per episode, so an alert built on it does not repeat every tick. The episode
+ * ends the way it began: after `needed` readings in a row that are not hot (cool, not idle, or
+ * unsampled), so a process spinning near the threshold that dips once is one spin, not two. A cool
+ * reading inside an episode reports `spinning: null` for that tick and does not re-arm the alert. A
+ * change of hot process (bridge to Claude, or a different bridge pid) ends it at once: what gets
+ * alerted, or killed, is the process that was hot every time. Before an episode starts, one reading
+ * that is not hot resets the streak.
  */
 export function createSpinTracker(threshold = SPIN_CPU_PERCENT, needed = SPIN_CONSECUTIVE_SAMPLES) {
-  const streak = new Map<string, { n: number; proc: string }>()
+  const streak = new Map<string, { n: number; proc: string; cool: number }>()
   const alerted = new Set<string>()
   return {
     observe(id: string, r: CpuReading): SpinState {
       const who = r.idle ? hotProcess(r, threshold) : null
+      const prev = streak.get(id)
       if (!who) {
-        streak.delete(id)
-        alerted.delete(id)
+        if (prev && prev.n >= needed && prev.cool + 1 < needed) {
+          streak.set(id, { ...prev, cool: prev.cool + 1 })
+        } else {
+          streak.delete(id)
+          alerted.delete(id)
+        }
         return { spinning: null, newly: false }
       }
       const proc = `${who}:${(who === 'bridge' ? r.bridgePid : r.claudePid) ?? '?'}`
-      const prev = streak.get(id)
       if (prev && prev.proc !== proc) alerted.delete(id)
       const n = prev && prev.proc === proc ? prev.n + 1 : 1
-      streak.set(id, { n, proc })
+      streak.set(id, { n, proc, cool: 0 })
       if (n < needed) return { spinning: null, newly: false }
       const newly = !alerted.has(id)
       alerted.add(id)

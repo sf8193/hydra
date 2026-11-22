@@ -606,6 +606,10 @@ export class DiscordGateway implements ChatGateway {
     return this.recentSentIds.has(id)
   }
 
+  isReplyToUs(msg: InboundMessage): boolean {
+    return !!msg.referenceMessageId && this.wasSentByUs(msg.referenceMessageId)
+  }
+
   async getThreadUrl(threadId: string): Promise<string> {
     try {
       const ch = await this.client.channels.fetch(threadId)

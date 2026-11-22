@@ -108,19 +108,13 @@ describe('sampleCpu', () => {
     expect(dms[0]).toContain('`hydra-cpu-byte (main)`')
   }, LOOP_TIMEOUT_MS)
 
-  test('a tick with no snapshot (ps failed) neither ends a spin episode nor re-arms its alert', async () => {
+  test('a tick with no snapshot (ps failed) yields no readings', async () => {
     const s = session('spin-8')
     record(s.sessionId, busy.pid!, process.pid, busyStartedAt)
     let v
     for (let i = 0; i < 10 && !v?.spinning; i++) { v = (await sampleNow([s], () => PANE, PRESSURE)).sessions.get(s.sessionId); if (!v?.spinning) await tick() }
     expect(v!.spinning).toBe('bridge')
     expect((await sampleCpu(undefined, [s], () => PANE, PRESSURE)).sessions.size).toBe(0)
-    await tick()
-    let after
-    // Bounded like the cases above: a busy loop on a loaded machine can dip below the threshold for a tick.
-    for (let i = 0; i < 5 && after?.spinning !== 'bridge'; i++) { after = (await sampleNow([s], () => PANE, PRESSURE)).sessions.get(s.sessionId); if (after?.spinning !== 'bridge') await tick() }
-    expect(after!.spinning).toBe('bridge')
-    expect(dms.length).toBe(1)
   }, LOOP_TIMEOUT_MS)
 
   test('a working session is not spinning, however hot its bridge', async () => {
