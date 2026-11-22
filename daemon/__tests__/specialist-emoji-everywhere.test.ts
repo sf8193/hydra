@@ -537,7 +537,7 @@ describe('no site reads the catalog glyph', () => {
         else if (/\.(ts|tsx|js|mjs)$/.test(e)) files.push(rel)
       }
     }
-    for (const dir of ['app', 'infra', 'engines', 'sessions', 'specialists', 'shared', 'gateways']) walk(dir)
+    for (const dir of ['app', 'infra', 'engines', 'sessions', 'protocols', 'specialists', 'shared', 'gateways']) walk(dir)
     files.push('daemon.ts')
     expect(files.length).toBeGreaterThan(50)   // the walk found the tree, not nothing
     const holders = files.filter(f => /\bsessionEmoji\b/.test(read(f))).map(f => relative('.', f)).sort()
