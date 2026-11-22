@@ -5,7 +5,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { alertOperator, alertOperatorOnce, operatorId } from '../boot-refusal-alert.js'
 import { noteBootRefusal } from '../boot-refusal.js'
-import { BOOT_REFUSED_FILE } from '../../config/migrate.js'
+import { BOOT_REFUSED_FILE } from '../../infra/migrate.js'
 
 let dir: string
 const state = (files: Record<string, string>) => {

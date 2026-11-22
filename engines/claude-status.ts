@@ -8,7 +8,7 @@
 import { readdirSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { claudeConfigDir } from '../shared/constants.js'
-import { pidAlive } from '../shared/bridge-life.js'
+import { pidAlive } from '../infra/bridge-life-file.js'
 import type { LiveState } from './engine-adapter.js'
 
 // Claude's status vocabulary: busy = a turn is running, idle, waiting. shell (idle with a background shell

@@ -3,12 +3,11 @@ import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSyn
 import { homedir, tmpdir } from 'os'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
-import { _resetSourcedEnvNamesForTesting, parseEnvLine, sourceEnvFiles } from '../env-parse.js'
+import { _resetSourcedEnvNamesForTesting, parseEnvLine } from '../env-parse.js'
+import { sourceEnvFiles } from '../../infra/env-files.js'
 import { scrubTokenVarsNamedIn } from '../../config/token-vars.js'
-import {
-  STATE_ENV_KEEP, STATE_ENV_KEEP_PREFIXES, NEW_SESSION_TIMEOUT_MS, SCRUBBED_SPAWN_VARS, TMUX_PANE_FD_LIMIT, NEVER_SCRUBBED, NEVER_SCRUBBED_PREFIXES,
-  _resetScrubbedForTesting, capturedSpawnVars, stateEnvUnsets, captureSpawnVars, codexSpawnEnv, registerSpawnVars, scrubbedSpawnEnv, scrubbedSpawnVars, tmuxNewSession, tokenVarRefusal, withRaisedFdLimit,
-} from '../spawn-env.js'
+import { STATE_ENV_KEEP, STATE_ENV_KEEP_PREFIXES, SCRUBBED_SPAWN_VARS, TMUX_PANE_FD_LIMIT, NEVER_SCRUBBED, NEVER_SCRUBBED_PREFIXES, _resetScrubbedForTesting, capturedSpawnVars, stateEnvUnsets, captureSpawnVars, codexSpawnEnv, registerSpawnVars, scrubbedSpawnEnv, scrubbedSpawnVars, tokenVarRefusal, withRaisedFdLimit } from '../spawn-env.js'
+import { NEW_SESSION_TIMEOUT_MS, tmuxNewSession } from '../../infra/tmux-session.js'
 
 function withEnv(vars: Record<string, string | undefined>, fn: () => void): void {
   const saved = Object.fromEntries(Object.keys(vars).map(k => [k, process.env[k]]))
@@ -324,9 +323,9 @@ const CREATES_SESSION = /[`'"]new-session[`'"]|\btmux\b[^;|&]{0,80}?\bnew\b(?!-w
 
 const TS_SOURCES = () => walk('.', f => /\.(m|c)?tsx?$/.test(f) && !/\.test\.[mc]?tsx?$/.test(f))
 
-test('only shared/spawn-env.ts creates a tmux session', () => {
+test('only infra/tmux-session.ts creates a tmux session', () => {
   const offenders = TS_SOURCES()
-    .filter(f => f !== 'shared/spawn-env.ts')
+    .filter(f => f !== 'infra/tmux-session.ts')
     .filter(f => CREATES_SESSION.test(flat(f)))
   expect(offenders).toEqual([])
 })

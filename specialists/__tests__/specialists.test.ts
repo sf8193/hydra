@@ -73,15 +73,15 @@ describe('specialists', () => {
         spawn(topic, undefined, undefined, { ...extra, existingThreadId: threadId, resurrectFrom, model })) as any,
     })
   }
-  /** A spawn that behaves like doSpawnSession: registers a live session and reports its thread. */
-  function fakeSpawn() {
+  /** A spawn that behaves like doSpawnSession: registers a live session and reports its thread. `born`: what a real spawn stamps on it (its policy), computed when it spawns. */
+  function fakeSpawn(born: () => Record<string, unknown> = () => ({})) {
     const calls: unknown[][] = []
     const spawn = async (...args: unknown[]) => {
       calls.push(args)
       await Bun.sleep(15) // a real spawn yields; concurrent callers must still share it
       const opts = args[3] as { existingThreadId?: string }
       const threadId = opts.existingThreadId ?? `fresh-thread-${++n}`
-      const sessionId = occupy(threadId)
+      const sessionId = occupy(threadId, born())
       return { name: `${sessionId}-tmux`, sessionId, threadId, url: '' }
     }
     setSpawn(spawn)
@@ -105,7 +105,7 @@ describe('specialists', () => {
       specialists: { [name]: { id: name, workdir: '/srv/x', kickoff: 'k', homePlace: '555', reachableBy: [], sessions: 'shared', maxSessions: 20, renamedFrom: [], restricted: false, ...over } as any },
     })
     afterEach(() => _setHydraConfigForTesting(undefined))
-    /** The real Claude adapter (its `deliver` is where every delivery is gated), reported alive: the session is running, with no bridge. */
+    /** The real Claude adapter (deliveries to it are gated by `deliverToAdapter`, not by the engine), reported alive: the session is running, with no bridge. */
     const gated = () => Object.assign(Object.create(engines.claude), { isAlive: () => true })
     const queued = (sid: string) => (transport.messageQueues.get(sid) ?? []).length
     const quiet = async <T>(fn: () => Promise<T>): Promise<{ out: T; log: string; posted: string[] }> => {
@@ -125,8 +125,8 @@ describe('specialists', () => {
     const nameOf = () => { const name = `t-scope-${++n}`; names.push(name); return name }
 
     test('operator access to workdir: nothing is delivered, the thread is told the command, the log names both accesses; after a respawn it delivers', async () => {
-      const calls = fakeSpawn()
       const name = nameOf()
+      const calls = fakeSpawn(() => ({ policy: bornPolicy(name), verified: true }))   // a real spawn stamps the policy hydra.toml gives now, and the verified marker once its start is checked
       const sid = running(name, 'thread-scope-1', operatorPolicy(name))
       expect((await deliver(name)).ok).toBe(true)                                 // unchanged: delivered
       const before = queued(sid)

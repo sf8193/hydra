@@ -5,7 +5,8 @@ import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { bridgeLifeIO, socketServer } from '../../app/bridge-server.js'
 import { SOCK_PATH } from '../../infra/config.js'
-import { appendBridgeLife, bridgeLifePath } from '../../shared/bridge-life.js'
+import { bridgeLifePath } from '../../shared/bridge-life.js'
+import { appendBridgeLife } from '../../infra/bridge-life-file.js'
 
 let dir: string
 let sock: string

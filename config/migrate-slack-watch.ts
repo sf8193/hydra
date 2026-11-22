@@ -1,5 +1,6 @@
 // `hydra migrate`'s step for `<state>/slack-watch.json`: its routes become hydra.toml tables. `migrateSlackWatch` is
 // pure: the old file's JSON in, the tables (in the file's own snake_case keys) and what could not be carried over out.
+// Reading the file: slackWatchStep in infra/migrate.ts.
 //
 //   (the file existing)               → [slack.apps.default], with the token variables the Slack connector has always read
 //   people {U…: {name, role}}         → [people.<id>] addresses = ["slack:U…"], roles = [<role>]
@@ -23,10 +24,6 @@ export type SlackWatchMigration = {
   /** One line each, for the operator to read. */
   notes: string[]
 }
-
-import { existsSync, readFileSync } from 'fs'
-import { join } from 'path'
-import type { MigrateStep } from './migrate.js'
 
 type Json = Record<string, unknown>
 const isObj = (v: unknown): v is Json => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -124,20 +121,4 @@ export function migrateSlackWatch(raw: unknown): SlackWatchMigration {
     if (raw[k] !== undefined && raw[k] !== '' && raw[k] !== d) note(`${k} = ${JSON.stringify(raw[k])} has no hydra.toml key; the default (${JSON.stringify(d)}) applies`)
   }
   return out
-}
-
-const FILE = 'slack-watch.json'
-
-/** The step `hydra migrate` runs: slack-watch.json in, its tables merged with the other steps', the file retired. */
-export const slackWatchStep: MigrateStep = {
-  name: FILE,
-  pending: stateDir => existsSync(join(stateDir, FILE)),
-  run({ stateDir }) {
-    const path = join(stateDir, FILE)
-    if (!existsSync(path)) return undefined
-    let raw: unknown
-    try { raw = JSON.parse(readFileSync(path, 'utf8')) } catch (e) { throw new Error(`${FILE} is not valid JSON: ${(e as Error).message}`) }
-    const { notes, ...doc } = migrateSlackWatch(raw)
-    return { doc, consumed: [FILE], notes }
-  },
 }

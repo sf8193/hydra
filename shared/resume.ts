@@ -10,13 +10,8 @@
 //
 // A suspension counts whatever its cause: asleep, or the loop held by something untimed, nothing on a timer could
 // run in it. The cause only names it, for the log and the alerts: on macOS the kernel's last sleep and wake instants
-// say which (`kern.sleeptime`, `kern.waketime`); elsewhere it stays "asleep or stalled". A hold the OS says was not
-// a sleep goes on to `onStalled`.
-
-import { execFile } from 'child_process'
-import { promisify } from 'util'
-
-const execFileP = promisify(execFile)
+// say which (`kern.sleeptime`, `kern.waketime`, read by infra/last-sleep.ts); elsewhere it stays "asleep or stalled".
+// A hold the OS says was not a sleep goes on to `onStalled`.
 
 /** Suspensions kept, newest last. Older ones are dropped: a timestamp from before them ages by wall time, as before. */
 const SUSPENSIONS_KEPT = 256
@@ -54,6 +49,7 @@ export type ResumeDetector = {
 
 export type ResumeDetectorDeps = {
   now?: () => number
+  /** The OS's last sleep and wake (infra/last-sleep.ts on macOS). Without it every suspension stays `asleep or stalled`. */
   lastSleep?: LastSleep
   /** The loop watch's gap not yet reported (loop-watch.ts `pendingGap`): counted as suspended until its beat comes. */
   pendingGap?: (now: number) => { from: number; to: number } | null
@@ -65,21 +61,8 @@ export type ResumeDetectorDeps = {
 /** `75s` under two minutes, `99m` beyond. */
 export const span = (ms: number) => ms < 120_000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60_000)}m`
 
-/**
- * macOS's last sleep and wake. Async, absolute path, killed outright at its deadline, so a slow machine on wake can
- * delay the name of a resume but never hold the loop. `{ sec = 1794422780, usec = 970655 } Wed Nov 11 …` per line.
- */
-export const sysctlLastSleep: LastSleep = async () => {
-  if (process.platform !== 'darwin') return null
-  try {
-    const { stdout } = await execFileP('/usr/sbin/sysctl', ['-n', 'kern.sleeptime', 'kern.waketime'], { encoding: 'utf8', timeout: 2_000, killSignal: 'SIGKILL' })
-    const [slept, woke] = [...stdout.matchAll(/sec = (\d+), usec = (\d+)/g)].map(m => Number(m[1]) * 1000 + Math.floor(Number(m[2]) / 1000))
-    return slept === undefined || woke === undefined ? null : { sleptAt: slept, wokeAt: woke }
-  } catch { return null }
-}
-
 export function createResumeDetector({
-  now = Date.now, lastSleep = sysctlLastSleep, pendingGap = () => null, onStalled, log = line => { process.stderr.write(line) },
+  now = Date.now, lastSleep = async () => null, pendingGap = () => null, onStalled, log = line => { process.stderr.write(line) },
 }: ResumeDetectorDeps = {}): ResumeDetector {
   const kept: Suspension[] = []
 

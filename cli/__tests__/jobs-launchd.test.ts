@@ -4,7 +4,8 @@ import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { attemptIO, jobsIO, jobsLaunchdRun, jobsList, launchdIO, launchdNotes, parseJobs, runIO, syncLaunchd } from '../jobs.js'
 import { platformStateDir } from '../../shared/constants.js'
-import { LAUNCH_AGENTS_DIR, launchdCalendar, launchdPlist, stableBun } from '../../shared/jobs-launchd.js'
+import { LAUNCH_AGENTS_DIR, launchdCalendar, launchdPlist } from '../../shared/jobs-launchd.js'
+import { stableBun } from '../../infra/launch-agents.js'
 import { daemonFile, externalFile } from '../../shared/jobs.js'
 
 describe('a cron schedule as a launchd calendar', () => {

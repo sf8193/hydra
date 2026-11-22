@@ -10,10 +10,10 @@ import {
   waitForSocket, buildDaemonEnvs, pinnedBun, pinnedBunVersion, requireSpawnCwd, probeDaemonHealth, byteModel,
 } from './helpers.js'
 import { isKnownModel, SPIN_CPU_PERCENT } from '../shared/constants.js'
-import { modsExport, syncMods } from '../shared/mods.js'
+import { modsExport, syncMods } from '../infra/mods.js'
 import { checkDaemonCpu } from './watchdog-cpu.js'
 import { noteRestart } from './watchdog-restarts.js'
-import { bootRefusal } from '../config/migrate.js'
+import { bootRefusal } from '../infra/migrate.js'
 import { noteBootRefusal } from './boot-refusal.js'
 import { alertOperatorOnce } from './boot-refusal-alert.js'
 import { clearMainRecord, writeMainRecord } from '../shared/main-record.js'

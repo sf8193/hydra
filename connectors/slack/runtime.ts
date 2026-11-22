@@ -31,7 +31,7 @@ import { NO_SLACK_APP, SLACK_APP_NEEDS, appKey, appName, notConnected } from './
 import { timed } from '../../shared/loop-watch.js'
 import { registerSlackChannelNames } from '../../shared/link-previews.js'
 import { bareOf, readTarget } from '../../shared/target-kind.js'
-import { placeInInbox } from '../../shared/confined-inbox.js'
+import { placeInInbox } from '../../infra/confined-inbox.js'
 import { oneLine } from '../../shared/untrusted-text.js'
 
 const log = (line: string) => { process.stderr.write(line) }

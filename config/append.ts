@@ -4,7 +4,7 @@
 import { closeSync, openSync, readFileSync, statSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import { atomicWriteFileSync } from '../shared/atomic-write.js'
-import { HYDRA_TOML } from './migrate.js'
+import { HYDRA_TOML } from './toml-doc.js'
 
 const LOCK = 'hydra.toml.lock'
 const STALE_LOCK_MS = 10_000

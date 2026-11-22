@@ -51,7 +51,7 @@ jobs:
       - name: Cycles
         run: bun scripts/check-cycles.ts
 
-      # Capabilities, not names: no new branch on a platform or engine name outside the folders that own it, gateways/ and engines/ first (scripts/check-rules.ts); today's hits are listed there and the list only shrinks.
+      # The rule table (scripts/check-rules.ts): no new branch on a platform or engine name outside the folders that own it (capabilities, not names), and no new I/O in tier 0; today's hits are listed there and the list only shrinks.
       - name: Rules
         run: bun scripts/check-rules.ts
 

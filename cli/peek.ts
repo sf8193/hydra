@@ -1,5 +1,5 @@
 import { execSync } from 'child_process'
-import { tmuxNewSession } from '../shared/spawn-env.js'
+import { tmuxNewSession } from '../infra/tmux-session.js'
 import { randomUUID } from 'crypto'
 import { resolveSocket, sendRequest, shq, tmuxExists, tmuxKill } from './helpers.js'
 

@@ -2,7 +2,8 @@ import { test, expect } from 'bun:test'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { currentResultWord, readJobState, stateFile, writeAtomic } from '../jobs.js'
+import { currentResultWord, stateFile } from '../jobs.js'
+import { readJobState, writeAtomic } from '../../infra/job-files.js'
 
 // Job state and result files written before `not-now` became `deferred` still read.
 

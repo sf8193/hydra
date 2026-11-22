@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpath
 import { tmpdir } from 'os'
 import { join } from 'path'
 import type { InboundMessage } from '../../gateways/gateway.js'
-import { writeInboxFile } from '../../shared/confined-inbox.js'
+import { writeInboxFile } from '../../infra/confined-inbox.js'
 import { INBOX_DIR_NAME, INBOX_LIMITS, fileRefusal } from '../../config/write-confinement.js'
 import * as access from '../../sessions/access.js'
 import { MAX_ATTACHMENT_BYTES } from '../../sessions/access.js'

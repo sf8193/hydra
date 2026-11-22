@@ -5,7 +5,7 @@
 // The async window-activity reads live here too, outside the hold by design: they never block the loop.
 
 import { execFileSync, execFile } from 'child_process'
-import { tmuxNewSession } from '../shared/spawn-env.js'
+import { tmuxNewSession } from './tmux-session.js'
 
 /** How long a sync tmux call on the daemon's loop may take before it is killed. */
 export const TMUX_TIMEOUT_MS = 2_000

@@ -378,7 +378,7 @@ describe('the warning for an operator-access specialist someone else can talk to
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { addFragment } from '../add.js'
+import { addFragment } from '../../infra/add-fragment.js'
 
 describe('hydra config add refuses what only a hand edit sets', () => {
   const LIVE = `operator = "op"\n[people.op]\naddresses = ["slack:U0OP"]\n[mcp_servers.datadog]\ncommand = "bun"\ntools = ["a"]\n`

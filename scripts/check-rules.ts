@@ -6,13 +6,15 @@
 //
 // An ALLOWED entry is `<file name>: <the code that matched>`, with no folder, so moving a file keeps its entries; renaming
 // it, or editing the matched code, means updating them (--list prints the new form). An entry may repeat, once per hit.
-// Scope: production .ts files. Tests, test-setup.ts, scripts/ and the mods are out; so are each rule's owner folders.
+// Scope: production .ts files. Tests, test-setup.ts, scripts/ and the mods are out; so are each rule's owner folders. A
+// rule with a scope checks only the files it takes (io-in-core: tier 0, as check-layers places files).
 // check-owners (one owner file per dangerous primitive) is the other rule table; its rules can become rows here.
 
 import { execFileSync } from 'child_process'
 import { readFileSync } from 'fs'
 import { basename, join } from 'path'
 import { fileURLToPath } from 'url'
+import { tierOf } from './check-layers.js'
 
 export type Rule = {
   id: string
@@ -21,6 +23,8 @@ export type Rule = {
   pattern: RegExp
   /** Folders where matching is the job (the gateway naming its platform), so never a hit. */
   owners: string[]
+  /** The files the rule checks, when not all of them. */
+  scope?: (path: string) => boolean
   allowed: readonly string[]
   fix: string
 }
@@ -37,6 +41,8 @@ const nameBranch = (subject: string, names: string[]) => {
 }
 
 const CAPABILITIES_NOT_NAMES = 'capabilities, not names'
+
+const IO_MODULES = String.raw`['"](?:node:)?(?:fs|fs/promises|child_process|net)['"]`
 
 export const RULES: readonly Rule[] = [
   {
@@ -86,6 +92,36 @@ export const RULES: readonly Rule[] = [
     ],
     fix: 'give the engine a capability (a field or method on EngineAdapter, engines/engine-adapter.ts) and branch on that',
   },
+  {
+    id: 'io-in-core',
+    principle: 'tier 0 does no I/O',
+    // An import of a module that reads, writes, runs or connects, Bun's own ways to, or a fetch. A type-only import is not
+    // I/O (the lookbehind stops at the previous module string, so an earlier `import type` line hides nothing after it).
+    pattern: new RegExp(String.raw`(?<!\bimport\s+type\b[^'"]*)\bfrom\s*${IO_MODULES}|\b(?:import|require)\s*\(\s*${IO_MODULES}\s*\)|\bBun\.(?:spawn|spawnSync|write|file|serve|connect|listen)\b|\bBun\.\$|(?<![\w.$])fetch\s*\(`, 'g'),
+    owners: [],
+    // Tier 0 (shared/, config/, routing/): what the tiers above build on, so it stays pure. Every other tier may do I/O.
+    scope: path => tierOf(path) === 0,
+    allowed: [
+      // config/: hydra.toml's loader and its readers (load, watch, token-vars), which move when load does: its reads become one
+      // infra loader handing a pure validate a snapshot. admit and append write hydra.toml, and sessions/access.ts, which
+      // other work in progress holds, imports them.
+      "admit.ts: from 'fs'",
+      "append.ts: from 'fs'",
+      "load.ts: Bun.spawnSync",
+      "load.ts: from 'fs'",
+      "token-vars.ts: from 'fs'",
+      "watch.ts: from 'fs'",
+      // routing/: the guard runs the operator's guard command.
+      "guard.ts: from 'child_process'",
+      // shared/: atomic-write moves with config/append, which uses it. main-record's importers are sessions/main.ts and
+      // cli/lifecycle.ts, and sessions/ has other work in progress. socket-supervisor's fetch is the default of its
+      // injected one.
+      "atomic-write.ts: from 'fs'",
+      "main-record.ts: from 'fs'",
+      "socket-supervisor.ts: fetch(",
+    ],
+    fix: 'move the I/O to infra/ (tier 1), keeping the pure part (types, parsing, rules) in tier 0, or have the caller pass in what was read',
+  },
 ]
 
 const inScope = (path: string) => path.endsWith('.ts') && !path.endsWith('.d.ts') && !path.endsWith('.test.ts')
@@ -102,7 +138,7 @@ export function hits(files: Array<{ path: string; text: string }>, rules: readon
     if (!inScope(path)) continue
     const code = uncomment(text)
     for (const rule of rules) {
-      if (rule.owners.some(o => path.startsWith(o))) continue
+      if (rule.owners.some(o => path.startsWith(o)) || (rule.scope && !rule.scope(path))) continue
       for (const m of code.matchAll(rule.pattern)) {
         out.push({ rule, path, line: code.slice(0, m.index).split('\n').length, entry: `${basename(path)}: ${m[0].replace(/\s+/g, ' ')}` })
       }

@@ -1,4 +1,3 @@
-import * as childProcess from 'child_process'
 import { sourcedEnvNames } from './env-parse.js'
 /**
  * tmux panes inherit RLIMIT_NOFILE from the tmux *server*, not from whoever ran
@@ -21,14 +20,6 @@ export const TMUX_PANE_FD_LIMIT = 65536
 export function withRaisedFdLimit(command: string): string {
   return `ulimit -n ${TMUX_PANE_FD_LIMIT} 2>/dev/null; ${command}`
 }
-
-const SWEEP_TIMEOUT_MS = 500
-// new-session is killed at this unless the caller names its own bound: the daemon creates sessions on its one
-// event loop, and a hung tmux server would otherwise hold it for good. Longer than a read: it forks a shell.
-export const NEW_SESSION_TIMEOUT_MS = 5_000
-
-// tmux exits 1 for a cold start and for a real error alike; only the text differs.
-const NO_SERVER = /no server running|error connecting to/
 
 export const SCRUBBED_SPAWN_VARS = [
   // The Slack connector's default tokens: only the Slack connector may hold them. HYDRA_SLACK_USER_TOKEN reads as the
@@ -75,9 +66,6 @@ export function _resetScrubbedForTesting(): void {
 export function scrubbedSpawnVars(): readonly string[] {
   return [...SCRUBBED_SPAWN_VARS, ...registered]
 }
-
-const sweepArgvFor = (vars: readonly string[]): string[] =>
-  vars.flatMap((v, i) => (i === 0 ? [] : [';']).concat('set-environment', '-gr', v))
 
 // Removes them, so nothing the daemon forks can inherit them. Returns what this call took.
 export function captureSpawnVars(env: NodeJS.ProcessEnv = process.env): Readonly<Record<string, string>> {
@@ -141,34 +129,6 @@ export function stateEnvUnsets(names: Iterable<string> = sourcedEnvNames()): str
   return [...new Set(names)]
     .filter(n => /^[A-Za-z_][A-Za-z0-9_]*$/.test(n) && !SHELL_READONLY.has(n) && !STATE_ENV_KEEP.has(n) && !STATE_ENV_KEEP_PREFIXES.some(p => n.startsWith(p)))
     .sort()
-}
-
-type ExecFn = typeof childProcess.execFileSync
-type TmuxOpts = Omit<childProcess.ExecFileSyncOptions, 'env'> & { env?: NodeJS.ProcessEnv }
-
-export function tmuxNewSession(
-  args: string[],
-  opts: TmuxOpts = {},
-  exec: ExecFn = childProcess.execFileSync,
-): void {
-  const run = { stdio: 'pipe' as const, timeout: NEW_SESSION_TIMEOUT_MS, killSignal: 'SIGKILL' as const, ...opts, env: scrubbedSpawnEnv(opts.env) }
-  try {
-    exec('tmux', sweepArgvFor(scrubbedSpawnVars()), {
-      ...run,
-      timeout: run.timeout ? Math.min(run.timeout, SWEEP_TIMEOUT_MS) : SWEEP_TIMEOUT_MS,
-    })
-  } catch (err) {
-    const e = err as { stderr?: unknown; message?: string; status?: number; code?: string }
-    const stderr = String(e.stderr ?? '').trim()
-    if (e.code !== 'ENOENT' && !NO_SERVER.test(stderr)) {
-      const cause = [stderr, e.code, e.status === undefined ? '' : `exit ${e.status}`, e.message]
-        .filter(Boolean).join(' ')
-      process.stderr.write(
-        `hydra: tmux env sweep failed (${cause}) — a pane may inherit ${scrubbedSpawnVars().join(', ')}\n`,
-      )
-    }
-  }
-  exec('tmux', ['new-session', ...args], run)
 }
 
 // A session's identity. Claude and omp export their own at launch. A process started from a session's

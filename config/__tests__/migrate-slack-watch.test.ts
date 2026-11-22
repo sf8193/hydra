@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'fs
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { migrateSlackWatch, type SlackWatchMigration } from '../migrate-slack-watch.js'
-import { planMigrate, applyMigrate } from '../migrate.js'
+import { planMigrate, applyMigrate } from '../../infra/migrate.js'
 import { loadHydraConfig } from '../load.js'
 import { route } from '../../routing/route.js'
 import { mustParsePlace, type HydraConfig } from '../types.js'

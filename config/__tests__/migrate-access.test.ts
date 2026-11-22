@@ -3,7 +3,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { accessStep, applyMigrate, bootRefusal, planMigrate, type MigrateInput } from '../migrate.js'
+import { accessStep, applyMigrate, bootRefusal, planMigrate, type MigrateInput } from '../../infra/migrate.js'
 import { loadHydraConfig } from '../load.js'
 import { testLoadEnv } from './load-env.js'
 

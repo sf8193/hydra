@@ -4,10 +4,8 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { createServer } from 'net'
 
-import {
-  appendBridgeLife, bridgeLifeDir, bridgeLifePath, describeBridgeExit, pidAlive, pruneBridgeLife, readBridgeLife,
-  type BridgeLifeEvent,
-} from '../bridge-life.js'
+import { bridgeLifeDir, bridgeLifePath, describeBridgeExit, type BridgeLifeEvent } from '../bridge-life.js'
+import { appendBridgeLife, pidAlive, pruneBridgeLife, readBridgeLife } from '../../infra/bridge-life-file.js'
 
 const T0 = 1_760_000_000_000
 const start: BridgeLifeEvent = { ev: 'start', ts: T0, pid: 42, ppid: 41, sessionId: 's1' }

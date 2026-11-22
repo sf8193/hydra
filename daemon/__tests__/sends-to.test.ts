@@ -7,8 +7,9 @@ import { rmSync } from 'fs'
 import { join } from 'path'
 import { STATE_DIR, gateway } from '../../infra/config.js'
 import { registry } from '../../sessions/registry.js'
-import { transport } from '../../sessions/bridge-transport.js'
+import { transport, setDeliveryGate } from '../../sessions/bridge-transport.js'
 import { executeTool, restrictedRefusal } from '../../app/bridge-dispatch.js'
+import { deliveryRefusal } from '../../app/restricted.js'
 import { renderSend, sendToThread, sendDeps, sendsToRefusal, _resetSends, SEND_MAX_PER_WINDOW, SEND_WINDOW_MS, SEND_NOTICE } from '../../app/sends-to.js'
 import { getToolsForSession, isToolAllowed, noteDeclaredRestrictions } from '../../sessions/tool-surface.js'
 import { RESTRICTED_SEND_TYPES, UNIVERSAL_TOOLS } from '../../shared/tool-definitions.js'
@@ -73,6 +74,7 @@ type Landed = { from: string; target: string; envelope: string }
 const landed: Landed[] = []
 
 beforeEach(() => {
+  setDeliveryGate(deliveryRefusal)   // a test that is about the landing, not the gate, unsets it
   _setHydraConfigForTesting(load(TOML))
   for (const [s, t] of [['ops', 'ops-thread'], ['deep', 'deep-thread'], ['plain', 'plain-thread'], ['full', 'full-thread']]) setSpecialistThread(s, t)
   landed.length = 0; _resetSends()
@@ -358,6 +360,7 @@ describe('what any session sends INTO a restricted session is fenced and capped 
 describe('a landing on the real session', () => {
   test('the envelope reaches the specialist\'s own session through its adapter, with its own thread as the chat_id to answer in', async () => {
     Object.assign(sendDeps, real)
+    setDeliveryGate(() => undefined)   // the session's policy here is a stand-in: this test is about the landing, not the drift gate
     sendDeps.linkOf = async () => undefined
     const got: Record<string, unknown>[] = []
     const deep = session('deep-live', 'deep-thread', { adapter: fakeAdapter({ isAlive: () => true, deliver: async (_i: unknown, m: Record<string, unknown>) => { got.push(m); return { status: 'accepted' } } }) })
@@ -468,6 +471,7 @@ describe('the receiver\'s thread shows a one-line note that a hand-off arrived',
   })
   test('through the real landing: gateway.send is called once for the receiver\'s own thread, as subtext', async () => {
     Object.assign(sendDeps, real)
+    setDeliveryGate(() => undefined)   // as above: the landing, not the drift gate
     sendDeps.linkOf = async () => undefined
     const sentTo: { id: string; opts: unknown }[] = []
     const realSend = gateway.send

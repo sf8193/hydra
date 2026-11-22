@@ -1,5 +1,7 @@
-import { appendFileSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync } from 'fs'
-import { dirname, join } from 'path'
+// A bridge's life record: its events, where its file sits, and how the daemon words a bridge's end. Writing and reading
+// the file: infra/bridge-life-file.ts.
+
+import { join } from 'path'
 
 type ExitCause = { ev: 'stdin' | 'signal'; ts: number; ppid: number; detail: string }
 
@@ -16,35 +18,6 @@ export function bridgeLifeDir(stateDir: string): string {
 
 export function bridgeLifePath(stateDir: string, sessionId: string, pid: number): string {
   return join(bridgeLifeDir(stateDir), `${sessionId.replace(/[^\w-]/g, '_')}-${pid}.jsonl`)
-}
-
-export function appendBridgeLife(path: string, event: BridgeLifeEvent): void {
-  try {
-    if (event.ev === 'start') mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
-    appendFileSync(path, JSON.stringify(event) + '\n')
-  } catch (err) {
-    try { process.stderr.write(`bridge: life record write failed (${path}): ${err}\n`) } catch {}
-  }
-}
-
-export function readBridgeLife(path: string): BridgeLifeEvent[] {
-  let raw: string
-  try { raw = readFileSync(path, 'utf8') } catch { return [] }
-  const events: BridgeLifeEvent[] = []
-  for (const line of raw.split('\n')) {
-    if (!line) continue
-    try { events.push(JSON.parse(line) as BridgeLifeEvent) } catch {}
-  }
-  return events
-}
-
-export function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === 'EPERM'
-  }
 }
 
 function ago(ms: number): string {
@@ -83,18 +56,4 @@ export function describeBridgeExit(events: BridgeLifeEvent[], alive: boolean, no
   if (lastError) notes.push(`${errors.length} uncaught error(s) recorded, last: ${lastError.detail.replace(/\s+/g, ' ').slice(0, 200)}`)
   if (events.length > 0 && !start) notes.push('no start record')
   return notes.length ? `${head} (${notes.join('; ')})` : head
-}
-
-export function pruneBridgeLife(stateDir: string, maxAgeMs: number, now: number): void {
-  const dir = bridgeLifeDir(stateDir)
-  let names: string[]
-  try { names = readdirSync(dir) } catch { return }
-  for (const name of names) {
-    const path = join(dir, name)
-    const pid = Number(name.match(/-(\d+)\.jsonl$/)?.[1])
-    try {
-      if (pid && pidAlive(pid)) continue
-      if (now - statSync(path).mtimeMs > maxAgeMs) unlinkSync(path)
-    } catch {}
-  }
 }

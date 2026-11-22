@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { writeFileSync, mkdtempSync, symlinkSync, linkSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { KEPT_EXTENSIONS } from '../../shared/confined-inbox.js'
+import { KEPT_EXTENSIONS } from '../../infra/confined-inbox.js'
 import { AUDIO_EXTENSIONS, isAudioFile, mergeTranscripts, transcriptionEnabled, transcribeDownloads } from '../../infra/transcription.js'
 
 describe('isAudioFile', () => {
