@@ -15,8 +15,6 @@ import type { SessionInfo } from '../../sessions/registry.js'
 import { gateway } from '../../infra/config.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import { sessionTokenHash } from '../../sessions/cli-caller.js'
-import { rmSync } from 'fs'
-import { join } from 'path'
 
 const PARENT_CH = 'parent-channel-ksd'
 let deleted: string[] = []
@@ -259,7 +257,7 @@ describe('hydra kill --destroy', () => {
   test('the token of a session that has ended (a crash left its record) is unverified: nothing is killed', async () => {
     const pm = seed('pm-c10', 'th-pm-c10')
     seed('kid-cli10', 'th-cli10', { parentId: pm.sessionId })
-    pm.deadAt = Date.now(); rmSync(join(tmux.dir, 'alive-pm-c10'))   // its pane is gone
+    pm.deadAt = Date.now(); tmux.dead('pm-c10')   // its pane is gone
     const res = await handleCLIRequest(req({ name: 'kid-cli10', destroy: true }, as(pm)))
     expect(res.ok).toBe(false)
     expect(JSON.stringify(res)).toContain('which has ended')

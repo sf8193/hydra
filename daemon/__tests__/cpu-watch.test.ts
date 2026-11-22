@@ -44,7 +44,8 @@ function record(sessionId: string, pid: number, ppid: number, ts: number): void 
 
 type Args = Parameters<typeof sampleCpu> extends [unknown, ...infer R] ? R : never
 const sampleNow = async (...args: Args) => sampleCpu(await psAll(), ...args)
-const tick = () => new Promise(r => setTimeout(r, 1000))
+// macOS `ps -o time=` has centisecond resolution (0:00.20), so 200ms ticks measure real CPU cleanly; Linux `ps` reports whole seconds.
+const tick = () => new Promise(r => setTimeout(r, process.platform === 'darwin' ? 200 : 1000))
 // Real processes on a shared machine: a busy loop may get far less than a core, so these tests classify at a
 // threshold any running loop clears (the 90% rule is pinned in cpu-spin.test.ts), and allow time for the ticks.
 const LOW_THRESHOLD = 10
@@ -100,7 +101,7 @@ describe('sampleCpu', () => {
     record('main', busy.pid!, process.pid, busyStartedAt)
     const main = { tmuxName: 'hydra-cpu-byte', pid: process.pid }
     let sample
-    for (let i = 0; i < 10 && !sample?.main?.spinning; i++) { sample = await sampleNow([], () => undefined, PRESSURE, main); await tick() }
+    for (let i = 0; i < 10 && !sample?.main?.spinning; i++) { sample = await sampleNow([], () => undefined, PRESSURE, main); if (!sample?.main?.spinning) await tick() }
     expect(sample!.main).toMatchObject({ bridgePid: busy.pid, spinning: 'bridge' })
     expect(sample!.orphans).toEqual([])
     expect(dms.length).toBe(1)
@@ -111,7 +112,7 @@ describe('sampleCpu', () => {
     const s = session('spin-8')
     record(s.sessionId, busy.pid!, process.pid, busyStartedAt)
     let v
-    for (let i = 0; i < 10 && !v?.spinning; i++) { v = (await sampleNow([s], () => PANE, PRESSURE)).sessions.get(s.sessionId); await tick() }
+    for (let i = 0; i < 10 && !v?.spinning; i++) { v = (await sampleNow([s], () => PANE, PRESSURE)).sessions.get(s.sessionId); if (!v?.spinning) await tick() }
     expect(v!.spinning).toBe('bridge')
     expect((await sampleCpu(undefined, [s], () => PANE, PRESSURE)).sessions.size).toBe(0)
     await tick()
@@ -126,7 +127,7 @@ describe('sampleCpu', () => {
     const s = session('spin-2', 'working')
     record(s.sessionId, busy.pid!, process.pid, busyStartedAt)
     let last
-    for (let i = 0; i < 3; i++) { last = (await sampleNow([s], () => PANE, PRESSURE)).sessions.get(s.sessionId)!; await tick() }
+    for (let i = 0; i < 3; i++) { last = (await sampleNow([s], () => PANE, PRESSURE)).sessions.get(s.sessionId)!; if (i < 2) await tick() }
     expect(last!.bridgePct!).toBeGreaterThanOrEqual(LOW_THRESHOLD)
     expect(last!.spinning).toBeNull()
     expect(dms.length).toBe(0)
@@ -152,7 +153,7 @@ describe('sampleCpu', () => {
     strays.push(pid)
     record('gone-session', pid, shPid, Date.now())
     let sample
-    for (let i = 0; i < 10 && !sample?.orphans[0]?.spinning; i++) { sample = await sampleNow([], () => undefined, PRESSURE); await tick() }
+    for (let i = 0; i < 10 && !sample?.orphans[0]?.spinning; i++) { sample = await sampleNow([], () => undefined, PRESSURE); if (!sample?.orphans[0]?.spinning) await tick() }
     expect(sample!.orphans).toEqual([expect.objectContaining({ pid, key: 'gone-session', spinning: true })])
     expect(dms.length).toBe(1)
     expect(dms[0]).toContain(`orphan bridge pid ${pid}`)

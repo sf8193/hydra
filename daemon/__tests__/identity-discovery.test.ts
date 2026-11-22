@@ -7,7 +7,7 @@
 
 import { engines } from '../../sessions/engine-instances.js'
 import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test'
-import { discoverClaudeSessionId, killSession } from '../../app/session-lifecycle.js'
+import { discoverClaudeSessionId, killSession, killTiming } from '../../app/session-lifecycle.js'
 import { mkdirSync, writeFileSync, mkdtempSync, existsSync, rmSync } from 'fs'
 import { execFileSync } from 'child_process'
 import { tmpdir } from 'os'
@@ -289,8 +289,13 @@ describe('killSession keepRecord: ended the way a crash leaves it', () => {
   test('a tmux session that outlives the kill is still caught by the deferred kill, though the kept record has its name', async () => {
     const info = seed('claude', { claudeSessionId: SID })
     tmux.alive(info.tmuxName)  // kill-session "succeeds" but the session stays up
-    await killSession(info, 'idle 7d, ended', { keepRecord: true })
-    await Bun.sleep(3_300)
-    expect(tmux.calls().filter(c => c === `kill-session -t ${info.tmuxName}`).length).toBe(2)
+    const saved = killTiming.deferredKillMs
+    killTiming.deferredKillMs = 20
+    try {
+      await killSession(info, 'idle 7d, ended', { keepRecord: true })
+      const killCount = () => tmux.calls().filter(c => c === `kill-session -t ${info.tmuxName}`).length
+      for (let i = 0; i < 100 && killCount() < 2; i++) await Bun.sleep(10)
+      expect(killCount()).toBe(2)
+    } finally { killTiming.deferredKillMs = saved }
   }, 10_000)
 })

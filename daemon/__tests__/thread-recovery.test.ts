@@ -601,7 +601,7 @@ describe('handleForkIntercept', () => {
 
   // Z4: the fork guard asks the adapter whether the source is alive. Claude:
   // tmux. Codex: app-server connection, then socket, then tmux.
-  const dead = (info: SessionInfo) => rmSync(join(tmux.dir, `alive-${info.tmuxName}`))
+  const dead = (info: SessionInfo) => tmux.dead(info.tmuxName)
   const refused = (info: SessionInfo) => sent.some(s => s.includes(`Cannot fork — **${info.tmuxName}** is no longer running.`))
 
   test('Z4 Claude with tmux gone → refused, nothing spawned', async () => {

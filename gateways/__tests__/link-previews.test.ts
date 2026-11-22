@@ -59,6 +59,7 @@ describe('Slack', () => {
     } } }
     ;(gw as any)._sendChain = Promise.resolve()
     ;(gw as any)._lastSendAt = 0
+    ;(gw as any)._sendRateMs = 0
     ;(gw as any).noteSent = () => {}
     return { gw, calls }
   }
@@ -90,6 +91,7 @@ describe('Slack: hydra\'s own subtext lines', () => {
     ;(gw as any).app = { client: { chat: { postMessage: async (args: any) => { calls.push(args); return { ts: '1.1' } } } } }
     ;(gw as any)._sendChain = Promise.resolve()
     ;(gw as any)._lastSendAt = 0
+    ;(gw as any)._sendRateMs = 0
     ;(gw as any).noteSent = () => {}
     return { gw, calls }
   }
@@ -223,6 +225,7 @@ describe('link_previews = "single": at most one preview per post', () => {
     ;(gw as any).app = { client: { chat: { postMessage: async (a: any) => { calls.push(a); return { ts: '1.1' } } } } }
     ;(gw as any)._sendChain = Promise.resolve()
     ;(gw as any)._lastSendAt = 0
+    ;(gw as any)._sendRateMs = 0
     ;(gw as any).noteSent = () => {}
     return { gw, calls }
   }

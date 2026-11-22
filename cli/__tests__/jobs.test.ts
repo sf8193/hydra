@@ -735,7 +735,7 @@ await jobsAttempt(JSON.parse(process.argv[2])); process.exit(0)\n`)
     writeFileSync(daemon, `import { spawnAttempt } from ${JSON.stringify(join(repo, 'connectors', 'clock', 'jobs-clock.ts'))}
 import { attemptArgv } from ${JSON.stringify(join(repo, 'shared', 'jobs.ts'))}
 const args = [${JSON.stringify(join(repo, 'cli', 'hydra.ts'))}, ...attemptArgv({ platform: 'test', name: 'sweep', dispatch: 1, nonce: 'n', slot: 's', manual: false, stateDir: ${JSON.stringify(dir)} })]
-console.log(spawnAttempt(args, JSON.stringify({ name: 'sweep', schedule: '* * * * *', check: 'sleep 1; echo after-daemon-exit; echo more >&2', mode: 'none' }), ${JSON.stringify(join(jobsState, 'sweep.log'))}))\n`)
+console.log(String(spawnAttempt(args, JSON.stringify({ name: 'sweep', schedule: '* * * * *', check: 'sleep 1; echo after-daemon-exit; echo more >&2', mode: 'none' }), ${JSON.stringify(join(jobsState, 'sweep.log'))})))\n`)
     const p = Bun.spawn([process.execPath, daemon], { stdout: 'pipe', stderr: 'pipe' })
     const attemptPid = Number((await new Response(p.stdout).text()).trim())
     expect(await p.exited).toBe(0)                  // the daemon is gone; the attempt runs on

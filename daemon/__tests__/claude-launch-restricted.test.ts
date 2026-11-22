@@ -312,14 +312,14 @@ describe('generated settings and mcp-config', () => {
   })
 
   test('a launch that fails after the files were written (tmux refuses the session) leaves none behind', async () => {
-    writeFileSync(join(fake.dir, 'tmux'), '#!/bin/sh\ncase "$1" in new-session) echo "no server" >&2; exit 1;; esac\n', { mode: 0o755 })
+    fake.fail('new-session', 'no server')
     await expect(launch()).rejects.toThrow(/failed to spawn tmux session/)
     expect(existsSync(restrictedDir()) ? readdirSync(restrictedDir()) : []).toEqual([])
   })
 
   test('a launch that fails before the files exist leaves none either, and a failed one does not take an earlier running session\'s', async () => {
     await new ClaudeEngine({} as any).launch({ ...base, tmuxName: 'other', sessionId: '99999999-9999-4999-8999-999999999999' } as any)
-    writeFileSync(join(fake.dir, 'tmux'), '#!/bin/sh\ncase "$1" in new-session) exit 1;; esac\n', { mode: 0o755 })
+    fake.fail('new-session')
     await expect(launch()).rejects.toThrow()
     expect(readdirSync(restrictedDir()).sort()).toEqual(['other-99999999-9999-4999-8999-999999999999.mcp.json', 'other-99999999-9999-4999-8999-999999999999.settings.json'])
   })
