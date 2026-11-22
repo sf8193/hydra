@@ -153,6 +153,16 @@ export function resolveLaunchSelection(raw: string, engine?: EngineName): { mode
 export function resolveEngineAlias(engine: EngineName, alias: string): string | undefined {
   return lookup(ENGINE_PROFILES[engine].aliases, alias.toLowerCase())
 }
+
+/** Resolve a chat alias across every engine's profile (`opus`, `sol`, `omp-sonnet`, `neon`, …). No alias appears in two profiles (shared/__tests__/constants.test.ts). */
+export function resolveAnyEngineAlias(alias: string): { model: string; engine: EngineName } | undefined {
+  const key = alias.toLowerCase()
+  for (const [engine, profile] of Object.entries(ENGINE_PROFILES) as Array<[EngineName, EngineProfile]>) {
+    const model = lookup(profile.aliases, key)
+    if (model) return { model, engine }
+  }
+  return undefined
+}
 export const resolveModelAlias = (alias: string) => resolveEngineAlias('claude', alias)
 export const resolveCodexModelAlias = (alias: string) => resolveEngineAlias('codex', alias)
 export const resolveOmpModelAlias = (alias: string) => resolveEngineAlias('omp', alias)

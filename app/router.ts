@@ -14,8 +14,8 @@ import { transcribeDownloads, mergeTranscripts } from '../infra/transcription.js
 
 import { handleSpawnIntercept, handleTemplateSpawn, handleKillIntercept, handleRestartIntercept, handleReconnectIntercept, handleCommandsIntercept } from './commands/global.js'
 import { handleRecoverIntercept } from './recovery.js'
-import { resolveModelAlias, resolveCodexModelAlias, resolveEngineAlias, engineAliasPattern, extractModelPrefix, isDeleteReaction, MODEL_ALIAS_PATTERN, MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES, DEFAULT_REVIEW_ROUNDS } from '../shared/constants.js'
-import { ENGINES } from '../shared/engines/index.js'
+import { resolveModelAlias, resolveCodexModelAlias, resolveEngineAlias, resolveAnyEngineAlias, engineAliasPattern, extractModelPrefix, isDeleteReaction, MODEL_ALIAS_PATTERN, MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES, DEFAULT_REVIEW_ROUNDS } from '../shared/constants.js'
+import { ENGINES, ENGINE_PROFILES } from '../shared/engines/index.js'
 import { isForMain, noteMainChannel } from '../sessions/main.js'
 import { handleMainHandoffIntercept } from './main-handoff.js'
 import { handleThreadKillIntercept, handleHandoffIntercept, handleDestroyIntercept, handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept, handlePeekIntercept } from './commands/thread.js'
@@ -109,7 +109,7 @@ export const BUILD_RE = /^(?:\/build_v2|build_v2|\/build|build)\s*(?:(\S+?):\s+)
 /** A model the sender put in the topic instead of before the colon, so the command would run the default model with the alias as part of the topic. Returns the hint to send, or undefined for a topic that merely starts with a word that is also an alias ("opus is slow"). Refused: an alias then a count (`fable 3 topic`), an alias then a spaced dash (`fable - topic`), or a versioned alias such as `fable-5-2` (the form that is easy to type in place of `fable-5-2:`; a task that opens by naming a versioned model is refused too, and is retyped). The separator is a space or tab, so a list or number on the alias's next line is not read as one. */
 export function misplacedModelHint(command: 'review' | 'build', topic: string): string | undefined {
   const counted = topic.match(/^(\S+)[ \t]+(\d+)(?=\s|$)/)
-  const known = (w: string) => resolveModelAlias(w) || resolveCodexModelAlias(w)
+  const known = (w: string) => resolveAnyEngineAlias(w)
   if (counted && known(counted[1])) {
     return `_Model syntax: \`/${command} ${counted[2]} ${counted[1]}: topic\` or \`/${command} ${counted[1]}: ${counted[2]} topic\`_`
   }
@@ -152,7 +152,7 @@ export function parseHandoffCommand(content: string): { model?: string; note?: s
   const m = content.match(/^\/?handoff(?:\s+([a-z][\w.-]*))?(?:(?::\s*|\s+[-–—]\s+)([\s\S]*?))?\s*$/i)
   if (!m) return null
   const [, model, rawNote] = m
-  if (model && rawNote !== undefined && !resolveModelAlias(model) && !resolveCodexModelAlias(model)) return null
+  if (model && rawNote !== undefined && !resolveAnyEngineAlias(model)) return null
   const note = rawNote?.trim()
   return { ...(model ? { model } : {}), ...(note ? { note } : {}) }
 }
@@ -170,15 +170,13 @@ export function isHandoffNearMiss(content: string): boolean {
 
 function resolveProtocolModel(alias: string | undefined, channelId: string, replyTo: string): ProtocolModelSelection | undefined | false {
   if (!alias) return undefined
-  const claudeModel = resolveModelAlias(alias)
-  if (claudeModel) return { model: claudeModel, engine: 'claude' }
-  const codexModel = resolveCodexModelAlias(alias)
-  if (!codexModel) {
-    const available = [...Object.keys(MODEL_ALIASES), ...Object.keys(CODEX_MODEL_ALIASES)].join(', ')
+  const resolved = resolveAnyEngineAlias(alias)
+  if (!resolved) {
+    const available = ENGINES.flatMap(e => Object.keys(ENGINE_PROFILES[e].aliases)).join(', ')
     void gateway.send(channelId, `_Unknown model \`${alias}\`. Available: ${available}_`, { replyTo }).catch(() => {})
     return false
   }
-  return { model: codexModel, engine: 'codex' }
+  return resolved
 }
 
 // ---------------------------------------------------------------------------
