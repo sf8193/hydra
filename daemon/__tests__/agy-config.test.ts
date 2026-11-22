@@ -16,6 +16,15 @@ test('a missing file gets the hydra entry: this checkout\'s tool server, run by 
   expect(args[0]).toEndWith('/daemon/codex-mcp-server.ts')
 })
 
+test('an empty file, as agy itself leaves mcp_config.json, gets the entries like a missing one', () => {
+  const m = fresh(), h = fresh()
+  for (const f of [m, h]) { registerHydraTools(f); writeFileSync(f, '') }
+  registerHydraTools(m)
+  registerHydraHooks(h)
+  expect(read(m).mcpServers.hydra.args[0]).toEndWith('/daemon/codex-mcp-server.ts')
+  expect(Object.keys(read(h).hydra)).toEqual(['SessionStart', 'PreInvocation', 'Stop'])
+})
+
 test('the operator\'s other servers and the hydra entry\'s other keys are kept; a stale hydra path is replaced', () => {
   const f = fresh(), first = fresh()
   registerHydraTools(first)

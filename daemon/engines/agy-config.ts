@@ -13,9 +13,10 @@ export const AGY_HOOKS_CONFIG = join(GEMINI_CONFIG, 'hooks.json')
 const TOOL_SERVER = join(import.meta.dir, '..', 'codex-mcp-server.ts')
 const HOOK_SCRIPT = join(import.meta.dir, '..', 'agy-hook.ts')
 
-// Rewrites `file` only when `edit` changes something. Throws if the file is not JSON.
+// Rewrites `file` only when `edit` changes something. Throws if the file is not JSON. An empty file counts as `{}`: agy itself leaves a 0-byte mcp_config.json.
 function update(file: string, edit: (config: any) => boolean): void {
-  const config = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {}
+  const text = existsSync(file) ? readFileSync(file, 'utf8').trim() : ''
+  const config = text ? JSON.parse(text) : {}
   if (!edit(config)) return
   mkdirSync(dirname(file), { recursive: true })
   const temp = `${file}.${process.pid}.tmp`   // a reader never sees a half-written file
