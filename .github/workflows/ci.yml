@@ -43,6 +43,10 @@ jobs:
       - name: Dynamic imports
         run: bun scripts/check-dynamic-imports.ts
 
+      # Imports point down the tiers, never up (scripts/check-layers.ts); today's upward imports are listed there and the list only shrinks.
+      - name: Layers
+        run: bun scripts/check-layers.ts
+
       - name: Install tmux
         run: sudo apt-get install -y tmux
 
