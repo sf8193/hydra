@@ -6,7 +6,7 @@ import { CAPABILITY_TOOLS } from '../../shared/constants.js'
 import { protocol } from '../protocol-dsl.js'
 import { resolveModifier } from '../modifiers.js'
 import { getActiveRuns } from '../protocol-runner.js'
-import { registry } from '../sessions.js'
+import { registry } from '../../sessions/registry.js'
 import { reviewResult } from '../review-result.js'
 
 // Real protocol definitions — the harness exercises them as-is

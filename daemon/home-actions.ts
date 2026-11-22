@@ -1,10 +1,10 @@
-import { registry } from './sessions.js'
-import { transport } from './bridge-transport.js'
+import { registry } from '../sessions/registry.js'
+import { transport } from '../sessions/bridge-transport.js'
 import { safeSend } from '../infra/util.js'
 import { confirmedStuckState, isBlockingKind, resolveStuckFromHome } from './pane-probe.js'
 import { handleResumeIntercept } from './commands/thread.js'
 import { refreshDashboardNow } from './dashboard.js'
-import { daemonPastOrphanGrace } from './session-reachability.js'
+import { daemonPastOrphanGrace } from '../sessions/session-reachability.js'
 import { homeRecoverable } from '../infra/home-status.js'
 
 const liveDeps = {

@@ -1,4 +1,4 @@
-import type { ThreadSessionEntry } from '../daemon/sessions.js'
+import type { ThreadSessionEntry } from '../sessions/registry.js'
 import type { SessionLabel } from '../shared/constants.js'
 import { isForeignPlaceholder } from '../engines/history.js'
 

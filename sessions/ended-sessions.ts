@@ -1,7 +1,7 @@
 // The sessions that have ended, read off the thread history hydra keeps (threads.json): the latest session of each thread nobody is home in
 // now. Read-only: it changes nothing and starts nothing. The router reads it to find a thread whose session could be revived for a Slack
 // thread (`hydra deliver --to thread:<id> --revive`).
-import { registry, threadRegistry, type ThreadMetadata } from './sessions.js'
+import { registry, threadRegistry, type ThreadMetadata } from './registry.js'
 import { occupancy, occupied } from './session-reachability.js'
 import { fallbackDescription, formatDuration } from '../infra/util.js'
 

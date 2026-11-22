@@ -1,7 +1,7 @@
 // A freshly started Claude session registers its bridge while Claude Code is still starting; a notification pushed at that moment is
 // dropped without a trace (issue #790). The flush waits for the session's first idle, and a notification arriving meanwhile queues behind it.
 import { describe, expect, test } from 'bun:test'
-import { BridgeTransport } from '../bridge-transport.js'
+import { BridgeTransport } from '../../sessions/bridge-transport.js'
 
 process.stderr.write = (() => true) as any
 const conn = (id: string) => { const written: any[] = []; return { conn: { sessionId: id, buf: '', socket: { destroyed: false, write: (s: string) => { written.push(JSON.parse(s)); return true } } } as any, written } }

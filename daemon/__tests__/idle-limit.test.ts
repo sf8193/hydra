@@ -1,10 +1,10 @@
 import { describe, test, expect, beforeEach, afterEach, jest } from 'bun:test'
-import { touchIdleLimit, resumeIdleLimit, clearIdleLimit, initIdleLimits, idleTtlMs, awaitingReply, busyFrom, IDLE_GRACE_MS, _idleTimersForTesting, _resetIdleLimitsForTesting } from '../idle-limit.js'
+import { touchIdleLimit, resumeIdleLimit, clearIdleLimit, initIdleLimits, idleTtlMs, awaitingReply, busyFrom, IDLE_GRACE_MS, _idleTimersForTesting, _resetIdleLimitsForTesting } from '../../sessions/idle-limit.js'
 import { idleReapMs } from '../../infra/config.js'
-import { setSpecialist, removeSpecialist } from '../../specialists/specialists.js'
-import { registerProtocol, _resetForTesting as resetProtocols } from '../protocol-registry.js'
-import { transport } from '../bridge-transport.js'
-import { registry, type SessionInfo } from '../sessions.js'
+import { setSpecialist, removeSpecialist } from '../../sessions/specialists.js'
+import { registerProtocol, _resetForTesting as resetProtocols } from '../../sessions/protocol-registry.js'
+import { transport } from '../../sessions/bridge-transport.js'
+import { registry, type SessionInfo } from '../../sessions/registry.js'
 import { DEFAULT_IDLE_TTL_MS } from '../../shared/constants.js'
 
 const sent: Array<{ sessionId: string; content: string }> = []

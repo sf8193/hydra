@@ -19,10 +19,10 @@
 import { copyFileSync, existsSync, readFileSync, renameSync } from 'fs'
 import { join } from 'path'
 import type { InboundMessage } from '../gateways/gateway.js'
-import type { SessionInfo } from './sessions.js'
+import type { SessionInfo } from '../sessions/registry.js'
 import { STATE_DIR } from '../infra/config.js'
 import { ensureSpecialist, SpecialistError } from '../specialists/specialist-deliver.js'
-import { specialistForThread } from '../specialists/specialists.js'
+import { specialistForThread } from '../sessions/specialists.js'
 import { atomicWriteFileSync, safeSend } from '../infra/util.js'
 import { on } from '../infra/event-bus.js'
 

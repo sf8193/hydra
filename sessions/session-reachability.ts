@@ -11,7 +11,7 @@
  * dead whose execution is still running is orphaned.
  */
 import { transport } from './bridge-transport.js'
-import { registry } from './sessions.js'
+import { registry } from './registry.js'
 import { tmuxHasSession } from '../infra/tmux.js'
 import { awakeSince } from '../shared/resume.js'
 

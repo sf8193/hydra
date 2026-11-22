@@ -12,7 +12,7 @@ import { confinementShortfall, confinementSurplus, readLoaded, verifyConfinement
 import { bridgeServerCommands, claudeSettingsProblems, MIN_CLAUDE_VERSION, claudeVersion, claudeVersionRefusal, confinementMcp, confinementRules, confinementSettings } from '../write-confinement.js'
 import { EMPTY_CONFIG } from '../../config/load.js'
 import { readDenyRoots } from '../../config/write-confinement.js'
-import { hydraLoadEnv } from '../hydra-config.js'
+import { hydraLoadEnv } from '../../infra/hydra-config.js'
 import type { HydraConfig } from '../../config/types.js'
 import { _resetSourcedEnvNamesForTesting, sourceEnvFiles } from '../../shared/env-parse.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'

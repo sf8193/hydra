@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { recoveryEntry, recoveryModel, deadSessionLabel, RESPAWN_RE } from '../../infra/recovery-selection.js'
 import { recoveryEngine } from '../../engines/history.js'
-import type { ThreadSessionEntry } from '../sessions.js'
+import type { ThreadSessionEntry } from '../../sessions/registry.js'
 
 test('respawn accepts model selection without breaking topics or templates', () => {
   // Unmatched optional groups are undefined at runtime; lib types say string.

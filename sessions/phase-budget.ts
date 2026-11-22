@@ -9,7 +9,7 @@
 // THIS module must never import session-lifecycle (which imports us to arm
 // budgets on spawn — importing back would be a cycle, the class PR #88
 // removed from this layer). daemon.ts, outside the cycle, does the wiring.
-import { registry, type SessionInfo } from './sessions.js'
+import { registry, type SessionInfo } from './registry.js'
 import { occupancy } from './session-reachability.js'
 import { transport } from './bridge-transport.js'
 import { safeSend } from '../infra/util.js'

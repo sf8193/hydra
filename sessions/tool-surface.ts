@@ -1,13 +1,13 @@
-import { registry } from './sessions.js'
+import { registry } from './registry.js'
 import { transport } from './bridge-transport.js'
 import { computeToolsForSession, type SessionTool } from '../engines/bridge-tools.js'
 import { CONFINED_TOOLS as TYPED_CONFINED_TOOLS, BASE_TOOLS as TYPED_BASE_TOOLS, ALL_CAPABILITY_TOOLS as TYPED_ALL_CAPABILITY_TOOLS } from '../shared/constants.js'
 import type { ToolBase, Capability, DerivedCapability } from '../shared/constants.js'
-import { isRestricted } from './policy-record.js'
-import type { SessionInfo } from './sessions.js'
+import { isRestricted } from '../daemon/policy-record.js'
+import type { SessionInfo } from './registry.js'
 import { resolveEngine } from '../engines/instances.js'
-import { specialistOf, boundAs, sendsToOf } from '../specialists/specialists.js'
-import { currentHydraConfig, onHydraConfigLoad } from './hydra-config.js'
+import { specialistOf, boundAs, sendsToOf } from './specialists.js'
+import { currentHydraConfig, onHydraConfigLoad } from '../infra/hydra-config.js'
 import { slackConfigured } from '../config/types.js'
 
 // Widened views: isToolAllowed checks arbitrary wire names, not just known ToolNames.

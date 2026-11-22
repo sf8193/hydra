@@ -2,11 +2,11 @@
 // post to it for days; these pin each place that refuses, routes or reports such an id.
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test'
 import { gateway } from '../../infra/config.js'
-import { registry } from '../sessions.js'
+import { registry } from '../../sessions/registry.js'
 import { backfillAnchorChannelIds } from '../session-lifecycle.js'
-import { refreshSessionVisual } from '../anchor-state.js'
+import { refreshSessionVisual } from '../../sessions/anchor-state.js'
 import { safeSend } from '../../infra/util.js'
-import { routeThreadId, reportUnaddressableThreads } from '../thread-route.js'
+import { routeThreadId, reportUnaddressableThreads } from '../../sessions/thread-route.js'
 import { DiscordGateway, isDiscordThreadId } from '../../gateways/discord.js'
 import { isSlackThreadId } from '../../gateways/slack.js'
 

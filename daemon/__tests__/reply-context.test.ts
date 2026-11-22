@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test'
 import type { InboundMessage, ReplyContext } from '../../gateways/gateway.js'
-import { replyContextLine, replyContextMeta, resolveReplyContext, trimQuote, REPLY_QUOTE_MAX } from '../reply-context.js'
+import { replyContextLine, replyContextMeta, resolveReplyContext, trimQuote, REPLY_QUOTE_MAX } from '../../shared/reply-context.js'
 
 const msg = (referenceMessageId: string | null): InboundMessage => ({
   id: 'm2', channelId: 'c1', authorId: 'u1', authorUsername: 'dan', content: 'yes, that one',

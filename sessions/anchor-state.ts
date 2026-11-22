@@ -1,6 +1,6 @@
 import { gateway, DEFAULT_SESSION_CHANNEL } from '../infra/config.js'
-import { registry, sessionEmoji, type SessionInfo } from './sessions.js'
-import { specialistEmoji, specialistOf } from '../specialists/specialists.js'
+import { registry, sessionEmoji, type SessionInfo } from './registry.js'
+import { specialistEmoji, specialistOf } from './specialists.js'
 import { occupancy } from './session-reachability.js'
 import { COUNT_EMOJI, SUPERSCRIPT, SUBSCRIPT, ANCHOR_STATES, type AnchorState } from '../gateways/gateway.js'
 

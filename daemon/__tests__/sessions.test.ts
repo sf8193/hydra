@@ -2,7 +2,7 @@ import { describe, test, expect } from 'bun:test'
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { STATE_DIR } from '../../infra/config.js'
-import { SessionRegistry, ThreadRegistry, SESSION_NAMES, sessionEmoji, ensureSessionType, type SessionInfo, type ThreadMetadata } from '../sessions.js'
+import { SessionRegistry, ThreadRegistry, SESSION_NAMES, sessionEmoji, ensureSessionType, type SessionInfo, type ThreadMetadata } from '../../sessions/registry.js'
 import { _setTmuxForTesting } from '../../infra/tmux.js'
 
 // Suppress stderr
@@ -343,7 +343,7 @@ describe('sessionEmoji', () => {
 // contract PR-0 S0.1: adapter is required, so boot's reattach is what supplies it.
 describe('reattachAdapters', () => {
   test("every record gets its engine's adapter; a record without an engine gets Claude's", async () => {
-    const { registry, reattachAdapters } = await import('../sessions.js')
+    const { registry, reattachAdapters } = await import('../../sessions/registry.js')
     const { engines, resolveEngine } = await import('../../engines/instances.js')
     // reattach walks the whole shared registry: put back what other files left there.
     const saved = [...registry.values()].map(i => [i, i.adapter] as const)

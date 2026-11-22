@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { executeTool } from '../bridge-dispatch.js'
-import * as access from '../access.js'
+import * as access from '../../sessions/access.js'
 import { gateway } from '../../infra/config.js'
-import { registry } from '../sessions.js'
+import { registry } from '../../sessions/registry.js'
 import { setHydra } from './test-hydra.js'
 
 const SID = 'hsw-owner'

@@ -8,8 +8,8 @@ import { ClaudeEngine } from '../../engines/claude-engine.js'
 import { killSession } from '../session-lifecycle.js'
 import { withFakeTmux } from './fake-tmux.js'
 import { checkSessionDeath, deathCheckIO } from '../bridge-server.js'
-import { registry, threadRegistry } from '../sessions.js'
-import type { SessionInfo } from '../sessions.js'
+import { registry, threadRegistry } from '../../sessions/registry.js'
+import type { SessionInfo } from '../../sessions/registry.js'
 
 let seq = 0
 function session(extra: Partial<SessionInfo> = {}): SessionInfo {

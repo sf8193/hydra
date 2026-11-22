@@ -237,7 +237,7 @@ Global options: `--daemon <name>` (target specific daemon), `--json` (raw JSON o
 | `daemon/cli-handler.ts` | Daemon-side request dispatch |
 | `infra/idempotency.ts` | Idempotency state machine |
 | `daemon/session-lifecycle.ts` | `doSpawnSession` primitive |
-| `daemon/session-reachability.ts` | Reachability classification (used by deliver) |
+| `sessions/session-reachability.ts` | Reachability classification (used by deliver) |
 | `shared/constants.ts` | Model aliases |
 | `diagrams/flow-deliver.mmd` | Deliver flow diagram |
 

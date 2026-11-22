@@ -16,13 +16,13 @@
 // session the first time the daemon starts with HYDRA_IDLE_REAP_DAYS set, gets a fresh window.
 // Like phase-budget, the reaper is injected at boot: this module must never import
 // session-lifecycle (which imports us).
-import { registry, parentSessionOf, type SessionInfo } from './sessions.js'
-import { isPlainWorker } from './policy-record.js'
+import { registry, parentSessionOf, type SessionInfo } from './registry.js'
+import { isPlainWorker } from '../daemon/policy-record.js'
 import { occupancy } from './session-reachability.js'
 import { transport } from './bridge-transport.js'
 import { safeSend, formatDuration } from '../infra/util.js'
 import { idleReapMs } from '../infra/config.js'
-import { listSpecialists } from '../specialists/specialists.js'
+import { listSpecialists } from './specialists.js'
 import { isProtocolParticipant } from './protocol-registry.js'
 import { sessionLiveAsync } from './session-activity.js'
 import { DEFAULT_IDLE_TTL_MS } from '../shared/constants.js'

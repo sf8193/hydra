@@ -1,11 +1,11 @@
 // `list_sessions` with include_ended and `hydra list --ended`: the sessions that have ended, read off the thread history. Read-only,
 // bounded (a window and a count), one per thread, and never a thread somebody is home in.
 import { describe, test, expect, afterEach } from 'bun:test'
-import { threadRegistry, registry, type ThreadMetadata } from '../sessions.js'
-import { endedSessions, endedWithinDays, ENDED_LIMIT } from '../ended-sessions.js'
+import { threadRegistry, registry, type ThreadMetadata } from '../../sessions/registry.js'
+import { endedSessions, endedWithinDays, ENDED_LIMIT } from '../../sessions/ended-sessions.js'
 import { handleCLIRequest } from '../cli-handler.js'
 import { executeTool } from '../bridge-dispatch.js'
-import { transport } from '../bridge-transport.js'
+import { transport } from '../../sessions/bridge-transport.js'
 import { fakeAdapter } from './test-harness.js'
 
 process.stderr.write = (() => true) as any

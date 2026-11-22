@@ -17,7 +17,7 @@ import { browserDownloadDir, browserProfileDir, fileRefusal, fileSendDecision, f
 import { CONFINED_TOOLS } from '../shared/constants.js'
 import { UNIVERSAL_TOOLS } from '../shared/tool-definitions.js'
 import { STATE_DIR } from '../infra/config.js'
-import { MAX_ATTACHMENT_BYTES } from './access.js'
+import { MAX_ATTACHMENT_BYTES } from '../sessions/access.js'
 import { expectedServerNames } from '../engines/claude-verify.js'
 import { bridgeCommand } from '../infra/plugin-manifest.js'
 import { readdirSync, readFileSync } from 'fs'

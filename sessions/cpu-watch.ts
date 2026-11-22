@@ -13,20 +13,20 @@
 
 import { readdirSync, readFileSync } from 'fs'
 import { join } from 'path'
-import { STATE_DIR } from './config.js'
-import { threadRegistry } from '../daemon/sessions.js'
-import type { SessionInfo } from '../daemon/sessions.js'
-import { notifyOperator } from '../daemon/access.js'
-import { isSessionWorkingAsync } from '../daemon/session-activity.js'
-import { fallbackDescription } from './util.js'
-import { isTmuxRecentlyActive } from './tmux.js'
-import type { PaneVitals } from './vitals-snapshot.js'
+import { STATE_DIR } from '../infra/config.js'
+import { threadRegistry } from './registry.js'
+import type { SessionInfo } from './registry.js'
+import { notifyOperator } from './access.js'
+import { isSessionWorkingAsync } from './session-activity.js'
+import { fallbackDescription } from '../infra/util.js'
+import { isTmuxRecentlyActive } from '../infra/tmux.js'
+import type { PaneVitals } from '../infra/vitals-snapshot.js'
 import { bridgeLifeDir, type BridgeLifeEvent } from '../shared/bridge-life.js'
 import { SPIN_CPU_PERCENT } from '../shared/constants.js'
 import {
   claudeAncestor, createCpuMeter, createSpinTracker, formatSpinAlert, hotProcess, startedAt,
   type ProcStat, type SpinEntry, type SpinWho, type SystemPressure,
-} from './cpu-spin.js'
+} from '../infra/cpu-spin.js'
 
 export type CpuVitals = {
   claudePid?: number

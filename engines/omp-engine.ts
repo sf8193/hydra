@@ -6,7 +6,7 @@
 
 import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'fs'
 import { join } from 'path'
-import type { SessionInfo } from '../daemon/sessions.js'
+import type { SessionInfo } from '../sessions/registry.js'
 import type {
   EngineAdapter, LaunchInput, LaunchResult, DeliveryResult, Notification, StopResult,
   ContextUsage, RecoveryPlan, RecoverySource, Turn,

@@ -5,7 +5,7 @@ import { CodexEngineAdapter } from '../../engines/codex-engine-adapter.js'
 import { parseContextPercent } from '../../infra/util.js'
 import { CACHE_HANDOFF_LINE, CONTEXT_ALERT_LINES, FULL_HANDOFF_DEFAULT_LINE } from '../context-lines.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
-import type { SessionInfo } from '../sessions.js'
+import type { SessionInfo } from '../../sessions/registry.js'
 
 const RULE = '─'.repeat(40)
 const footer = (line: string, conversation = '⏺ done') => `${conversation}\n${RULE}\n❯ \n${RULE}\n  ${line}\n`

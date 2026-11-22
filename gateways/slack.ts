@@ -226,7 +226,7 @@ export class SlackGateway implements ChatGateway {
     // Publish Home tab when user opens it
     this.app.event('app_home_opened' as any, async ({ event }: any) => {
       this.touchHeartbeat()
-      const { operatorIds } = await import('../daemon/access.js')
+      const { operatorIds } = await import('../sessions/access.js')
       if (!operatorIds().includes(event.user)) return
       if (this.homeTabHandler) {
         this.homeTabHandler(event.user).catch((e: Error) =>
@@ -239,7 +239,7 @@ export class SlackGateway implements ChatGateway {
       this.touchHeartbeat()
       await ack()
       if (!action?.value || !this.homeStatusHandler) return
-      const { operatorIds } = await import('../daemon/access.js')
+      const { operatorIds } = await import('../sessions/access.js')
       const click = parseHomeStatusClick(String(action.action_id), action.value, body?.user?.id, operatorIds())
       if (!click) {
         process.stderr.write(`slack gateway: home status action rejected for user ${body?.user?.id ?? '(none)'}\n`)
@@ -255,7 +255,7 @@ export class SlackGateway implements ChatGateway {
       await ack()
       const userId = body?.user?.id
       if (!userId) return
-      const { operatorIds } = await import('../daemon/access.js')
+      const { operatorIds } = await import('../sessions/access.js')
       if (!operatorIds().includes(userId)) {
         process.stderr.write(`slack gateway: home:spawn rejected — user ${userId} is not the operator\n`)
         return

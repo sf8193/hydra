@@ -2,13 +2,13 @@
 // for a thread id, and the deleted-thread case (exit 3). The spawn is stubbed through recovery.ts's seam.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { handleCLIRequest, type CLIRequest } from '../cli-handler.js'
-import { registry, threadRegistry, type SessionInfo } from '../sessions.js'
-import { transport } from '../bridge-transport.js'
+import { registry, threadRegistry, type SessionInfo } from '../../sessions/registry.js'
+import { transport } from '../../sessions/bridge-transport.js'
 import { _setRecoveryDeps, _resetRecoveryDeps, reviveDeps } from '../recovery.js'
 import { _resetBackoff } from '../../infra/recovery-backoff.js'
-import { _setDaemonStartedAtForTesting } from '../session-reachability.js'
+import { _setDaemonStartedAtForTesting } from '../../sessions/session-reachability.js'
 import { fakeAdapter } from './test-harness.js'
-import { removeSpecialist, setSpecialist } from '../../specialists/specialists.js'
+import { removeSpecialist, setSpecialist } from '../../sessions/specialists.js'
 import { getBackoff } from '../../infra/recovery-backoff.js'
 
 process.stderr.write = (() => true) as any
