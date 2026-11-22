@@ -29,17 +29,23 @@ import { gateway } from '../infra/config.js'
 import { SESSION_IDENTITY_VARS, capturedSpawnVars, stateEnvUnsets, scrubbedSpawnEnv, withRaisedFdLimit } from '../shared/spawn-env.js'
 import { modsExport } from '../infra/mods.js'
 import { BRIDGE_CHANNEL_FLAG, BRIDGE_MCP_SERVER_KEY, BRIDGE_PLUGIN_ID, BRIDGE_TOOLS_PERMISSION, BUILTIN_TOOL_PLUGIN_IDS } from '../infra/plugin-manifest.js'
-import { type LaunchPolicy, missingTokenRefusal, PolicyRefusal, remedy, RESTRICTED_MODS, RESTRICTED_PREAMBLE, sandboxInputs, serverToolRule, type RestrictedPolicy } from './launch-policy.js'
+import { type LaunchPolicy, missingTokenRefusal, PolicyRefusal, remedy, RESTRICTED_MODS, RESTRICTED_PREAMBLE, serverToolRule, type RestrictedPolicy } from '../shared/launch-policy.js'
 import { verifyConfinement as verifyConfinementLoaded, verifyLaunch as verifyLoaded, type Verdict } from './claude-verify.js'
 import { removeSessionToken, removeSpawnPrompt, shq, writeSessionToken, writeSpawnPrompt } from '../infra/launch-files.js'
 import { makeServerTmpDirs, removeRestrictedFiles, serverTmpDir, serverTmpRoot, writeRestrictedFiles } from '../infra/restricted-files.js'
 import { sandboxedServer, sandboxIssues } from '../config/server-sandbox.js'
-import type { PrivateRoot } from '../config/restricted-workdir.js'
-import type { LoadEnv } from '../config/types.js'
+import { currentHydraConfig, hydraLoadEnv } from '../infra/hydra-config.js'
+import { offLimitRoots, type PrivateRoot } from '../config/restricted-workdir.js'
+import type { HydraConfig, LoadEnv } from '../config/types.js'
 import { bridgeServerCommands, claudeSettingsProblems, claudeVersionRefusal, confinementRules, confinementServers, makeBrowserDirs, confinementLogLine, confinementMcp, confinementSettings } from './write-confinement.js'
 import { syncDaemonBridge } from './bridge-sync.js'
 import { clearNeedsAuthEntry, describeSetAt, NEEDS_AUTH_CLEARED_NOTE } from './claude-needs-auth.js'
 import { isRestricted, isRestrictedPolicy } from '../shared/policy-record.js'
+
+/** What a restricted launch builds the listed servers' sandbox from, as the daemon has it now: the probes and the places to keep servers out of. */
+type SandboxInputs = { env: LoadEnv; roots: PrivateRoot[] }
+
+export const sandboxInputs = (h: HydraConfig = currentHydraConfig()): SandboxInputs => { const env = hydraLoadEnv(); return { env, roots: offLimitRoots(env, h.offLimits ?? []) } }
 
 // What the pane-and-transcript methods read. The byte (main) has no SessionInfo, so these take only this.
 export type ClaudeSubject = Pick<SessionInfo, 'tmuxName'> & Partial<Pick<SessionInfo, 'claudeSessionId'>>

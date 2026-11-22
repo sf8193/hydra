@@ -11,7 +11,7 @@ import { nameHeldByAnother, occupancy, occupied } from '../sessions/session-reac
 import { withThreadLock } from '../sessions/specialists.js'
 import { browserProfileProblem, managedMcpNameClashes, unreadableWorkdir } from '../config/write-confinement.js'
 import { confinementRefusal, endVerifying, startVerifying, verifyBackoff, verifyRefusal, describePolicy, macosRefusal, resolvePolicy } from './restricted.js'
-import { missingTokenRefusal, PolicyRefusal, remedy, type LaunchPolicy } from '../engines/launch-policy.js'
+import { missingTokenRefusal, PolicyRefusal, remedy, type LaunchPolicy } from '../shared/launch-policy.js'
 import { refusalNoticeKey, threadNotices } from '../shared/notice-limit.js'
 import { reportUnaddressableThreads } from '../sessions/thread-route.js'
 import { hydraLoadEnv, currentHydraConfig } from '../infra/hydra-config.js'

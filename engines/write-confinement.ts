@@ -1,5 +1,5 @@
 // What a write-confined specialist's launch writes and checks (`can_only_write_to = "workdir"`): Claude Code's own controls, set in the launch's
-// settings, and nothing hydra built itself. The policy is `LaunchPolicy.canOnlyWriteTo` (engines/launch-policy.ts); the one place it turns into a launch is
+// settings, and nothing hydra built itself. The policy is `LaunchPolicy.canOnlyWriteTo` (shared/launch-policy.ts); the one place it turns into a launch is
 // `launchSession` in engines/claude-engine.ts, which every start passes (fresh, respawn, handoff successor, resume, fork).
 //
 //   sandbox.*                                     Claude Code's sandboxed Bash (Seatbelt): writes limited to the working directory and Claude Code's own per-user $TMPDIR (a shared /tmp is not writable; Claude Code's default, hydra sets neither).
@@ -14,14 +14,13 @@ import { spawnSync } from 'child_process'
 import { chmodSync, closeSync, constants, fstatSync, mkdirSync, mkdtempSync, openSync, readSync, realpathSync, rmSync, statSync, writeSync } from 'fs'
 import { basename, join } from 'path'
 import { browserDownloadDir, browserProfileDir, fileRefusal, fileSendDecision, fillProfile, readDenyRule } from '../config/write-confinement.js'
-import { CONFINED_TOOLS } from '../shared/constants.js'
+import { CONFINED_TOOLS, MAX_ATTACHMENT_BYTES } from '../shared/constants.js'
 import { UNIVERSAL_TOOLS } from '../shared/tool-definitions.js'
 import { STATE_DIR } from '../infra/config.js'
-import { MAX_ATTACHMENT_BYTES } from '../shared/constants.js'
 import { expectedServerNames } from './claude-verify.js'
 import { bridgeCommand } from '../infra/plugin-manifest.js'
 import { readdirSync, readFileSync } from 'fs'
-import { PolicyRefusal, missingTokenRefusal, remedy, serverToolRule, type ConfinementPolicy, type ConfinementServer, type LaunchPolicy } from './launch-policy.js'
+import { PolicyRefusal, missingTokenRefusal, remedy, serverToolRule, type ConfinementPolicy, type ConfinementServer, type LaunchPolicy } from '../shared/launch-policy.js'
 
 /** The first Claude Code with `permissions.blockWritesOutsideWorkingDirectories`: an older one ignores the key, which would leave Edit/Write unconfined. */
 export const MIN_CLAUDE_VERSION = [2, 1, 314] as const
@@ -169,7 +168,7 @@ export type ConfinedFiles = { files: string[]; cleanup: () => void } | { refusal
  * file, then decided on again and compared by device and inode with the open file: a file swapped for a link between the decision and the open, or a folder in
  * the path swapped, no longer leads to the file that was opened. The open file's bytes are copied into a folder of the daemon's own (the inbox, which the
  * session cannot read), and the copy is what the gateway opens: it never re-opens the session's path. `cleanup` removes the copies once the send has settled.
- * A file over the attachment limit (access.ts MAX_ATTACHMENT_BYTES) is refused on its size before any byte is read, and the copy is bounded by the same limit for a file that grows.
+ * A file over the attachment limit (shared/constants.ts MAX_ATTACHMENT_BYTES) is refused on its size before any byte is read, and the copy is bounded by the same limit for a file that grows.
  * A file with more than one name (st_nlink > 1) is refused: a hardlink in the workdir to a file outside it cannot be told from the file by its path. The sandboxed shell cannot make one to a place it may not read (`ln` is denied, shown live in write-confinement-escape.live.test.ts), but a browser, an MCP server or an earlier write could.
  * Not covered: a shell that swaps a folder of the path outward before the open, back before the second decision, and outward again before the comparison (three swaps, microseconds apart; a race-free check needs the open file's own path, F_GETPATH, which Node and Bun do not expose without a native call).
  */

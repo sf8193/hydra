@@ -8,7 +8,7 @@ import { SessionRegistry, ThreadRegistry, type SessionInfo } from '../../session
 import { _setTmuxForTesting } from '../../infra/tmux.js'
 import { isPlainWorker, isRestricted } from '../../shared/policy-record.js'
 import { deliveryRefusal, policyProblem } from '../../app/restricted.js'
-import { confinementIdFor, OPERATOR_POLICY_ID, policyIdFor, type LaunchPolicy } from '../../engines/launch-policy.js'
+import { confinementIdFor, OPERATOR_POLICY_ID, policyIdFor, type LaunchPolicy } from '../../shared/launch-policy.js'
 import { isToolAllowed, noteDeclaredRestrictions } from '../../sessions/tool-surface.js'
 import { registry } from '../../sessions/registry.js'
 import { _setHydraConfigForTesting } from '../../infra/hydra-config.js'

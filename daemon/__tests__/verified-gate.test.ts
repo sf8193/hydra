@@ -11,7 +11,7 @@ import { registry } from '../../sessions/registry.js'
 import { engines } from '../../sessions/engine-instances.js'
 import { _setHydraConfigForTesting } from '../../infra/hydra-config.js'
 import { endVerifying, sessionDrift, startVerifying, unverified } from '../../app/restricted.js'
-import { policyIdFor, type LaunchPolicy } from '../../engines/launch-policy.js'
+import { policyIdFor, type LaunchPolicy } from '../../shared/launch-policy.js'
 import { threadNotices } from '../../shared/notice-limit.js'
 import type { HydraConfig, Specialist } from '../../config/types.js'
 

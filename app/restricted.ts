@@ -27,22 +27,10 @@ import { isRestricted, isRestrictedPolicy } from '../shared/policy-record.js'
 import { refusalNoticeKey, threadNotices } from '../shared/notice-limit.js'
 import { setDeliveryGate } from '../sessions/bridge-transport.js'
 import { safeSend } from '../infra/util.js'
-import { type PolicyServer, type ConfinementServer, type ConfinementPolicy, type LaunchPolicy, type RestrictedPolicy, confinementIdFor, OPERATOR_POLICY_ID, policyIdFor, remedy, PolicyRefusal } from '../engines/launch-policy.js'
-
-
-
-
-
-
-
-
-
-
-
+import { type PolicyServer, type ConfinementServer, type ConfinementPolicy, type LaunchPolicy, type RestrictedPolicy, confinementIdFor, OPERATOR_POLICY_ID, policyIdFor, remedy, PolicyRefusal } from '../shared/launch-policy.js'
 
 /** After a start is stopped by verification, the same specialist is not started again for this long: each message would otherwise launch a session and wait to verify it. `now` is a test seam. */
 export const verifyBackoff = { ms: 60_000, now: (): number => Date.now() }
-
 
 /** Sessions whose start is being verified right now (in memory: a restart empties it, which is what leaves an unfinished one unverified). */
 const verifying = new Set<string>()
@@ -87,7 +75,6 @@ export function policyProblem(p: unknown): string | undefined {
   return undefined
 }
 
-
 /**
  * The policy hydra.toml gives a specialist now, found by its current id or an old one (`renamed_from`): undefined when none is
  * declared. This is what a birth stores.
@@ -116,8 +103,6 @@ export function bornPolicy(specialistId: string | undefined, h: HydraConfig = cu
   return { specialist: declared.id, restricted: false, id: OPERATOR_POLICY_ID }
 }
 
-
-
 /** The sentence every statement of trust repeats (the load log, docs/slack.md, README, hydra.example.toml; a test keeps them equal). */
 export const SERVER_TRUST_SENTENCE = 'Listing a server means running code you trust with your own privileges.'
 
@@ -129,7 +114,6 @@ export const serverTrustLine = (specialist: string, servers: readonly string[]):
 onHydraConfigLoad(config => {
   for (const s of Object.values(config.specialists)) if (s.restricted && s.mcpServerNames.length) process.stderr.write(`daemon: hydra.toml: ${serverTrustLine(s.id, s.mcpServerNames)}\n`)
 })
-
 
 /**
  * Why this start must not happen on this macOS version, or undefined: a restricted policy that lists servers runs them under a sandbox

@@ -19,7 +19,7 @@ export const browserDownloadDir = (workdir: string, named?: string): string => n
  */
 export const INBOX_DIR_NAME = '.inbox'
 /**
- * What one specialist's inbox may hold. The file size is the attachment limit (sessions/access.ts MAX_ATTACHMENT_BYTES, pinned equal by a test); a full folder
+ * What one specialist's inbox may hold. The file size is the attachment limit (shared/constants.ts MAX_ATTACHMENT_BYTES, pinned equal by a test); a full folder
  * refuses the next file and says so. The daemon never deletes inside it by age: it is the specialist's own folder, and a folder swapped for a link would turn a sweep into a delete.
  */
 export const INBOX_LIMITS = { maxFileBytes: 25 * 1024 * 1024, maxFiles: 200, maxTotalBytes: 500 * 1024 * 1024 } as const
