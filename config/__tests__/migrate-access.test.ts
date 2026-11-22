@@ -112,6 +112,18 @@ describe('an access.json that does not parse', () => {
   })
 })
 
+describe('groups and --operator', () => {
+  test('a group whose id this platform cannot name is left out without needing its people', () => {
+    const plan = planMigrate(state({ 'access.json': { allowFrom: [OP], groups: { C0123ABC: { allowFrom: ['U0X'] } } } }))
+    expect(errors(plan).join('\n')).not.toContain('people add')
+    expect(plan.ok && plan.notes.join('\n')).toContain('left out')
+  })
+  test('a group may list the person --operator adds in the same run', () => {
+    const plan = planMigrate({ ...state({ 'access.json': { groups: { '300000000000000001': { allowFrom: [OP] } } } }), operator: OP })
+    expect(loaded(plan).channels?.['discord:300000000000000001']).toBeDefined()
+  })
+})
+
 describe('what is still to migrate', () => {
   test('a backup from an earlier migration is kept; this one takes the next name', () => {
     const toml = `operator = "me"\n[people.me]\naddresses = ["discord:${OP}"]\n`

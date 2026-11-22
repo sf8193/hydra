@@ -77,7 +77,7 @@ export const accessStep: MigrateStep = {
       return found.allowFrom.length > 0 || groupsOf(r).length > 0 || cutSettings(r).length > 0 || r.dmPolicy === 'disabled' || r.ackReaction !== undefined || r.defaultListen !== undefined || mentionPatternsOf(r).length > 0
     } catch { return true }
   },
-  run({ stateDir, platform }) {
+  run({ stateDir, platform, operator: operatorFlag }) {
     const found = accessOf(stateDir)
     if (!found || !this.pending(stateDir)) return undefined
     const { raw } = found
@@ -108,17 +108,20 @@ export const accessStep: MigrateStep = {
     for (const [pid, p] of Object.entries(isTable(existing.people) ? existing.people : {})) for (const a of isTable(p) && Array.isArray(p.addresses) ? p.addresses : []) known.set(normalizeAddress(String(a)) ?? String(a), pid)
     // An address hydra.toml already gives a person stays theirs: the merge folds the new person into them.
     for (const [pid, p] of Object.entries(people)) { const a = (p as { addresses: string[] }).addresses[0]; if (!known.has(a)) known.set(a, pid) }
+    // --operator names the person this run adds as people.operator, so a group may list them.
+    const flagged = operatorFlag === undefined ? undefined : normalizeAddress(`${platform}:${operatorFlag.trim()}`)
+    if (flagged && !known.has(flagged)) known.set(flagged, 'operator')
     const asPerson = (id: string) => known.get(normalizeAddress(`${platform}:${id}`) ?? '')
     const places: Doc = {}
     for (const [channel, g] of Object.entries(isTable(raw.groups) ? raw.groups : {})) {
       if (!isTable(g)) { notes.push(`group "${channel}" left out: not an object`); continue }
       if (g.allowFrom !== undefined && !Array.isArray(g.allowFrom)) throw new Error(`groups.${channel}.allowFrom must be a list of ids, not ${JSON.stringify(g.allowFrom)}: fix it in access.json, then run hydra migrate again`)
       const ids = (Array.isArray(g.allowFrom) ? g.allowFrom : []).map(String).map(x => x.trim()).filter(Boolean)
+      const key = `${platform}:${channel}`
+      if (!parsePlace(key).ok) { notes.push(`group "${channel}" left out: ${key} isn't a channel id hydra.toml can name`); continue }
       const stranger = ids.filter(id => asPerson(id) === undefined)
       if (stranger.length) throw new Error(`groups.${channel}.allowFrom has ${stranger.join(', ')}, who ${stranger.length === 1 ? 'is' : 'are'} not in hydra.toml's people. Add ${stranger.length === 1 ? 'them' : 'each'} first (hydra people add <name> ${platform}:${stranger[0]}), then run hydra migrate again`)
       const who = [...new Set(ids.map(id => asPerson(id) as string))]
-      const key = `${platform}:${channel}`
-      if (!parsePlace(key).ok) { notes.push(`group "${channel}" left out: ${key} isn't a channel id hydra.toml can name`); continue }
       places[key] = {
         ...(typeof g.threadReply === 'boolean' && { thread_reply: g.threadReply }),
         access: { mention: g.requireMention !== false, allow: who.length ? who : ['anyone'], ...(typeof g.defaultListen === 'boolean' && { listen: g.defaultListen }) },
