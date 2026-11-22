@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { _setIO, _resetIO, detectBlockingState, type PaneProbeIO } from '../../app/pane-probe.js'
+import { _setIO, _resetIO, type PaneProbeIO } from '../../app/pane-probe.js'
+import { detectBlockingState } from '../../engines/claude-blocking.js'
 import {
   tryTypedDelivery, typedDeliveryText, deliveryDecision, deliverUserMessage, flushHeld, flushAllHeld,
   _setDeliveryDeps, _resetDelivery, _heldCount, HOLD_QUEUE_MAX, type DeliveryOutcome, type DeliveryFacts,

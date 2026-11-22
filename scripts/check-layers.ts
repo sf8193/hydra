@@ -33,7 +33,6 @@ export function tierOf(path: string): number | undefined {
 /** `from -> to`, one per allowed upward import. */
 export const ALLOWED: readonly string[] = [
   'engines/agy-engine.ts -> app/restricted.ts',
-  'engines/claude-engine.ts -> app/pane-probe.ts',
   'engines/claude-engine.ts -> app/restricted.ts',
   'engines/claude-engine.ts -> app/write-confinement.ts',
   'engines/claude-verify.ts -> app/restricted.ts',
@@ -50,7 +49,6 @@ export const ALLOWED: readonly string[] = [
   'infra/config.ts -> sessions/access.ts',
   'specialists/specialist-deliver.ts -> app/recovery.ts',
   'specialists/specialist-deliver.ts -> app/session-lifecycle.ts',
-  'specialists/targets.ts -> app/pane-probe.ts',
   'specialists/targets.ts -> app/recovery.ts',
 ]
 
