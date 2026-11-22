@@ -124,6 +124,16 @@ describe('groups and --operator', () => {
   })
 })
 
+describe('merging into a hydra.toml that has people already', () => {
+  test('a migrated channel admits the person it named, not the existing person whose id it collided with', () => {
+    const toml = `operator = "sam"\n[people.sam]\naddresses = ["discord:${OP}"]\n[people.person-2]\naddresses = ["discord:999"]\n`
+    const plan = planMigrate(state({ 'hydra.toml': toml, 'access.json': { allowFrom: [OP, PAL], groups: { '300000000000000001': { allowFrom: [PAL] } } } }))
+    const config = loaded(plan)
+    expect(config.channels?.['discord:300000000000000001']?.access.allow).toEqual(['person-2-2'])
+    expect(config.people['person-2-2'].addresses).toEqual([`discord:${PAL}`])
+  })
+})
+
 describe('what is still to migrate', () => {
   test('a backup from an earlier migration is kept; this one takes the next name', () => {
     const toml = `operator = "me"\n[people.me]\naddresses = ["discord:${OP}"]\n`
