@@ -84,7 +84,7 @@ export function hotProcess(r: CpuReading, threshold = SPIN_CPU_PERCENT): SpinWho
  * `newly` is true once per episode, so an alert built on it does not repeat every tick. The episode
  * ends the way it began: after `needed` readings in a row that are not hot (cool, not idle, or
  * unsampled), so a process spinning near the threshold that dips once is one spin, not two. A cool
- * reading inside an episode reports `spinning: null` for that tick and keeps the alert armed. A
+ * reading inside an episode reports `spinning: null` for that tick and does not re-arm the alert. A
  * change of hot process (bridge to Claude, or a different bridge pid) ends it at once: what gets
  * alerted, or killed, is the process that was hot every time. Before an episode starts, one reading
  * that is not hot resets the streak.

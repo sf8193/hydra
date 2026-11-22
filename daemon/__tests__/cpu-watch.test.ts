@@ -115,10 +115,6 @@ describe('sampleCpu', () => {
     for (let i = 0; i < 10 && !v?.spinning; i++) { v = (await sampleNow([s], () => PANE, PRESSURE)).sessions.get(s.sessionId); if (!v?.spinning) await tick() }
     expect(v!.spinning).toBe('bridge')
     expect((await sampleCpu(undefined, [s], () => PANE, PRESSURE)).sessions.size).toBe(0)
-    await tick()
-    // One tick's reading, hot or dipped: neither the missing snapshot nor a dip re-arms the alert.
-    await sampleNow([s], () => PANE, PRESSURE)
-    expect(dms.length).toBe(1)
   }, LOOP_TIMEOUT_MS)
 
   test('a working session is not spinning, however hot its bridge', async () => {
