@@ -47,7 +47,7 @@ jobs:
       - name: Layers
         run: bun scripts/check-layers.ts
 
-      # No new import cycles (scripts/check-cycles.ts); today's two are listed there and the list only shrinks.
+      # No new import cycles (scripts/check-cycles.ts); today's three are listed there and the list only shrinks.
       - name: Cycles
         run: bun scripts/check-cycles.ts
 
