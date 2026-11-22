@@ -28,15 +28,15 @@ export type BridgeConn = {
 // ---------------------------------------------------------------------------
 
 /**
- * Whether a queued notification may still be flushed to this session: a reason it may not, or undefined. Set by app/restricted.ts
+ * Whether this session may be delivered to, now or from its queue: a reason it may not, or undefined. Set by app/restricted.ts
  * (the one drift gate; it cannot be imported here, since it reaches back to this module through the specialists).
  */
-let flushGate: ((info: SessionInfo) => string | undefined) | undefined
-export function setFlushGate(gate: ((info: SessionInfo) => string | undefined) | undefined): void { flushGate = gate }
+let deliveryGate: ((info: SessionInfo) => string | undefined) | undefined
+export function setDeliveryGate(gate: ((info: SessionInfo) => string | undefined) | undefined): void { deliveryGate = gate }
 
 /** Why this session may not be delivered to, or undefined. No gate set (app/restricted.ts has not loaded) refuses: a delivery and a queue flush both fail closed. */
 function gateReason(info: SessionInfo): string | undefined {
-  return flushGate ? flushGate(info) : 'the delivery gate is not set (app/restricted.ts sets it when it loads)'
+  return deliveryGate ? deliveryGate(info) : 'the delivery gate is not set (app/restricted.ts sets it when it loads)'
 }
 
 /**

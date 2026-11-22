@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { BridgeTransport, DEPARTING_NOTICE, setFlushGate } from '../../sessions/bridge-transport.js'
+import { BridgeTransport, DEPARTING_NOTICE, setDeliveryGate } from '../../sessions/bridge-transport.js'
 import { registry } from '../../sessions/registry.js'
 import { STATE_DIR } from '../../infra/config.js'
 import { on } from '../../infra/event-bus.js'
@@ -419,7 +419,7 @@ describe('delivery paths (adapter-policy T7)', () => {
   }
 
   beforeEach(() => {
-    setFlushGate(() => undefined)   // these tests are about the delivery paths, not the policy gate
+    setDeliveryGate(() => undefined)   // these tests are about the delivery paths, not the policy gate
     t = new BridgeTransport()
     logged = []
     process.stderr.write = ((line: string) => { logged.push(line); return true }) as any
@@ -521,11 +521,11 @@ describe('delivery paths (adapter-policy T7)', () => {
     expect(t.messageQueues.has('t7-c9')).toBe(false)
   })
 
-  test('the flush gate and a failed write together: refused notifications are dropped, the rest keep their order', () => {
+  test('the delivery gate and a failed write together: refused notifications are dropped, the rest keep their order', () => {
     claude('t7-c10')
     const a = { type: 'tools_update', n: 'a' }, x = { type: 'notification', content: 'x' }, b = { type: 'tools_update', n: 'b' }, c = { type: 'tools_update', n: 'c' }
     for (const m of [a, x, b, c]) t.sendOrQueue('t7-c10', m)
-    setFlushGate(() => 'drifted from hydra.toml')
+    setDeliveryGate(() => 'drifted from hydra.toml')
     try {
       const { socket } = socketOn(t, 't7-c10')
       const realWrite = socket.write
@@ -539,14 +539,14 @@ describe('delivery paths (adapter-policy T7)', () => {
       socket.write = (d: string) => { out.push(d); return true }
       t.flushQueue('t7-c10')
       expect(out.map(o => JSON.parse(o).n)).toEqual(['a', 'b', 'c'])
-    } finally { setFlushGate(() => undefined) }
+    } finally { setDeliveryGate(() => undefined) }
   })
 
   test('with no gate set a flush drops the queued notifications, as a delivery is refused', () => {
     claude('t7-c11')
     const a = { type: 'tools_update', n: 'a' }, x = { type: 'notification', content: 'x' }
     for (const m of [a, x]) t.sendOrQueue('t7-c11', m)
-    setFlushGate(undefined)
+    setDeliveryGate(undefined)
     try {
       const { socket } = socketOn(t, 't7-c11')
       const out: string[] = []
@@ -554,7 +554,7 @@ describe('delivery paths (adapter-policy T7)', () => {
       t.flushQueue('t7-c11')
       expect(out.map(o => JSON.parse(o).n)).toEqual(['a'])
       expect(logged.filter(l => l.includes('dropped 1 queued message(s) for t7-c11'))).toHaveLength(1)
-    } finally { setFlushGate(() => undefined) }
+    } finally { setDeliveryGate(() => undefined) }
   })
 
   test("main: a departing notice queued before a restart is dropped at restore; the successor prompt and an ordinary message queued with it are kept, in order", () => {
