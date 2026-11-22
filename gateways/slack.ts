@@ -148,6 +148,8 @@ export class SlackGateway implements ChatGateway {
   private heartbeatPath: string | null = null
   private readonly sup: SocketSupervisor
   onReconnectAfterOutage: ((gapMs: number) => void) | undefined = undefined
+  // Set by the daemon; no operators until then.
+  operatorIds: () => string[] = () => []
   homeTabHandler: ((userId: string) => Promise<void>) | null = null
   homeSpawnHandler: ((topic: string, userId: string) => Promise<void>) | null = null
   homeStatusHandler: ((sessionId: string, shown: string) => Promise<void>) | null = null
@@ -226,9 +228,7 @@ export class SlackGateway implements ChatGateway {
     // Publish Home tab when user opens it
     this.app.event('app_home_opened' as any, async ({ event }: any) => {
       this.touchHeartbeat()
-      const { loadAccess, operatorIds } = await import('../sessions/access.js')
-      const access = loadAccess()
-      if (!operatorIds(access).includes(event.user)) return
+      if (!this.operatorIds().includes(event.user)) return
       if (this.homeTabHandler) {
         this.homeTabHandler(event.user).catch((e: Error) =>
           process.stderr.write(`slack gateway: app_home_opened handler error: ${e}\n`),
@@ -240,8 +240,7 @@ export class SlackGateway implements ChatGateway {
       this.touchHeartbeat()
       await ack()
       if (!action?.value || !this.homeStatusHandler) return
-      const { loadAccess, operatorIds } = await import('../sessions/access.js')
-      const click = parseHomeStatusClick(String(action.action_id), action.value, body?.user?.id, operatorIds(loadAccess()))
+      const click = parseHomeStatusClick(String(action.action_id), action.value, body?.user?.id, this.operatorIds())
       if (!click) {
         process.stderr.write(`slack gateway: home status action rejected for user ${body?.user?.id ?? '(none)'}\n`)
         return
@@ -256,9 +255,7 @@ export class SlackGateway implements ChatGateway {
       await ack()
       const userId = body?.user?.id
       if (!userId) return
-      const { loadAccess, operatorIds } = await import('../sessions/access.js')
-      const access = loadAccess()
-      if (!operatorIds(access).includes(userId)) {
+      if (!this.operatorIds().includes(userId)) {
         process.stderr.write(`slack gateway: home:spawn rejected — user ${userId} is not the operator\n`)
         return
       }

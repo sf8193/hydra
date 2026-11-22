@@ -52,7 +52,6 @@ export const ALLOWED: readonly string[] = [
   'gateways/slack.ts -> connectors/slack/conversation.ts',
   'gateways/slack.ts -> sessions/access.ts',
   'infra/artifacts.ts -> connectors/slack/conversation.ts',
-  'infra/config.ts -> sessions/access.ts',
   'specialists/specialist-deliver.ts -> app/recovery.ts',
   'specialists/specialist-deliver.ts -> app/session-lifecycle.ts',
   'specialists/targets.ts -> app/pane-probe.ts',

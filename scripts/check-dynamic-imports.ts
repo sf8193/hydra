@@ -20,11 +20,6 @@ export const ALLOWED: readonly string[] = [
   'boot-probe.ts -> ./app/session-lifecycle.js',
   'boot-probe.ts -> ./app/router.js',
   'gateways/slack.ts -> ../sessions/access.js',
-  'gateways/slack.ts -> ../sessions/access.js',
-  'gateways/slack.ts -> ../sessions/access.js',
-  'gateways/slack.ts -> ../sessions/access.js',
-  'infra/config.ts -> ../sessions/access.js',
-  'infra/config.ts -> ../sessions/access.js',
   'infra/config.ts -> ../gateways/slack.js',
   'infra/config.ts -> ../gateways/discord.js',
 ]
