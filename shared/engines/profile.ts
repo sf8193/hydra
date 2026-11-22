@@ -12,6 +12,8 @@ export type EngineProfile = {
   enforcesReadOnly: boolean
   /** `respawn +f` can layer a template's tools and session type onto the session. */
   takesTemplates: boolean
+  /** Present when no specialist can run on this engine: why, as the end of the sentence "<label> ..." (the config loader refuses a specialist that names it). */
+  specialistRefusal?: string
   /** The chat aliases that name this engine's models (`spawn neon: topic`), each mapped to the model id it runs. An alias selects the engine as well as the model. */
   aliases: Readonly<Record<string, string>>
   /** Every model id that starts with this is this engine's (`gpt-` is Codex's, `gemini-` is agy's). Absent: the engine's ids are known by other means. */

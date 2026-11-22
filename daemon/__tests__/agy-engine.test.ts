@@ -88,11 +88,6 @@ test('a key file other users can read is refused before anything starts', async 
   try { await expect(launchCommand('hi')).rejects.toThrow('chmod 600') } finally { rmSync(AGY_API_KEY_FILE, { force: true }) }
 })
 
-test('a restricted or write-confined specialist is refused before anything starts', async () => {
-  await expect(launchCommand('hi', { policy: { specialist: 'ops', id: 'p1', restricted: true, workdir: '/w', tools: [], servers: [] } })).rejects.toThrow('restricted = true')
-  await expect(launchCommand('hi', { policy: { specialist: 'ops', id: 'p2', restricted: false, canOnlyWriteTo: { workdir: '/w' } } as any })).rejects.toThrow('can_only_write_to')
-})
-
 // delivery: a real tmux pane (the suite's private server) whose terminal is raw like a TUI's (`cat` in cooked mode drops a long paste), showing what arrives
 const tmuxUp = Bun.spawnSync(['tmux', '-V']).exitCode === 0
 const name = `agy-deliver-${process.pid}`

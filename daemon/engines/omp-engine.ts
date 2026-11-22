@@ -19,7 +19,6 @@ import { tmuxCreateSession, tmuxWindowActivity } from '../tmux.js'
 import { ompContextTokens, ompSessionDir, ompTurn } from './omp-session.js'
 import { contextWindowOf, ompProvider } from '../../shared/constants.js'
 import { withRaisedFdLimit } from '../../shared/spawn-env.js'
-import { isRestrictedPolicy } from '../policy-record.js'
 
 const EXTENSION = join(import.meta.dir, '..', '..', 'omp', 'hydra-bridge.ts')
 const OMP_CONFIG = join(import.meta.dir, '..', '..', 'omp', 'hydra-omp.yml')
@@ -32,9 +31,6 @@ export class OmpEngine implements EngineAdapter {
   async start(_records: readonly SessionInfo[]): Promise<void> {}
 
   async launch(input: LaunchInput): Promise<LaunchResult> {
-    // This engine cannot limit a session's access (see ENGINE_PROFILES); it would run one as the operator.
-    if (isRestrictedPolicy(input.policy)) throw new Error(`specialist ${input.policy.specialist} has restricted = true, which this engine cannot give: set engine = "claude", or set restricted = false`)
-    if (input.policy?.canOnlyWriteTo) throw new Error(`specialist ${input.policy.specialist} has can_only_write_to = "workdir", which this engine cannot give: set engine = "claude", or remove can_only_write_to`)
     const { sessionId, tmuxName, model } = input
     if (!model) throw new Error('omp engine: launched without a model')   // doSpawnSession always gives omp one
     // CLAUDE_CONFIG_DIR unset and the claude providers disabled (OMP_CONFIG): omp must not load Claude's plugins or a cwd .mcp.json.
