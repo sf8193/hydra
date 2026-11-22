@@ -31,7 +31,7 @@ function withoutFiles(tool: SessionTool): SessionTool {
 
 /**
  * `send_to_thread` as a restricted session sees it: to a specialist its hydra.toml `sends_to` names, a question or an answer, about a
- * conversation it owns, text only. Hydra renders what the receiver reads (daemon/sends-to.ts); nothing here reaches a header.
+ * conversation it owns, text only. Hydra renders what the receiver reads (app/sends-to.ts); nothing here reaches a header.
  */
 function restrictedSend(tool: SessionTool): SessionTool {
   return {

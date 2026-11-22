@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { reportUsage, parseRateLimits, _setUsageAlertsIO, _resetUsageAlertsIO, type UsageReading } from '../usage-alerts.js'
+import { reportUsage, parseRateLimits, _setUsageAlertsIO, _resetUsageAlertsIO, type UsageReading } from '../../app/usage-alerts.js'
 
 const T0 = 1_800_000_000_000
 const H = 60 * 60_000

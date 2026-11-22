@@ -1,8 +1,8 @@
 // The launch policy's own rules: what differs between two policies (said field by field), what a stored one must be to be
 // believed, the one remedy sentence, and the one rate limit behind every notice a thread is sent.
 import { describe, expect, test } from 'bun:test'
-import { NoticeLimiter } from '../notice-limit.js'
-import { OPERATOR_POLICY_ID, policyDrifted, policyIdFor, policyProblem, remedy, type LaunchPolicy, type PolicyServer, type RestrictedPolicy } from '../restricted.js'
+import { NoticeLimiter } from '../../shared/notice-limit.js'
+import { OPERATOR_POLICY_ID, policyDrifted, policyIdFor, policyProblem, remedy, type LaunchPolicy, type PolicyServer, type RestrictedPolicy } from '../../app/restricted.js'
 
 const server = (over: Partial<PolicyServer> = {}) => ({ name: 'datadog', command: '/usr/local/bin/datadog-mcp', tokenEnv: ['DD_API_KEY'], tools: ['a'], ...over })
 const restrictedPolicy = (over: Partial<RestrictedPolicy> = {}): RestrictedPolicy => {

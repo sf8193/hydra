@@ -8,11 +8,11 @@
 // modifier list rather than riding along as a lens.
 
 import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from 'bun:test'
-import { handleReviewIntercept } from '../commands/review.js'
+import { handleReviewIntercept } from '../../app/commands/review.js'
 import reviewProtoForTest from '../../protocols/review.js'
-import { resolveModifier, listLensNames, READABILITY_INSTRUCTIONS, PONYTAIL_INSTRUCTIONS } from '../modifiers.js'
-import { handleDelegatedBuildIntercept } from '../commands/delegated-build.js'
-import { __test as runnerTest, getRunByThread, cancelRun } from '../protocol-runner.js'
+import { resolveModifier, listLensNames, READABILITY_INSTRUCTIONS, PONYTAIL_INSTRUCTIONS } from '../../protocols/modifiers.js'
+import { handleDelegatedBuildIntercept } from '../../app/commands/delegated-build.js'
+import { __test as runnerTest, getRunByThread, cancelRun } from '../../app/protocol-runner.js'
 import { registry } from '../../sessions/registry.js'
 import type { SessionInfo } from '../../sessions/registry.js'
 import { transport } from '../../sessions/bridge-transport.js'

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { reserveUserIngress } from '../user-ingress.js'
+import { reserveUserIngress } from '../../app/user-ingress.js'
 
 function gate() {
   let open!: () => void

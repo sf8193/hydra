@@ -11,7 +11,7 @@ import { nameHeldByAnother, occupancy, occupied } from '../sessions/session-reac
 import { withThreadLock } from '../sessions/specialists.js'
 import { browserProfileProblem, managedMcpNameClashes, unreadableWorkdir } from '../config/write-confinement.js'
 import { confinementRefusal, endVerifying, startVerifying, verifyBackoff, verifyRefusal, describePolicy, macosRefusal, missingTokenRefusal, PolicyRefusal, remedy, resolvePolicy, type LaunchPolicy } from './restricted.js'
-import { refusalNoticeKey, threadNotices } from './notice-limit.js'
+import { refusalNoticeKey, threadNotices } from '../shared/notice-limit.js'
 import { reportUnaddressableThreads } from '../sessions/thread-route.js'
 import { hydraLoadEnv, currentHydraConfig } from '../infra/hydra-config.js'
 import { workdirRestrictionIssues } from '../config/restricted-workdir.js'
@@ -30,13 +30,13 @@ import { startPhaseBudget, clearPhaseBudget } from '../sessions/phase-budget.js'
 import { clearIdleLimit, resumeIdleLimit } from '../sessions/idle-limit.js'
 import { AGY_MODEL_ALIASES, resolveLaunchSelection, spawnModel, withContextSuffix } from '../shared/constants.js'
 import type { SessionType, ToolBase, SessionLabel } from '../shared/constants.js'
-import { isRestricted, isRestrictedPolicy } from './policy-record.js'
+import { isRestricted, isRestrictedPolicy } from '../shared/policy-record.js'
 import { resolveEngine } from '../engines/instances.js'
 import { engineLimitsAccess } from '../shared/engines/index.js'
 import type { EngineAdapter, ProviderId } from '../engines/engine-adapter.js'
 import { resumeHomeOwner } from '../engines/codex-engine-adapter.js'
-import { buildSpawnPrompt, buildForkPrompt, buildHandoffPrompt, buildResurrectPrompt } from './prompts/session.js'
-import { hydraPrompt } from './prompts/request.js'
+import { buildSpawnPrompt, buildForkPrompt, buildHandoffPrompt, buildResurrectPrompt } from '../shared/prompts/session.js'
+import { hydraPrompt } from '../shared/prompts/request.js'
 import { readHandoffTemplate } from './handoff-templates.js'
 import { projectDirName, transcriptPathFor } from '../infra/usage.js'
 import { refreshSessionVisual, emojiOf, emojiOfName } from '../sessions/anchor-state.js'
@@ -1543,7 +1543,7 @@ export async function tryResume(dead: {
       // Orphan: Claude is running with restored context but the bridge hasn't
       // connected. Preserve the session — killing it discards recovered context,
       // and returning null would cascade to a tier that spawns a duplicate.
-      // The periodic orphan detector (daemon/session-health.ts) will monitor it from here.
+      // The periodic orphan detector (app/session-health.ts) will monitor it from here.
       process.stderr.write(`daemon: resume ${info.tmuxName}: bridge timeout but tmux alive — preserving as orphan${info.channelNote ? ` (${info.channelNote})` : ''}\n`)
 
       // One-shot recheck: the periodic detector runs every 5 minutes, so a

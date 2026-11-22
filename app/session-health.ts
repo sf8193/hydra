@@ -8,7 +8,7 @@ import { bridgeWaitMs, occupancy } from '../sessions/session-reachability.js'
 import { notifyOperator } from '../sessions/access.js'
 import type { SessionInfo } from '../sessions/registry.js'
 import { automaticHandoffSentence, autoHandoff } from './auto-handoff.js'
-import { CONTEXT_ALERT_LINES } from './context-lines.js'
+import { CONTEXT_ALERT_LINES } from '../shared/context-lines.js'
 import { timed } from '../shared/loop-watch.js'
 
 const SESSION_CHECK_INTERVAL_MS = 5 * 60 * 1000

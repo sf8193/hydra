@@ -10,10 +10,10 @@ import { deliverToSession, targetDeps, type DeliverOutcome } from '../../../spec
 import { registry, type SessionInfo } from '../../../sessions/registry.js'
 import { transport } from '../../../sessions/bridge-transport.js'
 import { setSpecialist, removeSpecialist } from '../../../sessions/specialists.js'
-import { killSession } from '../../../daemon/session-lifecycle.js'
+import { killSession } from '../../../app/session-lifecycle.js'
 import { gateway } from '../../../infra/config.js'
-import { reviveThreadForDelivery, reviveDeps } from '../../../daemon/recovery.js'
-import { landingOf } from '../../../daemon/landing.js'
+import { reviveThreadForDelivery, reviveDeps } from '../../../app/recovery.js'
+import { landingOf } from '../../../shared/landing.js'
 
 process.stderr.write = (() => true) as any
 

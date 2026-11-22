@@ -4,8 +4,8 @@ import { gateway } from '../../infra/config.js'
 import * as access from '../../sessions/access.js'
 import { hydraConfigPath, reloadHydraConfig, startHydraConfig, stopHydraConfig } from '../../infra/hydra-config.js'
 import { testLoadEnv } from '../../config/__tests__/load-env.js'
-import * as global from '../commands/global.js'
-import * as status from '../commands/status.js'
+import * as global from '../../app/commands/global.js'
+import * as status from '../../app/commands/status.js'
 import { reactionPlace } from '../../gateways/discord.js'
 import { ChannelType } from 'discord.js'
 
@@ -33,7 +33,7 @@ beforeAll(async () => {
   startHydraConfig({ env: { ...testLoadEnv({ home: '/h', sessionNames: [] }), isDir: () => true } })
   spies.push(spyOn(global, 'handleSpawnIntercept').mockImplementation((async (...args: any[]) => { spawns.push(args) }) as any))
   spies.push(spyOn(status, 'handleListIntercept').mockImplementation((async (...args: any[]) => { lists.push(args) }) as any))
-  await import('../router.js')
+  await import('../../app/router.js')
 })
 afterAll(() => { for (const s of spies) s.mockRestore(); stopHydraConfig(); rmSync(hydraConfigPath(), { force: true }) })
 beforeEach(() => { writeFileSync(hydraConfigPath(), TOML); reloadHydraConfig(); mentionCalls.length = 0; tagged = false; spawns.length = 0; lists.length = 0; deletes.length = 0 })

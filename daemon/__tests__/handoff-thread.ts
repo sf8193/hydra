@@ -1,5 +1,5 @@
-import { handleHandoffIntercept } from '../commands/thread.js'
-import { handoffIO } from '../session-lifecycle.js'
+import { handleHandoffIntercept } from '../../app/commands/thread.js'
+import { handoffIO } from '../../app/session-lifecycle.js'
 import { registry, type SessionInfo, type SpawnOpts } from '../../sessions/registry.js'
 import { transport } from '../../sessions/bridge-transport.js'
 import { gateway } from '../../infra/config.js'

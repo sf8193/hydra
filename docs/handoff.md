@@ -47,7 +47,7 @@ Every percent below is a share of the session's context window, read one way eve
 | Cache handoff | off; 50%, idle 50 min | An idle Claude session is asked to hand off while its prompt cache is warm. | `AUTO_HANDOFF_CACHE=1` |
 | Full handoff | off; 85% | An idle session is asked to hand off (or restarted fresh, per its `handoff_protocol`). | `AUTO_HANDOFF_FULL=1`, `AUTO_HANDOFF_FULL_PCT`, a specialist's `handoff_at_pct` |
 
-The lines live in `daemon/context-lines.ts`.
+The lines live in `shared/context-lines.ts`.
 
 ## Automatic handoff
 

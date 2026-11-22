@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { gateway } from '../../infra/config.js'
 import { registry } from '../../sessions/registry.js'
-import { resolveSpawnTarget } from '../commands/global.js'
+import { resolveSpawnTarget } from '../../app/commands/global.js'
 import type { SessionInfo } from '../../sessions/registry.js'
 import type { InboundMessage } from '../../gateways/gateway.js'
 

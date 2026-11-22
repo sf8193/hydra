@@ -1,4 +1,4 @@
-// The Slack home-tab dashboard shows each live session with its emoji (daemon/dashboard.ts `getActiveSessions`): a session born for a specialist with
+// The Slack home-tab dashboard shows each live session with its emoji (app/dashboard.ts `getActiveSessions`): a session born for a specialist with
 // `emoji = "🔐"` wears it there, and an ordinary session, a specialist with no emoji, and a name outside the catalog keep their catalog glyph (🔣, 🔣, 🔹).
 // The dashboard publishes only on the Slack platform, a module-load constant, so this file is its own: it sets CHAT_PLATFORM before the first daemon import
 // (the suite runs each file isolated) and drives `refreshDashboardNow` into a stubbed `publishHomeTab`.
@@ -12,7 +12,7 @@ const { gateway, STATE_DIR, PLATFORM } = await import('../../infra/config.js')
 for (const [k, v] of [['CHAT_PLATFORM', env.p], ['SLACK_BOT_TOKEN', env.b], ['SLACK_APP_TOKEN', env.a]] as const) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
 const { registry } = await import('../../sessions/registry.js')
 const { _setHydraConfigForTesting } = await import('../../infra/hydra-config.js')
-const { refreshDashboardNow } = await import('../dashboard.js')
+const { refreshDashboardNow } = await import('../../app/dashboard.js')
 const { fakeAdapter } = await import('./test-harness.js')
 
 process.stderr.write = (() => true) as any

@@ -4,9 +4,9 @@ import { afterEach, beforeAll, afterAll, beforeEach, describe, expect, test } fr
 import { existsSync, rmSync } from 'fs'
 import { engines } from '../../engines/instances.js'
 import { gateway } from '../../infra/config.js'
-import { destroyThread } from '../destroy.js'
+import { destroyThread } from '../../app/destroy.js'
 import { spawnPromptDir, writeSpawnPrompt } from '../../infra/launch-files.js'
-import { killSession } from '../session-lifecycle.js'
+import { killSession } from '../../app/session-lifecycle.js'
 import { markDead, registry, threadRegistry, type SessionInfo } from '../../sessions/registry.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 

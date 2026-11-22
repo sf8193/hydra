@@ -1,8 +1,8 @@
 // T4 (adapter-policy): pins the bridge-register connection role (D1) and the
 // spawn sessionMetadata tool list (D7).
 import { describe, test, expect } from 'bun:test'
-import { connectionRoleFor } from '../bridge-server.js'
-import { spawnToolNames } from '../session-lifecycle.js'
+import { connectionRoleFor } from '../../app/bridge-server.js'
+import { spawnToolNames } from '../../app/session-lifecycle.js'
 import { computeToolsForSession } from '../../engines/bridge-tools.js'
 import type { SessionInfo } from '../../sessions/registry.js'
 import { engines } from '../../engines/instances.js'

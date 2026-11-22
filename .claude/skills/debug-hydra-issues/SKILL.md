@@ -54,7 +54,7 @@ tmux capture-pane -t <session-name> -p -J | tail -30
 
 **Signature worth memorizing:** *daemon green, gateway "connected", session silent on real messages.* The session looks healthy from outside but the model isn't processing. This is the most common failure and the most expensive to find by layer-walking.
 
-The `pane-probe` module (`daemon/pane-probe.ts`) detects these states automatically on a 60s interval — `login_required` (stages: `expiring`, `login-blocked`, `oauth_url`, `success`), `plan_mode`, `resume_prompt`. If pane-probe hasn't alerted, the session may still be in its boot grace window.
+The `pane-probe` module (`app/pane-probe.ts`) detects these states automatically on a 60s interval — `login_required` (stages: `expiring`, `login-blocked`, `oauth_url`, `success`), `plan_mode`, `resume_prompt`. If pane-probe hasn't alerted, the session may still be in its boot grace window.
 
 ## Step 1 — Auth (CC only)
 
@@ -104,7 +104,7 @@ Recovery flows through three tiers (see `diagrams/flow-recovery-cascade.mmd`):
 
 **Don't trust the correlate line.** The observability layer (`sessions/observability.ts`) resolves transcript paths against a base path that may differ from the session's actual config dir. The daemon log can print a transcript path *that exists* while the session itself cannot see it. Verify which config dir the file is actually under.
 
-The kill/orphan classification lives in `sessions/resume-health.ts`. Trap: **when no exit-marker path was configured, a fully alive session is still classified `kill`** — "absence of evidence is not evidence of liveness." Symptom: the cascade killed a running session for no visible reason. The periodic orphan detector (`daemon/session-health.ts`) checks the same condition — both must agree on preserve-vs-kill, or the incoherence is itself a bug.
+The kill/orphan classification lives in `sessions/resume-health.ts`. Trap: **when no exit-marker path was configured, a fully alive session is still classified `kill`** — "absence of evidence is not evidence of liveness." Symptom: the cascade killed a running session for no visible reason. The periodic orphan detector (`app/session-health.ts`) checks the same condition — both must agree on preserve-vs-kill, or the incoherence is itself a bug.
 
 For daemon issues, `hydra restart <platform>` validates the module graph first — safe to run.
 

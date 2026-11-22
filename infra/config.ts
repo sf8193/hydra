@@ -52,7 +52,7 @@ const held = capturedSpawnVars()
 
 export const CLAUDE_CONFIG = claudeConfigDir()
 
-/** The automatic handoffs (daemon/auto-handoff.ts) are opt-in: each runs only when its env var (AUTO_HANDOFF_CACHE, AUTO_HANDOFF_FULL) is 1. Read per call. */
+/** The automatic handoffs (app/auto-handoff.ts) are opt-in: each runs only when its env var (AUTO_HANDOFF_CACHE, AUTO_HANDOFF_FULL) is 1. Read per call. */
 export const autoHandoffOn = (feature: 'CACHE' | 'FULL'): boolean => process.env[`AUTO_HANDOFF_${feature}`] === '1'
 
 /** A context percent from env var `name`: a whole number 1–99 (a leading zero is fine), else `fallback`. Read per call. */
@@ -65,7 +65,7 @@ export function envPercent(name: string, fallback?: number): number | undefined 
 }
 
 /**
- * Chat user ids whose messages get typed delivery (daemon/typed-delivery.ts). Env
+ * Chat user ids whose messages get typed delivery (app/typed-delivery.ts). Env
  * HYDRA_TYPED_DELIVERY_USER_IDS, comma-separated; empty (the default) means nobody. Read per call.
  */
 export const typedDeliveryUserIds = (): Set<string> =>

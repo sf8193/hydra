@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { workKey, dedupForRecovery } from '../recovery.js'
+import { workKey, dedupForRecovery } from '../../app/recovery.js'
 import { SESSION_NAMES, type SessionInfo } from '../../sessions/registry.js'
 import { listWatches, unwatchPr } from '../../connectors/github/pr-watch.js'
 import { seedPrWatch } from './test-harness.js'

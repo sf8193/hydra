@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { reviewSummaryFormat } from '../prompts/review-summary.js'
+import { reviewSummaryFormat } from '../../shared/prompts/review-summary.js'
 
 describe('reviewSummaryFormat', () => {
   test('sections in order: synthesis → round arc → dispositions → meaning', () => {

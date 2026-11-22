@@ -9,7 +9,7 @@ import { ClaudeEngine } from '../../engines/claude-engine.js'
 import { OmpEngine } from '../../engines/omp-engine.js'
 import { STATE_DIR } from '../../infra/config.js'
 import { removeLaunchFiles, spawnPromptDir } from '../../infra/launch-files.js'
-import { PolicyRefusal, policyIdFor, type RestrictedPolicy } from '../restricted.js'
+import { PolicyRefusal, policyIdFor, type RestrictedPolicy } from '../../app/restricted.js'
 import { _setLoadEnvForTesting } from '../../infra/hydra-config.js'
 import { macLike } from './sandbox-host.js'
 

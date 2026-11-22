@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test'
-import { executeTool, __test as dispatchTest } from '../bridge-dispatch.js'
-import { onRunAdvance, onRunDisconnect, __test } from '../protocol-runner.js'
+import { executeTool, __test as dispatchTest } from '../../app/bridge-dispatch.js'
+import { onRunAdvance, onRunDisconnect, __test } from '../../app/protocol-runner.js'
 import { transport } from '../../sessions/bridge-transport.js'
 import { gateway } from '../../infra/config.js'
 import { registry } from '../../sessions/registry.js'

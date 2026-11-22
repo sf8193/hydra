@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, expect, spyOn, test } from 'bun:test'
 import { gateway } from '../../infra/config.js'
 import * as access from '../../sessions/access.js'
-import * as global from '../commands/global.js'
+import * as global from '../../app/commands/global.js'
 import { setHydra } from './test-hydra.js'
 
 // The production router: `spawn neon: …` must reach handleSpawnIntercept with the agy model AND the agy engine.
@@ -15,7 +15,7 @@ beforeAll(async () => {
   spies.push(spyOn(gateway, 'send').mockImplementation((async (_c: string, text: string) => { sent.push(text); return { id: 'x' } }) as any))
   spies.push(setHydra({ operators: ['u1'], channels: { c1: {} } }))
   spies.push(spyOn(global, 'handleSpawnIntercept').mockImplementation((async (...args: any[]) => { spawns.push(args) }) as any))
-  await import('../router.js')
+  await import('../../app/router.js')
 })
 afterAll(() => { for (const s of spies) s.mockRestore() })
 beforeEach(() => { spawns.length = 0; sent.length = 0 })

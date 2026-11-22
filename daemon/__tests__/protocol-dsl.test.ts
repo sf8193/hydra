@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { protocol, type ProtocolSpec } from '../protocol-dsl.js'
-import { protocolEvents } from '../protocol-runner.js'
-import type { CompletionEvent } from '../protocol-types.js'
+import { protocol, type ProtocolSpec } from '../../protocols/dsl.js'
+import { protocolEvents } from '../../app/protocol-runner.js'
+import type { CompletionEvent } from '../../shared/protocol-types.js'
 
 let origStderrWrite: typeof process.stderr.write
 beforeEach(() => { origStderrWrite = process.stderr.write; process.stderr.write = (() => true) as any })
