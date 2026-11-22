@@ -24,7 +24,7 @@ Each diagram has a `.mmd` source and a rendered `.png`.
 - Bug fixes that don't change the message path
 - Config or env changes
 
-**One question per picture.** A picture that needs paragraphs inside its shapes is two pictures. Labels are a few words; a list a reader needs goes in a side note (a grey box on a dotted line), not inside a gate. The routing and Slack pictures are sourced: each name means one thing across the set, a `<name>.sources.md` puts a `path:line` behind every box, and a reviewer who did not draw it checks the raw `.mmd` against the code before it is rendered. Their legend: orange diamond = a numbered gate, red = refused, unrouted or dropped, grey = held or still owed, green = delivered or done, plain = any other outcome. Their first line is an `%%{init}%%` that sets a white theme and a wider wrap, so any render command draws them the same.
+**One question per picture.** A picture that needs paragraphs inside its shapes is two pictures. Labels are a few words; a list a reader needs goes in a side note (a grey box on a dotted line), not inside a gate. The routing and Slack pictures are checked against the code: each name means one thing across the set, a reviewer who did not draw it checks the raw `.mmd` against the code before it is rendered. Their legend: orange diamond = a numbered gate, red = refused, unrouted or dropped, grey = held or still owed, green = delivered or done, plain = any other outcome. Their first line is an `%%{init}%%` that sets a white theme and a wider wrap, so any render command draws them the same.
 
 **Names are checked.** CI fails when a diagram shows a `.ts` file or a camelCase name that no longer exists in the code (`__tests__/core-abstractions.test.ts`). It checks names only, so a move that keeps the name never fails it, and it cannot tell whether the flow drawn is still true. When it fails, redraw that part from the code, or delete the diagram if all it draws is removed code.
 
@@ -68,7 +68,7 @@ for f in diagrams/*.mmd; do [ -f "${f%.mmd}.png" ] || { echo "unrendered: $f"; e
 | `flow-jobs-dispatch` | Jobs: the clock's tick or `jobs run` → synchronous reserve → detached attempt → result file → apply on a later tick (or "ended without a result", or the guarded kill) |
 
 ### Routing and the Slack connector
-One question per picture, read in this order. Each has a `<name>.sources.md` beside it: every box's `path:line`.
+One question per picture, read in this order.
 
 | Diagram | The question it answers |
 |---------|--------------|
@@ -82,7 +82,7 @@ One question per picture, read in this order. Each has a `<name>.sources.md` bes
 | `flow-slack-owed` | How long may a Slack message stay owed, and what ends it? |
 | `flow-slack-alert` | When a message is dropped or a connection goes wrong, who is told, where, and how often? |
 
-A bold name in these pictures is one of README's [core abstractions](../README.md#core-abstractions), or one of these:
+A bold name in these pictures is one of the [core abstractions](../docs/concepts.md#core-abstractions), or one of these:
 
 | Name | Question | Sentence |
 |---|---|---|

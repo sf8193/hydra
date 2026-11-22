@@ -3,13 +3,13 @@ import { execFileSync } from 'child_process'
 import { existsSync, readFileSync, readdirSync } from 'fs'
 import { basename, join } from 'path'
 
-// The README's "Core abstractions" section and every diagrams/*.mmd name files and symbols.
-// Names that no longer exist, or a picture that drifted from the README's copy, fail here.
+// docs/concepts.md's "Core abstractions" section and every diagrams/*.mmd name files and symbols.
+// Names that no longer exist, or a picture that drifted from the concepts page's copy, fail here.
 // A diagram's names are checked by name only, so a move that keeps the name never fails it.
 const ROOT = join(import.meta.dir, '..')
-const readme = readFileSync(join(ROOT, 'README.md'), 'utf8')
+const readme = readFileSync(join(ROOT, 'docs/concepts.md'), 'utf8')
 const core = readFileSync(join(ROOT, 'diagrams/core.mmd'), 'utf8')
-const section = readme.match(/^## Core abstractions\n([\s\S]*?)^## /m)?.[1] ?? ''
+const section = readme.match(/^## Core abstractions\n([\s\S]*?)(?=^## |(?![\s\S]))/m)?.[1] ?? ''
 
 const isPath = (t: string) => /^[\w.-]+(\/[\w.-]+)*\/?$/.test(t) && (t.includes('/') || /\.(ts|mmd|png)$/.test(t))
 const isSymbol = (t: string) => /^([a-z]+[A-Z]\w*|[A-Z]\w*)$/.test(t)
@@ -54,8 +54,8 @@ function missingNames(mmd: string, has = { file: isFile, symbol: inCode }): stri
 }
 
 describe('core abstractions', () => {
-  test('the README section exists', () => {
-    expect(section, 'README.md has no "## Core abstractions" section').not.toBe('')
+  test('the concepts section exists', () => {
+    expect(section, 'docs/concepts.md has no "## Core abstractions" section').not.toBe('')
   })
 
   test('the section avoids retired names', () => {
@@ -68,7 +68,7 @@ describe('core abstractions', () => {
       if (isPath(t) && !existsSync(join(ROOT, t))) missing.push(`path ${t}`)
       else if (isSymbol(t) && !isExported(t)) missing.push(`symbol ${t}`)
     }
-    expect(missing, `README "Core abstractions" names things that do not exist: ${missing.join(', ')}`).toEqual([])
+    expect(missing, `docs/concepts.md "Core abstractions" names things that do not exist: ${missing.join(', ')}`).toEqual([])
   })
 
   test('every path named in diagrams/core.mmd exists', () => {
@@ -85,9 +85,9 @@ describe('core abstractions', () => {
     expect(stray, `bold titles in diagrams/core.mmd that are not glossary names: ${stray.join(', ')}`).toEqual([])
   })
 
-  test("the README's picture is diagrams/core.mmd", () => {
+  test("the concepts picture is diagrams/core.mmd", () => {
     const block = section.match(/```mermaid\n([\s\S]*?)```/)?.[1]
-    expect(block, 'README "Core abstractions" has no mermaid block').toBe(core)
+    expect(block, 'docs/concepts.md "Core abstractions" has no mermaid block').toBe(core)
   })
 })
 

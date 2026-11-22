@@ -1,9 +1,9 @@
 # hydra.toml: whom hydra serves. Lives at <state dir>/hydra.toml (e.g. ~/.claude/channels/discord/hydra.toml).
 # hydra re-reads it within a second of a change; a file that fails to load keeps the last good config and tells the
 # operator why. An empty file is valid: the operator's DMs go to main and nothing else is heard.
-# Start from your old files with `hydra migrate` rather than writing it by hand (see README › Configuration).
+# Start from your old files with `hydra migrate` rather than writing it by hand (see docs/reference.md › Configuration).
 # Another repo's specialist and schedules: ship them as a fragment of [specialists.*] and [schedules.*] tables, and
-# add it with `hydra config add <fragment.toml>` (README › Configuration).
+# add it with `hydra config add <fragment.toml>` (docs/reference.md › Configuration).
 # Every key below is optional unless it says required. Unknown keys are errors, so a typo never passes silently.
 #
 # Two kinds of door. A gateway is where the operator talks to hydra (Discord, Slack). A connector is where outside events arrive
@@ -54,7 +54,7 @@ poll = "3m"                           # how often it looks (default 3m)
 
 [slack]
 line_emoji = "<:slack:123456789012345678>"   # optional (default "💬"): what stands for Slack in the lines a session's own thread shows about its Slack traffic. A unicode emoji, or a Discord custom emoji as a message holds it
-                                      # (it exists in one server only: where the gateway cannot render it, the line shows 💬). docs/slack.md, "Slack lines in a session's thread"
+                                      # (it exists in one server only: where the gateway cannot render it, the line shows 💬). docs/slack-connector.md, "Slack lines in a session's thread"
 
 [slack.apps.default]
 bot_token_env = "CONNECTOR_SLACK_BOT_TOKEN"   # required
@@ -64,7 +64,7 @@ description = "Answers Acme's Slack threads it is tagged in."  # what the app sa
 operator_token_env = "CONNECTOR_SLACK_USER_TOKEN"   # optional: hear the channels, DMs and group DMs the operator is in, as the operator; never posts (a DM or group DM is delivered only where a place names it).
                                       # What it hears arrives through this app: see the `slack:person-dm:alice` rule
 router = "main"                       # optional: where a tag of this app goes in a thread no conversation binds and no rule takes. "main" (only the operator's tag) or "specialist:<name>" (the router: it hears
-                                      # whoever its own `reachable_by` lets in, and may bind the thread to another session; never restricted or write-confined). docs/slack.md, "The app's router"
+                                      # whoever its own `reachable_by` lets in, and may bind the thread to another session; never restricted or write-confined). docs/slack-connector.md, "The app's router"
 
 [slack.apps.sales]                    # another app: its own tokens, named by its id when it sets no display_name
 bot_token_env = "SALES_SLACK_BOT_TOKEN"
@@ -123,8 +123,7 @@ speaks_as = "app:sales"               # the Slack app whose bot posts for it whe
 # A specialist other people talk to, restricted: it knows only its workdir, uses only the tools and servers it lists, and answers only its own
 # conversation. `restricted = false` (the default) is the operator's account, with every tool and server they have. A workdir must be a folder
 # of its own (not $HOME, not a git work tree, no symlinks out). `restricted`, `can_only_write_to`, `deny_commands`, `tools`, `mcp_servers` and `sends_to` are refused in [defaults.specialist] and in `hydra
-# config add` fragments. Each new start is checked against this, from Claude Code's own debug file (docs/slack.md, "A specialist other people talk to",
-# which shows the same kind of specialist as a file of its own, named `ops`). Its `.env` variables are read when the daemon starts.
+# config add` fragments. Each new start is checked against this, from Claude Code's own debug file (docs/specialists.md). Its `.env` variables are read when the daemon starts.
 [specialists.helpdesk]
 workdir = "~/agents/helpdesk"
 pinned_to = ["app:sales"]             # pinned, because the `sales` app is pinned by deals: an unpinned specialist would lose it (hydra.toml warns)
@@ -168,7 +167,7 @@ env_file = ".env.reviewer"            # extra environment for its sessions; rela
 [restricted]
 off_limits = ["~/notes"]               # absolute paths, or starting with ~
 # allow_unproven_macos = true          # a restricted specialist that lists servers runs under a sandbox proven only on some macOS versions
-#                                      # (docs/slack.md names them); on any other it is refused at launch unless you set this. Default: off
+#                                      # (docs/specialists.md names them); on any other it is refused at launch unless you set this. Default: off
 
 # --- mcp_servers: declared here, at the top, as [mcp_servers.<name>]; a restricted specialist lists their names in its own `mcp_servers = [...]`. Per-operator: only hydra.toml declares one ---
 

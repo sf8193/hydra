@@ -1,7 +1,7 @@
 %%{init: {"theme":"base","themeVariables":{"background":"#ffffff","primaryColor":"#ffffff","primaryBorderColor":"#6b7280","primaryTextColor":"#1f2937","lineColor":"#374151","clusterBkg":"#ffffff","clusterBorder":"#d1d5db"},"flowchart":{"wrappingWidth":420,"useMaxWidth":false}}}%%
 %% How does an owed Slack message reach its target?
 %% deliverBatches, connectors/slack/watch.ts:1057; deliverGroup, :1231; runGuard, routing/guard.ts:57.
-%% Before: flow-slack-fate. How long a message may stay owed: flow-slack-owed. Every box's source: diagrams/flow-slack-deliver.sources.md.
+%% Before: flow-slack-fate. How long a message may stay owed: flow-slack-owed.
 flowchart TD
   in(["a batch of <b>Owed</b> messages,<br/>one conversation, after 4 s"])
   g1{"1. its <b>Binding</b>'s<br/>target still declared?"}

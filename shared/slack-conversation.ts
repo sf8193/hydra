@@ -1,5 +1,5 @@
 // A Slack conversation's identity: the app that heard it, the channel, and the thread. A leaf: no daemon, no Bolt.
-// The format is documented once, in docs/slack.md ("Conversations and replies, per app").
+// The format is documented once, in docs/slack-connector.md ("Conversations and replies, per app").
 
 import { DEFAULT_SLACK_APP } from '../config/types.js'
 

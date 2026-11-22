@@ -11,7 +11,7 @@ const env: LoadEnv = testLoadEnv({ home: '/h', sessionNames: [] })
 
 // The live hydra.toml's shape after its migrate (2026-11-09), with the operator's address made up.
 const LIVE = `# Written by \`hydra migrate\`. Edit freely: hydra re-reads this file when it changes.
-# Every key, explained: hydra.example.toml in the hydra repo; where each kind of setting lives: README › Configuration.
+# Every key, explained: hydra.example.toml in the hydra repo; where each kind of setting lives: docs/reference.md › Configuration.
 
 operator = "operator"
 

@@ -135,7 +135,7 @@ export function bornPolicy(specialistId: string | undefined, h: HydraConfig = cu
   return { specialist: declared.id, restricted: false, id: OPERATOR_POLICY_ID }
 }
 
-/** The sentence every statement of trust repeats (the load log, docs/slack.md, README, hydra.example.toml; a test keeps them equal). */
+/** The sentence every statement of trust repeats (the load log, docs/specialists.md, hydra.example.toml; a test keeps them equal). */
 export const SERVER_TRUST_SENTENCE = 'Listing a server means running code you trust with your own privileges.'
 
 /** The load-log line for one specialist that lists servers: the trust statement, and what the sandbox and the tools list each are. */

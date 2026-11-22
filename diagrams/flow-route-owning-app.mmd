@@ -1,6 +1,6 @@
 %%{init: {"theme":"base","themeVariables":{"background":"#ffffff","primaryColor":"#ffffff","primaryBorderColor":"#6b7280","primaryTextColor":"#1f2937","lineColor":"#374151","clusterBkg":"#ffffff","clusterBorder":"#d1d5db"},"flowchart":{"wrappingWidth":420,"useMaxWidth":false}}}%%
 %% Which app answers a message that several Slack apps heard? owningApp(), routing/route.ts:178; route() asks it first (route.ts:211).
-%% Then flow-route: which target hears it. Every box's source: diagrams/flow-route-owning-app.sources.md.
+%% Then flow-route: which target hears it.
 flowchart TD
   in(["a message, and every <b>App</b> that heard it"])
   heard["heard by: the apps in the channel,<br/>the app its conversation is bound through,<br/>an app it tags, even one offline<br/>a DM is heard by one app"]

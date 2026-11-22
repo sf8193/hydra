@@ -1,4 +1,4 @@
-# The old format. New setups declare [schedules.<id>] in <state dir>/hydra.toml (README, "Schedules"); an existing
+# The old format. New setups declare [schedules.<id>] in <state dir>/hydra.toml (docs/schedules.md); an existing
 # jobs.toml runs exactly as before until `hydra migrate` moves its jobs there.
 #
 # Copy to <state dir>/jobs.toml, then `hydra schedules sync <platform>`. Each job runs at its local-time slots; a slot

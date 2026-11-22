@@ -23,7 +23,7 @@ export type GuardInput = {
   person: string | null
   roles: string[]
   place: string
-  /** The conversation's id, as docs/slack.md writes it: `slack:C0ABC:<thread ts>`, and `slack:<app>:C0ABC:<thread ts>` for a conversation of an app other than `default`. */
+  /** The conversation's id, as docs/slack-connector.md writes it: `slack:C0ABC:<thread ts>`, and `slack:<app>:C0ABC:<thread ts>` for a conversation of an app other than `default`. */
   conversation: string
   /** Where routing sent it: `main`, a specialist, or a session's thread. */
   target: string

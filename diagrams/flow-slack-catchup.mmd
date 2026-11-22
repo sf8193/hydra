@@ -1,7 +1,7 @@
 %%{init: {"theme":"base","themeVariables":{"background":"#ffffff","primaryColor":"#ffffff","primaryBorderColor":"#6b7280","primaryTextColor":"#1f2937","lineColor":"#374151","clusterBkg":"#ffffff","clusterBorder":"#d1d5db"},"flowchart":{"wrappingWidth":420,"useMaxWidth":false}}}%%
 %% What does a catch-up pass read, and when does it hold or give up?
 %% SlackListener.runCatchUp, connectors/slack/listener.ts:669; catchUp, connectors/slack/catchup.ts:114.
-%% Next: flow-slack-accept. Every box's source: diagrams/flow-slack-catchup.sources.md.
+%% Next: flow-slack-accept.
 flowchart TD
   trig(["a <b>Catch-up</b> trigger"])
   ntrig["deep: boot, reconnect, resume,<br/>every 10 min, a retry after 60 s<br/>not deep: all apps joined, a place freed"]
