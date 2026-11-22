@@ -1,5 +1,5 @@
 // No new import cycles. A cycle is a group of files that all import each other (directly or through others), found on the same runtime imports check-layers counts.
-// Today's three cycles are listed in ALLOWED, one entry per group (its files, sorted, joined by a space). The list only shrinks: a new cycle fails, and so does an entry that is no longer a cycle (delete it).
+// Today's two cycles are listed in ALLOWED, one entry per group (its files, sorted, joined by a space). The list only shrinks: a new cycle fails, and so does an entry that is no longer a cycle (delete it).
 //   bun scripts/check-cycles.ts            check
 //   bun scripts/check-cycles.ts --list     print the cycles in ALLOWED's format
 
@@ -11,7 +11,6 @@ import { edges } from './check-layers.js'
 
 export const ALLOWED: readonly string[] = [
   'sessions/bridge-transport.ts sessions/delivery-notice.ts sessions/registry.ts sessions/session-reachability.ts',
-  'gateways/slack.ts infra/config.ts infra/hydra-config.ts infra/util.ts sessions/access.ts',
   'specialists/specialist-deliver.ts specialists/targets.ts',
 ]
 

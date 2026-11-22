@@ -18,12 +18,8 @@ export const ALLOWED: readonly string[] = [
   'boot-probe.ts -> ./infra/config.js',
   'boot-probe.ts -> ./sessions/bridge-transport.js',
   'boot-probe.ts -> ./sessions/registry.js',
-  'gateways/slack.ts -> ../sessions/access.js',
-  'gateways/slack.ts -> ../sessions/access.js',
-  'gateways/slack.ts -> ../sessions/access.js',
   'infra/config.ts -> ../gateways/discord.js',
   'infra/config.ts -> ../gateways/slack.js',
-  'infra/config.ts -> ../sessions/access.js',
 ]
 
 // Bun's transpiler drops types and comments and keeps every runtime `import()`, so a type query is never mistaken for a load and a load is never missed by its spelling.

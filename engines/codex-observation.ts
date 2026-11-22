@@ -3,7 +3,8 @@
 // What the daemon observes of a Codex turn: its last message and whether the
 // protocol-level turn finished, both pushed by codex-runtime's events.
 
-import { readConversationForensics, vitalsPruners } from '../sessions/observability.js'
+import { readConversationForensics } from './conversation-forensics.js'
+import { vitalsPruners } from '../infra/vitals-snapshot.js'
 import { transcriptPathFor } from '../infra/usage.js'
 import type { TurnOutcome } from './engine-adapter.js'
 import { transcriptAnswer, type TranscriptSources } from './claude-transcript.js'

@@ -13,7 +13,7 @@ import type {
   ContextUsage, RecoveryPlan, RecoverySource, Turn,
 } from './engine-adapter.js'
 import { withoutIntents } from './engine-adapter.js'
-import type { BlockingState } from '../app/pane-probe.js'
+import type { BlockingState } from './engine-adapter.js'
 import { CLAUDE_WORKING_SILENCE_S, type ClaudeEngine } from './claude-engine.js'
 import { FRESH_START_MS, SOCK_PATH, PLATFORM, SPAWN_LOGS_DIR, STATE_DIR } from '../infra/config.js'
 import { removeSessionToken, removeSpawnPrompt, shq, writeSessionToken, writeSpawnPrompt } from '../infra/launch-files.js'

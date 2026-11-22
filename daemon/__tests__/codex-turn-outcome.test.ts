@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { codexTurnOutcome, defaultTurnSources, type TurnSources } from '../../engines/codex-observation.js'
-import { vitalsPruners } from '../../sessions/observability.js'
+import { vitalsPruners } from '../../infra/vitals-snapshot.js'
 import { engines } from '../../sessions/engine-instances.js'
 import type { SessionInfo } from '../../sessions/registry.js'
 import type { CodexLastTurn } from '../../engines/codex-rollout.js'

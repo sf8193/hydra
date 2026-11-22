@@ -11,7 +11,7 @@ import { registry, threadRegistry, type SessionInfo } from '../sessions/registry
 import { transport } from '../sessions/bridge-transport.js'
 import { gateway } from '../infra/config.js'
 import { occupancy, occupied, ORPHAN_GRACE_MS, bridgeWaitMs } from '../sessions/session-reachability.js'
-import { confirmedStuckState } from '../app/pane-probe.js'
+import type { BlockingState } from '../engines/engine-adapter.js'
 import { landingOf } from '../shared/landing.js'
 import { checkIdempotency, clearIdempotency, registerIdempotency, DELIVER_IDEMPOTENCY_TTL_MS } from '../infra/idempotency.js'
 import { DELIVER_MAX_MESSAGE_BYTES, parseIdleTtl } from '../shared/constants.js'
@@ -45,8 +45,8 @@ export type DeliverOutcome =
  *  that can withdraw (a PR watch ended by a kill), asked under the thread's lock just before a revive; false is exit 3. */
 export type DeliverOpts = { initiator: string; idempotencyKey?: string; idempotencyTtlMs?: number; queue?: boolean; source?: string; lowPriority?: boolean; wanted?: () => boolean }
 
-/** Test seam: pane-probe's verdict that a session sits on a dialog or prompt. */
-export const targetDeps = { stuckState: confirmedStuckState }
+/** pane-probe's verdict that a session sits on a dialog or prompt; the daemon sets it at boot (daemon.ts), and a test sets its own. */
+export const targetDeps: { stuckState: (tmuxName: string) => BlockingState | null } = { stuckState: () => null }
 
 /**
  * What a `to` names, for delivery. Typed values (hydra.toml, the CLI) say their kind through `readTarget`: `main`, `specialist:<name>`,
