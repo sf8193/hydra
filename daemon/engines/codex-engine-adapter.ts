@@ -11,7 +11,6 @@ import { join } from 'path'
 import { codexSpawnEnv } from '../../shared/spawn-env.js'
 import { registry, type SessionInfo } from '../sessions.js'
 import type { BlockingState } from '../pane-probe.js'
-import { ENGINE_CAPABILITIES } from '../../shared/engine-capabilities.js'
 import type {
   EngineAdapter, LaunchInput, LaunchResult,
   DeliveryMode, DeliveryResult, Notification,
@@ -61,7 +60,6 @@ export function resumeHomeOwner(records: Iterable<SessionInfo>, resumeCodex: { h
 export const codexLaunchProcess = { registerMcp: registerCodexMcp, start: startCodexAppServer, stop: stopCodexAppServer }
 
 export class CodexEngineAdapter implements EngineAdapter {
-  readonly limitsAccess = ENGINE_CAPABILITIES.codex.limitsAccess
   // Tests shorten these; production uses the defaults.
   static COMPOSER_DEADLINE_MS = 5000
   static COMPOSER_POLL_MS = 100

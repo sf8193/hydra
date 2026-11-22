@@ -7,7 +7,6 @@
 import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'fs'
 import { join } from 'path'
 import type { SessionInfo } from '../sessions.js'
-import { ENGINE_CAPABILITIES } from '../../shared/engine-capabilities.js'
 import type {
   EngineAdapter, LaunchInput, LaunchResult, DeliveryResult, Notification, StopResult,
   ContextUsage, RecoveryPlan, RecoverySource, Turn,
@@ -27,7 +26,6 @@ const OMP_CONFIG = join(import.meta.dir, '..', '..', 'omp', 'hydra-omp.yml')
 const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
 
 export class OmpEngine implements EngineAdapter {
-  readonly limitsAccess = ENGINE_CAPABILITIES.omp.limitsAccess
   readonly provider = 'omp' as const
   readonly channel = 'bridge' as const
   constructor(private readonly claude: ClaudeEngine) {}

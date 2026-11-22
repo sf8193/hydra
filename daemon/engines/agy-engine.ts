@@ -8,7 +8,6 @@
 import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import type { SessionInfo } from '../sessions.js'
-import { ENGINE_CAPABILITIES } from '../../shared/engine-capabilities.js'
 import type {
   EngineAdapter, LaunchInput, LaunchResult, DeliveryResult, Notification, StopResult,
   ContextUsage, RecoveryPlan, RecoverySource, Turn,
@@ -43,7 +42,6 @@ export function agySettings(cwd: string, apiKeyMode: boolean): string {
 const collapse = (s: string) => s.replace(/\s+/g, '')
 
 export class AgyEngine implements EngineAdapter {
-  readonly limitsAccess = ENGINE_CAPABILITIES.agy.limitsAccess
   readonly provider = 'agy' as const
   readonly channel = 'engine' as const
   constructor(private readonly claude: ClaudeEngine, private readonly mcpConfig = AGY_MCP_CONFIG, private readonly hooksConfig = AGY_HOOKS_CONFIG) {}

@@ -172,8 +172,6 @@ export interface EngineAdapter {
   // Boot, once, over this provider's persisted records; never rejects. Claude:
   // nothing to do. Codex: reconnect the live records to their app-servers.
   start(records: readonly SessionInfo[]): Promise<void>
-  /** Whether this engine can run a session with less than the operator's access: restricted (`restricted = true`) or write-confined (`can_only_write_to`). Read from shared/engine-capabilities.ts. */
-  readonly limitsAccess: boolean
   launch(input: LaunchInput): Promise<LaunchResult>
   /** A restricted launch's check, from the engine's own record of what it loaded: refuse (with the cause) or pass. Absent: the engine cannot say, so it cannot run a restricted session. */
   verifyLaunch?(policy: RestrictedPolicy, launched: LaunchResult): Promise<{ ok: true } | { ok: false; why: string }>
