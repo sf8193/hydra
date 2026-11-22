@@ -24,14 +24,13 @@ import { projectDirName, projectsRoot, transcriptContext, transcriptPathFor } fr
 import { claudeTurnOutcome } from './claude-transcript.js'
 import { readClaudeStatus } from './claude-status.js'
 import { defaultTurnSources } from './codex-observation.js'
-import { CLAUDE_CONFIG, ENV_FILE, SOCK_PATH, PLATFORM, STATE_DIR } from '../config.js'
+import { CLAUDE_CONFIG, ENV_FILE, SOCK_PATH, PLATFORM, SPAWN_LOGS_DIR, STATE_DIR } from '../config.js'
 import { gateway } from '../config.js'
 import { SESSION_IDENTITY_VARS, capturedSpawnVars, stateEnvUnsets, scrubbedSpawnEnv, withRaisedFdLimit } from '../../shared/spawn-env.js'
 import { modsExport } from '../../shared/mods.js'
 import { BRIDGE_CHANNEL_FLAG, BRIDGE_MCP_SERVER_KEY, BRIDGE_PLUGIN_ID, BRIDGE_TOOLS_PERMISSION, BUILTIN_TOOL_PLUGIN_IDS } from '../plugin-manifest.js'
 import { deliveryRefusal, type LaunchPolicy, missingTokenRefusal, PolicyRefusal, remedy, RESTRICTED_MODS, RESTRICTED_PREAMBLE, sandboxInputs, serverToolRule, type RestrictedPolicy } from '../restricted.js'
 import { verifyConfinement as verifyConfinementLoaded, verifyLaunch as verifyLoaded, type Verdict } from './claude-verify.js'
-import { ENGINE_CAPABILITIES } from '../../shared/engine-capabilities.js'
 import { removeSessionToken, removeSpawnPrompt, shq, writeSessionToken, writeSpawnPrompt } from '../launch-files.js'
 import { makeServerTmpDirs, removeRestrictedFiles, serverTmpDir, serverTmpRoot, writeRestrictedFiles } from '../restricted-files.js'
 import { sandboxedServer, sandboxIssues } from '../../config/server-sandbox.js'
@@ -46,7 +45,6 @@ import { isRestricted, isRestrictedPolicy } from '../policy-record.js'
 export type ClaudeSubject = Pick<SessionInfo, 'tmuxName'> & Partial<Pick<SessionInfo, 'claudeSessionId'>>
   & { sessionMetadata?: Pick<SessionMetadata, 'model'> }
 
-const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
 
 /**
  * What a restricted launch writes and passes: the settings (the bridge plugin on, and the only tool permissions: the bridge's
@@ -288,7 +286,6 @@ export const CLAUDE_WORKING_SILENCE_S = 10 * 60
 export class ClaudeEngine implements EngineAdapter {
   readonly provider = 'claude' as const
   readonly channel = 'bridge' as const
-  readonly limitsAccess = ENGINE_CAPABILITIES.claude.limitsAccess
   constructor(private readonly transport: BridgeTransport) {}
 
   // Resume relaunches with --resume and is confirmed when the bridge registers.

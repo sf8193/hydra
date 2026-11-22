@@ -40,7 +40,7 @@ let fake: FakeTmux
 const launches: (LaunchInput & { provider: ProviderId })[] = []
 const orig: Record<string, any> = {}
 const fakeEngine = (provider: ProviderId) => ({
-  provider, channel: 'bridge', limitsAccess: provider === 'claude',
+  provider, channel: 'bridge',
   launch: async (input: LaunchInput) => {
     launches.push({ ...input, provider })
     return { provider, model: input.model, identity: {} }

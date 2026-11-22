@@ -4,6 +4,7 @@
 // Content (what may be said, approvals) is out of scope: it belongs to each specialist. What a specialist's session may
 // reach is not: `restricted` says whether it runs in its folder alone, `tools` and `mcp_servers` (with `[mcp_servers.*]`) list what a restricted
 // specialist may use, and `sends_to` names the specialists it may send to.
+import type { EngineName } from '../shared/engine-capabilities.js'
 
 /** A platform hydra can connect to. A person's address and most places start with one. */
 export const PLATFORMS = ['discord', 'slack', 'github'] as const
@@ -241,7 +242,7 @@ type SpecialistBase = {
   model?: string
   /** Shown in its sessions' thread names in place of the default session emoji: one emoji character. Absent: the default. */
   emoji?: string
-  engine?: 'claude' | 'codex' | 'omp' | 'agy'
+  engine?: EngineName
   /** `~` expanded; a relative path is under `workdir`. */
   envFile?: string
   /** Old ids, so a rename keeps its thread, session and owed messages. */

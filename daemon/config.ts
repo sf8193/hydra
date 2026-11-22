@@ -23,6 +23,10 @@ if (process.env.NODE_ENV === 'test' && process.env.HYDRA_TEST_PRELOADED !== '1')
 export const STATE_DIR = process.env.HYDRA_STATE_DIR
   ?? process.env.DISCORD_STATE_DIR
   ?? platformStateDir(process.env.CHAT_PLATFORM ?? 'discord')
+/** Where each launch's stderr and spawn logs go. */
+export const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
+/** A session this young may still be in its engine's startup (Claude Code's, or agy's boot, login and folder-trust screens). */
+export const FRESH_START_MS = 120_000
 /**
  * Whether this process may write the daemon's state. The daemon may (its entry file is daemon.ts), and so may
  * anything pointed at a state dir that isn't a live one: a test's temp dir, or a scratch dir. Anything else only

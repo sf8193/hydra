@@ -43,7 +43,7 @@ const told: string[] = []
 let launchError: Error | undefined
 const orig: Record<string, any> = {}
 const fakeClaude = {
-  provider: 'claude', channel: 'bridge', limitsAccess: true,
+  provider: 'claude', channel: 'bridge',
   launch: async (input: LaunchInput) => {
     launches.push(input)
     if (launchError) throw launchError

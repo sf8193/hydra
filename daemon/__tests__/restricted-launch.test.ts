@@ -56,7 +56,7 @@ const launches: LaunchInput[] = []
 const stops: string[] = []
 const orig: Record<string, any> = {}
 const fakeClaude = {
-  provider: 'claude', channel: 'bridge', limitsAccess: true,
+  provider: 'claude', channel: 'bridge',
   launch: async (input: LaunchInput) => {
     launches.push(input)
     if (input.resumeFrom && failResume) throw new Error('resume failed')

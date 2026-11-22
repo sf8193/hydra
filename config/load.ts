@@ -11,7 +11,7 @@ import { DISCORD_GATEWAY_TOKEN_ENV, engineOfModel, parseIdleTtl, SLACK_GATEWAY_T
 import { ENV_NAME_RE, tokenVarRefusal } from '../shared/spawn-env.js'
 import { offLimitRoots, workdirRestrictionIssues } from './restricted-workdir.js'
 import { ALLOW_UNPROVEN_MACOS, macosGateIssue, sandboxIssues, unquotablePath } from './server-sandbox.js'
-import { engineLimitsAccess } from '../shared/engine-capabilities.js'
+import { ENGINES, engineLimitsAccess } from '../shared/engine-capabilities.js'
 import { CAN_ONLY_WRITE_TO_VALUES, KNOWN_BUILTIN_TOOLS, browserDownloadDir, browserProfileDir, browserProfileProblem, browserProfilesOverlap, canonicalFolder, confinementWarning, hasPlaceholder, managedMcpNameClashes, readDenyRoots, unknownPlaceholders, unreadableWorkdir } from './write-confinement.js'
 import { noSuchApp, pinnersOf, speaksAsOf, whyNotServed } from './pins.js'
 import { SLACK_APP_DEFAULTS } from '../connectors/slack/app.js'
@@ -39,7 +39,6 @@ const ADDRESS_RE: Record<Platform, RegExp> = {
   slack: /^slack:[UW][A-Z0-9]+$/,
   github: /^github:[a-z0-9](?:[a-z0-9-]{0,38})$/,
 }
-const ENGINES = ['claude', 'codex', 'omp', 'agy'] as const
 /** Why a built-in tool is not on a restricted specialist's list. Any other name gets the generic refusal. */
 const TOOL_REFUSALS: Readonly<Record<string, string>> = {
   Bash: 'runs code outside the workdir', PowerShell: 'runs code outside the workdir', Monitor: 'runs code outside the workdir',
