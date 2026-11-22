@@ -3,7 +3,8 @@
 import { describe, expect, test } from 'bun:test'
 import { NoticeLimiter } from '../../shared/notice-limit.js'
 import { policyDrifted, policyProblem } from '../../app/restricted.js'
-import { OPERATOR_POLICY_ID, policyIdFor, remedy, type LaunchPolicy, type PolicyServer, type RestrictedPolicy } from '../../shared/launch-policy.js'
+import { remedy, type LaunchPolicy, type PolicyServer, type RestrictedPolicy } from '../../shared/launch-policy.js'
+import { OPERATOR_POLICY_ID, policyIdFor } from '../../app/restricted.js'
 
 const server = (over: Partial<PolicyServer> = {}) => ({ name: 'datadog', command: '/usr/local/bin/datadog-mcp', tokenEnv: ['DD_API_KEY'], tools: ['a'], ...over })
 const restrictedPolicy = (over: Partial<RestrictedPolicy> = {}): RestrictedPolicy => {
