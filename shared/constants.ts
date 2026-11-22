@@ -101,10 +101,19 @@ export function ompProvider(model: string): 'openai-codex' | 'anthropic' {
 
 export const AGY_MODEL_ALIASES = ENGINE_PROFILES.agy.aliases
 
-// Validate aliases at load time.
+/** Every engine's chat aliases in engine order, built once from ENGINE_PROFILES. */
+export const ENGINE_ALIAS_ENTRIES: ReadonlyArray<{ alias: string; model: string; engine: EngineName; label: string }> =
+  (Object.entries(ENGINE_PROFILES) as Array<[EngineName, EngineProfile]>).flatMap(([engine, profile]) =>
+    Object.entries(profile.aliases).map(([alias, model]) => ({ alias, model, engine, label: profile.label })),
+  )
+export const ENGINE_ALIAS_KEYS: readonly string[] = ENGINE_ALIAS_ENTRIES.map(e => e.alias)
+
+// Validate aliases at load time. Every engine's alias keys go unescaped into router regexes.
 const ALIAS_KEY_RE = /^[a-z0-9-]+$/
+for (const { alias, engine } of ENGINE_ALIAS_ENTRIES) {
+  if (!ALIAS_KEY_RE.test(alias)) throw new Error(`${engine} alias "${alias}" contains invalid characters — must be [a-z0-9-]`)
+}
 for (const [key, id] of Object.entries(MODEL_ALIASES)) {
-  if (!ALIAS_KEY_RE.test(key)) throw new Error(`MODEL_ALIASES key "${key}" contains invalid characters — must be [a-z0-9-]`)
   if (!KNOWN_MODELS.has(id.replace(/\[1m\]$/, ''))) throw new Error(`MODEL_ALIASES["${key}"] points to unknown model "${id}"`)
 }
 
@@ -113,13 +122,6 @@ for (const [key, id] of Object.entries(MODEL_ALIASES)) {
 export const engineAliasPattern = (engine: EngineName) => Object.keys(ENGINE_PROFILES[engine].aliases).sort((a, b) => b.length - a.length).join('|')
 export const MODEL_ALIAS_PATTERN = engineAliasPattern('claude')
 export const CODEX_MODEL_ALIAS_PATTERN = engineAliasPattern('codex')
-
-/** Every engine's chat aliases in engine order, built once from ENGINE_PROFILES. */
-export const ENGINE_ALIAS_ENTRIES: ReadonlyArray<{ alias: string; model: string; engine: EngineName; label: string }> =
-  (Object.entries(ENGINE_PROFILES) as Array<[EngineName, EngineProfile]>).flatMap(([engine, profile]) =>
-    Object.entries(profile.aliases).map(([alias, model]) => ({ alias, model, engine, label: profile.label })),
-  )
-export const ENGINE_ALIAS_KEYS: readonly string[] = ENGINE_ALIAS_ENTRIES.map(e => e.alias)
 /** Longest-first regex fragment matching any engine's chat alias. */
 export const ALL_ENGINE_ALIAS_PATTERN = [...ENGINE_ALIAS_KEYS].sort((a, b) => b.length - a.length).join('|')
 
@@ -149,7 +151,7 @@ export function engineOfModel(raw: string): EngineName | undefined {
 
 /**
  * A raw model, as any launch path names it, resolved to the model to run and the engine that runs it. With no `engine`, an alias picks
- * it (the Codex, omp and agy tables are checked before the Claude one, and any other string is Claude's). With one (the thread's history,
+ * its engine from ENGINE_PROFILES (no alias appears in two profiles, and any other string is Claude's). With one (the thread's history,
  * a handoff), the alias is read in that engine's table and a full id passes through.
  */
 export function resolveLaunchSelection(raw: string, engine?: EngineName): { model: string; engine: EngineName } {
