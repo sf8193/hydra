@@ -1,4 +1,4 @@
-import { parseDuration } from './util.js'
+import { parseDuration } from '../infra/util.js'
 import { createStateMachine, type TransitionTable } from './state-machine.js'
 import type { PhaseBehaviorFn, RunState } from './protocol-types.js'
 import { mechanicsBlock } from './prompts/mechanics.js'

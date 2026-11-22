@@ -1,15 +1,15 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { rmSync } from 'fs'
 import { join } from 'path'
-import { STATE_DIR, gateway } from '../../../daemon/config.js'
-import { registry } from '../../../daemon/sessions.js'
-import { setSpecialistThread, _reloadSpecialists } from '../../../specialists/specialists.js'
-import { _setHydraConfigForTesting } from '../../../daemon/hydra-config.js'
+import { STATE_DIR, gateway } from '../../../infra/config.js'
+import { registry } from '../../../sessions/registry.js'
+import { setSpecialistThread, _reloadSpecialists } from '../../../sessions/specialists.js'
+import { _setHydraConfigForTesting } from '../../../infra/hydra-config.js'
 import {
   getConversationTable, slackConversationHealth, bindConversation, formatConversations, operatorBind, operatorUnbind, slackRuntimeDeps, replyInConversation, startSlackListener, stopSlackListener,
 } from '../runtime.js'
 import { slackSpecialistsOf } from '../../../routing/route.js'
-import { sessionCapabilities } from '../../../daemon/tool-surface.js'
+import { sessionCapabilities } from '../../../sessions/tool-surface.js'
 import { BASE, TWO_APPS, hydra, view, SALES_BOT } from './slack-config.js'
 import { ConversationTable } from '../watch.js'
 

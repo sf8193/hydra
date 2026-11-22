@@ -5,10 +5,10 @@
 // true for a message posted inside the thread itself — the one place a stuck-looking
 // spawn gets retried from.
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
-import { gateway } from '../config.js'
-import { registry } from '../sessions.js'
+import { gateway } from '../../infra/config.js'
+import { registry } from '../../sessions/registry.js'
 import { resolveSpawnTarget } from '../commands/global.js'
-import type { SessionInfo } from '../sessions.js'
+import type { SessionInfo } from '../../sessions/registry.js'
 import type { InboundMessage } from '../../gateways/gateway.js'
 
 function liveSession(id: string, threadId: string, anchorChannelId?: string): SessionInfo {

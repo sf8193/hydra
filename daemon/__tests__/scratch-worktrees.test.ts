@@ -4,11 +4,11 @@
 import { describe, test, expect, afterAll, spyOn } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { cleanScratchWorktrees, createWorktree, destroyWorktree, sessionScratchpads } from '../worktree-manager.js'
-import * as worktreeManager from '../worktree-manager.js'
+import { cleanScratchWorktrees, createWorktree, destroyWorktree, sessionScratchpads } from '../../infra/worktree-manager.js'
+import * as worktreeManager from '../../infra/worktree-manager.js'
 import { scratchSessionIds, splitOwnFromHistory, killSession } from '../session-lifecycle.js'
-import type { SessionInfo } from '../sessions.js'
-import { threadRegistry } from '../sessions.js'
+import type { SessionInfo } from '../../sessions/registry.js'
+import { threadRegistry } from '../../sessions/registry.js'
 import { fixtureRoot, git, gitCommit, gitInit } from './git-fixture.js'
 
 const { path: root, cleanup } = fixtureRoot('scratch-wt')

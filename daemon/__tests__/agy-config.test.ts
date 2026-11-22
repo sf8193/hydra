@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { mkdtempSync, readFileSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { registerHydraHooks, registerHydraTools } from '../engines/agy-config.js'
+import { registerHydraHooks, registerHydraTools } from '../../engines/agy-config.js'
 
 const fresh = () => join(mkdtempSync(join(tmpdir(), 'agy-mcp-')), 'config', 'mcp_config.json')
 const read = (f: string) => JSON.parse(readFileSync(f, 'utf8'))
@@ -13,7 +13,7 @@ test('a missing file gets the hydra entry: this checkout\'s tool server, run by 
   const { command, args } = read(f).mcpServers.hydra
   expect(command).toBe(process.execPath)
   expect(args).toHaveLength(1)
-  expect(args[0]).toEndWith('/daemon/codex-mcp-server.ts')
+  expect(args[0]).toEndWith('/engines/codex-mcp-server.ts')
 })
 
 test('an empty file, as agy itself leaves mcp_config.json, gets the entries like a missing one', () => {
@@ -21,7 +21,7 @@ test('an empty file, as agy itself leaves mcp_config.json, gets the entries like
   for (const f of [m, h]) { registerHydraTools(f); writeFileSync(f, '') }
   registerHydraTools(m)
   registerHydraHooks(h)
-  expect(read(m).mcpServers.hydra.args[0]).toEndWith('/daemon/codex-mcp-server.ts')
+  expect(read(m).mcpServers.hydra.args[0]).toEndWith('/engines/codex-mcp-server.ts')
   expect(Object.keys(read(h).hydra)).toEqual(['SessionStart', 'PreInvocation', 'Stop'])
 })
 
@@ -63,7 +63,7 @@ test('the hook group covers the session start, each model call and each stop, wi
   expect(Object.keys(hydra)).toEqual(['SessionStart', 'PreInvocation', 'Stop'])
   for (const [event, [handler]] of Object.entries<any>(hydra)) {
     expect(handler.type).toBe('command')
-    expect(handler.command).toContain(`/daemon/agy-hook.ts' ${event}`)
+    expect(handler.command).toContain(`/engines/agy-hook.ts' ${event}`)
   }
   expect(mine).toEqual({ Stop: [{ command: 'echo' }] })
 })

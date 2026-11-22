@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { rmSync } from 'fs'
 import { join } from 'path'
-import { STATE_DIR } from '../config.js'
+import { STATE_DIR } from '../../infra/config.js'
 import {
   completePendingRetirement,
   listPendingRetirements, recordPendingRetirement,
-} from '../retirement-journal.js'
+} from '../../infra/retirement-journal.js'
 
 const file = join(STATE_DIR, 'pending-retirements.json')
 

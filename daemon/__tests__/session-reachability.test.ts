@@ -9,10 +9,10 @@ import {
   daemonPastOrphanGrace,
   occupancy,
   occupied,
-} from '../session-reachability.js'
-import { engines } from '../engines/instances.js'
-import { markDead, registry, threadRegistry, type SessionInfo } from '../sessions.js'
-import { transport } from '../bridge-transport.js'
+} from '../../sessions/session-reachability.js'
+import { engines } from '../../engines/instances.js'
+import { markDead, registry, threadRegistry, type SessionInfo } from '../../sessions/registry.js'
+import { transport } from '../../sessions/bridge-transport.js'
 import { withFakeTmux } from './fake-tmux.js'
 
 const old = ORPHAN_GRACE_MS + 1

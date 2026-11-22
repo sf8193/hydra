@@ -2,8 +2,8 @@
 // writing a death's endedAt alongside its deadAt.
 import { expect, test } from 'bun:test'
 import { handOff, handoffIO } from '../session-lifecycle.js'
-import { registry, ThreadRegistry, type SessionInfo } from '../sessions.js'
-import { withThreadLock } from '../../specialists/specialists.js'
+import { registry, ThreadRegistry, type SessionInfo } from '../../sessions/registry.js'
+import { withThreadLock } from '../../sessions/specialists.js'
 
 process.stderr.write = (() => true) as any
 

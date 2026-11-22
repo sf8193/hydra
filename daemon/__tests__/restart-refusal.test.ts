@@ -4,7 +4,7 @@ import { afterEach, expect, spyOn, test } from 'bun:test'
 import * as childProcess from 'child_process'
 import { rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { gateway, STATE_DIR } from '../config.js'
+import { gateway, STATE_DIR } from '../../infra/config.js'
 import { handleRestartIntercept } from '../commands/global.js'
 
 const spies: Array<{ mockRestore(): void }> = []

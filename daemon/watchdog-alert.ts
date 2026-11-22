@@ -4,9 +4,9 @@
 // it for the next one.
 import { existsSync, readFileSync, unlinkSync } from 'fs'
 import { join } from 'path'
-import { STATE_DIR } from './config.js'
-import { formatDuration } from './util.js'
-import { notifyOperator } from './access.js'
+import { STATE_DIR } from '../infra/config.js'
+import { formatDuration } from '../infra/util.js'
+import { notifyOperator } from '../sessions/access.js'
 import { WATCHDOG_ALERT_FILE } from '../shared/constants.js'
 
 // The alert says "in the last hour"; one that waited longer than that for a daemon to post it says how long.

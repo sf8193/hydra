@@ -9,20 +9,20 @@
 // are replaceable for testing.
 
 import { execFile } from 'child_process'
-import { occupancy, type Occupancy } from './session-reachability.js'
+import { occupancy, type Occupancy } from '../sessions/session-reachability.js'
 import { promisify } from 'util'
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { registry } from './sessions.js'
-import type { SessionInfo } from './sessions.js'
-import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL } from './config.js'
-import { operatorIds } from './access.js'
-import { safeSend } from './util.js'
-import { transport } from './bridge-transport.js'
+import { registry } from '../sessions/registry.js'
+import type { SessionInfo } from '../sessions/registry.js'
+import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL } from '../infra/config.js'
+import { operatorIds } from '../sessions/access.js'
+import { safeSend } from '../infra/util.js'
+import { transport } from '../sessions/bridge-transport.js'
 import { byteTmuxName, claudeConfigDir } from '../shared/constants.js'
-import { blockedReason, readClaudeStatus, type ClaudeLiveStatus } from './engines/claude-status.js'
+import { blockedReason, readClaudeStatus, type ClaudeLiveStatus } from '../engines/claude-status.js'
 import { reportUsage, type UsageReading } from './usage-alerts.js'
-import { transcriptPathFor } from './usage.js'
+import { transcriptPathFor } from '../infra/usage.js'
 
 const execFileAsync = promisify(execFile)
 

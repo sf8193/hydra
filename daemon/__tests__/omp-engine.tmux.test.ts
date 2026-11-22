@@ -3,11 +3,11 @@ import { existsSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'fs'
 import { createServer, type Socket } from 'net'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { BridgeTransport } from '../bridge-transport.js'
-import { computeToolsForSession } from '../bridge-tools.js'
-import { ClaudeEngine } from '../engines/claude-engine.js'
-import { OmpEngine } from '../engines/omp-engine.js'
-import { SOCK_PATH } from '../config.js'
+import { BridgeTransport } from '../../sessions/bridge-transport.js'
+import { computeToolsForSession } from '../../engines/bridge-tools.js'
+import { ClaudeEngine } from '../../engines/claude-engine.js'
+import { OmpEngine } from '../../engines/omp-engine.js'
+import { SOCK_PATH } from '../../infra/config.js'
 
 // Real omp in tmux against a stub daemon socket, on the suite's private tmux server.
 // It calls the real model (a handful of turns), so it runs only with HYDRA_OMP_E2E=1 (omp logged in, HYDRA_OMP_BIN set).

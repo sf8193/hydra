@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
 import { dirname, join } from 'path'
-import { codexHomeDir, codexPidPath, startCodexAppServer, stopCodexAppServer } from '../codex-process.js'
+import { codexHomeDir, codexPidPath, startCodexAppServer, stopCodexAppServer } from '../../engines/codex-process.js'
 
 describe('durable Codex app-server process', () => {
   test('stores process identity inside the isolated agent home', () => {

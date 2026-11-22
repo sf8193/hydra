@@ -24,21 +24,21 @@
 //
 // The daemon polls tmux's window_activity timestamp every 20s to detect
 // idle sessions. No monitor-silence/activity options needed.
-import { occupancy, type Occupancy } from './session-reachability.js'
+import { occupancy, type Occupancy } from '../sessions/session-reachability.js'
 import { writeFileSync, unlinkSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { transport } from './bridge-transport.js'
-import { registry } from './sessions.js'
-import type { SessionInfo } from './sessions.js'
-import { gateway } from './config.js'
-import { on } from './event-bus.js'
-import type { TurnOutcome } from './engines/engine-adapter.js'
-import { safeSend } from './util.js'
-import { hasFreeze, paneScreenshot, tmuxSync, tmuxWindowActivity } from './tmux.js'
+import { transport } from '../sessions/bridge-transport.js'
+import { registry } from '../sessions/registry.js'
+import type { SessionInfo } from '../sessions/registry.js'
+import { gateway } from '../infra/config.js'
+import { on } from '../infra/event-bus.js'
+import type { TurnOutcome } from '../engines/engine-adapter.js'
+import { safeSend } from '../infra/util.js'
+import { hasFreeze, paneScreenshot, tmuxSync, tmuxWindowActivity } from '../infra/tmux.js'
 import { probeByteTmuxName } from './pane-probe.js'
-import { blockedReason, readClaudeStatus } from './engines/claude-status.js'
-import { markYourTurn } from './home-status.js'
+import { blockedReason, readClaudeStatus } from '../engines/claude-status.js'
+import { markYourTurn } from '../infra/home-status.js'
 
 export type ReplyGuardDeps = {
   registryGet: (sessionId: string) => SessionInfo | undefined

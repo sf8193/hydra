@@ -19,7 +19,7 @@ completion. Peek is deliberately irrelevant to turn ownership.
 ## Constraints and rejected ideas
 
 - Do not touch existing unrelated dirty files: `daemon.ts`,
-  `daemon/plugin-manifest.ts`, `scripts/jev-routing-backtest.ts`, or
+  `infra/plugin-manifest.ts`, `scripts/jev-routing-backtest.ts`, or
   `scripts/jev-swebench-eval.ts`.
 - Do not use automatic steer for normal comments or TUI output for idleness.
 - Do not silently evict user messages or blindly retry unknown starts.
@@ -54,7 +54,7 @@ completion. Peek is deliberately irrelevant to turn ownership.
 
 ### Step 1 — engine scheduler and adapter contract
 
-Files: `daemon/codex-engine.ts`, `daemon/engines/codex-engine-adapter.ts`, focused
+Files: `engines/codex-engine.ts`, `engines/codex-engine-adapter.ts`, focused
 Codex tests. Add scheduler state, truthful queue acceptance, launch item zero,
 serialized drain/retry/reconciliation/stall recovery, and stable acknowledged
 interrupt ownership.

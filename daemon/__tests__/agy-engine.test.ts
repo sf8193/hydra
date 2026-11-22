@@ -3,14 +3,14 @@ import { mkdirSync, readdirSync } from 'fs'
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { AGY_API_KEY_FILE, AgyEngine, agySettings } from '../engines/agy-engine.js'
-import { ClaudeEngine } from '../engines/claude-engine.js'
-import { BridgeTransport } from '../bridge-transport.js'
+import { AGY_API_KEY_FILE, AgyEngine, agySettings } from '../../engines/agy-engine.js'
+import { ClaudeEngine } from '../../engines/claude-engine.js'
+import { BridgeTransport } from '../../sessions/bridge-transport.js'
 import { SESSION_INSTRUCTIONS } from '../../shared/constants.js'
-import { _setTmuxForTesting } from '../tmux.js'
-import { agyStateDir, agyStateFile } from '../engines/agy-session.js'
-import { STATE_DIR } from '../config.js'
-import { sessionTokenDir, spawnPromptDir } from '../launch-files.js'
+import { _setTmuxForTesting } from '../../infra/tmux.js'
+import { agyStateDir, agyStateFile } from '../../engines/agy-session.js'
+import { STATE_DIR } from '../../infra/config.js'
+import { sessionTokenDir, spawnPromptDir } from '../../infra/launch-files.js'
 
 const configDir = mkdtempSync(join(tmpdir(), 'hydra-agy-mcp-'))
 const mcpConfig = join(configDir, 'mcp_config.json')
@@ -43,10 +43,10 @@ test('launch runs agy on the model, trusting only its folder, approving tools, w
   expect(cmd).toContain('unset HYDRA_ROLE CLAUDE_CONFIG_DIR')
   expect(cmd).toContain('export DAEMON_SOCK=')
   expect(cmd).toContain(`export HYDRA_AGY_STATE='${agyStateFile('s1')}'`)
-  expect(JSON.parse(readFileSync(hooksConfig, 'utf8')).hydra.Stop[0].command).toContain('/daemon/agy-hook.ts')
+  expect(JSON.parse(readFileSync(hooksConfig, 'utf8')).hydra.Stop[0].command).toContain('/engines/agy-hook.ts')
   expect(cmd).not.toContain('say hi')
   expect(cmd).not.toContain('GEMINI_API_KEY')
-  expect(JSON.parse(readFileSync(mcpConfig, 'utf8')).mcpServers.hydra.args[0]).toEndWith('/daemon/codex-mcp-server.ts')
+  expect(JSON.parse(readFileSync(mcpConfig, 'utf8')).mcpServers.hydra.args[0]).toEndWith('/engines/codex-mcp-server.ts')
 })
 
 test('the first prompt is hydra\'s reply rules, then the spawn prompt', async () => {

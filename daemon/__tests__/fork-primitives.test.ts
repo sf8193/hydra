@@ -2,19 +2,19 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } fr
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { homedir, tmpdir } from 'os'
 import { join } from 'path'
-import { gateway, STATE_DIR, CLAUDE_CONFIG } from '../config.js'
+import { gateway, STATE_DIR, CLAUDE_CONFIG } from '../../infra/config.js'
 import { doSpawnSession, handOff, handoffIO, predecessorOf } from '../session-lifecycle.js'
-import { isParentOf, registry, SESSION_NAMES, SessionRegistry, threadRegistry } from '../sessions.js'
-import type { SessionInfo, ThreadSessionEntry } from '../sessions.js'
-import { transport } from '../bridge-transport.js'
-import { engines } from '../engines/instances.js'
-import { ClaudeEngine } from '../engines/claude-engine.js'
+import { isParentOf, registry, SESSION_NAMES, SessionRegistry, threadRegistry } from '../../sessions/registry.js'
+import type { SessionInfo, ThreadSessionEntry } from '../../sessions/registry.js'
+import { transport } from '../../sessions/bridge-transport.js'
+import { engines } from '../../engines/instances.js'
+import { ClaudeEngine } from '../../engines/claude-engine.js'
 import { executeTool } from '../bridge-dispatch.js'
-import type { LaunchInput } from '../engines/engine-adapter.js'
+import type { LaunchInput } from '../../engines/engine-adapter.js'
 import { handleRecoverIntercept } from '../recovery.js'
 import { RECOVERY_REVERIFY_GUARD } from '../session-lifecycle.js'
 import { handleResumeIntercept } from '../commands/thread.js'
-import { projectDirName } from '../usage.js'
+import { projectDirName } from '../../infra/usage.js'
 import { buildForkPrompt, buildHandoffPrompt } from '../prompts/session.js'
 import { hydraPrompt } from '../prompts/request.js'
 import type { InboundMessage } from '../../gateways/gateway.js'
@@ -565,7 +565,7 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
   })
 
   test('L2: a claimed name stops the clocks of the records it replaces, so a reaper armed while they ran cannot end the new session', async () => {
-    const { resumeIdleLimit, _idleTimersForTesting } = await import('../idle-limit.js')
+    const { resumeIdleLimit, _idleTimersForTesting } = await import('../../sessions/idle-limit.js')
     seedDead()
     let alive = true
     const byName = { ...fakeClaude, isAlive: () => alive || launches.some(l => l.tmuxName === 'opsl4') }

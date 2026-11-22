@@ -12,10 +12,10 @@
 //   it gives null text.
 
 import { describe, expect, test } from 'bun:test'
-import { CodexEngine } from '../codex-engine.js'
-import { codexEngine, onTurnReconciled } from '../engines/codex-runtime.js'
-import { getLastCodexMessage, isCodexTurnComplete, isCodexWorking } from '../engines/codex-observation.js'
-import { registry, type SessionInfo } from '../sessions.js'
+import { CodexEngine } from '../../engines/codex-engine.js'
+import { codexEngine, onTurnReconciled } from '../../engines/codex-runtime.js'
+import { getLastCodexMessage, isCodexTurnComplete, isCodexWorking } from '../../engines/codex-observation.js'
+import { registry, type SessionInfo } from '../../sessions/registry.js'
 
 // The resume shape is the live one recorded at the top of this file.
 const liveTurn = (over: Record<string, unknown> = {}) => ({

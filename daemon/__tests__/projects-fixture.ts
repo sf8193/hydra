@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { randomUUID } from 'crypto'
 import { join, resolve } from 'path'
-import { projectsRoot } from '../usage.js'
+import { projectsRoot } from '../../infra/usage.js'
 import { isUnder } from '../../shared/path-containment.js'
 import { TEST_STATE_DIR } from '../../test-setup.js'
 

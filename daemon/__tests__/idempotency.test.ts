@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach } from 'bun:test'
-import { checkIdempotency, registerIdempotency, updateIdempotency, clearIdempotency, getIdempotencyEntry, listIdempotencyEntries } from '../idempotency.js'
+import { checkIdempotency, registerIdempotency, updateIdempotency, clearIdempotency, getIdempotencyEntry, listIdempotencyEntries } from '../../infra/idempotency.js'
 
 // Note: these tests operate on the live idempotency registry.
 // We use unique keys per test to avoid cross-test interference.

@@ -5,11 +5,11 @@
 import { parseConversation } from '../../conversation.js'
 import { appOfEntry, conversationId, isDm, TOP_LEVEL, type ConversationEntry } from '../../watch.js'
 import { getConversationTable } from '../../runtime.js'
-import { conversationSpecialistOf, boundAs } from '../../../../specialists/specialists.js'
+import { conversationSpecialistOf, boundAs } from '../../../../sessions/specialists.js'
 import { conversationSessionName } from '../../../../specialists/targets.js'
-import { registry, type SessionInfo } from '../../../../daemon/sessions.js'
+import { registry, type SessionInfo } from '../../../../sessions/registry.js'
 import { MAIN, currentId, isSessionThread } from '../../../../routing/route.js'
-import { currentHydraConfig as hydraConfig } from '../../../../daemon/hydra-config.js'
+import { currentHydraConfig as hydraConfig } from '../../../../infra/hydra-config.js'
 import type { HydraConfig } from '../../../../config/types.js'
 
 const isConversationSession = (caller: Partial<Pick<SessionInfo, 'tmuxName'>> | undefined): boolean => !!conversationSpecialistOf(caller?.tmuxName)

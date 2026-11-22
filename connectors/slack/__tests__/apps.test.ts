@@ -12,7 +12,7 @@ import type { SlackApi, RawMessage } from '../catchup.js'
 import type { SocketEmitter } from '../../../shared/socket-supervisor.js'
 import { hydra as load, sharedChannel, BOT, SALES_BOT, TWO_APPS } from './slack-config.js'
 import { SLACK_APP_NEEDS } from '../app.js'
-import { STATE_DIR } from '../../../daemon/config.js'
+import { STATE_DIR } from '../../../infra/config.js'
 import { eventsDir } from '../../../shared/events.js'
 import { readEvents } from '../../../cli/events.js'
 

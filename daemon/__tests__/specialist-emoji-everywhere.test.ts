@@ -8,12 +8,12 @@
 import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test'
 import { readdirSync, readFileSync, rmSync, statSync } from 'fs'
 import { join, relative, resolve } from 'path'
-import { gateway, STATE_DIR } from '../config.js'
-import { registry, threadRegistry, sessionEmoji, type SessionInfo } from '../sessions.js'
-import { emojiOf, emojiOfName } from '../anchor-state.js'
-import { transport } from '../bridge-transport.js'
-import { _setHydraConfigForTesting } from '../hydra-config.js'
-import { engines } from '../engines/instances.js'
+import { gateway, STATE_DIR } from '../../infra/config.js'
+import { registry, threadRegistry, sessionEmoji, type SessionInfo } from '../../sessions/registry.js'
+import { emojiOf, emojiOfName } from '../../sessions/anchor-state.js'
+import { transport } from '../../sessions/bridge-transport.js'
+import { _setHydraConfigForTesting } from '../../infra/hydra-config.js'
+import { engines } from '../../engines/instances.js'
 import { handleListIntercept, handleUsageIntercept, __test as statusTest } from '../commands/status.js'
 import { handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept, _setRecoveryDeps, _resetRecoveryDeps } from '../commands/thread.js'
 import { handleSpawnIntercept } from '../commands/global.js'
@@ -22,10 +22,10 @@ import { killSession } from '../session-lifecycle.js'
 import { handleRecoverIntercept } from '../recovery.js'
 import { executeTool } from '../bridge-dispatch.js'
 import { sendToThread, sendDeps, _resetSends } from '../sends-to.js'
-import { mainTmux } from '../main-session.js'
+import { mainTmux } from '../../sessions/main.js'
 import { protocol } from '../protocol-dsl.js'
 import { onRunAdvance, __test as protocolTest } from '../protocol-runner.js'
-import { setSpecialistThread, _reloadSpecialists } from '../../specialists/specialists.js'
+import { setSpecialistThread, _reloadSpecialists } from '../../sessions/specialists.js'
 import { fakeAdapter } from './test-harness.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 
@@ -527,7 +527,7 @@ const root = resolve(import.meta.dir, '..', '..')
 const read = (file: string) => readFileSync(join(root, file), 'utf8')
 
 describe('no site reads the catalog glyph', () => {
-  test('only the definition (daemon/sessions.ts) and the fallback (daemon/anchor-state.ts) reference sessionEmoji', () => {
+  test('only the definition (sessions/registry.ts) and the fallback (sessions/anchor-state.ts) reference sessionEmoji', () => {
     const files: string[] = []
     const walk = (dir: string) => {
       for (const e of readdirSync(join(root, dir))) {
@@ -537,11 +537,11 @@ describe('no site reads the catalog glyph', () => {
         else if (/\.(ts|tsx|js|mjs)$/.test(e)) files.push(rel)
       }
     }
-    for (const dir of ['daemon', 'specialists', 'shared', 'gateways']) walk(dir)
+    for (const dir of ['daemon', 'infra', 'engines', 'sessions', 'specialists', 'shared', 'gateways']) walk(dir)
     files.push('daemon.ts')
     expect(files.length).toBeGreaterThan(50)   // the walk found the tree, not nothing
     const holders = files.filter(f => /\bsessionEmoji\b/.test(read(f))).map(f => relative('.', f)).sort()
-    expect(holders).toEqual(['daemon/anchor-state.ts', 'daemon/sessions.ts'])
+    expect(holders).toEqual(['sessions/anchor-state.ts', 'sessions/registry.ts'])
   })
 })
 

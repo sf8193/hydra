@@ -7,7 +7,7 @@ import { rmSync } from 'fs'
 import { join } from 'path'
 import { makeProbe, type Probe } from './confined-shell-probe.js'
 import { confinementRules } from '../write-confinement.js'
-import { confinementShortfall, readLoaded } from '../engines/claude-verify.js'
+import { confinementShortfall, readLoaded } from '../../engines/claude-verify.js'
 
 const LIVE = process.env.HYDRA_LIVE_CLAUDE === '1' && process.platform === 'darwin' && !!Bun.which('claude')
 

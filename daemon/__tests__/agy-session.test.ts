@@ -2,7 +2,7 @@ import { afterAll, beforeEach, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { agyContextTokens, agyState, agyStateDir, agyStateFile, agyTurn } from '../engines/agy-session.js'
+import { agyContextTokens, agyState, agyStateDir, agyStateFile, agyTurn } from '../../engines/agy-session.js'
 
 // A transcript as agy writes it (the shape of a real one: a user input, a tool call, its result, the answer).
 const at = (s: number) => new Date(Date.UTC(2026, 10, 21, 4, 55, s)).toISOString().replace('.000Z', 'Z')

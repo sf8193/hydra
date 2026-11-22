@@ -4,7 +4,7 @@
 
 import { readdirSync, readFileSync } from 'fs'
 import { join } from 'path'
-import { STATE_DIR } from './config.js'
+import { STATE_DIR } from '../infra/config.js'
 
 export type SeedModifier = {
   type: 'seed'

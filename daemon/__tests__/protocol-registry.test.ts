@@ -3,8 +3,8 @@ import {
   registerProtocol, isThreadOccupied, isProtocolPost,
   dispatchSessionReply, dispatchDisconnect, dispatchReconnect, dispatchAdvance,
   _resetForTesting,
-} from '../protocol-registry.js'
-import { _resetForTesting as resetBus } from '../event-bus.js'
+} from '../../sessions/protocol-registry.js'
+import { _resetForTesting as resetBus } from '../../infra/event-bus.js'
 
 function makeHooks(overrides: Partial<Parameters<typeof registerProtocol>[1]> = {}) {
   return {

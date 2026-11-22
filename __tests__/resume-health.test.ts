@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { classifyResumeFailure } from '../daemon/resume-health.js'
+import { classifyResumeFailure } from '../sessions/resume-health.js'
 
 describe('classifyResumeFailure', () => {
   test('tmux dead, no exit marker → kill (everything gone)', () => {

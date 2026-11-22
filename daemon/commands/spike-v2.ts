@@ -1,9 +1,9 @@
-import { gateway } from '../config.js'
-import { registry } from '../sessions.js'
+import { gateway } from '../../infra/config.js'
+import { registry } from '../../sessions/registry.js'
 import { startProtocolRun, getRunByThread, cancelRun } from '../protocol-runner.js'
-import { isThreadOccupied } from '../protocol-registry.js'
+import { isThreadOccupied } from '../../sessions/protocol-registry.js'
 import type { InboundMessage } from '../../gateways/gateway.js'
-import type { ProviderId } from '../engines/engine-adapter.js'
+import type { ProviderId } from '../../engines/engine-adapter.js'
 import spikeProto from '../../protocols/spike.js'
 
 export async function handleSpikeV2Intercept(msg: InboundMessage, topic?: string, model?: string, engine?: ProviderId): Promise<void> {

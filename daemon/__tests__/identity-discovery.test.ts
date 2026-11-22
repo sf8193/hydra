@@ -5,7 +5,7 @@
 // Runs the real discoverClaudeSessionId through a PATH-shim tmux and a temp
 // CLAUDE_CONFIG_DIR (see fake-tmux.ts).
 
-import { engines } from '../engines/instances.js'
+import { engines } from '../../engines/instances.js'
 import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test'
 import { discoverClaudeSessionId, killSession } from '../session-lifecycle.js'
 import { mkdirSync, writeFileSync, mkdtempSync, existsSync, rmSync } from 'fs'
@@ -13,9 +13,9 @@ import { execFileSync } from 'child_process'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { handleForkIntercept } from '../commands/thread.js'
-import { registry, threadRegistry } from '../sessions.js'
-import type { SessionInfo } from '../sessions.js'
-import { gateway } from '../config.js'
+import { registry, threadRegistry } from '../../sessions/registry.js'
+import type { SessionInfo } from '../../sessions/registry.js'
+import { gateway } from '../../infra/config.js'
 import { fakeCodexAdapter } from './test-harness.js'
 import type { InboundMessage } from '../../gateways/gateway.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'

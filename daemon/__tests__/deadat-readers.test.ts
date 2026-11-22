@@ -33,7 +33,7 @@ const ALLOWED: Record<string, { why: string; lines: string[] }> = {
       "const claimed = [...registry.values()].some(s => s !== info && !s.deadAt && s.engine === 'codex' && (s.codexHomeName ?? s.tmuxName) === home)",
     ],
   },
-  'engines/codex-piggyback.ts': {
+  'sessions/codex-piggyback.ts': {
     why: 'buffers for a Codex record its runtime has given up on are dropped',
     lines: [
       "if (!info || info.deadAt || !info.adapter) { this.clear(sessionId); return }",
@@ -50,7 +50,7 @@ const ALLOWED: Record<string, { why: string; lines: string[] }> = {
       "delete info.deadAt",
     ],
   },
-  'observability.ts': {
+  'sessions/observability.ts': {
     why: 'a vitals sample is dropped once the autopsy has read it, which is when the death is written',
     lines: [
       "const goneOrDead = (id: string) => { const s = registry.get(id); return !s || !!s.deadAt }",
@@ -83,7 +83,7 @@ const ALLOWED: Record<string, { why: string; lines: string[] }> = {
       "if (!s || s.deadAt) return",
     ],
   },
-  'session-reachability.ts': {
+  'sessions/session-reachability.ts': {
     why: 'occupancy() itself: a stamp over a running session reads orphaned, unless a record not given up on holds its name',
     lines: [
       "deadAt?: number",
@@ -92,7 +92,7 @@ const ALLOWED: Record<string, { why: string; lines: string[] }> = {
       "for (const s of records) if (s.sessionId !== info.sessionId && s.tmuxName === info.tmuxName && !s.deadAt) return true",
     ],
   },
-  'sessions.ts': {
+  'sessions/registry.ts': {
     why: 'the field, markDead (the one runtime writer, which says so once, the first time it writes), the boot loader (a tmux that does not answer keeps the saved state), the boot history close, ranking a name\'s past threads by when it died',
     lines: [
       "deadAt?: number",
@@ -110,14 +110,17 @@ const ALLOWED: Record<string, { why: string; lines: string[] }> = {
 
 const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
 const DAEMON = join(import.meta.dir, '..')
+const ROOT = join(import.meta.dir, '..', '..')   // infra/ and engines/ moved out of daemon/: their keys are prefixed with the folder
 
 describe('deadAt readers', () => {
   test('only the allowed files touch deadAt, each on its listed lines', () => {
     const found: Record<string, string[]> = {}
-    for (const f of new Glob('**/*.ts').scanSync(DAEMON)) {
-      if (f.startsWith('__tests__/')) continue
-      const lines = strip(readFileSync(join(DAEMON, f), 'utf8')).split('\n').filter(l => /\bdeadAt\b/.test(l)).map(l => l.trim())
-      if (lines.length) found[f] = lines
+    for (const [dir, prefix] of [[DAEMON, ''], [join(ROOT, 'infra'), 'infra/'], [join(ROOT, 'engines'), 'engines/'], [join(ROOT, 'sessions'), 'sessions/']] as const) {
+      for (const f of new Glob('**/*.ts').scanSync(dir)) {
+        if (f.startsWith('__tests__/')) continue
+        const lines = strip(readFileSync(join(dir, f), 'utf8')).split('\n').filter(l => /\bdeadAt\b/.test(l)).map(l => l.trim())
+        if (lines.length) found[prefix + f] = lines
+      }
     }
     const expected = Object.fromEntries(Object.entries(ALLOWED).map(([f, a]) => [f, a.lines]))
     expect(found, 'a deadAt read decides liveness only in occupancy(): ask it instead, or allow a history read with its reason').toEqual(expected)

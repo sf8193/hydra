@@ -9,7 +9,7 @@ describe('importing a daemon module outside the daemon', () => {
   const root = join(import.meta.dir, '..', '..')
   const record = [{ sessionId: 's-1', tmuxName: 'no-such-tmux-session-xyz', threadId: 't-1', engine: 'claude', createdAt: 1, sessionType: 'thread_owner' }]
   function importSessions(home: string, stateDir: string) {
-    return Bun.spawnSync(['bun', '-e', `import '${join(root, 'daemon', 'sessions.ts')}'`], {
+    return Bun.spawnSync(['bun', '-e', `import '${join(root, 'sessions', 'registry.ts')}'`], {
       cwd: root, timeout: 30_000,
       env: { ...process.env, HOME: home, HYDRA_STATE_DIR: stateDir, DISCORD_BOT_TOKEN: 'dummy' },
     })

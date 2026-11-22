@@ -3,10 +3,10 @@
 // shape of an unregistered or half-registered caller falls back to a wider surface.
 import { afterEach, describe, expect, test } from 'bun:test'
 import { executeTool, restrictedRefusal, PLACE_USE } from '../bridge-dispatch.js'
-import { registry } from '../sessions.js'
-import { getToolsForSession, isToolAllowed, noteDeclaredRestrictions } from '../tool-surface.js'
+import { registry } from '../../sessions/registry.js'
+import { getToolsForSession, isToolAllowed, noteDeclaredRestrictions } from '../../sessions/tool-surface.js'
 import { UNIVERSAL_TOOLS } from '../../shared/tool-definitions.js'
-import { computeToolsForSession } from '../bridge-tools.js'
+import { computeToolsForSession } from '../../engines/bridge-tools.js'
 import { BASE_TOOLS } from '../../shared/constants.js'
 import { ownConversationRefusal } from '../../connectors/slack/runtime.js'
 

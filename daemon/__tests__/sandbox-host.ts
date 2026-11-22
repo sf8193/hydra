@@ -5,9 +5,9 @@ import { systemEnv } from '../../config/load.js'
 import { PROVEN_MACOS_MAJORS, SANDBOX_EXEC } from '../../config/server-sandbox.js'
 import { offLimitRoots } from '../../config/restricted-workdir.js'
 import type { LoadEnv } from '../../config/types.js'
-import { CLAUDE_CONFIG, STATE_DIR, PLATFORM } from '../config.js'
-import { SESSION_NAMES } from '../sessions.js'
-import type { RestrictedConfigInput } from '../engines/claude-engine.js'
+import { CLAUDE_CONFIG, STATE_DIR, PLATFORM } from '../../infra/config.js'
+import { SESSION_NAMES } from '../../sessions/registry.js'
+import type { RestrictedConfigInput } from '../../engines/claude-engine.js'
 
 export const macLike = (over: Partial<LoadEnv> = {}): LoadEnv => {
   const real = systemEnv(SESSION_NAMES, STATE_DIR, PLATFORM, CLAUDE_CONFIG)

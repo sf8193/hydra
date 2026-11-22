@@ -7,7 +7,7 @@ import {
   renderContextLink,
   assembleContextLines,
   type WatchLine,
-} from '../artifacts.js'
+} from '../../infra/artifacts.js'
 
 // ---------------------------------------------------------------------------
 // extractArtifactLinks
@@ -345,7 +345,7 @@ describe('assembleContextLines', () => {
 // local bounded helper. We verify the eviction contract by checking observable
 // side-effects (title lookup miss → fallback render).
 
-import { cachePrTitle, cacheSlackChannel, cacheSlackThread } from '../artifacts.js'
+import { cachePrTitle, cacheSlackChannel, cacheSlackThread } from '../../infra/artifacts.js'
 
 describe('cache eviction', () => {
   test('cachePrTitle evicts oldest entries when cap is reached', () => {

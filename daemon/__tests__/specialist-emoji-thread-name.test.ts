@@ -1,10 +1,10 @@
 // A specialist's `emoji` is the glyph its sessions wear in their thread names. Every name goes through `emojiOf` (the first name at spawn
 // and every refresh after it), so these drive `refreshSessionVisual` and read the name the Discord and Slack gateways would set.
 import { describe, test, expect, afterEach } from 'bun:test'
-import { gateway } from '../config.js'
-import { registry, sessionEmoji } from '../sessions.js'
-import { refreshSessionVisual, emojiOf } from '../anchor-state.js'
-import { _setHydraConfigForTesting } from '../hydra-config.js'
+import { gateway } from '../../infra/config.js'
+import { registry, sessionEmoji } from '../../sessions/registry.js'
+import { refreshSessionVisual, emojiOf } from '../../sessions/anchor-state.js'
+import { _setHydraConfigForTesting } from '../../infra/hydra-config.js'
 import { formatThreadName } from '../../gateways/discord.js'
 import { slackSessionTitles } from '../../gateways/slack.js'
 import type { SessionVisualOpts } from '../../gateways/gateway.js'
@@ -122,7 +122,7 @@ describe('hydra specialist show', () => {
 
 describe('a session sitting in its specialist\'s own thread, with no stored policy', () => {
   test('is found by the thread, and wears the emoji', async () => {
-    const { setSpecialistThread } = await import('../../specialists/specialists.js')
+    const { setSpecialistThread } = await import('../../sessions/specialists.js')
     configure(decl('ops', { emoji: '🔐' }))
     setSpecialistThread('ops', 'emoji-home-thread')
     const id = 'emoji-home-s'

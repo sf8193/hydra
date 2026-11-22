@@ -2,19 +2,19 @@
 // helpers throw and the async ones answer only after a delay: sampleCpu has to await them, for a
 // session with no live signal, a 'working' claim that tmux must confirm, and main.
 import { afterAll, expect, mock, test } from 'bun:test'
-import type { SessionInfo } from '../sessions.js'
+import type { SessionInfo } from '../../sessions/registry.js'
 
-const real = await import('../tmux.js')
+const real = await import('../../infra/tmux.js')
 let answered = 0
 const later = <T>(v: T) => new Promise<T>(r => setTimeout(() => { answered++; r(v) }, 30))
-mock.module('../tmux.js', () => ({
+mock.module('../../infra/tmux.js', () => ({
   ...real,
   isTmuxRecentlyActiveSync: () => { throw new Error('sync tmux on the vitals tick') },
   tmuxSilentLongerThanSync: () => { throw new Error('sync tmux on the vitals tick') },
   isTmuxRecentlyActive: () => later(false),
   tmuxSilentLongerThan: () => later(true),
 }))
-const { sampleCpu, _setSpinThresholdForTesting } = await import('../cpu-watch.js')
+const { sampleCpu, _setSpinThresholdForTesting } = await import('../../sessions/cpu-watch.js')
 
 afterAll(() => _setSpinThresholdForTesting(undefined))
 

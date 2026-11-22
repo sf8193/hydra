@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { homeStatus, homeStatusAccessory, parseHomeStatusClick, markUserMessaged, markYourTurn, type HomeStatus, type HomeStatusInputs } from '../home-status.js'
+import { homeStatus, homeStatusAccessory, parseHomeStatusClick, markUserMessaged, markYourTurn, type HomeStatus, type HomeStatusInputs } from '../../infra/home-status.js'
 import { __test as dashboardTest } from '../dashboard.js'
 import { HOME_STATUS_ACTION_PREFIX } from '../../shared/constants.js'
 

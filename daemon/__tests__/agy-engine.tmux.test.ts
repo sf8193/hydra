@@ -3,12 +3,12 @@ import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync
 import { createServer } from 'net'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { BridgeTransport } from '../bridge-transport.js'
-import { AGY_API_KEY_FILE, AgyEngine } from '../engines/agy-engine.js'
-import { AGY_HOOKS_CONFIG, AGY_MCP_CONFIG } from '../engines/agy-config.js'
-import { agyState, agyStateFile } from '../engines/agy-session.js'
-import { ClaudeEngine } from '../engines/claude-engine.js'
-import { SOCK_PATH } from '../config.js'
+import { BridgeTransport } from '../../sessions/bridge-transport.js'
+import { AGY_API_KEY_FILE, AgyEngine } from '../../engines/agy-engine.js'
+import { AGY_HOOKS_CONFIG, AGY_MCP_CONFIG } from '../../engines/agy-config.js'
+import { agyState, agyStateFile } from '../../engines/agy-session.js'
+import { ClaudeEngine } from '../../engines/claude-engine.js'
+import { SOCK_PATH } from '../../infra/config.js'
 
 // Real agy in tmux against a stub daemon socket, on the suite's private tmux server.
 // It calls the real model (a few turns), so it runs only with HYDRA_AGY_E2E=1 and HYDRA_AGY_E2E_KEY=<file holding a Gemini API key>

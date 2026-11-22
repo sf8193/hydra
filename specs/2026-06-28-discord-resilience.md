@@ -13,11 +13,11 @@ A faithful port would be wrong, not merely redundant:
 
 ## The latent bug this fixes
 
-`daemon/config.ts` currently writes the Discord `daemon.alive` heartbeat on a **blind 30s `setInterval`, decoupled from connectivity**. The watchdog (heartbeat freshness < 300s) therefore reports Discord healthy whenever the *process* is alive — even with a dead WebSocket. Slack's heartbeat is connection-driven and goes stale on a real outage, triggering a watchdog restart. Discord's heartbeat lies. This work makes the Discord heartbeat **connectivity-aware**.
+`infra/config.ts` currently writes the Discord `daemon.alive` heartbeat on a **blind 30s `setInterval`, decoupled from connectivity**. The watchdog (heartbeat freshness < 300s) therefore reports Discord healthy whenever the *process* is alive — even with a dead WebSocket. Slack's heartbeat is connection-driven and goes stale on a real outage, triggering a watchdog restart. Discord's heartbeat lies. This work makes the Discord heartbeat **connectivity-aware**.
 
 ## Design
 
-### 1. `daemon/gateway-health.ts` — `GatewayHealth` (new, shared-ready)
+### 1. `infra/gateway-health.ts` — `GatewayHealth` (new, shared-ready)
 
 Owns the recovery semantics that are currently duplicated inside each gateway: heartbeat writing (throttled), gap computation, the outage threshold, and the recovery-report trigger. Clock- and fs-injectable so the semantics are unit-testable in isolation (Slack's inline version is not). Designed for Slack to adopt in PR 2; **Slack is untouched here.**
 
@@ -43,7 +43,7 @@ Plus:
 - **`forceReconnect()`** = `client.destroy()` + `client.login(token)`. Listeners persist across `destroy()`, so re-login reuses them (no double-bind). Wires the existing `reconnect` command (🔌) — today Slack-only.
 - `onReconnectAfterOutage` field (interface contract); `GatewayHealth.onOutageRecovered` delegates to it. `daemon.ts:55` already assigns `sendRecoveryReport` to it.
 
-### 3. `daemon/config.ts`
+### 3. `infra/config.ts`
 
 - `new DiscordGateway({ heartbeatPath })` so the gateway owns its heartbeat.
 - Remove the blind `setInterval(touchHeartbeat, 30_000)` for non-Slack. (Startup write at `daemon.ts:122` still seeds it; first `ShardReady` writes within seconds.)

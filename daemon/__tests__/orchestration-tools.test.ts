@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'bun:test'
-import { engines } from '../engines/instances.js'
+import { engines } from '../../engines/instances.js'
 import { executeTool } from '../bridge-dispatch.js'
-import { registry } from '../sessions.js'
+import { registry } from '../../sessions/registry.js'
 import { withFakeTmux } from './fake-tmux.js'
 import { fakeAdapter } from './test-harness.js'
 
@@ -113,7 +113,7 @@ describe('send_to_thread', () => {
       listening: false,
       engine: 'claude', adapter: fakeAdapter({ isAlive: () => true }) as any, sessionType: 'thread_owner' as const,
     })
-    const { gateway } = await import('../config.js')
+    const { gateway } = await import('../../infra/config.js')
     const real = gateway.send
     const sent: string[] = []
     gateway.send = (async (channelId: string) => { sent.push(channelId); return { id: 'm1' } }) as any
@@ -140,7 +140,7 @@ describe('send_to_thread', () => {
       listening: false,
       engine: 'claude', adapter: fakeAdapter({ isAlive: () => true }) as any, sessionType: 'thread_owner' as const,
     })
-    const { gateway } = await import('../config.js')
+    const { gateway } = await import('../../infra/config.js')
     const real = gateway.send
     const sent: string[] = []
     gateway.send = (async (channelId: string) => { sent.push(channelId); return { id: 'm1' } }) as any
@@ -280,7 +280,7 @@ describe('list_sessions', () => {
 
 describe('download_attachment', () => {
   test('a message with nothing downloadable reports that, without a path', async () => {
-    const { gateway } = await import('../config.js')
+    const { gateway } = await import('../../infra/config.js')
     const real = gateway.downloadAttachments
     gateway.downloadAttachments = (async () => []) as typeof gateway.downloadAttachments
     try {
@@ -294,7 +294,7 @@ describe('download_attachment', () => {
   })
 
   test('a failed lookup surfaces as an error, not as an absence of attachments', async () => {
-    const { gateway } = await import('../config.js')
+    const { gateway } = await import('../../infra/config.js')
     const real = gateway.downloadAttachments
     gateway.downloadAttachments = (async () => {
       throw new Error('message 1789405927.425409 not found in D0BE3RB4Y00')

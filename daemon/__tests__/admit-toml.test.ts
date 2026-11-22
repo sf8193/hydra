@@ -2,9 +2,9 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
-import { gateway } from '../config.js'
-import { admitTaggedChannel, channelAllowed, gate } from '../access.js'
-import { _setHydraConfigForTesting, hydraConfigPath, startHydraConfig, stopHydraConfig } from '../hydra-config.js'
+import { gateway } from '../../infra/config.js'
+import { admitTaggedChannel, channelAllowed, gate } from '../../sessions/access.js'
+import { _setHydraConfigForTesting, hydraConfigPath, startHydraConfig, stopHydraConfig } from '../../infra/hydra-config.js'
 import { testLoadEnv } from '../../config/__tests__/load-env.js'
 import type { InboundMessage } from '../../gateways/gateway.js'
 

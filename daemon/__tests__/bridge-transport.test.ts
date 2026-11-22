@@ -1,12 +1,12 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { BridgeTransport, DEPARTING_NOTICE, setFlushGate } from '../bridge-transport.js'
-import { registry } from '../sessions.js'
-import { STATE_DIR } from '../config.js'
-import { on } from '../event-bus.js'
-import { engines } from '../engines/instances.js'
-import { ClaudeEngine } from '../engines/claude-engine.js'
+import { BridgeTransport, DEPARTING_NOTICE, setFlushGate } from '../../sessions/bridge-transport.js'
+import { registry } from '../../sessions/registry.js'
+import { STATE_DIR } from '../../infra/config.js'
+import { on } from '../../infra/event-bus.js'
+import { engines } from '../../engines/instances.js'
+import { ClaudeEngine } from '../../engines/claude-engine.js'
 import { fakeAdapter, fakeCodexAdapter } from './test-harness.js'
 
 // Suppress stderr
@@ -350,7 +350,7 @@ describe('engines/instances import (adapter-policy S2)', () => {
   test('a fresh process imports instances.ts first and the Claude adapter is bound to a transport', () => {
     // Subprocess: this file's module cache already holds bridge-transport, so
     // only a fresh process can catch a TDZ from an import cycle.
-    const code = "const { engines } = await import('./daemon/engines/instances.ts'); console.log(engines.claude.isConnected({ sessionId: 'nope' }))"
+    const code = "const { engines } = await import('./engines/instances.ts'); console.log(engines.claude.isConnected({ sessionId: 'nope' }))"
     const r = Bun.spawnSync(['bun', '-e', code], { cwd: join(import.meta.dir, '..', '..'), env: { ...process.env, DISCORD_BOT_TOKEN: 'test-token' } })
     expect(r.stderr.toString()).not.toContain('Error')
     expect(r.stdout.toString().trim()).toBe('false')
@@ -364,8 +364,8 @@ describe('persisted queues at boot', () => {
     const queueFile = join(stateDir, 'message-queue.json')
     writeFileSync(queueFile, JSON.stringify({ known: [{ type: 'notification', content: 'kept' }], gone: [{ type: 'notification', content: 'dropped' }] }))
     const code = [
-      "const { registry } = await import('./daemon/sessions.ts')",
-      "const { transport } = await import('./daemon/bridge-transport.ts')",
+      "const { registry } = await import('./sessions/registry.ts')",
+      "const { transport } = await import('./sessions/bridge-transport.ts')",
       "registry.set('known', { sessionId: 'known', threadId: 't', tmuxName: 'known' })",
       "transport.restorePersistedQueues()",
       "console.log(JSON.stringify(Object.fromEntries(transport.messageQueues)))",
@@ -613,7 +613,7 @@ describe('delivery paths (adapter-policy T7)', () => {
 // Review of S1–S2: has() short-circuits on bridges, so the adapter answer was untested.
 describe('ClaudeEngine.isConnected', () => {
   test('true exactly when its own transport holds a bridge for the session', async () => {
-    const { ClaudeEngine } = await import('../engines/claude-engine.js')
+    const { ClaudeEngine } = await import('../../engines/claude-engine.js')
     const t = new BridgeTransport()
     const claude = new ClaudeEngine(t)
     expect(claude.isConnected({ sessionId: 'iscon', threadId: 'other' } as any)).toBe(false)

@@ -4,10 +4,10 @@ import {
   tryTypedDelivery, typedDeliveryText, deliveryDecision, deliverUserMessage, flushHeld, flushAllHeld,
   _setDeliveryDeps, _resetDelivery, _heldCount, HOLD_QUEUE_MAX, type DeliveryOutcome, type DeliveryFacts,
 } from '../typed-delivery.js'
-import { emit } from '../event-bus.js'
-import { _setHydraConfigForTesting } from '../hydra-config.js'
+import { emit } from '../../infra/event-bus.js'
+import { _setHydraConfigForTesting } from '../../infra/hydra-config.js'
 import { bornPolicy } from '../restricted.js'
-import type { SessionInfo } from '../sessions.js'
+import type { SessionInfo } from '../../sessions/registry.js'
 
 process.stderr.write = (() => true) as any
 

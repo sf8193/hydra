@@ -8,10 +8,10 @@ import { join } from 'path'
 
 const env = { p: process.env.CHAT_PLATFORM, b: process.env.SLACK_BOT_TOKEN, a: process.env.SLACK_APP_TOKEN }
 process.env.CHAT_PLATFORM = 'slack'; process.env.SLACK_BOT_TOKEN = 'x'; process.env.SLACK_APP_TOKEN = 'x'
-const { gateway, STATE_DIR, PLATFORM } = await import('../config.js')
+const { gateway, STATE_DIR, PLATFORM } = await import('../../infra/config.js')
 for (const [k, v] of [['CHAT_PLATFORM', env.p], ['SLACK_BOT_TOKEN', env.b], ['SLACK_APP_TOKEN', env.a]] as const) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
-const { registry } = await import('../sessions.js')
-const { _setHydraConfigForTesting } = await import('../hydra-config.js')
+const { registry } = await import('../../sessions/registry.js')
+const { _setHydraConfigForTesting } = await import('../../infra/hydra-config.js')
 const { refreshDashboardNow } = await import('../dashboard.js')
 const { fakeAdapter } = await import('./test-harness.js')
 

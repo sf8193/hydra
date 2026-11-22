@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'bun:test'
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { PLUGIN_MANIFEST, MCP_CONFIG } from '../plugin-manifest.js'
+import { PLUGIN_MANIFEST, MCP_CONFIG } from '../../infra/plugin-manifest.js'
 
 /**
  * The manifest is the declaration that survives.

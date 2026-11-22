@@ -1,0 +1,152 @@
+import { registry } from './registry.js'
+import { transport } from './bridge-transport.js'
+import { computeToolsForSession, type SessionTool } from '../engines/bridge-tools.js'
+import { CONFINED_TOOLS as TYPED_CONFINED_TOOLS, BASE_TOOLS as TYPED_BASE_TOOLS, ALL_CAPABILITY_TOOLS as TYPED_ALL_CAPABILITY_TOOLS } from '../shared/constants.js'
+import type { ToolBase, Capability, DerivedCapability } from '../shared/constants.js'
+import { isRestricted } from '../daemon/policy-record.js'
+import type { SessionInfo } from './registry.js'
+import { resolveEngine } from '../engines/instances.js'
+import { specialistOf, boundAs, sendsToOf } from './specialists.js'
+import { currentHydraConfig, onHydraConfigLoad } from '../infra/hydra-config.js'
+import { slackConfigured } from '../config/types.js'
+
+// Widened views: isToolAllowed checks arbitrary wire names, not just known ToolNames.
+const BASE_TOOLS: Readonly<Record<ToolBase, ReadonlySet<string>>> = TYPED_BASE_TOOLS
+const CONFINED_TOOLS: ReadonlySet<string> = TYPED_CONFINED_TOOLS
+const ALL_CAPABILITY_TOOLS: Readonly<Record<Capability | DerivedCapability, ReadonlySet<string>>> = TYPED_ALL_CAPABILITY_TOOLS
+
+/** Whether ask_predecessor works end to end: the predecessor's engine can fork it one-shot (askFork),
+ * and the successor's MCP client waits out a fork turn. Only Claude's bridge reads LONG_TOOL_TIMEOUTS_MS:
+ * Codex's client stops at its default tool_timeout_sec (60s), omp's bridge at a fixed 60s. */
+export function predecessorAsker(info: Pick<SessionInfo, 'engine' | 'predecessor'>): ((question: string, timeoutMs: number) => Promise<string>) | undefined {
+  const p = info.predecessor
+  const engine = p && resolveEngine(p.engine)
+  if (!p || !engine?.askFork || info.engine !== 'claude') return undefined
+  return (question, timeoutMs) => engine.askFork!(p.fork, p.cwd, question, timeoutMs, p.model)  // a method call, so the adapter keeps its this
+}
+
+export const canAskPredecessor = (info: Pick<SessionInfo, 'engine' | 'predecessor'>): boolean => !!predecessorAsker(info)
+
+
+/** Whether this session acts for a specialist declared in hydra.toml (its thread, or one of its conversation sessions). */
+export const isSpecialistOccupant = (info: Partial<Pick<SessionInfo, 'threadId' | 'tmuxName'>>): boolean => !!specialistOf(info)
+
+/** Whether this session holds Slack conversations of its own (specialists.ts boundAs), once hydra.toml configures Slack. */
+export const holdsConversations = (info: Partial<Pick<SessionInfo, 'threadId' | 'tmuxName' | 'sessionType'>>): boolean =>
+  slackConfigured(currentHydraConfig()) && !!boundAs(info)
+
+/** Stored capabilities plus the derived ones: a session that can ask its predecessor, or that holds Slack conversations, gets those tools. */
+export function sessionCapabilities(info: Pick<SessionInfo, 'capabilities' | 'engine' | 'predecessor'> & Partial<Pick<SessionInfo, 'threadId' | 'tmuxName' | 'sessionType'>>): Set<Capability | DerivedCapability> {
+  const caps = new Set<Capability | DerivedCapability>(info.capabilities ?? [])
+  if (canAskPredecessor(info)) caps.add('predecessor')
+  if (holdsConversations(info)) caps.add('conversations')
+  return caps
+}
+
+/**
+ * Session ids whose bridge declared itself restricted when it registered (HYDRA_RESTRICTED=1, set by the launch). A bridge can only
+ * narrow itself this way: a declaration is believed whether or not the registry knows the id, and never undone.
+ */
+const declaredRestricted = new Set<string>()
+
+/** Records what a registering bridge says it is. Only a restriction matters: the declaration that takes tools away. */
+export function noteDeclaredRestrictions(sessionId: string, declared: { restricted?: unknown; writeConfined?: unknown }): void {
+  const { restricted, writeConfined } = declared
+  if (restricted === true && sessionId !== 'main') declaredRestricted.add(sessionId)
+  if (writeConfined === true && sessionId !== 'main') declaredConfined.add(sessionId)
+}
+
+/** The same for a write-confined launch (HYDRA_WRITE_CONFINED): a session that lost its record (a lingering claude whose bridge reconnects) must not be handed thread_owner's tools. */
+const declaredConfined = new Set<string>()
+
+/** Whether this session runs as a restricted specialist: its record says so, or its bridge declared it (an unregistered id never falls back to a wider surface). */
+export const isRestrictedSession = (sessionId: string): boolean => {
+  if (declaredRestricted.has(sessionId)) return true
+  // isRestricted fails closed (policy-record.ts): a policy not exactly `restricted: false` holds the restricted tools, never a wider set.
+  return isRestricted(registry.get(sessionId))
+}
+
+/** Whether this session's record says its writes are confined (`can_only_write_to`), or its bridge declared it: it holds CONFINED_TOOLS and nothing a capability would add. */
+export const isWriteConfinedSession = (sessionId: string): boolean => sessionId !== 'main' && (declaredConfined.has(sessionId) || !!registry.get(sessionId)?.policy?.canOnlyWriteTo)
+
+export function getToolsForSession(sessionId: string): SessionTool[] {
+  if (sessionId === 'main') {
+    return computeToolsForSession('master_orchestrator', new Set<Capability>(['main_handoff']))
+  }
+  const info = registry.get(sessionId)
+  if (isWriteConfinedSession(sessionId)) return computeToolsForSession(info?.sessionType ?? 'thread_owner', new Set(), { descriptions: info?.toolDescriptions, inputSchemas: info?.toolInputSchemas }).filter(t => CONFINED_TOOLS.has(t.name))
+  if (isRestrictedSession(sessionId)) {
+    const tools = computeToolsForSession('restricted', new Set(), { descriptions: info?.toolDescriptions, inputSchemas: info?.toolInputSchemas })
+    // send_to_thread is advertised only to a specialist with someone to send to; the call is held to the list at the gate either way.
+    return sendsToOf(info).length ? tools : tools.filter(t => t.name !== 'send_to_thread')
+  }
+  if (!info) {
+    process.stderr.write(`daemon: getToolsForSession: no registry entry for ${sessionId}, using thread_owner defaults\n`)
+    return computeToolsForSession('thread_owner', new Set())
+  }
+  return computeToolsForSession(
+    info.sessionType,
+    sessionCapabilities(info),
+    {
+      descriptions: info.toolDescriptions,
+      inputSchemas: info.toolInputSchemas,
+    },
+  )
+}
+
+/** O(1) name-only check — avoids rebuilding the full tool list on every tool_call. */
+export function isToolAllowed(sessionId: string, toolName: string): boolean {
+  if (sessionId === 'main') {
+    return BASE_TOOLS.master_orchestrator.has(toolName) || ALL_CAPABILITY_TOOLS.main_handoff.has(toolName)
+  }
+  // Before the registry lookup: a restricted caller whose record is missing must not be handed thread_owner's tools.
+  if (isRestrictedSession(sessionId)) return BASE_TOOLS.restricted.has(toolName)
+  if (isWriteConfinedSession(sessionId)) return CONFINED_TOOLS.has(toolName)
+  const info = registry.get(sessionId)
+  if (!info) return BASE_TOOLS.thread_owner.has(toolName)
+  if (BASE_TOOLS[info.sessionType].has(toolName)) return true
+  for (const cap of sessionCapabilities(info)) {
+    if (ALL_CAPABILITY_TOOLS[cap]?.has(toolName)) return true
+  }
+  return false
+}
+
+/** What a refused tool call says: a restricted session is told what it has, anyone else the plain refusal. */
+export function refusalText(sessionId: string, name: string): string {
+  const hasSendsTo = sendsToOf(registry.get(sessionId)).length > 0
+  if (isWriteConfinedSession(sessionId)) return `${name} is not available to a write-confined session: it runs on the operator's account, so it has no tool that starts, lists, reads, messages or ends another session. It has ${[...CONFINED_TOOLS].join(', ')}, each only in its own conversation (set_description on itself)`
+  return isRestrictedSession(sessionId)
+    ? `${name} is not available to a restricted session: it has set_description (on itself) and, each only in its own conversation, ${[...BASE_TOOLS.restricted].filter(t => t !== 'set_description' && (hasSendsTo || t !== 'send_to_thread')).join(', ')}`
+    : `${name} is not available to this session`
+}
+
+/** A hash of the tool list each session was last sent: what pushChangedToolSurfaces compares against, so only a changed list is pushed. */
+const advertised = new Map<string, number | bigint>()
+const listKey = (tools: readonly SessionTool[]): number | bigint => Bun.hash(JSON.stringify(tools))
+
+/** The tool list to send this session now, noted as the one it holds. Every list the daemon sends a bridge comes from here: registration, a pull and a push. */
+export function advertiseTools(sessionId: string): SessionTool[] {
+  const tools = getToolsForSession(sessionId)
+  advertised.set(sessionId, listKey(tools))
+  return tools
+}
+
+export function pushToolSurface(sessionId: string): void {
+  const tools = advertiseTools(sessionId)
+  process.stderr.write(`daemon: pushToolSurface ${sessionId} → ${tools.length} tools\n`)
+  transport.sendOrQueue(sessionId, { type: 'tools_update', tools })
+}
+
+/**
+ * Pushes the tool list to every session whose list is no longer the one it was sent: after a hydra.toml load (`sends_to` adds or removes
+ * send_to_thread; Slack being configured adds or removes the conversation tools) or a specialist's thread moved by the CLI. Sessions never
+ * sent a list are skipped: their registration will carry the current one.
+ */
+export function pushChangedToolSurfaces(): void {
+  for (const [sessionId, sent] of advertised) {
+    if (!registry.has(sessionId)) { advertised.delete(sessionId); continue }
+    if (listKey(getToolsForSession(sessionId)) !== sent) pushToolSurface(sessionId)
+  }
+}
+// Everything the list reads from hydra.toml is read live, so a load is where a config change reaches a running session's list.
+onHydraConfigLoad(() => pushChangedToolSurfaces())

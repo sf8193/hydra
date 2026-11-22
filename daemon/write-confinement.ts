@@ -16,10 +16,10 @@ import { basename, join } from 'path'
 import { browserDownloadDir, browserProfileDir, fileRefusal, fileSendDecision, fillProfile, readDenyRule } from '../config/write-confinement.js'
 import { CONFINED_TOOLS } from '../shared/constants.js'
 import { UNIVERSAL_TOOLS } from '../shared/tool-definitions.js'
-import { STATE_DIR } from './config.js'
-import { MAX_ATTACHMENT_BYTES } from './access.js'
-import { expectedServerNames } from './engines/claude-verify.js'
-import { bridgeCommand } from './plugin-manifest.js'
+import { STATE_DIR } from '../infra/config.js'
+import { MAX_ATTACHMENT_BYTES } from '../sessions/access.js'
+import { expectedServerNames } from '../engines/claude-verify.js'
+import { bridgeCommand } from '../infra/plugin-manifest.js'
 import { readdirSync, readFileSync } from 'fs'
 import { PolicyRefusal, missingTokenRefusal, remedy, serverToolRule, type ConfinementPolicy, type ConfinementServer, type LaunchPolicy } from './restricted.js'
 
@@ -204,7 +204,7 @@ export function snapshotConfinedFiles(w: NonNullable<LaunchPolicy['canOnlyWriteT
   return { files: out, cleanup }
 }
 
-/** The plugin id and marketplace of the bridge (daemon/plugin-manifest.ts BRIDGE_PLUGIN_ID). */
+/** The plugin id and marketplace of the bridge (infra/plugin-manifest.ts BRIDGE_PLUGIN_ID). */
 const BRIDGE_MARKETPLACE_DIR = 'claude-plugins-official'
 const BRIDGE_PLUGIN_NAME = 'discord'
 

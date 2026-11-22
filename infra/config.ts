@@ -1,0 +1,193 @@
+import { chmodSync } from 'fs'
+import { homedir } from 'os'
+import { basename, join } from 'path'
+
+import type { ChatGateway } from '../gateways/gateway.js'
+import { sourceEnvFiles } from '../shared/env-parse.js'
+import { captureSpawnVars, capturedSpawnVars } from '../shared/spawn-env.js'
+import { scrubTokenVarsInFile } from '../config/token-vars.js'
+import { claudeConfigDir, DISCORD_GATEWAY_TOKEN_ENV, platformStateDir, SLACK_GATEWAY_TOKEN_ENVS } from '../shared/constants.js'
+import { isUnder } from '../shared/path-containment.js'
+
+// ---------------------------------------------------------------------------
+// Paths & env
+// ---------------------------------------------------------------------------
+
+// Under bun test the preload (test-setup.ts, found via bunfig.toml at the repo root)
+// points state at a temp dir. Run from a subdirectory, bun skips it and tests would read
+// and write the live daemon's state (it happened: Sep 28, 2026). Refuse instead.
+if (process.env.NODE_ENV === 'test' && process.env.HYDRA_TEST_PRELOADED !== '1') {
+  throw new Error('bun test without test-setup.ts preload: run it from the repo root so state is isolated')
+}
+
+export const STATE_DIR = process.env.HYDRA_STATE_DIR
+  ?? process.env.DISCORD_STATE_DIR
+  ?? platformStateDir(process.env.CHAT_PLATFORM ?? 'discord')
+/** Where each launch's stderr and spawn logs go. */
+export const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
+/** A session this young may still be in its engine's startup (Claude Code's, or agy's boot, login and folder-trust screens). */
+export const FRESH_START_MS = 120_000
+/**
+ * Whether this process may write the daemon's state. The daemon may (its entry file is daemon.ts), and so may
+ * anything pointed at a state dir that isn't a live one: a test's temp dir, or a scratch dir. Anything else only
+ * reads. A one-off `bun -e "import './daemon/…'"` run from a hydra session inherits the live HYDRA_STATE_DIR, and
+ * importing must never write live state: it once stamped every live session dead.
+ */
+export const STATE_WRITABLE = ['daemon.ts', 'daemon.js'].includes(basename(Bun.main)) || !isUnder(STATE_DIR, join(homedir(), '.claude', 'channels'), { realpath: true })
+
+export const ENV_FILE = join(STATE_DIR, '.env')
+export const SOCK_PATH = join(STATE_DIR, 'daemon.sock')
+export const INBOX_DIR = join(STATE_DIR, 'inbox')
+
+const LOCAL_ENV_FILE = join(import.meta.dir, '..', '.env')
+for (const envFile of [LOCAL_ENV_FILE, ENV_FILE]) {
+  try { if (!process.env.HYDRA_PROBE_SOCK) chmodSync(envFile, 0o600) } catch {}
+}
+sourceEnvFiles([LOCAL_ENV_FILE, ENV_FILE])
+// Names hydra.toml declares as tokens (Slack apps, the Discord gateway, each server's token_env) join the scrubbed set before anything is captured, so no session can inherit them.
+scrubTokenVarsInFile(join(STATE_DIR, 'hydra.toml'))
+// What is scrubbed from the environment is kept for the daemon's own use (capturedSpawnVars): the gateway's tokens and every token hydra.toml names.
+captureSpawnVars()
+const held = capturedSpawnVars()
+
+export const CLAUDE_CONFIG = claudeConfigDir()
+
+/** The automatic handoffs (daemon/auto-handoff.ts) are opt-in: each runs only when its env var (AUTO_HANDOFF_CACHE, AUTO_HANDOFF_FULL) is 1. Read per call. */
+export const autoHandoffOn = (feature: 'CACHE' | 'FULL'): boolean => process.env[`AUTO_HANDOFF_${feature}`] === '1'
+
+/** A context percent from env var `name`: a whole number 1–99 (a leading zero is fine), else `fallback`. Read per call. */
+export function envPercent(name: string): number | undefined
+export function envPercent(name: string, fallback: number): number
+export function envPercent(name: string, fallback?: number): number | undefined {
+  const raw = (process.env[name] || '').trim()
+  const n = /^\d{1,2}$/.test(raw) ? Number(raw) : 0
+  return n >= 1 ? n : fallback
+}
+
+/**
+ * Chat user ids whose messages get typed delivery (daemon/typed-delivery.ts). Env
+ * HYDRA_TYPED_DELIVERY_USER_IDS, comma-separated; empty (the default) means nobody. Read per call.
+ */
+export const typedDeliveryUserIds = (): Set<string> =>
+  new Set((process.env.HYDRA_TYPED_DELIVERY_USER_IDS || '').split(',').map(s => s.trim()).filter(Boolean))
+
+/**
+ * HYDRA_IDLE_REAP_DAYS: a positive number of days (`7`, `1.5`) after which an idle spawned
+ * session is nudged, then ended, resumably (sessions/idle-limit.ts). Unset or malformed: off. Read per call.
+ */
+export function idleReapMs(): number | undefined {
+  const raw = (process.env.HYDRA_IDLE_REAP_DAYS || '').trim()
+  const days = /^\d+(\.\d+)?$/.test(raw) ? Number(raw) : 0
+  return days > 0 ? Math.round(days * 86_400_000) : undefined
+}
+
+export type TypedDeliveryMode = 'off' | 'paste' | 'hold'
+let warnedBadMode = false
+/** HYDRA_TYPED_DELIVERY_MODE: off (default) | paste | hold. An unknown value means off and is logged once. Read per call. */
+export function typedDeliveryMode(): TypedDeliveryMode {
+  const raw = (process.env.HYDRA_TYPED_DELIVERY_MODE || '').trim().toLowerCase()
+  if (raw === 'paste' || raw === 'hold') return raw
+  if (raw && raw !== 'off' && !warnedBadMode) {
+    warnedBadMode = true
+    process.stderr.write(`daemon: HYDRA_TYPED_DELIVERY_MODE="${raw}" is not off|paste|hold; typed delivery is off\n`)
+  }
+  return 'off'
+}
+
+/** HYDRA_TYPED_DELIVERY_HOLD_MAX_S: the longest a held message waits for idle before it is pasted instead (default 120). Read per call. */
+export function typedDeliveryHoldMaxMs(): number {
+  const n = Number((process.env.HYDRA_TYPED_DELIVERY_HOLD_MAX_S || '').trim())
+  return (Number.isFinite(n) && n > 0 ? n : 120) * 1000
+}
+
+// Read after .env sourcing — .env values must be available.
+// If not set, resolveDefaultChannel() will auto-detect the bot's DM with the primary user.
+export let DEFAULT_SESSION_CHANNEL = process.env.DEFAULT_SESSION_CHANNEL ?? ''
+
+export async function resolveDefaultChannel(): Promise<void> {
+  if (DEFAULT_SESSION_CHANNEL) return
+  try {
+    const userId = (await import('../sessions/access.js')).operatorIds()[0]
+    if (!userId) return
+    if ('sendDM' in gateway) {
+      const ch = await (gateway as any).app?.client?.conversations?.open({ users: userId })
+      if (ch?.channel?.id) {
+        DEFAULT_SESSION_CHANNEL = ch.channel.id
+        process.stderr.write(`daemon: auto-resolved DEFAULT_SESSION_CHANNEL=${DEFAULT_SESSION_CHANNEL} (DM with ${userId})\n`)
+        return
+      }
+    }
+  } catch (err) {
+    process.stderr.write(`daemon: failed to auto-resolve DEFAULT_SESSION_CHANNEL: ${err}\n`)
+  }
+  if (!DEFAULT_SESSION_CHANNEL) {
+    process.stderr.write(`daemon: DEFAULT_SESSION_CHANNEL not set — spawns from home tab will fail.\n`)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Platform
+// ---------------------------------------------------------------------------
+
+export const PLATFORM = (process.env.CHAT_PLATFORM ?? 'discord') as 'discord' | 'slack'
+
+let TOKEN: string | undefined
+let SLACK_APP_TOKEN: string | undefined
+
+if (PLATFORM === 'slack') {
+  TOKEN = held[SLACK_GATEWAY_TOKEN_ENVS.bot]
+  SLACK_APP_TOKEN = held[SLACK_GATEWAY_TOKEN_ENVS.app]
+  if (!TOKEN || !SLACK_APP_TOKEN) {
+    process.stderr.write(
+      `daemon: SLACK_BOT_TOKEN and SLACK_APP_TOKEN required for slack platform\n` +
+      `  set in ${ENV_FILE}\n`,
+    )
+    process.exit(1)
+  }
+} else {
+  TOKEN = held[DISCORD_GATEWAY_TOKEN_ENV]
+  if (!TOKEN) {
+    process.stderr.write(
+      `daemon: DISCORD_BOT_TOKEN required for discord platform\n` +
+      `  set in ${ENV_FILE}\n`,
+    )
+    process.exit(1)
+  }
+}
+
+export { TOKEN, SLACK_APP_TOKEN }
+
+// ---------------------------------------------------------------------------
+// Permission regex
+// ---------------------------------------------------------------------------
+
+export const PERMISSION_REPLY_RE = /^\s*(y|yes|n|no)\s+([a-km-z]{5})\s*$/i
+
+// ---------------------------------------------------------------------------
+// Safety nets
+// ---------------------------------------------------------------------------
+
+process.on('unhandledRejection', err => {
+  process.stderr.write(`daemon: unhandled rejection: ${err}\n`)
+})
+process.on('uncaughtException', err => {
+  process.stderr.write(`daemon: uncaught exception: ${err}\n`)
+})
+
+// ---------------------------------------------------------------------------
+// Gateway (created here, wired by daemon.ts orchestrator)
+// ---------------------------------------------------------------------------
+
+export const heartbeatPath = join(STATE_DIR, 'daemon.alive')
+
+export let gateway: ChatGateway
+
+if (PLATFORM === 'slack') {
+  const { SlackGateway } = await import('../gateways/slack.js')
+  gateway = new SlackGateway(SLACK_APP_TOKEN!, { heartbeatPath })
+} else {
+  const { DiscordGateway } = await import('../gateways/discord.js')
+  // DiscordGateway owns its heartbeat via GatewayHealth — written only while the
+  // socket is actually connected, so a wedged transport goes stale for the watchdog.
+  gateway = new DiscordGateway({ heartbeatPath })
+}

@@ -4,8 +4,8 @@ import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { executeTool } from '../bridge-dispatch.js'
 import { PRE_HANDOFF_HOOK_PATH, runPreHandoffHook } from '../session-lifecycle.js'
-import { registry, type SessionInfo } from '../sessions.js'
-import { STATE_DIR } from '../config.js'
+import { registry, type SessionInfo } from '../../sessions/registry.js'
+import { STATE_DIR } from '../../infra/config.js'
 import { openHandoffThread, waitFor, type HandoffThread } from './handoff-thread.js'
 
 const stderr: string[] = []

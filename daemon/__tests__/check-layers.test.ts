@@ -9,10 +9,10 @@ const file = (path: string, ...lines: string[]) => ({ path, text: lines.join('\n
 describe('check-layers', () => {
   test('files get the tier of their folder, or of their name in daemon/', () => {
     expect(tierOf('shared/constants.ts')).toBe(0)
-    expect(tierOf('daemon/engines/agy-engine.ts')).toBe(1)
+    expect(tierOf('engines/agy-engine.ts')).toBe(1)
     expect(tierOf('gateways/slack.ts')).toBe(1)
-    expect(tierOf('daemon/sessions.ts')).toBe(2)
-    expect(tierOf('specialists/specialists.ts')).toBe(2)
+    expect(tierOf('sessions/registry.ts')).toBe(2)
+    expect(tierOf('sessions/specialists.ts')).toBe(2)
     expect(tierOf('specialists/targets.ts')).toBe(3)
     expect(tierOf('connectors/github/pr-watch.ts')).toBe(3)
     expect(tierOf('daemon/router.ts')).toBe(4)   // a daemon file nobody placed is app
@@ -30,7 +30,7 @@ describe('check-layers', () => {
   })
 
   test('imports that point down or sideways are fine', () => {
-    const files = [file('daemon/router.ts', "import { a } from '../shared/a.js'", "import { b } from './sessions.js'"), file('shared/a.ts', 'export const a = 1'), file('daemon/sessions.ts', "import { a } from '../shared/a.js'\nexport const b = 1")]
+    const files = [file('daemon/router.ts', "import { a } from '../shared/a.js'", "import { b } from './sessions.js'"), file('shared/a.ts', 'export const a = 1'), file('sessions/registry.ts', "import { a } from '../shared/a.js'\nexport const b = 1")]
     expect(violations(files, [])).toEqual([])
   })
 
@@ -62,8 +62,8 @@ describe('check-layers', () => {
   })
 
   test('edges reads the import path relative to the importing file', () => {
-    const files = [file('daemon/engines/x.ts', "import { a } from '../sessions.js'"), file('daemon/sessions.ts', 'export const a = 1')]
-    expect(edges(files)).toEqual(['daemon/engines/x.ts -> daemon/sessions.ts'])
+    const files = [file('daemon/engines/x.ts', "import { a } from '../../sessions/registry.js'"), file('sessions/registry.ts', 'export const a = 1')]
+    expect(edges(files)).toEqual(['daemon/engines/x.ts -> sessions/registry.ts'])
   })
 
   test('the repo today matches the allowlist exactly', () => {

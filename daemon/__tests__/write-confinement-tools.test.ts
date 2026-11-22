@@ -3,9 +3,9 @@
 // no tool that starts, reaches, lists, reads or ends another session, and none that reads another conversation.
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { executeTool } from '../bridge-dispatch.js'
-import { gateway } from '../config.js'
-import { registry } from '../sessions.js'
-import { getToolsForSession, isToolAllowed } from '../tool-surface.js'
+import { gateway } from '../../infra/config.js'
+import { registry } from '../../sessions/registry.js'
+import { getToolsForSession, isToolAllowed } from '../../sessions/tool-surface.js'
 import { UNIVERSAL_TOOLS } from '../../shared/tool-definitions.js'
 import { BASE_TOOLS } from '../../shared/constants.js'
 import { confinementIdFor } from '../restricted.js'

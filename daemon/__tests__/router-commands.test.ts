@@ -1,6 +1,6 @@
 import { describe, test, expect, spyOn } from 'bun:test'
-import { PERMISSION_REPLY_RE, gateway } from '../config.js'
-import { renderContextLink } from '../artifacts.js'
+import { PERMISSION_REPLY_RE, gateway } from '../../infra/config.js'
+import { renderContextLink } from '../../infra/artifacts.js'
 import { listModifierKeys } from '../modifiers.js'
 import {
   SPAWN_RE, SPAWN_WT_RE, KILL_RE, LIST_RE, RESTART_RE, HEALTH_RE, RECONNECT_RE, COMMANDS_RE,

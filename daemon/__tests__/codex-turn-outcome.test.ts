@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { codexTurnOutcome, defaultTurnSources, type TurnSources } from '../engines/codex-observation.js'
-import { vitalsPruners } from '../observability.js'
-import { engines } from '../engines/instances.js'
-import type { SessionInfo } from '../sessions.js'
-import type { CodexLastTurn } from '../codex-rollout.js'
+import { codexTurnOutcome, defaultTurnSources, type TurnSources } from '../../engines/codex-observation.js'
+import { vitalsPruners } from '../../sessions/observability.js'
+import { engines } from '../../engines/instances.js'
+import type { SessionInfo } from '../../sessions/registry.js'
+import type { CodexLastTurn } from '../../engines/codex-rollout.js'
 
 const T = 1_000_000
 const info = { sessionId: 's1', codexThreadId: 'th', tmuxName: 'cedar' }

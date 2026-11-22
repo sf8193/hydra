@@ -3,14 +3,14 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { STATE_DIR } from '../config.js'
-import { SessionRegistry, ThreadRegistry, type SessionInfo } from '../sessions.js'
-import { _setTmuxForTesting } from '../tmux.js'
+import { STATE_DIR } from '../../infra/config.js'
+import { SessionRegistry, ThreadRegistry, type SessionInfo } from '../../sessions/registry.js'
+import { _setTmuxForTesting } from '../../infra/tmux.js'
 import { isPlainWorker, isRestricted } from '../policy-record.js'
 import { confinementIdFor, deliveryRefusal, OPERATOR_POLICY_ID, policyIdFor, policyProblem, type LaunchPolicy } from '../restricted.js'
-import { isToolAllowed, noteDeclaredRestrictions } from '../tool-surface.js'
-import { registry } from '../sessions.js'
-import { _setHydraConfigForTesting } from '../hydra-config.js'
+import { isToolAllowed, noteDeclaredRestrictions } from '../../sessions/tool-surface.js'
+import { registry } from '../../sessions/registry.js'
+import { _setHydraConfigForTesting } from '../../infra/hydra-config.js'
 
 process.stderr.write = (() => true) as any
 

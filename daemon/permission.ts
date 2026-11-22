@@ -1,6 +1,6 @@
-import { transport } from './bridge-transport.js'
-import { operatorIds } from './access.js'
-import { on } from './event-bus.js'
+import { transport } from '../sessions/bridge-transport.js'
+import { operatorIds } from '../sessions/access.js'
+import { on } from '../infra/event-bus.js'
 import type { ChatGateway, ButtonDef } from '../gateways/gateway.js'
 
 // ---------------------------------------------------------------------------

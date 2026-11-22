@@ -1,0 +1,620 @@
+// engines/claude-engine.ts
+//
+// Claude engine adapter — wraps tmux + bridge socket communication.
+
+import { randomUUID } from 'crypto'
+import { spawn } from 'child_process'
+import { existsSync, mkdirSync, readFileSync } from 'fs'
+import { join } from 'path'
+import type { SessionInfo, SessionMetadata } from '../sessions/registry.js'
+import { detectBlockingState as detectBlockingStateFn } from '../daemon/pane-probe.js'
+import type { BlockingState } from '../daemon/pane-probe.js'
+import type {
+  EngineAdapter, ForkPlan, LaunchInput, LaunchResult,
+  DeliveryResult, Notification,
+  StopResult,
+  ContextUsage, RecoverySource, RecoveryPlan, Turn,
+} from './engine-adapter.js'
+import { withoutIntents } from './engine-adapter.js'
+import type { BridgeTransport } from '../sessions/bridge-transport.js'
+import { parseContextFooter, type ContextFooter } from '../infra/util.js'
+import { tmuxCreateSession, tmuxHasSession, tmuxSessionState, tmuxSync, tmuxTimedOut, tmuxWindowActivity } from '../infra/tmux.js'
+import { claudeConfigDir, contextWindowOf, isKnownModel } from '../shared/constants.js'
+import { projectDirName, projectsRoot, transcriptContext, transcriptPathFor } from '../infra/usage.js'
+import { claudeTurnOutcome } from './claude-transcript.js'
+import { readClaudeStatus } from './claude-status.js'
+import { defaultTurnSources } from './codex-observation.js'
+import { CLAUDE_CONFIG, ENV_FILE, SOCK_PATH, PLATFORM, SPAWN_LOGS_DIR, STATE_DIR } from '../infra/config.js'
+import { gateway } from '../infra/config.js'
+import { SESSION_IDENTITY_VARS, capturedSpawnVars, stateEnvUnsets, scrubbedSpawnEnv, withRaisedFdLimit } from '../shared/spawn-env.js'
+import { modsExport } from '../shared/mods.js'
+import { BRIDGE_CHANNEL_FLAG, BRIDGE_MCP_SERVER_KEY, BRIDGE_PLUGIN_ID, BRIDGE_TOOLS_PERMISSION, BUILTIN_TOOL_PLUGIN_IDS } from '../infra/plugin-manifest.js'
+import { deliveryRefusal, type LaunchPolicy, missingTokenRefusal, PolicyRefusal, remedy, RESTRICTED_MODS, RESTRICTED_PREAMBLE, sandboxInputs, serverToolRule, type RestrictedPolicy } from '../daemon/restricted.js'
+import { verifyConfinement as verifyConfinementLoaded, verifyLaunch as verifyLoaded, type Verdict } from './claude-verify.js'
+import { removeSessionToken, removeSpawnPrompt, shq, writeSessionToken, writeSpawnPrompt } from '../infra/launch-files.js'
+import { makeServerTmpDirs, removeRestrictedFiles, serverTmpDir, serverTmpRoot, writeRestrictedFiles } from '../infra/restricted-files.js'
+import { sandboxedServer, sandboxIssues } from '../config/server-sandbox.js'
+import type { PrivateRoot } from '../config/restricted-workdir.js'
+import type { LoadEnv } from '../config/types.js'
+import { bridgeServerCommands, claudeSettingsProblems, claudeVersionRefusal, confinementRules, confinementServers, makeBrowserDirs, confinementLogLine, confinementMcp, confinementSettings } from '../daemon/write-confinement.js'
+import { syncDaemonBridge } from './bridge-sync.js'
+import { clearNeedsAuthEntry, describeSetAt, NEEDS_AUTH_CLEARED_NOTE } from './claude-needs-auth.js'
+import { isRestricted, isRestrictedPolicy } from '../daemon/policy-record.js'
+
+// What the pane-and-transcript methods read. The byte (main) has no SessionInfo, so these take only this.
+export type ClaudeSubject = Pick<SessionInfo, 'tmuxName'> & Partial<Pick<SessionInfo, 'claudeSessionId'>>
+  & { sessionMetadata?: Pick<SessionMetadata, 'model'> }
+
+
+/**
+ * What a restricted launch writes and passes: the settings (the bridge plugin on, and the only tool permissions: the bridge's
+ * and each listed server tool), and the MCP config (the listed servers, each with the `token_env` variables and nothing
+ * else of the daemon's environment). Written by restricted-files.ts: mode 0600, since the MCP config holds secrets.
+ */
+export type RestrictedConfigInput = {
+  policy: Pick<RestrictedPolicy, 'specialist' | 'servers' | 'tools'>
+  /** The variables a server's `token_env` may take (the daemon's environment) and the ones its scrub held back. */
+  env: NodeJS.ProcessEnv
+  held: Readonly<Record<string, string>>
+  sessionName: string
+  /** The sandbox: the machine's probes, the places off limits, and each server's one writable folder. All injected, none read here. */
+  load: Pick<LoadEnv, 'isCommand' | 'realpath'>
+  roots: readonly PrivateRoot[]
+  /** The folder every restricted server's folder sits in, and one server's own folder in it. */
+  tmpRoot: string
+  tmp: (server: string) => string
+}
+
+export function restrictedConfig({ policy, env, held, sessionName, load, roots, tmpRoot, tmp }: RestrictedConfigInput): { settings: object; mcp: object } {
+  // Listed servers run under sandbox-exec (config/server-sandbox.ts): where that cannot be set up none starts, and the launch says why.
+  // The same check hydra.toml's load makes; both run in the daemon. A failure while building a profile (the temp path) is a refusal too.
+  const refuse = (why: string): never => { throw new PolicyRefusal(`specialist ${policy.specialist}: ${why}. No session starts until that is fixed; after you fix it, ${remedy(sessionName)}`) }
+  const why = policy.servers.length ? sandboxIssues(load.isCommand, roots) : undefined
+  if (why) refuse(why)
+  const sandboxed = (command: string, dir: string) => {
+    try { return sandboxedServer(command, load, roots, { root: tmpRoot, dir }) } catch (err) { return refuse(err instanceof Error ? err.message : String(err)) }
+  }
+  return {
+    settings: {
+      enabledPlugins: { [BRIDGE_PLUGIN_ID]: true, ...Object.fromEntries(BUILTIN_TOOL_PLUGIN_IDS.map(id => [id, false])) },
+      permissions: { allow: [BRIDGE_TOOLS_PERMISSION, ...policy.servers.flatMap(s => s.tools.map(t => serverToolRule(s.name, t)))] },
+    },
+    mcp: {
+      mcpServers: Object.fromEntries(policy.servers.map(s => [s.name, {
+        type: 'stdio', ...sandboxed(s.command, tmp(s.name)),
+        env: {
+          ...Object.fromEntries(s.tokenEnv.map(v => {
+            const value = env[v] ?? held[v]
+            if (value === undefined) throw new PolicyRefusal(missingTokenRefusal({ specialist: policy.specialist, servers: [s] }, ENV_FILE, sessionName, env, held)!)
+            return [v, value]
+          })),
+          // The one place the server may write is its own folder: npm's cache and the temp dir are put in it, never in ~/.npm (which a server could poison for the operator's other npx runs).
+          npm_config_cache: join(tmp(s.name), 'npm-cache'),
+          TMPDIR: tmp(s.name),
+        },
+      }])),
+    },
+  }
+}
+
+/** Writes this launch's settings and MCP config (restricted-files.ts); returns their paths. */
+function writeRestrictedConfig(policy: RestrictedPolicy, tmuxName: string, sessionId: string): { settings: string; mcp: string } {
+  // Made first: Seatbelt matches resolved paths, which the profile can only name once the folders exist.
+  try { makeServerTmpDirs(tmuxName, sessionId, policy.servers.map(s => s.name)) } catch (err) {
+    throw new PolicyRefusal(`specialist ${policy.specialist}: ${err instanceof Error ? err.message : String(err)}. No session starts until that is fixed; after you fix it, ${remedy(tmuxName)}`)
+  }
+  try {
+    const { env: load, roots } = sandboxInputs()
+    const { settings, mcp } = restrictedConfig({ policy, env: process.env, held: capturedSpawnVars(), sessionName: tmuxName, load, roots, tmpRoot: serverTmpRoot(), tmp: server => serverTmpDir(tmuxName, sessionId, server) })
+    return writeRestrictedFiles(tmuxName, sessionId, { settings, mcp })
+  } catch (err) {
+    removeRestrictedFiles({ tmuxName, sessionId }, true)   // a refused launch leaves no folder behind
+    throw err
+  }
+}
+
+/**
+ * Writes a write-confined launch's settings and MCP config (restricted-files.ts) and makes the browser's own folders in the workdir.
+ * Everything that can refuse does so before a file is written; a launch that fails after leaves nothing behind.
+ */
+function writeConfinementConfig(w: NonNullable<LaunchPolicy['canOnlyWriteTo']>, specialist: string, tmuxName: string, sessionId: string): { settings: string; mcp: string } {
+  const policy = { specialist, ...w }
+  const refusal = claudeVersionRefusal(policy, tmuxName)
+  if (refusal) throw new PolicyRefusal(refusal)
+  const mcp = confinementMcp(policy, tmuxName, process.env, capturedSpawnVars(), ENV_FILE)
+  // The bridge is allowed by the exact command it runs, one per synced plugin folder: with none, the session could never reach its thread, so nothing starts.
+  const bridgeCommands = bridgeServerCommands(CLAUDE_CONFIG)
+  if (bridgeCommands.length === 0) throw new PolicyRefusal(`specialist ${specialist}: hydra's bridge plugin is not synced under ${CLAUDE_CONFIG}/plugins/cache/claude-plugins-official/discord/, so a session's server allowlist could not admit it and it would have no way to its thread. No session starts until the daemon has synced it (it does at boot); then ${remedy(tmuxName)}`)
+  const settings = confinementSettings({ ...policy, bridgeCommands })
+  // An entry Claude Code's schema rejects makes it stop at an interactive "Settings Warning" and never start: refused here, never written.
+  const invalid = claudeSettingsProblems(settings as { allowedMcpServers?: unknown })
+  if (invalid.length) throw new PolicyRefusal(`specialist ${specialist}: the launch settings hold an entry Claude Code would reject (${invalid.join('; ')}), which stops it at a dialog and never starts the session, so no session starts. ${remedy(tmuxName)}`)
+  try { makeBrowserDirs(w.workdir, w.browserProfile) } catch (err) {
+    throw new PolicyRefusal(`specialist ${specialist}: cannot make its browser folders in ${w.workdir}: ${err instanceof Error ? err.message : String(err)}. No session starts until that is fixed; after you fix it, ${remedy(tmuxName)}`)
+  }
+  return writeRestrictedFiles(tmuxName, sessionId, { settings, mcp })
+}
+
+// Spawn env whitelist: explicit construction, not ambient inheritance. Each env var the byte
+// carries gets a conscious routing decision here:
+//   pass-through: shared between byte and sessions (platform, socket, config, mods)
+//   override:     session-specific identity (thread and type as hookEnv gives them: '' when unknown)
+//   strip:        byte-only (HYDRA_ROLE), kept from leaking into sessions
+//   lineage:      the Claude session a fork continues, for hooks keyed on Claude's session_id (fresh: unset)
+//   unset:        a restricted or write-confined launch keeps only the allowlisted part of the state .env (stateEnvUnsets)
+function buildSpawnEnv(input: LaunchInput): string[] {
+  const forkedFromClaudeSessionId = input.forkFrom?.claudeSessionId
+  const dropped = isRestrictedPolicy(input.policy) || input.policy?.canOnlyWriteTo ? stateEnvUnsets() : []
+  return [
+    ...(dropped.length ? [`unset ${dropped.join(' ')}`] : []),
+    `export HYDRA_SESSION_ID=${shq(input.sessionId)}`,
+    `export HYDRA_SESSION_NAME=${shq(input.tmuxName)}`,
+    `export HYDRA_THREAD_ID=${shq(input.threadId ?? '')}`,
+    `export HYDRA_SESSION_TYPE=${shq(input.sessionType ?? '')}`,
+    // A restricted launch says so to its bridge, which declares it at registration (tool-surface noteDeclaredRestrictions).
+    ...(isRestricted(input) ? ['export HYDRA_RESTRICTED=1'] : []),
+    // A write-confined launch says so to its bridge, which declares it at registration (tool-surface noteDeclaredRestrictions): a record that is gone must not widen it.
+    ...(input.policy?.canOnlyWriteTo ? ['export HYDRA_WRITE_CONFINED=1'] : []),
+    ...(forkedFromClaudeSessionId ? [`export HYDRA_FORKED_FROM_CLAUDE_SESSION_ID=${shq(forkedFromClaudeSessionId)}`] : []),
+    `export DAEMON_SOCK=${shq(SOCK_PATH)}`,
+    `export CLAUDE_CONFIG_DIR=${shq(CLAUDE_CONFIG)}`,
+    `export CHAT_PLATFORM=${shq(PLATFORM)}`,
+    modsExport(STATE_DIR, isRestricted(input) ? RESTRICTED_MODS : undefined),
+    // Enabling the bridge plugin by settings would also bring back the account's claude.ai connectors: this keeps them off.
+    ...(isRestricted(input) || input.policy?.canOnlyWriteTo ? [`export ENABLE_CLAUDEAI_MCP_SERVERS=false`] : []),
+    `unset HYDRA_ROLE`,
+  ]
+}
+
+export function resolveForkSpawnCwd(isFork: boolean, hasWorktree: boolean, spawnCwd: string, effectiveCwd: string): string {
+  return (isFork && hasWorktree) ? spawnCwd : effectiveCwd
+}
+
+export function buildWorktreePromptAppend(isFork: boolean, worktreePath: string | undefined): string {
+  if (isFork && worktreePath) {
+    return `\n\nWORKTREE: Your isolated worktree is at ${worktreePath}. cd there before making any code changes.`
+  }
+  return ''
+}
+
+// ---------------------------------------------------------------------------
+// Claude session ID discovery
+// ---------------------------------------------------------------------------
+
+export function discoverClaudeSessionId(tmuxName: string): string | null {
+  try {
+    const panePid = tmuxSync(['list-panes', '-t', tmuxName, '-F', '#{pane_pid}']).trim()
+    if (!panePid) return null
+
+    // Primary: read Claude's session file at $CLAUDE_CONFIG_DIR/sessions/<pid>.json
+    const sessionFile = join(claudeConfigDir(), 'sessions', `${panePid}.json`)
+    try {
+      const data = JSON.parse(readFileSync(sessionFile, 'utf8'))
+      if (data.sessionId && data.cwd) {
+        // Verify the conversation file exists (Claude creates .jsonl lazily —
+        // freshly spawned sessions may not have one yet).
+        // NOTE: For fork+worktree builders, data.cwd reflects Claude's launch CWD
+        // (spawnCwd, e.g. /Users/sam/trading), not the worktree the builder later
+        // `cd`s to via Bash. Claude's session file captures the startup CWD and does
+        // not update on shell cd — so the conversation file will be found correctly.
+        const projectDir = join(projectsRoot(), projectDirName(data.cwd))
+        const conversationFile = join(projectDir, `${data.sessionId}.jsonl`)
+        if (existsSync(conversationFile)) return data.sessionId
+      }
+    } catch {}
+
+    // Fallback (Claude is a child of the pane's shell, so no <panePid>.json): the status file that names this tmux session.
+    return readClaudeStatus(tmuxName)?.sessionId ?? null
+  } catch {
+    return null
+  }
+}
+
+// ---------------------------------------------------------------------------
+// ask_predecessor: a one-shot read-only fork of a finished conversation
+// ---------------------------------------------------------------------------
+
+// Read-only by construction, not by instruction: only the read tools exist, in plan mode.
+// No MCP servers (plugins' included), so the fork can't register with Hydra; no session
+// persistence, so it leaves no transcript. `--` keeps a question starting with '-' from being a flag.
+export function askForkArgv(claudeSessionId: string, question: string, model?: string): string[] {
+  return [
+    '--resume', claudeSessionId, '--fork-session', '--no-session-persistence',
+    '--strict-mcp-config', '--permission-mode', 'plan', '--tools', 'Read,Grep,Glob',
+    ...(model ? ['--model', model] : []),
+    '-p', '--', `${question}\n\nAnswer only; change nothing.`,
+  ]
+}
+
+// The fork must not look like any Hydra session: no identity or daemon socket to register with.
+export function askForkEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env = scrubbedSpawnEnv(base)
+  for (const v of [...SESSION_IDENTITY_VARS, 'HYDRA_ROLE', 'DAEMON_SOCK', 'TMUX', 'TMUX_PANE']) delete env[v]
+  return { ...env, CLAUDE_CONFIG_DIR: CLAUDE_CONFIG }
+}
+
+/** Injectable for tests: the real one runs `claude`, detached so a timeout can kill its whole process group (rg, hooks). */
+export const claudeForkProcess = { spawn: (args: string[], opts: { cwd: string; env: NodeJS.ProcessEnv }) => spawn('claude', args, { ...opts, stdio: ['ignore', 'pipe', 'pipe'], detached: true }) }
+
+const FORK_KILL_GRACE_MS = 5_000
+const FORK_OUTPUT_CHARS = 400
+
+function killFork(child: { pid?: number; kill: (sig: NodeJS.Signals) => boolean }, sig: NodeJS.Signals): void {
+  try { if (child.pid) { process.kill(-child.pid, sig); return } } catch { /* group already gone: fall through to the pid */ }
+  try { child.kill(sig) } catch { /* already exited */ }
+}
+
+// Both streams, each from its start (an error's message line comes first; a stack's tail is its deepest frames).
+export function forkFailureOutput(stdout: string, stderr: string): string {
+  const parts = [['stderr', stderr.trim()], ['stdout', stdout.trim()]].filter(([, t]) => t)
+  return parts.length ? parts.map(([name, t]) => `${name}: ${t.length > FORK_OUTPUT_CHARS ? t.slice(0, FORK_OUTPUT_CHARS) + '…' : t}`).join(' | ') : 'no output'
+}
+
+function runFork(args: string[], cwd: string, timeoutMs: number): Promise<string> {
+  // Otherwise spawn's ENOENT reads as "claude is not installed".
+  if (!existsSync(cwd)) return Promise.reject(new Error(`ask_predecessor: the predecessor's directory ${cwd} no longer exists`))
+  return new Promise((resolve, reject) => {
+    const child = claudeForkProcess.spawn(args, { cwd, env: askForkEnv() })
+    let out = '', err = ''
+    child.stdout?.setEncoding('utf8'); child.stderr?.setEncoding('utf8')
+    child.stdout?.on('data', (d: string) => { out += d })
+    child.stderr?.on('data', (d: string) => { err += d })
+    const timer = setTimeout(() => {
+      killFork(child, 'SIGTERM')
+      // The group, not just claude: its children can outlive it.
+      setTimeout(() => killFork(child, 'SIGKILL'), FORK_KILL_GRACE_MS).unref()
+      reject(new Error(`ask_predecessor: the fork gave no answer within ${Math.round(timeoutMs / 1000)}s`))
+    }, timeoutMs)
+    child.on('error', e => { clearTimeout(timer); reject(new Error(`ask_predecessor: could not run claude: ${e.message}`)) })
+    child.on('close', (code, signal) => {
+      clearTimeout(timer)
+      const answer = out.trim()
+      if (code !== 0) reject(new Error(`ask_predecessor: the fork ${signal ? `was killed by ${signal}` : `exited ${code}`}: ${forkFailureOutput(out, err)}`))
+      else if (!answer) reject(new Error('ask_predecessor: the fork returned an empty answer'))
+      else resolve(answer)
+    })
+  })
+}
+
+// The pane is read for the transcript cross-check at most this often per session; only a `ctx:` footer is compared.
+const CONTEXT_CHECK_EVERY_MS = 10 * 60_000
+const lastContextCheckAt = new Map<string, number>()
+
+// ponytail: a genuinely silent Claude turn longer than this (no spinner repaint) reads not-working.
+export const CLAUDE_WORKING_SILENCE_S = 10 * 60
+
+export class ClaudeEngine implements EngineAdapter {
+  readonly provider = 'claude' as const
+  readonly channel = 'bridge' as const
+  constructor(private readonly transport: BridgeTransport) {}
+
+  // Resume relaunches with --resume and is confirmed when the bridge registers.
+  recoveryPlan(s: RecoverySource, opts?: { discover?: boolean }): RecoveryPlan {
+    const learnedId = opts?.discover ? this.discover(s) : null
+    const id = s.claudeSessionId
+    const plan: RecoveryPlan = id
+      ? { generic: true, resume: { kind: 'await-bridge', resumeFrom: id }, fork: { claudeSessionId: id, parentName: s.tmuxName } }
+      : { generic: true, resume: null, fork: null }
+    return learnedId ? { learnedId, ...plan } : plan
+  }
+
+  // Learn a missing claudeSessionId from the running pane and set it on the record.
+  private discover(s: RecoverySource): string | null {
+    if (s.claudeSessionId) return null
+    const discovered = discoverClaudeSessionId(s.tmuxName)
+    if (discovered) s.claudeSessionId = discovered
+    return discovered
+  }
+
+  askFork(plan: ForkPlan, cwd: string, question: string, timeoutMs: number, model?: string): Promise<string> {
+    // Narrows the shared ForkPlan type: Claude's recoveryPlan only yields a fork that has the id.
+    if (!plan.claudeSessionId) return Promise.reject(new Error(`ask_predecessor: ${plan.parentName} has no Claude session id to fork`))
+    return runFork(askForkArgv(plan.claudeSessionId, question, model), cwd, timeoutMs)
+  }
+
+  isConnected(info: SessionInfo): boolean {
+    return this.transport.bridges.has(info.sessionId)
+  }
+
+  turn(info: SessionInfo, sinceMs: number): Turn {
+    const outcome = claudeTurnOutcome(info, sinceMs, defaultTurnSources)
+    return {
+      get confirmedComplete() { return outcome.confirmedComplete }, answer: outcome.answer,
+      get activityAt() { try { return tmuxWindowActivity(info.tmuxName) } catch { return null } },
+      get live() { return outcome.live },
+      get backgroundWork() { return outcome.backgroundWork },
+      // A live turn keeps its spinner moving; a hung one (API retry loop, stuck tool) goes silent while the
+      // status file still says busy, so isSessionWorking bounds the claim by pane activity.
+      workingSilenceLimitS: CLAUDE_WORKING_SILENCE_S,
+    }
+  }
+
+  async start(_records: readonly SessionInfo[]): Promise<void> {}
+
+  /** What a restricted launch loaded, from its own debug file, against the policy (claude-verify.ts). */
+  verifyLaunch(policy: RestrictedPolicy, launched: LaunchResult): Promise<Verdict> { return verifyLoaded(policy, launched.debugLogPath) }
+
+  /** What a write-confined launch applied, from its own debug file, against its policy (claude-verify.ts `verifyConfinement`). */
+  verifyConfinement(policy: LaunchPolicy, launched: LaunchResult): Promise<Verdict> {
+    const w = policy.canOnlyWriteTo
+    return w ? verifyConfinementLoaded({ ...confinementRules(w), servers: confinementServers(w) }, launched.debugLogPath) : Promise.resolve({ ok: false, why: 'the policy confines nothing to check' })
+  }
+
+  async launch(input: LaunchInput): Promise<LaunchResult> {
+    try {
+      return await this.launchSession(input)
+    } catch (err) {
+      // A restricted or write-confined launch writes a file holding token values before it starts anything; one that fails then has no session record
+      // whose kill or death would remove it, so it is removed here.
+      removeSpawnPrompt(input)
+      removeSessionToken(input)
+      if (isRestricted(input) || input.policy?.canOnlyWriteTo) removeRestrictedFiles({ tmuxName: input.tmuxName, sessionId: input.sessionId })
+      throw err
+    }
+  }
+
+  private async launchSession(input: LaunchInput): Promise<LaunchResult> {
+    const { sessionId, tmuxName, model } = input
+    if (!model) throw new Error('claude engine: launched without a model')   // doSpawnSession always gives Claude one
+    // The folder, flags, env and files of a launch come from the launch policy here, whatever cwd the caller passed.
+    const restricted = isRestrictedPolicy(input.policy) ? input.policy : undefined
+    // `can_only_write_to`: the operator's tools, started in the folder its writes are confined to, with the settings below (every start passes here).
+    const writes = input.policy?.canOnlyWriteTo
+    const effectiveCwd = restricted ? restricted.workdir : writes ? writes.workdir : input.cwd
+    const spawnCwd = restricted ? restricted.workdir : writes ? writes.workdir : input.originalCwd
+    const worktreePath = input.worktreePath
+    const worktreeTarget = !!input.forkFromOriginalCwd
+    const isFork = !!input.forkFrom?.claudeSessionId
+    const isResume = !!input.resumeFrom
+
+    if (!isKnownModel(model)) {
+      process.stderr.write(`daemon: unrecognized model ${model} — may be a new release or typo. Spawning anyway.\n`)
+      if (input.threadId) void gateway.send(input.threadId, `⚠️ Unrecognized model \`${model}\` — may be a new release or typo. Spawning anyway.`).catch(() => {})
+    }
+
+    let prompt = input.prompt
+    // A restricted kickoff starts with hydra's fixed preamble (restricted.ts): a prompt, not a control. Operator and non-specialist kickoffs are untouched.
+    if (restricted) prompt = `${RESTRICTED_PREAMBLE} ${prompt}`
+    const worktreeAppend = buildWorktreePromptAppend(isFork, worktreePath)
+    if (worktreeAppend) prompt += worktreeAppend
+
+    // The prompt is handed to the pane by file (launch-files.ts), so no part of it is on a command line. A resume takes none.
+    const promptFile = isResume ? null : writeSpawnPrompt(tmuxName, sessionId, prompt)
+    // Its token, by file too: what the daemon checks when the session's shell runs the hydra CLI (cli-caller.ts).
+    const tokenFile = input.sessionToken ? writeSessionToken(tmuxName, sessionId, input.sessionToken) : null
+    const channelFlag = BRIDGE_CHANNEL_FLAG
+    let claudeArgs: string
+    let assignedClaudeSessionId: string | undefined
+    const disallowed = input.disallowedTools?.length ? ` --disallowedTools ${shq(input.disallowedTools.join(','))}` : ''
+    // A write-confined session's built-in tools are its policy's `tools`, narrowed (never widened) by a caller's own list; absent from the policy, the caller's list rules as it always has.
+    const effectiveTools = writes?.tools ? (input.tools?.length ? writes.tools.filter(t => input.tools!.includes(t)) : writes.tools) : input.tools
+    if (writes?.tools && effectiveTools!.length === 0) throw new PolicyRefusal(`specialist ${input.policy!.specialist}: the tools asked for (${input.tools!.join(', ')}) leave none of the tools its policy lists (${writes.tools.join(', ')}), so no session starts. ${remedy(tmuxName)}`)
+    const toolsFlag = effectiveTools?.length ? ` --tools ${shq(effectiveTools.join(','))}` : ''
+    // After the prompt and the other flags, as `disallowed` is: the settings that confine writes, and the servers that get their own browser folders.
+    let confinementFlags = ''
+    if (writes) {
+      const files = writeConfinementConfig(writes, input.policy!.specialist, tmuxName, sessionId)
+      confinementFlags = ` --settings ${shq(files.settings)}${writes.servers.length ? ` --mcp-config ${shq(files.mcp)}` : ''}`
+      process.stderr.write(`${confinementLogLine(tmuxName, { specialist: input.policy!.specialist, ...writes })}\n`)
+    }
+    if (restricted) {
+      // A specialist with restricted = true: no --dangerously-skip-permissions (--permission-mode dontAsk instead), the
+      // prompt positional before the variadic flags, and the generated settings and MCP config (see restrictedConfig).
+      const files = writeRestrictedConfig(restricted, tmuxName, sessionId)
+      const restrictedFlags = ` --restricted --tools ${shq(restricted.tools.join(','))} --settings ${shq(files.settings)} --mcp-config ${shq(files.mcp)} --permission-mode dontAsk`
+      if (isFork) {
+        claudeArgs = `claude --resume ${shq(input.forkFrom!.claudeSessionId!)} --fork-session --model ${shq(model)} ${promptFile!.ref} --channels ${shq(channelFlag)}${restrictedFlags}${disallowed}`
+      } else if (isResume) {
+        claudeArgs = `claude --resume ${shq(input.resumeFrom!)} --model ${shq(model)} --channels ${shq(channelFlag)}${restrictedFlags}${disallowed}`
+      } else {
+        assignedClaudeSessionId = randomUUID()
+        claudeArgs = `claude --session-id ${shq(assignedClaudeSessionId)} --model ${shq(model)} ${promptFile!.ref} --channels ${shq(channelFlag)}${restrictedFlags}${disallowed}`
+      }
+    } else if (isFork) {
+      claudeArgs = [
+        `claude`,
+        `--resume ${shq(input.forkFrom!.claudeSessionId!)}`,
+        `--fork-session`,
+        `--model ${shq(model)}`,
+        `--channels ${shq(channelFlag)}`,
+        `--dangerously-skip-permissions`,
+        promptFile!.ref,
+      ].join(' ') + disallowed + toolsFlag + confinementFlags
+    } else if (isResume) {
+      claudeArgs = [
+        `claude`,
+        `--resume ${shq(input.resumeFrom!)}`,
+        `--model ${shq(model)}`,
+        `--channels ${shq(channelFlag)}`,
+        `--dangerously-skip-permissions`,
+      ].join(' ') + disallowed + toolsFlag + confinementFlags
+    } else {
+      assignedClaudeSessionId = randomUUID()
+      claudeArgs = `claude --session-id ${shq(assignedClaudeSessionId)} --model ${shq(model)} --channels ${shq(channelFlag)} --dangerously-skip-permissions ${promptFile!.ref}${disallowed}${toolsFlag}${confinementFlags}`
+    }
+    if (disallowed) process.stderr.write(`daemon: disallowedTools flag: ${disallowed}\n`)
+    if (restricted) process.stderr.write(`daemon: restricted launch ${tmuxName}: specialist ${restricted.specialist}, tools ${restricted.tools.join(',')}, servers ${restricted.servers.map(x => x.name).join(',') || 'none'}\n`)
+    if (toolsFlag && !restricted) process.stderr.write(`daemon: tools whitelist active (${effectiveTools!.length} tools${writes ? '' : ', Edit/Write blocked'})\n`)
+
+    const stderrLog = join(SPAWN_LOGS_DIR, `stderr-${tmuxName}-${sessionId}.log`)
+    const debugLog = join(SPAWN_LOGS_DIR, `debug-${tmuxName}-${sessionId}.log`)
+    const exitFile = join(SPAWN_LOGS_DIR, `exit-${tmuxName}-${sessionId}.log`)
+    const writeExitMarker = [
+      `_HYDRA_EXIT_CODE=$?`,
+      `_HYDRA_EXIT_TS=$(date +%s)`,
+      `{ echo "exit_code=$_HYDRA_EXIT_CODE"`,
+      `echo "wall_clock=\${SECONDS}s"`,
+      `echo "exit_ts=$_HYDRA_EXIT_TS"`,
+      `echo "session_id=${sessionId}"`,
+      `echo "tmux_name=${tmuxName}"`,
+      `if [ $_HYDRA_EXIT_CODE -gt 128 ]; then echo "signal=$(( $_HYDRA_EXIT_CODE - 128 ))"; fi`,
+      `} > ${shq(exitFile)}`,
+    ].join('; ')
+    claudeArgs += ` --debug-file ${shq(debugLog)}`
+    const spawnCd = resolveForkSpawnCwd(isFork, !!worktreeTarget, spawnCwd, effectiveCwd)
+    if (isFork && worktreeTarget) {
+      process.stderr.write(`daemon: spawn ${tmuxName}: fork+worktree — using PM CWD ${spawnCwd} for fork (worktree ${effectiveCwd} in prompt)\n`)
+    }
+    const inner = [
+      `_hydra_write_exit() { ${writeExitMarker}; }; trap _hydra_write_exit EXIT`,
+      `cd ${shq(spawnCd)}`,
+      ...buildSpawnEnv(input),
+      ...(tokenFile ? [tokenFile.load] : []),
+      ...(promptFile ? [promptFile.load] : []),
+      `${claudeArgs} 2>>${shq(stderrLog)}`,
+    ].join(' && ')
+
+    // Claude Code may have added or refilled a plugin version dir since boot (auto-update): link its server.ts,
+    // and wait for its dependency install, before the session that loads it starts.
+    try {
+      const sync = syncDaemonBridge()
+      if (sync.relinked.length) process.stderr.write(`daemon: spawn ${tmuxName}: relinked bridge server.ts in ${sync.relinked.join(', ')}\n`)
+      await sync.ready
+    } catch (err) {
+      process.stderr.write(`daemon: spawn ${tmuxName}: bridge sync skipped (non-fatal): ${err instanceof Error ? err.message : String(err)}\n`)
+    }
+
+    // A needs-auth entry for the bridge would make this process skip it silently (claude-needs-auth.ts).
+    const cleared = await clearNeedsAuthEntry(BRIDGE_MCP_SERVER_KEY)
+    if (cleared) process.stderr.write(`daemon: cleared Claude Code needs-auth cache entry for ${cleared.key} (set ${describeSetAt(cleared.setAt, Date.now())}) before launching ${tmuxName}\n`)
+
+    process.stderr.write(`daemon: spawn ${tmuxName}: creating the tmux session\n`)
+    process.stderr.write(`daemon: spawn ${tmuxName}: inner cmd = ${inner.slice(0, 300)}...\n`)
+
+    mkdirSync(SPAWN_LOGS_DIR, { recursive: true, mode: 0o700 })
+    let created: ReturnType<typeof tmuxCreateSession>
+    try {
+      created = tmuxCreateSession(tmuxName, [withRaisedFdLimit(inner)])
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      process.stderr.write(`daemon: spawn ${tmuxName}: tmuxNewSession FAILED: ${msg}\n`)
+      throw new Error(`failed to spawn tmux session: ${msg}`)
+    }
+
+    const tmuxConfirmedAlive = created === 'alive'
+    process.stderr.write(`daemon: spawn ${tmuxName}: ${
+      created === 'alive' ? 'tmux session confirmed alive'
+      : created === 'dead' ? 'WARNING -- tmux session died immediately after creation'
+      : 'WARNING -- tmux not responding; session unconfirmed, pane capture skipped'}\n`)
+
+    let spawnLogPath: string | undefined
+    if (tmuxConfirmedAlive) {
+      try {
+        mkdirSync(SPAWN_LOGS_DIR, { recursive: true, mode: 0o700 })
+        const logPath = join(SPAWN_LOGS_DIR, `${tmuxName}-${sessionId}.log`)
+        tmuxSync(['pipe-pane', '-o', '-t', tmuxName, `cat >> ${shq(logPath)}`])
+        spawnLogPath = logPath
+        process.stderr.write(`daemon: spawn ${tmuxName}: pane capture -> ${logPath}\n`)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        process.stderr.write(`daemon: spawn ${tmuxName}: pipe-pane capture setup FAILED (non-fatal): ${msg}\n`)
+      }
+    }
+
+    return {
+      provider: 'claude', model,
+      identity: assignedClaudeSessionId ? { claudeSessionId: assignedClaudeSessionId } : {},
+      spawnLogPath, exitFilePath: exitFile, stderrLogPath: stderrLog, debugLogPath: debugLog,
+      ...(cleared ? { channelNote: NEEDS_AUTH_CLEARED_NOTE } : {}),
+    }
+  }
+
+  // No await before the write: callers rely on it having happened on return.
+  async deliver(info: SessionInfo, msg: Notification): Promise<DeliveryResult> {
+    // Every delivery to a Claude session passes here: one that no longer matches what hydra.toml gives its specialist is not delivered to.
+    const refused = deliveryRefusal(info)
+    if (refused) return { status: 'rejected', retryable: false, reason: refused }
+    const r = this.transport.writeOrQueue(info.sessionId, withoutIntents(msg))
+    return r === 'written' ? { status: 'accepted', via: 'bridge-socket' }
+      : r === 'queued' ? { status: 'accepted', via: 'queued' }
+      // sendToBridge re-queued it; the queue flushes on reconnect, as when absent.
+      // Not 'unknown': that would surface a delivery:failed warning (#378) for
+      // a message the transport still owns.
+      : { status: 'accepted', via: 'requeued' }
+  }
+
+  async stop(info: SessionInfo): Promise<StopResult> {
+    // Last-resort claudeSessionId discovery before tmux dies — if the bridge
+    // never registered it, read $CLAUDE_CONFIG_DIR/sessions/<panePid>.json while the
+    // pane PID is still available. Without this, resume falls to tier 3 (respawn).
+    const discovered = this.discover(info)
+    if (discovered) process.stderr.write(`daemon: kill ${info.tmuxName}: late-discovered claudeSessionId=${discovered}\n`)
+    try {
+      tmuxSync(['kill-session', '-t', info.tmuxName])
+      return { status: 'stopped' }
+    } catch (err) {
+      if (tmuxTimedOut(err)) return { status: 'uncertain', reason: 'tmux not responding' }
+      if (!tmuxHasSession(info.tmuxName)) return { status: 'stopped' }
+      return { status: 'uncertain', reason: `tmux session ${info.tmuxName} is still running` }
+    }
+  }
+
+  isAlive(info: ClaudeSubject): boolean {
+    return tmuxHasSession(info.tmuxName)
+  }
+
+  peek(info: ClaudeSubject, lines: number = 50): string {
+    try {
+      return tmuxSync(['capture-pane', '-t', info.tmuxName, '-p', '-S', `-${lines}`]).trimEnd()
+    } catch { return '' }
+  }
+
+  // From the transcript: the last turn's context tokens over the window the session was launched with. The id comes
+  // from the status file (a /clear starts a new transcript; the stored id goes stale). The pane's footer number is
+  // the fallback (no or unknown launch model; no transcript yet). Only a `ctx:` footer is cross-checked,
+  // at most every CONTEXT_CHECK_EVERY_MS: hydra's mod (mod/hooks/register.ts) prints Claude Code's used percentage as is,
+  // while an operator's own statusline bar may be rescaled (one that reads 100% at auto-compact). A session whose window the
+  // transcript cannot give (a `/model` switch, see transcriptContext) reads its `ctx:` footer on every call instead: it is the reading.
+  usage(info: ClaudeSubject): ContextUsage | null {
+    const launch = info.sessionMetadata?.model
+    const path = contextWindowOf(launch) ? transcriptPathFor(readClaudeStatus(info.tmuxName)?.sessionId ?? info.claudeSessionId) : undefined
+    const t = path ? transcriptContext(path, launch) : null
+    if (!t) {
+      const pane = this.paneFooter(info)
+      return pane === null ? null : { usedTokens: 0, contextWindow: 0, percent: pane.percent }
+    }
+    const now = Date.now()
+    const due = now - (lastContextCheckAt.get(info.tmuxName) ?? 0) >= CONTEXT_CHECK_EVERY_MS
+    // After a `/model` switch the transcript cannot name the window; Claude Code's own `ctx: N%` can, so it is the reading.
+    const pane = t.switched || due ? this.paneFooter(info) : null
+    if (due) lastContextCheckAt.set(info.tmuxName, now)
+    if (t.switched && pane?.shape === 'ctx') {
+      if (due) process.stderr.write(`daemon: context %: ${info.tmuxName} switched model (launched ${launch}); reading the pane's ctx ${pane.percent}% (transcript floor ${t.percent}%)\n`)
+      return { usedTokens: 0, contextWindow: 0, percent: pane.percent }
+    }
+    if (due && pane?.shape === 'ctx' && Math.abs(pane.percent - t.percent) >= 2) {
+      process.stderr.write(`daemon: context %: ${info.tmuxName} transcript says ${t.percent}% (${t.usedTokens}/${t.contextWindow}), pane says ${pane.percent}%\n`)
+    }
+    return { usedTokens: t.usedTokens, contextWindow: t.contextWindow, percent: t.percent }
+  }
+
+  private paneFooter(info: ClaudeSubject): ContextFooter | null {
+    try {
+      const pane = tmuxSync(['capture-pane', '-t', info.tmuxName, '-p'])
+      return parseContextFooter(pane)
+    } catch { return null }
+  }
+
+  surface(info: ClaudeSubject): string | null { return tmuxHasSession(info.tmuxName) ? info.tmuxName : null }
+
+  async sendKeys(info: ClaudeSubject, keys: string, opts?: { raw?: boolean; trailingKey?: string }): Promise<{ queued: boolean }> {
+    // Its own 3 s, as before: typing a long message into a busy pane can outlast a read.
+    const send = (args: string[]) => tmuxSync(['send-keys', '-t', info.tmuxName, ...args], { timeout: 3_000 })
+    if (opts?.raw) send(keys.split(/\s+/))
+    else { send(['-l', keys]); send([opts?.trailingKey ?? 'Enter']) }
+    return { queued: false }
+  }
+
+  async interrupt(info: SessionInfo): Promise<void> {
+    Bun.spawn(['tmux', 'send-keys', '-t', info.tmuxName, 'Escape'], { stdio: ['pipe', 'pipe', 'pipe'] })
+  }
+
+  detectBlockingState(_info: ClaudeSubject, tailText: string): BlockingState | null {
+    return detectBlockingStateFn(tailText)
+  }
+
+  async reconnect(_info: SessionInfo): Promise<boolean> {
+    // Claude's bridge self-reconnects via scheduleReconnect() — daemon accepts passively
+    return true
+  }
+}

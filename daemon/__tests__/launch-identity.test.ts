@@ -1,6 +1,6 @@
 // LaunchResult.identity omits ids the launch did not assign (peer c2-3 #5).
 import { expect, test } from 'bun:test'
-import { ClaudeEngine } from '../engines/claude-engine.js'
+import { ClaudeEngine } from '../../engines/claude-engine.js'
 import { withFakeTmux } from './fake-tmux.js'
 
 const input = { sessionId: 'li-s', tmuxName: 'li-t', cwd: '/tmp', originalCwd: '/tmp', model: 'claude-opus-4-1', prompt: 'hi' }
