@@ -469,7 +469,7 @@ describe('what the docs say a write-confined session may write', () => {
   const root = join(import.meta.dir, '..', '..')
   const read = (f: string) => readFileSync(join(root, f), 'utf8')
   // Claude Code's sandbox allows the folder and the per-user $TMPDIR (macOS: /tmp/claude-<uid>), not the shared /tmp, which any local user can read.
-  const files = ['README.md', 'docs/slack.md', 'daemon/write-confinement.ts']
+  const files = ['docs/specialists.md', 'docs/slack.md', 'daemon/write-confinement.ts']
   for (const f of files) {
     test(`${f} names the per-user $TMPDIR and never says "temp" alone is writable`, () => {
       const text = read(f)
@@ -477,8 +477,8 @@ describe('what the docs say a write-confined session may write', () => {
       expect(text).toContain('$TMPDIR')
     })
   }
-  test('README and the guide say shared /tmp is not writable', () => {
-    for (const f of ['README.md', 'docs/slack.md']) { expect(read(f)).toMatch(/shared `\/tmp`[^.]*not/); expect(read(f)).toContain("Claude Code's sandbox default") }
+  test('the specialists reference and the guide say shared /tmp is not writable', () => {
+    for (const f of ['docs/specialists.md', 'docs/slack.md']) { expect(read(f)).toMatch(/shared `\/tmp`[^.]*not/); expect(read(f)).toContain("Claude Code's sandbox default") }
   })
 })
 
