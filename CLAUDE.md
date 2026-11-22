@@ -42,15 +42,10 @@ Compile-check all three entry points before committing — they are independent 
 
 ## Invariants
 
-What the code must stay true to. Each says how to tell you are breaking it and what catches it. A rule marked "review" has no check: it holds only if you hold it.
+What the code must stay true to that no check catches: it holds only if you hold it. (The ones CI does catch, the tiers, cycles, tier-0 I/O, capability names and dangerous primitives, are in `scripts/check-*.ts` and are not restated here.)
 
-- **One owner per fact.** Before you define a constant, a text, an id or a check, search for it and import it. Two definitions drift. A tool name, a limit or a refusal text lives in one file. Check: `check-owners` (dangerous primitives only); the rest is review.
-- **Decide in the app, act in the engine.** Who may start, what is allowed and what a refusal says are decided in `app/`. An engine or gateway turns a decision into its own format and runs it. If an engine file names a policy, a role or a refusal of its own, move it up. Check: `check-layers` stops engines importing `app/`; the rest is review.
-- **Imports point down the tiers** (`shared`, `config`, `routing` < `infra`, `gateways`, `engines` < `sessions` < `specialists`, `connectors`, `protocols` < `app` < `daemon.ts`, `cli`). Name the tier of both files before you add an import. A lower layer never names a higher one: data goes up through handlers and events, calls go down. Check: `check-layers` (today's exceptions are listed there and only shrink), `check-cycles`.
-- **Tier 0 does no I/O.** `shared/`, `config/` and `routing/` read no files, clocks, env or sockets; the caller passes values in. Check: `check-rules` (`io-in-core`).
-- **Capabilities, not names.** Behavior that differs by platform or engine is a capability on `ChatGateway` or `EngineAdapter`, never a branch on a name. Check: `check-rules` (`platform-name-branch`, `engine-name-branch`).
-- **Fail closed.** A missing gate, token or config refuses; it never allows. Check: a test per gate (`daemon/__tests__/deliver-gate.test.ts`); review otherwise.
-- **No work at import.** A module defines; the daemon's boot starts. Safety must not depend on a side-effect import loading. Check: none yet (review).
-- **An exception list only shrinks.** A check lists today's hits; a new one fails, and a fixed one must be deleted from the list. Do not add an entry to make a check pass without saying why in the PR.
-
-CI runs every check named here; you do not need to run them before you push.
+- **One owner per fact.** Before you define a constant, a text, an id or a check, search for it and import it. Two definitions drift. A limit, a tool name or a refusal text lives in one file. Only dangerous primitives have a check (`check-owners`).
+- **Decide in the app, act in the engine.** Who may start, what is allowed and what a refusal says are decided in `app/`. An engine or gateway turns a decision into its own format and runs it. If an engine file names a policy, a role or a refusal of its own, move it up.
+- **Fail closed.** A missing gate, token or config refuses; it never allows.
+- **No work at import.** A module defines; the daemon's boot starts. Safety must not depend on a side-effect import loading.
+- **An exception list only shrinks.** Do not add an entry to a check's list to make it pass without saying why in the PR.
