@@ -5,8 +5,8 @@
  * Codex app-servers outlive their replaceable tmux TUIs. This module owns the
  * engine event plumbing and reconnects transiently lost daemon connections.
  * Its listeners bind their dependencies (registry, reply guard, safeSend,
- * dispatchDisconnect) at import, as before, so an event that arrives before
- * start() behaves exactly as one after it.
+ * dispatchDisconnect) at import, so an event that arrives before
+ * startCodexRuntime() behaves exactly as one after it.
  */
 
 import type { ReconciledTurn } from '../engines/codex-engine.js'

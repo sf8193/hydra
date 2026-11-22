@@ -104,8 +104,8 @@ process.on('exit', () => {
 transport.restorePersistedQueues()
 startBridgeServer()
 
-// Start each engine over its persisted records (Codex reconnects its sessions to
-// their app-server sockets). Not awaited; each start logs its own outcome.
+// Start each engine over its persisted records. Not awaited; each start logs its own outcome.
+// Codex has no start of its own: its sweep (startCodexRuntime) reconnects its sessions to their app-server sockets.
 for (const adapter of Object.values(engines)) {
   adapter.start(engineRecords(adapter)).catch(err => {
     process.stderr.write(`daemon: ${adapter.provider} start failed: ${err}\n`)
