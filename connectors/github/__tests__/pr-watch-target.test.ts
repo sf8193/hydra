@@ -4,7 +4,7 @@
 import { afterEach, beforeEach, describe, expect, setSystemTime, test } from 'bun:test'
 import {
   prWatchDeps, listWatches, unwatchPr, unwatchBySession, retargetWatches, getWatchesBySession, parsePersistedWatches,
-  _pollForTesting, _pollAllForTesting, _setWatchForTesting, type WatchEntry,
+  _pollForTesting, _pollAllForTesting, _setPortsForTesting, _setWatchForTesting, type WatchEntry,
 } from '../pr-watch.js'
 import { deliverToSession, targetDeps, type DeliverOutcome } from '../../../specialists/targets.js'
 import { registry, type SessionInfo } from '../../../daemon/sessions.js'
@@ -18,7 +18,7 @@ import { landingOf } from '../../../daemon/landing.js'
 process.stderr.write = (() => true) as any
 
 const URL = 'https://github.com/o/r/pull/11'
-const real = { api: prWatchDeps.api, deliver: prWatchDeps.deliver, send: gateway.send, persist: registry.persist }
+const real = { api: prWatchDeps.api, send: gateway.send, persist: registry.persist }
 let calls: Array<{ t: { to: string; revive?: true }; text: string; opts: any }> = []
 let answer: DeliverOutcome
 let comments: any[] = []
@@ -58,18 +58,35 @@ beforeEach(() => {
     if (endpoint.endsWith('/status')) return { statuses: [] }
     return null
   }
-  prWatchDeps.deliver = async (t, text, opts) => { calls.push({ t, text, opts }); return answer }
+  _setPortsForTesting({ deliver: async (t, text, opts) => { calls.push({ t, text, opts }); return answer }, onWatchRemoved: () => {} })
   ;(gateway as any).send = async (_c: string, text: string) => { posted.push(text); return { id: 'm' } }
   ;(registry as any).persist = () => {}
 })
 
 afterEach(() => {
   unwatchPr(URL)
-  Object.assign(prWatchDeps, { api: real.api, deliver: real.deliver })
+  Object.assign(prWatchDeps, { api: real.api })
   ;(gateway as any).send = real.send
   ;(registry as any).persist = real.persist
   for (const id of ['w-old', 'w-kept', 'w-sync', 'w-guest', 'w-live', 'w-sib']) registry.delete(id)
   removeSpecialist('reviewer')
+})
+
+describe('a watch that ends by itself', () => {
+  test('a merged PR is dropped and the daemon is told through the port; pr-watch does not touch session artifacts itself', async () => {
+    seed()
+    const removed: string[] = []
+    const api = prWatchDeps.api
+    _setPortsForTesting({ deliver: async () => answer, onWatchRemoved: e => { removed.push(e.prUrl) } })
+    prWatchDeps.api = async (endpoint: string) => endpoint.endsWith('pulls/11') ? { state: 'closed', merged: true, head: { sha: 'h1' } } : api(endpoint)
+    const owner = record('w-owner', 'thread-w', { artifacts: [URL] })
+    try {
+      await _pollForTesting(entry()!)
+      expect(removed).toEqual([URL])
+      expect(entry()).toBeUndefined()
+      expect(owner.artifacts).toEqual([URL])   // the registry's to change (daemon.ts's port), not the connector's
+    } finally { prWatchDeps.api = api }
+  })
 })
 
 describe('poll → target', () => {

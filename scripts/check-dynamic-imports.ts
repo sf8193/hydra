@@ -12,8 +12,6 @@ import { fileURLToPath } from 'url'
 
 /** `file -> specifier`, one entry per allowed dynamic import (a file that loads the same module twice lists it twice). */
 export const ALLOWED: readonly string[] = [
-  'connectors/github/pr-watch.ts -> ../../specialists/targets.js',
-  'connectors/github/pr-watch.ts -> ../../daemon/dashboard.js',
   'daemon/boot-probe.ts -> ./config.js',
   'daemon/boot-probe.ts -> ./sessions.js',
   'daemon/boot-probe.ts -> ./bridge-transport.js',
