@@ -20,7 +20,7 @@ Four homes, each for one kind of fact:
 
 | Where | Holds | Who writes it |
 |---|---|---|
-| `<state dir>/.env` | how the daemon runs: `SPAWN_CWD`, `HYDRA_MODEL`, bot tokens. Hydra removes every token it holds from the environment of the sessions it starts | you |
+| `<state dir>/.env` | how the daemon runs: `SPAWN_CWD`, `HYDRA_MODEL`, bot tokens. Hydra removes every token it holds from the environment of the sessions it starts, but the file stays readable by any session not confined away from it, and a name only the daemon's own shell exports is not covered | you |
 | `<state dir>/hydra.toml` | whom it serves: operator, people, connectors, specialists, schedules, rules. Re-read within a second of a change | you |
 | `<state dir>/` state files (`sessions.json`, `threads.json`, …) | what it remembers | hydra only |
 | a specialist's `workdir` | what the agent knows: its `CLAUDE.md`, skills and files | you and the agent |
@@ -41,7 +41,7 @@ The daemon transcribes inbound audio attachments (Discord voice notes, Slack cli
 
 ## Tools
 
-The MCP tools a session has: `reply` (`chat_id` + `text`; `reply_to`, `files` up to 10 × 25 MB; long text is chunked), `react`, `edit_message`, `fetch_messages` (up to 100), `download_attachment`, `create_thread`, and for main only `spawn_session`, `list_sessions` and `kill_session` (`destroy: true` also deletes its thread). Restricted specialists have a smaller set ([specialists.md](specialists.md)).
+The MCP tools a session has: `reply` (`chat_id` + `text`; `reply_to`, `files` up to 10 × 25 MB; long text is chunked), `react`, `edit_message`, `fetch_messages` (up to 100), `download_attachment`, `create_thread`, and `spawn_session`, `list_sessions` and `kill_session` for a thread owner (`kill_session` ends only sessions it spawned; main may end any; `destroy: true` also deletes the thread). Restricted specialists have a smaller set ([specialists.md](specialists.md)).
 
 ## Sessions
 
@@ -56,7 +56,7 @@ The MCP tools a session has: `reply` (`chat_id` + `text`; `reply_to`, `files` up
 
 Sessions get names (spark, pixel, nova…), run in their own tmux sessions, and survive daemon restarts.
 
-- **Idle reaping:** an ephemeral session (`hydra spawn --ephemeral`, every `jobs.toml` spawn) is nudged after 30 minutes with no one posting and ended 5 minutes later. `HYDRA_IDLE_REAP_DAYS=<days>` in `.env` does the same for every other spawned session, except specialists' and protocol runs'; it is off by default. An ended session keeps its record and worktree, and `resume` in its thread continues it.
+- **Idle reaping:** an ephemeral session (`hydra spawn --ephemeral`, every `jobs.toml` spawn) is nudged after 30 minutes with no one posting and ended 5 minutes later. `HYDRA_IDLE_REAP_DAYS=<days>` in `.env` does the same for every other spawned session, except specialists' and protocol runs'; it is off by default. Only that idle reap keeps the record and worktree, so `resume` in its thread continues it; an ephemeral session's worktree is destroyed.
 - **Usage alerts:** account-wide Claude rate-limit alerts go to the default channel (5-hour window at 80% and 95%, weekly at 80%, 90% and 95%, once per threshold).
 - **Session environment:** each session has `HYDRA_SESSION_ID`, `HYDRA_SESSION_NAME`, `HYDRA_THREAD_ID` and `HYDRA_SESSION_TYPE`, so a hook can find its thread without calling the daemon.
 - **More:** [schedules](schedules.md), [handoff](handoff.md), [forking](forking.md), [Google models (`spawn neon:`)](agy.md), [Slack connector](slack-connector.md).
