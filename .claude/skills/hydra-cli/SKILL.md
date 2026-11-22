@@ -160,7 +160,7 @@ hydra deliver --session bloom --message "check replies" --queue
 
 Exit codes: `0` delivered/queued, `1` bad request, `2` idempotency hit (already delivered), `3` gone or refused, `4` running but unreachable (orphaned), `5` deferred (booting or busy; a session stuck on a dialog says `stuck: <kind>` and is a failure), `6` starting failed or backing off, died during delivery, or outcome unknown, `7` a delivery with the same idempotency key is still in flight (deferred), `8` no such specialist.
 
-`--json` adds a `result` word (`done`, `deferred` or `failed`) to the reply and exits 0 whenever the daemon answers, so read `exitCode` and `result` from the JSON. If the daemon does not answer, it exits 1 with a `fatal:` line on stderr and no JSON. The full table, with the guard and schedule codes: README, "Exit codes and result words".
+`--json` adds a `result` word (`done`, `deferred` or `failed`) to the reply and exits 0 whenever the daemon answers, so read `exitCode` and `result` from the JSON. If the daemon does not answer, it exits 1 with a `fatal:` line on stderr and no JSON. The full table, with the guard and schedule codes: docs/reference.md, "Exit codes and result words".
 
 ### Common Patterns
 

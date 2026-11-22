@@ -88,10 +88,10 @@ describe('what a load says about restricted servers on a macOS version', () => {
 describe('the docs say what the list says', () => {
   test('docs/specialists.md names exactly the proven versions, and the opt-in key is in the doc and the example', () => {
     const root = join(import.meta.dir, '..', '..')
-    const slack = readFileSync(join(root, 'docs/specialists.md'), 'utf8')
-    expect(slack).toContain(`: **${PROVEN_MACOS_MAJORS.join(', ')}** today.`)
-    expect(slack).toContain('PROVEN_MACOS_MAJORS')
-    expect(slack).toContain('allow_unproven_macos')
+    const specialists = readFileSync(join(root, 'docs/specialists.md'), 'utf8')
+    expect(specialists).toContain(`: **${PROVEN_MACOS_MAJORS.join(', ')}** today.`)
+    expect(specialists).toContain('PROVEN_MACOS_MAJORS')
+    expect(specialists).toContain('allow_unproven_macos')
     expect(readFileSync(join(root, 'hydra.example.toml'), 'utf8')).toContain('allow_unproven_macos')
   })
 })
