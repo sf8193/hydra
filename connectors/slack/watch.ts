@@ -183,6 +183,8 @@ export type SlackMessageEvent = {
   threadTs?: string
   user?: string
   botId?: string
+  /** A bot's name as Slack shows it, for one that posts with no user to look up. */
+  botName?: string
   subtype?: string
   text?: string
   files?: SlackFile[]
@@ -532,6 +534,8 @@ export type Item = {
   ts: string; user?: string; name?: string; person?: string; roles?: string[]; operator?: boolean
   kind: 'mention' | 'follow-up' | 'dm' | 'reaction'; text: string; files?: SlackFile[]; saved?: FileRef[]
   tagged?: boolean; from?: SenderStanding
+  /** Another app's bot, where the place does not hear bots: heard only because a session's binding listens to everyone. It reaches nobody but a session. */
+  sessionOnly?: true
   /** How routing took it, kept for the event written when its delivery settles: `via` is what chose the place, `tagged` whether the text tags the bot. */
   routed?: { via: string; tagged: boolean }
 }
@@ -1232,26 +1236,41 @@ export class ConversationTable {
   }
 
   private classify(ev: SlackMessageEvent, cfg: ConversationConfig): HandleOutcome {
-    // A message dropped before anything is counted or logged is said for a DM, where silence reads as a lost message (channels carry far too many to name).
-    const skip = (why: () => string): HandleOutcome => { if (isDm(ev.channel) || cfg.directory.isGroupDm?.(ev.channel)) this.deps.log(`daemon: slack connector: dropped ${ev.channel} ${ev.ts} from ${ev.user ?? ev.botId ?? 'unknown'} (${this.appName(ev.app)}): ${why()}\n`); return 'ignored' }
+    // A message dropped before anything is counted or logged is said for a DM, and where `say`, where silence reads as a lost message (channels carry far too many to name).
+    const skip = (why: () => string, say = false): HandleOutcome => { if (say || isDm(ev.channel) || cfg.directory.isGroupDm?.(ev.channel)) this.deps.log(`daemon: slack connector: dropped ${ev.channel} ${ev.ts} from ${ev.user ?? ev.botId ?? 'unknown'} (${this.appName(ev.app)}): ${why()}\n`); return 'ignored' }
     if (!PLAIN_SUBTYPES.has(ev.subtype)) return skip(() => `the message has subtype ${ev.subtype}, which is not heard`)
 
     const app = appOfEntry(cfg)
     const botId = cfg.botId ?? this.botIds.get(app)
     const own = ev.user === cfg.botUserId || (!!ev.botId && ev.botId === botId)
-    // Another app's bot is another bot: not conversation, unless the place says so. Its own events may carry only a user, so its ids are known too.
-    // A sibling hydra app is never heard, `bots = true` or not: two of ours answering each other would loop.
+    // A sibling hydra app is never heard, `bots = true` or not: two of ours answering each other would loop. Its own events may carry only a user, so its ids are known too.
     const others = Object.entries(cfg.identities ?? {}).filter(([a]) => a !== app).map(([, i]) => i)
     const sibling = !own && others.some(i => i.botUserId === ev.user || (!!ev.botId && i.botId === ev.botId))
     if (sibling) return skip(() => `it is from another hydra app's bot`)
-    const otherBot = !own && !!ev.botId
-    if (otherBot && !placeOptions(cfg, ev.channel)?.bots) return skip(() => `it is from another bot and the place does not hear bots`)
     // A DM is one conversation per channel, whoever is in it; a group DM is treated alike, though its id looks like a channel's.
     const dm = isDm(ev.channel) || !!cfg.directory.isGroupDm?.(ev.channel)
     const isReply = !!ev.threadTs && ev.threadTs !== ev.ts
-    const tagged = !own && !!ev.text && tagRe(cfg.botUserId).test(ev.text)
+    // A DM's top-level messages are one conversation. Anywhere else, a top-level message is its thread's first: the
+    // conversation is that thread, bound when this message arrives. A thread inside a DM is a thread like any other.
+    const threadTs = dm && !isReply ? TOP_LEVEL : ev.threadTs ?? ev.ts
+    // Another app's bot is another bot: heard where the place hears bots, and in a conversation bound to a session, which hears everyone in it as
+    // other people's words and is told to answer only the operator or a declared person. Heard only for that binding, its tag is chatter: it takes
+    // no thread from the session and picks no app, and it reaches nobody but a session (`sessionOnly`).
+    const unheardBot = !own && !!ev.botId && !placeOptions(cfg, ev.channel)?.bots
+    const boundTo = unheardBot ? this.get(ev.channel, threadTs, app) : undefined
+    if (unheardBot && !(boundTo?.specialist && isSessionThread(boundTo.specialist))) {
+      // Accepted for a session that has since let the thread go, and replayed: let go, settled and said, as a refused one is.
+      if (boundTo?.owed?.includes(ev.ts)) {
+        this.drop('refused', boundTo, [ev.ts], `it is from another bot, accepted for a session, but the thread now goes to ${boundTo.specialist ?? 'nobody'}, not a session, and the place does not hear bots`)
+        this.settle(keyOf(boundTo), boundTo, [ev.ts])
+        return 'refused'
+      }
+      // Turned away from a bound conversation, it is said, once (a deep catch-up pass reads it again): silence there reads as a lost message.
+      return skip(() => `it is from another bot and the place does not hear bots`, !!boundTo && this.firstTime(this.noted.dropped, `bot:${keyOf(boundTo)}:${ev.ts}`))
+    }
+    const tagged = !own && !unheardBot && !!ev.text && tagRe(cfg.botUserId).test(ev.text)
     // The apps the text tags, first tag first: what decides which of several apps in a channel answers.
-    const mentioned = own ? [] : mentionedApps({ [app]: { botUserId: cfg.botUserId }, ...cfg.identities }, ev.text)
+    const mentioned = own || unheardBot ? [] : mentionedApps({ [app]: { botUserId: cfg.botUserId }, ...cfg.identities }, ev.text)
     // A DM is this app's alone. In a channel, the apps whose bot is in it (a cache the connections share).
     // An app this thread is already bound through is in the channel too: it keeps its untagged follow-ups (`boundApp`), even while its connection is down.
     // A tagged app with no connection is taken to hear its tag: it is the owning app and catches it up, so no other app answers in its place.
@@ -1274,9 +1293,6 @@ export class ConversationTable {
     const inNoBotDm = dm && !at.some(isDmPlace)
     // An ask of the bot: a tag, or a DM with it. One turned away is recorded (`noRoute`) and gets the 🚫; chatter, and anything in a DM the bot is not part of, is neither.
     const asksBot = (tagged || dm) && !inNoBotDm
-    // A DM's top-level messages are one conversation. Anywhere else, a top-level message is its thread's first: the
-    // conversation is that thread, bound when this message arrives. A thread inside a DM is a thread like any other.
-    const threadTs = dm && !isReply ? TOP_LEVEL : ev.threadTs ?? ev.ts
     if (this.inflight.get(watchKey(app, ev.channel, threadTs))?.has(ev.ts)) return skip(() => `it is in flight already`)
     if (own) this.noteOwn(cfg, ev, threadTs, app)
     if (dm && own) return skip(() => `it is the bot's own message in a DM`)
@@ -1381,7 +1397,7 @@ export class ConversationTable {
       const slack = this.actions.get(appOfEntry(entry))
       if (slack) this.reactAs(slack, entry.app, entry.channel, ev.ts, ROUTED_REACTION)
     }
-    this.enqueue(entry, { ts: ev.ts, user: ev.user, kind, text: ev.text ?? '', ...(ev.files?.length && { files: ev.files }), routed: { via: d.via, tagged } }, cfg)
+    this.enqueue(entry, { ts: ev.ts, user: ev.user, ...(!ev.user && ev.botName && { name: ev.botName }), ...(unheardBot && { sessionOnly: true as const }), kind, text: ev.text ?? '', ...(ev.files?.length && { files: ev.files }), routed: { via: d.via, tagged } }, cfg)
     return kind
   }
 
@@ -1790,17 +1806,20 @@ export class ConversationTable {
     const senders = new Map(items.map(i => [i.ts, identify(h, addressOf(i.user))] as const))
     const refused: { item: Item; why: string }[] = []
     items = items.filter(i => {
-      const why = refusal(h, homeOf(i), senders.get(i.ts)!, { app })
+      const why = i.sessionOnly && !isSessionThread(homeOf(i))
+        ? `it is from another bot, heard only for the session that listened here; the thread now goes to ${homeOf(i)}, not a session, and the place does not hear bots`
+        : refusal(h, homeOf(i), senders.get(i.ts)!, { app })
       if (why) refused.push({ item: i, why })
       return !why
     })
-    // The one place a sender gets a name: the roster's `name` wins; else Slack's display name (a stranger, or a person declared without a `name`); else the person's id.
+    // The one place a sender gets a name: the roster's `name` wins; else Slack's display name (a stranger, or a person declared without a `name`),
+    // or for a bot with no user, the name it posted under; else the person's id.
     const users = [...new Set(items.filter(i => !senders.get(i.ts)!.person?.name).map(i => i.user).filter((u): u is string => !!u))]
     const resolved = new Map(await Promise.all(users.map(async u => [u, await this.nameOf(u, app)] as const)))
     const named = items.map(i => {
       const who = senders.get(i.ts)!
       // A Slack display name is the sender's own free text: no mentions or special links (<@U…>, <!here>), so it cannot pose as another sender.
-      const cleaned = i.user ? resolved.get(i.user)?.replace(/<[@!#][^>]*>/g, '') : undefined
+      const cleaned = (i.user ? resolved.get(i.user) : i.name)?.replace(/<[@!#][^>]*>/g, '')
       // A display name that reads as a rostered person or as `operator` is a disguise next to person="carol" operator=false: the sender's own id stands instead.
       const slackName = cleaned && isDisguise(h, cleaned) ? who.person?.id ?? i.user : cleaned
       return { ...i, name: who.person?.name ?? slackName ?? who.person?.id, ...(who.person && { person: who.person.id }), roles: who.roles, operator: who.operator }
