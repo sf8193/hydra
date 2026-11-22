@@ -10,7 +10,6 @@ import { tmuxSessionState, tmuxSync } from '../infra/tmux.js'
 import { CAPABILITY_TOOLS, engineOfModel } from '../shared/constants.js'
 import { SESSION_CATALOG, SESSION_NAMES } from '../shared/session-catalog.js'
 import type { SessionType, Capability, ToolName, SessionLabel } from '../shared/constants.js'
-import { recordPendingRetirement } from '../infra/retirement-journal.js'
 import { classifyPersisted } from '../engines/boot.js'
 import type { EngineAdapter, ProviderId } from '../engines/engine-adapter.js'
 
@@ -87,7 +86,6 @@ export type SessionInfo = {
   adapter: EngineAdapter // runtime instance, not persisted — reattached on load
   codexThreadId?: string       // persisted codex thread ID for resume on daemon restart
   codexHomeName?: string       // CODEX_HOME identity; differs from tmuxName after auto-resume
-  ownershipGeneration?: string // immutable lifecycle owner; prevents stale cleanup from targeting successors
   contextUsage?: { usedTokens: number; contextWindow: number; percent: number; updatedAt: number }
   sessionType: SessionType
   /**
@@ -799,6 +797,14 @@ export class ThreadRegistry {
     this.persist()
   }
 
+  /** The pair of closeHistoryEntry: its session is alive, so its entry is open again. Not persisted: the caller persists. */
+  reopenHistoryEntry(threadId: string, sessionId: string): boolean {
+    const entry = this.threads.get(threadId)?.sessionHistory.findLast(h => h.sessionId === sessionId)
+    if (!entry || entry.endedAt === undefined) return false
+    delete entry.endedAt
+    return true
+  }
+
   persist(): void {
     try {
       const data = [...this.threads.values()]
@@ -880,8 +886,10 @@ export class ThreadRegistry {
     // The session loader stamps deadAt before this registry exists, so a death across the restart is written
     // here: deadAt and endedAt together, as markDead does at runtime.
     let closed = 0
+    let reopened = 0
     for (const session of sessionRegistry.values()) {
-      if (!session.deadAt) continue
+      // Found alive: the loader cleared a stale stamp (a tmux that still answers), so its entry is open, as markRevived leaves it.
+      if (!session.deadAt) { if (this.reopenHistoryEntry(session.threadId, session.sessionId)) reopened++; continue }
       const entry = this.threads.get(session.threadId)?.sessionHistory.find(h => h.sessionId === session.sessionId && !h.endedAt)
       if (entry) { entry.endedAt = session.deadAt; closed++ }
       // What closeHistoryEntry keeps, so a kill after this boot, which finds no open entry, leaves the entry whole.
@@ -892,11 +900,12 @@ export class ThreadRegistry {
       }
     }
 
-    if (created > 0 || backfilled > 0 || closed > 0 || engined > 0) {
+    if (created > 0 || backfilled > 0 || closed > 0 || reopened > 0 || engined > 0) {
       if (created > 0) process.stderr.write(`daemon: created ${created} thread(s) from sessions\n`)
       if (backfilled > 0) process.stderr.write(`daemon: backfilled parentChannelId on ${backfilled} thread(s)\n`)
       if (engined > 0) process.stderr.write(`daemon: recorded the engine on ${engined} history entr${engined === 1 ? 'y' : 'ies'}\n`)
       if (closed > 0) process.stderr.write(`daemon: closed ${closed} history entr${closed === 1 ? 'y' : 'ies'} of sessions dead at boot\n`)
+      if (reopened > 0) process.stderr.write(`daemon: reopened ${reopened} history entr${reopened === 1 ? 'y' : 'ies'} of sessions alive at boot\n`)
       this.persist()
     }
   }
@@ -904,7 +913,7 @@ export class ThreadRegistry {
 
 export const threadRegistry = new ThreadRegistry()
 
-/** The one writer of a death: `deadAt` on the record and `endedAt` on its history entry, together. Keeps the first stamp. */
+/** The one writer of a death (markRevived is its undoing): `deadAt` on the record and `endedAt` on its history entry, together. Keeps the first stamp. */
 export function markDead(info: SessionInfo, at = Date.now()): void {
   const fresh = info.deadAt === undefined
   info.deadAt ??= at
@@ -914,4 +923,10 @@ export function markDead(info: SessionInfo, at = Date.now()): void {
   registry.persist()
   threadRegistry.closeHistoryEntry(info.threadId, info)
   if (fresh) emit('session:marked-dead', { sessionId: info.sessionId, tmuxName: info.tmuxName })
+}
+
+/** The pair of markDead: the session is alive again, so its record and its history entry say so together. Persists the thread file when it reopens an entry; the caller persists the session record. */
+export function markRevived(info: SessionInfo): void {
+  delete info.deadAt
+  if (threadRegistry.reopenHistoryEntry(info.threadId, info.sessionId)) threadRegistry.persist()
 }

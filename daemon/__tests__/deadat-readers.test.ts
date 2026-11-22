@@ -41,13 +41,12 @@ const ALLOWED: Record<string, { why: string; lines: string[] }> = {
     ],
   },
   'app/codex-runtime.ts': {
-    why: 'the Codex runtime writes and reads its own verdict',
+    why: 'the Codex runtime reads its own verdict (it writes through markDead and markRevived)',
     lines: [
       "if (!current || current.deadAt) return",
-      "delete info.deadAt",
       "if (info && !info.deadAt) deps.finalise(info)",
       "const codexSessions = records.filter(s => !s.deadAt)",
-      "delete info.deadAt",
+      "if (info.deadAt) continue",
     ],
   },
   'sessions/observability.ts': {
@@ -94,16 +93,17 @@ const ALLOWED: Record<string, { why: string; lines: string[] }> = {
     ],
   },
   'sessions/registry.ts': {
-    why: 'the field, markDead (the one runtime writer, which says so once, the first time it writes), the boot loader (a tmux that does not answer keeps the saved state), the boot history close',
+    why: 'the field, markDead and markRevived (the runtime writers, a pair; markDead says so once, the first time it writes), the boot loader (a tmux that does not answer keeps the saved state), the boot history close',
     lines: [
       "deadAt?: number",
       "const tmuxAlive = state === 'alive' || (state === 'not responding' && !info.deadAt)",
       "delete info.deadAt",
       "info.deadAt = info.deadAt ?? Date.now()",
-      "if (!session.deadAt) continue",
+      "if (!session.deadAt) { if (this.reopenHistoryEntry(session.threadId, session.sessionId)) reopened++; continue }",
       "if (entry) { entry.endedAt = session.deadAt; closed++ }",
       "const fresh = info.deadAt === undefined",
       "info.deadAt ??= at",
+      "delete info.deadAt",
     ],
   },
 }

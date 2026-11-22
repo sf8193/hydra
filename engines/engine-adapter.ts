@@ -233,16 +233,6 @@ export interface EngineAdapter {
   askFork?(plan: ForkPlan, cwd: string, question: string, timeoutMs: number, model?: string): Promise<string>
 }
 
-// Compat — flat serializable ref used by retirement journal persistence
-export type ProviderExecutionRef = {
-  provider: ProviderId
-  sessionId: string
-  claudeSessionId?: string
-  codexThreadId?: string
-  codexHomeName?: string
-  ownershipGeneration?: string
-}
-
 /** Format context usage as "N%" or "?" for display. */
 export function formatContextPercent(adapter: EngineAdapter, info: SessionInfo): string {
   const u = adapter.usage(info)

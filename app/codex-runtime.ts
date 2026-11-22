@@ -12,7 +12,7 @@
 import type { ReconciledTurn } from '../engines/codex-engine.js'
 import { codexEngine } from '../sessions/engine-instances.js'
 import { codexReconnecting as reconnecting } from '../engines/codex-reconnecting.js'
-import { markDead, registry, threadRegistry, type SessionInfo } from '../sessions/registry.js'
+import { markDead, markRevived, registry, threadRegistry, type SessionInfo } from '../sessions/registry.js'
 import { dispatchDisconnect } from '../sessions/protocol-registry.js'
 import { handleSilenceEvent, noteActivityForSession } from '../app/reply-guard.js'
 import { appendFileSync } from 'fs'
@@ -191,12 +191,13 @@ export async function reconnectCodexAfterDisconnect(
   for (const delay of delays) {
     await deps.wait(delay)
     const info = deps.get(sessionId)
-    if (!info || !info.codexThreadId || !info.adapter) return false
+    // suppressAutoRecover: its end was deliberate (a keepRecord kill), so a late disconnect event does not bring it back.
+    if (!info || !info.codexThreadId || !info.adapter || info.suppressAutoRecover) return false
     try {
       const ok = await reconnectOf(info)
       if (deps.get(sessionId) !== info) return false // replaced/removed meanwhile (invariant 10)
       if (!ok) continue
-      delete info.deadAt
+      markRevived(info)
       deps.persist()
       info.adapter.surface(info)
       process.stderr.write(`codex-bootstrap: restored app-server connection for ${info.tmuxName}\n`)
@@ -249,11 +250,11 @@ export async function reconnectCodexSessions(records: readonly SessionInfo[]): P
       }
       reconnecting.delete(info.sessionId)
       if (registry.get(info.sessionId) !== info) continue // replaced during the sweep: not ours to finalise
+      if (info.deadAt) continue // ended while it waited its turn (the idle reaper's keepRecord kill): its death is already written
       if (!connected) {
         finaliseCodexDeath(info)
         continue
       }
-      delete info.deadAt
       const entry = threadRegistry.get(info.threadId)?.sessionHistory.find(e => e.sessionId === info.sessionId)
       if (entry) {
         entry.codexThreadId = info.codexThreadId
