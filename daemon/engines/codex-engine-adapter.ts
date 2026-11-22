@@ -29,8 +29,8 @@ import { codexPiggyback, type CodexPiggyback } from './codex-piggyback.js'
 import { isCodexReconnecting, reconnectCodexSessions } from './codex-runtime.js'
 import { replyContextLine } from '../reply-context.js'
 import { isRestrictedPolicy } from '../policy-record.js'
+import { shq } from '../launch-files.js'
 
-const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
 const execFileAsync = promisify(execFile)
 

@@ -15,9 +15,6 @@ export type { BlockingState } from '../pane-probe.js'
 
 export type ProviderId = 'claude' | 'codex' | 'omp' | 'agy'
 
-/** The engine as a person reads it, for a notice about one of its sessions. */
-export const engineLabel = (engine: ProviderId | undefined): string => engine === 'codex' ? 'Codex' : engine === 'omp' ? 'omp' : engine === 'agy' ? 'agy' : 'Claude'
-
 // ---------------------------------------------------------------------------
 // Delivery
 // ---------------------------------------------------------------------------

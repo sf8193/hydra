@@ -4,7 +4,7 @@
 import { on } from './event-bus.js'
 import { registry } from './sessions.js'
 import { safeSend } from './util.js'
-import { engineLabel } from './engines/engine-adapter.js'
+import { engineLabel } from '../shared/engine-capabilities.js'
 import { refusalNoticeKey, threadNotices } from './notice-limit.js'
 
 on('delivery:failed', ({ sessionId, status, reason, messageId }) => {

@@ -511,6 +511,12 @@ describe('handleRespawnIntercept', () => {
     expect(sent.some(s => s.includes('not available for agy sessions'))).toBe(true)
   })
 
+  test('a template respawn of a Codex thread is taken, as Claude\'s is', async () => {
+    seedHistory({ codexThreadId: 'T-1' })
+    await handleRespawnIntercept(msg('respawn'), undefined, 'review')
+    expect(fns()).toEqual(['tryRespawn'])
+  })
+
   test('the record engine beats the history inference', async () => {
     seedHistory({ codexThreadId: 'T-1' }, { engine: 'claude' })
     await handleRespawnIntercept(msg('respawn'))

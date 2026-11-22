@@ -141,21 +141,16 @@ for (const [key, id] of Object.entries(MODEL_ALIASES)) {
 
 /** Regex fragment matching any alias key, for use in router patterns.
  *  Sorted longest-first so prefix aliases (e.g. 'sonnet' vs 'sonnet-5') don't short-circuit. */
-export const MODEL_ALIAS_PATTERN = Object.keys(MODEL_ALIASES)
-  .sort((a, b) => b.length - a.length)
-  .join('|')
+const patternOf = (aliases: Readonly<Record<string, string>>) => Object.keys(aliases).sort((a, b) => b.length - a.length).join('|')
+export const MODEL_ALIAS_PATTERN = patternOf(MODEL_ALIASES)
+export const CODEX_MODEL_ALIAS_PATTERN = patternOf(CODEX_MODEL_ALIASES)
+export const OMP_MODEL_ALIAS_PATTERN = patternOf(OMP_MODEL_ALIASES)
+export const AGY_MODEL_ALIAS_PATTERN = patternOf(AGY_MODEL_ALIASES)
 
-export const CODEX_MODEL_ALIAS_PATTERN = Object.keys(CODEX_MODEL_ALIASES)
-  .sort((a, b) => b.length - a.length)
-  .join('|')
-
-export const OMP_MODEL_ALIAS_PATTERN = Object.keys(OMP_MODEL_ALIASES)
-  .sort((a, b) => b.length - a.length)
-  .join('|')
-
-export const AGY_MODEL_ALIAS_PATTERN = Object.keys(AGY_MODEL_ALIASES)
-  .sort((a, b) => b.length - a.length)
-  .join('|')
+/** Each engine's alias table. An alias is looked up in this order (object keys keep it): the other engines' tables before the Claude one. */
+const ENGINE_ALIASES: Record<EngineName, Readonly<Record<string, string>>> = {
+  codex: CODEX_MODEL_ALIASES, omp: OMP_MODEL_ALIASES, agy: AGY_MODEL_ALIASES, claude: MODEL_ALIASES,
+}
 
 /** Look up a chat alias. Returns the full model ID or undefined.
  *  Lowercases input — router regex 'i' flag handles matching, this handles lookup. */
@@ -174,10 +169,7 @@ export function resolveLaunchModel(raw: string): string {
  * cannot place: that passes through unchanged and no check holds it against an engine.
  */
 export function engineOfModel(raw: string): EngineName | undefined {
-  if (resolveCodexModelAlias(raw)) return 'codex'
-  if (resolveOmpModelAlias(raw)) return 'omp'
-  if (resolveAgyModelAlias(raw)) return 'agy'
-  if (resolveModelAlias(raw)) return 'claude'
+  for (const [engine, aliases] of Object.entries(ENGINE_ALIASES)) if (lookup(aliases, raw.toLowerCase())) return engine as EngineName
   const id = raw.replace(/\[1m\]$/, '')
   if (isKnownModel(id)) return 'claude'
   if (id.startsWith('gpt-') || Object.values(CODEX_MODEL_ALIASES).includes(id)) return 'codex'
@@ -192,10 +184,8 @@ export function engineOfModel(raw: string): EngineName | undefined {
  */
 export function resolveLaunchSelection(raw: string, engine?: EngineName): { model: string; engine: EngineName } {
   const run = engine ?? engineOfModel(raw) ?? 'claude'
-  if (run === 'codex') return { model: resolveCodexModelAlias(raw) ?? raw, engine: run }
-  if (run === 'omp') return { model: resolveOmpModelAlias(raw) ?? raw, engine: run }
-  if (run === 'agy') return { model: resolveAgyModelAlias(raw) ?? raw, engine: run }
-  return { model: resolveLaunchModel(raw), engine: run }
+  if (run === 'claude') return { model: resolveLaunchModel(raw), engine: run }
+  return { model: lookup(ENGINE_ALIASES[run], raw.toLowerCase()) ?? raw, engine: run }
 }
 
 export function resolveModelAlias(alias: string): string | undefined {
