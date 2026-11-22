@@ -478,7 +478,7 @@ describe('what the docs say a write-confined session may write', () => {
     })
   }
   test('the specialists reference and the guide say shared /tmp is not writable', () => {
-    for (const f of ['docs/specialists.md']) { expect(read(f)).toMatch(/shared `\/tmp`[^.]*not/); expect(read(f)).toContain("Claude Code's sandbox default") }
+    for (const f of ['docs/specialists.md']) { expect(read(f)).toMatch(/not the shared `\/tmp`/); expect(read(f)).toContain("Claude Code's sandbox default") }
   })
 })
 

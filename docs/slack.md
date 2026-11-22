@@ -225,7 +225,7 @@ A message from another app's bot is another bot's message: it is passed over unl
 *Slack connector.* Hydra serves two uses through one routing system, and which app listens follows from the use.
 
 - **The operator's harness.** The operator's own app: a bot plus `operator_token_env`, the operator's own token (a Slack user token; it reads, and rewrites the operator's own messages, [below](#editing-and-deleting-slack-messages)). With it, a thread in a channel the bot isn't in is still read, as the operator, and routed to the operator's own sessions (`bind_conversation`), so no bot has to join that channel; the operator's DMs and group DMs are heard too, and delivered only where a place names them ([below](#dms-and-group-dms-the-operators-app-hears)). A whole channel (a place in hydra.toml) is still read through the bot today, so its bot must be in it. These sessions serve the operator, so they may see what the operator sees.
-- **Agents for other people.** A restricted app whose own bot sits in the channels its agent serves, routed to specialists, usually restricted specialists (`restricted = true`, [below](specialists.md)). It listens through its own bot.
+- **Agents for other people.** A restricted app whose own bot sits in the channels its agent serves, routed to specialists, usually restricted specialists (`restricted = true`, [specialists.md](specialists.md#what-restricted-and-write-confined-specialists-cannot-do)). It listens through its own bot.
 
 **When not to listen through the operator's app.** Give the agent an app of its own that listens through its own bot when any of these is true:
 
