@@ -2,7 +2,7 @@ import { describe, expect, test, beforeEach, afterEach } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { blockedReason, readClaudeStatus } from '../engines/claude-status.js'
+import { blockedReason, readClaudeStatus } from '../../engines/claude-status.js'
 
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'claude-status-')) })

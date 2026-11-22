@@ -38,9 +38,9 @@ Object.assign(gateway, {
 })
 const { registry, threadRegistry } = await import(repo + '/daemon/sessions.ts')
 const { doSpawnSession, killSession } = await import(repo + '/daemon/session-lifecycle.ts')
-const { codexEngine, reconnectCodexAfterDisconnect } = await import(repo + '/daemon/engines/codex-runtime.ts')
+const { codexEngine, reconnectCodexAfterDisconnect } = await import(repo + '/engines/codex-runtime.ts')
 const { handleResumeIntercept, handleRespawnIntercept } = await import(repo + '/daemon/commands/thread.ts')
-const { codexHomeDir, stopCodexAppServer } = await import(repo + '/daemon/codex-process.ts')
+const { codexHomeDir, stopCodexAppServer } = await import(repo + '/engines/codex-process.ts')
 const starts: {id: string, text: string}[] = []
 // Real app-server lifecycle/RPC, but no model turns for command checks.
 const startTurn = codexEngine.startTurn.bind(codexEngine)
@@ -93,7 +93,7 @@ try {
    try { return await request(...args) }
    catch (err) { console.error('RPC failed:', args[1], String(err)); throw err }
  }
- const { resolveEngine: providerFor } = await import(repo + '/daemon/engines/instances.ts')
+ const { resolveEngine: providerFor } = await import(repo + '/engines/instances.ts')
  assert(await providerFor('codex').interruptExecution(providerFor('codex').executionRef(info)))
  assert(!starts.some(s => s.text.startsWith('ROUND_3')))
  console.log('PASS retirement fences and discards queued handoff')

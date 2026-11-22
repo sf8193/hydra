@@ -15,7 +15,7 @@ import type { SpawnTemplate } from '../templates.js'
 import { buildTemplateSpawnOpts, runTemplateAction } from '../templates.js'
 import type { InboundMessage } from '../../gateways/gateway.js'
 import { type Access } from '../access.js'
-import type { ProviderId } from '../engines/engine-adapter.js'
+import type { ProviderId } from '../../engines/engine-adapter.js'
 
 const RESTART_PENDING_FILE = join(STATE_DIR, 'restart-pending.json')
 

@@ -1,5 +1,5 @@
 import { codexEngine } from './codex-runtime.js'
-import { transport } from '../bridge-transport.js'
+import { transport } from '../daemon/bridge-transport.js'
 import { ClaudeEngine } from './claude-engine.js'
 import { CodexEngineAdapter } from './codex-engine-adapter.js'
 import { OmpEngine } from './omp-engine.js'

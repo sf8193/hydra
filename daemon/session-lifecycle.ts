@@ -23,7 +23,7 @@ import { issueSessionToken } from './cli-caller.js'
 import type { Predecessor, SessionInfo, SessionMetadata, SpawnOpts, SpawnResult } from './sessions.js'
 import { notePendingReply } from './reply-guard.js'
 import { transport } from './bridge-transport.js'
-import { computeToolsForSession } from './bridge-tools.js'
+import { computeToolsForSession } from '../engines/bridge-tools.js'
 import { canAskPredecessor, pushToolSurface } from './tool-surface.js'
 import { parseSpawnTopic, resolveSpawnLabel } from '../infra/util.js'
 import { startPhaseBudget, clearPhaseBudget } from './phase-budget.js'
@@ -31,10 +31,10 @@ import { clearIdleLimit, resumeIdleLimit } from './idle-limit.js'
 import { AGY_MODEL_ALIASES, resolveLaunchSelection, spawnModel, withContextSuffix } from '../shared/constants.js'
 import type { SessionType, ToolBase, SessionLabel } from '../shared/constants.js'
 import { isRestricted, isRestrictedPolicy } from './policy-record.js'
-import { resolveEngine } from './engines/instances.js'
+import { resolveEngine } from '../engines/instances.js'
 import { engineLimitsAccess } from '../shared/engines/index.js'
-import type { EngineAdapter, ProviderId } from './engines/engine-adapter.js'
-import { resumeHomeOwner } from './engines/codex-engine-adapter.js'
+import type { EngineAdapter, ProviderId } from '../engines/engine-adapter.js'
+import { resumeHomeOwner } from '../engines/codex-engine-adapter.js'
 import { buildSpawnPrompt, buildForkPrompt, buildHandoffPrompt, buildResurrectPrompt } from './prompts/session.js'
 import { hydraPrompt } from './prompts/request.js'
 import { readHandoffTemplate } from './handoff-templates.js'
@@ -1589,7 +1589,7 @@ export async function tryRespawn(
 }
 
 // Claude session ID discovery lives in the Claude engine; re-exported for existing importers.
-export { discoverClaudeSessionId } from './engines/claude-engine.js'
+export { discoverClaudeSessionId } from '../engines/claude-engine.js'
 
 /**
  * Marks folders as trusted in Claude's config, so a session launched there doesn't wait on the trust dialog.

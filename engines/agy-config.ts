@@ -1,17 +1,17 @@
-// What hydra keeps in agy's config files: the `hydra` MCP server (the tools reach agy through the stdio server Codex uses, daemon/codex-mcp-server.ts) and the
-// `hydra` hooks (daemon/agy-hook.ts: the conversation id, working or idle). agy reads both only from these files, so they are there for the operator's own agy
+// What hydra keeps in agy's config files: the `hydra` MCP server (the tools reach agy through the stdio server Codex uses, engines/codex-mcp-server.ts) and the
+// `hydra` hooks (engines/agy-hook.ts: the conversation id, working or idle). agy reads both only from these files, so they are there for the operator's own agy
 // runs too (the hook then records nothing; `/mcp` lists `hydra` as failed, harmless). The entries point at the checkout that launched last: run one hydra daemon per user.
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
 import { dirname, join } from 'path'
-import { shq } from '../../infra/launch-files.js'
+import { shq } from '../infra/launch-files.js'
 
 const GEMINI_CONFIG = join(homedir(), '.gemini', 'config')
 export const AGY_MCP_CONFIG = join(GEMINI_CONFIG, 'mcp_config.json')
 export const AGY_HOOKS_CONFIG = join(GEMINI_CONFIG, 'hooks.json')
-const TOOL_SERVER = join(import.meta.dir, '..', 'codex-mcp-server.ts')
-const HOOK_SCRIPT = join(import.meta.dir, '..', 'agy-hook.ts')
+const TOOL_SERVER = join(import.meta.dir, 'codex-mcp-server.ts')
+const HOOK_SCRIPT = join(import.meta.dir, 'agy-hook.ts')
 
 // Rewrites `file` only when `edit` changes something. Throws if the file is not JSON. An empty file counts as `{}`: agy itself leaves a 0-byte mcp_config.json.
 function update(file: string, edit: (config: any) => boolean): void {

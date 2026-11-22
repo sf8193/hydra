@@ -3,7 +3,7 @@
 import { afterEach, expect, test } from 'bun:test'
 import { mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { ClaudeEngine } from '../engines/claude-engine.js'
+import { ClaudeEngine } from '../../engines/claude-engine.js'
 import { bridgePluginCache, bridgeReadiness, isLinkedTo } from '../../infra/plugin-manifest.js'
 import { claudeConfigDir } from '../../shared/constants.js'
 import { withFakeTmux } from './fake-tmux.js'

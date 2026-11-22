@@ -14,7 +14,7 @@ import WebSocket from 'ws'
 import { EventEmitter } from 'events'
 import { join } from 'path'
 import { codexHomeDir } from './codex-process.js'
-import type { DeliveryResult } from './engines/engine-adapter.js'
+import type { DeliveryResult } from './engine-adapter.js'
 
 class CodexRpcError extends Error {
   constructor(message: string, readonly code: number) { super(`${message} (code ${code})`) }

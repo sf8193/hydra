@@ -123,8 +123,8 @@
       "desc": "Git worktree create/reattach/destroy, unpushed-commit check"
     },
     {
-      "id": "daemon_bridge-tools",
-      "label": "daemon/bridge-tools.ts",
+      "id": "engines_bridge-tools",
+      "label": "engines/bridge-tools.ts",
       "layer": "tools",
       "desc": "UNIVERSAL_TOOLS, computeToolsForSession — zero daemon imports (cycle guard)"
     },
@@ -491,11 +491,11 @@
       "shared_constants"
     ],
     [
-      "daemon_bridge-tools",
+      "engines_bridge-tools",
       "shared_constants"
     ],
     [
-      "daemon_bridge-tools",
+      "engines_bridge-tools",
       "shared_tool-definitions"
     ],
     [
@@ -508,7 +508,7 @@
     ],
     [
       "daemon_tool-surface",
-      "daemon_bridge-tools"
+      "engines_bridge-tools"
     ],
     [
       "daemon_tool-surface",
@@ -732,7 +732,7 @@
     ],
     [
       "daemon_session-lifecycle",
-      "daemon_bridge-tools"
+      "engines_bridge-tools"
     ],
     [
       "daemon_session-lifecycle",

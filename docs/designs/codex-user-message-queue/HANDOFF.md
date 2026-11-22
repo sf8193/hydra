@@ -54,7 +54,7 @@ completion. Peek is deliberately irrelevant to turn ownership.
 
 ### Step 1 — engine scheduler and adapter contract
 
-Files: `daemon/codex-engine.ts`, `daemon/engines/codex-engine-adapter.ts`, focused
+Files: `engines/codex-engine.ts`, `engines/codex-engine-adapter.ts`, focused
 Codex tests. Add scheduler state, truthful queue acceptance, launch item zero,
 serialized drain/retry/reconciliation/stall recovery, and stable acknowledged
 interrupt ownership.

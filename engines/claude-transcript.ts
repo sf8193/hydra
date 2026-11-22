@@ -1,9 +1,9 @@
-// daemon/engines/claude-transcript.ts
+// engines/claude-transcript.ts
 //
 // A Claude turn's answer is its transcript: Claude has no push signal for turn
 // end, so the reply guard reads the JSONL back.
 
-import type { ConversationForensics } from '../../infra/observability.js'
+import type { ConversationForensics } from '../infra/observability.js'
 import type { TurnOutcome } from './engine-adapter.js'
 import { liveStateOf, type ClaudeLiveStatus } from './claude-status.js'
 import type { LiveState } from './engine-adapter.js'

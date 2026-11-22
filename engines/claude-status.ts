@@ -1,4 +1,4 @@
-// daemon/engines/claude-status.ts
+// engines/claude-status.ts
 //
 // Claude Code writes <config>/sessions/<pid>.json per running process: live `status`
 // (busy / idle / waiting), sessionId, and its tmux pane. Hydra's pane_pid is a wrapper
@@ -7,8 +7,8 @@
 
 import { readdirSync, readFileSync } from 'fs'
 import { join } from 'path'
-import { claudeConfigDir } from '../../shared/constants.js'
-import { pidAlive } from '../../shared/bridge-life.js'
+import { claudeConfigDir } from '../shared/constants.js'
+import { pidAlive } from '../shared/bridge-life.js'
 import type { LiveState } from './engine-adapter.js'
 
 // Claude's status vocabulary: busy = a turn is running, idle, waiting. shell (idle with a background shell

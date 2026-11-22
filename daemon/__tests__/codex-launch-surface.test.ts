@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
+import { CodexEngineAdapter } from '../../engines/codex-engine-adapter.js'
 
 // Fake engine: connected only once connect() resolves with a thread.
 function fakeEngine(log: string[]) {

@@ -9,8 +9,8 @@ import { handleSpawnIntercept } from '../commands/global.js'
 import { handleResumeIntercept } from '../commands/thread.js'
 import { killSession } from '../session-lifecycle.js'
 import { startBridgeServer, socketServer } from '../bridge-server.js'
-import { engines } from '../engines/instances.js'
-import { ompSessionDir } from '../engines/omp-session.js'
+import { engines } from '../../engines/instances.js'
+import { ompSessionDir } from '../../engines/omp-session.js'
 
 // The whole path with real parts: `spawn omp-sonnet:` -> doSpawnSession -> OmpEngine in tmux -> real omp -> the hydra extension -> the real bridge
 // server -> the real `reply` tool -> the gateway; then kill and `resume` in the thread. Only Discord is stubbed. Real model: HYDRA_OMP_E2E=1.

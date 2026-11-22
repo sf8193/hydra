@@ -6,7 +6,7 @@ import { gateway } from '../../infra/config.js'
 import { doSpawnSession } from '../session-lifecycle.js'
 import { registry, threadRegistry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
-import { engines } from '../engines/instances.js'
+import { engines } from '../../engines/instances.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import { fakeAdapter } from './test-harness.js'
 

@@ -18,12 +18,12 @@ import {
 } from '../reply-guard.js'
 import { probeByteTmuxName } from '../pane-probe.js'
 import { fakeAdapter } from './test-harness.js'
-import { engines } from '../engines/instances.js'
+import { engines } from '../../engines/instances.js'
 import { withFakeTmux } from './fake-tmux.js'
 import type { SessionInfo } from '../sessions.js'
 import type { ConversationForensics } from '../../infra/observability.js'
-import { claudeTurnOutcome } from '../engines/claude-transcript.js'
-import { codexTurnOutcome, type TurnSources } from '../engines/codex-observation.js'
+import { claudeTurnOutcome } from '../../engines/claude-transcript.js'
+import { codexTurnOutcome, type TurnSources } from '../../engines/codex-observation.js'
 import type { Occupancy } from '../session-reachability.js'
 // Liveness is occupancy()'s answer, set per record; a stand-in's stamp (`deadAt`) is not consulted: a stamped record may still run.
 const occupancies = new Map<string, Occupancy>()

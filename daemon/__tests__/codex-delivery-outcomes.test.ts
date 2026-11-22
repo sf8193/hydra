@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { EventEmitter } from 'events'
-import { CodexEngine } from '../codex-engine.js'
-import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
+import { CodexEngine } from '../../engines/codex-engine.js'
+import { CodexEngineAdapter } from '../../engines/codex-engine-adapter.js'
 
 const engines: any[] = []
 const watchdogMs = (CodexEngine as any).WATCHDOG_MS

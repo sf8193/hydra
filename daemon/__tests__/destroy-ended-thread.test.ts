@@ -6,7 +6,7 @@
 // A live session's destroy is untouched by the setting.
 
 import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from 'bun:test'
-import { engines } from '../engines/instances.js'
+import { engines } from '../../engines/instances.js'
 import { executeTool } from '../bridge-dispatch.js'
 import { handleCLIRequest } from '../cli-handler.js'
 import { _setHydraConfigForTesting } from '../hydra-config.js'

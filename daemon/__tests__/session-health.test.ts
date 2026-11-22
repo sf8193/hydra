@@ -6,7 +6,7 @@
 // fresh ids. Only messages to this file's threads are asserted — the registry
 // is a process-wide singleton.
 
-import { engines } from '../engines/instances.js'
+import { engines } from '../../engines/instances.js'
 import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test'
 import { rmSync, writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'

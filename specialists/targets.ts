@@ -19,7 +19,7 @@ import { getSpecialist, specialistForThread, withTargetLock, type Specialist } f
 import { currentHydraConfig } from '../daemon/hydra-config.js'
 import { ensureSpecialist, SpecialistError } from './specialist-deliver.js'
 import { currentRecoveryDeps, reviveThreadForDelivery } from '../daemon/recovery.js'
-import type { DeliveryResult } from '../daemon/engines/engine-adapter.js'
+import type { DeliveryResult } from '../engines/engine-adapter.js'
 import { readTarget, spelledTo, TARGET_FORMS, type TargetValue } from '../shared/target-kind.js'
 import { STUCK_PREFIX } from '../shared/exit-codes.js'
 

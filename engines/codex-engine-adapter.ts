@@ -1,5 +1,5 @@
-import { deliveryRefusal } from '../restricted.js'
-// daemon/engines/codex-engine-adapter.ts
+import { deliveryRefusal } from '../daemon/restricted.js'
+// engines/codex-engine-adapter.ts
 //
 // Codex engine adapter — wraps the CodexEngine (app-server + unix socket)
 // and the disposable tmux TUI.
@@ -8,26 +8,26 @@ import { execFile, execFileSync } from 'child_process'
 import { promisify } from 'util'
 import { mkdirSync } from 'fs'
 import { join } from 'path'
-import { codexSpawnEnv } from '../../shared/spawn-env.js'
-import { registry, type SessionInfo } from '../sessions.js'
-import type { BlockingState } from '../pane-probe.js'
+import { codexSpawnEnv } from '../shared/spawn-env.js'
+import { registry, type SessionInfo } from '../daemon/sessions.js'
+import type { BlockingState } from '../daemon/pane-probe.js'
 import type {
   EngineAdapter, LaunchInput, LaunchResult,
   DeliveryMode, DeliveryResult, Notification,
   StopResult,
   ContextUsage, RecoverySource, RecoveryPlan, Turn,
 } from './engine-adapter.js'
-import { codexSocketPath, type CodexEngine } from '../codex-engine.js'
-import { codexHomeDir as codexHomeDirFn, codexRoot, startCodexAppServer, stopCodexAppServer } from '../codex-process.js'
-import { parseContextPercent, safeSend } from '../../infra/util.js'
-import { tmuxCreateSession, tmuxHasSession, tmuxSync, tmuxTimedOut, tmuxWindowActivity } from '../../infra/tmux.js'
-import { sendTmuxKeys, type TmuxKeyAction } from '../codex-key-queue.js'
-import { SOCK_PATH, SPAWN_LOGS_DIR } from '../../infra/config.js'
+import { codexSocketPath, type CodexEngine } from './codex-engine.js'
+import { codexHomeDir as codexHomeDirFn, codexRoot, startCodexAppServer, stopCodexAppServer } from './codex-process.js'
+import { parseContextPercent, safeSend } from '../infra/util.js'
+import { tmuxCreateSession, tmuxHasSession, tmuxSync, tmuxTimedOut, tmuxWindowActivity } from '../infra/tmux.js'
+import { sendTmuxKeys, type TmuxKeyAction } from './codex-key-queue.js'
+import { SOCK_PATH, SPAWN_LOGS_DIR } from '../infra/config.js'
 import { codexTurnOutcome, defaultTurnSources, isCodexWorking } from './codex-observation.js'
 import { codexPiggyback, type CodexPiggyback } from './codex-piggyback.js'
 import { isCodexReconnecting, reconnectCodexSessions } from './codex-runtime.js'
-import { replyContextLine } from '../reply-context.js'
-import { shq } from '../../infra/launch-files.js'
+import { replyContextLine } from '../daemon/reply-context.js'
+import { shq } from '../infra/launch-files.js'
 
 const execFileAsync = promisify(execFile)
 

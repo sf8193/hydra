@@ -5,7 +5,7 @@ import { isThreadOccupied } from '../protocol-registry.js'
 import { resolveModifiers, partitionFlagModifiers, listLensNames } from '../modifiers.js'
 import type { InboundMessage } from '../../gateways/gateway.js'
 import { normalizeReviewRounds } from '../../shared/constants.js'
-import type { ProviderId } from '../engines/engine-adapter.js'
+import type { ProviderId } from '../../engines/engine-adapter.js'
 import reviewProto from '../../protocols/review.js'
 
 export async function handleReviewIntercept(msg: InboundMessage, rounds: number, topic?: string, model?: string, modifierNames?: string[], engine?: ProviderId): Promise<void> {

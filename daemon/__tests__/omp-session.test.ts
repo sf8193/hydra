@@ -1,8 +1,8 @@
 import { beforeEach, expect, test } from 'bun:test'
 import { appendFileSync, copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { OmpEngine } from '../engines/omp-engine.js'
-import { ompSessionDir } from '../engines/omp-session.js'
+import { OmpEngine } from '../../engines/omp-engine.js'
+import { ompSessionDir } from '../../engines/omp-session.js'
 
 // omp's own session file. The fixture is a real one from `omp --session-dir` (user asked for `echo hi` then DONE): user message at
 // 1791874541262, assistant toolUse at ...309, toolResult at ...125, final assistant `stop` "DONE" at 1791874543153, usage input 2 / cacheRead 13713 / cacheWrite 84.

@@ -6,7 +6,7 @@ import { registry, type SessionInfo } from './sessions.js'
 import { atomicWriteFileSync } from '../infra/util.js'
 import { emit } from '../infra/event-bus.js'
 import './delivery-notice.js'
-import { withoutIntents, type DeliveryResult, type Notification } from './engines/engine-adapter.js'
+import { withoutIntents, type DeliveryResult, type Notification } from '../engines/engine-adapter.js'
 
 // ---------------------------------------------------------------------------
 // Types

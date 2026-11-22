@@ -110,12 +110,12 @@ const ALLOWED: Record<string, { why: string; lines: string[] }> = {
 
 const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
 const DAEMON = join(import.meta.dir, '..')
-const INFRA = join(import.meta.dir, '..', '..', 'infra')   // moved out of daemon/: its keys are prefixed infra/
+const ROOT = join(import.meta.dir, '..', '..')   // infra/ and engines/ moved out of daemon/: their keys are prefixed with the folder
 
 describe('deadAt readers', () => {
   test('only the allowed files touch deadAt, each on its listed lines', () => {
     const found: Record<string, string[]> = {}
-    for (const [dir, prefix] of [[DAEMON, ''], [INFRA, 'infra/']] as const) {
+    for (const [dir, prefix] of [[DAEMON, ''], [join(ROOT, 'infra'), 'infra/'], [join(ROOT, 'engines'), 'engines/']] as const) {
       for (const f of new Glob('**/*.ts').scanSync(dir)) {
         if (f.startsWith('__tests__/')) continue
         const lines = strip(readFileSync(join(dir, f), 'utf8')).split('\n').filter(l => /\bdeadAt\b/.test(l)).map(l => l.trim())

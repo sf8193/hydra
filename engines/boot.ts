@@ -1,8 +1,8 @@
-// daemon/engines/boot.ts
+// engines/boot.ts
 //
 // Boot-time record selection and load-time liveness.
 
-import { registry, type SessionInfo } from '../sessions.js'
+import { registry, type SessionInfo } from '../daemon/sessions.js'
 import type { EngineAdapter } from './engine-adapter.js'
 
 // tmux decides, except for a Codex record with a thread id: its hydra-anchor tmux

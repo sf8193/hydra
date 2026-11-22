@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { _resetRolloutMemoForTesting, codexLastTurn, findRollout } from '../codex-rollout.js'
+import { _resetRolloutMemoForTesting, codexLastTurn, findRollout } from '../../engines/codex-rollout.js'
 
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'codex-rollout-')) })

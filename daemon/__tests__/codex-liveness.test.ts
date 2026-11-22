@@ -4,8 +4,8 @@
 
 import { describe, test, expect, afterEach } from 'bun:test'
 import { fakeCodexAdapter } from './test-harness.js'
-import { isCodexReconnecting, reconnectCodexSessions, reconnectDeps } from '../engines/codex-runtime.js'
-import { engines } from '../engines/instances.js'
+import { isCodexReconnecting, reconnectCodexSessions, reconnectDeps } from '../../engines/codex-runtime.js'
+import { engines } from '../../engines/instances.js'
 import { occupancy, occupied } from '../session-reachability.js'
 const isAlive = (info: any) => occupied(occupancy(info))
 import { registry } from '../sessions.js'
@@ -119,7 +119,7 @@ describe('reconnect verdicts (step 2)', () => {
   })
 
   test('exhaustion: the session reads dead before the protocol layer is told', async () => {
-    const { codexEngine } = await import('../engines/codex-runtime.js')
+    const { codexEngine } = await import('../../engines/codex-runtime.js')
     const { registerProtocol } = await import('../protocol-registry.js')
     const a = codex(false) as any
     a.reconnect = async () => false
@@ -145,7 +145,7 @@ describe('reconnect verdicts (step 2)', () => {
 
 describe('discardSession (step 2)', () => {
   test('a dead session drops queued + retrying input, reports an unknown start, and is fenced', async () => {
-    const { CodexEngine } = await import('../codex-engine.js')
+    const { CodexEngine } = await import('../../engines/codex-engine.js')
     const engine = new CodexEngine() as any
     const s = engine.getScheduling('dead-1')
     s.deferredTurnQueue.push('a', 'b')
@@ -163,7 +163,7 @@ describe('discardSession (step 2)', () => {
 describe('heartbeat (step 3)', () => {
   const { EventEmitter } = require('events')
   async function withHeartbeat(chatty: boolean) {
-    const { CodexEngine } = await import('../codex-engine.js')
+    const { CodexEngine } = await import('../../engines/codex-engine.js')
     const E = CodexEngine as any
     const saved = [E.HEARTBEAT_MS, E.HEARTBEAT_TIMEOUT_MS]
     E.HEARTBEAT_MS = 20; E.HEARTBEAT_TIMEOUT_MS = 15

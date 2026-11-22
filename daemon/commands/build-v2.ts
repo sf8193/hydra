@@ -3,7 +3,7 @@ import { registry } from '../sessions.js'
 import { startProtocolRun, getRunByThread, cancelRun } from '../protocol-runner.js'
 import { isThreadOccupied } from '../protocol-registry.js'
 import type { InboundMessage } from '../../gateways/gateway.js'
-import type { ProviderId } from '../engines/engine-adapter.js'
+import type { ProviderId } from '../../engines/engine-adapter.js'
 import buildProto from '../../protocols/build.js'
 
 export async function handleBuildV2Intercept(msg: InboundMessage, rounds: number, task?: string, model?: string, engine?: ProviderId): Promise<void> {
