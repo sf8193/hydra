@@ -6,10 +6,11 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { ClaudeEngine } from '../../engines/claude-engine.js'
 import { CLAUDE_CONFIG, STATE_DIR } from '../../infra/config.js'
-import { PolicyRefusal, bornPolicy, describePolicy, policyDrifted, policyProblem, confinementIdFor, type LaunchPolicy } from '../../app/restricted.js'
+import { bornPolicy, describePolicy, policyDrifted, policyProblem } from '../../app/restricted.js'
+import { PolicyRefusal, confinementIdFor, type LaunchPolicy } from '../../shared/launch-policy.js'
 import { removeRestrictedFiles, restrictedDir } from '../../infra/restricted-files.js'
 import { confinementShortfall, confinementSurplus, readLoaded, verifyConfinement, verifyDeps } from '../../engines/claude-verify.js'
-import { bridgeServerCommands, claudeSettingsProblems, MIN_CLAUDE_VERSION, claudeVersion, claudeVersionRefusal, confinementMcp, confinementRules, confinementSettings } from '../../app/write-confinement.js'
+import { bridgeServerCommands, claudeSettingsProblems, MIN_CLAUDE_VERSION, claudeVersion, claudeVersionRefusal, confinementMcp, confinementRules, confinementSettings } from '../../engines/write-confinement.js'
 import { EMPTY_CONFIG } from '../../config/load.js'
 import { readDenyRoots } from '../../config/write-confinement.js'
 import { hydraLoadEnv } from '../../infra/hydra-config.js'
@@ -172,7 +173,7 @@ describe('the settings', () => {
   // Claude Code 2.1.326 matches a stdio server by its full command once any serverCommand entry (the bridge's) exists: a name no longer admits it. See #772.
   test('the allowlist admits the MCP config it ships with: every server\'s command, as the config runs it, is an entry', () => {
     const policy = { specialist: 's', workdir: '/w', denyCommands: [], cannotRead: [], servers: [server, { ...server, name: 'second', command: 'npx', profileArgs: ['-y', 'pkg', '--out', '{download_dir}'] }], browserProfile: '/w/p1' }
-    const mcp: any = confinementMcp(policy, 's', { BR_TOKEN: 't' }, {}, '/env')
+    const mcp: any = confinementMcp(policy, { BR_TOKEN: 't' }, {})
     const entries = new Set(((confinementSettings({ ...policy, bridgeCommands: [['bun', 'run', 'x']] }) as any).allowedMcpServers as any[]).map(e => JSON.stringify(e.serverCommand)))
     expect(Object.keys(mcp.mcpServers)).toEqual(['browser', 'second'])
     for (const [name, c] of Object.entries<any>(mcp.mcpServers)) expect([name, entries.has(JSON.stringify([c.command, ...c.args]))]).toEqual([name, true])
@@ -283,13 +284,6 @@ describe('the browser', () => {
     expect(readJson(mcpFile()).mcpServers.browser.env.BROWSER_HOME).toBe(named)
     for (const d of [named, `${named}-downloads`]) { expect(statSync(d).isDirectory()).toBe(true); expect(statSync(d).mode & 0o077).toBe(0) }
     expect(existsSync(join(work, '.browser'))).toBe(false)
-  })
-
-  test('a server that needs a token the daemon does not have refuses the start, with the file to fix, and leaves no file', async () => {
-    delete process.env.BR_TOKEN
-    await expect(launch()).rejects.toThrow(/\[mcp_servers\.browser\] needs BR_TOKEN, which is not set/)
-    expect(existsSync(settingsFile())).toBe(false)
-    expect(fake.calls().filter(c => c.startsWith('new-session'))).toHaveLength(0)
   })
 
   test('the profile is the specialist\'s to keep: a later launch and a session\'s end leave it', async () => {

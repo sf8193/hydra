@@ -8,8 +8,8 @@ import { registry } from '../../sessions/registry.js'
 import { getToolsForSession, isToolAllowed } from '../../sessions/tool-surface.js'
 import { UNIVERSAL_TOOLS } from '../../shared/tool-definitions.js'
 import { BASE_TOOLS } from '../../shared/constants.js'
-import { confinementIdFor } from '../../app/restricted.js'
-import { confinementSettings } from '../../app/write-confinement.js'
+import { confinementIdFor } from '../../shared/launch-policy.js'
+import { confinementSettings } from '../../engines/write-confinement.js'
 
 process.stderr.write = (() => true) as any
 

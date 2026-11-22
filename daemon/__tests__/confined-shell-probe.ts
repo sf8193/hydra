@@ -4,7 +4,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { confinementSettings } from '../../app/write-confinement.js'
+import { confinementSettings } from '../../engines/write-confinement.js'
 import { readDenyRoots } from '../../config/write-confinement.js'
 
 export type ToolCall = { name: string; input: Record<string, unknown> }

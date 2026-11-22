@@ -12,7 +12,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { confinementSettings } from '../../app/write-confinement.js'
+import { confinementSettings } from '../../engines/write-confinement.js'
 import { readDenyRoots } from '../../config/write-confinement.js'
 
 const SECURITY = '/usr/bin/security'

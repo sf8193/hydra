@@ -9,7 +9,7 @@ import { ClaudeEngine } from '../../engines/claude-engine.js'
 import { OmpEngine } from '../../engines/omp-engine.js'
 import { STATE_DIR } from '../../infra/config.js'
 import { removeLaunchFiles, spawnPromptDir } from '../../infra/launch-files.js'
-import { PolicyRefusal, policyIdFor, type RestrictedPolicy } from '../../app/restricted.js'
+import { PolicyRefusal, policyIdFor, type LaunchPolicy, type RestrictedPolicy } from '../../shared/launch-policy.js'
 import { _setLoadEnvForTesting } from '../../infra/hydra-config.js'
 import { macLike } from './sandbox-host.js'
 
@@ -126,7 +126,7 @@ describe('Claude: the prompt is absent from every command line, and arrives unch
     expect(claudeArgv()).toEqual(['--resume', 'C-old', '--model', 'claude-opus-4-1', '--channels', expect.any(String), '--dangerously-skip-permissions', '--debug-file', expect.any(String)])
   })
 
-  test('a restricted kickoff (preamble + prompt) arrives whole, and the command line holds none of it', async () => {
+  test('a restricted kickoff arrives whole, and the command line holds none of it', async () => {
     const servers: RestrictedPolicy['servers'] = []
     const policy: RestrictedPolicy = { specialist: 'ops', restricted: true, workdir: dir, tools: ['Read'], servers, id: policyIdFor(dir, ['Read'], servers) }
     _setLoadEnvForTesting(macLike())
@@ -134,7 +134,6 @@ describe('Claude: the prompt is absent from every command line, and arrives unch
     expect(tmuxCalls()).not.toContain(MARKER)
     const word = claudeArgv().find(a => a.includes(MARKER))!
     expect(word.endsWith(`ops ${MARKER}`)).toBe(true)
-    expect(word.length).toBeGreaterThan(`ops ${MARKER}`.length)   // the fixed preamble leads it
   })
 
   test('an unreadable prompt file stops the chain: claude does not start with an empty prompt', async () => {
@@ -217,11 +216,10 @@ describe('the file: private, replaced by the next launch of the name, removed wi
     expect(tmuxCalls()).not.toContain('new-session')
   })
 
-  test('a restricted launch the policy refuses leaves no file', async () => {
-    // A listed server whose token variable is not set: the launch refuses after the prompt file is written.
-    const servers = [{ name: 'dd', command: '/bin/dd-mcp', tokenEnv: ['HYDRA_TEST_UNSET_TOKEN'], tools: ['a'] }]
-    const policy: RestrictedPolicy = { specialist: 'ops', restricted: true, workdir: '/w/ops', tools: ['Read'], servers, id: policyIdFor('/w/ops', ['Read'], servers) }
-    await expect(launchClaude({ prompt: 'a', policy })).rejects.toThrow(PolicyRefusal)
+  test('a launch the policy refuses leaves no file', async () => {
+    // A write-confined launch whose caller's tools leave none of the policy's tools: refused after the prompt file is written.
+    const policy: LaunchPolicy = { specialist: 'ops', restricted: false, id: 'writes:test', canOnlyWriteTo: { workdir: '/w/ops', denyCommands: [], cannotRead: [], tools: ['Read'], servers: [] } }
+    await expect(launchClaude({ prompt: 'a', tools: ['Bash'], policy })).rejects.toThrow(PolicyRefusal)
     expect(files()).toEqual([])
   })
 })

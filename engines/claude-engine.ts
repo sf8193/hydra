@@ -24,22 +24,29 @@ import { projectDirName, projectsRoot, transcriptContext, transcriptPathFor } fr
 import { claudeTurnOutcome } from './claude-transcript.js'
 import { readClaudeStatus } from './claude-status.js'
 import { defaultTurnSources } from './codex-observation.js'
-import { CLAUDE_CONFIG, ENV_FILE, SOCK_PATH, PLATFORM, SPAWN_LOGS_DIR, STATE_DIR } from '../infra/config.js'
+import { CLAUDE_CONFIG, SOCK_PATH, PLATFORM, SPAWN_LOGS_DIR, STATE_DIR } from '../infra/config.js'
 import { gateway } from '../infra/config.js'
 import { SESSION_IDENTITY_VARS, capturedSpawnVars, stateEnvUnsets, scrubbedSpawnEnv, withRaisedFdLimit } from '../shared/spawn-env.js'
 import { modsExport } from '../infra/mods.js'
 import { BRIDGE_CHANNEL_FLAG, BRIDGE_MCP_SERVER_KEY, BRIDGE_PLUGIN_ID, BRIDGE_TOOLS_PERMISSION, BUILTIN_TOOL_PLUGIN_IDS } from '../infra/plugin-manifest.js'
-import { type LaunchPolicy, missingTokenRefusal, PolicyRefusal, remedy, RESTRICTED_MODS, RESTRICTED_PREAMBLE, sandboxInputs, serverToolRule, type RestrictedPolicy } from '../app/restricted.js'
+import { type LaunchPolicy, PolicyRefusal, remedy, type RestrictedPolicy } from '../shared/launch-policy.js'
+import { RESTRICTED_MODS, serverToolRule } from './claude-names.js'
 import { verifyConfinement as verifyConfinementLoaded, verifyLaunch as verifyLoaded, type Verdict } from './claude-verify.js'
 import { removeSessionToken, removeSpawnPrompt, shq, writeSessionToken, writeSpawnPrompt } from '../infra/launch-files.js'
 import { makeServerTmpDirs, removeRestrictedFiles, serverTmpDir, serverTmpRoot, writeRestrictedFiles } from '../infra/restricted-files.js'
 import { sandboxedServer, sandboxIssues } from '../config/server-sandbox.js'
-import type { PrivateRoot } from '../config/restricted-workdir.js'
-import type { LoadEnv } from '../config/types.js'
-import { bridgeServerCommands, claudeSettingsProblems, claudeVersionRefusal, confinementRules, confinementServers, makeBrowserDirs, confinementLogLine, confinementMcp, confinementSettings } from '../app/write-confinement.js'
+import { currentHydraConfig, hydraLoadEnv } from '../infra/hydra-config.js'
+import { offLimitRoots, type PrivateRoot } from '../config/restricted-workdir.js'
+import type { HydraConfig, LoadEnv } from '../config/types.js'
+import { bridgeServerCommands, claudeSettingsProblems, claudeVersionRefusal, confinementRules, confinementServers, makeBrowserDirs, confinementLogLine, confinementMcp, confinementSettings } from './write-confinement.js'
 import { syncDaemonBridge } from './bridge-sync.js'
 import { clearNeedsAuthEntry, describeSetAt, NEEDS_AUTH_CLEARED_NOTE } from './claude-needs-auth.js'
 import { isRestricted, isRestrictedPolicy } from '../shared/policy-record.js'
+
+/** What a restricted launch builds the listed servers' sandbox from, as the daemon has it now: the probes and the places to keep servers out of. */
+type SandboxInputs = { env: LoadEnv; roots: PrivateRoot[] }
+
+export const sandboxInputs = (h: HydraConfig = currentHydraConfig()): SandboxInputs => { const env = hydraLoadEnv(); return { env, roots: offLimitRoots(env, h.offLimits ?? []) } }
 
 // What the pane-and-transcript methods read. The byte (main) has no SessionInfo, so these take only this.
 export type ClaudeSubject = Pick<SessionInfo, 'tmuxName'> & Partial<Pick<SessionInfo, 'claudeSessionId'>>
@@ -84,9 +91,8 @@ export function restrictedConfig({ policy, env, held, sessionName, load, roots, 
         type: 'stdio', ...sandboxed(s.command, tmp(s.name)),
         env: {
           ...Object.fromEntries(s.tokenEnv.map(v => {
-            const value = env[v] ?? held[v]
-            if (value === undefined) throw new PolicyRefusal(missingTokenRefusal({ specialist: policy.specialist, servers: [s] }, ENV_FILE, sessionName, env, held)!)
-            return [v, value]
+            // doSpawnSession refused a start whose token variable is unset before it got here (app/session-lifecycle.ts), so it is set.
+            return [v, (env[v] ?? held[v])!]
           })),
           // The one place the server may write is its own folder: npm's cache and the temp dir are put in it, never in ~/.npm (which a server could poison for the operator's other npx runs).
           npm_config_cache: join(tmp(s.name), 'npm-cache'),
@@ -121,7 +127,7 @@ function writeConfinementConfig(w: NonNullable<LaunchPolicy['canOnlyWriteTo']>, 
   const policy = { specialist, ...w }
   const refusal = claudeVersionRefusal(policy, tmuxName)
   if (refusal) throw new PolicyRefusal(refusal)
-  const mcp = confinementMcp(policy, tmuxName, process.env, capturedSpawnVars(), ENV_FILE)
+  const mcp = confinementMcp(policy, process.env, capturedSpawnVars())
   // The bridge is allowed by the exact command it runs, one per synced plugin folder: with none, the session could never reach its thread, so nothing starts.
   const bridgeCommands = bridgeServerCommands(CLAUDE_CONFIG)
   if (bridgeCommands.length === 0) throw new PolicyRefusal(`specialist ${specialist}: hydra's bridge plugin is not synced under ${CLAUDE_CONFIG}/plugins/cache/claude-plugins-official/discord/, so a session's server allowlist could not admit it and it would have no way to its thread. No session starts until the daemon has synced it (it does at boot); then ${remedy(tmuxName)}`)
@@ -373,8 +379,6 @@ export class ClaudeEngine implements EngineAdapter {
     }
 
     let prompt = input.prompt
-    // A restricted kickoff starts with hydra's fixed preamble (restricted.ts): a prompt, not a control. Operator and non-specialist kickoffs are untouched.
-    if (restricted) prompt = `${RESTRICTED_PREAMBLE} ${prompt}`
     const worktreeAppend = buildWorktreePromptAppend(isFork, worktreePath)
     if (worktreeAppend) prompt += worktreeAppend
 

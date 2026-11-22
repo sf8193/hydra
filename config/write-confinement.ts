@@ -19,7 +19,7 @@ export const browserDownloadDir = (workdir: string, named?: string): string => n
  */
 export const INBOX_DIR_NAME = '.inbox'
 /**
- * What one specialist's inbox may hold. The file size is the attachment limit (sessions/access.ts MAX_ATTACHMENT_BYTES, pinned equal by a test); a full folder
+ * What one specialist's inbox may hold. The file size is the attachment limit (shared/constants.ts MAX_ATTACHMENT_BYTES, pinned equal by a test); a full folder
  * refuses the next file and says so. The daemon never deletes inside it by age: it is the specialist's own folder, and a folder swapped for a link would turn a sweep into a delete.
  */
 export const INBOX_LIMITS = { maxFileBytes: 25 * 1024 * 1024, maxFiles: 200, maxTotalBytes: 500 * 1024 * 1024 } as const
@@ -122,7 +122,7 @@ export const fileRefusal = (path: string): string =>
  * that holds the session's shell and Read tool, so the daemon asks what the session could read itself: the file, as it resolves (symlinks followed,
  * a relative path being its folder's, `~` not expanded), lies in the session's folder or temp folder and in none of the places `readDenyRoots`
  * denies. Returns the resolved path, or the refusal's text (one text for every cause).
- * This is the decision on a string; the daemon opens what it decides on once and sends a copy (app/write-confinement.ts `snapshotConfinedFiles`).
+ * This is the decision on a string; the daemon opens what it decides on once and sends a copy (engines/write-confinement.ts `snapshotConfinedFiles`).
  */
 export function fileSendDecision(path: string, env: FileSendEnv): { path: string; refusal?: undefined } | { path?: undefined; refusal: string } {
   const abs = path.startsWith('/') ? path : `${trim(env.workdir)}/${path}`
