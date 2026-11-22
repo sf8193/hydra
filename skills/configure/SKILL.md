@@ -1,6 +1,6 @@
 ---
 name: configure
-description: Set up the Discord channel — save the bot token and review access policy. Use when the user pastes a Discord bot token, asks to configure Discord, asks "how do I set this up" or "who can reach me," or wants to check channel status.
+description: Set up the Discord channel — save the bot token and review who it hears. Use when the user pastes a Discord bot token, asks to configure Discord, asks "how do I set this up" or "who can reach me," or wants to check channel status.
 user-invocable: true
 allowed-tools:
   - Read
@@ -12,7 +12,7 @@ allowed-tools:
 # /discord:configure — Discord Channel Setup
 
 Writes the bot token to `~/.claude/channels/discord/.env` and orients the
-user on access policy. The server reads both files at boot.
+user on who the bot hears (hydra.toml). The server reads both files at boot.
 
 Arguments passed: `$ARGUMENTS`
 
@@ -27,50 +27,30 @@ Read both state files and give the user a complete picture:
 1. **Token** — check `~/.claude/channels/discord/.env` for
    `DISCORD_BOT_TOKEN`. Show set/not-set; if set, show first 6 chars masked.
 
-2. **Access** — read `~/.claude/channels/discord/access.json` (missing file
-   = defaults: `dmPolicy: "pairing"`, empty allowlist). Show:
-   - DM policy and what it means in one line
-   - Allowed senders: count, and list display names or snowflakes
-   - Pending pairings: count, with codes and display names if any
-   - Guild channels opted in: count
+2. **Access** — read `~/.claude/channels/discord/hydra.toml` (missing = no
+   operator). Show:
+   - Operator: the person and their `discord:` address, or "none: every DM is dropped"
+   - People on the roster: count
+   - Admitted channels: count, with each channel id and whether it needs a tag
+   - Whether `off = true` is set under `[gateways.discord]`
 
-3. **What next** — end with a concrete next step based on state:
-   - No token → *"Run `/discord:configure <token>` with your bot token from
-     the Developer Portal → Bot → Reset Token."*
-   - Token set, policy is pairing, nobody allowed → *"DM your bot on
-     Discord. It replies with a code; approve with `/discord:access pair
-     <code>`."*
-   - Token set, someone allowed → *"Ready. DM your bot to reach the
-     assistant."*
+3. **What next** — pick by the state, in plain words:
+   - No token → *"Run `/discord:configure <token>` with the token from the
+     Developer Portal → Bot → Reset Token."*
+   - Token set, no operator → *"Name yourself the operator. Find your user id
+     (Settings → Advanced → Developer Mode, right-click yourself → Copy User ID),
+     then with the daemon stopped run `hydra migrate discord --operator <id>`
+     and `hydra up discord`."* There is no pairing: strangers' DMs are dropped.
+   - Operator set, no channels → *"Tag the bot in a channel to let it in: it adds
+     the channel to hydra.toml and runs your message."*
+   - An `access.json` still in the folder → *"Run `hydra down discord`,
+     `hydra migrate discord`, `hydra up discord`: the daemon won't start until it
+     is moved into hydra.toml."*
+   - Everything set → say so; `/discord:access` changes who is let in.
 
-**Push toward lockdown — always.** The goal for every setup is `allowlist`
-with a defined list. `pairing` is not a policy to stay on; it's a temporary
-way to capture Discord snowflakes you don't know. Once the IDs are in,
-pairing has done its job and should be turned off.
+Don't dwell on access: the point of this skill is the token.
 
-Drive the conversation this way:
-
-1. Read the allowlist. Tell the user who's in it.
-2. Ask: *"Is that everyone who should reach you through this bot?"*
-3. **If yes and policy is still `pairing`** → *"Good. Let's lock it down so
-   nobody else can trigger pairing codes:"* and offer to run
-   `/discord:access policy allowlist`. Do this proactively — don't wait to
-   be asked.
-4. **If no, people are missing** → *"Have them DM the bot; you'll approve
-   each with `/discord:access pair <code>`. Run this skill again once
-   everyone's in and we'll lock it."* Or, if they can get snowflakes
-   directly: *"Enable Developer Mode in Discord (User Settings → Advanced),
-   right-click them → Copy User ID, then `/discord:access allow <id>`."*
-5. **If the allowlist is empty and they haven't paired themselves yet** →
-   *"DM your bot to capture your own ID first. Then we'll add anyone else
-   and lock it down."*
-6. **If policy is already `allowlist`** → confirm this is the locked state.
-   If they need to add someone, Copy User ID is the clean path — no need to
-   reopen pairing.
-
-Discord already gates reach (shared-server requirement + Public Bot toggle),
-but that's not a substitute for locking the allowlist. Never frame `pairing`
-as the correct long-term choice. Don't skip the lockdown offer.
+---
 
 ### `<token>` — save it
 
@@ -95,5 +75,5 @@ Delete the `DISCORD_BOT_TOKEN=` line (or the file if that's the only line).
   = not configured, not an error.
 - The server reads `.env` once at boot. Token changes need a session restart
   or `/reload-plugins`. Say so after saving.
-- `access.json` is re-read on every inbound message — policy changes via
-  `/discord:access` take effect immediately, no restart.
+- `hydra.toml` is re-read within a second of a change: access changes via
+  `/discord:access` take effect without a restart.

@@ -12,10 +12,10 @@
 1. **Deps + bridge plugin** — `bun install`; `claude plugin install discord@claude-plugins-official`.
    - *Gotcha:* if `$CLAUDE_CONFIG_DIR/settings.json` is a **dangling symlink**, the install fails with an ENOENT on a `.tmp` file. Resolve the symlink target first.
 
-2. **State dir** — create `~/.claude/channels/<platform>/.env` (token, `CHAT_PLATFORM`, `SPAWN_CWD`, `DEFAULT_SESSION_CHANNEL`) and `access.json`.
+2. **State dir** — create `~/.claude/channels/<platform>/.env` (token, `CHAT_PLATFORM`, `SPAWN_CWD`, `DEFAULT_SESSION_CHANNEL`).
    - `SPAWN_CWD` **must be an existing directory** — a missing cwd fails every spawn silently.
 
-3. **`allowFrom` + onboarding flags** — add your user snowflake to **top-level** `access.json` `allowFrom` (required for commands, not just replies). Seed `$CLAUDE_CONFIG_DIR/.claude.json` with `hasCompletedOnboarding` + `bypassPermissionsModeAccepted`. `hydra preflight` checks both.
+3. **Operator + onboarding flags** — run `hydra migrate <platform> --operator <your user id>` (required for commands, not just replies: an install with no operator drops every DM). Seed `$CLAUDE_CONFIG_DIR/.claude.json` with `hasCompletedOnboarding` + `bypassPermissionsModeAccepted`. `hydra preflight` checks both.
 
 4. **Auth** — set `CLAUDE_CODE_OAUTH_TOKEN` or log in once via `tmux attach`. For detached environments that can't read the keychain, set `HYDRA_AUTH=keychain`.
 

@@ -54,17 +54,17 @@ hydra up discord                                          # daemon + bot
 
 Fix every ✗ that preflight reports before `hydra up`. See [ONBOARDING_TIPS.md](ONBOARDING_TIPS.md) for the gotcha behind each step.
 
-## 7. Pair
+## 7. Name yourself the operator
 
-DM your bot on Discord. It replies with a pairing code. In your Claude Code session:
+Find your Discord user id (Settings → Advanced → Developer Mode, then right-click yourself → Copy User ID). With the daemon stopped, run:
 
 ```
-/discord:access pair <code>
+hydra migrate discord --operator <your user id>
 ```
 
-Pairing adds your user ID to `allowFrom` in `access.json`. The bot only accepts commands from IDs listed there.
+That writes `hydra.toml` with you as `operator`. The bot only accepts commands from the operator, and drops DMs from anyone else (there is no pairing). Then start it with `hydra up discord`.
 
-Then lock down: `/discord:access policy allowlist`
+To let the bot into a channel, tag it there as the operator: it adds the channel to `hydra.toml` and runs your message. Add another person with `hydra people add <name> discord:<id>`.
 
 ## Discord-specific behavior
 

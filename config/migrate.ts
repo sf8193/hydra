@@ -407,7 +407,7 @@ export function planMigrate(input: MigrateInput, steps: MigrateStep[] = STEPS): 
   const merged = mergeDocs([...(existing ? [existing] : []), ...outputs.map(o => o.doc)])
   if (merged.conflicts.length) return { ok: false, errors: merged.conflicts.map(c => `two sources disagree on ${c}`) }
   // A hydra.toml governs only once it names an operator; one without would retire allowFrom and leave nobody in charge.
-  if (typeof merged.doc.operator !== 'string') return { ok: false, errors: ['no operator: access.json has no allowFrom to take one from. Add an allowFrom id (or write hydra.toml by hand).'] }
+  if (typeof merged.doc.operator !== 'string') return { ok: false, errors: ['no operator: access.json has no allowFrom to take one from. Pass --operator <your user id> (or write hydra.toml by hand).'] }
   // A hydra.toml with only comments in it is kept above the new content.
   const after = (body: string) => appendText(existingText, body)
   let text = existingText.trim() && !existing ? after(toToml(merged.doc)) : toToml(merged.doc)

@@ -499,6 +499,11 @@ async function restartDaemonForWatchdog(cfg: HydraConfig, why: { reason: string;
 // preflight (replaces preflight.sh)
 // ---------------------------------------------------------------------------
 
+/** Whether the file names a top-level `operator`: the one thing without which every DM is dropped. */
+export function tomlNamesOperator(path: string): boolean {
+  try { return typeof (Bun.TOML.parse(readFileSync(path, 'utf8')) as { operator?: unknown }).operator === 'string' } catch { return false }
+}
+
 export async function lifecyclePreflight(platform: string): Promise<void> {
   const cfg = resolveConfig(platform)
   let fail = false
@@ -555,10 +560,11 @@ export async function lifecyclePreflight(platform: string): Promise<void> {
     bad(`.env missing at ${envFile} (see .env.example)`)
   }
 
-  if (existsSync(join(cfg.stateDir, 'access.json'))) {
-    ok('access.json present')
+  const tomlPath = join(cfg.stateDir, 'hydra.toml')
+  if (tomlNamesOperator(tomlPath)) {
+    ok('hydra.toml names an operator')
   } else {
-    wrn(`access.json missing — no users are allowlisted yet (${join(cfg.stateDir, 'access.json')})`)
+    wrn(`no operator in ${tomlPath}, so every DM is dropped — run: hydra migrate ${cfg.platform} --operator <your user id>`)
   }
 
   const bridgeDir = bridgePluginCache(cfg.configDir)

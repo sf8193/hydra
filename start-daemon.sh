@@ -10,7 +10,7 @@ set -euo pipefail
 #
 # Optional env vars:
 #   CHAT_PLATFORM — discord (default) or slack
-#   HYDRA_STATE_DIR — state dir (socket, access.json, sessions)
+#   HYDRA_STATE_DIR — state dir (socket, hydra.toml, sessions)
 #   CLAUDE_CONFIG_DIR — config dir for spawned Claude sessions
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

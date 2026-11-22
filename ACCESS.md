@@ -1,145 +1,57 @@
-# Discord — Access & Delivery
+# Access control
 
-Discord only allows DMs between accounts that share a server. Who can DM your bot depends on where it's installed: one private server means only that server's members can reach it; a public community means every member there can open a DM.
+Who the bot hears, and where. Everything lives in `hydra.toml`, in the state dir (`~/.claude/channels/<platform>/`). hydra re-reads it within a second of a change, and keeps the last good copy if a change doesn't load. `hydra config check <platform>` loads it the way the daemon does and prints what is wrong.
 
-The **Public Bot** toggle in the Developer Portal (Bot tab, on by default) controls who can add the bot to new servers. Turn it off and only your own account can install it. This is your first gate, and it's enforced by Discord rather than by this process.
+There is no `access.json` and no pairing. An old install runs `hydra migrate <platform>` once; a new one runs `hydra migrate <platform> --operator <your user id>`.
 
-For DMs that do get through, the default policy is **pairing**. An unknown sender gets a 6-character code in reply and their message is dropped. You run `/discord:access pair <code>` from your assistant session to approve them. Once approved, their messages pass through.
+## The operator
 
-All state lives in `~/.claude/channels/discord/access.json`. The `/discord:access` skill commands edit this file; the server re-reads it on every inbound message, so changes take effect without a restart. Set `DISCORD_ACCESS_MODE=static` to pin config to what was on disk at boot (pairing is unavailable in static mode since it requires runtime writes).
+```toml
+operator = "operator"
 
-## At a glance
-
-| | |
-| --- | --- |
-| Default policy | `pairing` |
-| Sender ID | User snowflake (numeric, e.g. `184695080709324800`) |
-| Group key | Channel snowflake — not guild ID |
-| Config file | `~/.claude/channels/discord/access.json` |
-
-## DM policies
-
-`dmPolicy` controls how DMs from senders not on the allowlist are handled.
-
-| Policy | Behavior |
-| --- | --- |
-| `pairing` (default) | Reply with a pairing code, drop the message. Approve with `/discord:access pair <code>`. |
-| `allowlist` | Drop silently. No reply. Use this once everyone who needs access is already on the list, or if pairing replies would attract spam. |
-| `disabled` | Drop everything, including allowlisted users and guild channels. |
-
-```
-/discord:access policy allowlist
+[people.operator]
+addresses = ["discord:184695080709324800"]   # one address per platform, as <platform>:<user id>
 ```
 
-## User IDs
+The operator is the one person whose DMs reach `main`, who runs commands (`spawn:`, `kill:`, `/sessions`, `/health`) and who may admit channels. Anyone else's DM is dropped, with no reply. Another person goes on the roster with `hydra people add <name> <platform>:<id>`; that lets specialists whose `reachable_by` names them hear them, and lets you name them in a channel's `allow`; it does not let them DM `main` or run commands.
 
-Discord identifies users by **snowflakes**: permanent numeric IDs like `184695080709324800`. Usernames are mutable; snowflakes aren't. The allowlist stores snowflakes.
+## Channels
 
-Pairing captures the ID automatically. To add someone manually, enable **User Settings → Advanced → Developer Mode** in Discord, then right-click any user and choose **Copy User ID**. Your own ID is available by right-clicking your avatar in the lower-left.
+A channel is admitted when its access table exists. The key is the platform and the channel **id** (never a name):
 
-```
-/discord:access allow 184695080709324800
-/discord:access remove 184695080709324800
-```
-
-## Guild channels
-
-Guild channels are off by default. Opt each one in individually, keyed on the **channel** snowflake (not the guild). Threads inherit their parent channel's opt-in; no separate entry needed. Find channel IDs the same way as user IDs: Developer Mode, right-click the channel, Copy Channel ID.
-
-```
-/discord:access group add 846209781206941736
+```toml
+[places."discord:846209781206941736".access]
+mention = true          # a top-level message must tag the bot (default true)
+allow = ["anyone"]      # required. People from [people], or ["anyone"] for everyone who tags
+listen = true           # a session thread started here listens without a tag
 ```
 
-With the default `requireMention: true`, the bot responds only when @mentioned or replied to. Pass `--no-mention` to process every message in the channel, or `--allow id1,id2` to restrict which members can trigger it.
+`allow` is always written out, and an empty list does not load. `["anyone"]` is the only way to leave a channel open. People named in `allow` who have no address on this platform hear nobody.
 
-```
-/discord:access group add 846209781206941736 --no-mention
-/discord:access group add 846209781206941736 --allow 184695080709324800,221773638772129792
-/discord:access group rm 846209781206941736
-```
+To admit a channel, **tag the bot there as the operator**. It writes that table (`mention = true`, `allow` = the operator, `listen = true`) and runs the same message's command. If hydra.toml can't take the write, it says so once in that channel and does nothing else. Anyone else's tag admits nothing. To remove a channel, delete its `[places."…".access]` table; to change who may speak, edit `allow`.
 
-Outside static mode, an access change takes effect on the next message, with no restart.
+`thread_reply = true` on the same place (`[places."discord:846209781206941736"]`) makes a session reply in a thread of the message. The connector's own place options (`ack`, `messages`, `files`, …) share that table; a place with only an access table is not "named" for the Slack connector.
 
-## Mention detection
+Threads follow their parent channel: a thread inside an admitted channel uses its table. A reply to the bot or a `mention_patterns` match does not count as a tag when admitting.
 
-In channels with `requireMention: true`, any of the following triggers the bot:
+## Whole-platform settings
 
-- A structured `@botname` mention (typed via Discord's autocomplete)
-- A reply to one of the bot's recent messages
-- A match against any regex in `mentionPatterns`
-
-Example regex setup for a nickname trigger:
-
-```
-/discord:access set mentionPatterns '["^hey claude\\b", "\\bassistant\\b"]'
+```toml
+[gateways.discord]      # or [gateways.slack]
+ack_reaction = "👀"     # emoji added to every message a session picks up
+listen = true           # default for session threads; a channel's listen overrides it
+off = true              # drop every message that would reach a session, channels too (the old dmPolicy "disabled"); the operator's commands still run
+mention_patterns = ["^hey claude\\b"]   # extra text that counts as a tag
 ```
 
-## Delivery
+On Discord, `[gateways.discord]` also takes `bot_token_env` (the variable holding the token). A table with only these settings leaves Discord's connector unchanged.
 
-Configure outbound behavior with `/discord:access set <key> <value>`.
+## What went away
 
-**`ackReaction`** reacts to inbound messages on receipt as a "seen" acknowledgment. Unicode emoji work directly; custom server emoji require the full `<:name:id>` form. The emoji ID is at the end of the URL when you right-click the emoji and copy its link. Empty string disables.
-
-```
-/discord:access set ackReaction 🔨
-/discord:access set ackReaction ""
-```
-
-**`replyToMode`** controls threading on chunked replies. When a long response is split, `first` (default) threads only the first chunk under the inbound message; `all` threads every chunk; `off` sends all chunks standalone.
-
-**`textChunkLimit`** sets the split threshold. Discord rejects messages over 2000 characters, which is the hard ceiling.
-
-**`chunkMode`** chooses the split strategy: `length` cuts exactly at the limit; `newline` prefers paragraph boundaries.
-
-## Skill reference
-
-| Command | Effect |
-| --- | --- |
-| `/discord:access` | Print current state: policy, allowlist, pending pairings, enabled channels. |
-| `/discord:access pair a4f91c` | Approve pairing code `a4f91c`. Adds the sender to `allowFrom` and sends a confirmation on Discord. |
-| `/discord:access deny a4f91c` | Discard a pending code. The sender is not notified. |
-| `/discord:access allow 184695080709324800` | Add a user snowflake directly. |
-| `/discord:access remove 184695080709324800` | Remove from the allowlist. |
-| `/discord:access policy allowlist` | Set `dmPolicy`. Values: `pairing`, `allowlist`, `disabled`. |
-| `/discord:access group add 846209781206941736` | Enable a guild channel. Flags: `--no-mention`, `--allow id1,id2`. |
-| `/discord:access group rm 846209781206941736` | Disable a guild channel. |
-| `/discord:access set ackReaction 🔨` | Set a config key: `ackReaction`, `replyToMode`, `textChunkLimit`, `chunkMode`, `mentionPatterns`. |
-
-## Config file
-
-`~/.claude/channels/discord/access.json`. Absent file is equivalent to `pairing` policy with empty lists, so the first DM triggers pairing.
-
-```jsonc
-{
-  // Handling for DMs from senders not in allowFrom.
-  "dmPolicy": "pairing",
-
-  // User snowflakes allowed to DM.
-  "allowFrom": ["184695080709324800"],
-
-  // Guild channels the bot is active in. Empty object = DM-only.
-  "groups": {
-    "846209781206941736": {
-      // true: respond only to @mentions and replies.
-      "requireMention": true,
-      // Restrict triggers to these senders. Empty = any member (subject to requireMention).
-      "allowFrom": []
-    }
-  },
-
-  // Case-insensitive regexes that count as a mention.
-  "mentionPatterns": ["^hey claude\\b"],
-
-  // Reaction on receipt. Empty string disables.
-  "ackReaction": "👀",
-
-  // Threading on chunked replies: first | all | off
-  "replyToMode": "first",
-
-  // Split threshold. Discord rejects > 2000.
-  "textChunkLimit": 2000,
-
-  // length = cut at limit. newline = prefer paragraph boundaries.
-  "chunkMode": "newline"
-}
-```
+| Old | Now |
+|---|---|
+| `dmPolicy` `pairing` / `allowlist` | strangers' DMs are always dropped; people come in through `hydra people add` |
+| `dmPolicy` `disabled` | `[gateways.<platform>] off = true` |
+| `allowFrom`, `groups` | The first `allowFrom` id becomes the operator; the others become `[people]` entries that no longer reach `main` or run commands. Each group becomes a `[places."…".access]` table; `migrate` stops if a group's `allowFrom` names someone not yet in `[people]` (add them with `hydra people add`, then run it again). |
+| `replyToMode`, `textChunkLimit`, `chunkMode`, `threadArchiveMinutes` | fixed: markdown chunks of the platform's maximum, the first chunk answers the message, threads archive after a day. `hydra migrate` stops if an old file sets one. |
+| `DISCORD_ACCESS_MODE=static` | none |

@@ -97,7 +97,7 @@ Deliver (whisper channel — message to session context, not thread):
   --json adds "result" (done, deferred or failed) and exits 0 whenever the daemon answers (no answer: exit 1, no JSON). Every code and word: README, "Exit codes and result words"
 
 Config:
-  hydra migrate [<platform>] [--operator <user id>] [--dry-run]   write <state>/hydra.toml once from access.json's allowFrom, specialists.json and slack-watch.json,
+  hydra migrate [<platform>] [--operator <user id>] [--dry-run]   write <state>/hydra.toml once from access.json (people, channels, settings), specialists.json and slack-watch.json,
                                        keeping each file it changes or retires as *.migrated; --dry-run prints it and writes
                                        nothing. Stop the daemon first; an interrupted run is finished by running it again
 

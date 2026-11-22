@@ -15,7 +15,7 @@ export type AddPerson = { id: string; address: string; roles?: string[]; name?: 
 export type AddPersonPlan = { ok: true; text: string; added: string; from: string } | { ok: false; error: string }
 
 export function planAddPerson(stateDir: string, env: LoadEnv, p: AddPerson): AddPersonPlan {
-  if (!hydraTomlInUse(stateDir)) return { ok: false, error: `${join(stateDir, HYDRA_TOML)} isn't in use yet: people are still access.json's allowFrom (or run hydra migrate first)` }
+  if (!hydraTomlInUse(stateDir)) return { ok: false, error: `${join(stateDir, HYDRA_TOML)} isn't in use yet: run hydra migrate <platform> first (on a fresh install: hydra migrate <platform> --operator <your user id>)` }
   if (!ID_RE.test(p.id)) return { ok: false, error: `"${p.id}" must be lowercase letters, digits and dashes` }
   const address = normalizeAddress(p.address)
   if (!address) return { ok: false, error: `"${p.address}" is not an address: use discord:<user id>, slack:<user id> or github:<login>` }

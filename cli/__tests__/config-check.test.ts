@@ -21,7 +21,7 @@ describe('hydra config check', () => {
     expect(broken.out).toContain('"ghost" is not a person')
     expect(check('operator = "op"\n[people.op]\naddresses = ["slack:U0OP"]\n').out)
       .toBe('$d/hydra.toml: loads, with 1 warning\nhydra.toml operator: op has no discord: address, so on discord nobody passes admin checks or reaches main by DM\n')
-    expect(check(undefined).out).toBe('$d/hydra.toml: none (the old files still apply)\n')
+    expect(check(undefined).out).toContain('$d/hydra.toml: none: no operator, so every DM is dropped (hydra migrate ')
   })
   test('prints where each specialist is heard, read off the rules', () => {
     const base = 'operator = "op"\n[people.op]\naddresses = ["discord:100000000000000001"]\n[specialists.ops]\nworkdir = "/tmp"\n[specialists.crm]\nworkdir = "/tmp"\n[[rules]]\nplace = "discord:100000000000000002"\ntarget = "specialist:crm"\n[[rules]]\nplace = "discord:100000000000000003"\ntarget = "specialist:ops"\n'
