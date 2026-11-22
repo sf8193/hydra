@@ -1,5 +1,5 @@
 // What a write-confined specialist's launch writes and checks (`can_only_write_to = "workdir"`): Claude Code's own controls, set in the launch's
-// settings, and nothing hydra built itself. The policy is `LaunchPolicy.canOnlyWriteTo` (restricted.ts); the one place it turns into a launch is
+// settings, and nothing hydra built itself. The policy is `LaunchPolicy.canOnlyWriteTo` (engines/launch-policy.ts); the one place it turns into a launch is
 // `launchSession` in engines/claude-engine.ts, which every start passes (fresh, respawn, handoff successor, resume, fork).
 //
 //   sandbox.*                                     Claude Code's sandboxed Bash (Seatbelt): writes limited to the working directory and Claude Code's own per-user $TMPDIR (a shared /tmp is not writable; Claude Code's default, hydra sets neither).
@@ -21,7 +21,7 @@ import { MAX_ATTACHMENT_BYTES } from '../shared/constants.js'
 import { expectedServerNames } from './claude-verify.js'
 import { bridgeCommand } from '../infra/plugin-manifest.js'
 import { readdirSync, readFileSync } from 'fs'
-import { PolicyRefusal, missingTokenRefusal, remedy, serverToolRule, type ConfinementPolicy, type ConfinementServer, type LaunchPolicy } from '../engines/launch-policy.js'
+import { PolicyRefusal, missingTokenRefusal, remedy, serverToolRule, type ConfinementPolicy, type ConfinementServer, type LaunchPolicy } from './launch-policy.js'
 
 /** The first Claude Code with `permissions.blockWritesOutsideWorkingDirectories`: an older one ignores the key, which would leave Edit/Write unconfined. */
 export const MIN_CLAUDE_VERSION = [2, 1, 314] as const
