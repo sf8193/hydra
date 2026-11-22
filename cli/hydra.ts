@@ -96,7 +96,7 @@ Deliver (whisper channel — message to session context, not thread):
                                        (resume, else fork, else a fresh one that reads the thread); the message queues for it.
   Exit codes: 2 already delivered with this key · 3 gone or refused · 4 running but unreachable · 5 deferred (booting,
   busy, or a retryable engine rejection; stuck on a dialog is a failure) · 6 starting failed or backing off, died during delivery, or outcome unknown · 7 a delivery with this key is in flight (deferred) · 8 no such specialist
-  --json adds "result" (done, deferred or failed) and exits 0 whenever the daemon answers (no answer: exit 1, no JSON). Every code and word: README, "Exit codes and result words"
+  --json adds "result" (done, deferred or failed) and exits 0 whenever the daemon answers (no answer: exit 1, no JSON). Every code and word: docs/reference.md, "Exit codes and result words"
 
 Config:
   hydra migrate [<platform>] [--operator <user id>] [--dry-run]   write <state>/hydra.toml once from access.json (people, channels, settings), specialists.json and slack-watch.json,

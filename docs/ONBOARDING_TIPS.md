@@ -26,7 +26,7 @@
    - Send a real message; a spawned session should appear in `hydra list` and greet its thread.
    - *Known failure* (Claude Code ≥ 2.1.199, inline plugins): bridge logs `Channel notifications skipped … inline` → byte replies but **never receives**. Run the plugin marketplace-installed + enabled and omit `--plugin-dir`.
 
-See [README.md Troubleshooting](../README.md#troubleshooting) for symptom→cause diagnosis.
+See [reference.md Troubleshooting](reference.md#troubleshooting) for symptom→cause diagnosis.
 
 ## One-token-per-daemon
 One Discord Application = one bot = one token = one gateway connection. Concurrent machines (laptop / work / VPS) each need their **own** Application + token. Same name/icon is fine; the Application ID and token cannot be shared.

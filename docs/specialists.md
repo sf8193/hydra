@@ -1,6 +1,6 @@
 # Specialists
 
-Once `hydra.toml` exists, it declares the specialists (`[specialists.<name>]`, see [`hydra.example.toml`](hydra.example.toml)) and `hydra specialist set` only moves `--thread`; the commands below describe an install that hasn't migrated.
+Once `hydra.toml` exists, it declares the specialists (`[specialists.<name>]`, see [`hydra.example.toml`](../hydra.example.toml)) and `hydra specialist set` only moves `--thread`; the commands below describe an install that hasn't migrated.
 
 A specialist is a standing job with a stable name, filled by one long-lived session. It stores the thread its session lives in (or the channel to open one in) and the prompt to start it with, and it is the only pointer to that thread: the session is named after the specialist, and only the specialist claims that name, under its own lock. Its name needs a letter (an all-digit one reads as a thread id) and must not be one of the default session names (spark, comet, …); a name stored before that rule is reported at boot and ignored, never renamed.
 

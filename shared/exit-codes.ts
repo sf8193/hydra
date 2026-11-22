@@ -1,4 +1,4 @@
-// The exit codes hydra's own tools speak, and the one word each means. README "Exit codes and result words" is the
+// The exit codes hydra's own tools speak, and the one word each means. docs/reference.md "Exit codes and result words" is the
 // reader's table; this file is where the code reads it.
 //
 // The word is the schedule `Result` vocabulary (shared/jobs.ts): `deferred` is "try again later, nothing is wrong".

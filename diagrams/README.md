@@ -82,7 +82,7 @@ One question per picture, read in this order.
 | `flow-slack-owed` | How long may a Slack message stay owed, and what ends it? |
 | `flow-slack-alert` | When a message is dropped or a connection goes wrong, who is told, where, and how often? |
 
-A bold name in these pictures is one of README's [core abstractions](../README.md#core-abstractions), or one of these:
+A bold name in these pictures is one of the [core abstractions](../docs/concepts.md#core-abstractions), or one of these:
 
 | Name | Question | Sentence |
 |---|---|---|

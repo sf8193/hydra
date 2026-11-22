@@ -1,9 +1,9 @@
 # hydra.toml: whom hydra serves. Lives at <state dir>/hydra.toml (e.g. ~/.claude/channels/discord/hydra.toml).
 # hydra re-reads it within a second of a change; a file that fails to load keeps the last good config and tells the
 # operator why. An empty file is valid: the operator's DMs go to main and nothing else is heard.
-# Start from your old files with `hydra migrate` rather than writing it by hand (see README › Configuration).
+# Start from your old files with `hydra migrate` rather than writing it by hand (see docs/reference.md › Configuration).
 # Another repo's specialist and schedules: ship them as a fragment of [specialists.*] and [schedules.*] tables, and
-# add it with `hydra config add <fragment.toml>` (README › Configuration).
+# add it with `hydra config add <fragment.toml>` (docs/reference.md › Configuration).
 # Every key below is optional unless it says required. Unknown keys are errors, so a typo never passes silently.
 #
 # Two kinds of door. A gateway is where the operator talks to hydra (Discord, Slack). A connector is where outside events arrive
