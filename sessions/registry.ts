@@ -8,7 +8,7 @@ import { removeLaunchFiles } from '../infra/launch-files.js'
 import type { LaunchPolicy } from '../shared/launch-policy.js'
 import { atomicWriteFileSync, baseNameFromBranch } from '../infra/util.js'
 import { tmuxSessionState, tmuxSync } from '../infra/tmux.js'
-import { CAPABILITY_TOOLS } from '../shared/constants.js'
+import { CAPABILITY_TOOLS, engineOfModel } from '../shared/constants.js'
 import { SESSION_CATALOG, SESSION_NAMES } from '../shared/session-catalog.js'
 import type { SessionType, Capability, ToolName, SessionLabel } from '../shared/constants.js'
 import { recordPendingRetirement } from '../infra/retirement-journal.js'
@@ -243,7 +243,8 @@ export type ThreadSessionEntry = {
   endedAt?: number
   messageCount: number
   claudeSessionId?: string
-  engine?: ProviderId
+  /** The engine that ran the session, written at spawn: every reader takes it from here and none infers it. */
+  engine: ProviderId
   codexThreadId?: string
   codexHomeName?: string
   model?: string
@@ -712,7 +713,7 @@ export class ThreadRegistry {
     anchorMessageId?: string, anchorChannelId?: string, threadUrl?: string, topic: string,
     respawnCount: number, sessionId: string, tmuxName: string,
     originType: 'spawn' | 'fork' | 'handoff' | 'resurrect', originFrom?: string,
-    model?: string, parentChannelId?: string, claudeSessionId?: string,
+    model?: string, parentChannelId?: string, claudeSessionId?: string, engine: ProviderId, codexThreadId?: string, codexHomeName?: string,
     label: SessionLabel | undefined, policy?: LaunchPolicy, kickoffHash?: string, hydraMade?: boolean, spawnerThreadId?: string,
     /** The start continues the thread's own session (resume, respawn, revive, handoff, or its lineage's owner spawning into it): it keeps that session's `hydraMade`. */
     continuesThread?: boolean,
@@ -752,6 +753,9 @@ export class ThreadRegistry {
       messageCount: 0,
       model: opts.model,
       claudeSessionId: opts.claudeSessionId,
+      engine: opts.engine,
+      ...(opts.codexThreadId && { codexThreadId: opts.codexThreadId }),
+      ...(opts.codexHomeName && { codexHomeName: opts.codexHomeName }),
       label: opts.label,
       ...(opts.policy !== undefined && { policy: opts.policy }),
       ...(opts.kickoffHash !== undefined && { kickoffHash: opts.kickoffHash }),
@@ -781,7 +785,7 @@ export class ThreadRegistry {
   }
 
   // The durable record a later resume reads; killSession drops the registry entry.
-  closeHistoryEntry(threadId: string, info: { sessionId: string; messageCount?: number; claudeSessionId?: string; engine?: string; codexThreadId?: string; codexHomeName?: string; label?: SessionLabel }): void {
+  closeHistoryEntry(threadId: string, info: { sessionId: string; messageCount?: number; claudeSessionId?: string; codexThreadId?: string; codexHomeName?: string; label?: SessionLabel }): void {
     const thread = this.threads.get(threadId)
     if (!thread) return
     const entry = thread.sessionHistory.find(h => h.sessionId === info.sessionId && !h.endedAt)
@@ -789,7 +793,6 @@ export class ThreadRegistry {
       entry.endedAt = Date.now()
       entry.messageCount = info.messageCount ?? 0
       if (info.claudeSessionId) entry.claudeSessionId = info.claudeSessionId
-      if (info.engine) entry.engine = info.engine as any
       if (info.codexThreadId) entry.codexThreadId = info.codexThreadId
       if (info.codexHomeName) entry.codexHomeName = info.codexHomeName
       if (info.label) entry.label = info.label
@@ -822,6 +825,20 @@ export class ThreadRegistry {
       }
     }
 
+    // An entry from before the engine was recorded gets it once, here, and keeps it on disk. In order of evidence: its session's record if one
+    // is left, the engine its model belongs to (`gemini-*` is agy, `gpt-*` Codex), the id it ran with (a Codex thread), else Claude, the only
+    // engine there was. omp runs Claude's models, so an omp entry with no record is not told from a Claude one.
+    const engineOfSession = new Map<string, ProviderId>()
+    for (const session of sessionRegistry.values()) engineOfSession.set(session.sessionId, session.engine)
+    let engined = 0
+    for (const thread of this.threads.values()) {
+      for (const entry of thread.sessionHistory) {
+        if (entry.engine) continue
+        entry.engine = engineOfSession.get(entry.sessionId) ?? (entry.model ? engineOfModel(entry.model) : undefined) ?? (entry.codexThreadId ? 'codex' : 'claude')
+        engined++
+      }
+    }
+
     let created = 0
     for (const session of sessionRegistry.values()) {
       if (session.sessionType === 'thread_guest') continue
@@ -846,6 +863,7 @@ export class ThreadRegistry {
           startedAt: session.createdAt,
           messageCount: session.messageCount ?? 0,
           claudeSessionId: session.claudeSessionId,
+          engine: session.engine,
         }],
       })
       created++
@@ -867,11 +885,18 @@ export class ThreadRegistry {
       if (!session.deadAt) continue
       const entry = this.threads.get(session.threadId)?.sessionHistory.find(h => h.sessionId === session.sessionId && !h.endedAt)
       if (entry) { entry.endedAt = session.deadAt; closed++ }
+      // What closeHistoryEntry keeps, so a kill after this boot, which finds no open entry, leaves the entry whole.
+      if (entry) {
+        entry.engine = session.engine
+        if (session.codexThreadId) entry.codexThreadId = session.codexThreadId
+        if (session.codexHomeName) entry.codexHomeName = session.codexHomeName
+      }
     }
 
-    if (created > 0 || backfilled > 0 || closed > 0) {
+    if (created > 0 || backfilled > 0 || closed > 0 || engined > 0) {
       if (created > 0) process.stderr.write(`daemon: created ${created} thread(s) from sessions\n`)
       if (backfilled > 0) process.stderr.write(`daemon: backfilled parentChannelId on ${backfilled} thread(s)\n`)
+      if (engined > 0) process.stderr.write(`daemon: recorded the engine on ${engined} history entr${engined === 1 ? 'y' : 'ies'}\n`)
       if (closed > 0) process.stderr.write(`daemon: closed ${closed} history entr${closed === 1 ? 'y' : 'ies'} of sessions dead at boot\n`)
       this.persist()
     }

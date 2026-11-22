@@ -122,7 +122,7 @@ function seedDead(extra: Partial<SessionInfo> = {}): SessionInfo {
   } as any as SessionInfo
   registry.set(info.sessionId, info)
   registry.setThread(THREAD, info.sessionId)
-  threadRegistry.recordSpawn(THREAD, { topic: 'topic', respawnCount: 0, sessionId: info.sessionId, tmuxName: info.tmuxName, originType: 'spawn', model: 'm', claudeSessionId: info.claudeSessionId, label: undefined, policy: info.policy, kickoffHash: info.kickoffHash })
+  threadRegistry.recordSpawn(THREAD, { topic: 'topic', respawnCount: 0, sessionId: info.sessionId, tmuxName: info.tmuxName, originType: 'spawn', engine: info.engine, model: 'm', claudeSessionId: info.claudeSessionId, label: undefined, policy: info.policy, kickoffHash: info.kickoffHash })
   return info
 }
 const live = () => registry.get(registry.getByThread(THREAD)!)!
@@ -686,7 +686,7 @@ describe('a launch path that passes nothing for a specialist session: restricted
   describe('a restricted thread whose record a kill deleted: the history entry still holds the policy, and a revive reads it', () => {
     /** Only the thread's history entry is left: no registry record (hydra kill deleted it), the policy as it was born. */
     function killed(policy: LaunchPolicy | undefined = opsPolicy()) {
-      threadRegistry.recordSpawn(THREAD, { topic: 'topic', respawnCount: 0, sessionId: 'sl-gone', tmuxName: 'slgone', originType: 'spawn', model: 'm', claudeSessionId: 'C-gone', label: undefined, policy })
+      threadRegistry.recordSpawn(THREAD, { topic: 'topic', respawnCount: 0, sessionId: 'sl-gone', tmuxName: 'slgone', originType: 'spawn', engine: 'claude', model: 'm', claudeSessionId: 'C-gone', label: undefined, policy })
     }
     beforeEach(() => { _resetBackoff() })   // a refused revive counts toward the thread's back-off; each case starts clear
     const removed = () => use(DESK)                                  // the specialist is no longer declared

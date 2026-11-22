@@ -100,7 +100,7 @@ let deadKid = ''
 function endedChild(spawnerThread: string | undefined, threadId = KID_T): void {
   deadKid = `kid-gone-${++seq}`
   threadRegistry.threads.set(threadId, { threadId, topic: 't', respawnCount: 0, createdAt: 1, lastActive: 1, totalMessages: 0, hydraMade: true, parentChannelId: PARENT,
-    sessionHistory: [{ sessionId: deadKid, tmuxName: 'kid', originType: 'spawn', startedAt: 1, endedAt: 2, messageCount: 0, hydraMade: true, ...(spawnerThread && { spawnerThreadId: spawnerThread }) }] })
+    sessionHistory: [{ sessionId: deadKid, tmuxName: 'kid', originType: 'spawn', engine: 'claude', startedAt: 1, endedAt: 2, messageCount: 0, hydraMade: true, ...(spawnerThread && { spawnerThreadId: spawnerThread }) }] })
   registry.set(deadKid, { sessionId: deadKid, tmuxName: 'kid', topic: 't', threadId, createdAt: 1, lastActive: 1, listening: false, engine: 'claude',
     sessionType: 'thread_owner', deadAt: 2, adapter: fakeAdapter({ isAlive: () => false, stop: async () => undefined }) } as any)
   registry.setThread(threadId, deadKid)

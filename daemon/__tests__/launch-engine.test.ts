@@ -196,7 +196,7 @@ describe('a specialist whose conversation has history', () => {
       engine, sessionType: 'thread_owner', deadAt: Date.now(), adapter: fakeEngine(engine) as any, ...(engine === 'claude' && { claudeSessionId: 'C-1' }),
     } as any as SessionInfo)
     registry.setThread('le-hist', sessionId)
-    threadRegistry.recordSpawn('le-hist', { topic: 'topic', respawnCount: 0, sessionId, tmuxName: 'helper', originType: 'spawn', model: 'm', label: undefined })
+    threadRegistry.recordSpawn('le-hist', { topic: 'topic', respawnCount: 0, sessionId, tmuxName: 'helper', originType: 'spawn', engine, model: 'm', label: undefined })
   }
   const revive = (declaredEngine: ProviderId | undefined, extra: Record<string, unknown> = {}) =>
     reviveThread({ thread: threadRegistry.get('le-hist')!, respawnOnly: true, respawnTopic: 'kickoff', name: 'helper', declaredEngine, ...extra } as any)
@@ -232,7 +232,7 @@ describe('a specialist whose conversation has history', () => {
   })
 
   test('a history entry that records no engine, with no record left (a clean kill), is a Claude conversation over a declared codex', async () => {
-    threadRegistry.recordSpawn('le-hist', { topic: 'topic', respawnCount: 0, sessionId: 'le-killed', tmuxName: 'helper', originType: 'spawn', model: 'm', label: undefined })
+    threadRegistry.recordSpawn('le-hist', { topic: 'topic', respawnCount: 0, sessionId: 'le-killed', tmuxName: 'helper', originType: 'spawn', engine: 'claude', model: 'm', label: undefined })
     expect(registry.get('le-killed')).toBeUndefined()
     expect(await revive('codex')).toMatchObject({ ok: true })
     expect(lastLaunch().provider).toBe('claude')

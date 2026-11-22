@@ -131,7 +131,7 @@ describe('markDead', () => {
     const sessionId = `md-${Date.now()}`, threadId = `${sessionId}-t`
     try {
       const info = { sessionId, threadId, tmuxName: 'md', createdAt: 0, lastActive: 0, topic: 't', listening: false, messageCount: 3 } as SessionInfo
-      threadRegistry.recordSpawn(threadId, { topic: 't', respawnCount: 0, sessionId, tmuxName: 'md', originType: 'spawn', label: undefined })
+      threadRegistry.recordSpawn(threadId, { topic: 't', respawnCount: 0, sessionId, tmuxName: 'md', originType: 'spawn', engine: 'claude', label: undefined })
       markDead(info, 1_000)
       markDead(info, 2_000)
       expect(info.deadAt).toBe(1_000)

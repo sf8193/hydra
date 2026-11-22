@@ -49,7 +49,7 @@ function live(thread: string, tmuxName: string, over: Partial<SessionInfo> = {})
   registry.set(sessionId, info)
   registry.threadToSession.set(thread, sessionId)
   if (!threadRegistry.get(thread)) threadRegistry.set(thread, { threadId: thread, topic: 'be the helper', respawnCount: 0, createdAt: Date.now(), lastActive: Date.now(), totalMessages: 0, sessionHistory: [] } as ThreadMetadata)
-  threadRegistry.get(thread)!.sessionHistory.push({ sessionId, tmuxName, originType: 'spawn', startedAt: Date.now(), messageCount: 0, claudeSessionId: info.claudeSessionId })
+  threadRegistry.get(thread)!.sessionHistory.push({ sessionId, tmuxName, originType: 'spawn', engine: 'claude', startedAt: Date.now(), messageCount: 0, claudeSessionId: info.claudeSessionId })
   return info
 }
 

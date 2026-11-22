@@ -109,7 +109,7 @@ function msg(content = 'resume', threadId = THREAD): InboundMessage {
 /** A thread whose history ends with `entry`; optionally a (dead, unbound) registry record for it. */
 function seedHistory(entry: Partial<ThreadSessionEntry>, info?: Partial<SessionInfo>): ThreadSessionEntry {
   const n = ++seq
-  const e = { sessionId: `sess-t8-${n}`, tmuxName: `t8dead${n}`, originType: 'spawn', startedAt: 1, endedAt: 2,
+  const e = { sessionId: `sess-t8-${n}`, tmuxName: `t8dead${n}`, originType: 'spawn', engine: info?.engine ?? 'claude', startedAt: 1, endedAt: 2,
     messageCount: 3, model: 'dead-model', label: 'build', ...entry } as ThreadSessionEntry
   threadRegistry.threads.set(THREAD, {
     threadId: THREAD, topic: TOPIC, threadUrl: URL, respawnCount: 0, createdAt: 1, lastActive: 1,
@@ -385,8 +385,8 @@ describe('resume tier matrix — Codex', () => {
     expect(sent.some(s => s.includes('`resume-name` resumed — full context restored'))).toBe(true)
   })
 
-  test('history engine inference: no record, history codexThreadId → Codex; home defaults to tmuxName', async () => {
-    const e = seedHistory({ codexThreadId: 'T-1' })
+  test('no record: the history entry\'s engine runs it; home defaults to tmuxName', async () => {
+    const e = seedHistory({ codexThreadId: 'T-1', engine: 'codex' })
     await handleResumeIntercept(msg())
     expect(opts(0).resumeCodex).toEqual({ threadId: 'T-1', homeName: e.tmuxName })
     expect(opts(0).engine).toBe('codex')
@@ -475,13 +475,13 @@ describe('handleRespawnIntercept', () => {
     expect(respawnArgs()[4].engine).toBe('codex')
   })
 
-  test('no selection, no record: history codexThreadId → Codex, else Claude', async () => {
-    seedHistory({ codexThreadId: 'T-1' })
+  test('no selection, no record: the history entry\'s engine', async () => {
+    seedHistory({ codexThreadId: 'T-1', engine: 'codex' })
     await handleRespawnIntercept(msg('respawn'))
     expect(respawnArgs()[4].engine).toBe('codex')
 
     calls = []
-    seedHistory({ claudeSessionId: 'C-1' })
+    seedHistory({ claudeSessionId: 'C-1', engine: 'claude' })
     await handleRespawnIntercept(msg('respawn'))
     expect(respawnArgs()[4].engine).toBe('claude')
     expect(respawnArgs()[3]).toBe('dead-model')
