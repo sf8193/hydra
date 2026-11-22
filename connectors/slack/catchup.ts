@@ -36,6 +36,9 @@ export type RawMessage = {
   thread_ts?: string
   user?: string
   bot_id?: string
+  /** A bot's display: its app profile's name, or the name a legacy integration posted under. */
+  bot_profile?: { name?: string }
+  username?: string
   subtype?: string
   text?: string
   reply_count?: number
@@ -83,6 +86,7 @@ export function toEvent(channel: string, m: RawMessage): SlackMessageEvent | nul
     ...(m.thread_ts && { threadTs: m.thread_ts }),
     ...(m.user && { user: m.user }),
     ...(m.bot_id && { botId: m.bot_id }),
+    ...(m.bot_id && (m.bot_profile?.name || m.username) && { botName: m.bot_profile?.name || m.username }),
     ...(m.subtype && { subtype: m.subtype }),
     ...(m.text !== undefined && { text: m.text }),
     ...(files(m).length && { files: files(m) }),
