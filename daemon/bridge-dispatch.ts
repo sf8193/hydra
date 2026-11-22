@@ -30,6 +30,7 @@ import { refreshDashboard } from './dashboard.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './artifacts.js'
 import { fetchPrTitle, parsePrUrl } from '../connectors/github/pr-watch.js'
 import { SEND_TYPES, type SendType } from '../shared/tool-definitions.js'
+import { onRunExtend } from './protocol-runner.js'
 import { ASK_PREDECESSOR_TIMEOUT_MS, engineOfModel, normalizeReviewRounds } from '../shared/constants.js'
 import { ENGINE_PROFILES } from '../shared/engines/index.js'
 import { isRestrictedSession, isToolAllowed, isWriteConfinedSession, predecessorAsker, refusalText } from './tool-surface.js'
@@ -935,7 +936,6 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         if (!callerSessionId) throw new Error('extend_phase requires a session context')
         const minutes = Math.max(1, Math.min(Number(args.minutes) || 5, 15))
 
-        const { onRunExtend } = await import('./protocol-runner.js')
         const result = onRunExtend(callerSessionId, reason, minutes)
         if (!result.ok) throw new Error(result.reason)
 

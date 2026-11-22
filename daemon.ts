@@ -51,7 +51,7 @@ try {
 }
 
 // DEFAULT_SESSION_CHANNEL is a live binding: resolveDefaultChannel fills it after boot.
-import { gateway, TOKEN, PLATFORM, STATE_DIR, CLAUDE_CONFIG, SOCK_PATH, heartbeatPath, DEFAULT_SESSION_CHANNEL } from './daemon/config.js'
+import { gateway, TOKEN, PLATFORM, STATE_DIR, CLAUDE_CONFIG, SOCK_PATH, heartbeatPath, DEFAULT_SESSION_CHANNEL, resolveDefaultChannel } from './daemon/config.js'
 import { syncMods } from './shared/mods.js'
 import { syncDaemonBridge } from './daemon/bridge-sync.js'
 import { registry, threadRegistry, reattachAdapters } from './daemon/sessions.js'
@@ -117,7 +117,10 @@ queueMicrotask(logSubscriptions)
 
 import { initPhaseBudgets } from './daemon/phase-budget.js'
 import { initIdleLimits } from './daemon/idle-limit.js'
-import { killSession, backfillAnchorChannelIds } from './daemon/session-lifecycle.js'
+import { killSession, backfillAnchorChannelIds, doSpawnSession } from './daemon/session-lifecycle.js'
+import { runHomeStatusAction } from './daemon/home-actions.js'
+import { parseTemplateTopic, buildTemplateSpawnOpts, runTemplateAction, getTemplate } from './daemon/templates.js'
+import { resolveModelAlias } from './shared/constants.js'
 initPhaseBudgets((info, reason) => killSession(info, reason, { ended: 'killed by hydra' }))
 initIdleLimits((info, reason, opts) => killSession(info, reason, { ...opts, ended: 'killed by hydra' }))
 
@@ -149,14 +152,10 @@ if ('homeTabHandler' in gateway) {
 }
 
 if ('homeStatusHandler' in gateway) {
-  const { runHomeStatusAction } = await import('./daemon/home-actions.js')
   ;(gateway as any).homeStatusHandler = runHomeStatusAction
 }
 
 if ('homeSpawnHandler' in gateway) {
-  const { doSpawnSession } = await import('./daemon/session-lifecycle.js')
-  const { parseTemplateTopic, buildTemplateSpawnOpts, runTemplateAction } = await import('./daemon/templates.js')
-  const { resolveModelAlias } = await import('./shared/constants.js')
   ;(gateway as any).homeSpawnHandler = async (topic: string, userId: string) => {
     try {
       let parsed = parseTemplateTopic(topic)
@@ -171,7 +170,6 @@ if ('homeSpawnHandler' in gateway) {
           const prefix = topic.slice(0, colonIdx).trim().toLowerCase()
           const spaceIdx = prefix.indexOf(' ')
           if (spaceIdx > 0) {
-            const { getTemplate } = await import('./daemon/templates.js')
             const tplName = prefix.slice(0, spaceIdx)
             const modelAlias = prefix.slice(spaceIdx + 1)
             const tpl = getTemplate(tplName)
@@ -336,7 +334,6 @@ async function startGateway(attempt = 0): Promise<void> {
   try {
     await gateway.start(TOKEN!)
     process.stderr.write(`daemon: ${PLATFORM} gateway started\n`)
-    const { resolveDefaultChannel } = await import('./daemon/config.js')
     await resolveDefaultChannel()
     void announceRestartComplete()
     void deliverWatchdogAlert()
@@ -435,7 +432,11 @@ async function backfillArtifacts(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 startHydraConfig({ alert: notifyOperator })
-startPrWatcher()
+startPrWatcher({
+  deliver: deliverToTarget,
+  // A merged or closed PR leaves every session's artifact list and the home tab.
+  onWatchRemoved: entry => { registry.dropArtifact(entry.prUrl); refreshDashboard() },
+})
 startConversationTable()
 pruneEvents()
 

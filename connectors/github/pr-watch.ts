@@ -69,11 +69,20 @@ export function conflictChange(last: boolean | undefined, mergeable: boolean | n
 
 export type CheckStatusType = WatchEntry['lastCheckStatus']
 
-/** Test seams: GitHub, and delivery to a watch's target (targets.ts, loaded late: it reaches recovery, which imports this module). */
+/** What pr-watch needs from the daemon above it, handed in once by startPrWatcher (this file imports `deliverToTarget` and the dashboard from neither). */
+export type PrWatchPorts = {
+  /** Deliver a watch's text to its target (specialists/targets.ts `deliverToTarget`). */
+  deliver(t: { to: string; revive?: true }, text: string, opts: DeliverOpts): Promise<DeliverOutcome>
+  /** A watch ended by itself (its PR merged or closed), after it was dropped and saved: the daemon drops the PR from its own views. Must not throw: nothing retries it. */
+  onWatchRemoved(entry: WatchEntry): void
+}
+
+// Set by startPrWatcher before the first poll (the poll timer is started there), or by a test through _setPortsForTesting.
+let ports!: PrWatchPorts
+
+/** Test seam: GitHub. */
 export const prWatchDeps = {
   api: (endpoint: string): Promise<any> => ghApiFetch(endpoint),
-  deliver: async (t: { to: string; revive?: true }, text: string, opts: DeliverOpts): Promise<DeliverOutcome> =>
-    (await import('../../specialists/targets.js')).deliverToTarget(t, text, opts),
 }
 
 /** The target a session's watches deliver to: `main`, its thread's specialist, or its thread, revived when dead. */
@@ -463,14 +472,7 @@ async function pollPr(entry: WatchEntry): Promise<void> {
       watches.delete(entry.prUrl)
       persist()
       unpinWatch(entry)
-      // Scrub the PR from the artifact lists so it disappears from the home tab
-      for (const info of registry.values()) {
-        if (!info.artifacts?.includes(entry.prUrl)) continue
-        info.artifacts = info.artifacts.filter(u => u !== entry.prUrl)
-        registry.persist()
-      }
-      const { refreshDashboard } = await import('../../daemon/dashboard.js')
-      refreshDashboard()
+      ports.onWatchRemoved(entry)
       return
     }
   } catch (err) {
@@ -571,7 +573,7 @@ async function pollPr(entry: WatchEntry): Promise<void> {
   // Killed or unwatched while this poll fetched: the thread was ended on purpose, so nothing may revive it.
   if (watches.get(entry.prUrl) !== entry) { Object.assign(entry, held); return }
   // Low priority: an engine where every delivery is a priced turn (Codex) may hold it for the next turn.
-  const r = await prWatchDeps.deliver({ to: entry.to, ...(entry.revive && { revive: true }) }, content, {
+  const r = await ports.deliver({ to: entry.to, ...(entry.revive && { revive: true }) }, content, {
     initiator: 'pr-watch', source: 'pr-watch', idempotencyKey: key, queue: true, lowPriority: true,
     wanted: () => watches.get(entry.prUrl) === entry,
   })
@@ -875,7 +877,8 @@ export async function backfillTitles(): Promise<number> {
 // Lifecycle
 // ---------------------------------------------------------------------------
 
-export function startPrWatcher(): void {
+export function startPrWatcher(wired: PrWatchPorts): void {
+  ports = wired
   loadPersisted()
   loadGhToken()
   pollTimer = setInterval(() => timed('pr-watch', () => {
@@ -893,6 +896,7 @@ export function stopPrWatcher(): void {
   }
 }
 
+export const _setPortsForTesting = (wired: PrWatchPorts): void => { ports = wired }
 export const _pollForTesting = (entry: WatchEntry): Promise<void> => pollPr(entry)
 export const _pollAllForTesting = (): Promise<void> => pollAll()
 export function _setWatchForTesting(entry: WatchEntry): void { watches.set(entry.prUrl, entry) }

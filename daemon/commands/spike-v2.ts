@@ -4,13 +4,7 @@ import { startProtocolRun, getRunByThread, cancelRun } from '../protocol-runner.
 import { isThreadOccupied } from '../protocol-registry.js'
 import type { InboundMessage } from '../../gateways/gateway.js'
 import type { ProviderId } from '../engines/engine-adapter.js'
-
-let spikeProto: typeof import('../../protocols/spike.js')['default'] | null = null
-
-async function getSpikeProto() {
-  if (!spikeProto) spikeProto = (await import('../../protocols/spike.js')).default
-  return spikeProto
-}
+import spikeProto from '../../protocols/spike.js'
 
 export async function handleSpikeV2Intercept(msg: InboundMessage, topic?: string, model?: string, engine?: ProviderId): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '🔬').catch(() => {})
@@ -37,8 +31,7 @@ export async function handleSpikeV2Intercept(msg: InboundMessage, topic?: string
   }
 
   try {
-    const proto = await getSpikeProto()
-    await startProtocolRun(proto, threadId, sessionId, { rounds: 1, topic, model, engine })
+    await startProtocolRun(spikeProto, threadId, sessionId, { rounds: 1, topic, model, engine })
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err)
     await gateway.send(msg.channelId, `Spike failed to start: ${errMsg}`, { replyTo: msg.id })

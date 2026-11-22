@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { spawnSync } from 'child_process'
 import { randomUUID } from 'crypto'
 import { join, resolve } from 'path'
 import { resolveConfig, resolveSocket, sendRequest, printResponse } from './helpers.js'
@@ -669,7 +670,6 @@ async function main(): Promise<void> {
         console.error(`error: session "${name}" has no attachable surface — is it still running?`)
         process.exit(1)
       }
-      const { spawnSync } = await import('child_process')
       process.exit(spawnSync('tmux', ['attach', '-t', target], { stdio: 'inherit' }).status ?? 1)
     }
 

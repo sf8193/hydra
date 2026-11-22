@@ -38,6 +38,27 @@ function makeThread(overrides: Partial<ThreadMetadata> = {}): ThreadMetadata {
 // Real sessions may exist on the host, so we test behaviors that are additive/relative.
 
 describe('SessionRegistry', () => {
+  test('dropArtifact removes a URL from every session\'s list, keeps the others, and persists only when something changed', () => {
+    const file = join(STATE_DIR, 'sessions.json')
+    const saved = existsSync(file) ? readFileSync(file, 'utf8') : null
+    try {
+      const reg = new SessionRegistry()
+      reg.set('da-1', makeInfo({ sessionId: 'da-1', tmuxName: 'da-1', artifacts: ['https://x/pr/1', 'https://x/pr/2'] }))
+      reg.set('da-2', makeInfo({ sessionId: 'da-2', tmuxName: 'da-2', artifacts: ['https://x/pr/1'] }))
+      reg.set('da-3', makeInfo({ sessionId: 'da-3', tmuxName: 'da-3' }))
+      let persists = 0
+      const persist = reg.persist.bind(reg)
+      reg.persist = () => { persists++; persist() }
+      reg.dropArtifact('https://x/pr/1')
+      expect(reg.get('da-1')!.artifacts).toEqual(['https://x/pr/2'])
+      expect(reg.get('da-2')!.artifacts).toEqual([])
+      expect(reg.get('da-3')!.artifacts).toBeUndefined()
+      expect(persists).toBe(1)
+      reg.dropArtifact('https://x/pr/none')
+      expect(persists).toBe(1)
+    } finally { if (saved === null) rmSync(file, { force: true }); else writeFileSync(file, saved) }
+  })
+
   test('a persisted turnState (retired field) is dropped on load, not carried or re-persisted', () => {
     const file = join(STATE_DIR, 'sessions.json')
     const saved = existsSync(file) ? readFileSync(file, 'utf8') : null
