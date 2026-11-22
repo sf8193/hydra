@@ -1,7 +1,7 @@
 {
   "version": 1,
   "files": {
-    "config/__tests__/server-sandbox.test.ts": 40000,
+    "config/__tests__/server-sandbox.test.ts": 10000,
     "daemon/__tests__/pre-handoff-hook.test.ts": 5500,
     "connectors/slack/__tests__/operator-tag-fuzz.test.ts": 4800,
     "shared/__tests__/spawn-env.test.ts": 4500,

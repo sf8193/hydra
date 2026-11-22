@@ -346,6 +346,47 @@ console.log('own=' + own + ' other=' + other)`
   })
 
   describe('the way out through LaunchServices', () => {
+    // Kernel-level proof that works in both GUI and headless macOS sessions (<100 ms): without the coreservices
+    // mach-lookup denial, a process resolves LaunchServices' bootstrap port; under the profile, Seatbelt denies it.
+    test('the LaunchServices mach service (com.apple.coreservices.launchservicesd) is reachable for the control, denied under the profile, and reachable again without the coreservices rule', async () => {
+      const probe = join(dir, 'ls-mach-probe.ts')
+      writeFileSync(probe, `import { dlopen, FFIType, ptr } from 'bun:ffi'
+const lib = dlopen('libSystem.B.dylib', {
+  bootstrap_look_up: { args: [FFIType.u32, FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
+  task_get_special_port: { args: [FFIType.u32, FFIType.i32, FFIType.ptr], returns: FFIType.i32 },
+  mach_task_self: { args: [], returns: FFIType.u32 },
+})
+const bp = new Uint32Array(1)
+const port = new Uint32Array(1)
+const r1 = lib.symbols.task_get_special_port(lib.symbols.mach_task_self(), 4, ptr(bp))
+const svc = Buffer.from('com.apple.coreservices.launchservicesd\\0')
+const r2 = lib.symbols.bootstrap_look_up(bp[0], ptr(svc), ptr(port))
+console.log(JSON.stringify({ r1, r2, port: port[0] }))
+`)
+      const parse = (r: { code: number; out: string; err: string }) => {
+        expect([r.code, r.err]).toEqual([0, ''])
+        return JSON.parse(r.out.trim()) as { r1: number; r2: number; port: number }
+      }
+      const control = parse(await run(['bun', probe], false))
+      expect(control.r1).toBe(0)
+      expect(control.r2).toBe(0)
+      expect(control.port).toBeGreaterThan(0)
+      const boxed = parse(await run(['bun', probe]))
+      expect(boxed.r1).toBe(0)
+      expect(boxed.r2).not.toBe(0)
+      expect(boxed.port).toBe(0)
+      const weak = profile().replace('(deny mach-lookup (global-name-prefix "com.apple.coreservices."))', '')
+      expect(weak).not.toBe(profile())
+      const w = Bun.spawnSync([SANDBOX_EXEC, '-p', weak, 'bun', probe], { env: clean })
+      const unguarded = parse({ code: w.exitCode, out: w.stdout.toString(), err: w.stderr.toString() })
+      expect(unguarded.r1).toBe(0)
+      expect(unguarded.r2).toBe(0)
+      expect(unguarded.port).toBeGreaterThan(0)
+    })
+
+    // End-to-end .app bundle launch requires an interactive macOS GUI WindowServer session (fails in headless/background
+    // sessions even unsandboxed, waiting 10 s per test); gated behind HYDRA_LIVE_PERSISTENCE=1 like write-confinement P8.
+    describe.skipIf(process.env.HYDRA_LIVE_PERSISTENCE !== '1')('end-to-end .app bundle launch (HYDRA_LIVE_PERSISTENCE=1: needs an interactive macOS GUI session)', () => {
     const toml = join(home, 'state', 'hydra.toml')
     const marker = (n: string) => join(dir, `marker-${n}.txt`)
     /** A background app whose payload records what it can read and reach: it runs outside the sandbox when LaunchServices starts it. */
@@ -426,6 +467,7 @@ console.log('own=' + own + ' other=' + other)`
       expect(await waitFor(marker('direct'), window)).toBeUndefined()
       expect(accepted).toBe(before)
     }, LS_TIMEOUT)
+    })
   })
 
   describe('reading the environment of processes that are not its own', () => {
