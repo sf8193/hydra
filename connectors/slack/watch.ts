@@ -17,6 +17,7 @@ export { conversationId, appOfEntry, TOP_LEVEL }
 export type RouteTarget = { to: string; conversation?: string }
 import { runGuard, type GuardInput, type GuardVerdict } from '../../routing/guard.js'
 import type { Guard } from '../../config/types.js'
+import type { DeliverOutcome } from '../../specialists/targets.js'
 import { spelledBare } from '../../shared/target-kind.js'
 import { receivedLine, type LinePoster } from './lines.js'
 
@@ -190,16 +191,15 @@ export type SlackMessageEvent = {
   files?: SlackFile[]
 }
 
-export type DeliverResult =
-  | { ok: true; duplicate?: boolean }
-  // `permanent`: this message can never be delivered (too large). It is dropped, not retried.
-  // `exit` 8: the binding names no such specialist, or (`malformed`) a target hydra cannot read. Kept owed (a fixed config delivers it) and alerted.
-  // `wait`: its specialist runs `max_sessions` conversation sessions already. Kept owed, and never expires while it waits.
-  | { ok: false; error: string; permanent?: boolean; exit?: number; wait?: true; malformed?: true }
-
 export type ConversationDeps = {
   now: () => number
-  deliver: (target: RouteTarget, message: string, idempotencyKey: string) => Promise<DeliverResult>
+  /**
+   * The delivery's outcome as targets.ts gives it. A refusal that is `permanent` (it can never be delivered: too large) is dropped,
+   * never retried. Exit 8 (the binding names no such specialist, or, `malformed`, a target hydra cannot read) is kept owed, since a
+   * fixed config delivers it, and alerted. `wait` (its specialist runs `max_sessions` conversation sessions already) is kept owed,
+   * and never expires while it waits.
+   */
+  deliver: (target: RouteTarget, message: string, idempotencyKey: string) => Promise<DeliverOutcome>
   /** One app's view, read per event so edits apply without a restart. Null: that app isn't connected, nothing is heard through it. Absent `app`: `default`. */
   config: (app?: string) => ConversationConfig | null
   /** Every app hydra.toml declares now, to name one in a message. Absent: each is named by its id. */
@@ -1219,7 +1219,7 @@ export class ConversationTable {
     const send = this.chain.then(async () => {
       const result = await this.post(entry, { to }, named, cfg)
       if (result.ok) this.deps.log(`daemon: slack connector: delivered a reaction in ${key} (to ${item.ts}) to ${spelledBare(to)}${result.duplicate ? ' (already delivered)' : ''}\n`)
-      else { this.undo(entry, mark); this.deps.log(`daemon: slack connector: delivering a reaction in ${key} to ${spelledBare(to)} failed: ${result.error}\n`) }
+      else { this.undo(entry, mark); this.deps.log(`daemon: slack connector: delivering a reaction in ${key} to ${spelledBare(to)} failed: ${result.reason}\n`) }
     })
     this.chain = send.catch(() => {})
     await send
@@ -1832,7 +1832,7 @@ export class ConversationTable {
   }
 
   /** One send: the items as the session reads them, to `target`. The target is part of the key: the same items re-routed elsewhere are a different send. */
-  private async post(entry: ConversationEntry, target: RouteTarget, batch: Item[], cfg: ConversationConfig): Promise<DeliverResult> {
+  private async post(entry: ConversationEntry, target: RouteTarget, batch: Item[], cfg: ConversationConfig): Promise<DeliverOutcome> {
     // A channel thread main hears for the first time: main is told what it may do with it. A DM or a group DM is main's to answer, and has no session to hand it to.
     const fresh = target.to === MAIN && !isDm(entry.channel) && !cfg.directory.isGroupDm?.(entry.channel) && entry.threadTs !== TOP_LEVEL && !entry.delivered?.length
     // The session the conversation is bound to reads, with each message (a reaction too), whether the app was tagged and by whom, and one line on
@@ -1843,7 +1843,8 @@ export class ConversationTable {
     const message = formatDelivery(entry, items, { place: placeName(cfg, entry.channel), ...(cfg.workspaceUrl && { workspaceUrl: cfg.workspaceUrl }), ...(note && { note }) })
     const idempotencyKey = `slack-watch-${appPrefix(entry.app, '-')}${entry.channel}-${entry.threadTs}-${batch[0].ts}-${batch[batch.length - 1].ts}-${target.to}`
     try { return await this.deps.deliver({ ...target, conversation: conversationId(entry) }, message, idempotencyKey) } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      // A deliver that threw: exit 6 (failed), as targets.ts's `deliverVia` answers a throw.
+      return { ok: false, exit: 6, reason: err instanceof Error ? err.message : String(err) }
     }
   }
 
@@ -1881,27 +1882,27 @@ export class ConversationTable {
       if (!result.ok && result.wait) {
         // Not a failure: a turn. Said once an hour while it lasts, so a specialist stuck at max (no idle) is noticed.
         if (entry.waitingSince === undefined) { entry.waitingSince = this.deps.now(); this.persist() }
-        this.deps.log(`daemon: slack connector: ${key} waits: ${result.error}\n`)
-        this.alertOnce(`max:${target.to}`, target.to, `⏳ ${result.error}. Its messages stay owed until then.`, appOfEntry(entry))
+        this.deps.log(`daemon: slack connector: ${key} waits: ${result.reason}\n`)
+        this.alertOnce(`max:${target.to}`, target.to, `⏳ ${result.reason}. Its messages stay owed until then.`, appOfEntry(entry))
         continue
       }
       if (entry.waitingSince !== undefined) { delete entry.waitingSince; this.persist() }
       if (!result.ok && !result.permanent) {
         // Still owed: it stays in `owed`, so the catch-up pass fetches it again. Unless the owed list was full and cut it.
-        this.deps.log(`daemon: slack connector: delivery to ${spelledBare(target.to)} failed for ${key} (${first}..${last}): ${result.error}\n`)
-        this.failing.set(key, oneLine(result.error, 200))
+        this.deps.log(`daemon: slack connector: delivery to ${spelledBare(target.to)} failed for ${key} (${first}..${last}): ${result.reason}\n`)
+        this.failing.set(key, oneLine(result.reason, 200))
         if (result.exit === 8 && fallback) {
           this.deps.log(`daemon: slack connector: the guard redirected ${key} (${first}..${last}) to ${target.to}, which has no session record; delivering to ${fallback}\n`)
-          this.alertOnce(`guard-redirect:${target.to}`, fallback, `⚠️ The guard redirected a Slack message in ${placeName(cfg, entry.channel)} to "${target.to}", which has no session record (${result.error}), so it went to ${fallback} instead.`, appOfEntry(entry))
+          this.alertOnce(`guard-redirect:${target.to}`, fallback, `⚠️ The guard redirected a Slack message in ${placeName(cfg, entry.channel)} to "${target.to}", which has no session record (${result.reason}), so it went to ${fallback} instead.`, appOfEntry(entry))
           await this.deliverGroup(key, entry, { to: fallback }, batch, cfg)
           continue
         }
-        if (result.exit === 8) this.alertOnce(`no-such-specialist:${target.to}`, undefined, `⚠️ Slack messages in ${placeName(cfg, entry.channel)} are owed but undeliverable: ${result.error}. The conversation is bound to "${target.to}", ${result.malformed ? 'which hydra cannot read as a target' : `which has no session record; check [specialists.${target.to}] in hydra.toml`}. They stay owed for up to a day.`, appOfEntry(entry))
+        if (result.exit === 8) this.alertOnce(`no-such-specialist:${target.to}`, undefined, `⚠️ Slack messages in ${placeName(cfg, entry.channel)} are owed but undeliverable: ${result.reason}. The conversation is bound to "${target.to}", ${result.malformed ? 'which hydra cannot read as a target' : `which has no session record; check [specialists.${target.to}] in hydra.toml`}. They stay owed for up to a day.`, appOfEntry(entry))
         const cut = batch.map(i => i.ts).filter(ts => !entry.owed?.includes(ts))
         if (cut.length && this.entries.get(key) === entry) this.drop('owed-full', entry, cut, OWED_FULL_WHY)
         continue
       }
-      if (!result.ok) this.drop('too-large', entry, batch.map(i => i.ts), `it can never be delivered: ${result.error}`)
+      if (!result.ok) this.drop('too-large', entry, batch.map(i => i.ts), `it can never be delivered: ${result.reason}`)
       else {
         this.failing.delete(key)
         // Every landed delivery names its target, whoever it is (main, a specialist, a thread).

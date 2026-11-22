@@ -799,10 +799,10 @@ describe('specialists', () => {
     const seen: any[] = []
     occupy('thread-src', { adapter: fakeAdapter({ isAlive: () => true, deliver: async (_i: unknown, m: unknown) => { seen.push(m); return { status: 'accepted' } } }) })
     const name = specialist('thread-src')
-    const { deliverToSpecialist } = await import('../specialist-deliver.js')
-    expect((await deliverToSpecialist({ specialist: name, message: 'hi', source: 'slack-watch', initiator: 'slack-watch' })).ok).toBe(true)
+    const { deliverToTarget } = await import('../targets.js')
+    expect((await deliverToTarget({ to: name }, 'hi', { source: 'slack-watch', initiator: 'slack-watch' })).ok).toBe(true)
     expect(seen[0].meta).toMatchObject({ source: 'slack-watch', specialist: name, initiator: 'slack-watch' })
-    const big = await deliverToSpecialist({ specialist: name, message: 'x'.repeat(10_001) })
+    const big = await deliverToTarget({ to: name }, 'x'.repeat(10_001), { initiator: 'unknown' })
     expect(big).toMatchObject({ ok: false, permanent: true })
     expect(seen).toHaveLength(1)
   })

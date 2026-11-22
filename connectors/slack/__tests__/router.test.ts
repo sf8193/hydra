@@ -11,13 +11,15 @@ import { transport } from '../../../sessions/bridge-transport.js'
 import { _setHydraConfigForTesting } from '../../../infra/hydra-config.js'
 import { executeTool } from '../../../app/bridge-dispatch.js'
 import { setSpecialistThread, _reloadSpecialists } from '../../../sessions/specialists.js'
-import { ConversationTable, ROUTED_REACTION, type ConversationConfig, type DeliverResult, type SlackActions, type SlackMessageEvent } from '../watch.js'
+import { ConversationTable, ROUTED_REACTION, type ConversationConfig, type SlackActions, type SlackMessageEvent } from '../watch.js'
 import { bindConversation, getConversationTable, slackConversationLink, slackRuntimeDeps, ROUTER_BIND_MAX } from '../runtime.js'
 import { BASE, BOT, TWO_APPS, hydra, view } from './slack-config.js'
 import { loadHydraConfig } from '../../../config/load.js'
 import { isRouter, routerOf, placeOf } from '../../../config/types.js'
 import { explain, route } from '../../../routing/route.js'
 import { testLoadEnv } from '../../../config/__tests__/load-env.js'
+import { LANDED } from './outcomes.js'
+import type { DeliverOutcome } from '../../../specialists/targets.js'
 
 process.stderr.write = (() => true) as any
 
@@ -50,7 +52,7 @@ function table(toml: string, a?: SlackActions) {
   const config: ConversationConfig = view(toml, { coalesceMs: 1 })
   const w = new ConversationTable({
     now: () => 1_000_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => config, alert: () => {},
-    deliver: async ({ to }, msg): Promise<DeliverResult> => { sent.push({ to, msg }); return { ok: true } },
+    deliver: async ({ to }, msg): Promise<DeliverOutcome> => { sent.push({ to, msg }); return LANDED },
   })
   if (a) w.setSlackActions(a)
   return { w, sent }
@@ -119,7 +121,7 @@ describe("the app's router: where a tag goes that no conversation binds and no r
     const dir = mkdtempSync(join(tmpdir(), 'router-'))
     dirs.push(dir)
     const config: ConversationConfig = view(WITH, { coalesceMs: 1 })
-    const w = new ConversationTable({ now: () => 1e12, file: join(dir, 'w.json'), log: l => logs.push(l), config: () => config, alert: () => {}, deliver: async () => ({ ok: true }) })
+    const w = new ConversationTable({ now: () => 1e12, file: join(dir, 'w.json'), log: l => logs.push(l), config: () => config, alert: () => {}, deliver: async () => LANDED })
     w.handle(ev())
     expect(logs.join()).toContain('→ router specialist:slack-router for')
     expect(logs.join()).not.toContain('unrouted')

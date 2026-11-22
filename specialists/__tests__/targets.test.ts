@@ -14,6 +14,7 @@ import { _reloadSpecialists, getSpecialist, listSpecialists, removeSpecialist, s
 import { deliverToTarget, parseTarget, conversationSessionName, sessionByName, targetDeps } from '../targets.js'
 import { _setHydraConfigForTesting } from '../../infra/hydra-config.js'
 import { hydra } from '../../connectors/slack/__tests__/slack-config.js'
+import { deliverForSlack } from '../../connectors/slack/runtime.js'
 import { fakeAdapter } from '../../daemon/__tests__/test-harness.js'
 import { _setDaemonStartedAtForTesting } from '../../sessions/session-reachability.js'
 
@@ -249,14 +250,33 @@ describe('max: counted under one lock per specialist, from the sessions running 
   const PER = (extra = '') => hydra(`operator = "op"\n[people.op]\naddresses = ["slack:UOP"]\n[specialists.mx]\nworkdir = "/w"\nkickoff = "k"\nsessions = "per-conversation"\nmax_sessions = 2\n${extra}\n[specialists.mx-c1]\nworkdir = "/w"\nkickoff = "k"\n`)
   beforeEach(() => { setSpecialist('mx', { channel: 'chan-mx', kickoff: 'k' }); names.push('mx') })
 
-  test('past max, a conversation without a running session waits (exit 5, atMax); one with a session goes', async () => {
+  test('past max, a conversation without a running session waits (exit 5, wait); one with a session goes', async () => {
     _setHydraConfigForTesting(PER())
     occupy('t-mx-1', { tmuxName: 'mx_c1-1-000001' })
     occupy('t-mx-2', { tmuxName: 'mx_c1-2-000001' })
     occupy('t-other', { tmuxName: 'other_c1-9-000001' }) // another specialist's: not counted
     expect(await deliverToTarget({ perConversation: 'mx', conversation: 'slack:C1:3.000001' }, 'x', opts))
-      .toMatchObject({ ok: false, exit: 5, atMax: true, reason: expect.stringContaining('mx already runs 2 conversation sessions (max_sessions 2); slack:C1:3.000001 waits for one to end, and none ends on its own: give the specialist an idle') })
+      .toMatchObject({ ok: false, exit: 5, wait: true, reason: expect.stringContaining('mx already runs 2 conversation sessions (max_sessions 2); slack:C1:3.000001 waits for one to end, and none ends on its own: give the specialist an idle') })
     expect(await deliverToTarget({ perConversation: 'mx', conversation: 'slack:C1:1.000001' }, 'x', opts)).toMatchObject({ ok: true, sessionName: 'mx_c1-1-000001' })
+    expect(spawns).toHaveLength(0)
+  })
+
+  test('a refusal reaches the CLI and the Slack connector as targets.ts gave it: wait and malformed are not dropped on the way', async () => {
+    _setHydraConfigForTesting(PER())
+    occupy('t-mx-1', { tmuxName: 'mx_c1-1-000001' })
+    occupy('t-mx-2', { tmuxName: 'mx_c1-2-000001' })
+    const cli = (params: Record<string, unknown>) => handleCLIRequest({ type: 'cli', command: 'deliver', id: `tg-flags-${++n}`, params } as CLIRequest)
+    const slack = (to: string, conversation?: string) => deliverForSlack({ to, ...(conversation && { conversation }) }, 'x', `tg-flags-key-${++n}`)
+    // At max: exit 5, deferred, and `wait`, in both.
+    expect(await cli({ to: 'specialist:mx', conversation: 'slack:C1:3.000001', message: 'x', initiator: 't' }))
+      .toMatchObject({ ok: false, exitCode: 5, result: 'deferred', data: { wait: true }, error: expect.stringContaining('waits for one to end') })
+    expect(await slack('mx', 'slack:C1:3.000001')).toMatchObject({ ok: false, exit: 5, wait: true, reason: expect.stringContaining('waits for one to end') })
+    // A target hydra cannot read: exit 8, failed, and `malformed`, in both.
+    expect(await cli({ to: 'session:x', message: 'x', initiator: 't' })).toMatchObject({ ok: false, exitCode: 8, result: 'failed', data: { malformed: true } })
+    expect(await cli({ specialist: 'a:b', message: 'x', initiator: 't' })).toMatchObject({ ok: false, exitCode: 8, result: 'failed', data: { malformed: true } })   // targets.ts's own
+    expect(await slack('D0BE3RB4Y00:x')).toMatchObject({ ok: false, exit: 8, malformed: true })
+    // A plain refusal carries no flags.
+    expect(await cli({ to: 'specialist:ghost', message: 'x', initiator: 't' })).not.toHaveProperty('data')
     expect(spawns).toHaveLength(0)
   })
 
@@ -272,7 +292,7 @@ describe('max: counted under one lock per specialist, from the sessions running 
     occupy('t-old-1', { tmuxName: 'old-mx_c1-1-000001' })
     occupy('t-old-2', { tmuxName: 'old-mx_c1-2-000001' })
     expect(await deliverToTarget({ perConversation: 'mx', conversation: 'slack:C1:1.000001' }, 'x', opts)).toMatchObject({ ok: true, sessionName: 'old-mx_c1-1-000001' })
-    expect(await deliverToTarget({ perConversation: 'mx', conversation: 'slack:C1:3.000001' }, 'x', opts)).toMatchObject({ ok: false, atMax: true })
+    expect(await deliverToTarget({ perConversation: 'mx', conversation: 'slack:C1:3.000001' }, 'x', opts)).toMatchObject({ ok: false, wait: true })
   })
 
   test('a slow cold start holds up no one: the lock covers only the decision, and the start counts against max while it runs', async () => {
@@ -287,7 +307,7 @@ describe('max: counted under one lock per specialist, from the sessions running 
     // a conversation whose session runs goes straight through
     expect(await deliverToTarget({ perConversation: 'mx', conversation: 'slack:C1:1.000001' }, 'y', opts)).toMatchObject({ ok: true, sessionName: 'mx_c1-1-000001' })
     // a third, cold, is told no at once: the hanging start holds the second place
-    expect(await deliverToTarget({ perConversation: 'mx', conversation: 'slack:C1:3.000001' }, 'z', opts)).toMatchObject({ ok: false, atMax: true })
+    expect(await deliverToTarget({ perConversation: 'mx', conversation: 'slack:C1:3.000001' }, 'z', opts)).toMatchObject({ ok: false, wait: true })
     release()
     expect(await cold).toMatchObject({ ok: true, sessionName: 'mx_c1-2-000001' })
   })

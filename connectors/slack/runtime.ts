@@ -1,11 +1,11 @@
-import { ConversationTable, namedChannels, cantRead, NOT_A_MEMBER, cmpTs, slackWatchesPath, unresolvedPlaces, conversationId, placeName, isDm, appOfEntry, TOP_LEVEL, NO_DIRECTORY, SLACK_LIMITS, heldBySession, type BoundBy, type ConversationConfig, type ConversationEntry, type ConversationStats, type LateOwed } from './watch.js'
+import { ConversationTable, namedChannels, cantRead, NOT_A_MEMBER, cmpTs, slackWatchesPath, unresolvedPlaces, conversationId, placeName, isDm, appOfEntry, TOP_LEVEL, NO_DIRECTORY, SLACK_LIMITS, heldBySession, type BoundBy, type ConversationConfig, type ConversationEntry, type ConversationStats, type LateOwed, type RouteTarget } from './watch.js'
 import { archiveUrl, parseConversation, THREAD_TS } from '../../shared/slack-conversation.js'
 import { ConnectedApps, type AppIdentity } from './apps.js'
 import { getSpecialist, conversationSpecialistOf, specialistOf, boundAs } from '../../sessions/specialists.js'
 import { registry } from '../../sessions/registry.js'
 import { occupancy, occupied } from '../../sessions/session-reachability.js'
 import type { SessionInfo } from '../../sessions/registry.js'
-import { deliverToTarget, conversationSessionName, conversationSessionRunning, placesFree, type Target } from '../../specialists/targets.js'
+import { deliverToTarget, conversationSessionName, conversationSessionRunning, placesFree, type DeliverOutcome, type Target } from '../../specialists/targets.js'
 import { on } from '../../infra/event-bus.js'
 import { SlackListener, boltApp, POST_TIMEOUT_MS, OWED_LATE_AFTER_MS, type ToldScopes, type MessageAuthor, type Writer, type ReadMessage } from './listener.js'
 import { SlackConnections, type AppHealth } from './connections.js'
@@ -172,23 +172,26 @@ export function getConversationTable(): ConversationTable {
     hosted: threadId => !!registry.getByThread(threadId),
     line: (threadId, make) => showLine(threadId, make),
     speaksIn: threadId => { const id = registry.getByThread(threadId); return isPlainSession(id, id ? registry.get(id) : undefined) },
-    deliver: async (target, message, idempotencyKey) => {
-      const t = targetFor(target.to, target.conversation)
-      // First come, first served, when places are short: a newer conversation without a session takes a place only if
-      // one is left over after every older waiter has had theirs.
-      if ('perConversation' in t && !conversationSessionRunning(t.perConversation, t.conversation)) {
-        const h = hydraConfig()
-        const waiters = getConversationTable().waiters(id => currentId(h, id) === t.perConversation)
-        const ahead = waiters.findIndex(e => conversationId(e) === t.conversation)
-        const before = ahead === -1 ? waiters.length : ahead
-        if (before > 0 && placesFree(t.perConversation) <= before) return { ok: false, error: `${t.perConversation} is at max with ${before} conversation${before === 1 ? '' : 's'} waiting ahead of ${t.conversation}`, wait: true }
-      }
-      const r = await deliverToTarget(t, message, { initiator: 'slack-watch', idempotencyKey, source: 'slack-watch' })
-      if (!r.ok && r.atMax) return { ok: false, error: r.reason, wait: true }
-      if (r.ok) return { ok: true, ...(r.duplicate && { duplicate: true }) }
-      return { ok: false, error: r.reason, exit: r.exit, ...(r.permanent && { permanent: true }), ...(r.malformed && { malformed: true }) }
-    },
+    deliver: deliverForSlack,
   })
+}
+
+/**
+ * The Slack connector's delivery: the conversation's target, after the connector's own turn order for per-conversation places.
+ * The outcome is targets.ts's, unchanged.
+ */
+export async function deliverForSlack(target: RouteTarget, message: string, idempotencyKey: string): Promise<DeliverOutcome> {
+  const t = targetFor(target.to, target.conversation)
+  // First come, first served, when places are short: a newer conversation without a session takes a place only if
+  // one is left over after every older waiter has had theirs.
+  if ('perConversation' in t && !conversationSessionRunning(t.perConversation, t.conversation)) {
+    const h = hydraConfig()
+    const waiters = getConversationTable().waiters(id => currentId(h, id) === t.perConversation)
+    const ahead = waiters.findIndex(e => conversationId(e) === t.conversation)
+    const before = ahead === -1 ? waiters.length : ahead
+    if (before > 0 && placesFree(t.perConversation) <= before) return { ok: false, exit: 5, reason: `${t.perConversation} is at max with ${before} conversation${before === 1 ? '' : 's'} waiting ahead of ${t.conversation}`, wait: true }
+  }
+  return deliverToTarget(t, message, { initiator: 'slack-watch', idempotencyKey, source: 'slack-watch' })
 }
 
 /**

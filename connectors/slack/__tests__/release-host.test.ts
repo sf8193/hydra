@@ -4,6 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { ConversationTable, type SlackMessageEvent } from '../watch.js'
 import { BOT, oneListener, view } from './slack-config.js'
+import { LANDED } from './outcomes.js'
 
 const CH = 'C0FOOD'
 const SESSION = '1552619225032425525'
@@ -20,7 +21,7 @@ function setup(initially: boolean) {
   const logs: string[] = []
   const w = new ConversationTable({
     now: () => 1_000_000_000_000, file: join(dir, 'w.json'), log: l => { logs.push(l) }, config: () => view(oneListener(CH)), alert: t => { alerts.push(t) }, hosted,
-    deliver: async ({ to }) => { sent.push(to); return { ok: true } },
+    deliver: async ({ to }) => { sent.push(to); return LANDED },
   })
   return { w, alerts, sent, logs, host }
 }

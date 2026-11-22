@@ -12,6 +12,7 @@ import type { SocketEmitter } from '../../../shared/socket-supervisor.js'
 import { createResumeDetector, type LastSleep } from '../../../shared/resume.js'
 import { slackHealthLines } from '../../../cli/helpers.js'
 import { route } from '../../../routing/route.js'
+import { LANDED } from './outcomes.js'
 
 const BOT = 'UBOT'
 const CH = 'C0FOOD'
@@ -48,7 +49,7 @@ function setup(over: { tokens?: { app?: string; bot?: string }; toml?: string | 
   const before = toml === null ? null : view(toml, { names: Object.fromEntries((over.channels ?? []).map(c => [c.id, c.name])) })
   const watcher = new ConversationTable({
     now: () => now, file: join(dir, 'w.json'), filesDir: join(dir, 'files'), log: l => logs.push(l), config: () => listener?.view() ?? before,
-    deliver: async (_s, msg) => { sent.push(msg); return { ok: true } },
+    deliver: async (_s, msg) => { sent.push(msg); return LANDED },
   })
   // a cursor so the boot pass reads something instead of starting from now
   watcher.handle({ channel: CH, ts: '1000.000001', user: 'UA', text: 'old chat' })

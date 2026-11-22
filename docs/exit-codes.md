@@ -33,6 +33,8 @@ One word means "try again later, nothing is wrong": **`deferred`**. A schedule's
 | 8 | `failed` | No such specialist, or a target with no kind. |
 | none | no word | The daemon does not answer: exit 1 with `fatal: ...`, and no JSON. `hydra jobs` treats it as deferred. |
 
+With `--json`, a refusal's `data` carries its flags: `permanent` (it can never be delivered, such as a message too large: drop it, never retry), `wait` (exit 5: a per-conversation specialist has no place for this conversation yet) and `malformed` (exit 8: hydra cannot read the target).
+
 **Other commands**
 
 | Command | Exit | Meaning |

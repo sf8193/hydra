@@ -10,10 +10,12 @@ import { registry } from '../../../sessions/registry.js'
 import { _setHydraConfigForTesting } from '../../../infra/hydra-config.js'
 import { readEvents } from '../../../cli/events.js'
 import { eventsDir } from '../../../shared/events.js'
-import { ConversationTable, type ConversationConfig, type DeliverResult, type SlackMessageEvent } from '../watch.js'
+import { ConversationTable, type ConversationConfig, type SlackMessageEvent } from '../watch.js'
 import { getConversationTable, replyInConversation, slackRuntimeDeps } from '../runtime.js'
 import { resolveLineEmoji, receivedLine, postedLine } from '../lines.js'
 import { BOT, BASE, hydra, view } from './slack-config.js'
+import { LANDED } from './outcomes.js'
+import type { DeliverOutcome } from '../../../specialists/targets.js'
 
 process.stderr.write = (() => true) as any
 
@@ -39,7 +41,7 @@ describe('📨: a tag by someone in [people], shown in the thread of the session
     const config: ConversationConfig = view(toml, { coalesceMs: 1 })
     const w = new ConversationTable({
       now: () => Date.now(), file: join(dir, 'w.json'), log: () => {}, config: () => config, alert: () => {},
-      deliver: async (): Promise<DeliverResult> => ({ ok: true }),
+      deliver: async (): Promise<DeliverOutcome> => LANDED,
       line: (to, make) => lines.push({ to, line: make('💬') }),
     })
     w.bind(ELSEWHERE, TS, MINE, 'cli')

@@ -30,12 +30,12 @@ Checked against code at 42721c5. Bold names are README's core abstractions or th
 | 2 messages at a time, 20 MB each | `connectors/slack/watch.ts:1160`, `:341`, `:1179` | `mapLimit(group, 2, …)`; `FILE_MAX_BYTES = 20 MB` |
 | a file not saved is listed, with why | `connectors/slack/watch.ts:1176-1198` | `ref.note`: off, no link, too large, not connected, read as the operator, download failed |
 | 5. the answer? | `connectors/slack/watch.ts:1239-1266` | branches on `result` |
-| ok, or already delivered → delivered: settled, the place's ack reaction if set | `specialists/targets.ts:150-153`; `connectors/slack/runtime.ts:135`; `connectors/slack/watch.ts:1265-1266`, `:1271-1281` | a duplicate key is `ok`; `ack`, then `settle` |
+| ok, or already delivered → delivered: settled, the place's ack reaction if set | `specialists/targets.ts:176-182`; `connectors/slack/runtime.ts:194`; `connectors/slack/watch.ts:1265-1266`, `:1271-1281` | a duplicate key is `ok`; `ack`, then `settle` |
 | replies go out through the same App | `connectors/slack/runtime.ts:471-472` | `postParts(app, …)`: "Through the app that heard the conversation, and no other" |
-| over 10000 bytes → dropped: too-large | `shared/constants.ts:34`; `specialists/targets.ts:144`; `connectors/slack/watch.ts:1264` | `DELIVER_MAX_MESSAGE_BYTES = 10_000` → `permanent`; `drop('too-large')`, `settle` |
-| at max_sessions, or older waiters ahead → waits for a session of its own; stays owed, alerted | `connectors/slack/runtime.ts:126-134`; `specialists/targets.ts:288`; `connectors/slack/watch.ts:1242-1247` | `wait`; `waitingSince` set; `alertOnce('max:…')` |
+| over 10000 bytes → dropped: too-large | `shared/constants.ts:34`; `specialists/targets.ts:172`; `connectors/slack/watch.ts:1264` | `DELIVER_MAX_MESSAGE_BYTES = 10_000` → `permanent`; `drop('too-large')`, `settle` |
+| at max_sessions, or older waiters ahead → waits for a session of its own; stays owed, alerted | `connectors/slack/runtime.ts:185-192`; `specialists/targets.ts:312`; `connectors/slack/watch.ts:1242-1247` | `wait`; `waitingSince` set; `alertOnce('max:…')` |
 | exit 8 after a redirect: sent to the binding, alerted | `connectors/slack/watch.ts:1253-1257` | `exit === 8 && fallback` → `alertOnce`, `deliverGroup` to the binding |
-| exit 8, alerted; or another error → stays owed | `specialists/targets.ts:182`, `:268`; `connectors/slack/watch.ts:1250-1262` | not `permanent`: stays in `owed`; exit 8 → `alertOnce('no-such-specialist')` |
+| exit 8, alerted; or another error → stays owed | `specialists/targets.ts:210`, `:296`; `connectors/slack/watch.ts:1250-1262` | not `permanent`: stays in `owed`; exit 8 → `alertOnce('no-such-specialist')` |
 | stays owed: catch-up replays it | `connectors/slack/watch.ts:645-648`; `connectors/slack/catchup.ts:180-183` | `owedHints` tells each pass where to reread |
 
 Not drawn: a guard `deferred` for a ts the owed list already cut is `owed-full` (`watch.ts:1480`), and so is a failed batch whose ts was cut (`:1260-1261`).
