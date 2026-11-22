@@ -13,14 +13,14 @@ import type {
   EngineAdapter, ForkPlan, LaunchInput, LaunchResult,
   DeliveryResult, Notification,
   StopResult,
-  ContextUsage, RecoverySource, RecoveryPlan, Turn, UsageReading, UsageSubject,
+  ContextUsage, RecoverySource, RecoveryPlan, Turn,
 } from './engine-adapter.js'
 import { withoutIntents } from './engine-adapter.js'
 import type { BridgeTransport } from '../bridge-transport.js'
 import { parseContextFooter, type ContextFooter } from '../util.js'
 import { tmuxCreateSession, tmuxHasSession, tmuxSessionState, tmuxSync, tmuxTimedOut, tmuxWindowActivity } from '../tmux.js'
 import { claudeConfigDir, contextWindowOf, isKnownModel } from '../../shared/constants.js'
-import { drainSession, newSessionCursor, projectDirName, projectsRoot, transcriptContext, transcriptPathFor, type SessionCursor } from '../usage.js'
+import { projectDirName, projectsRoot, transcriptContext, transcriptPathFor } from '../usage.js'
 import { claudeTurnOutcome } from './claude-transcript.js'
 import { readClaudeStatus } from './claude-status.js'
 import { defaultTurnSources } from './codex-observation.js'
@@ -597,20 +597,6 @@ export class ClaudeEngine implements EngineAdapter {
       const pane = tmuxSync(['capture-pane', '-t', info.tmuxName, '-p'])
       return parseContextFooter(pane)
     } catch { return null }
-  }
-
-  // Reads only the four token counters out of the transcript; see daemon/usage.ts.
-  // A drain that can't stat the file throws: a transcript that quietly stops being
-  // readable would otherwise report zero forever.
-  usageTotals(info: UsageSubject, prev: unknown): UsageReading | null {
-    const transcript = transcriptPathFor(info.claudeSessionId)
-    if (!transcript) return null
-    const next = drainSession(transcript, (prev as SessionCursor | undefined) ?? newSessionCursor())
-    return {
-      totals: { ...next.totals }, providerSessionId: info.claudeSessionId!, cursor: next.cursor,
-      restarted: next.restarted,
-      phases: { totals: next.phaseTotals, current: next.latch, voted: next.voted },
-    }
   }
 
   surface(info: ClaudeSubject): string | null { return tmuxHasSession(info.tmuxName) ? info.tmuxName : null }

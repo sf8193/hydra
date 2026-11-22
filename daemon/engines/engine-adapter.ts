@@ -7,8 +7,6 @@
 import type { SessionInfo, SpawnOpts } from '../sessions.js'
 import type { LaunchPolicy, RestrictedPolicy } from '../restricted.js'
 import type { BlockingState } from '../pane-probe.js'
-import type { PhaseTotals, TokenTotals } from '../usage.js'
-import type { LatchPhase, UsagePhase } from '../usage-phase.js'
 export type { BlockingState } from '../pane-probe.js'
 
 // ---------------------------------------------------------------------------
@@ -70,18 +68,6 @@ export type ContextUsage = {
   readonly usedTokens: number
   readonly contextWindow: number
   readonly percent: number
-}
-
-// Cumulative spend of the provider's own session. `cursor` is opaque adapter
-// state the caller hands back next time; `restarted` means the totals are a new
-// baseline (rotated transcript, Codex decrease or thread change): report no delta.
-export type UsageSubject = Pick<SessionInfo, 'sessionId' | 'tmuxName' | 'claudeSessionId' | 'codexThreadId' | 'codexHomeName'>
-// `phases` splits the same spend by work phase, and is absent for a provider
-// whose records carry no per-turn tool names to read one from. Nested so the
-// split and the phase the cursor stands at can only arrive together.
-export type UsageReading = {
-  totals: TokenTotals; providerSessionId: string; cursor: unknown; restarted: boolean
-  phases?: { totals: PhaseTotals; current: LatchPhase; voted: readonly UsagePhase[] }
 }
 
 // confirmedComplete: the turn is definitely over (skip the reply guard's grace).
@@ -214,9 +200,6 @@ export interface EngineAdapter {
   isAlive(info: SessionInfo): boolean
   peek(info: SessionInfo, lines?: number): string
   usage(info: SessionInfo): ContextUsage | null
-  // Spend so far, or null when it can't be read yet (Raindrop counts the session unresolved).
-  // Claude: its transcript, drained incrementally from `prev`. Codex: the rollout's last token_count.
-  usageTotals(info: UsageSubject, prev: unknown): UsageReading | null
 
   // Surface
   // Ensure the interactive surface exists (Codex may recreate its tmux container

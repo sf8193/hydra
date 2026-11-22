@@ -35,7 +35,6 @@ import { pendingPermissions } from './permission.js'
 import { notePendingReply } from './reply-guard.js'
 import { deliverUserMessage } from './typed-delivery.js'
 import { replyContextMeta, resolveReplyContext } from './reply-context.js'
-import { emit } from './event-bus.js'
 import { getThreadIntercept } from './pane-probe.js'
 import { reportError } from './util.js'
 import { occupancy, occupied } from './session-reachability.js'
@@ -412,7 +411,6 @@ gateway.onMessageDelete((messageId, threadId) => {
 
 if (gateway.onReaction) {
   gateway.onReaction(async (event) => {
-    emit('reaction', event)
     if (!isDeleteReaction(event.emoji)) return
     const access = loadAccess()
     if (!operatorIds(access).includes(event.userId)) return

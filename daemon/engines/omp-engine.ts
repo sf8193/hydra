@@ -10,14 +10,14 @@ import type { SessionInfo } from '../sessions.js'
 import { ENGINE_CAPABILITIES } from '../../shared/engine-capabilities.js'
 import type {
   EngineAdapter, LaunchInput, LaunchResult, DeliveryResult, Notification, StopResult,
-  ContextUsage, RecoveryPlan, RecoverySource, Turn, UsageReading, UsageSubject,
+  ContextUsage, RecoveryPlan, RecoverySource, Turn,
 } from './engine-adapter.js'
 import type { BlockingState } from '../pane-probe.js'
 import type { ClaudeEngine } from './claude-engine.js'
 import { SOCK_PATH, PLATFORM, STATE_DIR } from '../config.js'
 import { removeSessionToken, removeSpawnPrompt, writeSessionToken, writeSpawnPrompt } from '../launch-files.js'
 import { tmuxCreateSession, tmuxWindowActivity } from '../tmux.js'
-import { ompContextTokens, ompSessionDir, ompTurn, ompUsageTotals, type OmpUsageCursor } from './omp-session.js'
+import { ompContextTokens, ompSessionDir, ompTurn } from './omp-session.js'
 import { contextWindowOf, ompProvider } from '../../shared/constants.js'
 import { withRaisedFdLimit } from '../../shared/spawn-env.js'
 import { isRestrictedPolicy } from '../policy-record.js'
@@ -103,8 +103,6 @@ export class OmpEngine implements EngineAdapter {
     const window = contextWindowOf(info.sessionMetadata?.model)
     return used === null || !window ? null : { usedTokens: used, contextWindow: window, percent: Math.min(100, Math.round(used * 100 / window)) }
   }
-  // Spend so far, from every assistant message in omp's session file (omp-session.ts); no phase split, as for Codex.
-  usageTotals(info: UsageSubject, prev: unknown): UsageReading | null { return ompUsageTotals(info.sessionId, prev as OmpUsageCursor | undefined) }
   detectBlockingState(_info: SessionInfo, _tail: string): BlockingState | null { return null }
   // Resume continues the dead session's file (`launch` copies it). Not `generic`: boot recovery and the `recover` list skip omp (they would relaunch it as Claude). No fork.
   recoveryPlan(src: RecoverySource): RecoveryPlan {

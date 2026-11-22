@@ -8,7 +8,7 @@ import { execFileSync } from 'child_process'
 import { markDead, registry } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
 import { formatDuration } from './util.js'
-import { PLATFORM, RAINDROP_DRYRUN_FILE } from './config.js'
+import { PLATFORM } from './config.js'
 import { transcriptPathFor } from './usage.js'
 import { sampleCpu, type CpuSample, type CpuVitals } from './cpu-watch.js'
 import { formatPct, formatPressure, type SystemPressure } from './cpu-spin.js'
@@ -31,8 +31,6 @@ const DAEMON_LOG_KEEP_BYTES = 64 * 1024 * 1024
 
 const SPAWN_LOG_MAX_BYTES = 5 * 1024 * 1024
 const SPAWN_LOG_KEEP_BYTES = 2 * 1024 * 1024
-const RAINDROP_DRYRUN_MAX_BYTES = 5 * 1024 * 1024
-const RAINDROP_DRYRUN_KEEP_BYTES = 2 * 1024 * 1024
 
 // How much pane tail the autopsy reads into the daemon log (PRESERVE, hardware-only).
 // The channel crash notice gets a LINK to the log, never the bytes — so there is no
@@ -259,10 +257,6 @@ export function trimDaemonLog(): void {
   frontTrim(path, DAEMON_LOG_MAX_BYTES, DAEMON_LOG_KEEP_BYTES, 'daemon-log')
 }
 
-export function trimRaindropDryrun(): void {
-  frontTrim(RAINDROP_DRYRUN_FILE, RAINDROP_DRYRUN_MAX_BYTES, RAINDROP_DRYRUN_KEEP_BYTES, 'raindrop-dryrun')
-}
-
 function frontTrim(path: string, maxBytes: number, keepBytes: number, label: string): void {
   let size: number
   try { size = statSync(path).size } catch { return }
@@ -322,7 +316,6 @@ async function vitalsTick(isConnected: (id: string) => boolean, host: HostHealth
   for (const s of live) if (s.debugLogPath) trimSpawnLog(s.debugLogPath)
   // Ahead of the empty-fleet return: a runaway can outlive every session.
   trimDaemonLog()
-  trimRaindropDryrun()
   const snap = await vitalsSnapshot()
   const { pressure } = snap
   // Ahead of the empty-fleet return: the host can be in trouble with no session running.

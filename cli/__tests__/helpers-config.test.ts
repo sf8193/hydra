@@ -217,15 +217,6 @@ const HEALTH = {
   idempotency: { active: 0 },
 }
 
-test('hydra health prints the raindrop line when the daemon reports one', () => {
-  expect(capturedHealth({ ...HEALTH, raindrop: 'dryrun → /tmp/x.jsonl (2 recorded, last 1m ago)' }))
-    .toContain('raindrop: dryrun → /tmp/x.jsonl (2 recorded, last 1m ago)')
-})
-
-test('hydra health prints no raindrop line when the daemon reports none', () => {
-  expect(capturedHealth(HEALTH)).not.toContain('raindrop')
-})
-
 test('hydra health names a refused restricted launch, with what to do; none reported, no line (#669)', () => {
   const out = capturedHealth({ ...HEALTH, refusedLaunches: [{ specialist: 'ops', why: 'it loaded an unlisted server', ageMin: 4 }] })
   expect(out).toContain('restricted specialist ops: launch REFUSED 4 min ago (it loaded an unlisted server) · fix: send it another message')
@@ -244,7 +235,7 @@ test('hydra health says a restricted specialist is refused on a macOS version th
   expect(capturedHealth(HEALTH)).not.toContain('macOS')
 })
 
-test('sourceStateDirEnv loads the .env but keeps no RAINDROP_ value in this process', () => {
+test('sourceStateDirEnv loads the .env but keeps no scrubbed token in this process', () => {
   writeEnv(`${SCRUBBED_SPAWN_VARS.map(v => `${v}=seeded`).join('\n')}\nSPAWN_CWD=/tmp/x\n`)
   sourceStateDirEnv(stateDir)
   expect(process.env.SPAWN_CWD).toBe('/tmp/x')

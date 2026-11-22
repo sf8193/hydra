@@ -11,7 +11,7 @@ import { tokenVarRefusal } from '../shared/spawn-env.js'
 import { SESSION_NAMES } from '../shared/session-catalog.js'
 
 export function slackCommand(args: string[], stateDirOpt: string | undefined): number {
-  // Hidden, for `scrub-raindrop.sh`: the token variables hydra.toml names (any app's, the gateway's, any server's), one per line, so a shell entrypoint unsets a custom one too.
+  // Hidden, for `scrub-secrets.sh`: the token variables hydra.toml names (any app's, the gateway's, any server's), one per line, so a shell entrypoint unsets a custom one too.
   // Read like the daemon reads them (config/token-vars.ts), valid file or not; a missing file names none.
   if (args.length === 1 && args[0] === 'token-vars') {
     const file = join(stateDirOpt ?? resolveConfig().stateDir, 'hydra.toml')

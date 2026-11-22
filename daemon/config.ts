@@ -36,7 +36,6 @@ export const APPROVED_DIR = join(STATE_DIR, 'approved')
 export const ENV_FILE = join(STATE_DIR, '.env')
 export const SOCK_PATH = join(STATE_DIR, 'daemon.sock')
 export const INBOX_DIR = join(STATE_DIR, 'inbox')
-export const RAINDROP_DRYRUN_FILE = join(STATE_DIR, 'raindrop-dryrun.jsonl')
 
 const LOCAL_ENV_FILE = join(import.meta.dir, '..', '.env')
 for (const envFile of [LOCAL_ENV_FILE, ENV_FILE]) {
@@ -45,7 +44,7 @@ for (const envFile of [LOCAL_ENV_FILE, ENV_FILE]) {
 sourceEnvFiles([LOCAL_ENV_FILE, ENV_FILE])
 // Names hydra.toml declares as tokens (Slack apps, the Discord gateway, each server's token_env) join the scrubbed set before anything is captured, so no session can inherit them.
 scrubTokenVarsInFile(join(STATE_DIR, 'hydra.toml'))
-// What is scrubbed from the environment is kept for the daemon's own use (capturedSpawnVars): Raindrop's settings, the gateway's tokens and every token hydra.toml names.
+// What is scrubbed from the environment is kept for the daemon's own use (capturedSpawnVars): the gateway's tokens and every token hydra.toml names.
 captureSpawnVars()
 const held = capturedSpawnVars()
 

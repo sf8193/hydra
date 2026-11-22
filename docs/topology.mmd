@@ -12,8 +12,6 @@ graph TD
   subgraph shared["Shared"]
     shared_constants["constants.ts"]
     shared_tool-definitions["tool-definitions.ts"]
-    daemon_raindrop-payload["raindrop-payload.ts"]
-    daemon_usage-phase["usage-phase.ts"]
   end
 
   subgraph core["Core"]
@@ -62,7 +60,6 @@ graph TD
     daemon_idle-limit["idle-limit.ts"]
     daemon_session-health["session-health.ts"]
     daemon_auto-handoff["auto-handoff.ts"]
-    daemon_raindrop["raindrop.ts"]
     daemon_usage-alerts["usage-alerts.ts"]
   end
 
@@ -91,7 +88,6 @@ graph TD
   daemon --> daemon_commands_global
   daemon --> daemon_recovery
   daemon --> connectors_clock_jobs-clock
-  daemon --> daemon_raindrop
   daemon --> daemon_phase-budget
   daemon --> daemon_idle-limit
   daemon --> daemon_session-lifecycle
@@ -169,7 +165,6 @@ graph TD
   daemon_cli-handler --> daemon_idempotency
   daemon_cli-handler --> daemon_config
   daemon_cli-handler --> daemon_access
-  daemon_cli-handler --> daemon_raindrop
   daemon_cli-handler --> connectors_clock_jobs-clock
   daemon_session-lifecycle --> daemon_config
   daemon_session-lifecycle --> daemon_util
@@ -267,18 +262,7 @@ graph TD
   daemon_auto-handoff --> daemon_permission
   daemon_auto-handoff --> daemon_session-lifecycle
   daemon_auto-handoff --> daemon_util
-  daemon_raindrop --> daemon_tmux
-  daemon_raindrop --> daemon_config
-  daemon_raindrop --> daemon_access
-  daemon_raindrop --> daemon_sessions
-  daemon_raindrop --> shared_constants
-  daemon_raindrop --> daemon_usage
-  daemon_raindrop --> daemon_usage-phase
-  daemon_raindrop --> daemon_raindrop-payload
-  daemon_raindrop-payload --> shared_constants
-  daemon_raindrop-payload --> daemon_usage-phase
   daemon_usage --> shared_constants
-  daemon_usage --> daemon_usage-phase
   daemon_usage-alerts --> daemon_config
   daemon_usage-alerts --> daemon_util
   daemon_commands_global --> daemon_config
@@ -296,7 +280,6 @@ graph TD
   daemon_commands_status --> daemon_bridge-transport
   daemon_commands_status --> daemon_util
   daemon_commands_status --> connectors_github_pr-watch
-  daemon_commands_status --> daemon_raindrop
   daemon_commands_thread --> daemon_config
   daemon_commands_thread --> daemon_sessions
   daemon_commands_thread --> daemon_bridge-transport

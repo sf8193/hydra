@@ -16,9 +16,8 @@ import type {
   EngineAdapter, LaunchInput, LaunchResult,
   DeliveryMode, DeliveryResult, Notification,
   StopResult,
-  ContextUsage, RecoverySource, RecoveryPlan, Turn, UsageReading, UsageSubject,
+  ContextUsage, RecoverySource, RecoveryPlan, Turn,
 } from './engine-adapter.js'
-import { codexUsageTotals } from '../codex-rollout.js'
 import { codexSocketPath, type CodexEngine } from '../codex-engine.js'
 import { codexHomeDir as codexHomeDirFn, codexRoot, startCodexAppServer, stopCodexAppServer } from '../codex-process.js'
 import { parseContextPercent, safeSend } from '../util.js'
@@ -308,10 +307,6 @@ export class CodexEngineAdapter implements EngineAdapter {
       if (percent === null) return null
       return { usedTokens: 0, contextWindow: 0, percent }
     } catch { return null }
-  }
-
-  usageTotals(info: UsageSubject, prev: unknown): UsageReading | null {
-    return codexUsageTotals(info, prev)
   }
 
   surface(info: SessionInfo): string | null {

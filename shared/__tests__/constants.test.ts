@@ -339,8 +339,7 @@ test('canonicalModel resolves a Claude chat alias, not only a codex one', () => 
 })
 
 describe('SESSION_LABELS', () => {
-  // A wire contract: `label` rides on every raindrop session event, and any
-  // template named after one is auto-labelled. Adding a member changes both.
+  // A wire contract: any template named after one is auto-labelled. Adding a member changes it.
   test('is exactly the three buckets', () => {
     expect([...SESSION_LABELS]).toEqual(['review', 'build', 'investigate'])
   })

@@ -56,7 +56,7 @@ describe('hydra slack manifest', () => {
   })
 })
 
-describe('hydra slack token-vars (hidden: what scrub-raindrop.sh asks)', () => {
+describe('hydra slack token-vars (hidden: what scrub-secrets.sh asks)', () => {
   const run = (toml?: string) => {
     dir = mkdtempSync(join(tmpdir(), 'slack-token-vars-'))
     if (toml !== undefined) writeFileSync(join(dir, 'hydra.toml'), toml)

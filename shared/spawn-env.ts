@@ -31,7 +31,6 @@ export const NEW_SESSION_TIMEOUT_MS = 5_000
 const NO_SERVER = /no server running|error connecting to/
 
 export const SCRUBBED_SPAWN_VARS = [
-  'RAINDROP_WRITE_KEY', 'RAINDROP_MODE', 'RAINDROP_USER_ID', 'RAINDROP_OMIT_REPO',
   // The Slack connector's default tokens: only the Slack connector may hold them. HYDRA_SLACK_USER_TOKEN reads as the
   // operator. Names hydra.toml declares as tokens (Slack apps, the Discord gateway, each [mcp_servers.*] token_env) are added to these by registerSpawnVars.
   'SLOPBOT_SLACK_APP_TOKEN', 'SLOPBOT_SLACK_BOT_TOKEN',
@@ -144,12 +143,6 @@ export function stateEnvUnsets(names: Iterable<string> = sourcedEnvNames()): str
     .sort()
 }
 
-let onSweepFailure: ((reason: string) => void) | null = null
-
-export function setSweepFailureHandler(fn: ((reason: string) => void) | null): void {
-  onSweepFailure = fn
-}
-
 type ExecFn = typeof childProcess.execFileSync
 type TmuxOpts = Omit<childProcess.ExecFileSyncOptions, 'env'> & { env?: NodeJS.ProcessEnv }
 
@@ -173,8 +166,6 @@ export function tmuxNewSession(
       process.stderr.write(
         `hydra: tmux env sweep failed (${cause}) — a pane may inherit ${scrubbedSpawnVars().join(', ')}\n`,
       )
-      const reason = e.code ?? (e.status === undefined ? 'unknown' : `exit-${e.status}`)
-      try { onSweepFailure?.(reason) } catch {}
     }
   }
   exec('tmux', ['new-session', ...args], run)

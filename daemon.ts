@@ -112,9 +112,6 @@ for (const adapter of Object.values(engines)) {
   })
 }
 
-import { register as registerRaindrop } from './daemon/raindrop.js'
-registerRaindrop()
-
 import { logSubscriptions, emit } from './daemon/event-bus.js'
 queueMicrotask(logSubscriptions)
 

@@ -10,7 +10,7 @@
 import { readFileSync, statSync } from 'fs'
 import { join } from 'path'
 import { STATE_DIR } from '../config.js'
-import { readRange, zeroTotals, type TokenTotals } from '../usage.js'
+import { readRange } from '../usage.js'
 
 export const agyStateDir = () => join(STATE_DIR, 'agy-sessions')
 export const agyStateFile = (sessionId: string): string => join(agyStateDir(), `${sessionId}.json`)
@@ -75,33 +75,4 @@ export function agyContextTokens(sessionId: string): number | null {
   const state = agyState(sessionId)
   const call = state && tailSteps(state.transcriptPath).findLast(s => s.type === 'PLANNER_RESPONSE')
   return call ? (call.input_tokens ?? 0) + (call.cache_read_tokens ?? 0) : null
-}
-
-// Spend so far: every model call's counts, summed. `cursor` is the byte offset after the last complete line read, so the next read adds only what agy
-// appended since; a different conversation or a shorter file starts over (`restarted`).
-export type AgyUsageCursor = { offset: number; totals: TokenTotals; conversationId: string }
-const DRAIN_MAX_BYTES = 8 * 1024 * 1024
-
-export function agyUsageTotals(sessionId: string, prev: AgyUsageCursor | undefined): { totals: TokenTotals; providerSessionId: string; cursor: AgyUsageCursor; restarted: boolean } | null {
-  const state = agyState(sessionId)
-  if (!state) return null
-  let size: number
-  try { size = statSync(state.transcriptPath).size } catch { return null }
-  const restarted = !!prev && (size < prev.offset || prev.conversationId !== state.conversationId)
-  const base = prev && !restarted ? prev : { offset: 0, totals: zeroTotals(), conversationId: state.conversationId }
-  const buf = readRange(state.transcriptPath, base.offset, Math.min(size - base.offset, DRAIN_MAX_BYTES))
-  const text = buf.toString('utf8')
-  const complete = text.slice(0, text.lastIndexOf('\n') + 1)
-  const consumed = Buffer.byteLength(complete)
-  const totals = { ...base.totals }
-  for (const line of complete.split('\n')) {
-    if (!line.includes('"PLANNER_RESPONSE"')) continue
-    try {
-      const s: Step = JSON.parse(line)
-      totals.inputTokens += s.input_tokens ?? 0
-      totals.outputTokens += s.output_tokens ?? 0
-      totals.cacheReadTokens += s.cache_read_tokens ?? 0
-    } catch { continue }
-  }
-  return { totals, providerSessionId: state.conversationId, cursor: { offset: base.offset + consumed, totals, conversationId: state.conversationId }, restarted }
 }

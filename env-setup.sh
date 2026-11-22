@@ -38,11 +38,11 @@ if [ -f "$STATE_DIR/.env" ]; then
   set +a
 fi
 
-if [ -f "$SCRIPT_DIR/scrub-raindrop.sh" ]; then
-  . "$SCRIPT_DIR/scrub-raindrop.sh"
-elif env | grep -q '^RAINDROP_'; then
-  echo "hydra: scrub-raindrop.sh missing and RAINDROP_ vars are set — refusing to spawn" >&2
+if [ -f "$SCRIPT_DIR/scrub-secrets.sh" ]; then
+  . "$SCRIPT_DIR/scrub-secrets.sh"
+elif env | grep -qE '^(DISCORD_BOT_TOKEN|SLACK_(BOT|APP)_TOKEN|SLOPBOT_SLACK_|HYDRA_SLACK_)'; then
+  echo "hydra: scrub-secrets.sh missing and token vars are set — refusing to spawn" >&2
   exit 1
 else
-  echo "hydra: scrub-raindrop.sh missing (no RAINDROP_ vars set; continuing)" >&2
+  echo "hydra: scrub-secrets.sh missing (no token vars set; continuing)" >&2
 fi

@@ -230,10 +230,6 @@ SLACK_BOT_TOKEN=xoxb-...
 SLACK_APP_TOKEN=xapp-...
 ```
 
-### Raindrop observability (opt-in, off by default)
-
-Opt-in reporting of session lifecycle metadata (never message text) to [Raindrop](https://raindrop.ai). Off by default. Setup, privacy boundaries, known limits and troubleshooting: [docs/raindrop.md](docs/raindrop.md).
-
 ### Access control
 
 `access.json` controls who can message the bot. Lives in the state dir (`~/.claude/channels/discord/` by default). Once `hydra.toml` exists, its `operator` replaces `allowFrom` (admin checks, DMs to main) and pairing is off; the rest of `access.json` (DM policy, groups) still applies.

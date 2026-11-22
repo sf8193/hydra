@@ -25,7 +25,6 @@ import { deliverResult, type DeliverResult } from '../shared/exit-codes.js'
 import { gateway } from './config.js'
 import { loadAccess, operatorIds } from './access.js'
 import { on } from './event-bus.js'
-import { raindropStatusLine } from './raindrop.js'
 import { getCpuVitals } from './cpu-watch.js'
 import { formatCpuSummary } from './cpu-spin.js'
 import { jobsClock } from '../connectors/clock/jobs-clock.js'
@@ -281,7 +280,6 @@ function handleHealth(req: CLIRequest): CLIResponse {
   const connected = sessions.filter(s => transport.has(s.sessionId)).length
   const disconnected = sessions.length - connected
 
-  const raindropLine = raindropStatusLine('cli')
   const refused = refusedLaunches()
   const macosGate = macosGateHealth()
   const slack = slackConversationHealth()
@@ -290,7 +288,6 @@ function handleHealth(req: CLIRequest): CLIResponse {
     tmux: tmuxServerState(),
     idempotency: { active: listIdempotencyEntries().length },
     ...loopHealth(),
-    ...(raindropLine ? { raindrop: raindropLine } : {}),
     ...(refused.length ? { refusedLaunches: refused } : {}),
     ...(macosGate ? { macosGate } : {}),
     ...(slack ? { slack } : {}),
