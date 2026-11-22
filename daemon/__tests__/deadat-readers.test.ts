@@ -40,10 +40,10 @@ const ALLOWED: Record<string, { why: string; lines: string[] }> = {
       "if (!registry.has(sid) || registry.get(sid)?.deadAt || entry.items.length === 0) continue",
     ],
   },
-  'engines/codex-runtime.ts': {
+  'app/codex-runtime.ts': {
     why: 'the Codex runtime writes and reads its own verdict',
     lines: [
-      "if (!current || current.deadAt || current.engine !== 'codex') return",
+      "if (!current || current.deadAt) return",
       "delete info.deadAt",
       "if (info && !info.deadAt) deps.finalise(info)",
       "const codexSessions = records.filter(s => !s.deadAt)",

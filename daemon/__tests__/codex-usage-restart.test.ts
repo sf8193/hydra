@@ -13,7 +13,8 @@
 
 import { describe, expect, test } from 'bun:test'
 import { CodexEngine } from '../../engines/codex-engine.js'
-import { codexEngine, onTurnReconciled } from '../../engines/codex-runtime.js'
+import { onTurnReconciled } from '../../app/codex-runtime.js'
+import { codexEngine } from '../../sessions/engine-instances.js'
 import { getLastCodexMessage, isCodexTurnComplete, isCodexWorking } from '../../engines/codex-observation.js'
 import { registry, type SessionInfo } from '../../sessions/registry.js'
 

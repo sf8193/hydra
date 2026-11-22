@@ -34,11 +34,6 @@ export function tierOf(path: string): number | undefined {
 export const ALLOWED: readonly string[] = [
   'engines/codex-engine-adapter.ts -> sessions/codex-piggyback.ts',
   'engines/codex-engine-adapter.ts -> sessions/registry.ts',
-  'engines/codex-runtime.ts -> app/reply-guard.ts',
-  'engines/codex-runtime.ts -> sessions/anchor-state.ts',
-  'engines/codex-runtime.ts -> sessions/codex-piggyback.ts',
-  'engines/codex-runtime.ts -> sessions/protocol-registry.ts',
-  'engines/codex-runtime.ts -> sessions/registry.ts',
   'specialists/specialist-deliver.ts -> app/recovery.ts',
   'specialists/specialist-deliver.ts -> app/session-lifecycle.ts',
   'specialists/targets.ts -> app/recovery.ts',

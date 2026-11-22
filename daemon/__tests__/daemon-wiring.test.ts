@@ -10,6 +10,11 @@ test('daemon.ts hands the specialist delivery its stuck-state lookup', () => {
   expect(daemon).toMatch(/^targetDeps\.stuckState = confirmedStuckState$/m)
 })
 
+test('daemon.ts imports the Codex runtime and starts its boot sweep', () => {
+  expect(daemon).toMatch(/^import \{ startCodexRuntime \} from '\.\/app\/codex-runtime\.js'$/m)
+  expect(daemon).toMatch(/^void startCodexRuntime\(engineRecords\(engines\.codex\)\)$/m)
+})
+
 test('daemon.ts hands the Slack gateway its operator ids', () => {
   expect(daemon).toMatch(/\(gateway as any\)\.operators = operatorIds\b/)
 })

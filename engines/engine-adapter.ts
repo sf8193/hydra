@@ -179,7 +179,7 @@ export interface EngineAdapter {
 
   // Lifecycle
   // Boot, once, over this provider's persisted records; never rejects. Claude:
-  // nothing to do. Codex: reconnect the live records to their app-servers.
+  // nothing to do. Codex: nothing here either; daemon.ts runs its reconnect sweep (app/codex-runtime.ts).
   start(records: readonly SessionInfo[]): Promise<void>
   launch(input: LaunchInput): Promise<LaunchResult>
   /** A restricted launch's check, from the engine's own record of what it loaded: refuse (with the cause) or pass. Absent: the engine cannot say, so it cannot run a restricted session. */
