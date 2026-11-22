@@ -20,13 +20,13 @@ import { operatorIds } from '../sessions/access.js'
 import { safeSend } from '../infra/util.js'
 import { transport } from '../sessions/bridge-transport.js'
 import { byteTmuxName, claudeConfigDir } from '../shared/constants.js'
-import { detectBlockingState, hasLiveReplPrompt, LOGIN_BLOCKED_PATTERNS, LOGIN_EXPIRED_RE, LOGIN_EXPIRING_PATTERNS, LOGIN_SUCCESS_RE, OAUTH_URL_RE, PLAN_OPTION_A, PLAN_OPTION_B, PLAN_OPTION_C, USAGE_LIMIT_NAME_RE, USAGE_RESUME_AT_RE, type BlockingState, type BlockingKind, isResumePromptOnScreen, isUsageLimitOnScreen } from '../engines/claude-blocking.js'
+import type { BlockingKind, BlockingState } from '../engines/engine-adapter.js'
+import { detectBlockingState, hasLiveReplPrompt, LOGIN_BLOCKED_PATTERNS, LOGIN_EXPIRED_RE, LOGIN_EXPIRING_PATTERNS, LOGIN_SUCCESS_RE, OAUTH_URL_RE, PLAN_OPTION_A, PLAN_OPTION_B, PLAN_OPTION_C, USAGE_LIMIT_NAME_RE, USAGE_RESUME_AT_RE, isResumePromptOnScreen, isUsageLimitOnScreen } from '../engines/claude-blocking.js'
 import { blockedReason, readClaudeStatus, type ClaudeLiveStatus } from '../engines/claude-status.js'
 import { reportUsage, type UsageReading } from './usage-alerts.js'
 import { transcriptPathFor } from '../infra/usage.js'
 
 const execFileAsync = promisify(execFile)
-
 
 // ---------------------------------------------------------------------------
 // Types

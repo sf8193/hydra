@@ -10,7 +10,7 @@ import { mkdirSync } from 'fs'
 import { join } from 'path'
 import { codexSpawnEnv } from '../shared/spawn-env.js'
 import { registry, type SessionInfo } from '../sessions/registry.js'
-import type { BlockingState } from './claude-blocking.js'
+import type { BlockingState } from './engine-adapter.js'
 import type {
   EngineAdapter, LaunchInput, LaunchResult,
   DeliveryMode, DeliveryResult, Notification,

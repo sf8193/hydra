@@ -13,7 +13,7 @@ import { assembleContextLines } from '../infra/artifacts.js'
 import { sessionLiveAsync } from '../sessions/session-activity.js'
 import { homeRecoverable, homeStatus, homeStatusAccessory, type HomeStatus } from '../infra/home-status.js'
 import { confirmedStuckState, homeActionable } from './pane-probe.js'
-import type { BlockingState } from '../engines/claude-blocking.js'
+import type { BlockingState } from '../engines/engine-adapter.js'
 import { daemonPastOrphanGrace, occupancy, occupied } from '../sessions/session-reachability.js'
 import { timed } from '../shared/loop-watch.js'
 

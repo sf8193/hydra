@@ -1,17 +1,7 @@
 // Claude Code's blocking screens (plan mode, login, resume prompt, usage limit, unknown dialog) read off the pane tail: pure text matching, no I/O.
 // CC-specific and coupled to its terminal strings; app/pane-probe.ts probes the panes and acts on what this finds.
 
-export type BlockingKind = 'plan_mode' | 'login_required' | 'resume_prompt' | 'usage_limit' | 'unknown_dialog'
-
-export type LoginStage = 'expiring' | 'login-blocked' | 'oauth_url' | 'success'
-
-export type BlockingState = {
-  kind: BlockingKind
-  planPath: string | null
-  loginStage: LoginStage | null
-  oauthUrl: string | null
-  escEndsSession?: boolean
-}
+import type { BlockingKind, BlockingState, LoginStage } from './engine-adapter.js'
 
 // ---------------------------------------------------------------------------
 // Detection patterns — anchored to the pane TAIL where the prompt renders.

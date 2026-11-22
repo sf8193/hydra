@@ -11,7 +11,7 @@ import { registry, threadRegistry, type SessionInfo } from '../sessions/registry
 import { transport } from '../sessions/bridge-transport.js'
 import { gateway } from '../infra/config.js'
 import { occupancy, occupied, ORPHAN_GRACE_MS, bridgeWaitMs } from '../sessions/session-reachability.js'
-import type { BlockingState } from '../engines/claude-blocking.js'
+import type { BlockingState } from '../engines/engine-adapter.js'
 import { landingOf } from '../shared/landing.js'
 import { checkIdempotency, clearIdempotency, registerIdempotency, DELIVER_IDEMPOTENCY_TTL_MS } from '../infra/idempotency.js'
 import { DELIVER_MAX_MESSAGE_BYTES, parseIdleTtl } from '../shared/constants.js'
