@@ -1,7 +1,7 @@
 // A Slack conversation's identity: the app that heard it, the channel, and the thread. A leaf: no daemon, no Bolt.
 // The format is documented once, in docs/slack.md ("Conversations and replies, per app").
 
-import { DEFAULT_SLACK_APP } from '../../config/types.js'
+import { DEFAULT_SLACK_APP } from '../config/types.js'
 
 /** A thread's ts, or a DM's top level (below). */
 export const THREAD_TS = /^\d{1,12}\.\d{1,6}$/

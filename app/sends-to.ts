@@ -22,7 +22,7 @@ import { specialistOf, sendsToOf } from '../sessions/specialists.js'
 import { ensureSpecialist } from '../specialists/specialist-deliver.js'
 import { deliverToSession } from '../specialists/targets.js'
 import { slackConversationLink } from '../connectors/slack/runtime.js'
-import { parseConversation, conversationId } from '../connectors/slack/conversation.js'
+import { parseConversation, conversationId } from '../shared/slack-conversation.js'
 import { attr, fence, quoteBody, UNTRUSTED_TEXT_MAX_CHARS } from '../shared/untrusted-text.js'
 
 /** At most this many questions, and this many results, per conversation in the window: one conversation, a hijacked specialist or two specialists answering each other cannot send without end. */

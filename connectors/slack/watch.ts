@@ -8,7 +8,7 @@ import { HYDRA_ACTOR, type BindReason, type UnbindReason } from '../../shared/ev
 import { DEFAULT_SLACK_APP, isChannelName, isDmPlace, optionsAt, optionsOf, placeCovers, placeKey, placeOf, type Address, type HydraConfig, type Place, type PlaceOptions, type SlackApp } from '../../config/types.js'
 import { appKey, appName, type Apps } from './app.js'
 import { attr, fence, oneLine, quoteBody, UNTRUSTED_TEXT_MAX_CHARS } from '../../shared/untrusted-text.js'
-import { archiveUrl, conversationId, appOfEntry, appPrefix, scopeKey, unscopeKey, TOP_LEVEL } from './conversation.js'
+import { archiveUrl, conversationId, appOfEntry, appPrefix, scopeKey, unscopeKey, TOP_LEVEL } from '../../shared/slack-conversation.js'
 import { reachableBy, route, owningApp, refusal, notServedBy, identify, currentId, isLive, isSessionThread, withoutFallbacks, routerOf, MAIN } from '../../routing/route.js'
 
 export { conversationId, appOfEntry, TOP_LEVEL }

@@ -2,7 +2,7 @@
 // FROZEN COPY of the ownership rule in connectors/slack/runtime.ts as it was at the parent of the change that lets a plain session speak in a
 // thread bound to its own thread (lines 377 and 460-511 there, verbatim but for `export` and the imports). bound-speak-fuzz.test.ts runs it
 // beside the current rule on generated cases. Do not edit it to follow runtime.ts.
-import { parseConversation } from '../../conversation.js'
+import { parseConversation } from '../../../../shared/slack-conversation.js'
 import { appOfEntry, conversationId, isDm, TOP_LEVEL, type ConversationEntry } from '../../watch.js'
 import { getConversationTable } from '../../runtime.js'
 import { conversationSpecialistOf, boundAs } from '../../../../sessions/specialists.js'
