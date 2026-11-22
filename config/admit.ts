@@ -5,7 +5,7 @@ import { readFileSync } from 'fs'
 import { join } from 'path'
 import { withHydraTomlLock, writeIfUnchanged } from './append.js'
 import { formatIssues, loadHydraConfig } from './load.js'
-import { appendText, HYDRA_TOML } from './migrate.js'
+import { appendText, HYDRA_TOML } from './toml-doc.js'
 import type { LoadEnv } from './types.js'
 
 export type AdmitResult = { ok: true } | { ok: false; error: string }

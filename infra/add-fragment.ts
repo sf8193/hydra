@@ -6,15 +6,14 @@
 
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { withHydraTomlLock, writeIfUnchanged } from './append.js'
-import { formatIssues, loadHydraConfig, RESTRICTION_KEYS } from './load.js'
-import { appendOnly, appendText, HYDRA_TOML, hydraTomlInUse, toToml } from './migrate.js'
-import type { LoadEnv } from './types.js'
+import { withHydraTomlLock, writeIfUnchanged } from '../config/append.js'
+import { formatIssues, loadHydraConfig, RESTRICTION_KEYS } from '../config/load.js'
+import { hydraTomlInUse } from './migrate.js'
+import { appendOnly, appendText, HYDRA_TOML, isTable, toToml, type Doc } from '../config/toml-doc.js'
+import type { LoadEnv } from '../config/types.js'
 
-type Doc = Record<string, unknown>
 const SECTIONS = ['specialists', 'schedules'] as const
 type Section = typeof SECTIONS[number]
-const isTable = (v: unknown): v is Doc => typeof v === 'object' && v !== null && !Array.isArray(v)
 
 const describeRule = (r: Doc): string => `[[rules]] ${[r.place !== undefined && `place = ${JSON.stringify(r.place)}`, r.app !== undefined && `app = ${JSON.stringify(r.app)}`, r.person !== undefined && `person = ${JSON.stringify(r.person)}`, `target = ${JSON.stringify(r.target)}`].filter(Boolean).join(', ')}`
 const sameRule = (a: Doc, b: Doc): boolean => Bun.deepEquals(a, b)

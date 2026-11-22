@@ -3,7 +3,7 @@
 
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { HYDRA_TOML } from '../config/migrate.js'
+import { HYDRA_TOML } from '../config/toml-doc.js'
 import { finishOperatorAlert, shouldAlertOperator, startOperatorAlert } from './boot-refusal.js'
 import { readEnvFileValue } from './helpers.js'
 

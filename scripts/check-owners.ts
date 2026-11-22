@@ -79,7 +79,7 @@ export const RULES: Rule[] = [
     name: 'raw sync tmux exec',
     pattern: /\b(?:execFileSync|execSync|spawnSync)\s+tmux\b/g,
     // The daemon runs tmux synchronously only through tmuxSync (infra/tmux.ts): killed at its timeout, so a hung
-    // server can't hold the loop. Session creation has its own owner, spawn-env's tmuxNewSession, which bounds
+    // server can't hold the loop. Session creation has its own owner, tmuxNewSession (infra/tmux-session.ts), which bounds
     // itself. The CLI files and the recovery script are their own processes; test-setup kills the suite's server.
     allowed: [
       'infra/tmux.ts', 'cli/helpers.ts', 'cli/peek.ts', 'cli/lifecycle.ts', 'cli/hydra.ts',

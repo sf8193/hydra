@@ -3,11 +3,10 @@ import { closeSync, constants as fsc, existsSync, mkdirSync, mkdtempSync, openSy
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { JobsClock, openClockLock, ADOPT_GRACE_MS, applyOutcome, type ClockDeps } from '../jobs-clock.js'
-import {
-  ATTEMPT_DEADLINE_MS, KILL_GRACE_MS, v0File, externalFile, backoffUntil, commandMatches, listProcesses, lstartOf, normalizeLstart, daemonFile, owedSlot, readDaemonState, readJobState, resultFile, stateFile, writeAtomic,
-  type AttemptResult, type JobState,
-} from '../../../shared/jobs.js'
-import { legacyTitles, runnerJobs } from '../../../shared/jobs-launchd.js'
+import { ATTEMPT_DEADLINE_MS, KILL_GRACE_MS, v0File, externalFile, backoffUntil, commandMatches, normalizeLstart, daemonFile, owedSlot, resultFile, stateFile, type AttemptResult, type JobState } from '../../../shared/jobs.js'
+import { readDaemonState, readJobState, writeAtomic } from '../../../infra/job-files.js'
+import { listProcesses, lstartOf } from '../../../infra/processes.js'
+import { legacyTitles, runnerJobs } from '../../../infra/launch-agents.js'
 import { jobsFromSchedules } from '../../../shared/schedules.js'
 import type { HydraConfig, Schedule } from '../../../config/types.js'
 

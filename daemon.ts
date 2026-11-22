@@ -11,7 +11,7 @@
 import { join } from 'path'
 import { readFileSync, writeFileSync, unlinkSync, existsSync } from 'fs'
 import { connect } from 'net'
-import { bootRefusal, BOOT_REFUSED_FILE } from './config/migrate.js'
+import { bootRefusal, BOOT_REFUSED_FILE } from './infra/migrate.js'
 
 // ---------------------------------------------------------------------------
 // Singleton enforcement — exactly one daemon per state dir.
@@ -252,8 +252,9 @@ import { startPrWatcher, backfillTitles, fetchPrTitle, parsePrUrl } from './conn
 import { startConversationTable, stopConversationTable, startSlackListener } from './connectors/slack/runtime.js'
 import { pruneEvents } from './infra/events.js'
 import { startHydraConfig, stopHydraConfig, retryHydraConfigAlert, currentHydraConfig, onHydraConfigLoad, reloadHydraConfig, hydraConfigLoadedOk } from './infra/hydra-config.js'
-import { jobsFromSchedules, schedulesAreSource } from './shared/schedules.js'
-import { readDaemonState } from './shared/jobs.js'
+import { jobsFromSchedules } from './shared/schedules.js'
+import { schedulesAreSource } from './infra/schedule-source.js'
+import { readDaemonState } from './infra/job-files.js'
 import { pollActivityOnce } from './app/reply-guard.js'
 import { flushAllHeld } from './app/typed-delivery.js'
 import { probeAllSessions, mainStuckCause, confirmedStuckState } from './app/pane-probe.js'

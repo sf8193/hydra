@@ -8,7 +8,8 @@ import {
   parseJobs, runWork, jobsIO, jobsAttempt, attemptIO, jobsRun, runIO, jobsList,
   isPlatform, describeJob, jobsMarkDone, jobsSync, diffJobs, jobWarnings, jobsLaunchdRun, syncLaunchd, launchdIO, keyTtl,
 } from '../jobs.js'
-import { awakeTimeout, jobFromWire, parseEnvFile, tccFolder, externalFile, runnerLabel, resultFile, stateFile, writeAtomic, daemonFile, attemptArgv, parseAttemptArgs, parseAlertAfter, readJobState, runWaitMs, type AttemptArgs, type Job } from '../../shared/jobs.js'
+import { awakeTimeout, jobFromWire, parseEnvFile, tccFolder, externalFile, runnerLabel, resultFile, stateFile, daemonFile, attemptArgv, parseAttemptArgs, parseAlertAfter, runWaitMs, type AttemptArgs, type Job } from '../../shared/jobs.js'
+import { writeAtomic, readJobState } from '../../infra/job-files.js'
 import { parseLegacyTitle } from '../../shared/jobs-launchd.js'
 import { deliverResult } from '../../shared/exit-codes.js'
 
