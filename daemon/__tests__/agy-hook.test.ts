@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
-const script = join(import.meta.dir, '..', 'agy-hook.ts')
+const script = join(import.meta.dir, '..', '..', 'engines', 'agy-hook.ts')
 const event = { conversationId: 'c-1', transcriptPath: '/t/transcript.jsonl', workspacePaths: ['/w'], modelName: 'gemini-4-neon-high' }
 
 // agy runs the hook with the event on stdin and the session's environment.

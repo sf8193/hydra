@@ -1,8 +1,8 @@
-import { STATE_DIR, gateway, DEFAULT_SESSION_CHANNEL, PLATFORM } from './config.js'
+import { STATE_DIR, gateway, DEFAULT_SESSION_CHANNEL, PLATFORM } from '../infra/config.js'
 import { currentHydraConfig, hydraLoadEnv, reloadHydraConfig } from './hydra-config.js'
 import { admitChannel } from '../config/admit.js'
 import { BUSY } from '../config/append.js'
-import { chunk, safeSend } from './util.js'
+import { chunk, safeSend } from '../infra/util.js'
 import type { GateSettings } from '../config/types.js'
 import type { InboundMessage } from '../gateways/gateway.js'
 

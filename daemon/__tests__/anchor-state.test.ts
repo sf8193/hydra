@@ -1,7 +1,7 @@
 // The anchor state of a session's thread: which of the four a session is in, and what the Discord anchor shows for each. `respawned_session` is the
 // running session that has been respawned at least once; it is computed from `respawnCount` each time and stored nowhere.
 import { describe, test, expect, afterEach } from 'bun:test'
-import { gateway } from '../config.js'
+import { gateway } from '../../infra/config.js'
 import { registry } from '../sessions.js'
 import { refreshSessionVisual, ANCHOR_STATES } from '../anchor-state.js'
 import { DiscordGateway } from '../../gateways/discord.js'

@@ -15,17 +15,17 @@ graph TD
   end
 
   subgraph core["Core"]
-    daemon_config["config.ts"]
+    infra_config["config.ts"]
     daemon_sessions["sessions.ts"]
     daemon_bridge-transport["bridge-transport.ts"]
-    daemon_util["util.ts"]
-    daemon_tmux["tmux.ts"]
-    daemon_worktree-manager["worktree-manager.ts"]
-    daemon_usage["usage.ts"]
+    infra_util["util.ts"]
+    infra_tmux["tmux.ts"]
+    infra_worktree-manager["worktree-manager.ts"]
+    infra_usage["usage.ts"]
   end
 
   subgraph tools["Tools"]
-    daemon_bridge-tools["bridge-tools.ts"]
+    engines_bridge-tools["bridge-tools.ts"]
     daemon_tool-surface["tool-surface.ts"]
     daemon_bridge-dispatch["bridge-dispatch.ts"]
   end
@@ -51,9 +51,9 @@ graph TD
     connectors_github_pr-watch["pr-watch.ts"]
     connectors_clock_jobs-clock["jobs-clock.ts"]
     daemon_dashboard["dashboard.ts"]
-    daemon_idempotency["idempotency.ts"]
+    infra_idempotency["idempotency.ts"]
     daemon_state-machine["state-machine.ts"]
-    daemon_transcript-dump["transcript-dump.ts"]
+    infra_transcript-dump["transcript-dump.ts"]
     daemon_advance-nudge["advance-nudge.ts"]
     daemon_reply-guard["reply-guard.ts"]
     daemon_phase-budget["phase-budget.ts"]
@@ -78,7 +78,7 @@ graph TD
     daemon_commands_watch["watch.ts"]
   end
 
-  daemon --> daemon_config
+  daemon --> infra_config
   daemon --> daemon_sessions
   daemon --> daemon_anchor-state
   daemon --> daemon_bridge-transport
@@ -98,35 +98,35 @@ graph TD
   daemon --> daemon_router
   daemon --> connectors_github_pr-watch
   daemon --> daemon_reply-guard
-  daemon --> daemon_util
-  daemon --> daemon_tmux
+  daemon --> infra_util
+  daemon --> infra_tmux
   daemon --> daemon_session-health
   bridge --> shared_constants
   cli_hydra --> shared_constants
   shared_constants --> shared_tool-definitions
-  daemon_config --> shared_constants
-  daemon_sessions --> daemon_config
-  daemon_sessions --> daemon_util
-  daemon_sessions --> daemon_tmux
+  infra_config --> shared_constants
+  daemon_sessions --> infra_config
+  daemon_sessions --> infra_util
+  daemon_sessions --> infra_tmux
   daemon_sessions --> shared_constants
-  daemon_bridge-transport --> daemon_config
+  daemon_bridge-transport --> infra_config
   daemon_bridge-transport --> daemon_sessions
-  daemon_bridge-transport --> daemon_util
-  daemon_util --> daemon_config
-  daemon_util --> shared_constants
-  daemon_bridge-tools --> shared_constants
-  daemon_bridge-tools --> shared_tool-definitions
+  daemon_bridge-transport --> infra_util
+  infra_util --> infra_config
+  infra_util --> shared_constants
+  engines_bridge-tools --> shared_constants
+  engines_bridge-tools --> shared_tool-definitions
   daemon_tool-surface --> daemon_sessions
   daemon_tool-surface --> daemon_bridge-transport
-  daemon_tool-surface --> daemon_bridge-tools
+  daemon_tool-surface --> engines_bridge-tools
   daemon_tool-surface --> shared_constants
-  daemon_bridge-dispatch --> daemon_config
+  daemon_bridge-dispatch --> infra_config
   daemon_bridge-dispatch --> daemon_sessions
   daemon_bridge-dispatch --> daemon_bridge-transport
   daemon_bridge-dispatch --> daemon_access
   daemon_bridge-dispatch --> daemon_session-lifecycle
-  daemon_bridge-dispatch --> daemon_util
-  daemon_bridge-dispatch --> daemon_tmux
+  daemon_bridge-dispatch --> infra_util
+  daemon_bridge-dispatch --> infra_tmux
   daemon_bridge-dispatch --> daemon_protocol-registry
   daemon_bridge-dispatch --> connectors_github_pr-watch
   daemon_bridge-dispatch --> daemon_anchor-state
@@ -135,7 +135,7 @@ graph TD
   daemon_bridge-dispatch --> shared_constants
   daemon_bridge-dispatch --> daemon_tool-surface
   daemon_bridge-dispatch --> daemon_usage-alerts
-  daemon_bridge-server --> daemon_config
+  daemon_bridge-server --> infra_config
   daemon_bridge-server --> daemon_sessions
   daemon_bridge-server --> daemon_bridge-transport
   daemon_bridge-server --> daemon_bridge-dispatch
@@ -151,8 +151,8 @@ graph TD
   daemon_bridge-server --> daemon_cli-handler
   daemon_bridge-server --> connectors_github_pr-watch
   daemon_bridge-server --> daemon_main-guard
-  daemon_bridge-server --> daemon_util
-  daemon_bridge-server --> daemon_tmux
+  daemon_bridge-server --> infra_util
+  daemon_bridge-server --> infra_tmux
   daemon_bridge-server --> daemon_idle-limit
   daemon_protocol-registry --> daemon_sessions
   daemon_permission --> daemon_bridge-transport
@@ -161,42 +161,42 @@ graph TD
   daemon_cli-handler --> daemon_tool-surface
   daemon_cli-handler --> daemon_bridge-transport
   daemon_cli-handler --> daemon_session-lifecycle
-  daemon_cli-handler --> daemon_util
-  daemon_cli-handler --> daemon_tmux
+  daemon_cli-handler --> infra_util
+  daemon_cli-handler --> infra_tmux
   daemon_cli-handler --> shared_constants
-  daemon_cli-handler --> daemon_idempotency
-  daemon_cli-handler --> daemon_config
+  daemon_cli-handler --> infra_idempotency
+  daemon_cli-handler --> infra_config
   daemon_cli-handler --> daemon_access
   daemon_cli-handler --> connectors_clock_jobs-clock
-  daemon_session-lifecycle --> daemon_config
-  daemon_session-lifecycle --> daemon_util
-  daemon_session-lifecycle --> daemon_tmux
+  daemon_session-lifecycle --> infra_config
+  daemon_session-lifecycle --> infra_util
+  daemon_session-lifecycle --> infra_tmux
   daemon_session-lifecycle --> daemon_sessions
   daemon_session-lifecycle --> daemon_reply-guard
   daemon_session-lifecycle --> daemon_bridge-transport
-  daemon_session-lifecycle --> daemon_bridge-tools
+  daemon_session-lifecycle --> engines_bridge-tools
   daemon_session-lifecycle --> daemon_tool-surface
   daemon_session-lifecycle --> daemon_phase-budget
   daemon_session-lifecycle --> daemon_idle-limit
   daemon_session-lifecycle --> shared_constants
-  daemon_session-lifecycle --> daemon_usage
+  daemon_session-lifecycle --> infra_usage
   daemon_session-lifecycle --> daemon_anchor-state
   daemon_session-lifecycle --> connectors_github_pr-watch
   daemon_session-lifecycle --> daemon_access
-  daemon_session-lifecycle --> daemon_worktree-manager
-  daemon_recovery --> daemon_config
+  daemon_session-lifecycle --> infra_worktree-manager
+  daemon_recovery --> infra_config
   daemon_recovery --> daemon_sessions
   daemon_recovery --> daemon_anchor-state
   daemon_recovery --> daemon_session-lifecycle
-  daemon_recovery --> daemon_util
-  daemon_recovery --> daemon_tmux
+  daemon_recovery --> infra_util
+  daemon_recovery --> infra_tmux
   daemon_recovery --> connectors_github_pr-watch
-  daemon_recovery --> daemon_worktree-manager
+  daemon_recovery --> infra_worktree-manager
   daemon_recovery --> daemon_access
   daemon_recovery --> shared_constants
-  daemon_anchor-state --> daemon_config
+  daemon_anchor-state --> infra_config
   daemon_anchor-state --> daemon_sessions
-  daemon_router --> daemon_config
+  daemon_router --> infra_config
   daemon_router --> daemon_dashboard
   daemon_router --> daemon_sessions
   daemon_router --> daemon_bridge-transport
@@ -214,89 +214,89 @@ graph TD
   daemon_router --> daemon_idle-limit
   daemon_router --> daemon_permission
   daemon_router --> daemon_reply-guard
-  daemon_router --> daemon_util
+  daemon_router --> infra_util
   daemon_router --> daemon_templates
-  daemon_access --> daemon_config
-  daemon_access --> daemon_util
+  daemon_access --> infra_config
+  daemon_access --> infra_util
   daemon_templates --> shared_constants
-  connectors_github_pr-watch --> daemon_config
+  connectors_github_pr-watch --> infra_config
   connectors_github_pr-watch --> daemon_sessions
-  connectors_github_pr-watch --> daemon_util
+  connectors_github_pr-watch --> infra_util
   connectors_github_pr-watch --> shared_constants
-  daemon_dashboard --> daemon_config
+  daemon_dashboard --> infra_config
   daemon_dashboard --> daemon_sessions
   daemon_dashboard --> daemon_anchor-state
   daemon_dashboard --> daemon_bridge-transport
-  daemon_dashboard --> daemon_util
+  daemon_dashboard --> infra_util
   daemon_dashboard --> daemon_access
   daemon_dashboard --> connectors_github_pr-watch
-  daemon_idempotency --> daemon_config
-  daemon_idempotency --> daemon_util
-  daemon_transcript-dump --> daemon_config
-  daemon_transcript-dump --> daemon_util
+  infra_idempotency --> infra_config
+  infra_idempotency --> infra_util
+  infra_transcript-dump --> infra_config
+  infra_transcript-dump --> infra_util
   daemon_advance-nudge --> daemon_bridge-transport
   daemon_advance-nudge --> daemon_sessions
   daemon_advance-nudge --> daemon_protocol-registry
   daemon_reply-guard --> daemon_bridge-transport
   daemon_reply-guard --> daemon_sessions
-  daemon_reply-guard --> daemon_config
-  daemon_reply-guard --> daemon_util
-  daemon_reply-guard --> daemon_tmux
+  daemon_reply-guard --> infra_config
+  daemon_reply-guard --> infra_util
+  daemon_reply-guard --> infra_tmux
   daemon_phase-budget --> daemon_sessions
   daemon_phase-budget --> daemon_bridge-transport
-  daemon_phase-budget --> daemon_util
+  daemon_phase-budget --> infra_util
   daemon_idle-limit --> daemon_sessions
   daemon_idle-limit --> daemon_bridge-transport
-  daemon_idle-limit --> daemon_util
-  daemon_idle-limit --> daemon_config
+  daemon_idle-limit --> infra_util
+  daemon_idle-limit --> infra_config
   daemon_idle-limit --> daemon_protocol-registry
   daemon_idle-limit --> shared_constants
   daemon_session-health --> daemon_sessions
-  daemon_session-health --> daemon_config
-  daemon_session-health --> daemon_util
+  daemon_session-health --> infra_config
+  daemon_session-health --> infra_util
   daemon_session-health --> daemon_anchor-state
   daemon_session-health --> daemon_access
   daemon_session-health --> daemon_auto-handoff
   daemon_auto-handoff --> daemon_sessions
   daemon_auto-handoff --> daemon_tool-surface
-  daemon_auto-handoff --> daemon_config
+  daemon_auto-handoff --> infra_config
   daemon_auto-handoff --> daemon_bridge-transport
   daemon_auto-handoff --> daemon_permission
   daemon_auto-handoff --> daemon_session-lifecycle
-  daemon_auto-handoff --> daemon_util
-  daemon_usage --> shared_constants
-  daemon_usage-alerts --> daemon_config
-  daemon_usage-alerts --> daemon_util
-  daemon_commands_global --> daemon_config
+  daemon_auto-handoff --> infra_util
+  infra_usage --> shared_constants
+  daemon_usage-alerts --> infra_config
+  daemon_usage-alerts --> infra_util
+  daemon_commands_global --> infra_config
   daemon_commands_global --> daemon_sessions
   daemon_commands_global --> daemon_anchor-state
   daemon_commands_global --> daemon_bridge-transport
   daemon_commands_global --> daemon_session-lifecycle
-  daemon_commands_global --> daemon_util
+  daemon_commands_global --> infra_util
   daemon_commands_global --> daemon_commands_status
   daemon_commands_global --> daemon_templates
-  daemon_commands_status --> daemon_config
+  daemon_commands_status --> infra_config
   daemon_commands_status --> daemon_sessions
   daemon_commands_status --> daemon_anchor-state
   daemon_commands_status --> daemon_bridge-transport
-  daemon_commands_status --> daemon_util
+  daemon_commands_status --> infra_util
   daemon_commands_status --> connectors_github_pr-watch
-  daemon_commands_thread --> daemon_config
+  daemon_commands_thread --> infra_config
   daemon_commands_thread --> daemon_sessions
   daemon_commands_thread --> daemon_bridge-transport
   daemon_commands_thread --> daemon_session-lifecycle
   daemon_commands_thread --> daemon_anchor-state
   daemon_commands_thread --> daemon_commands_status
-  daemon_commands_thread --> daemon_util
-  daemon_commands_thread --> daemon_tmux
+  daemon_commands_thread --> infra_util
+  daemon_commands_thread --> infra_tmux
   daemon_commands_thread --> daemon_templates
   daemon_commands_thread --> daemon_auto-handoff
   daemon_commands_thread --> daemon_recovery
-  daemon_commands_review --> daemon_config
+  daemon_commands_review --> infra_config
   daemon_commands_review --> daemon_sessions
   daemon_commands_review --> daemon_protocol-registry
   daemon_commands_review --> shared_constants
-  daemon_commands_watch --> daemon_config
+  daemon_commands_watch --> infra_config
   daemon_commands_watch --> daemon_sessions
   daemon_commands_watch --> connectors_github_pr-watch
-  daemon_commands_watch --> daemon_util
+  daemon_commands_watch --> infra_util

@@ -1,13 +1,13 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { handleCLIRequest, type CLIRequest } from '../cli-handler.js'
 import { registry } from '../sessions.js'
-import { checkIdempotency } from '../idempotency.js'
+import { checkIdempotency } from '../../infra/idempotency.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import { fakeAdapter } from './test-harness.js'
 import { transport } from '../bridge-transport.js'
-import { engines } from '../engines/instances.js'
-import { emit } from '../event-bus.js'
-import { getIdempotencyEntry } from '../idempotency.js'
+import { engines } from '../../engines/instances.js'
+import { emit } from '../../infra/event-bus.js'
+import { getIdempotencyEntry } from '../../infra/idempotency.js'
 import { _setDaemonStartedAtForTesting } from '../session-reachability.js'
 import { targetDeps } from '../../specialists/targets.js'
 
@@ -100,7 +100,7 @@ describe('cli-handler', () => {
 
   test('spawn with idempotency key blocks duplicate', async () => {
     const key = `cli-test-idem-${Date.now()}`
-    const { registerIdempotency } = await import('../idempotency.js')
+    const { registerIdempotency } = await import('../../infra/idempotency.js')
     registerIdempotency(key, 'existing-session')
 
     const res = await handleCLIRequest(makeReq({
@@ -139,7 +139,7 @@ describe('cli-handler', () => {
 
   test('clear-key removes registered key', async () => {
     const key = `cli-test-clear-${Date.now()}`
-    const { registerIdempotency } = await import('../idempotency.js')
+    const { registerIdempotency } = await import('../../infra/idempotency.js')
     registerIdempotency(key, 'some-session')
 
     const res = await handleCLIRequest(makeReq({ command: 'clear-key', params: { key } }))

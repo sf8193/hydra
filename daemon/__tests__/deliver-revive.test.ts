@@ -5,11 +5,11 @@ import { handleCLIRequest, type CLIRequest } from '../cli-handler.js'
 import { registry, threadRegistry, type SessionInfo } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { _setRecoveryDeps, _resetRecoveryDeps, reviveDeps } from '../recovery.js'
-import { _resetBackoff } from '../recovery-backoff.js'
+import { _resetBackoff } from '../../infra/recovery-backoff.js'
 import { _setDaemonStartedAtForTesting } from '../session-reachability.js'
 import { fakeAdapter } from './test-harness.js'
 import { removeSpecialist, setSpecialist } from '../../specialists/specialists.js'
-import { getBackoff } from '../recovery-backoff.js'
+import { getBackoff } from '../../infra/recovery-backoff.js'
 
 process.stderr.write = (() => true) as any
 

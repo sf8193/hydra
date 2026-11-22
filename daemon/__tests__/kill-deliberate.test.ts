@@ -2,8 +2,8 @@ import { expect, test } from 'bun:test'
 import { readFileSync, readdirSync, statSync } from 'fs'
 import { join } from 'path'
 import { registry, threadRegistry } from '../sessions.js'
-import { gateway } from '../config.js'
-import { on } from '../event-bus.js'
+import { gateway } from '../../infra/config.js'
+import { on } from '../../infra/event-bus.js'
 import { killSession } from '../session-lifecycle.js'
 import { executeTool } from '../bridge-dispatch.js'
 import { handleCLIRequest } from '../cli-handler.js'
@@ -69,7 +69,7 @@ test('only these files call killSession with keepRecord or keepWatches (any layo
   const root = join(import.meta.dir, '..', '..')
   const files: string[] = []
   const walk = (d: string) => { for (const f of readdirSync(d)) { if (f === 'node_modules' || f === '__tests__' || f.startsWith('.')) continue; const p = join(d, f); if (statSync(p).isDirectory()) walk(p); else if (p.endsWith('.ts') && !p.includes('/scripts/')) files.push(p) } }
-  for (const d of ['daemon', 'specialists', 'connectors', 'shared']) walk(join(root, d))
+  for (const d of ['daemon', 'infra', 'engines', 'specialists', 'connectors', 'shared']) walk(join(root, d))
   const keeping = new Set<string>()
   for (const f of files) {
     const src = readFileSync(f, 'utf8')

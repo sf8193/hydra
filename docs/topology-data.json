@@ -87,8 +87,8 @@
       "desc": "UNIVERSAL_TOOLS — frozen tool objects (name, description, inputSchema)"
     },
     {
-      "id": "daemon_config",
-      "label": "daemon/config.ts",
+      "id": "infra_config",
+      "label": "infra/config.ts",
       "layer": "core",
       "desc": "Env, paths, .env loading, gateway instance"
     },
@@ -105,26 +105,26 @@
       "desc": "BridgeConn map, message queuing, flush"
     },
     {
-      "id": "daemon_util",
-      "label": "daemon/util.ts",
+      "id": "infra_util",
+      "label": "infra/util.ts",
       "layer": "core",
       "desc": "safeSend, chunk, parseContextPercent, formatDuration, baseNameFromBranch"
     },
     {
-      "id": "daemon_tmux",
-      "label": "daemon/tmux.ts",
+      "id": "infra_tmux",
+      "label": "infra/tmux.ts",
       "layer": "core",
       "desc": "Sync tmux, bounded with a hold: tmuxSync, session and server state, window activity"
     },
     {
-      "id": "daemon_worktree-manager",
-      "label": "daemon/worktree-manager.ts",
+      "id": "infra_worktree-manager",
+      "label": "infra/worktree-manager.ts",
       "layer": "core",
       "desc": "Git worktree create/reattach/destroy, unpushed-commit check"
     },
     {
-      "id": "daemon_bridge-tools",
-      "label": "daemon/bridge-tools.ts",
+      "id": "engines_bridge-tools",
+      "label": "engines/bridge-tools.ts",
       "layer": "tools",
       "desc": "UNIVERSAL_TOOLS, computeToolsForSession — zero daemon imports (cycle guard)"
     },
@@ -225,8 +225,8 @@
       "desc": "Slack Home tab dashboard"
     },
     {
-      "id": "daemon_idempotency",
-      "label": "daemon/idempotency.ts",
+      "id": "infra_idempotency",
+      "label": "infra/idempotency.ts",
       "layer": "domain",
       "desc": "Message deduplication"
     },
@@ -237,8 +237,8 @@
       "desc": "Generic state machine for protocols"
     },
     {
-      "id": "daemon_transcript-dump",
-      "label": "daemon/transcript-dump.ts",
+      "id": "infra_transcript-dump",
+      "label": "infra/transcript-dump.ts",
       "layer": "domain",
       "desc": "Preserve-then-strike: raw transcript dump before deletion"
     },
@@ -279,8 +279,8 @@
       "desc": "Automatic handoff of idle high-context sessions (cache and full-context rules)"
     },
     {
-      "id": "daemon_usage",
-      "label": "daemon/usage.ts",
+      "id": "infra_usage",
+      "label": "infra/usage.ts",
       "layer": "core",
       "desc": "Transcript location + incremental token-counter cursor"
     },
@@ -348,7 +348,7 @@
   "edges": [
     [
       "daemon",
-      "daemon_config"
+      "infra_config"
     ],
     [
       "daemon",
@@ -428,11 +428,11 @@
     ],
     [
       "daemon",
-      "daemon_util"
+      "infra_util"
     ],
     [
       "daemon",
-      "daemon_tmux"
+      "infra_tmux"
     ],
     [
       "daemon",
@@ -451,20 +451,20 @@
       "shared_tool-definitions"
     ],
     [
-      "daemon_config",
+      "infra_config",
       "shared_constants"
     ],
     [
       "daemon_sessions",
-      "daemon_config"
+      "infra_config"
     ],
     [
       "daemon_sessions",
-      "daemon_util"
+      "infra_util"
     ],
     [
       "daemon_sessions",
-      "daemon_tmux"
+      "infra_tmux"
     ],
     [
       "daemon_sessions",
@@ -472,7 +472,7 @@
     ],
     [
       "daemon_bridge-transport",
-      "daemon_config"
+      "infra_config"
     ],
     [
       "daemon_bridge-transport",
@@ -480,22 +480,22 @@
     ],
     [
       "daemon_bridge-transport",
-      "daemon_util"
+      "infra_util"
     ],
     [
-      "daemon_util",
-      "daemon_config"
+      "infra_util",
+      "infra_config"
     ],
     [
-      "daemon_util",
+      "infra_util",
       "shared_constants"
     ],
     [
-      "daemon_bridge-tools",
+      "engines_bridge-tools",
       "shared_constants"
     ],
     [
-      "daemon_bridge-tools",
+      "engines_bridge-tools",
       "shared_tool-definitions"
     ],
     [
@@ -508,7 +508,7 @@
     ],
     [
       "daemon_tool-surface",
-      "daemon_bridge-tools"
+      "engines_bridge-tools"
     ],
     [
       "daemon_tool-surface",
@@ -516,7 +516,7 @@
     ],
     [
       "daemon_bridge-dispatch",
-      "daemon_config"
+      "infra_config"
     ],
     [
       "daemon_bridge-dispatch",
@@ -536,11 +536,11 @@
     ],
     [
       "daemon_bridge-dispatch",
-      "daemon_util"
+      "infra_util"
     ],
     [
       "daemon_bridge-dispatch",
-      "daemon_tmux"
+      "infra_tmux"
     ],
     [
       "daemon_bridge-dispatch",
@@ -576,7 +576,7 @@
     ],
     [
       "daemon_bridge-server",
-      "daemon_config"
+      "infra_config"
     ],
     [
       "daemon_bridge-server",
@@ -640,11 +640,11 @@
     ],
     [
       "daemon_bridge-server",
-      "daemon_util"
+      "infra_util"
     ],
     [
       "daemon_bridge-server",
-      "daemon_tmux"
+      "infra_tmux"
     ],
     [
       "daemon_bridge-server",
@@ -680,11 +680,11 @@
     ],
     [
       "daemon_cli-handler",
-      "daemon_util"
+      "infra_util"
     ],
     [
       "daemon_cli-handler",
-      "daemon_tmux"
+      "infra_tmux"
     ],
     [
       "daemon_cli-handler",
@@ -692,11 +692,11 @@
     ],
     [
       "daemon_cli-handler",
-      "daemon_idempotency"
+      "infra_idempotency"
     ],
     [
       "daemon_cli-handler",
-      "daemon_config"
+      "infra_config"
     ],
     [
       "daemon_cli-handler",
@@ -708,15 +708,15 @@
     ],
     [
       "daemon_session-lifecycle",
-      "daemon_config"
+      "infra_config"
     ],
     [
       "daemon_session-lifecycle",
-      "daemon_util"
+      "infra_util"
     ],
     [
       "daemon_session-lifecycle",
-      "daemon_tmux"
+      "infra_tmux"
     ],
     [
       "daemon_session-lifecycle",
@@ -732,7 +732,7 @@
     ],
     [
       "daemon_session-lifecycle",
-      "daemon_bridge-tools"
+      "engines_bridge-tools"
     ],
     [
       "daemon_session-lifecycle",
@@ -752,7 +752,7 @@
     ],
     [
       "daemon_session-lifecycle",
-      "daemon_usage"
+      "infra_usage"
     ],
     [
       "daemon_session-lifecycle",
@@ -768,11 +768,11 @@
     ],
     [
       "daemon_session-lifecycle",
-      "daemon_worktree-manager"
+      "infra_worktree-manager"
     ],
     [
       "daemon_recovery",
-      "daemon_config"
+      "infra_config"
     ],
     [
       "daemon_recovery",
@@ -788,11 +788,11 @@
     ],
     [
       "daemon_recovery",
-      "daemon_util"
+      "infra_util"
     ],
     [
       "daemon_recovery",
-      "daemon_tmux"
+      "infra_tmux"
     ],
     [
       "daemon_recovery",
@@ -800,7 +800,7 @@
     ],
     [
       "daemon_recovery",
-      "daemon_worktree-manager"
+      "infra_worktree-manager"
     ],
     [
       "daemon_recovery",
@@ -812,7 +812,7 @@
     ],
     [
       "daemon_anchor-state",
-      "daemon_config"
+      "infra_config"
     ],
     [
       "daemon_anchor-state",
@@ -820,7 +820,7 @@
     ],
     [
       "daemon_router",
-      "daemon_config"
+      "infra_config"
     ],
     [
       "daemon_router",
@@ -892,7 +892,7 @@
     ],
     [
       "daemon_router",
-      "daemon_util"
+      "infra_util"
     ],
     [
       "daemon_router",
@@ -900,11 +900,11 @@
     ],
     [
       "daemon_access",
-      "daemon_config"
+      "infra_config"
     ],
     [
       "daemon_access",
-      "daemon_util"
+      "infra_util"
     ],
     [
       "daemon_templates",
@@ -912,7 +912,7 @@
     ],
     [
       "connectors_github_pr-watch",
-      "daemon_config"
+      "infra_config"
     ],
     [
       "connectors_github_pr-watch",
@@ -920,7 +920,7 @@
     ],
     [
       "connectors_github_pr-watch",
-      "daemon_util"
+      "infra_util"
     ],
     [
       "connectors_github_pr-watch",
@@ -928,7 +928,7 @@
     ],
     [
       "daemon_dashboard",
-      "daemon_config"
+      "infra_config"
     ],
     [
       "daemon_dashboard",
@@ -944,7 +944,7 @@
     ],
     [
       "daemon_dashboard",
-      "daemon_util"
+      "infra_util"
     ],
     [
       "daemon_dashboard",
@@ -955,20 +955,20 @@
       "connectors_github_pr-watch"
     ],
     [
-      "daemon_idempotency",
-      "daemon_config"
+      "infra_idempotency",
+      "infra_config"
     ],
     [
-      "daemon_idempotency",
-      "daemon_util"
+      "infra_idempotency",
+      "infra_util"
     ],
     [
-      "daemon_transcript-dump",
-      "daemon_config"
+      "infra_transcript-dump",
+      "infra_config"
     ],
     [
-      "daemon_transcript-dump",
-      "daemon_util"
+      "infra_transcript-dump",
+      "infra_util"
     ],
     [
       "daemon_advance-nudge",
@@ -992,15 +992,15 @@
     ],
     [
       "daemon_reply-guard",
-      "daemon_config"
+      "infra_config"
     ],
     [
       "daemon_reply-guard",
-      "daemon_util"
+      "infra_util"
     ],
     [
       "daemon_reply-guard",
-      "daemon_tmux"
+      "infra_tmux"
     ],
     [
       "daemon_phase-budget",
@@ -1012,7 +1012,7 @@
     ],
     [
       "daemon_phase-budget",
-      "daemon_util"
+      "infra_util"
     ],
     [
       "daemon_idle-limit",
@@ -1024,11 +1024,11 @@
     ],
     [
       "daemon_idle-limit",
-      "daemon_util"
+      "infra_util"
     ],
     [
       "daemon_idle-limit",
-      "daemon_config"
+      "infra_config"
     ],
     [
       "daemon_idle-limit",
@@ -1044,11 +1044,11 @@
     ],
     [
       "daemon_session-health",
-      "daemon_config"
+      "infra_config"
     ],
     [
       "daemon_session-health",
-      "daemon_util"
+      "infra_util"
     ],
     [
       "daemon_session-health",
@@ -1072,7 +1072,7 @@
     ],
     [
       "daemon_auto-handoff",
-      "daemon_config"
+      "infra_config"
     ],
     [
       "daemon_auto-handoff",
@@ -1088,23 +1088,23 @@
     ],
     [
       "daemon_auto-handoff",
-      "daemon_util"
+      "infra_util"
     ],
     [
-      "daemon_usage",
+      "infra_usage",
       "shared_constants"
     ],
     [
       "daemon_usage-alerts",
-      "daemon_config"
+      "infra_config"
     ],
     [
       "daemon_usage-alerts",
-      "daemon_util"
+      "infra_util"
     ],
     [
       "daemon_commands_global",
-      "daemon_config"
+      "infra_config"
     ],
     [
       "daemon_commands_global",
@@ -1124,7 +1124,7 @@
     ],
     [
       "daemon_commands_global",
-      "daemon_util"
+      "infra_util"
     ],
     [
       "daemon_commands_global",
@@ -1136,7 +1136,7 @@
     ],
     [
       "daemon_commands_status",
-      "daemon_config"
+      "infra_config"
     ],
     [
       "daemon_commands_status",
@@ -1152,7 +1152,7 @@
     ],
     [
       "daemon_commands_status",
-      "daemon_util"
+      "infra_util"
     ],
     [
       "daemon_commands_status",
@@ -1160,7 +1160,7 @@
     ],
     [
       "daemon_commands_thread",
-      "daemon_config"
+      "infra_config"
     ],
     [
       "daemon_commands_thread",
@@ -1184,11 +1184,11 @@
     ],
     [
       "daemon_commands_thread",
-      "daemon_util"
+      "infra_util"
     ],
     [
       "daemon_commands_thread",
-      "daemon_tmux"
+      "infra_tmux"
     ],
     [
       "daemon_commands_thread",
@@ -1204,7 +1204,7 @@
     ],
     [
       "daemon_commands_review",
-      "daemon_config"
+      "infra_config"
     ],
     [
       "daemon_commands_review",
@@ -1220,7 +1220,7 @@
     ],
     [
       "daemon_commands_watch",
-      "daemon_config"
+      "infra_config"
     ],
     [
       "daemon_commands_watch",
@@ -1232,7 +1232,7 @@
     ],
     [
       "daemon_commands_watch",
-      "daemon_util"
+      "infra_util"
     ]
   ]
 }

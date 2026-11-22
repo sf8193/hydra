@@ -9,7 +9,7 @@ const file = (path: string, ...lines: string[]) => ({ path, text: lines.join('\n
 describe('check-layers', () => {
   test('files get the tier of their folder, or of their name in daemon/', () => {
     expect(tierOf('shared/constants.ts')).toBe(0)
-    expect(tierOf('daemon/engines/agy-engine.ts')).toBe(1)
+    expect(tierOf('engines/agy-engine.ts')).toBe(1)
     expect(tierOf('gateways/slack.ts')).toBe(1)
     expect(tierOf('daemon/sessions.ts')).toBe(2)
     expect(tierOf('specialists/specialists.ts')).toBe(2)

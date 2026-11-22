@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { execFileSync } from 'child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs'
 import { join } from 'path'
-import { sendTmuxKeys } from '../codex-key-queue.js'
+import { sendTmuxKeys } from '../../engines/codex-key-queue.js'
 import { tmuxNewSession } from '../../shared/spawn-env.js'
 
 // Isolated real tmux server (its own TMUX_TMPDIR, every command by explicit -S).

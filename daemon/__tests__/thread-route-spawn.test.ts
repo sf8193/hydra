@@ -2,11 +2,11 @@
 // (a session id where a thread id belongs) is a fresh thread under its parent's channel, never a refusal: the predecessor may already be
 // killed. A joined or made thread that is not addressable fails before anything is made, or cleans up what was.
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
-import { gateway } from '../config.js'
+import { gateway } from '../../infra/config.js'
 import { doSpawnSession } from '../session-lifecycle.js'
 import { registry, threadRegistry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
-import { engines } from '../engines/instances.js'
+import { engines } from '../../engines/instances.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import { fakeAdapter } from './test-harness.js'
 

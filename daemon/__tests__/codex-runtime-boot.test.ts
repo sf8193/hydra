@@ -4,18 +4,18 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { gateway, STATE_DIR } from '../config.js'
+import { gateway, STATE_DIR } from '../../infra/config.js'
 import { registry, threadRegistry, SessionRegistry, type SessionInfo } from '../sessions.js'
-import { codexEngine, engines } from '../engines/instances.js'
-import type { EngineAdapter } from '../engines/engine-adapter.js'
-import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
+import { codexEngine, engines } from '../../engines/instances.js'
+import type { EngineAdapter } from '../../engines/engine-adapter.js'
+import { CodexEngineAdapter } from '../../engines/codex-engine-adapter.js'
 import { fakeCodexAdapter } from './test-harness.js'
-import { getLastCodexMessage, isCodexTurnComplete, isCodexWorking, noteCodexTurnState } from '../engines/codex-observation.js'
+import { getLastCodexMessage, isCodexTurnComplete, isCodexWorking, noteCodexTurnState } from '../../engines/codex-observation.js'
 import { notePendingReply, _pendingForTesting } from '../reply-guard.js'
 import { registerProtocol } from '../protocol-registry.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
-import { engineRecords } from '../engines/boot.js'
-import { reconnectCodexAfterDisconnect, reconnectCodexSessions, reconnectDeps } from '../engines/codex-runtime.js'
+import { engineRecords } from '../../engines/boot.js'
+import { reconnectCodexAfterDisconnect, reconnectCodexSessions, reconnectDeps } from '../../engines/codex-runtime.js'
 
 // The boot sweep over every Codex record in the registry.
 const sweep = (adapter: CodexEngineAdapter) => adapter.start(engineRecords(adapter))
@@ -225,10 +225,10 @@ describe('T0.7 engine events', () => {
   // drops module-level listeners for the rest of a shared process, so this runs fresh.
   test('delivery:failed: a notice to the session thread, none without a record', () => {
     const code = [
-      "const { gateway } = await import('./daemon/config.ts')",
+      "const { gateway } = await import('./infra/config.ts')",
       "const { registry } = await import('./daemon/sessions.ts')",
       "await import('./daemon/delivery-notice.ts')",
-      "const { emit } = await import('./daemon/event-bus.ts')",
+      "const { emit } = await import('./infra/event-bus.ts')",
       "const sent = []; gateway.send = async (c, text) => { sent.push([c, text]); return { id: 'x', channelId: c } }",
       "registry.set('t07-fail', { sessionId: 't07-fail', threadId: '1573000000000000001', tmuxName: 't07-fail', engine: 'codex' })",
       "emit('delivery:failed', { sessionId: 't07-fail', status: 'rejected', reason: 'busy', messageId: 'm-1' })",

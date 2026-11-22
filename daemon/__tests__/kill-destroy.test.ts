@@ -14,13 +14,13 @@
 // reachable by wrong routes: an already-dead session that gets killed anyway
 // still ends up destroyed, so these check for the absence of the wasted kill.
 
-import { engines } from '../engines/instances.js'
+import { engines } from '../../engines/instances.js'
 import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from 'bun:test'
 import { handleThreadKillIntercept, handleDestroyIntercept } from '../commands/thread.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import { registry, threadRegistry } from '../sessions.js'
 import type { SessionInfo } from '../sessions.js'
-import { gateway } from '../config.js'
+import { gateway } from '../../infra/config.js'
 import type { InboundMessage } from '../../gateways/gateway.js'
 
 const THREAD = 'thread-kd-1'

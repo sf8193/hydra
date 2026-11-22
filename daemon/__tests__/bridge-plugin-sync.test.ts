@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, symlinkSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { MCP_CONFIG, bridgeReadiness, isLinkedTo, syncBridgePlugin } from '../plugin-manifest.js'
+import { MCP_CONFIG, bridgeReadiness, isLinkedTo, syncBridgePlugin } from '../../infra/plugin-manifest.js'
 
 const realReadiness = bridgeReadiness.run
 afterEach(() => { bridgeReadiness.run = realReadiness })

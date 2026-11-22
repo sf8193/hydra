@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { executeTool } from '../bridge-dispatch.js'
 import * as access from '../access.js'
-import { gateway } from '../config.js'
+import { gateway } from '../../infra/config.js'
 import { registry } from '../sessions.js'
 import { setHydra } from './test-hydra.js'
 

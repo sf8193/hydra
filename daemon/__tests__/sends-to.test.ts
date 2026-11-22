@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { rmSync } from 'fs'
 import { join } from 'path'
-import { STATE_DIR, gateway } from '../config.js'
+import { STATE_DIR, gateway } from '../../infra/config.js'
 import { registry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { executeTool, restrictedRefusal } from '../bridge-dispatch.js'
@@ -17,7 +17,7 @@ import { setSpecialistThread, _reloadSpecialists } from '../../specialists/speci
 import { loadHydraConfig } from '../../config/load.js'
 import { testLoadEnv } from '../../config/__tests__/load-env.js'
 import { fakeAdapter } from './test-harness.js'
-import { engines } from '../engines/instances.js'
+import { engines } from '../../engines/instances.js'
 import type { HydraConfig } from '../../config/types.js'
 import type { SessionInfo } from '../sessions.js'
 

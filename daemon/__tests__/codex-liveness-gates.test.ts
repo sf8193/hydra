@@ -11,7 +11,7 @@ import { tmpdir } from 'os'
 import { join, resolve } from 'path'
 import { fakeCodexAdapter } from './test-harness.js'
 import { registry } from '../sessions.js'
-import { gateway } from '../config.js'
+import { gateway } from '../../infra/config.js'
 import { handleSpawnIntercept } from '../commands/global.js'
 import { doSpawnSession } from '../session-lifecycle.js'
 import { dedupForRecovery } from '../recovery.js'
@@ -205,8 +205,8 @@ describe('gate 5: dashboard rows', () => {
       const script = join(state, 'dash.ts')
       writeFileSync(script, `
         const { registry } = await import(${JSON.stringify(join(root, 'daemon/sessions.ts'))})
-        const { gateway } = await import(${JSON.stringify(join(root, 'daemon/config.ts'))})
-        const { CodexEngineAdapter } = await import(${JSON.stringify(join(root, 'daemon/engines/codex-engine-adapter.ts'))})
+        const { gateway } = await import(${JSON.stringify(join(root, 'infra/config.ts'))})
+        const { CodexEngineAdapter } = await import(${JSON.stringify(join(root, 'engines/codex-engine-adapter.ts'))})
         const { refreshDashboardNow } = await import(${JSON.stringify(join(root, 'daemon/dashboard.ts'))})
         const { startHydraConfig } = await import(${JSON.stringify(join(root, 'daemon/hydra-config.ts'))})
         startHydraConfig()

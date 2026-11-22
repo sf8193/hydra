@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { rmSync } from 'fs'
 import { join } from 'path'
-import { STATE_DIR } from '../../../daemon/config.js'
+import { STATE_DIR } from '../../../infra/config.js'
 import { registry } from '../../../daemon/sessions.js'
 import { setSpecialistThread, _reloadSpecialists } from '../../../specialists/specialists.js'
 import { _setHydraConfigForTesting } from '../../../daemon/hydra-config.js'

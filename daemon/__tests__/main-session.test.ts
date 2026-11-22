@@ -4,13 +4,13 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { appendFileSync, mkdirSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 delete process.env.BYTE_SESSION_NAME
-const { gateway, STATE_DIR } = await import('../config.js')
+const { gateway, STATE_DIR } = await import('../../infra/config.js')
 const { writeMainRecord } = await import('../../shared/main-record.js')
 const { handleUsageIntercept } = await import('../commands/status.js')
 const { handlePeekIntercept } = await import('../commands/thread.js')
 const { mainAlive, mainContext, mainLaunchModel } = await import('../main-session.js')
 const { withFakeTmux } = await import('./fake-tmux.js')
-const { projectDirName, projectsRoot } = await import('../usage.js')
+const { projectDirName, projectsRoot } = await import('../../infra/usage.js')
 type FakeTmux = ReturnType<typeof withFakeTmux>
 
 const BYTE = 'discord-byte'

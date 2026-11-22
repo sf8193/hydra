@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { codexStaticTools, computeToolsForSession, UNIVERSAL_TOOLS } from '../bridge-tools.js'
+import { codexStaticTools, computeToolsForSession, UNIVERSAL_TOOLS } from '../../engines/bridge-tools.js'
 import { BASE_TOOLS, CAPABILITY_TOOLS } from '../../shared/constants.js'
 
 // Suppress stderr

@@ -2,16 +2,16 @@
 // is and whichever refusal it was (a drifted policy, a start not yet verified). The target's thread hears it once, under the engine
 // the session really runs on.
 import { afterEach, describe, expect, test } from 'bun:test'
-import { gateway } from '../config.js'
+import { gateway } from '../../infra/config.js'
 import { transport } from '../bridge-transport.js'
 import { executeTool } from '../bridge-dispatch.js'
 import { registry } from '../sessions.js'
-import { engines } from '../engines/instances.js'
+import { engines } from '../../engines/instances.js'
 import { _setHydraConfigForTesting } from '../hydra-config.js'
 import { endVerifying, policyIdFor, startVerifying, type LaunchPolicy } from '../restricted.js'
 import { threadNotices } from '../notice-limit.js'
 import type { HydraConfig, Specialist } from '../../config/types.js'
-import '../engines/codex-runtime.js'
+import '../../engines/codex-runtime.js'
 
 process.stderr.write = (() => true) as any
 
@@ -112,7 +112,7 @@ describe('one refusal, one notice, under the engine the session runs on', () => 
   test('a rejection that no gate announced is said once, labelled with the session\'s own engine', async () => {
     configure(); watch()
     const claude = session('t5'); const codex = session('t6', { engine: 'codex' })
-    const { emit } = await import('../event-bus.js')
+    const { emit } = await import('../../infra/event-bus.js')
     emit('delivery:failed', { sessionId: claude.sessionId, status: 'rejected', reason: 'busy', messageId: 'm-1' })
     emit('delivery:failed', { sessionId: codex.sessionId, status: 'rejected', reason: 'busy', messageId: 'm-2' })
     await Bun.sleep(30)
@@ -127,7 +127,7 @@ import { writeFileSync } from 'fs'
 import { join } from 'path'
 import { deliveryWait } from '../bridge-dispatch.js'
 import { registerProtocol } from '../protocol-registry.js'
-import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
+import { CodexEngineAdapter } from '../../engines/codex-engine-adapter.js'
 
 const accepts = { status: 'accepted', via: 'bridge-socket' }
 const claudeWith = (deliver: (...a: any[]) => Promise<unknown>) => Object.assign(Object.create(engines.claude), { isAlive: () => true, deliver })
@@ -308,7 +308,7 @@ describe('the notice for a rejection the gate did not announce', () => {
   test('is said for every message, not once a minute per cause', async () => {
     configure(); watch()
     const s = session('n1')
-    const { emit } = await import('../event-bus.js')
+    const { emit } = await import('../../infra/event-bus.js')
     emit('delivery:failed', { sessionId: s.sessionId, status: 'rejected', reason: 'busy', messageId: 'm-1' })
     emit('delivery:failed', { sessionId: s.sessionId, status: 'rejected', reason: 'busy', messageId: 'm-2' })
     await Bun.sleep(30)

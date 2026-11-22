@@ -1,0 +1,25 @@
+// engines/history.ts
+//
+// Engine facts read off thread history entries. Pure.
+
+import type { ThreadSessionEntry } from '../daemon/sessions.js'
+import type { ProviderId } from './engine-adapter.js'
+
+// A legacy respawn accidentally passed the Codex placeholder to Claude. Such
+// a zero-message replacement never established a usable conversation.
+export function isForeignPlaceholder(entry: Pick<ThreadSessionEntry, 'model' | 'engine' | 'codexThreadId' | 'messageCount'>): boolean {
+  return entry.model === 'codex-default'
+    && entry.engine !== 'codex' && !entry.codexThreadId && entry.messageCount === 0
+}
+
+// Which engine ran the dead session: the live record's engine, else the engine the
+// history entry recorded, else (older entries) a codexThreadId means Codex, else Claude. A thread with no history yet is a fresh
+// start: it takes `declaredEngine` (a specialist's), else Claude. History is never overridden by `declaredEngine`.
+// (Uses the id as a discriminator — PR-IDENT.)
+export function recoveryEngine(
+  entry: Pick<ThreadSessionEntry, 'codexThreadId' | 'engine'> | undefined,
+  info: { engine?: ProviderId } | undefined,
+  declaredEngine?: ProviderId,
+): ProviderId {
+  return info?.engine ?? entry?.engine ?? (entry?.codexThreadId ? 'codex' : entry ? 'claude' : declaredEngine ?? 'claude')
+}

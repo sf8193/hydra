@@ -7,17 +7,17 @@
 
 import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach, spyOn } from 'bun:test'
 import { tmpdir } from 'os'
-import * as worktreeManager from '../worktree-manager.js'
-import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
-import { codexSocketPath } from '../codex-engine.js'
-import { codexHomeDir } from '../codex-process.js'
-import { engines } from '../engines/instances.js'
+import * as worktreeManager from '../../infra/worktree-manager.js'
+import { CodexEngineAdapter } from '../../engines/codex-engine-adapter.js'
+import { codexSocketPath } from '../../engines/codex-engine.js'
+import { codexHomeDir } from '../../engines/codex-process.js'
+import { engines } from '../../engines/instances.js'
 import { handleResumeIntercept } from '../commands/thread.js'
 import { registry, threadRegistry } from '../sessions.js'
 import type { SessionInfo } from '../sessions.js'
-import { gateway } from '../config.js'
+import { gateway } from '../../infra/config.js'
 import { transport } from '../bridge-transport.js'
-import type { LaunchInput } from '../engines/engine-adapter.js'
+import type { LaunchInput } from '../../engines/engine-adapter.js'
 import type { InboundMessage } from '../../gateways/gateway.js'
 
 
@@ -462,7 +462,7 @@ describe('stale Codex reconnect', () => {
   })
 
   test('reconnectCodexAfterDisconnect: replaced record is not revived or given a surface', async () => {
-    const { reconnectCodexAfterDisconnect } = await import('../engines/codex-runtime.js')
+    const { reconnectCodexAfterDisconnect } = await import('../../engines/codex-runtime.js')
     let current: any
     let ensured = 0, persisted = 0, failed = 0
     const A: any = { sessionId: 'sid', engine: 'codex', tmuxName: 'r16a', codexThreadId: 'T', deadAt: 1,

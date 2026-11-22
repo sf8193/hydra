@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { MessageReferenceType } from 'discord.js'
-import { DiscordGateway } from '../discord'
-import type { InboundMessage } from '../gateway'
+import { DiscordGateway } from '../discord.js'
+import type { InboundMessage } from '../gateway.js'
 
 const inbound = (referenceMessageId: string | null): InboundMessage => ({
   id: 'm2', channelId: 'c1', authorId: 'u1', authorUsername: 'dan', content: 'A',

@@ -1,10 +1,10 @@
 // A tmux that doesn't answer says nothing about a session: nothing is marked dead or reported stopped on it.
-// Every tmux call goes through daemon/tmux.ts's seam, which times out here: no tmux is touched.
+// Every tmux call goes through infra/tmux.ts's seam, which times out here: no tmux is touched.
 import { describe, test, expect, afterEach } from 'bun:test'
-import { _setTmuxForTesting, TMUX_HOLD_MS } from '../tmux.js'
-import { engines } from '../engines/instances.js'
-import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
-import { ClaudeEngine } from '../engines/claude-engine.js'
+import { _setTmuxForTesting, TMUX_HOLD_MS } from '../../infra/tmux.js'
+import { engines } from '../../engines/instances.js'
+import { CodexEngineAdapter } from '../../engines/codex-engine-adapter.js'
+import { ClaudeEngine } from '../../engines/claude-engine.js'
 import { killSession } from '../session-lifecycle.js'
 import { withFakeTmux } from './fake-tmux.js'
 import { checkSessionDeath, deathCheckIO } from '../bridge-server.js'

@@ -3,7 +3,7 @@
 // respawn's engine/model selection, and native fork vs continuation. Every
 // executor is stubbed through recoveryDeps, so nothing is spawned.
 
-import { engines, codexEngine } from '../engines/instances.js'
+import { engines, codexEngine } from '../../engines/instances.js'
 import { rmSync } from 'fs'
 import { join } from 'path'
 import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test'
@@ -11,7 +11,7 @@ import { handleResumeIntercept, handleRespawnIntercept, handleForkIntercept, _se
 import { RECOVERY_REVERIFY_GUARD, killSession } from '../session-lifecycle.js'
 import { registry, threadRegistry } from '../sessions.js'
 import type { SessionInfo, ThreadSessionEntry } from '../sessions.js'
-import { gateway } from '../config.js'
+import { gateway } from '../../infra/config.js'
 import type { InboundMessage } from '../../gateways/gateway.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import { pollSessionsOnce } from '../session-health.js'

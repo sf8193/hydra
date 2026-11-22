@@ -4,7 +4,7 @@
 // (e.g. dedup/pr-watch tests) would otherwise persist to the live pr-watches.json and wipe
 // running watches on every `bun test`.
 //
-// Must run BEFORE any module imports daemon/config.ts, which resolves STATE_DIR from
+// Must run BEFORE any module imports infra/config.ts, which resolves STATE_DIR from
 // HYDRA_STATE_DIR at import time — a bun `[test] preload` guarantees that ordering.
 //
 // ALWAYS isolate — never respect an inherited HYDRA_STATE_DIR/DISCORD_STATE_DIR, even if one
@@ -141,7 +141,7 @@ export const TEST_STATE_DIR = explicit || mkdtempSync(join(tmpdir(), TEST_DIR_PR
 const dir = TEST_STATE_DIR
 process.env.HYDRA_STATE_DIR = dir
 mkdirSync(join(dir, 'mods'), { recursive: true }) // the daemon's boot sync (shared/mods.ts) made this before any spawn
-process.env.HYDRA_TEST_PRELOADED = '1' // daemon/config.ts refuses to load under bun test without it
+process.env.HYDRA_TEST_PRELOADED = '1' // infra/config.ts refuses to load under bun test without it
 
 // Claude's config dir too, or planted transcript fixtures land in the live ~/.claude/projects.
 process.env.CLAUDE_CONFIG_DIR = join(dir, 'claude')

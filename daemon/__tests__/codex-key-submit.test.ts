@@ -3,8 +3,8 @@ import { execFileSync } from 'child_process'
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { keyTiming, sendTmuxKeys } from '../codex-key-queue.js'
-import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
+import { keyTiming, sendTmuxKeys } from '../../engines/codex-key-queue.js'
+import { CodexEngineAdapter } from '../../engines/codex-engine-adapter.js'
 import { fakeCodexAdapter } from './test-harness.js'
 
 // Fake tmux executable on PATH, not a child_process mock. Perl, written once per
