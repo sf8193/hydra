@@ -7,7 +7,7 @@ import { catchUp, toEvent, _resetCatchUpLogs, type SlackApi, type RawMessage, ty
 
 import { BASE, BOT, oneListener, view } from './slack-config.js'
 import { LANDED, refused } from './outcomes.js'
-import type { DeliverOutcome } from '../../../specialists/targets.js'
+import type { DeliverOutcome } from '../../../app/targets.js'
 
 const CH = 'C0FOOD'
 const cfg: ConversationConfig = view(oneListener(CH))

@@ -15,7 +15,10 @@ import { getConversationTable, replyInConversation, slackRuntimeDeps } from '../
 import { resolveLineEmoji, receivedLine, postedLine } from '../lines.js'
 import { BOT, BASE, hydra, view } from './slack-config.js'
 import { LANDED } from './outcomes.js'
-import type { DeliverOutcome } from '../../../specialists/targets.js'
+import type { DeliverOutcome } from '../../../app/targets.js'
+import * as slackTargets from '../../../app/targets.js'
+import { bindSlackDelivery } from '../runtime.js'
+bindSlackDelivery(slackTargets)
 
 process.stderr.write = (() => true) as any
 

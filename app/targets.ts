@@ -16,8 +16,8 @@ import { checkIdempotency, clearIdempotency, registerIdempotency, DELIVER_IDEMPO
 import { DELIVER_MAX_MESSAGE_BYTES, parseIdleTtl } from '../shared/constants.js'
 import { getSpecialist, specialistForThread, withTargetLock, type Specialist } from '../sessions/specialists.js'
 import { currentHydraConfig } from '../infra/hydra-config.js'
-import { ensureSpecialist, SpecialistError } from './specialist-deliver.js'
-import { currentRecoveryDeps, reviveThreadForDelivery } from '../app/recovery.js'
+import { conversationRecipe, ensureSpecialist, SpecialistError } from './specialist-deliver.js'
+import { currentRecoveryDeps, reviveThreadForDelivery } from './recovery.js'
 import { readTarget, spelledTo, TARGET_FORMS, type TargetValue } from '../shared/target-kind.js'
 import { STUCK_PREFIX } from '../shared/exit-codes.js'
 
@@ -322,21 +322,6 @@ async function toConversation(to: string, conversation: string, text: string, op
   } finally {
     reserve(to, decided.name, -1)
   }
-}
-
-/**
- * What a per-conversation specialist's conversation sessions are made from: the specialist without its own thread (its channel, or its
- * thread's channel; its kickoff, model, and `idle`, else hydra.toml's). Undefined when no such specialist is declared.
- */
-export async function conversationRecipe(to: string): Promise<Specialist | undefined> {
-  const base = getSpecialist(to)
-  if (!base) return undefined
-  const s = currentHydraConfig().specialists[to]
-  const { threadId: shared, ...recipe } = base
-  // A specialist declared by its thread alone opens its conversations' threads beside it, in that thread's channel.
-  if (!recipe.channel && shared) recipe.channel = await gateway.fetchChannel(shared).then(c => c.parentId ?? undefined, () => undefined)
-  if (!recipe.idle && s?.idleMs) recipe.idle = `${Math.max(1, Math.round(s.idleMs / 60_000))}m`
-  return recipe
 }
 
 /** A specialist always queues: whoever is home (or is filled now, by the rule) gets it once its bridge is up. */

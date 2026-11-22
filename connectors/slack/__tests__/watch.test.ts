@@ -11,7 +11,7 @@ import {
 import type { GuardInput, GuardVerdict } from '../../../routing/guard.js'
 import { BASE, BOT, firstRules, oneListener, view, directory, TWO_APPS, type ViewOver } from './slack-config.js'
 import { LANDED, refused } from './outcomes.js'
-import type { DeliverOutcome } from '../../../specialists/targets.js'
+import type { DeliverOutcome } from '../../../app/targets.js'
 
 const CH = 'C0FOOD'
 const cfg = (over: ViewOver = {}): ConversationConfig => view(oneListener(CH), over)

@@ -1,7 +1,7 @@
 import { registry, repointChildren, threadRegistry } from '../sessions/registry.js'
 import type { SessionInfo } from '../sessions/registry.js'
 import { transport } from '../sessions/bridge-transport.js'
-import { backoffRefusal, reviveDeps, reviveThread, threadStub } from '../app/recovery.js'
+import { backoffRefusal, reviveDeps, reviveThread, threadStub } from './recovery.js'
 import { backoffClock, getBackoff } from '../infra/recovery-backoff.js'
 import { occupancy, occupied } from '../sessions/session-reachability.js'
 import { pushToolSurface } from '../sessions/tool-surface.js'
@@ -9,10 +9,10 @@ import { resumeIdleLimit } from '../sessions/idle-limit.js'
 import { parseIdleTtl } from '../shared/constants.js'
 import { conversationSpecialistOf, getSpecialist, setSpecialistThread, readKickoff, declaredInToml, specialistOf, declaredEngineOf, withTargetLock, type Specialist } from '../sessions/specialists.js'
 import { safeSend } from '../infra/util.js'
-import { endForFreshStart } from '../app/session-lifecycle.js'
+import { endForFreshStart } from './session-lifecycle.js'
 import { currentHydraConfig } from '../infra/hydra-config.js'
 import { declaredSpecialist } from '../config/types.js'
-import { conversationRecipe } from './targets.js'
+import { gateway } from '../infra/config.js'
 
 /** A refusal that carries the CLI exit code a caller should see. Nothing was started. */
 export class SpecialistError extends Error {
@@ -186,4 +186,19 @@ export function specialistStatus(name: string): { occupant?: { session: string; 
     ...(live && { occupant: { session: live.tmuxName, connected: transport.has(live.sessionId) } }),
     ...(b && wait > 0 && { refillBackoff: { failures: b.failures, retryInSec: wait, lastError: b.lastError } }),
   }
+}
+
+/**
+ * What a per-conversation specialist's conversation sessions are made from: the specialist without its own thread (its channel, or its
+ * thread's channel; its kickoff, model, and `idle`, else hydra.toml's). Undefined when no such specialist is declared.
+ */
+export async function conversationRecipe(to: string): Promise<Specialist | undefined> {
+  const base = getSpecialist(to)
+  if (!base) return undefined
+  const s = currentHydraConfig().specialists[to]
+  const { threadId: shared, ...recipe } = base
+  // A specialist declared by its thread alone opens its conversations' threads beside it, in that thread's channel.
+  if (!recipe.channel && shared) recipe.channel = await gateway.fetchChannel(shared).then(c => c.parentId ?? undefined, () => undefined)
+  if (!recipe.idle && s?.idleMs) recipe.idle = `${Math.max(1, Math.round(s.idleMs / 60_000))}m`
+  return recipe
 }

@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 
-// Two lower layers hold a default that does nothing until daemon.ts sets it: specialists/targets.ts `targetDeps.stuckState` (no stuck dialog seen) and the Slack
+// Two lower layers hold a default that does nothing until daemon.ts sets it: app/targets.ts `targetDeps.stuckState` (no stuck dialog seen) and the Slack
 // gateway's `operators` (nobody is an operator). The daemon is the only runtime entry that sets them, so a dropped line would fail open without an error.
 const daemon = readFileSync(join(import.meta.dir, '..', '..', 'daemon.ts'), 'utf8')
 
@@ -13,6 +13,10 @@ test('daemon.ts hands the specialist delivery its stuck-state lookup', () => {
 test('daemon.ts imports the Codex runtime and starts its boot sweep', () => {
   expect(daemon).toMatch(/^import \{ startCodexRuntime \} from '\.\/app\/codex-runtime\.js'$/m)
   expect(daemon).toMatch(/^void startCodexRuntime\(engineRecords\(engines\.codex\)\)$/m)
+})
+
+test('daemon.ts hands the Slack runtime its delivery functions', () => {
+  expect(daemon).toMatch(/^bindSlackDelivery\(\{ deliverToTarget, conversationSessionName, conversationSessionRunning, placesFree \}\)$/m)
 })
 
 test('daemon.ts hands the Slack gateway its operator ids', () => {

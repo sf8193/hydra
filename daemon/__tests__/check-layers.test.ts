@@ -13,7 +13,7 @@ describe('check-layers', () => {
     expect(tierOf('gateways/slack.ts')).toBe(1)
     expect(tierOf('sessions/registry.ts')).toBe(2)
     expect(tierOf('sessions/specialists.ts')).toBe(2)
-    expect(tierOf('specialists/targets.ts')).toBe(3)
+    expect(tierOf('app/targets.ts')).toBe(4)
     expect(tierOf('connectors/github/pr-watch.ts')).toBe(3)
     expect(tierOf('app/router.ts')).toBe(4)   // an app file is app
     expect(tierOf('daemon.ts')).toBe(5)

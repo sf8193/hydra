@@ -5,7 +5,13 @@ import { getSpecialist, conversationSpecialistOf, specialistOf, boundAs } from '
 import { registry } from '../../sessions/registry.js'
 import { occupancy, occupied } from '../../sessions/session-reachability.js'
 import type { SessionInfo } from '../../sessions/registry.js'
-import { deliverToTarget, conversationSessionName, conversationSessionRunning, placesFree, type DeliverOutcome, type Target } from '../../specialists/targets.js'
+import type { DeliverOutcome, Target } from '../../app/targets.js'
+import type * as targets from '../../app/targets.js'
+
+/** What the Slack runtime calls back into app/targets.ts, which sits above it. daemon.ts binds it once at boot. */
+type Delivery = Pick<typeof targets, 'deliverToTarget' | 'conversationSessionName' | 'conversationSessionRunning' | 'placesFree'>
+let delivery!: Delivery
+export function bindSlackDelivery(d: Delivery): void { delivery = d }
 import { on } from '../../infra/event-bus.js'
 import { SlackListener, boltApp, POST_TIMEOUT_MS, OWED_LATE_AFTER_MS, type ToldScopes, type MessageAuthor, type Writer, type ReadMessage } from './listener.js'
 import { SlackConnections, type AppHealth } from './connections.js'
@@ -136,7 +142,7 @@ function alert(text: string, to?: string, app?: string): void {
  * Specialist and main alerts are not told this way: they are the operator's, about the connector, not about a binding the session holds.
  */
 function tellSession(threadId: string, text: string): void {
-  void deliverToTarget({ to: `thread:${threadId}` }, `[system] ${text}`, { initiator: 'slack-watch', source: 'slack-watch', queue: true })
+  void delivery.deliverToTarget({ to: `thread:${threadId}` }, `[system] ${text}`, { initiator: 'slack-watch', source: 'slack-watch', queue: true })
     .then(r => { if (!r.ok) log(`daemon: slack connector: the session in thread ${threadId} was not told (${r.reason}); its thread has the notice\n`) })
     .catch(err => log(`daemon: slack connector: telling the session in thread ${threadId} failed: ${err}\n`))
 }
@@ -184,14 +190,14 @@ export async function deliverForSlack(target: RouteTarget, message: string, idem
   const t = targetFor(target.to, target.conversation)
   // First come, first served, when places are short: a newer conversation without a session takes a place only if
   // one is left over after every older waiter has had theirs.
-  if ('perConversation' in t && !conversationSessionRunning(t.perConversation, t.conversation)) {
+  if ('perConversation' in t && !delivery.conversationSessionRunning(t.perConversation, t.conversation)) {
     const h = hydraConfig()
     const waiters = getConversationTable().waiters(id => currentId(h, id) === t.perConversation)
     const ahead = waiters.findIndex(e => conversationId(e) === t.conversation)
     const before = ahead === -1 ? waiters.length : ahead
-    if (before > 0 && placesFree(t.perConversation) <= before) return { ok: false, exit: 5, reason: `${t.perConversation} is at max with ${before} conversation${before === 1 ? '' : 's'} waiting ahead of ${t.conversation}`, wait: true }
+    if (before > 0 && delivery.placesFree(t.perConversation) <= before) return { ok: false, exit: 5, reason: `${t.perConversation} is at max with ${before} conversation${before === 1 ? '' : 's'} waiting ahead of ${t.conversation}`, wait: true }
   }
-  return deliverToTarget(t, message, { initiator: 'slack-watch', idempotencyKey, source: 'slack-watch' })
+  return delivery.deliverToTarget(t, message, { initiator: 'slack-watch', idempotencyKey, source: 'slack-watch' })
 }
 
 /**
@@ -521,7 +527,7 @@ const POST_BACKSTOP_MS = POST_TIMEOUT_MS + 5_000
  * shared session, any conversation bound to its specialist. `bound` is who the conversation is bound to (current id), `me` who the caller acts for.
  */
 function mayAnswerConversation(h: HydraConfig, caller: SessionInfo | undefined, me: string | undefined, bound: string | undefined, id: string): boolean {
-  const ownSession = !!caller && !!bound && [bound, ...(h.specialists[bound]?.renamedFrom ?? [])].some(sid => caller.tmuxName === conversationSessionName(sid, id))
+  const ownSession = !!caller && !!bound && [bound, ...(h.specialists[bound]?.renamedFrom ?? [])].some(sid => caller.tmuxName === delivery.conversationSessionName(sid, id))
   return isConversationSession(caller) ? ownSession : (!!me && bound === me)
 }
 

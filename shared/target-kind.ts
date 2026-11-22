@@ -1,5 +1,5 @@
 // What a target value says: `main`, `specialist:<name>` or `thread:<id>`, the `platform:thing` shape that places and addresses use.
-// The one reader of that shape: `resolveTo` (specialists/targets.ts) adds the live specialist list for delivery and the CLI, and the
+// The one reader of that shape: `resolveTo` (app/targets.ts) adds the live specialist list for delivery and the CLI, and the
 // hydra.toml loader passes the specialists it has loaded, so config checks and delivery never disagree about what a value means.
 // Pure on purpose (shared/ can't import the daemon): `declared` says whether a specialist of that name exists.
 //

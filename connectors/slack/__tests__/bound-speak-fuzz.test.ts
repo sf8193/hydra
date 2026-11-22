@@ -12,8 +12,11 @@ import { setSpecialistThread } from '../../../sessions/specialists.js'
 import { getConversationTable, ownConversationRefusal, slackRuntimeDeps, type OwnUse } from '../runtime.js'
 import { ownConversationRefusal as beforeRefusal } from './fixtures/own-conversation-before-bound-speak.js'
 import { TOP_LEVEL } from '../watch.js'
-import { conversationSessionName } from '../../../specialists/targets.js'
+import { conversationSessionName } from '../../../app/targets.js'
 import { TWO_APPS, hydra, view } from './slack-config.js'
+import * as slackTargets from '../../../app/targets.js'
+import { bindSlackDelivery } from '../runtime.js'
+bindSlackDelivery(slackTargets)
 
 process.stderr.write = (() => true) as any
 

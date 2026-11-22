@@ -9,7 +9,7 @@ import { engines } from '../../sessions/engine-instances.js'
 import { emit } from '../../infra/event-bus.js'
 import { getIdempotencyEntry } from '../../infra/idempotency.js'
 import { _setDaemonStartedAtForTesting } from '../../sessions/session-reachability.js'
-import { targetDeps } from '../../specialists/targets.js'
+import { targetDeps } from '../../app/targets.js'
 
 // Suppress stderr from daemon modules
 process.stderr.write = (() => true) as any

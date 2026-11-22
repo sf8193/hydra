@@ -7,7 +7,7 @@ import { registry, type SessionInfo } from '../../sessions/registry.js'
 import { atomicWriteFileSync, formatDuration, safeSend } from '../../infra/util.js'
 import { specialistForThread } from '../../sessions/specialists.js'
 import { DELIVER_MAX_MESSAGE_BYTES } from '../../shared/constants.js'
-import type { DeliverOpts, DeliverOutcome } from '../../specialists/targets.js'
+import type { DeliverOpts, DeliverOutcome } from '../../app/targets.js'
 import { timed } from '../../shared/loop-watch.js'
 import { spelledBare, spelledTo } from '../../shared/target-kind.js'
 
@@ -71,7 +71,7 @@ export type CheckStatusType = WatchEntry['lastCheckStatus']
 
 /** What pr-watch needs from the daemon above it, handed in once by startPrWatcher (this file imports `deliverToTarget` and the dashboard from neither). */
 export type PrWatchPorts = {
-  /** Deliver a watch's text to its target (specialists/targets.ts `deliverToTarget`). */
+  /** Deliver a watch's text to its target (app/targets.ts `deliverToTarget`). */
   deliver(t: { to: string; revive?: true }, text: string, opts: DeliverOpts): Promise<DeliverOutcome>
   /** A watch ended by itself (its PR merged or closed), after it was dropped and saved: the daemon drops the PR from its own views. Must not throw: nothing retries it. */
   onWatchRemoved(entry: WatchEntry): void

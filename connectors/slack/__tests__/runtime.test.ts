@@ -21,6 +21,9 @@ import { tokenEnvNames } from '../../../config/token-vars.js'
 import { defaultSlackApp } from '../../../config/types.js'
 import { registerSpawnVars } from '../../../shared/spawn-env.js'
 import { fakeAdapter } from '../../../daemon/__tests__/test-harness.js'
+import * as slackTargets from '../../../app/targets.js'
+import { bindSlackDelivery } from '../runtime.js'
+bindSlackDelivery(slackTargets)
 
 process.stderr.write = (() => true) as any
 

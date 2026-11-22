@@ -11,12 +11,15 @@ import { executeTool } from '../../app/bridge-dispatch.js'
 import { _setRecoveryDeps, _resetRecoveryDeps, reviveDeps } from '../../app/recovery.js'
 import { _resetBackoff, getBackoff } from '../../infra/recovery-backoff.js'
 import { _reloadSpecialists, getSpecialist, listSpecialists, removeSpecialist, setSpecialist, withThreadLock } from '../../sessions/specialists.js'
-import { deliverToTarget, parseTarget, conversationSessionName, sessionByName, targetDeps } from '../targets.js'
+import { deliverToTarget, parseTarget, conversationSessionName, sessionByName, targetDeps } from '../../app/targets.js'
 import { _setHydraConfigForTesting } from '../../infra/hydra-config.js'
 import { hydra } from '../../connectors/slack/__tests__/slack-config.js'
 import { deliverForSlack } from '../../connectors/slack/runtime.js'
 import { fakeAdapter } from '../../daemon/__tests__/test-harness.js'
 import { _setDaemonStartedAtForTesting } from '../../sessions/session-reachability.js'
+import * as targetsModule from '../../app/targets.js'
+import { bindSlackDelivery } from '../../connectors/slack/runtime.js'
+bindSlackDelivery(targetsModule)
 
 process.stderr.write = (() => true) as any
 

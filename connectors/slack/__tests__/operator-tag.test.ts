@@ -17,7 +17,10 @@ import { testLoadEnv } from '../../../config/__tests__/load-env.js'
 import { handleCLIRequest } from '../../../app/cli-handler.js'
 import { placeOf } from '../../../config/types.js'
 import { LANDED } from './outcomes.js'
-import type { DeliverOutcome } from '../../../specialists/targets.js'
+import type { DeliverOutcome } from '../../../app/targets.js'
+import * as slackTargets from '../../../app/targets.js'
+import { bindSlackDelivery } from '../runtime.js'
+bindSlackDelivery(slackTargets)
 
 process.stderr.write = (() => true) as any
 

@@ -9,6 +9,9 @@ import { getConversationTable, slackRuntimeDeps, editInConversation, deleteInCon
 import { executeTool } from '../../../app/bridge-dispatch.js'
 import type { MessageAuthor, Writer } from '../listener.js'
 import { TWO_APPS, hydra, view, SALES_BOT } from './slack-config.js'
+import * as slackTargets from '../../../app/targets.js'
+import { bindSlackDelivery } from '../runtime.js'
+bindSlackDelivery(slackTargets)
 
 process.stderr.write = (() => true) as any
 

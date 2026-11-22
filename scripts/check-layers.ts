@@ -7,7 +7,7 @@
 //   T0 core      shared/, config/, routing/, pure rules, prompts and types (no I/O of their own; check-rules.ts io-in-core refuses the imports and calls that do it)
 //   T1 edges     gateways/, engines/, infra (config paths, tmux, util, files, host probes)
 //   T2 sessions  the registry, access, reachability, transport, specialist data
-//   T3 domain    specialists/ (delivery), connectors/, protocols/ (specs)
+//   T3 domain    connectors/, protocols/ (specs)
 //   T4 app       use cases and inbound handling: lifecycle, recovery, router, commands, protocol-runner, bridge-server...  (everything that coordinates the layers below)
 //   T5 boot      daemon.ts, bridge.ts, cli/, and the boot probe (it loads every module on purpose)
 
@@ -24,7 +24,7 @@ export function tierOf(path: string): number | undefined {
   if (['shared', 'config', 'routing'].includes(top) || path === 'throttled-queue.ts') return 0
   if (top === 'sessions') return 2
   if (top === 'infra' || top === 'gateways' || top === 'omp' || top === 'engines') return 1
-  if (['specialists', 'connectors', 'protocols'].includes(top)) return 3
+  if (['connectors', 'protocols'].includes(top)) return 3
   if (top === 'cli' || path === 'daemon.ts' || path === 'bridge.ts' || path === 'boot-probe.ts') return 5
   if (top === 'app') return 4
   return undefined
@@ -34,9 +34,6 @@ export function tierOf(path: string): number | undefined {
 export const ALLOWED: readonly string[] = [
   'engines/codex-engine-adapter.ts -> sessions/codex-piggyback.ts',
   'engines/codex-engine-adapter.ts -> sessions/registry.ts',
-  'specialists/specialist-deliver.ts -> app/recovery.ts',
-  'specialists/specialist-deliver.ts -> app/session-lifecycle.ts',
-  'specialists/targets.ts -> app/recovery.ts',
 ]
 
 const skip = (p: string) => !p.endsWith('.ts') || p.endsWith('.d.ts') || p.endsWith('.test.ts') || /(^|\/)(__tests__|node_modules|docs|scripts|mods\.local|mod)\//.test(p) || p === 'test-setup.ts'
