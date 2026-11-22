@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { rmSync } from 'fs'
 import { join } from 'path'
-import { STATE_DIR, gateway } from '../config.js'
+import { STATE_DIR, gateway } from '../../infra/config.js'
 import { registry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { executeTool, restrictedRefusal } from '../bridge-dispatch.js'

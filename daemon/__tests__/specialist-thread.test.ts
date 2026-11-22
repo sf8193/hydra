@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { existsSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { STATE_DIR } from '../config.js'
+import { STATE_DIR } from '../../infra/config.js'
 import type { SessionInfo } from '../sessions.js'
 import { removeSpecialist, setSpecialist } from '../../specialists/specialists.js'
 import { _resetHeld, heldCount, holdForSpecialist, restoreHeld, setHeldDelivery, specialistThreadDeps } from '../specialist-thread.js'

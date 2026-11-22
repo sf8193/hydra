@@ -7,10 +7,10 @@ import { AGY_API_KEY_FILE, AgyEngine, agySettings } from '../engines/agy-engine.
 import { ClaudeEngine } from '../engines/claude-engine.js'
 import { BridgeTransport } from '../bridge-transport.js'
 import { SESSION_INSTRUCTIONS } from '../../shared/constants.js'
-import { _setTmuxForTesting } from '../tmux.js'
+import { _setTmuxForTesting } from '../../infra/tmux.js'
 import { agyStateDir, agyStateFile } from '../engines/agy-session.js'
-import { STATE_DIR } from '../config.js'
-import { sessionTokenDir, spawnPromptDir } from '../launch-files.js'
+import { STATE_DIR } from '../../infra/config.js'
+import { sessionTokenDir, spawnPromptDir } from '../../infra/launch-files.js'
 
 const configDir = mkdtempSync(join(tmpdir(), 'hydra-agy-mcp-'))
 const mcpConfig = join(configDir, 'mcp_config.json')

@@ -16,7 +16,7 @@ import { noteRestart } from './watchdog-restarts.js'
 import { bootRefusal } from '../config/migrate.js'
 import { noteBootRefusal } from './boot-refusal.js'
 import { clearMainRecord, writeMainRecord } from '../shared/main-record.js'
-import { bridgePluginCache, isLinkedTo, syncHydraBridge, type BridgeSyncResult } from '../daemon/plugin-manifest.js'
+import { bridgePluginCache, isLinkedTo, syncHydraBridge, type BridgeSyncResult } from '../infra/plugin-manifest.js'
 
 // ---------------------------------------------------------------------------
 // Start byte (replaces start-byte.sh)

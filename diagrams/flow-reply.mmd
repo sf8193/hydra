@@ -1,5 +1,5 @@
 %% A post's text on its way to the chat: a session's reply, send_to_thread or edit_message, and the daemon's own
-%% safeSend and safeEdit. Each calls withOutbound (daemon/util.ts) before chunking (a raw gateway.send elsewhere does
+%% safeSend and safeEdit. Each calls withOutbound (infra/util.ts) before chunking (a raw gateway.send elsewhere does
 %% not); the gateway's optional shapeOutbound shapes the text and owns any files it made until the caller's whole
 %% send, retries included, has settled.
 %% Only gateways/discord.ts implements shapeOutbound; a gateway without it posts text as written.
@@ -9,7 +9,7 @@ sequenceDiagram
     participant mod as mod/hooks/register.ts
     participant bridge as bridge.ts
     participant disp as daemon/bridge-dispatch.ts
-    participant util as daemon/util.ts
+    participant util as infra/util.ts
     participant gw as gateways/discord.ts
     participant fmt as gateways/discord-format.ts
     participant tab as gateways/tables.ts

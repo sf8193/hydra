@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { makeServerTmpDirs, removeRestrictedFiles, serverTmpDir, serverTmpRoot } from '../restricted-files.js'
+import { makeServerTmpDirs, removeRestrictedFiles, serverTmpDir, serverTmpRoot } from '../../infra/restricted-files.js'
 
 const SID = '11111111-1111-4111-8111-111111111111'
 const SID2 = '22222222-2222-4222-8222-222222222222'

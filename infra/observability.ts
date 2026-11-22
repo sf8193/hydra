@@ -3,10 +3,10 @@
 // stderr, and no link to its transcript.
 
 import { readFileSync, statSync, fstatSync, openSync, readSync, closeSync, writeFileSync } from 'fs'
-import { occupancy } from './session-reachability.js'
+import { occupancy } from '../daemon/session-reachability.js'
 import { execFileSync } from 'child_process'
-import { markDead, registry } from './sessions.js'
-import type { SessionInfo } from './sessions.js'
+import { markDead, registry } from '../daemon/sessions.js'
+import type { SessionInfo } from '../daemon/sessions.js'
 import { formatDuration } from './util.js'
 import { PLATFORM } from './config.js'
 import { transcriptPathFor } from './usage.js'

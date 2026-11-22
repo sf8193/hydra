@@ -1,4 +1,4 @@
-import { gateway, DEFAULT_SESSION_CHANNEL } from './config.js'
+import { gateway, DEFAULT_SESSION_CHANNEL } from '../infra/config.js'
 import { registry, sessionEmoji, type SessionInfo } from './sessions.js'
 import { specialistEmoji, specialistOf } from '../specialists/specialists.js'
 import { occupancy } from './session-reachability.js'

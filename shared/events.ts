@@ -1,4 +1,4 @@
-// The event stream's shape, shared by its one writer (daemon/events.ts) and its reader (`hydra events`).
+// The event stream's shape, shared by its one writer (infra/events.ts) and its reader (`hydra events`).
 // One JSON line per event in `<state dir>/events/YYYY-MM-DD.jsonl` (UTC day). A line carries ids, names and a bind's reason, never message text.
 
 import { join } from 'path'

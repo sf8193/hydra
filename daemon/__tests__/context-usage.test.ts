@@ -4,7 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { engines } from '../engines/instances.js'
 import { contextWindowOf } from '../../shared/constants.js'
-import { lastContextTurn, transcriptContext, projectDirName, projectsRoot } from '../usage.js'
+import { lastContextTurn, transcriptContext, projectDirName, projectsRoot } from '../../infra/usage.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import type { SessionInfo } from '../sessions.js'
 

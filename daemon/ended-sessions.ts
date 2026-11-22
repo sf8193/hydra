@@ -3,7 +3,7 @@
 // thread (`hydra deliver --to thread:<id> --revive`).
 import { registry, threadRegistry, type ThreadMetadata } from './sessions.js'
 import { occupancy, occupied } from './session-reachability.js'
-import { fallbackDescription, formatDuration } from './util.js'
+import { fallbackDescription, formatDuration } from '../infra/util.js'
 
 export const ENDED_WITHIN_DAYS_DEFAULT = 14
 export const ENDED_WITHIN_DAYS_MAX = 90

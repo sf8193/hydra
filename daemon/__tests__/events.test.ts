@@ -2,10 +2,10 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { STATE_DIR } from '../config.js'
+import { STATE_DIR } from '../../infra/config.js'
 import * as hydraConfig from '../hydra-config.js'
 import { _setHydraConfigForTesting } from '../hydra-config.js'
-import { _resetEventsForTesting, pruneEvents, recordEvent } from '../events.js'
+import { _resetEventsForTesting, pruneEvents, recordEvent } from '../../infra/events.js'
 import { eventsDir } from '../../shared/events.js'
 import { EMPTY_CONFIG } from '../../config/load.js'
 

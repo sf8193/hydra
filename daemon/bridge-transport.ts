@@ -1,10 +1,10 @@
 import { readFileSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import type { Socket } from 'net'
-import { STATE_DIR } from './config.js'
+import { STATE_DIR } from '../infra/config.js'
 import { registry, type SessionInfo } from './sessions.js'
-import { atomicWriteFileSync } from './util.js'
-import { emit } from './event-bus.js'
+import { atomicWriteFileSync } from '../infra/util.js'
+import { emit } from '../infra/event-bus.js'
 import './delivery-notice.js'
 import { withoutIntents, type DeliveryResult, type Notification } from './engines/engine-adapter.js'
 

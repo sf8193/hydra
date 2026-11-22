@@ -27,7 +27,7 @@ process.env.CLAUDE_CONFIG_DIR = join(root, '.claude')
 process.env.SPAWN_CWD = root
 process.env.PATH = join(root, 'bin') + ':' + process.env.PATH
 const repo = new URL('..', import.meta.url).pathname.replace(/\/$/, '')
-const { gateway } = await import(repo + '/daemon/config.ts')
+const { gateway } = await import(repo + '/infra/config.ts')
 const sent: string[] = []
 Object.assign(gateway, {
  send: async (_id: string, text: string) => { sent.push(text); return { id: 'test-message' } },

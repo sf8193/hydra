@@ -1,6 +1,6 @@
 import { describe, test, expect, afterEach } from 'bun:test'
 import { rmSync, writeFileSync } from 'fs'
-import { ACCESS_FILE } from '../config.js'
+import { ACCESS_FILE } from '../../infra/config.js'
 import { gate, operatorIds } from '../access.js'
 import { _setHydraConfigForTesting, hydraConfigPath, startHydraConfig, stopHydraConfig } from '../hydra-config.js'
 import type { HydraConfig } from '../../config/types.js'

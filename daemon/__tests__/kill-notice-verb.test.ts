@@ -1,7 +1,7 @@
 // The notice a child's end sends its parent says what happened: `killed` when someone chose the end, `killed & destroyed` when the thread went with it,
 // `killed by hydra` when hydra ended it on purpose, `died from crash` when it was lost, `finished` when it ended itself, `handed off` when a successor took the thread, `died` when no one has classified the end. One test per word, each through the real caller; the sites a kill reaches are listed in the PR.
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { gateway } from '../config.js'
+import { gateway } from '../../infra/config.js'
 import { registry, threadRegistry, type SessionInfo } from '../sessions.js'
 import { executeTool } from '../bridge-dispatch.js'
 import { killSession } from '../session-lifecycle.js'

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, expect, spyOn, test } from 'bun:test'
-import { gateway } from '../config.js'
+import { gateway } from '../../infra/config.js'
 import * as access from '../access.js'
 import { registry, threadRegistry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'

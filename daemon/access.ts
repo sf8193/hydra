@@ -1,9 +1,9 @@
 import { readFileSync, writeFileSync, readdirSync, rmSync, renameSync, mkdirSync } from 'fs'
 import { randomBytes } from 'crypto'
 import { join } from 'path'
-import { STATE_DIR, ACCESS_FILE, APPROVED_DIR, STATIC, gateway, DEFAULT_SESSION_CHANNEL, PLATFORM } from './config.js'
+import { STATE_DIR, ACCESS_FILE, APPROVED_DIR, STATIC, gateway, DEFAULT_SESSION_CHANNEL, PLATFORM } from '../infra/config.js'
 import { currentHydraConfig, hydraConfigInUse } from './hydra-config.js'
-import { chunk, safeSend } from './util.js'
+import { chunk, safeSend } from '../infra/util.js'
 import type { InboundMessage } from '../gateways/gateway.js'
 import { timed } from '../shared/loop-watch.js'
 

@@ -27,7 +27,7 @@ test('on-kill hook runs with the dead session identity in env; missing hook is a
 test('kill_session: agent kill reaches the hook as "session ended by <caller>", main as "session ended"', async () => {
   const { executeTool } = await import('../bridge-dispatch.js')
   const { registry, threadRegistry } = await import('../sessions.js')
-  const { gateway, STATE_DIR } = await import('../config.js')
+  const { gateway, STATE_DIR } = await import('../../infra/config.js')
   const { KILL_HOOK_PATH } = await import('../session-lifecycle.js')
   const { mkdirSync } = await import("fs")
   const { dirname } = await import('path')

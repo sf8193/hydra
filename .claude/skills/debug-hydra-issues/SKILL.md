@@ -102,7 +102,7 @@ Recovery flows through three tiers (see `diagrams/flow-recovery-cascade.mmd`):
 - **Fix:** `respawn`. Don't retry `resume`.
 - **Root cause:** compare config dirs. The session may be launching under a different `$CLAUDE_CONFIG_DIR` than where the conversation was stored.
 
-**Don't trust the correlate line.** The observability layer (`daemon/observability.ts`) resolves transcript paths against a base path that may differ from the session's actual config dir. The daemon log can print a transcript path *that exists* while the session itself cannot see it. Verify which config dir the file is actually under.
+**Don't trust the correlate line.** The observability layer (`infra/observability.ts`) resolves transcript paths against a base path that may differ from the session's actual config dir. The daemon log can print a transcript path *that exists* while the session itself cannot see it. Verify which config dir the file is actually under.
 
 The kill/orphan classification lives in `daemon/resume-health.ts`. Trap: **when no exit-marker path was configured, a fully alive session is still classified `kill`** — "absence of evidence is not evidence of liveness." Symptom: the cascade killed a running session for no visible reason. The periodic orphan detector (`daemon/session-health.ts`) checks the same condition — both must agree on preserve-vs-kill, or the incoherence is itself a bug.
 

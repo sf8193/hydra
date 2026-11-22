@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { GatewayHealth } from '../daemon/gateway-health.js'
+import { GatewayHealth } from '../infra/gateway-health.js'
 
 /** Build a GatewayHealth with a controllable clock and an in-memory heartbeat sink. */
 function harness(opts?: { outageThresholdMs?: number; heartbeatThrottleMs?: number }) {

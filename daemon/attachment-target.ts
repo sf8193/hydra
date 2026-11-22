@@ -1,7 +1,7 @@
 // Where the files people send a session are saved, and under what limits: the one answer, for a message arriving (router.ts) and for the `download_attachment` tool.
 import { INBOX_LIMITS, type InboxLimits } from '../config/write-confinement.js'
 import { prepareConfinedInbox } from '../shared/confined-inbox.js'
-import { INBOX_DIR } from './config.js'
+import { INBOX_DIR } from '../infra/config.js'
 import { registry } from './sessions.js'
 import { isWriteConfinedSession } from './tool-surface.js'
 

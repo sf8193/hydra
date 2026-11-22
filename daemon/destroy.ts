@@ -6,19 +6,19 @@
 // spawner; CLI: the local socket) and how to report; this decides *whether it
 // can* — and does it.
 
-import { gateway } from './config.js'
+import { gateway } from '../infra/config.js'
 import { isParentOf, registry, threadRegistry, type SessionInfo } from './sessions.js'
 import { isProtocolParticipant } from './protocol-registry.js'
 import { emitSessionDeath, killSession } from './session-lifecycle.js'
 import { debouncedRefreshListDisplay } from './commands/status.js'
 import { isThreadOccupied } from './protocol-registry.js'
 import { unwatchThread } from '../connectors/github/pr-watch.js'
-import { emit } from './event-bus.js'
+import { emit } from '../infra/event-bus.js'
 import { currentHydraConfig } from './hydra-config.js'
 import { listSpecialists } from '../specialists/specialists.js'
 import { ownsLineage } from './lineage.js'
 import { occupancy } from './session-reachability.js'
-import { removeLaunchFiles } from './launch-files.js'
+import { removeLaunchFiles } from '../infra/launch-files.js'
 
 export type DestroyOutcome =
   | { ok: true }

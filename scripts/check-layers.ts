@@ -19,8 +19,8 @@ import { fileURLToPath } from 'url'
 export const TIER_NAMES = ['core', 'edges', 'sessions', 'domain', 'app', 'boot'] as const
 
 const CORE_DAEMON = ['landing', 'notice-limit', 'context-lines', 'review-result', 'policy-record', 'protocol-types', 'state-machine']
-// idempotency, recovery-selection, recovery-backoff, modifiers and protocol-dsl read config, util or engine history, so they are not pure: edges.
-const EDGE_DAEMON = ['config', 'tmux', 'util', 'event-bus', 'events', 'idempotency', 'recovery-selection', 'recovery-backoff', 'modifiers', 'protocol-dsl', 'launch-files', 'restricted-files', 'retirement-journal', 'worktree-manager', 'plugin-manifest', 'transcription', 'gateway-health', 'host-health', 'cpu-watch', 'cpu-spin', 'vitals-snapshot', 'observability', 'transcript-dump', 'usage', 'boot-probe', 'artifacts', 'quiet-send', 'home-status',
+// modifiers and protocol-dsl read config or util, so they are not pure: edges (they move to protocols/ later).
+const EDGE_DAEMON = ['modifiers', 'protocol-dsl', 'boot-probe',
   'codex-engine', 'codex-process', 'codex-rollout', 'codex-key-queue', 'codex-mcp-server', 'agy-hook', 'bridge-sync', 'bridge-tools']
 const SESSIONS_DAEMON = ['sessions', 'access', 'hydra-config', 'session-reachability', 'bridge-transport', 'delivery-notice', 'ended-sessions', 'anchor-state', 'lineage', 'session-activity', 'phase-budget', 'idle-limit', 'protocol-registry', 'thread-route', 'main-session', 'reply-context', 'resume-health', 'cli-caller']
 
@@ -29,7 +29,7 @@ export function tierOf(path: string): number | undefined {
   const top = path.split('/')[0]
   if (['shared', 'config', 'routing'].includes(top) || path.startsWith('daemon/prompts/') || path === 'throttled-queue.ts') return 0
   if (path === 'specialists/specialists.ts') return 2
-  if (top === 'gateways' || top === 'omp' || path.startsWith('daemon/engines/')) return 1
+  if (top === 'infra' || top === 'gateways' || top === 'omp' || path.startsWith('daemon/engines/')) return 1
   if (['specialists', 'connectors', 'protocols'].includes(top)) return 3
   if (top === 'cli' || path === 'daemon.ts' || path === 'bridge.ts' || path === 'daemon/boot-probe.ts') return 5
   if (top === 'daemon') {
@@ -46,11 +46,11 @@ export function tierOf(path: string): number | undefined {
 export const ALLOWED: readonly string[] = [
   'config/load.ts -> connectors/slack/app.ts',
   'connectors/slack/runtime.ts -> daemon/tool-surface.ts',
-  'daemon/artifacts.ts -> connectors/slack/conversation.ts',
-  'daemon/config.ts -> daemon/access.ts',
-  'daemon/cpu-watch.ts -> daemon/access.ts',
-  'daemon/cpu-watch.ts -> daemon/session-activity.ts',
-  'daemon/cpu-watch.ts -> daemon/sessions.ts',
+  'infra/artifacts.ts -> connectors/slack/conversation.ts',
+  'infra/config.ts -> daemon/access.ts',
+  'infra/cpu-watch.ts -> daemon/access.ts',
+  'infra/cpu-watch.ts -> daemon/session-activity.ts',
+  'infra/cpu-watch.ts -> daemon/sessions.ts',
   'daemon/engines/agy-engine.ts -> daemon/restricted.ts',
   'daemon/engines/boot.ts -> daemon/sessions.ts',
   'daemon/engines/claude-engine.ts -> daemon/pane-probe.ts',
@@ -67,10 +67,10 @@ export const ALLOWED: readonly string[] = [
   'daemon/engines/codex-runtime.ts -> daemon/reply-guard.ts',
   'daemon/engines/codex-runtime.ts -> daemon/sessions.ts',
   'daemon/engines/instances.ts -> daemon/bridge-transport.ts',
-  'daemon/events.ts -> daemon/hydra-config.ts',
-  'daemon/host-health.ts -> daemon/hydra-config.ts',
-  'daemon/observability.ts -> daemon/session-reachability.ts',
-  'daemon/observability.ts -> daemon/sessions.ts',
+  'infra/events.ts -> daemon/hydra-config.ts',
+  'infra/host-health.ts -> daemon/hydra-config.ts',
+  'infra/observability.ts -> daemon/session-reachability.ts',
+  'infra/observability.ts -> daemon/sessions.ts',
   'gateways/slack.ts -> connectors/slack/conversation.ts',
   'gateways/slack.ts -> daemon/access.ts',
   'specialists/specialist-deliver.ts -> daemon/recovery.ts',

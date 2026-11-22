@@ -148,7 +148,7 @@ describe.skipIf(!LIVE)('the server allowlist of a write-confined session, agains
   }, 120_000)
 
   // The way hydra's real bridge is loaded: a plugin in <config>/plugins/cache/<marketplace>/<plugin>/<version>/, installed_plugins.json naming it, enabledPlugins turning it on, its
-  // manifest's server command the BARE string `bun` with `${CLAUDE_PLUGIN_ROOT}` in its args (daemon/plugin-manifest.ts), run through `start`.
+  // manifest's server command the BARE string `bun` with `${CLAUDE_PLUGIN_ROOT}` in its args (infra/plugin-manifest.ts), run through `start`.
   function cachedPlugin(name: string): { dir: string; bare: string[]; absolute: string[]; literal: string[]; bareMarket: string[]; absoluteMarket: string[] } {
     const market = 'probe-market', version = '0.0.1'
     const dir = join(configDir, 'plugins', 'cache', market, name, version)

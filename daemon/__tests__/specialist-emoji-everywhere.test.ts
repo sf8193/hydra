@@ -8,7 +8,7 @@
 import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test'
 import { readdirSync, readFileSync, rmSync, statSync } from 'fs'
 import { join, relative, resolve } from 'path'
-import { gateway, STATE_DIR } from '../config.js'
+import { gateway, STATE_DIR } from '../../infra/config.js'
 import { registry, threadRegistry, sessionEmoji, type SessionInfo } from '../sessions.js'
 import { emojiOf, emojiOfName } from '../anchor-state.js'
 import { transport } from '../bridge-transport.js'

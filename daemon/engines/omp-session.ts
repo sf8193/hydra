@@ -6,7 +6,7 @@
 
 import { closeSync, openSync, readdirSync, readSync, statSync } from 'fs'
 import { join } from 'path'
-import { STATE_DIR } from '../config.js'
+import { STATE_DIR } from '../../infra/config.js'
 
 export const ompSessionDir = (sessionId: string): string => join(STATE_DIR, 'omp-sessions', sessionId)
 
@@ -49,7 +49,7 @@ export function ompTurn(sessionId: string, sinceMs: number): { complete: boolean
   return { complete: true, text: (last.content ?? []).map(c => c.text ?? '').join('') }
 }
 
-// Tokens in context after the last request: its input plus both cache counters (as for Claude, daemon/usage.ts).
+// Tokens in context after the last request: its input plus both cache counters (as for Claude, infra/usage.ts).
 export function ompContextTokens(sessionId: string): number | null {
   const msgs = tailMessages(sessionId)
   for (let i = msgs.length - 1; i >= 0; i--) {

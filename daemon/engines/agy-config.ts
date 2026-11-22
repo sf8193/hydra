@@ -5,7 +5,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
 import { dirname, join } from 'path'
-import { shq } from '../launch-files.js'
+import { shq } from '../../infra/launch-files.js'
 
 const GEMINI_CONFIG = join(homedir(), '.gemini', 'config')
 export const AGY_MCP_CONFIG = join(GEMINI_CONFIG, 'mcp_config.json')

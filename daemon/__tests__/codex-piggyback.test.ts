@@ -14,8 +14,8 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { BridgeTransport } from '../bridge-transport.js'
 import { registry } from '../sessions.js'
-import { STATE_DIR } from '../config.js'
-import { on } from '../event-bus.js'
+import { STATE_DIR } from '../../infra/config.js'
+import { on } from '../../infra/event-bus.js'
 import { fakeCodexAdapter } from './test-harness.js'
 import { CodexPiggyback } from '../engines/codex-piggyback.js'
 
@@ -571,7 +571,7 @@ describe('session:death cleanup', () => {
   test('a dying session loses its buffered content', () => {
     const code = [
       "const { codexPiggyback } = await import('./daemon/engines/codex-piggyback.ts')",
-      "const { emit } = await import('./daemon/event-bus.ts')",
+      "const { emit } = await import('./infra/event-bus.ts')",
       "codexPiggyback.buffer('pb-death', 'x'); codexPiggyback.buffer('pb-alive', 'y')",
       "emit('session:death', { sessionId: 'pb-death', threadId: 't', wasOwner: true, tmuxName: 'n' })",
       "const items = (sid) => codexPiggyback.state.get(sid)?.items ?? null; console.log(JSON.stringify([items('pb-death'), items('pb-alive')]))",

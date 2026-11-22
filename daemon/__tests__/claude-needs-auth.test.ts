@@ -7,7 +7,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { clearNeedsAuthEntry, describeSetAt, NEEDS_AUTH_CACHE_FILE, NEEDS_AUTH_CLEARED_NOTE } from '../engines/claude-needs-auth.js'
-import { BRIDGE_CHANNEL_FLAG, BRIDGE_MCP_SERVER_KEY, MCP_CONFIG, PLUGIN_MANIFEST } from '../plugin-manifest.js'
+import { BRIDGE_CHANNEL_FLAG, BRIDGE_MCP_SERVER_KEY, MCP_CONFIG, PLUGIN_MANIFEST } from '../../infra/plugin-manifest.js'
 import { ClaudeEngine } from '../engines/claude-engine.js'
 import { claudeConfigDir } from '../../shared/constants.js'
 import { withFakeTmux } from './fake-tmux.js'
@@ -103,7 +103,7 @@ describe('bridge key derivation', () => {
   // Slack sessions load the same bridge plugin (its name is historical), so the key must not move with the platform.
   test('is the same key on both platforms', () => {
     for (const platform of ['discord', 'slack']) {
-      const r = Bun.spawnSync(['bun', '-e', "import('./daemon/plugin-manifest.ts').then(m => process.stdout.write(m.BRIDGE_MCP_SERVER_KEY))"], {
+      const r = Bun.spawnSync(['bun', '-e', "import('./infra/plugin-manifest.ts').then(m => process.stdout.write(m.BRIDGE_MCP_SERVER_KEY))"], {
         cwd: join(import.meta.dir, '..', '..'), env: { ...process.env, CHAT_PLATFORM: platform },
       })
       expect(r.stdout.toString()).toBe(KEY)

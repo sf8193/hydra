@@ -19,15 +19,15 @@ import type {
 } from './engine-adapter.js'
 import { codexSocketPath, type CodexEngine } from '../codex-engine.js'
 import { codexHomeDir as codexHomeDirFn, codexRoot, startCodexAppServer, stopCodexAppServer } from '../codex-process.js'
-import { parseContextPercent, safeSend } from '../util.js'
-import { tmuxCreateSession, tmuxHasSession, tmuxSync, tmuxTimedOut, tmuxWindowActivity } from '../tmux.js'
+import { parseContextPercent, safeSend } from '../../infra/util.js'
+import { tmuxCreateSession, tmuxHasSession, tmuxSync, tmuxTimedOut, tmuxWindowActivity } from '../../infra/tmux.js'
 import { sendTmuxKeys, type TmuxKeyAction } from '../codex-key-queue.js'
-import { SOCK_PATH, SPAWN_LOGS_DIR } from '../config.js'
+import { SOCK_PATH, SPAWN_LOGS_DIR } from '../../infra/config.js'
 import { codexTurnOutcome, defaultTurnSources, isCodexWorking } from './codex-observation.js'
 import { codexPiggyback, type CodexPiggyback } from './codex-piggyback.js'
 import { isCodexReconnecting, reconnectCodexSessions } from './codex-runtime.js'
 import { replyContextLine } from '../reply-context.js'
-import { shq } from '../launch-files.js'
+import { shq } from '../../infra/launch-files.js'
 
 const execFileAsync = promisify(execFile)
 

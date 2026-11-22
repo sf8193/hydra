@@ -11,7 +11,7 @@ import { handleResumeIntercept, handleRespawnIntercept, handleForkIntercept, _se
 import { RECOVERY_REVERIFY_GUARD, killSession } from '../session-lifecycle.js'
 import { registry, threadRegistry } from '../sessions.js'
 import type { SessionInfo, ThreadSessionEntry } from '../sessions.js'
-import { gateway } from '../config.js'
+import { gateway } from '../../infra/config.js'
 import type { InboundMessage } from '../../gateways/gateway.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import { pollSessionsOnce } from '../session-health.js'

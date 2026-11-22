@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { socketServer } from '../bridge-server.js'
-import { SOCK_PATH } from '../config.js'
+import { SOCK_PATH } from '../../infra/config.js'
 import { BRIDGE_SHUTDOWN_GRACE_MS } from '../../shared/constants.js'
 import { appendBridgeLife, bridgeLifePath } from '../../shared/bridge-life.js'
 

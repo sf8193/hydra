@@ -4,7 +4,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { STATE_DIR, gateway } from '../config.js'
+import { STATE_DIR, gateway } from '../../infra/config.js'
 import { BridgeTransport, transport } from '../bridge-transport.js'
 import { registry } from '../sessions.js'
 import { engines } from '../engines/instances.js'

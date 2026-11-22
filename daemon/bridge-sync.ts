@@ -4,8 +4,8 @@
  */
 import { join } from 'path'
 import { claudeConfigDir } from '../shared/constants.js'
-import { PLATFORM, SOCK_PATH } from './config.js'
-import { syncHydraBridge, type BridgeSyncResult } from './plugin-manifest.js'
+import { PLATFORM, SOCK_PATH } from '../infra/config.js'
+import { syncHydraBridge, type BridgeSyncResult } from '../infra/plugin-manifest.js'
 
 const HYDRA_DIR = join(import.meta.dir, '..')
 

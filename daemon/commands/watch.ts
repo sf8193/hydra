@@ -1,7 +1,7 @@
-import { gateway } from '../config.js'
+import { gateway } from '../../infra/config.js'
 import { registry } from '../sessions.js'
 import { watchPr, unwatchPr, listWatches, formatWatchEntry, detectPrUrl, WATCH_ERRORS, type WatchOpts } from '../../connectors/github/pr-watch.js'
-import { reportError } from '../util.js'
+import { reportError } from '../../infra/util.js'
 import type { InboundMessage } from '../../gateways/gateway.js'
 
 // `watch [pr-url] [+green]` — the URL may arrive Slack-wrapped (<url|label>).
