@@ -40,10 +40,10 @@ const ALLOWED: Record<string, { why: string; lines: string[] }> = {
       "if (!registry.has(sid) || registry.get(sid)?.deadAt || entry.items.length === 0) continue",
     ],
   },
-  'engines/codex-runtime.ts': {
+  'app/codex-runtime.ts': {
     why: 'the Codex runtime writes and reads its own verdict',
     lines: [
-      "if (!current || current.deadAt || current.engine !== 'codex') return",
+      "if (!current || current.deadAt) return",
       "delete info.deadAt",
       "if (info && !info.deadAt) deps.finalise(info)",
       "const codexSessions = records.filter(s => !s.deadAt)",
@@ -84,16 +84,17 @@ const ALLOWED: Record<string, { why: string; lines: string[] }> = {
     ],
   },
   'sessions/session-reachability.ts': {
-    why: 'occupancy() itself: a stamp over a running session reads orphaned, unless a record not given up on holds its name',
+    why: 'occupancy() itself: a stamp over a running session reads orphaned, unless a record not given up on holds its name; and resolveSendTarget, which ranks a name\'s past threads by when it died',
     lines: [
       "deadAt?: number",
       "givenUp: !!info.deadAt,",
       "if (!info.deadAt) return false",
       "for (const s of records) if (s.sessionId !== info.sessionId && s.tmuxName === info.tmuxName && !s.deadAt) return true",
+      "if (s.tmuxName === targetName && s.deadAt) note(s.threadId, s.deadAt)",
     ],
   },
   'sessions/registry.ts': {
-    why: 'the field, markDead (the one runtime writer, which says so once, the first time it writes), the boot loader (a tmux that does not answer keeps the saved state), the boot history close, ranking a name\'s past threads by when it died',
+    why: 'the field, markDead (the one runtime writer, which says so once, the first time it writes), the boot loader (a tmux that does not answer keeps the saved state), the boot history close',
     lines: [
       "deadAt?: number",
       "const tmuxAlive = state === 'alive' || (state === 'not responding' && !info.deadAt)",
@@ -103,7 +104,6 @@ const ALLOWED: Record<string, { why: string; lines: string[] }> = {
       "if (entry) { entry.endedAt = session.deadAt; closed++ }",
       "const fresh = info.deadAt === undefined",
       "info.deadAt ??= at",
-      "if (s.tmuxName === targetName && s.deadAt) note(s.threadId, s.deadAt)",
     ],
   },
 }

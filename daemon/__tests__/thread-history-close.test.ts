@@ -9,7 +9,7 @@ afterEach(() => { while (cleanups.length) { try { cleanups.pop()!() } catch {} }
 
 describe('the durable history entry a resume reads back', () => {
   const mk = (id: string) => {
-    threadRegistry.recordSpawn(id, { sessionId: `${id}-s`, tmuxName: 'x', originType: 'spawn' } as never)
+    threadRegistry.recordSpawn(id, { sessionId: `${id}-s`, tmuxName: 'x', originType: 'spawn', engine: 'claude' } as never)
     cleanups.push(() => threadRegistry.delete(id))
     return `${id}-s`
   }
@@ -21,10 +21,10 @@ describe('the durable history entry a resume reads back', () => {
     const t = 'T-rk'; mk(t)
     threadRegistry.closeHistoryEntry(t, {
       sessionId: `${t}-s`, messageCount: 7,
-      claudeSessionId: 'c-rk', engine: 'codex', codexThreadId: 'cx-1', codexHomeName: 'home-1', label: 'build',
+      claudeSessionId: 'c-rk', codexThreadId: 'cx-1', codexHomeName: 'home-1', label: 'build',
     })
     expect(entryOf(t)).toMatchObject({
-      messageCount: 7, claudeSessionId: 'c-rk', engine: 'codex',
+      messageCount: 7, claudeSessionId: 'c-rk', engine: 'claude',
       codexThreadId: 'cx-1', codexHomeName: 'home-1', label: 'build',
     })
     expect(entryOf(t)?.endedAt).toBeTruthy()
@@ -33,7 +33,7 @@ describe('the durable history entry a resume reads back', () => {
   test('a close that names no label leaves the one recorded at spawn', () => {
     const t = 'T-keeplabel'
     threadRegistry.recordSpawn(t, {
-      topic: 'keep', respawnCount: 0, sessionId: `${t}-s`, tmuxName: 'x', originType: 'spawn', label: 'build',
+      topic: 'keep', respawnCount: 0, sessionId: `${t}-s`, tmuxName: 'x', originType: 'spawn', engine: 'claude', label: 'build',
     })
     cleanups.push(() => threadRegistry.delete(t))
     threadRegistry.closeHistoryEntry(t, { sessionId: `${t}-s`, messageCount: 3, claudeSessionId: 'c-keep' })

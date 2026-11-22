@@ -1,7 +1,7 @@
 import { existsSync, statSync } from 'fs'
 import { isAbsolute, join, resolve as resolvePath } from 'path'
 import { gateway, STATE_DIR } from '../infra/config.js'
-import { isParentOf, parentSessionOf, registry, resolveSendTarget, threadRegistry, type Predecessor, type SessionInfo, type ThreadSessionEntry } from '../sessions/registry.js'
+import { isParentOf, parentSessionOf, registry, threadRegistry, type Predecessor, type SessionInfo, type ThreadSessionEntry } from '../sessions/registry.js'
 import { transport } from '../sessions/bridge-transport.js'
 import { callerRefusal, endedDestroyRefusal, destroyDeclinedText, destroyThreadById, killThenDestroy } from './destroy.js'
 import { operatorIds, maxChunkLimit, channelPolicy } from '../sessions/access.js'
@@ -14,7 +14,7 @@ import { envelopeFor, sendToThread, sendsToRefusal } from './sends-to.js'
 import { READ_ONLY_DISALLOWED_TOOLS, claudeLaunchCwd, doSpawnSession, handOff, handoffNoteFate, killSession, predecessorOf, runPreHandoffHook, sessionDir, type PreHandoffVerdict } from './session-lifecycle.js'
 import { fallbackDescription, formatDuration, chunk, assertSendable, parseDuration, withOutbound } from '../infra/util.js'
 import { tmuxHasSession } from '../infra/tmux.js'
-import { occupancy, occupied } from '../sessions/session-reachability.js'
+import { occupancy, occupied, resolveSendTarget } from '../sessions/session-reachability.js'
 import { endedSessions, endedWithinDays } from '../sessions/ended-sessions.js'
 import { formatContextPercent, type DeliveryResult } from '../engines/engine-adapter.js'
 import { resolveEngine } from '../sessions/engine-instances.js'
@@ -83,7 +83,7 @@ function findSessionByName(name: string): { record: SessionInfo } | { history: T
 
 /** A fork source rebuilt from a history entry, whose record is gone. History keeps no cwd: a Claude transcript names it. */
 function forkSourceOfHistory(h: ThreadSessionEntry): Predecessor | undefined {
-  const engine = h.engine ?? 'claude'
+  const { engine } = h
   const fork = resolveEngine(engine).recoveryPlan({ tmuxName: h.tmuxName, claudeSessionId: h.claudeSessionId, codexThreadId: h.codexThreadId, codexHomeName: h.codexHomeName }).fork
   if (!fork) return undefined
   // An engine that cannot fork is refused before this, so its missing cwd never matters.
@@ -92,9 +92,9 @@ function forkSourceOfHistory(h: ThreadSessionEntry): Predecessor | undefined {
   return { engine, fork, cwd, ...(h.model ? { model: h.model } : {}) }
 }
 
-/** Throws when the engine's profile says its sessions cannot be forked (absent engine: claude). */
-function refuseUnforkable(engine: EngineName | undefined, name: string): void {
-  const { forkable, label } = ENGINE_PROFILES[engine ?? 'claude']
+/** Throws when the engine's profile says its sessions cannot be forked. */
+function refuseUnforkable(engine: EngineName, name: string): void {
+  const { forkable, label } = ENGINE_PROFILES[engine]
   if (!forkable) throw new Error(`fork_from: ${name} runs on the ${label} engine, and ${label} sessions cannot be forked — spawn fresh with read_thread instead`)
 }
 
@@ -505,7 +505,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         try {
           result = await doSpawnSession(topic, args.chat_id as string | undefined, args.message_id as string | undefined, {
           ...(model ? { model } : {}),
-          // engine: always 'claude' while engines that cannot fork are refused; it matters once one can.
+          // The source's engine, which resolveForkSource has already checked can fork.
           ...(source ? { forkFrom: source.fork, launchCwd: source.cwd, engine: source.engine } : {}),
           ...(readOnly ? { disallowedTools: READ_ONLY_DISALLOWED_TOOLS } : {}),
           ...(phaseBudgetMs ? { phaseBudgetMs } : {}),

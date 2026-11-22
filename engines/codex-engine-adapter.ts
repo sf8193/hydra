@@ -24,7 +24,7 @@ import { sendTmuxKeys, type TmuxKeyAction } from './codex-key-queue.js'
 import { SOCK_PATH, SPAWN_LOGS_DIR } from '../infra/config.js'
 import { codexTurnOutcome, defaultTurnSources, isCodexWorking } from './codex-observation.js'
 import { codexPiggyback, type CodexPiggyback } from '../sessions/codex-piggyback.js'
-import { isCodexReconnecting, reconnectCodexSessions } from './codex-runtime.js'
+import { codexReconnecting } from './codex-reconnecting.js'
 import { replyContextLine } from '../shared/reply-context.js'
 import { shq } from '../infra/launch-files.js'
 
@@ -115,13 +115,9 @@ export class CodexEngineAdapter implements EngineAdapter {
     }
   }
 
-  // The boot sweep, with the completion and failure logging daemon.ts did.
-  start(records: readonly SessionInfo[]): Promise<void> {
-    return reconnectCodexSessions(records).then(() => {
-      process.stderr.write('daemon: codex reconnection sweep complete\n')
-    }).catch(err => {
-      process.stderr.write(`daemon: codex reconnection failed: ${err}\n`)
-    })
+  // Nothing to do here: daemon.ts runs the reconnect sweep (app/codex-runtime.ts).
+  start(): Promise<void> {
+    return Promise.resolve()
   }
 
   // Registers the MCP sidecar and starts the durable app-server; returns the spawn log path.
@@ -272,7 +268,7 @@ export class CodexEngineAdapter implements EngineAdapter {
   // Not tmux: the hydra-anchor window outlives a dead app-server. Not deadAt: the
   // runtime writes that as the verdict when reconnecting gives up.
   isAlive(info: SessionInfo): boolean {
-    return this.engine.isConnected(info.sessionId) || isCodexReconnecting(info.sessionId)
+    return this.engine.isConnected(info.sessionId) || codexReconnecting.has(info.sessionId)
   }
 
   peek(info: SessionInfo, lines: number = 50): string {
@@ -375,7 +371,7 @@ export class CodexEngineAdapter implements EngineAdapter {
     return null
   }
 
-  // Boot and disconnect recovery (codex-runtime); not part of EngineAdapter.
+  // Boot and disconnect recovery (app/codex-runtime); not part of EngineAdapter.
   async reconnect(info: SessionInfo): Promise<boolean> {
     const sockPath = codexSocketPath(info.codexHomeName ?? info.tmuxName)
     // Generation bound (invariant 10): if this record was replaced or removed while

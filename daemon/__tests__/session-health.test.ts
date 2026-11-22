@@ -91,7 +91,7 @@ function seed(extra: Partial<SessionInfo> & { ageMs: number }): SessionInfo {
   seededThreads.add(info.threadId)
   threadRegistry.recordSpawn(info.threadId, {
     topic: 'topic', respawnCount: 0, sessionId: info.sessionId, tmuxName: info.tmuxName,
-    originType: 'spawn', label: undefined,
+    originType: 'spawn', engine: 'claude', label: undefined,
   })
   return info
 }

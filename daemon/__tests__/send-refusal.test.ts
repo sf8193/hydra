@@ -13,7 +13,7 @@ import { type LaunchPolicy } from '../../shared/launch-policy.js'
 import { policyIdFor } from '../../app/restricted.js'
 import { threadNotices } from '../../shared/notice-limit.js'
 import type { HydraConfig, Specialist } from '../../config/types.js'
-import '../../engines/codex-runtime.js'
+import '../../app/codex-runtime.js'
 
 process.stderr.write = (() => true) as any
 

@@ -6,7 +6,8 @@ import { CodexEngine } from '../../engines/codex-engine.js'
 import { classifyPersisted } from '../../engines/boot.js'
 import { fakeCodexAdapter } from './test-harness.js'
 import { registry } from '../../sessions/registry.js'
-import { reconnectCodexSessions, codexEngine } from '../../engines/codex-runtime.js'
+import { reconnectCodexSessions } from '../../app/codex-runtime.js'
+import { codexEngine } from '../../sessions/engine-instances.js'
 const tick = () => new Promise(r => setTimeout(r, 0))
 function setup(id='review') {
  const engine:any = new CodexEngine(); const sent:any[]=[]; let terminated=0
@@ -71,7 +72,7 @@ test('boot sweep for all eight persisted states',async()=>{
  }
 })
 test('reply guard drops pending input when runtime finalises Codex death',async()=>{
- const {finaliseCodexDeath}=await import('../../engines/codex-runtime.js');const {notePendingReply,handleSilenceEvent,_pendingForTesting}=await import('../../app/reply-guard.js')
+ const {finaliseCodexDeath}=await import('../../app/codex-runtime.js');const {notePendingReply,handleSilenceEvent,_pendingForTesting}=await import('../../app/reply-guard.js')
  const info:any={sessionId:'reply-death',tmuxName:'reply-death',threadId:'reply-thread',engine:'codex',ephemeral:true};registry.set(info.sessionId,info)
  notePendingReply(info.sessionId,{chat_id:'reply-thread',message_id:'m'});expect(_pendingForTesting().size).toBe(1);finaliseCodexDeath(info);handleSilenceEvent(info.tmuxName);expect(_pendingForTesting().size).toBe(0);registry.delete(info.sessionId)
 })

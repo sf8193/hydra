@@ -39,3 +39,14 @@ Compile-check all three entry points before committing — they are independent 
 - Claude Code mods: hydra-coupled ones live in `mod/` (tracked); personal ones in `mods.local/<name>/` (gitignored, each a full plugin dir). The daemon copies both to `<state dir>/mods/` at boot and every Claude session loads them via `CLAUDE_CODE_PLUGIN_DIRS` (`infra/mods.ts`). A daemon restart hot-reloads running sessions' mods.
 - Capabilities, not names: behaviour that differs by platform or engine is a capability on the gateway (`ChatGateway`) or engine (`EngineAdapter`), never a branch on its name. Outside the folders that own the name (`gateways/`, `engines/`, and those listed in the rule), `scripts/check-rules.ts` (`platform-name-branch`, `engine-name-branch`) refuses new ones; today's are listed there and the list only shrinks.
 - Never special-case a specific caller/script by name or initiator string inside shared daemon code. Add a generic parameter (CLI flag, `SpawnOpts` field) the caller opts into instead.
+
+## Invariants
+
+What the code must stay true to that no check catches: it holds only if you hold it. (The ones CI does catch, the tiers, cycles, tier-0 I/O, capability names and dangerous primitives (`check-owners`), are in `scripts/check-*.ts` and are not restated here.)
+
+- **One owner per fact.** Before you define a constant, a text, an id or a check, search for it and import it. Two definitions drift. Record a fact where it is created and never re-derive it at a reader. A state the code cannot act on consistently should not be constructible.
+- **No impossible-state code.** Before you add a guard, fallback, retry or error branch, name the log, trace or code path that reaches it. If you cannot, leave it out. If only our own code can cause the error, make it unrepresentable: take no input that could be wrong, build the value in one place, hold the object instead of its id. A guard is allowed only to avoid a panic.
+- **Split deciding from acting.** What to do (who may start, what is allowed, what a refusal says, whether to resume) is a value one function returns; another carries it out. In functions: `decideResume` in `app/auto-resume.ts` returns the choice and its caller acts. In layers: the app decides and an engine or gateway turns the decision into its own format and runs it. If an engine file names a policy, a role or a refusal of its own, or a function both chooses and does, split it.
+- **Fail closed.** A missing gate, token or config refuses; it never allows.
+- **No work at import.** A module defines; the daemon's boot starts. Today this is a direction, not a fact: the delivery gate is set by importing `app/restricted.ts`, and `app/` registers listeners, timers and gateway handlers at module level (#143 removes them). Do not add another without a reason in the PR.
+- **An exception list only shrinks.** Do not add an entry to a check's list to make it pass without saying why in the PR.
