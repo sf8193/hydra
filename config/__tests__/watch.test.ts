@@ -2,7 +2,7 @@ import { describe, test, expect, afterEach } from 'bun:test'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, renameSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { watchHydraConfig, type HydraConfigWatch } from '../watch.js'
+import { watchHydraConfig, type HydraConfigWatch } from '../../infra/hydra-config-watch.js'
 import type { LoadEnv } from '../types.js'
 import { testLoadEnv } from './load-env.js'
 

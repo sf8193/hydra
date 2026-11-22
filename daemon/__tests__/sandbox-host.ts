@@ -1,7 +1,7 @@
 // The machine's own load probes, except that sandbox-exec is found (as on a Mac): a suite on a Linux CI machine launches restricted
 // servers as one on a Mac does, on a macOS version the sandbox is proven on (a test of the gate passes another). The test sets it through `_setLoadEnvForTesting` (hydra-config.ts), the seam startHydraConfig's
 // `env` option already is; nothing in production is patched.
-import { systemEnv } from '../../config/load.js'
+import { systemEnv } from '../../infra/load-env.js'
 import { PROVEN_MACOS_MAJORS, SANDBOX_EXEC } from '../../config/server-sandbox.js'
 import { offLimitRoots } from '../../config/restricted-workdir.js'
 import type { LoadEnv } from '../../config/types.js'

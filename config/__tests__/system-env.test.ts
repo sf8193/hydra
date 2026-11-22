@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { scanWorkdirOnDisk, systemEnv } from '../load.js'
+import { scanWorkdirOnDisk, systemEnv } from '../../infra/load-env.js'
 
 let root: string
 let dir: string

@@ -7,10 +7,11 @@ import { resolveLaunchModel, spawnModel, TRANSCRIBE_TMUX, byteTmuxName, claudeCo
 import { captureSpawnVars, withRaisedFdLimit } from '../shared/spawn-env.js'
 import { tmuxNewSession } from '../infra/tmux-session.js'
 import { callerClaim } from '../shared/caller.js'
-import { scrubTokenVarsInFile } from '../config/token-vars.js'
+import { scrubTokenVarsInFile } from '../infra/token-vars-file.js'
 import { parseEnvLine } from '../shared/env-parse.js'
 import { sourceEnvFiles } from '../infra/env-files.js'
-import { formatIssues, loadHydraConfig, systemEnv } from '../config/load.js'
+import { formatIssues, loadHydraConfig } from '../config/load.js'
+import { systemEnv } from '../infra/load-env.js'
 import { SESSION_NAMES } from '../shared/session-catalog.js'
 import { macosGateIssue } from '../config/server-sandbox.js'
 
