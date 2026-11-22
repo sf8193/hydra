@@ -4,7 +4,7 @@
 // Content (what may be said, approvals) is out of scope: it belongs to each specialist. What a specialist's session may
 // reach is not: `restricted` says whether it runs in its folder alone, `tools` and `mcp_servers` (with `[mcp_servers.*]`) list what a restricted
 // specialist may use, and `sends_to` names the specialists it may send to.
-import type { EngineName } from '../shared/engine-capabilities.js'
+import type { EngineName } from '../shared/engines/index.js'
 
 /** A platform hydra can connect to. A person's address and most places start with one. */
 export const PLATFORMS = ['discord', 'slack', 'github'] as const

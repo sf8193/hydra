@@ -250,7 +250,7 @@ export function buildModel(): string {
 import { homedir } from 'os'
 import { join } from 'path'
 import type { ToolName } from './tool-definitions.js'
-import type { EngineName } from './engine-capabilities.js'
+import type { EngineName } from './engines/index.js'
 
 /** The state dir a platform's daemon uses unless HYDRA_STATE_DIR points elsewhere: ~/.claude/channels/<platform>. */
 export const platformStateDir = (platform: string) => join(homedir(), '.claude', 'channels', platform)

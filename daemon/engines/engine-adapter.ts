@@ -7,7 +7,7 @@
 import type { SessionInfo, SpawnOpts } from '../sessions.js'
 import type { LaunchPolicy, RestrictedPolicy } from '../restricted.js'
 import type { BlockingState } from '../pane-probe.js'
-import type { EngineName } from '../../shared/engine-capabilities.js'
+import type { EngineName } from '../../shared/engines/index.js'
 export type { BlockingState } from '../pane-probe.js'
 
 // ---------------------------------------------------------------------------
