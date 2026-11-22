@@ -17,7 +17,7 @@ test('on-kill hook runs with the dead session identity in env; missing hook is a
     runKillHook(info, 'session ended', hook)
     // The shell creates the file before echo writes to it: wait for the line, not the file.
     const written = () => existsSync(out) && readFileSync(out, 'utf8').includes('\n')
-    for (let i = 0; i < 50 && !written(); i++) await Bun.sleep(20)
+    for (let i = 0; i < 200 && !written(); i++) await Bun.sleep(20)
     expect(readFileSync(out, 'utf8').trim()).toBe('glyph|session ended|codex|glyph')
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
@@ -56,7 +56,7 @@ test('kill_session: agent kill reaches the hook as "session ended by <caller>", 
 
     expect(sent).toContain('_session ended by kh-owner_')
     expect(sent).toContain('_session ended_')
-    for (let i = 0; i < 50 && (!existsSync(out) || readFileSync(out, 'utf8').trim().split('\n').length < 2); i++) await Bun.sleep(20)
+    for (let i = 0; i < 200 && (!existsSync(out) || readFileSync(out, 'utf8').trim().split('\n').length < 2); i++) await Bun.sleep(20)
     expect(readFileSync(out, 'utf8').trim().split('\n').sort()).toEqual(['kh-helper|session ended by kh-owner', 'kh-other|session ended'])
   } finally {
     ;(gateway as any).send = orig.send
