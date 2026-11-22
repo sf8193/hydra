@@ -252,7 +252,7 @@ type SpecialistBase = {
 /**
  * When and how its sessions are replaced, for a specialist whose sessions have no handoff tool (restricted, write-confined): they cannot
  * write a letter, so a line (`handoffAtPct`) comes only with `kill_and_respawn`. On every specialist, `handoffAtPct` (toml `handoff_at_pct`)
- * is the context percent (1-99) at which an idle session of it is replaced (daemon/auto-handoff.ts), whatever AUTO_HANDOFF_FULL and
+ * is the context percent (1-99) at which an idle session of it is replaced (app/auto-handoff.ts), whatever AUTO_HANDOFF_FULL and
  * AUTO_HANDOFF_FULL_PCT say, read on each health poll and not part of the launch policy; absent, the env vars decide.
  * `handoffProtocol` absent is `letter`.
  */

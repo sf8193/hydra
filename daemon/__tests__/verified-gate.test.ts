@@ -10,8 +10,8 @@ import { transport } from '../../sessions/bridge-transport.js'
 import { registry } from '../../sessions/registry.js'
 import { engines } from '../../engines/instances.js'
 import { _setHydraConfigForTesting } from '../../infra/hydra-config.js'
-import { endVerifying, policyIdFor, sessionDrift, startVerifying, unverified, type LaunchPolicy } from '../restricted.js'
-import { threadNotices } from '../notice-limit.js'
+import { endVerifying, policyIdFor, sessionDrift, startVerifying, unverified, type LaunchPolicy } from '../../app/restricted.js'
+import { threadNotices } from '../../shared/notice-limit.js'
 import type { HydraConfig, Specialist } from '../../config/types.js'
 
 process.stderr.write = (() => true) as any

@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs'
 import { createServer, type Server } from 'net'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { confinementSettings } from '../write-confinement.js'
+import { confinementSettings } from '../../app/write-confinement.js'
 import { readDenyRoots } from '../../config/write-confinement.js'
 
 const LIVE = process.env.HYDRA_LIVE_CLAUDE === '1' && process.platform === 'darwin' && !!Bun.which('claude') && !!Bun.which('nc')
@@ -78,7 +78,7 @@ describe.skipIf(!LIVE)('the Bash tool of a write-confined session and a unix soc
 
   test('the sandboxed shell\'s TMPDIR is /tmp/claude-<uid>, and it writes in temp nowhere else', async () => {
     const out = await bash(`echo TMPDIR=$TMPDIR; for d in "$TMPDIR" /tmp /private/tmp /tmp/claude-$(id -u) /var/folders; do touch "$d/hb-probe-$$" 2>/dev/null && echo "writable $d" && rm -f "$d/hb-probe-$$"; done; echo uid=$(id -u)`, places())
-    expect(out).toContain(`TMPDIR=/tmp/claude-${process.getuid!()}\n`)   // the temp folder daemon/write-confinement.ts confinedTemp names
+    expect(out).toContain(`TMPDIR=/tmp/claude-${process.getuid!()}\n`)   // the temp folder app/write-confinement.ts confinedTemp names
     expect(out).toContain(`writable /tmp/claude-${process.getuid!()}`)
     expect(out).not.toContain('writable /tmp\n')
   }, 90_000)

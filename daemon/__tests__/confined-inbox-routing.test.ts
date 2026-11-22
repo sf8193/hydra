@@ -13,9 +13,9 @@ import { MAX_ATTACHMENT_BYTES } from '../../sessions/access.js'
 import { gateway, INBOX_DIR, STATE_DIR } from '../../infra/config.js'
 import { registry } from '../../sessions/registry.js'
 import { transport } from '../../sessions/bridge-transport.js'
-import { confinementIdFor } from '../restricted.js'
-import { buildNotificationPayload } from '../router.js'
-import { executeTool } from '../bridge-dispatch.js'
+import { confinementIdFor } from '../../app/restricted.js'
+import { buildNotificationPayload } from '../../app/router.js'
+import { executeTool } from '../../app/bridge-dispatch.js'
 import { noteDeclaredRestrictions } from '../../sessions/tool-surface.js'
 
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), 'ib-routing-')))

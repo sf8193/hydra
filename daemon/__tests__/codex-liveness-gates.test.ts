@@ -12,9 +12,9 @@ import { join, resolve } from 'path'
 import { fakeCodexAdapter } from './test-harness.js'
 import { registry } from '../../sessions/registry.js'
 import { gateway } from '../../infra/config.js'
-import { handleSpawnIntercept } from '../commands/global.js'
-import { doSpawnSession } from '../session-lifecycle.js'
-import { dedupForRecovery } from '../recovery.js'
+import { handleSpawnIntercept } from '../../app/commands/global.js'
+import { doSpawnSession } from '../../app/session-lifecycle.js'
+import { dedupForRecovery } from '../../app/recovery.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 
 const codex = (connected: boolean) => {
@@ -207,7 +207,7 @@ describe('gate 5: dashboard rows', () => {
         const { registry } = await import(${JSON.stringify(join(root, 'sessions/registry.ts'))})
         const { gateway } = await import(${JSON.stringify(join(root, 'infra/config.ts'))})
         const { CodexEngineAdapter } = await import(${JSON.stringify(join(root, 'engines/codex-engine-adapter.ts'))})
-        const { refreshDashboardNow } = await import(${JSON.stringify(join(root, 'daemon/dashboard.ts'))})
+        const { refreshDashboardNow } = await import(${JSON.stringify(join(root, 'app/dashboard.ts'))})
         const recs = ${JSON.stringify(recs)}
         const names = recs.map(r => r.tmuxName)
         for (const [i, r] of recs.entries()) {

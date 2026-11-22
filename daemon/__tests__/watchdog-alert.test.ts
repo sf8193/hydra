@@ -2,7 +2,7 @@ import { test, expect, beforeEach, afterEach } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { deliverWatchdogAlert } from '../watchdog-alert.js'
+import { deliverWatchdogAlert } from '../../app/watchdog-alert.js'
 import { WATCHDOG_ALERT_FILE } from '../../shared/constants.js'
 
 let dir: string
@@ -45,7 +45,7 @@ test('no file: nothing sent; an unreadable file is dropped, not retried forever'
 })
 
 test('an alert that waited more than an hour says how old it is; a fresh one is posted as written', async () => {
-  const { alertText } = await import('../watchdog-alert.js')
+  const { alertText } = await import('../../app/watchdog-alert.js')
   expect(alertText('⚠️ x', 1_000, 1_000 + 3600)).toBe('⚠️ x')
   expect(alertText('⚠️ x', undefined, 1e9)).toBe('⚠️ x')
   expect(alertText('⚠️ x', 0, 2 * 86400 + 3 * 3600)).toBe('_This alert is from 2d 3h ago; no daemon could post it until now._\n⚠️ x')

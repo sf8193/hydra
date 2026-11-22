@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { maybeNudgeMissingAdvance, _resetNudgesForTesting } from '../advance-nudge.js'
+import { maybeNudgeMissingAdvance, _resetNudgesForTesting } from '../../app/advance-nudge.js'
 import { _resetForTesting as resetRegistry } from '../../sessions/protocol-registry.js'
 import { transport } from '../../sessions/bridge-transport.js'
 import { registry } from '../../sessions/registry.js'

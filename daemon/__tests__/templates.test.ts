@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach } from 'bun:test'
-import { getTemplate, listTemplates, parseTemplateTopic, buildTemplateSpawnOpts, loadTemplateFile } from '../templates.js'
+import { getTemplate, listTemplates, parseTemplateTopic, buildTemplateSpawnOpts, loadTemplateFile } from '../../app/templates.js'
 import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'

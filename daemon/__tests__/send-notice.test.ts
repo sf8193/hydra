@@ -3,7 +3,7 @@ import { gateway } from '../../infra/config.js'
 import { registry } from '../../sessions/registry.js'
 import type { SessionInfo } from '../../sessions/registry.js'
 import { transport } from '../../sessions/bridge-transport.js'
-import { executeTool } from '../bridge-dispatch.js'
+import { executeTool } from '../../app/bridge-dispatch.js'
 import { discordSubtext } from '../../gateways/discord.js'
 import { slackSubtextBlocks } from '../../gateways/slack.js'
 

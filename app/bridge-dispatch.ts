@@ -444,7 +444,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       }
 
       case 'download_attachment': {
-        // The one answer for where this session's files go (daemon/attachment-target.ts); a confined session with no record gets a refusal.
+        // The one answer for where this session's files go (app/attachment-target.ts); a confined session with no record gets a refusal.
         const { dir, limits } = attachmentTarget(callerSessionId)
         const results = await gateway.downloadAttachments(
           args.chat_id as string,

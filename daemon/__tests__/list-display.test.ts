@@ -6,7 +6,7 @@
 // rate-limit or a dropped connection must leave it tracked.
 
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { __test as statusTest, handleListIntercept } from '../commands/status.js'
+import { __test as statusTest, handleListIntercept } from '../../app/commands/status.js'
 import { registry } from '../../sessions/registry.js'
 import type { SessionInfo } from '../../sessions/registry.js'
 import { gateway } from '../../infra/config.js'

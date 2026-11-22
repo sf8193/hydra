@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { sessionFlapAction, shouldHoldIncumbentMain } from '../daemon/main-guard.js'
+import { sessionFlapAction, shouldHoldIncumbentMain } from '../app/main-guard.js'
 
 describe('shouldHoldIncumbentMain', () => {
   test('no incumbent → never hold (first/only main registers normally)', () => {

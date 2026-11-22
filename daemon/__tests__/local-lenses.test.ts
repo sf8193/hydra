@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 import { mkdirSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { LOCAL_LENSES_DIR, listLensNames, listModifierKeys, resolveModifier, resolveModifiers, withDefaultLenses } from '../modifiers.js'
+import { LOCAL_LENSES_DIR, listLensNames, listModifierKeys, resolveModifier, resolveModifiers, withDefaultLenses } from '../../protocols/modifiers.js'
 
 const put = (name: string, body: string) => { mkdirSync(LOCAL_LENSES_DIR, { recursive: true }); writeFileSync(join(LOCAL_LENSES_DIR, name), body) }
 afterEach(() => rmSync(LOCAL_LENSES_DIR, { recursive: true, force: true }))

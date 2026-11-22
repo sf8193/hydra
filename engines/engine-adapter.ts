@@ -5,10 +5,10 @@
 // callers just call info.adapter.deliver(...) — no dispatch logic needed.
 
 import type { SessionInfo, SpawnOpts } from '../sessions/registry.js'
-import type { LaunchPolicy, RestrictedPolicy } from '../daemon/restricted.js'
-import type { BlockingState } from '../daemon/pane-probe.js'
+import type { LaunchPolicy, RestrictedPolicy } from '../app/restricted.js'
+import type { BlockingState } from '../app/pane-probe.js'
 import type { EngineName } from '../shared/engines/index.js'
-export type { BlockingState } from '../daemon/pane-probe.js'
+export type { BlockingState } from '../app/pane-probe.js'
 
 // ---------------------------------------------------------------------------
 // Provider identity

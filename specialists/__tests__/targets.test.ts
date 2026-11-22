@@ -3,12 +3,12 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { handleCLIRequest, type CLIRequest } from '../../daemon/cli-handler.js'
+import { handleCLIRequest, type CLIRequest } from '../../app/cli-handler.js'
 import { registry, threadRegistry, type SessionInfo } from '../../sessions/registry.js'
 import { transport } from '../../sessions/bridge-transport.js'
 import { gateway, STATE_DIR } from '../../infra/config.js'
-import { executeTool } from '../../daemon/bridge-dispatch.js'
-import { _setRecoveryDeps, _resetRecoveryDeps, reviveDeps } from '../../daemon/recovery.js'
+import { executeTool } from '../../app/bridge-dispatch.js'
+import { _setRecoveryDeps, _resetRecoveryDeps, reviveDeps } from '../../app/recovery.js'
 import { _resetBackoff, getBackoff } from '../../infra/recovery-backoff.js'
 import { _reloadSpecialists, getSpecialist, listSpecialists, removeSpecialist, setSpecialist, withThreadLock } from '../../sessions/specialists.js'
 import { deliverToTarget, parseTarget, conversationSessionName, sessionByName, targetDeps } from '../targets.js'
@@ -280,7 +280,7 @@ describe('max: counted under one lock per specialist, from the sessions running 
     occupy('t-live', { tmuxName: 'mx_c1-1-000001' })
     let release!: () => void
     const gate = new Promise<void>(r => { release = r })
-    const realSpawn = (await import('../../daemon/recovery.js')).currentRecoveryDeps().doSpawnSession
+    const realSpawn = (await import('../../app/recovery.js')).currentRecoveryDeps().doSpawnSession
     _setRecoveryDeps({ doSpawnSession: (async (...a: any[]) => { await gate; return (realSpawn as any)(...a) }) as any })
     const cold = deliverToTarget({ perConversation: 'mx', conversation: 'slack:C1:2.000001' }, 'x', opts) // hangs in its start
     await Bun.sleep(10)

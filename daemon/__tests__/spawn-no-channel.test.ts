@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test'
-import { resolveSpawnChannel } from '../session-lifecycle.js'
+import { resolveSpawnChannel } from '../../app/session-lifecycle.js'
 
 const probe = async () => ({ isThread: false, isDM: false, parentId: null })
 

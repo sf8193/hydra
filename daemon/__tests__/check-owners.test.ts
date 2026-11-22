@@ -81,8 +81,8 @@ describe('check-owners: raw tmux liveness and exec only in owners', () => {
 
   test('has-session is asked only in infra/tmux.ts: any form, anywhere else, is caught', () => {
     const asked = (path: string, line: string) => hits(path, line).filter(v => v.includes('tmux has-session outside infra/tmux.ts'))
-    expect(asked('daemon/router.ts', "execFileSync('tmux', ['has-session', '-t', n])")).toHaveLength(1)
-    expect(asked('daemon/router.ts', 'execSync(`tmux has-session -t ${n}`)')).toHaveLength(1)
+    expect(asked('app/router.ts', "execFileSync('tmux', ['has-session', '-t', n])")).toHaveLength(1)
+    expect(asked('app/router.ts', 'execSync(`tmux has-session -t ${n}`)')).toHaveLength(1)
     expect(asked('engines/claude-engine.ts', "tmuxSync(['has-session', '-t', n], { ignoreHold: true })")).toHaveLength(1)
     expect(asked('infra/tmux.ts', "tmuxSync(['has-session', '-t', name], opts)")).toEqual([])
     expect(asked('infra/util.ts', "tmuxSync(['has-session', '-t', name], opts)")).toHaveLength(1)
@@ -91,7 +91,7 @@ describe('check-owners: raw tmux liveness and exec only in owners', () => {
 
   test('a raw kill-session/window/pane exec is caught, in any quoting; infra/tmux.ts and tmuxSync pass', () => {
     const kills = (path: string, line: string) => hits(path, line).filter(v => v.includes('raw tmux kill-session'))
-    expect(kills('daemon/router.ts', 'execFileSync("tmux", ["kill-window", "-t", n])')).toHaveLength(1)
+    expect(kills('app/router.ts', 'execFileSync("tmux", ["kill-window", "-t", n])')).toHaveLength(1)
     expect(kills('sessions/registry.ts', "execFileSync('tmux', ['kill-session', '-t', n])")).toHaveLength(1)
     expect(kills('sessions/registry.ts', "tmuxSync(['kill-session', '-t', n])")).toEqual([])
     expect(kills('infra/tmux.ts', "execFileSync('tmux', ['kill-session', '-t', n])")).toEqual([])
@@ -100,8 +100,8 @@ describe('check-owners: raw tmux liveness and exec only in owners', () => {
   test('a raw sync tmux exec is caught in the daemon, wrapped or in a shell string; infra/tmux.ts, the CLI and tmuxSync pass', () => {
     const raw = (path: string, ...lines: string[]) => hits(path, ...lines).filter(v => v.includes('raw sync tmux exec'))
     expect(raw('daemon/foo.ts', "execFileSync('tmux', ['list-panes'], { timeout: 2000 })")).toHaveLength(1)
-    expect(raw('daemon/reply-guard.ts', 'return execSync(', '  `tmux capture-pane -t ${t} -p`,', ')')).toHaveLength(1)
-    expect(raw('daemon/cli-handler.ts', "Bun.spawnSync(['tmux', 'list-sessions'])")).toHaveLength(1)
+    expect(raw('app/reply-guard.ts', 'return execSync(', '  `tmux capture-pane -t ${t} -p`,', ')')).toHaveLength(1)
+    expect(raw('app/cli-handler.ts', "Bun.spawnSync(['tmux', 'list-sessions'])")).toHaveLength(1)
     expect(raw('daemon/foo.ts', "tmuxSync(['list-panes'])")).toEqual([])
     expect(raw('infra/tmux.ts', "execFileSync('tmux', args)")).toEqual([])
     expect(raw('cli/lifecycle.ts', "execFileSync('tmux', ['capture-pane'])")).toEqual([])

@@ -14,7 +14,7 @@ import { BASE, BOT, hydra, view } from './slack-config.js'
 import { owningApp, route } from '../../../routing/route.js'
 import { loadHydraConfig } from '../../../config/load.js'
 import { testLoadEnv } from '../../../config/__tests__/load-env.js'
-import { handleCLIRequest } from '../../../daemon/cli-handler.js'
+import { handleCLIRequest } from '../../../app/cli-handler.js'
 import { placeOf } from '../../../config/types.js'
 
 process.stderr.write = (() => true) as any

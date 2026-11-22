@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, expect, spyOn, test } from 'bun:test'
 import { gateway } from '../../infra/config.js'
 import * as access from '../../sessions/access.js'
-import * as global from '../commands/global.js'
+import * as global from '../../app/commands/global.js'
 
 // The production router: `spawn sol: …` must reach handleSpawnIntercept with the Codex model AND the codex engine.
 let handler: (msg: any) => Promise<void>
@@ -14,7 +14,7 @@ beforeAll(async () => {
   spies.push(spyOn(gateway, 'send').mockImplementation((async (_c: string, text: string) => { sent.push(text); return { id: 'x' } }) as any))
   spies.push(spyOn(access, 'loadAccess').mockImplementation((() => ({ allowFrom: ['u1'], groups: { c1: {} } })) as any))
   spies.push(spyOn(global, 'handleSpawnIntercept').mockImplementation((async (...args: any[]) => { spawns.push(args) }) as any))
-  await import('../router.js')
+  await import('../../app/router.js')
 })
 afterAll(() => { for (const s of spies) s.mockRestore() })
 beforeEach(() => { spawns.length = 0; sent.length = 0 })

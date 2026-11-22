@@ -1,4 +1,4 @@
-import { deliveryRefusal } from '../daemon/restricted.js'
+import { deliveryRefusal } from '../app/restricted.js'
 // engines/codex-engine-adapter.ts
 //
 // Codex engine adapter — wraps the CodexEngine (app-server + unix socket)
@@ -10,7 +10,7 @@ import { mkdirSync } from 'fs'
 import { join } from 'path'
 import { codexSpawnEnv } from '../shared/spawn-env.js'
 import { registry, type SessionInfo } from '../sessions/registry.js'
-import type { BlockingState } from '../daemon/pane-probe.js'
+import type { BlockingState } from '../app/pane-probe.js'
 import type {
   EngineAdapter, LaunchInput, LaunchResult,
   DeliveryMode, DeliveryResult, Notification,

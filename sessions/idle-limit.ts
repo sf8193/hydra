@@ -17,7 +17,7 @@
 // Like phase-budget, the reaper is injected at boot: this module must never import
 // session-lifecycle (which imports us).
 import { registry, parentSessionOf, type SessionInfo } from './registry.js'
-import { isPlainWorker } from '../daemon/policy-record.js'
+import { isPlainWorker } from '../shared/policy-record.js'
 import { occupancy } from './session-reachability.js'
 import { transport } from './bridge-transport.js'
 import { safeSend, formatDuration } from '../infra/util.js'

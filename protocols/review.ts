@@ -1,6 +1,6 @@
-import { protocol, protocolSeed } from '../daemon/protocol-dsl.js'
-import { NATIVE_SUBAGENT } from '../daemon/modifiers.js'
-import { request } from '../daemon/prompts/request.js'
+import { protocol, protocolSeed } from './dsl.js'
+import { NATIVE_SUBAGENT } from './modifiers.js'
+import { request } from '../shared/prompts/request.js'
 
 export default protocol('review', {
   emoji: '⚔️',

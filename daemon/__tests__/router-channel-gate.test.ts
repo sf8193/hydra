@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, beforeEach, expect, spyOn, test } from 'bun:test'
 import { gateway } from '../../infra/config.js'
 import * as access from '../../sessions/access.js'
-import * as global from '../commands/global.js'
-import * as status from '../commands/status.js'
+import * as global from '../../app/commands/global.js'
+import * as status from '../../app/commands/status.js'
 import { reactionPlace } from '../../gateways/discord.js'
 import { ChannelType } from 'discord.js'
 
@@ -28,7 +28,7 @@ beforeAll(async () => {
   spies.push(spyOn(access, 'loadAccess').mockImplementation((() => ({ allowFrom: ['u1'], groups: { ours: {} }, pending: {} })) as any))
   spies.push(spyOn(global, 'handleSpawnIntercept').mockImplementation((async (...args: any[]) => { spawns.push(args) }) as any))
   spies.push(spyOn(status, 'handleListIntercept').mockImplementation((async (...args: any[]) => { lists.push(args) }) as any))
-  await import('../router.js')
+  await import('../../app/router.js')
 })
 afterAll(() => { for (const s of spies) s.mockRestore() })
 beforeEach(() => { mentionCalls.length = 0; tagged = false; saved.length = 0; spawns.length = 0; lists.length = 0; deletes.length = 0 })

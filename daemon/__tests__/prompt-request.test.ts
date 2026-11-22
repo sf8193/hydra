@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { buildSpawnPrompt, buildForkPrompt, buildHandoffPrompt, buildResurrectPrompt } from '../prompts/session.js'
-import { hydraPrompt } from '../prompts/request.js'
+import { buildSpawnPrompt, buildForkPrompt, buildHandoffPrompt, buildResurrectPrompt } from '../../shared/prompts/session.js'
+import { hydraPrompt } from '../../shared/prompts/request.js'
 
 let origStderrWrite: typeof process.stderr.write
 beforeEach(() => { origStderrWrite = process.stderr.write; process.stderr.write = (() => true) as any })

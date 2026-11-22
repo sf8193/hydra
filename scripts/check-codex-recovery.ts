@@ -37,9 +37,9 @@ Object.assign(gateway, {
  getThreadStarterInfo: async () => null, updateSessionVisual: async () => {}, renameThread: async () => {},
 })
 const { registry, threadRegistry } = await import(repo + '/sessions/registry.ts')
-const { doSpawnSession, killSession } = await import(repo + '/daemon/session-lifecycle.ts')
+const { doSpawnSession, killSession } = await import(repo + '/app/session-lifecycle.ts')
 const { codexEngine, reconnectCodexAfterDisconnect } = await import(repo + '/engines/codex-runtime.ts')
-const { handleResumeIntercept, handleRespawnIntercept } = await import(repo + '/daemon/commands/thread.ts')
+const { handleResumeIntercept, handleRespawnIntercept } = await import(repo + '/app/commands/thread.ts')
 const { codexHomeDir, stopCodexAppServer } = await import(repo + '/engines/codex-process.ts')
 const starts: {id: string, text: string}[] = []
 // Real app-server lifecycle/RPC, but no model turns for command checks.

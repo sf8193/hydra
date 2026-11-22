@@ -23,8 +23,8 @@ import { readDenyRoots } from '../config/write-confinement.js'
 import { macosGateIssue, unprovenMacos } from '../config/server-sandbox.js'
 import { hydraLoadEnv, onHydraConfigLoad } from '../infra/hydra-config.js'
 import type { SessionInfo } from '../sessions/registry.js'
-import { isRestricted, isRestrictedPolicy } from './policy-record.js'
-import { refusalNoticeKey, threadNotices } from './notice-limit.js'
+import { isRestricted, isRestrictedPolicy } from '../shared/policy-record.js'
+import { refusalNoticeKey, threadNotices } from '../shared/notice-limit.js'
 import { setFlushGate } from '../sessions/bridge-transport.js'
 import { safeSend } from '../infra/util.js'
 
@@ -34,7 +34,7 @@ export type PolicyServer = { name: string; command: string; tokenEnv: string[]; 
 export type ConfinementServer = { name: string; command: string; tokenEnv: string[]; profileArgs: string[]; profileEnv: Record<string, string>; /** Tools of the server its session may not call (`mcp__<server>__<tool>` deny rules); absent: none. */ denyTools?: string[] }
 
 /**
- * `can_only_write_to = "workdir"`: the operator's account and tools, with Bash and Edit/Write writes confined to `workdir` (daemon/write-confinement.ts).
+ * `can_only_write_to = "workdir"`: the operator's account and tools, with Bash and Edit/Write writes confined to `workdir` (app/write-confinement.ts).
  * It sits on a policy that is not restricted: the account is the operator's.
  */
 export type ConfinementPolicy = { specialist: string; workdir: string; denyCommands: string[]; /** Every place Claude Code's tools and shell may not read, as worked out at birth (config/write-confinement.ts `readDenyRoots`). */ cannotRead: string[]; /** The built-in tools it may use (`--tools`); absent: all, as for any unrestricted session. */ tools?: string[]; /** The folder its listed servers get as `{profile_dir}`, resolved and inside `workdir`; absent: `<workdir>/.browser/profile`. */ browserProfile?: string; servers: ConfinementServer[] }

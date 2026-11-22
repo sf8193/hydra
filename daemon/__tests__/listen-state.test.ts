@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { resolveListenStatePure } from '../session-lifecycle.js'
+import { resolveListenStatePure } from '../../app/session-lifecycle.js'
 
 process.stderr.write = (() => true) as any
 

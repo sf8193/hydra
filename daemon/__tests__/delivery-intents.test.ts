@@ -13,7 +13,7 @@ import { STATE_DIR } from '../../infra/config.js'
 import { ClaudeEngine } from '../../engines/claude-engine.js'
 import { fakeCodexAdapter } from './test-harness.js'
 import { deliverToSession } from '../../specialists/targets.js'
-import { __test } from '../protocol-runner.js'
+import { __test } from '../../app/protocol-runner.js'
 
 const { notifyNextActor, notifyActorOfTimeout, notifyParticipant } = __test!
 const NOW = new Date('2026-09-27T12:00:00.000Z')

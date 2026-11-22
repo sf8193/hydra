@@ -1,6 +1,6 @@
 # Codex user-message delivery case matrix
 
-Scope: user-authored Discord/Slack messages delivered from `daemon/router.ts` to a
+Scope: user-authored Discord/Slack messages delivered from `app/router.ts` to a
 Codex-backed Hydra session. Automated/protocol notifications are unchanged.
 
 ## Cases from the current code

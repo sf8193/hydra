@@ -1,4 +1,4 @@
-import { protocol, protocolSeed } from '../daemon/protocol-dsl.js'
+import { protocol, protocolSeed } from './dsl.js'
 
 export default protocol('delegated-build', {
   emoji: '📋', display: 'Delegated Build', owner: 'pm', initialPhase: 'planning', roundPhase: 'building',

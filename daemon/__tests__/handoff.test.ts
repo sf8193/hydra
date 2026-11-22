@@ -2,11 +2,11 @@ import { expect, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { executeTool } from '../bridge-dispatch.js'
+import { executeTool } from '../../app/bridge-dispatch.js'
 import { registry } from '../../sessions/registry.js'
 import { gateway, STATE_DIR } from '../../infra/config.js'
-import { HANDOFF_TEMPLATE_DIR } from '../handoff-templates.js'
-import { requestHandoff } from '../session-lifecycle.js'
+import { HANDOFF_TEMPLATE_DIR } from '../../app/handoff-templates.js'
+import { requestHandoff } from '../../app/session-lifecycle.js'
 import { mkSession as mk, waitFor, withHandoffThread, type HandoffThread } from './handoff-thread.js'
 
 process.stderr.write = (() => true) as any
@@ -154,7 +154,7 @@ test('handoff command: a notice.md longer than one message is chunked, not dropp
 })
 
 test('handOff: deliverables, PR watches and the `handoff <model>` choice reach the successor; a second concurrent handoff is refused', async () => {
-  const { handOff, handoffIO } = await import('../session-lifecycle.js')
+  const { handOff, handoffIO } = await import('../../app/session-lifecycle.js')
   const { getWatchesBySession, unwatchPr } = await import('../../connectors/github/pr-watch.js')
   const { seedPrWatch } = await import('./test-harness.js')
   const orig = { ...handoffIO }
@@ -184,8 +184,8 @@ test('handOff: deliverables, PR watches and the `handoff <model>` choice reach t
 })
 
 test('successor prompt: no arriving.md leaves the prompt as built without one', async () => {
-  const { handoffArrival } = await import('../session-lifecycle.js')
-  const { buildHandoffPrompt } = await import('../prompts/session.js')
+  const { handoffArrival } = await import('../../app/session-lifecycle.js')
+  const { buildHandoffPrompt } = await import('../../shared/prompts/session.js')
   const p = { sessionId: 's-1', tmuxName: 'fresh', threadId: 'th-1', topic: 't', originFrom: 'flint', artifact: '/h.md' }
   const arrival = handoffArrival({ artifact: '/h.md' }, { from: 'flint', session: 'fresh', cwd: '/w', worktree: '', branch: '' })
   expect(arrival).toBeUndefined()
@@ -195,8 +195,8 @@ test('successor prompt: no arriving.md leaves the prompt as built without one', 
 })
 
 test('successor prompt: arriving.md is filled, placed after the context line, and replaces the built-in arrival behavior', async () => {
-  const { handoffArrival } = await import('../session-lifecycle.js')
-  const { buildHandoffPrompt } = await import('../prompts/session.js')
+  const { handoffArrival } = await import('../../app/session-lifecycle.js')
+  const { buildHandoffPrompt } = await import('../../shared/prompts/session.js')
   const file = join(HANDOFF_TEMPLATE_DIR, 'arriving.md')
   mkdirSync(HANDOFF_TEMPLATE_DIR, { recursive: true })
   try {
@@ -227,7 +227,7 @@ test('templates live under <STATE_DIR>/actions/handoff', () => {
 })
 
 test('handoffSpawnOpts carries the predecessor\'s claude session id, and none for a Codex predecessor', async () => {
-  const { handoffSpawnOpts } = await import('../session-lifecycle.js')
+  const { handoffSpawnOpts } = await import('../../app/session-lifecycle.js')
   mk('ho-6', 'flint', 'ho-thread-6')
   try {
     const info = registry.get('ho-6')!
@@ -241,7 +241,7 @@ test('handoffSpawnOpts carries the predecessor\'s claude session id, and none fo
 })
 
 test('handoffSpawnOpts: the successor starts where its predecessor launched (a specialist\'s workdir), while that folder exists', async () => {
-  const { handoffSpawnOpts } = await import('../session-lifecycle.js')
+  const { handoffSpawnOpts } = await import('../../app/session-lifecycle.js')
   mk('ho-7', 'flint', 'ho-thread-7')
   try {
     const info = registry.get('ho-7')!
@@ -256,7 +256,7 @@ test('handoffSpawnOpts: the successor starts where its predecessor launched (a s
 })
 
 test('arriving {{from_session}}: the predecessor\'s claude session id, empty when there is none (Codex)', async () => {
-  const { handoffArrival } = await import('../session-lifecycle.js')
+  const { handoffArrival } = await import('../../app/session-lifecycle.js')
   const file = join(HANDOFF_TEMPLATE_DIR, 'arriving.md')
   mkdirSync(HANDOFF_TEMPLATE_DIR, { recursive: true })
   const vars = { from: 'flint', session: 'fresh', cwd: '/w', worktree: '', branch: '' }
@@ -270,7 +270,7 @@ test('arriving {{from_session}}: the predecessor\'s claude session id, empty whe
 })
 
 test('arriving {{from_transcript}}: the predecessor\'s transcript path when it exists, empty when the id is unknown', async () => {
-  const { handoffArrival } = await import('../session-lifecycle.js')
+  const { handoffArrival } = await import('../../app/session-lifecycle.js')
   const { projectsRoot } = await import('../../infra/usage.js')
   const projectDir = join(projectsRoot(), '-tmp-handoff-fixture')
   const transcript = join(projectDir, 'pred-1.jsonl')
@@ -291,7 +291,7 @@ test('arriving {{from_transcript}}: the predecessor\'s transcript path when it e
 })
 
 test('successor prompt: with arriving.md and a predecessor, the fork recipe stays and the built-in behavior is gone', async () => {
-  const { buildHandoffPrompt } = await import('../prompts/session.js')
+  const { buildHandoffPrompt } = await import('../../shared/prompts/session.js')
   const p = { sessionId: 's-2', tmuxName: 'fresh', threadId: 'th-2', topic: 't', originFrom: 'flint', artifact: '/h.md', arrival: 'Run /workstream-orient.', hasPredecessor: true, canAsk: true }
   const lines = buildHandoffPrompt(p).split('\n')
   const at = lines.indexOf('Run /workstream-orient.')
@@ -302,7 +302,7 @@ test('successor prompt: with arriving.md and a predecessor, the fork recipe stay
 })
 
 test('parseHandoffCommand: a note needs a separator; a chat line that starts with "handoff" is not a command', async () => {
-  const { parseHandoffCommand } = await import('../router.js')
+  const { parseHandoffCommand } = await import('../../app/router.js')
   expect(parseHandoffCommand('handoff')).toEqual({})
   expect(parseHandoffCommand('/handoff opus')).toEqual({ model: 'opus' })
   expect(parseHandoffCommand('handoff: So next session can listen to each of these PRs')).toEqual({ note: 'So next session can listen to each of these PRs' })
@@ -346,8 +346,8 @@ test('handoff command: a note reaches the built-in request and {{note}}; none le
 })
 
 test('handoff note: carried to the successor spawn, quoted in its prompt, and filled into arriving {{note}}', async () => {
-  const { handoffSpawnOpts, handoffArrival } = await import('../session-lifecycle.js')
-  const { buildHandoffPrompt } = await import('../prompts/session.js')
+  const { handoffSpawnOpts, handoffArrival } = await import('../../app/session-lifecycle.js')
+  const { buildHandoffPrompt } = await import('../../shared/prompts/session.js')
   mk('ho-7', 'flint', 'ho-thread-7')
   const info = registry.get('ho-7')!
   try {
@@ -370,7 +370,7 @@ test('handoff note: carried to the successor spawn, quoted in its prompt, and fi
 })
 
 test('isHandoffNearMiss: an attempted note that did not parse is flagged; chat and real commands are not', async () => {
-  const { isHandoffNearMiss } = await import('../router.js')
+  const { isHandoffNearMiss } = await import('../../app/router.js')
   for (const t of ['handoff -- note', 'handoff -note', 'handoff- note', 'handoff status: is it done?', 'handoff status - is it done?'])
     expect([t, isHandoffNearMiss(t)]).toEqual([t, true])
   for (const t of ['handoff: note', 'handoff opus: note', 'handoff - note', 'handoff opus - note', 'handoff', 'handoff opus', 'handoff-related bug', 'handoff looks broken', 'handoffs are slow', 'please handoff: x'])
@@ -406,7 +406,7 @@ test('the echoed note cannot ping: mentions are defused', async () => {
 })
 
 test('handoffNoteFate: same letter however spelled is carried; another letter is dropped; no note is none', async () => {
-  const { handoffNoteFate, handoffSpawnOpts } = await import('../session-lifecycle.js')
+  const { handoffNoteFate, handoffSpawnOpts } = await import('../../app/session-lifecycle.js')
   const { mkdtempSync, writeFileSync: wf, realpathSync } = await import('fs')
   const { tmpdir } = await import('os')
   const d = mkdtempSync(join(tmpdir(), 'fate-'))   // /var/… on macOS, which realpaths to /private/var/…
@@ -470,7 +470,7 @@ test('a daemon-started handoff has no message to react to or reply to', async ()
 })
 
 test('a handoff successor starts without read_only, and keeps any other blocked tools', async () => {
-  const { handoffSpawnOpts, READ_ONLY_DISALLOWED_TOOLS } = await import('../session-lifecycle.js')
+  const { handoffSpawnOpts, READ_ONLY_DISALLOWED_TOOLS } = await import('../../app/session-lifecycle.js')
   mk('ho-ro', 'flint', 'ho-thread-ro')
   try {
     const info = registry.get('ho-ro')!
@@ -484,7 +484,7 @@ test('a handoff successor starts without read_only, and keeps any other blocked 
 })
 
 test('a handoff successor never inherits its grandparent as predecessor', async () => {
-  const { handoffSpawnOpts } = await import('../session-lifecycle.js')
+  const { handoffSpawnOpts } = await import('../../app/session-lifecycle.js')
   mk('ho-gp', 'flint', 'ho-thread-gp')
   try {
     const info = registry.get('ho-gp')!

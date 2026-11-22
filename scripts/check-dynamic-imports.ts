@@ -12,13 +12,13 @@ import { fileURLToPath } from 'url'
 
 /** `file -> specifier`, one entry per allowed dynamic import (a file that loads the same module twice lists it twice). */
 export const ALLOWED: readonly string[] = [
-  'daemon/boot-probe.ts -> ../infra/config.js',
-  'daemon/boot-probe.ts -> ../sessions/registry.js',
-  'daemon/boot-probe.ts -> ../sessions/bridge-transport.js',
-  'daemon/boot-probe.ts -> ./bridge-dispatch.js',
-  'daemon/boot-probe.ts -> ./bridge-server.js',
-  'daemon/boot-probe.ts -> ./session-lifecycle.js',
-  'daemon/boot-probe.ts -> ./router.js',
+  'boot-probe.ts -> ./infra/config.js',
+  'boot-probe.ts -> ./sessions/registry.js',
+  'boot-probe.ts -> ./sessions/bridge-transport.js',
+  'boot-probe.ts -> ./app/bridge-dispatch.js',
+  'boot-probe.ts -> ./app/bridge-server.js',
+  'boot-probe.ts -> ./app/session-lifecycle.js',
+  'boot-probe.ts -> ./app/router.js',
   'gateways/slack.ts -> ../sessions/access.js',
   'gateways/slack.ts -> ../sessions/access.js',
   'gateways/slack.ts -> ../sessions/access.js',
