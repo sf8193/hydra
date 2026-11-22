@@ -32,7 +32,7 @@ import { BRIDGE_CHANNEL_FLAG, BRIDGE_MCP_SERVER_KEY, BRIDGE_PLUGIN_ID, BRIDGE_TO
 import { deliveryRefusal, type LaunchPolicy, missingTokenRefusal, PolicyRefusal, remedy, RESTRICTED_MODS, RESTRICTED_PREAMBLE, sandboxInputs, serverToolRule, type RestrictedPolicy } from '../restricted.js'
 import { verifyConfinement as verifyConfinementLoaded, verifyLaunch as verifyLoaded, type Verdict } from './claude-verify.js'
 import { ENGINE_CAPABILITIES } from '../../shared/engine-capabilities.js'
-import { removeSessionToken, removeSpawnPrompt, writeSessionToken, writeSpawnPrompt } from '../launch-files.js'
+import { removeSessionToken, removeSpawnPrompt, shq, writeSessionToken, writeSpawnPrompt } from '../launch-files.js'
 import { makeServerTmpDirs, removeRestrictedFiles, serverTmpDir, serverTmpRoot, writeRestrictedFiles } from '../restricted-files.js'
 import { sandboxedServer, sandboxIssues } from '../../config/server-sandbox.js'
 import type { PrivateRoot } from '../../config/restricted-workdir.js'
@@ -46,7 +46,6 @@ import { isRestricted, isRestrictedPolicy } from '../policy-record.js'
 export type ClaudeSubject = Pick<SessionInfo, 'tmuxName'> & Partial<Pick<SessionInfo, 'claudeSessionId'>>
   & { sessionMetadata?: Pick<SessionMetadata, 'model'> }
 
-const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
 
 /**
