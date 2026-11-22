@@ -39,7 +39,6 @@ export const ALLOWED: readonly string[] = [
   'engines/codex-engine-adapter.ts -> app/restricted.ts',
   'engines/codex-engine-adapter.ts -> sessions/codex-piggyback.ts',
   'engines/codex-engine-adapter.ts -> sessions/registry.ts',
-  'engines/codex-observation.ts -> sessions/observability.ts',
   'engines/codex-runtime.ts -> app/reply-guard.ts',
   'engines/codex-runtime.ts -> sessions/anchor-state.ts',
   'engines/codex-runtime.ts -> sessions/codex-piggyback.ts',
