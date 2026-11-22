@@ -134,6 +134,9 @@ EOF
 # Install watchdog + verify setup
 bun cli/hydra.ts install discord --cwd ~/your/project
 
+# Say who you are (without this every DM is dropped): your Discord user id
+bun cli/hydra.ts migrate discord --operator <your user id>
+
 # Start
 bun cli/hydra.ts up discord
 ```
