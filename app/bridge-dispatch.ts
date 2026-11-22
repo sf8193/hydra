@@ -24,7 +24,7 @@ import { fileArgTools, snapshotConfinedFiles } from './write-confinement.js'
 import { attachmentTarget } from './attachment-target.js'
 import { fileRefusal } from '../config/write-confinement.js'
 import { bindConversation, unbindConversation, formatConversationsFor, replyInConversation, editInConversation, deleteInConversation, fetchInConversation, ownConversationRefusal, type OwnUse } from '../connectors/slack/runtime.js'
-import { parseArchiveUrl } from '../shared/slack-conversation.js'
+import { parseArchiveUrl, conversationId, TOP_LEVEL } from '../shared/slack-conversation.js'
 import { refreshSessionVisual, emojiOf, emojiOfName } from '../sessions/anchor-state.js'
 import { refreshDashboard } from './dashboard.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from '../infra/artifacts.js'
@@ -245,7 +245,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
     if ((name === 'edit_message' || name === 'delete_message') && typeof args.link === 'string') {
       const archive = parseArchiveUrl(args.link, true)
       if (!archive) throw new Error(`${name}: link is not a Slack message link (https://<team>.slack.com/archives/<channel>/p<digits>)`)
-      args = { ...args, chat_id: `slack:${archive.channel}`, message_id: archive.ts }
+      args = { ...args, chat_id: conversationId({ channel: archive.channel, threadTs: archive.threadTs ?? TOP_LEVEL }), message_id: archive.ts }
       delete args.link
     }
     // A Slack conversation id is read once, trimmed, before any check: the check below and the routing in each tool see the same id

@@ -107,6 +107,17 @@ describe('a session edits and deletes the messages its own app posted', () => {
     expect(calls).toEqual([])
   })
 
+  test('a link to a reply inside a thread names that thread’s conversation, so it edits and deletes; a top-level link names the channel', async () => {
+    const reply = 'https://acme.slack.com/archives/C1/p1794969986907669?thread_ts=6.000001&cid=C1'
+    expect(await executeTool('edit_message', { link: reply, text: 'v2' }, 'crm-session')).toMatchObject({ content: [{ text: expect.stringContaining('edited 1794969986.907669 in slack:C1:6.000001') }] })
+    await executeTool('delete_message', { link: reply }, 'crm-session')
+    expect(calls.map(c => [c.verb, c.channel, c.ts])).toEqual([['edit', 'C1', '1794969986.907669'], ['delete', 'C1', '1794969986.907669']])
+    expect(reads.map(r => r.threadTs)).toEqual(['6.000001', '6.000001'])
+    // Without ?thread_ts the conversation is the channel's top level, as before: C1 has none open.
+    const top = await executeTool('delete_message', { link: 'https://acme.slack.com/archives/C1/p1794969986907669' }, 'crm-session')
+    expect(top.content[0].text).toContain('slack:C1 is not an open conversation')
+  })
+
   test('a link that is not a message link is refused before anything else is asked', async () => {
     for (const link of ['https://acme.slack.com/archives/C1', 'https://acme.slack.com/archives/C1/p123', 'https://elsewhere.example/archives/C1/p1794969983366379', 'slack:C1:5.000001']) {
       const r = await executeTool('edit_message', { link, text: 'x' }, 'crm-session')
