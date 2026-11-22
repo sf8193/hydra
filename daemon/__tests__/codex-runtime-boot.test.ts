@@ -122,7 +122,7 @@ describe('T0.7 boot sweep', () => {
   })
 })
 
-// S0.7: startCodexRuntime owns the logging daemon.ts:79-83 did, and never rejects.
+// startCodexRuntime logs how the sweep ended and never rejects.
 describe('Codex start: outcome logging', () => {
   async function stderrOf(fn: () => Promise<unknown>): Promise<string[]> {
     const lines: string[] = [], orig = process.stderr.write
@@ -143,7 +143,6 @@ describe('Codex start: outcome logging', () => {
   })
 
   test('a finished sweep logs completion, also with no records', async () => {
-    const adapter = fakeCodexAdapter()
     expect(await stderrOf(() => startCodexRuntime([]))).toEqual(['daemon: codex reconnection sweep complete\n'])
   })
 })

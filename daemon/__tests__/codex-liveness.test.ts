@@ -6,7 +6,6 @@ import { describe, test, expect, afterEach } from 'bun:test'
 import { fakeCodexAdapter } from './test-harness.js'
 import { reconnectCodexSessions, reconnectDeps } from '../../app/codex-runtime.js'
 import { codexReconnecting } from '../../engines/codex-reconnecting.js'
-const isCodexReconnecting = (id: string) => codexReconnecting.has(id)
 import { engines } from '../../sessions/engine-instances.js'
 import { occupancy, occupied } from '../../sessions/session-reachability.js'
 const isAlive = (info: any) => occupied(occupancy(info))
@@ -80,7 +79,7 @@ describe('boot sweep grace', () => {
     for (const r of [a, b]) { ids.push(r.sessionId); registry.set(r.sessionId, r) }
 
     const sweep = reconnectCodexSessions([a, b])
-    expect(isCodexReconnecting(b.sessionId)).toBe(true)
+    expect(codexReconnecting.has(b.sessionId)).toBe(true)
     expect(isAlive(b)).toBe(true)
     // Long past the grace window and even with a stale stamp, a Codex mid-reconnect is reachable (a queued turn waits
     // out the reconnect), never dead or orphaned: a revive over it would run a second app-server.
@@ -88,8 +87,8 @@ describe('boot sweep grace', () => {
     expect(occupied(occupancy({ ...b, createdAt: 0, deadAt: 1 }))).toBe(true)
     release()
     await sweep
-    expect(isCodexReconnecting(a.sessionId)).toBe(false)
-    expect(isCodexReconnecting(b.sessionId)).toBe(false)
+    expect(codexReconnecting.has(a.sessionId)).toBe(false)
+    expect(codexReconnecting.has(b.sessionId)).toBe(false)
     expect(isAlive(b)).toBe(false)
   })
 
@@ -103,8 +102,8 @@ describe('boot sweep grace', () => {
     for (const r of [a, b]) { ids.push(r.sessionId); registry.set(r.sessionId, r) }
     await reconnectCodexSessions([a, b])
     expect(secondRan).toBe(true)
-    expect(isCodexReconnecting(a.sessionId)).toBe(false)
-    expect(isCodexReconnecting(b.sessionId)).toBe(false)
+    expect(codexReconnecting.has(a.sessionId)).toBe(false)
+    expect(codexReconnecting.has(b.sessionId)).toBe(false)
   })
 })
 
@@ -137,7 +136,7 @@ describe('reconnect verdicts (step 2)', () => {
     reconnectDeps.wait = () => new Promise(r => setTimeout(r, 1)) // skip the real 250/750/1500ms backoff
     try {
       codexEngine.emit('disconnected', info.sessionId)
-      expect(isCodexReconnecting(info.sessionId)).toBe(true)
+      expect(codexReconnecting.has(info.sessionId)).toBe(true)
       await new Promise(r => setTimeout(r, 100))
     } finally { reconnectDeps.wait = realWait }
     expect(aliveWhenTold).toBe(false)
