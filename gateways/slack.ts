@@ -32,6 +32,7 @@ import type {
   AttachmentInfo,
   ReactionEvent,
   SessionVisualOpts,
+  HomeTabBlock,
 } from './gateway.js'
 
 const RECENT_SENT_CAP = 200
@@ -957,7 +958,7 @@ export class SlackGateway implements ChatGateway {
     } catch {}
   }
 
-  async publishHomeTab(userId: string, blocks: webApi.KnownBlock[]): Promise<void> {
+  async publishHomeTab(userId: string, blocks: HomeTabBlock[]): Promise<void> {
     if (!this.visualApi) throw new Error('not connected')
     await this.visualApi.views.publish({
       user_id: userId,

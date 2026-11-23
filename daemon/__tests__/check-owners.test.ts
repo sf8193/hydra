@@ -198,13 +198,13 @@ describe('check-owners: explicit `any` in production code', () => {
 
   test('enforces exact self-tightening cap on capped legacy files', () => {
     const anyRule = RULES.find(r => r.name === 'explicit `any` in production code')!
-    const cap = anyRule.max!['app/dashboard.ts']!
-    const atCap = Array.from({ length: cap }, (_, i) => `const v${i}: any = ${i}`)
-    expect(anyHits('app/dashboard.ts', ...atCap)).toEqual([])
-    const over = anyHits('app/dashboard.ts', ...atCap, 'const extra: any = 1')
+    const capped = [{ ...anyRule, max: { 'app/legacy.ts': 2 } }]
+    const checkCapped = (...lines: string[]) => violations([file('app/legacy.ts', ...lines)], capped)
+    expect(checkCapped('const v0: any = 0', 'const v1: any = 1')).toEqual([])
+    const over = checkCapped('const v0: any = 0', 'const v1: any = 1', 'const extra: any = 2')
     expect(over).toHaveLength(1)
-    expect(over[0]).toContain(`max ${cap}`)
-    const under = anyHits('app/dashboard.ts', ...atCap.slice(0, cap - 1))
+    expect(over[0]).toContain('max 2')
+    const under = checkCapped('const v0: any = 0')
     expect(under).toHaveLength(1)
     expect(under[0]).toContain('lower the cap')
   })
