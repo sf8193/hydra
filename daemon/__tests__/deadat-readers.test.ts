@@ -73,13 +73,23 @@ const ALLOWED: Record<string, { why: string; lines: string[] }> = {
       "if (occ === 'dead' && !info.deadAt && !engineProfile(info.engine).judgesOwnDeath && !crashAlerted.has(info.sessionId)) {",
     ],
   },
-  'app/session-lifecycle.ts': {
-    why: 'skipping a second parent notice for an already-dead record, the resume count of the latest death, restoring a replaced record (keeps its first stamp), and the resume recheck\'s "already written" guard',
+  'app/lifecycle/channel.ts': {
+    why: 'the resume count of the latest death',
     lines: [
       ".filter(s => s.claudeSessionId === resumeFrom && s.deadAt)",
       ".sort((a, b) => (b.deadAt ?? 0) - (a.deadAt ?? 0))[0]",
+    ],
+  },
+  'app/lifecycle/kill.ts': {
+    why: 'restoring a replaced record (keeps its first stamp), and skipping a second parent notice for an already-dead record',
+    lines: [
       "old.deadAt ??= Date.now()",
       "if (!info.deadAt) notifyParentOfEnd(info, opts?.ended, reason)",
+    ],
+  },
+  'app/lifecycle/revive.ts': {
+    why: 'the resume recheck\'s "already written" guard',
+    lines: [
       "if (!s || s.deadAt) return",
     ],
   },

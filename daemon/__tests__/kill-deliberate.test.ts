@@ -78,6 +78,6 @@ test('only these files call killSession with keepRecord or keepWatches (any layo
       if (/keepRecord|keepWatches/.test(argsOf(src, m.index! + 'killSession'.length))) keeping.add(f.slice(root.length + 1))
     }
   }
-  expect([...keeping].sort()).toEqual(['app/recovery.ts', 'app/session-lifecycle.ts'])
+  expect([...keeping].sort()).toEqual(['app/lifecycle/handoff.ts', 'app/lifecycle/revive.ts', 'app/lifecycle/spawn-stages.ts', 'app/recovery.ts'])
   expect(readFileSync(join(root, 'app/destroy.ts'), 'utf8')).toContain('emitSessionDeath(info, true)')
 })

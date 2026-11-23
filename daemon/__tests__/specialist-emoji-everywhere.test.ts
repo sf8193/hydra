@@ -550,7 +550,7 @@ describe('no site reads the catalog glyph', () => {
 // (specialist-emoji-thread-name.test.ts), they are pinned to take their glyph from emojiOfName.
 describe('the spawn-time sites (source-pinned)', () => {
   test('the spawn line doSpawnSession posts in the new session\'s thread', () => {
-    const src = read('app/session-lifecycle.ts')
+    const src = read('app/lifecycle/spawn-stages.ts')
     expect(src).toMatch(/const spawnLine = formatSpawnLine\(\{[^}]*emoji: emojiOfName\(tmuxName\),/s)
   })
 

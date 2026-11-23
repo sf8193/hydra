@@ -150,7 +150,49 @@
       "id": "app_session-lifecycle",
       "label": "app/session-lifecycle.ts",
       "tier": 4,
-      "desc": "doSpawnSession, killSession, tryResume, tryRespawn"
+      "desc": "Public lifecycle facade — re-exports app/lifecycle/*"
+    },
+    {
+      "id": "app_lifecycle_handoff",
+      "label": "app/lifecycle/handoff.ts",
+      "tier": 4,
+      "desc": "handOff, requestHandoff, handoffSpawnOpts, endForFreshStart"
+    },
+    {
+      "id": "app_lifecycle_revive",
+      "label": "app/lifecycle/revive.ts",
+      "tier": 4,
+      "desc": "tryResume, tryRespawn, waitForBridge"
+    },
+    {
+      "id": "app_lifecycle_spawn",
+      "label": "app/lifecycle/spawn.ts",
+      "tier": 4,
+      "desc": "doSpawnSession orchestrator"
+    },
+    {
+      "id": "app_lifecycle_spawn-stages",
+      "label": "app/lifecycle/spawn-stages.ts",
+      "tier": 4,
+      "desc": "Spawn stages: thread, policy, workspace, prompt, verify, announce"
+    },
+    {
+      "id": "app_lifecycle_kill",
+      "label": "app/lifecycle/kill.ts",
+      "tier": 4,
+      "desc": "killSession, restoreIfNotStarted, scratchpad cleanup"
+    },
+    {
+      "id": "app_lifecycle_hooks",
+      "label": "app/lifecycle/hooks.ts",
+      "tier": 4,
+      "desc": "on-kill and pre-handoff user hooks"
+    },
+    {
+      "id": "app_lifecycle_channel",
+      "label": "app/lifecycle/channel.ts",
+      "tier": 4,
+      "desc": "Channel resolution, backfill, carryOver, trust pre-approval"
     },
     {
       "id": "app_reply-guard",
@@ -648,67 +690,247 @@
     ],
     [
       "app_session-lifecycle",
+      "app_lifecycle_channel"
+    ],
+    [
+      "app_session-lifecycle",
+      "app_lifecycle_hooks"
+    ],
+    [
+      "app_session-lifecycle",
+      "app_lifecycle_kill"
+    ],
+    [
+      "app_session-lifecycle",
+      "app_lifecycle_spawn-stages"
+    ],
+    [
+      "app_session-lifecycle",
+      "app_lifecycle_spawn"
+    ],
+    [
+      "app_session-lifecycle",
+      "app_lifecycle_handoff"
+    ],
+    [
+      "app_session-lifecycle",
+      "app_lifecycle_revive"
+    ],
+    [
+      "app_lifecycle_spawn",
       "infra_config"
     ],
     [
-      "app_session-lifecycle",
+      "app_lifecycle_spawn",
       "infra_util"
     ],
     [
-      "app_session-lifecycle",
-      "infra_tmux"
-    ],
-    [
-      "app_session-lifecycle",
+      "app_lifecycle_spawn",
       "sessions_registry"
     ],
     [
-      "app_session-lifecycle",
-      "app_reply-guard"
-    ],
-    [
-      "app_session-lifecycle",
-      "sessions_bridge-transport"
-    ],
-    [
-      "app_session-lifecycle",
-      "engines_bridge-tools"
-    ],
-    [
-      "app_session-lifecycle",
-      "sessions_tool-surface"
-    ],
-    [
-      "app_session-lifecycle",
+      "app_lifecycle_spawn",
       "sessions_phase-budget"
     ],
     [
-      "app_session-lifecycle",
+      "app_lifecycle_spawn",
       "sessions_idle-limit"
     ],
     [
-      "app_session-lifecycle",
+      "app_lifecycle_spawn",
       "shared_constants"
     ],
     [
-      "app_session-lifecycle",
-      "infra_usage"
-    ],
-    [
-      "app_session-lifecycle",
+      "app_lifecycle_spawn",
       "sessions_anchor-state"
     ],
     [
-      "app_session-lifecycle",
+      "app_lifecycle_spawn",
+      "app_lifecycle_channel"
+    ],
+    [
+      "app_lifecycle_spawn",
+      "app_lifecycle_spawn-stages"
+    ],
+    [
+      "app_lifecycle_spawn-stages",
+      "infra_config"
+    ],
+    [
+      "app_lifecycle_spawn-stages",
+      "infra_util"
+    ],
+    [
+      "app_lifecycle_spawn-stages",
+      "sessions_registry"
+    ],
+    [
+      "app_lifecycle_spawn-stages",
+      "app_reply-guard"
+    ],
+    [
+      "app_lifecycle_spawn-stages",
+      "sessions_bridge-transport"
+    ],
+    [
+      "app_lifecycle_spawn-stages",
+      "sessions_tool-surface"
+    ],
+    [
+      "app_lifecycle_spawn-stages",
+      "sessions_phase-budget"
+    ],
+    [
+      "app_lifecycle_spawn-stages",
+      "sessions_idle-limit"
+    ],
+    [
+      "app_lifecycle_spawn-stages",
+      "sessions_anchor-state"
+    ],
+    [
+      "app_lifecycle_spawn-stages",
+      "infra_worktree-manager"
+    ],
+    [
+      "app_lifecycle_spawn-stages",
+      "app_lifecycle_channel"
+    ],
+    [
+      "app_lifecycle_spawn-stages",
+      "app_lifecycle_kill"
+    ],
+    [
+      "app_lifecycle_kill",
+      "infra_config"
+    ],
+    [
+      "app_lifecycle_kill",
+      "infra_util"
+    ],
+    [
+      "app_lifecycle_kill",
+      "infra_tmux"
+    ],
+    [
+      "app_lifecycle_kill",
+      "sessions_registry"
+    ],
+    [
+      "app_lifecycle_kill",
+      "sessions_bridge-transport"
+    ],
+    [
+      "app_lifecycle_kill",
+      "sessions_phase-budget"
+    ],
+    [
+      "app_lifecycle_kill",
+      "sessions_idle-limit"
+    ],
+    [
+      "app_lifecycle_kill",
+      "sessions_anchor-state"
+    ],
+    [
+      "app_lifecycle_kill",
       "connectors_github_pr-watch"
     ],
     [
-      "app_session-lifecycle",
-      "sessions_access"
+      "app_lifecycle_kill",
+      "infra_worktree-manager"
     ],
     [
-      "app_session-lifecycle",
-      "infra_worktree-manager"
+      "app_lifecycle_kill",
+      "app_lifecycle_hooks"
+    ],
+    [
+      "app_lifecycle_handoff",
+      "infra_config"
+    ],
+    [
+      "app_lifecycle_handoff",
+      "infra_util"
+    ],
+    [
+      "app_lifecycle_handoff",
+      "sessions_registry"
+    ],
+    [
+      "app_lifecycle_handoff",
+      "sessions_bridge-transport"
+    ],
+    [
+      "app_lifecycle_handoff",
+      "app_lifecycle_channel"
+    ],
+    [
+      "app_lifecycle_handoff",
+      "app_lifecycle_hooks"
+    ],
+    [
+      "app_lifecycle_handoff",
+      "app_lifecycle_kill"
+    ],
+    [
+      "app_lifecycle_handoff",
+      "app_lifecycle_spawn"
+    ],
+    [
+      "app_lifecycle_revive",
+      "infra_util"
+    ],
+    [
+      "app_lifecycle_revive",
+      "infra_tmux"
+    ],
+    [
+      "app_lifecycle_revive",
+      "sessions_registry"
+    ],
+    [
+      "app_lifecycle_revive",
+      "sessions_bridge-transport"
+    ],
+    [
+      "app_lifecycle_revive",
+      "sessions_anchor-state"
+    ],
+    [
+      "app_lifecycle_revive",
+      "app_lifecycle_kill"
+    ],
+    [
+      "app_lifecycle_revive",
+      "app_lifecycle_spawn"
+    ],
+    [
+      "app_lifecycle_hooks",
+      "infra_config"
+    ],
+    [
+      "app_lifecycle_channel",
+      "infra_config"
+    ],
+    [
+      "app_lifecycle_channel",
+      "infra_util"
+    ],
+    [
+      "app_lifecycle_channel",
+      "sessions_registry"
+    ],
+    [
+      "app_lifecycle_channel",
+      "engines_bridge-tools"
+    ],
+    [
+      "app_lifecycle_channel",
+      "infra_usage"
+    ],
+    [
+      "app_lifecycle_channel",
+      "sessions_access"
     ],
     [
       "app_recovery",
