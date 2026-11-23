@@ -44,7 +44,7 @@ Talk to many Claude Code (or Codex) sessions from Slack or Discord. Each session
 - **One gateway connection per platform.** Prevents token race conditions (Discord) and simplifies state.
 - **Daemon ↔ Bridge separation.** The daemon is long-lived; Claude sessions come and go. The bridge reconnects automatically.
 - **Platform selection via env var.** Set `CHAT_PLATFORM=discord` or `CHAT_PLATFORM=slack`. Default: `discord`.
-- **Simultaneous platforms.** Run two daemons on different state dirs for Discord + Slack at the same time.
+- **Simultaneous platforms.** Run two daemons on different state dirs for Discord + Slack at the same time, or attach Slack workspaces to an existing daemon via the [Slack connector](docs/slack.md).
 
 ## Prerequisites
 
@@ -55,29 +55,21 @@ Talk to many Claude Code (or Codex) sessions from Slack or Discord. Each session
 ## Quick Start
 
 ```bash
-# Install dependencies
+# 1. Install dependencies
 bun install
-claude plugin install discord@claude-plugins-official
 
-# Create .env with your bot token and an existing working directory
-mkdir -p ~/.claude/channels/discord
-cat > ~/.claude/channels/discord/.env << 'EOF'
-CHAT_PLATFORM=discord
-DISCORD_BOT_TOKEN=your-token-here
-SPAWN_CWD=~/your/project
-EOF
+# 2. Run the guided setup (prints Slack's 1-click manifest link or Discord's invite link,
+#    verifies tokens live, pairs you as operator by DM code or ID, writes .env + hydra.toml,
+#    installs the bridge plugin + launchd watchdog, and runs preflight)
+bun cli/hydra.ts init discord   # or: bun cli/hydra.ts init slack
 
-# Run `claude` once: accept the onboarding screens and log in
+# 3. If preflight flags Claude login or onboarding, run `claude` once in a terminal
 
-# Install watchdog + verify setup
-bun cli/hydra.ts install discord --cwd ~/your/project
-
-# Say who you are (without this every DM is dropped): your Discord user id
-bun cli/hydra.ts migrate discord --operator <your user id>
-
-# Start
-bun cli/hydra.ts up discord
+# 4. Start
+hydra up discord                # or: hydra up slack
 ```
+
+Manual setup without the wizard: see [Discord](docs/discord.md) or [Slack](docs/slack.md) (`install` → `migrate --operator` → `preflight` → `up`).
 
 ## Platform Setup
 

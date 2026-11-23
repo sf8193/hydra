@@ -1,5 +1,22 @@
 # Discord Setup
 
+## Fast path: `hydra init discord`
+
+Create a Discord application and bot token (steps 1–2 below), then run one command:
+
+```bash
+bun install
+bun cli/hydra.ts init discord
+```
+
+`hydra init discord` verifies your bot token live, prints a ready-made invite link (no manual OAuth checkboxes), pairs you as operator via a 6-digit DM code (or a pasted user ID), writes `.env` and `hydra.toml`, installs the bridge plugin and launchd watchdog, and runs `hydra preflight discord`. Fix any preflight `✗`, run `claude` once if it flags onboarding/login, then start:
+
+```bash
+hydra up discord
+```
+
+Use steps 1–6 below if you are setting up manually or scripting a headless machine.
+
 ## 1. Create a Discord application and bot
 
 Go to the [Discord Developer Portal](https://discord.com/developers/applications) → **New Application**. Give it a name.
@@ -52,6 +69,7 @@ Find your Discord user id (Settings → Advanced → Developer Mode, then right-
 ```bash
 bun cli/hydra.ts install discord --cwd ~/your/project   # launchd watchdog, `hydra` CLI, preflight
 hydra migrate discord --operator <your user id>          # writes hydra.toml with you as operator
+hydra preflight discord                                   # verify deployment is ready
 hydra up discord                                          # daemon + bot
 ```
 
