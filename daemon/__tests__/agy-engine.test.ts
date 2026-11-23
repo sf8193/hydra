@@ -122,6 +122,15 @@ test.skipIf(!tmuxUp)('a message to a session still starting waits for agy\'s fir
   try { expect(await sent).toEqual({ status: 'accepted', via: 'tmux-paste' }) } finally { rmSync(agyStateFile('deliver-young'), { force: true }) }
 })
 
+test.skipIf(!tmuxUp)('a busy agy queues the message and draws only its first line, which counts as landed', async () => {
+  const queued = `${name}-queued`
+  Bun.spawnSync(['tmux', 'new-session', '-d', '-s', queued, '-x', '200', '-y', '50', `stty -icanon -echo; IFS= read -r line; printf '%s...\\n' "$line"; cat > /dev/null`])
+  try {
+    const r = await engine.deliver({ sessionId: 'deliver-queued', tmuxName: queued } as any, { type: 'notification', content: 'line one\nline two\nline three', meta: { chat_id: '1', message_id: '2', user: 'sam' } })
+    expect(r).toEqual({ status: 'accepted', via: 'tmux-paste' })
+  } finally { Bun.spawnSync(['tmux', 'kill-session', '-t', queued]) }
+}, 20_000)
+
 test.skipIf(!tmuxUp)('a message already shown on the screen is not taken as landed when its paste shows nothing new', async () => {
   const shown = `${name}-shown`
   Bun.spawnSync(['tmux', 'new-session', '-d', '-s', shown, '-x', '200', '-y', '50', `printf '<channel source="hydra">\\nhi\\n</channel>\\n'; stty -icanon -echo; cat > /dev/null`])

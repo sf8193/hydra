@@ -120,8 +120,9 @@ export class AgyEngine implements EngineAdapter {
         if (Date.now() - start > READY_WAIT_MS) return { status: 'rejected', retryable: true, reason: `${info.tmuxName} has not finished starting: agy has sent no first event` }
       }
     }
-    const needle = collapse(text).slice(-40)
-    const seen = () => collapse(this.peek(info, 200)).split(needle).length - 1
+    // A busy agy queues the message and draws only its first line, so the head counts as landed too.
+    const flat = collapse(text), tail = flat.slice(-40), head = flat.slice(0, 40)
+    const seen = () => { const pane = collapse(this.peek(info, 200)); return pane.split(tail).length + pane.split(head).length - 2 }
     const before = seen()
     mkdirSync(PASTE_DIR, { recursive: true, mode: 0o700 })
     const file = join(PASTE_DIR, `${info.sessionId}.txt`)
