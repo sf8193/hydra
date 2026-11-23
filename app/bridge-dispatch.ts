@@ -843,13 +843,14 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           url: await partyLink({ ...s, threadId: routeThreadId(s) ?? s.threadId }, id => gateway.getThreadUrl(id), m => process.stderr.write(`daemon: ${m}\n`)),
         })
         const echoThread = caller?.threadId && caller.threadId !== threadId ? caller.threadId : undefined
+        const postSubtext = (t: string, line: string) => retrySend(() => gateway.send(t, line, { subtext: true }))
         const quietOutcome = wantsQuiet
           ? await Promise.all([caller ? party(caller) : { name: senderName, emoji: emojiOfName(senderName) }, party(targetSession)])
             .then(([from, to]) => quietSend(
               { from, to, type: msgType as SendType, text, summary, dir: join(STATE_DIR, 'messages') },
               {
-                postLine: line => postThread ? retrySend(() => gateway.send(postThread, line, { subtext: true })) : Promise.reject(new Error(`${targetSession.tmuxName} has no thread the gateway can address`)),
-                ...(echoThread ? { postEcho: (line: string) => retrySend(() => gateway.send(echoThread, line, { subtext: true })) } : {}),
+                postLine: line => postThread ? postSubtext(postThread, line) : Promise.reject(new Error(`${targetSession.tmuxName} has no thread the gateway can address`)),
+                ...(echoThread ? { postEcho: (line: string) => postSubtext(echoThread, line) } : {}),
                 log: m => process.stderr.write(`daemon: ${m}\n`),
               },
             ))

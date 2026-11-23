@@ -15,6 +15,8 @@ type Rule = {
   // `//` comments are gone, and consecutive lines are joined, so wrapped calls still match.
   pattern: RegExp
   allowed: string[]
+  // Optional per-file match ceilings so adding a new call site fails even inside a sanctioned file.
+  max?: Record<string, number>
   skipLine?: (normalizedLine: string) => boolean
   okAt?: (flat: string, index: number) => boolean   // a match that is fine in context
   tests: boolean   // does the rule also apply to test files?
@@ -90,14 +92,21 @@ export const RULES: Rule[] = [
   },
   {
     name: 'raw gateway.send() outside safeSend',
-    pattern: /\bgateway\.send\b/g,
-    // infra/util.ts owns safeSend. The remaining five need raw throws, retrySend, thread anchors, or non-thread Slack user IDs:
-    // bridge-dispatch (MCP reply/send_to_thread retrySend), session-lifecycle (thread anchor), connectors/slack/runtime (bindNotice DM fallback),
-    // app/reply-guard (screenshot fallback dep seam), daemon.ts (Slack Home spawn errors to userId).
-    allowed: [
-      'infra/util.ts', 'app/bridge-dispatch.ts', 'app/session-lifecycle.ts',
-      'connectors/slack/runtime.ts', 'app/reply-guard.ts', 'daemon.ts',
-    ],
+    pattern: /\bgateway(?:\??\.send|\s+as\s+\w+\s*\.send)\b/g,
+    // infra/util.ts owns safeSend. Every other file below is capped at its exact sanctioned count so no new raw send can enter:
+    // - app/bridge-dispatch.ts (3): MCP reply, loud send_to_thread, and quiet-send subtext helper (all wrap raw gateway.send in retrySend and propagate errors/IDs)
+    // - app/session-lifecycle.ts (1): thread anchor creation must throw on failure and return anchor.id
+    // - connectors/slack/runtime.ts (1): bindNotice catches failure to fall back to toOperatorDm
+    // - app/reply-guard.ts (1): defaultDeps.gatewaySend seam for screenshot fallback on throw
+    // - daemon.ts (4): 2 Slack Home errors to userId (U..., not a thread ID) + 2 threadId notices in the same homeSpawnHandler deferred while #964 moves that handler
+    allowed: ['infra/util.ts'],
+    max: {
+      'app/bridge-dispatch.ts': 3,
+      'app/session-lifecycle.ts': 1,
+      'connectors/slack/runtime.ts': 1,
+      'app/reply-guard.ts': 1,
+      'daemon.ts': 4,
+    },
     tests: false, ts: true,
     why: 'send through safeSend (infra/util.ts) so messages are chunked, shaped, address-checked and logged',
   },
@@ -123,6 +132,11 @@ export function violations(files: Array<{ path: string; text: string }>): string
     for (const r of RULES) {
       if (r.allowed.includes(path) || (!r.tests && isTest(path)) || (r.ts && !path.endsWith('.ts'))) continue
       const hits = [...flat.matchAll(r.pattern)].filter(m => !r.okAt?.(flat, m.index!)).map(m => lineAt(m.index!)).filter(n => !r.skipLine?.(lines[n - 1]))
+      const limit = r.max?.[path]
+      if (limit !== undefined) {
+        if (hits.length > limit) out.push(`${path}: ${hits.length} occurrences of ${r.name} (max ${limit}) — ${r.why}`)
+        continue
+      }
       for (const n of new Set(hits)) out.push(`${path}:${n}: ${r.name} — ${r.why}\n    ${raw[n - 1]?.trim()}`)
     }
   }

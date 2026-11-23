@@ -682,7 +682,7 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
       // unless info.forceWorktreeCleanup (see SpawnOpts).
       void (async () => {
         const kept = await destroyWorktree(wt.repo, wt.path, wt.branch, info.forceWorktreeCleanup)
-        if (kept) void safeSend(info.threadId, `⚠️ Worktree \`${wt.path}\` (branch \`${wt.branch}\`) kept: ${kept}. Remove it once the work is safe.`).catch(() => {})
+        if (kept) void safeSend(info.threadId, `⚠️ Worktree \`${wt.path}\` (branch \`${wt.branch}\`) kept: ${kept}. Remove it once the work is safe.`)
       })().catch(err => {
         process.stderr.write(`daemon: worktree cleanup failed for ${info.tmuxName}: ${err}\n`)
       })
@@ -704,7 +704,7 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
         if (removed.length) process.stderr.write(`daemon: ${info.tmuxName}: removed ${removed.length} scratchpad worktree(s)\n`)
         if (kept.length) {
           process.stderr.write(`daemon: ${info.tmuxName}: kept scratchpad worktree(s): ${kept.map(k => `${k.path} (${k.reason})`).join(', ')}\n`)
-          void safeSend(info.threadId, `⚠️ Kept ${kept.length} worktree(s) with work not on a remote:\n${kept.map(k => `- \`${k.path}\` — ${k.reason}`).join('\n')}`).catch(() => {})
+          void safeSend(info.threadId, `⚠️ Kept ${kept.length} worktree(s) with work not on a remote:\n${kept.map(k => `- \`${k.path}\` — ${k.reason}`).join('\n')}`)
         }
       }).catch(err => process.stderr.write(`daemon: scratchpad worktree cleanup failed for ${info.tmuxName}: ${err}\n`))
     }
@@ -766,7 +766,7 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
 /** Tells a thread why a start was refused, at most once a minute per cause (threadNotices): a revive tries three tiers, each refused for the same cause. */
 async function tellThread(threadId: string, why: string): Promise<void> {
   if (!threadNotices.allow(refusalNoticeKey(threadId, why))) return
-  await safeSend(threadId, `⚠️ ${why}`).catch(() => {})
+  await safeSend(threadId, `⚠️ ${why}`)
 }
 
 /** A start that must not happen: the thread is told why (once a minute per cause) and the start throws a PolicyRefusal, which no revive counts as a failure. */

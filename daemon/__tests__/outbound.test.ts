@@ -149,6 +149,14 @@ test('safeSend attaches buttons only to the last chunk and forwards subtext', as
   expect(sends[1].subtext).toBe(true)
 })
 
+test('safeSend never throws when shapeOutbound fails, logs channelId, and returns []', async () => {
+  const logged: string[] = []
+  process.stderr.write = ((s: string) => { logged.push(s); return true }) as any
+  ;(gateway as any).shapeOutbound = async () => { throw new Error('ENOSPC') }
+  expect(await safeSend('ob-chan', 'hello')).toEqual([])
+  expect(logged.some(l => l.includes('ob-chan') && l.includes('ENOSPC'))).toBe(true)
+})
+
 test('an edit cannot add files: safeEdit asks for no room', async () => {
   let edited = ''
   ;(gateway as any).edit = async (_c: string, _m: string, text: string) => { edited = text; return 'm1' }

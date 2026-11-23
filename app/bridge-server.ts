@@ -411,7 +411,9 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       // Post buttons in the session's thread (if it's a spawned session), otherwise DM the operator
       const permInfo = sessionId !== 'main' ? registry.get(sessionId) : undefined
       if (permInfo) {
-        void safeSend(permInfo.threadId, text, { buttons })
+        void safeSend(permInfo.threadId, text, { buttons }).then(ids => {
+          if (!ids.length) process.stderr.write(`daemon: permission_request send to thread ${permInfo.threadId} did not land\n`)
+        })
       } else {
         for (const userId of operatorIds()) {
           void gateway.sendDM(userId, text, buttons).catch(e => {
