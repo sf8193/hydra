@@ -350,6 +350,9 @@ describe('posting where link previews are off', () => {
     expect(postPayload('C1', '1.0', 'hi', { unfurl: false })).toEqual({ channel: 'C1', markdown_text: 'hi', thread_ts: '1.0', unfurl_links: false, unfurl_media: false })
     expect(postPayload('C1', undefined, 'hi')).toEqual({ channel: 'C1', markdown_text: 'hi' })
     expect(postPayload('C1', '1.0', 'hi', {})).toEqual({ channel: 'C1', markdown_text: 'hi', thread_ts: '1.0' })
+    // A split reply's choice, made on the whole text, wins over the part's own.
+    expect(postPayload('C1', undefined, '**b**', { classic: true })).toEqual({ channel: 'C1', text: '**b**' })
+    expect(postPayload('C1', undefined, 'hi <@U1>', { classic: false })).toEqual({ channel: 'C1', markdown_text: 'hi <@U1>' })
   })
   test('a reply goes as markdown_text, so **bold** and tables render; links and code reach Slack byte for byte', () => {
     const md = 'Fixed **it** in [#889](https://github.com/o/r/pull/889)\n\n| a | b |\n|---|---|\n| 1 | 2 |\n```ts\nconst a = `x` < 2 && b > 1\n```'
