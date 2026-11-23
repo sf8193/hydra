@@ -27,6 +27,18 @@ export type StartCodexAppServerOptions = {
   sessionToken?: string
 }
 
+/** Argv for `codex app-server`: forwards HYDRA_SESSION_TOKEN from the app-server env to its hydra MCP sidecar without touching config.toml or putting the secret on argv. */
+export function codexAppServerArgs(model?: string): string[] {
+  const args = ['app-server', '--listen', 'unix://']
+  if (model) args.push('-c', `model=${JSON.stringify(model)}`)
+  args.push(
+    '-c', 'approval_policy="never"',
+    '-c', 'sandbox_mode="danger-full-access"',
+    '-c', `mcp_servers.hydra.env_vars=[${JSON.stringify(SESSION_TOKEN_VAR)}]`,
+  )
+  return args
+}
+
 /** Start an app-server independently of tmux so the presentation surface is disposable. */
 export function startCodexAppServer(options: StartCodexAppServerOptions): number {
   if (process.env.NODE_ENV === 'test') throw new Error('refusing to start a real codex app-server under bun test — give the adapter a fake process')
@@ -39,9 +51,7 @@ export function startCodexAppServer(options: StartCodexAppServerOptions): number
   mkdirSync(home, { recursive: true, mode: 0o700 })
   mkdirSync(dirname(options.logPath), { recursive: true, mode: 0o700 })
 
-  const args = ['app-server', '--listen', 'unix://']
-  if (options.model) args.push('-c', `model=${JSON.stringify(options.model)}`)
-  args.push('-c', 'approval_policy="never"', '-c', 'sandbox_mode="danger-full-access"')
+  const args = codexAppServerArgs(options.model)
 
   const logFd = openSync(options.logPath, 'a', 0o600)
   try {

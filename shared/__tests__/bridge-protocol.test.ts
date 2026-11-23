@@ -7,28 +7,28 @@ describe('parseBridgeToDaemonMessage', () => {
       [
         'register with valid optional fields',
         {
-          type: 'register', sessionId: 's1', claudeSessionId: 'c1', pid: 42,
+          type: 'register', sessionId: 's1', sessionToken: 'tok-abc', claudeSessionId: 'c1', pid: 42,
           connectionRole: 'control', sessionType: 'thread_owner', restricted: true, writeConfined: true,
         },
         {
           ok: true,
           msg: {
-            type: 'register', sessionId: 's1', claudeSessionId: 'c1', pid: 42,
+            type: 'register', sessionId: 's1', sessionToken: 'tok-abc', claudeSessionId: 'c1', pid: 42,
             connectionRole: 'control', sessionType: 'thread_owner', restricted: true, writeConfined: true,
           },
         },
       ],
       [
-        'register strips negative/fractional pid, invalid connectionRole, and non-boolean restriction flags',
+        'register strips negative/fractional pid, empty/non-string sessionToken, invalid connectionRole, and non-boolean restriction flags',
         {
-          type: 'register', sessionId: 's2', pid: -1, connectionRole: 'admin',
+          type: 'register', sessionId: 's2', sessionToken: '', pid: -1, connectionRole: 'admin',
           restricted: 'true', writeConfined: 1,
         },
         { ok: true, msg: { type: 'register', sessionId: 's2' } },
       ],
       [
-        'register strips non-integer pid',
-        { type: 'register', sessionId: 's3', pid: 1.5, restricted: false, writeConfined: false },
+        'register strips non-integer pid and non-string sessionToken',
+        { type: 'register', sessionId: 's3', sessionToken: 123, pid: 1.5, restricted: false, writeConfined: false },
         { ok: true, msg: { type: 'register', sessionId: 's3' } },
       ],
       [
