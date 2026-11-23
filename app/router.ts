@@ -360,8 +360,6 @@ async function deliverToSession(msg: InboundMessage, targetSessionId: string, be
   return enqueueUserMessage(msg, targetSessionId, chatId, before)
 }
 
-// A held message lands in the started session as any message in its thread does; one restored at boot lands the same way.
-
 /**
  * Reserve the session's ingress slot synchronously, then enrich and deliver
  * as a distinct next turn. `before` (a `!` interrupt) is awaited inside the
@@ -381,19 +379,12 @@ function enqueueUserMessage(msg: InboundMessage, targetSessionId: string, chatId
 }
 
 // ---------------------------------------------------------------------------
-// Event handlers
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Inbound message routing
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
 // Binding — daemon.ts calls bindRouter() once at boot
 // ---------------------------------------------------------------------------
 
 /** Registers the router's gateway handlers and the held-message delivery. */
 export function bindRouter(): void {
+  // A held message lands in the started session as any message in its thread does; one restored at boot lands the same way.
   setHeldDelivery(async (msg, info) => {
     info.lastActive = Date.now()
     registry.debouncedPersist()
@@ -442,6 +433,7 @@ export function bindRouter(): void {
     })
   }
 
+  // Inbound message routing
   gateway.onMessage(async (inbound: InboundMessage) => {
     if (inbound.isBot) return
 
