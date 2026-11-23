@@ -34,7 +34,7 @@ Twenty-three names carry the design. Each answers one question.
 
 A schedule is the one name for a clock that sends a message to a specialist; `job` is its old name. An audience is not a key: it is derived from who `reachable_by` lets reach a specialist, the places its `[[rules]]` send to it, and whether those places hear other bots (`bots = true` on the place).
 
-In code: the gateways are `gateways/`, the Slack connector is `connectors/slack/`, an Inbound is `Inbound` in `routing/route.ts`, a Target is `Target` in `app/targets.ts`, and the restricted layer is `app/restricted.ts`. `diagrams/core.mmd` is the picture below; a test checks that every path and symbol named here and in `diagrams/core.mmd` exists.
+In code: the gateways are `gateways/`, what each platform can do is its `GatewayProfile` in `shared/gateways/` (outside the folders that own a platform's name, code that differs by platform asks a capability there), the Slack connector is `connectors/slack/`, an Inbound is `Inbound` in `routing/route.ts`, a Target is `Target` in `app/targets.ts`, and the restricted layer is `app/restricted.ts`. `diagrams/core.mmd` is the picture below; a test checks that every path and symbol named here and in `diagrams/core.mmd` exists.
 
 ```mermaid
 flowchart LR

@@ -6,6 +6,7 @@ import { markDead, registry, threadRegistry, type SessionInfo } from '../session
 import { transport, type BridgeConn } from '../sessions/bridge-transport.js'
 import { executeTool } from './bridge-dispatch.js'
 import { BRIDGE_SHUTDOWN_GRACE_MS } from '../shared/constants.js'
+import { gatewayProfile } from '../shared/gateways/index.js'
 import { pendingPermissions } from './permission.js'
 import { discoverClaudeSessionId, killSession } from './session-lifecycle.js'
 import { operatorIds } from '../sessions/access.js'
@@ -341,7 +342,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
           // Reply guard: a reaction acknowledges the message — but only where one is
           // actually posted. Slack `react` succeeds as a no-op, so settling on it
           // would disarm the guard on an ack the sender never sees.
-          if (name === 'react' && PLATFORM !== 'slack' && !result.isError && conn.sessionId && args.chat_id && args.message_id) {
+          if (name === 'react' && gateway.postsReactions && !result.isError && conn.sessionId && args.chat_id && args.message_id) {
             settlePendingOnReact(conn.sessionId, args.chat_id as string, args.message_id as string)
           }
 

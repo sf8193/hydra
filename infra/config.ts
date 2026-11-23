@@ -8,6 +8,8 @@ import { captureSpawnVars, capturedSpawnVars } from '../shared/spawn-env.js'
 import { scrubTokenVarsInFile } from './token-vars-file.js'
 import { claudeConfigDir, DISCORD_GATEWAY_TOKEN_ENV, platformStateDir, SLACK_GATEWAY_TOKEN_ENVS } from '../shared/constants.js'
 import { isUnder } from './path-containment.js'
+import { GATEWAY_PLATFORMS, isChatPlatform } from '../shared/gateways/index.js'
+import type { ChatPlatform } from '../config/types.js'
 
 // ---------------------------------------------------------------------------
 // Paths & env
@@ -129,7 +131,12 @@ export async function resolveDefaultChannel(operators: string[]): Promise<void> 
 // Platform
 // ---------------------------------------------------------------------------
 
-export const PLATFORM = (process.env.CHAT_PLATFORM ?? 'discord') as 'discord' | 'slack'
+const requestedPlatform = process.env.CHAT_PLATFORM || 'discord'
+if (!isChatPlatform(requestedPlatform)) {
+  process.stderr.write(`daemon: CHAT_PLATFORM must be one of ${GATEWAY_PLATFORMS.join(', ')}, got '${requestedPlatform}'\n`)
+  process.exit(1)
+}
+export const PLATFORM: ChatPlatform = requestedPlatform
 
 let TOKEN: string | undefined
 let SLACK_APP_TOKEN: string | undefined

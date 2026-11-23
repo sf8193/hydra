@@ -14,7 +14,7 @@ describe('check-rules', () => {
     expect(RULES.map(r => r.id)).toEqual(['platform-name-branch', 'engine-name-branch', 'io-in-core'])
     for (const r of RULES.filter(r => r.id !== 'io-in-core')) {
       expect(r.principle).toBe('capabilities, not names')
-      expect(r.fix).toMatch(/give the (gateway|engine) a capability .*(gateways\/gateway\.ts|engines\/engine-adapter\.ts)/)
+      expect(r.fix).toMatch(/give the (gateway|engine) a capability .*(gateways\/gateway\.ts.*shared\/gateways\/profile\.ts|engines\/engine-adapter\.ts)/)
     }
   })
 

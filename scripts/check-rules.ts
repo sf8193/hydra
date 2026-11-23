@@ -54,21 +54,10 @@ export const RULES: readonly Rule[] = [
     // process, which names the daemon it talks to.
     owners: ['gateways/', 'connectors/', 'routing/', 'config/', 'cli/'],
     allowed: [
-      "bridge-dispatch.ts: gateway.platform === 'slack'",
-      "bridge-server.ts: PLATFORM !== 'slack'",
-      "bridge.ts: platform === 'discord'",
       "config.ts: PLATFORM === 'slack'",
       "config.ts: PLATFORM === 'slack'",
-      "dashboard.ts: PLATFORM !== 'slack'",
-      "link-previews.ts: platform === 'discord'",
-      "link-previews.ts: platform === 'slack'",
-      "link-previews.ts: platform === 'slack'",
-      "link-previews.ts: platform === 'slack'",
-      "link-previews.ts: platform === 'slack'",
-      "typed-delivery.ts: platform === 'slack'",
-      "usage-alerts.ts: io.platform === 'discord'",
     ],
-    fix: 'give the gateway a capability (a field or method on ChatGateway, gateways/gateway.ts) and branch on that',
+    fix: 'give the gateway a capability (a field or method on ChatGateway, gateways/gateway.ts, for what the running gateway does; a field on GatewayProfile, shared/gateways/profile.ts, for what a reader needs about a platform without its gateway object) and branch on that',
   },
   {
     id: 'engine-name-branch',

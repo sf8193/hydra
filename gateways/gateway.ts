@@ -147,6 +147,8 @@ export interface ChatGateway {
 
   readonly canThreadInDM: boolean
   readonly dmThreadsAreExclusive: boolean
+  /** `react` posts the emoji on the message. False: the call succeeds as a no-op and nothing shows, so it acknowledges nothing. */
+  readonly postsReactions: boolean
   readonly healthCheckUrl: string
   readonly maxMessageLength: number
   /** Files one message may carry. */
@@ -233,6 +235,12 @@ export interface ChatGateway {
    * root) leaves it out. May reject; the caller then keeps the id alone.
    */
   getReplyContext?(msg: InboundMessage): Promise<ReplyContext | null>
+
+  /**
+   * Optional: `at` as text the platform draws itself, live and in the reader's own timezone (Discord: `<t:…:R>`). A gateway without it leaves the
+   * caller to write the time out.
+   */
+  relativeTime?(at: Date): string
 
   // Sent message tracking (for mention-by-reply detection)
   noteSent(id: string): void

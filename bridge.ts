@@ -23,6 +23,7 @@ import { randomUUID } from 'crypto'
 import { readFileSync, existsSync } from 'fs'
 import { fileURLToPath } from 'url'
 
+import { GATEWAY_PLATFORMS } from './shared/gateways/index.js'
 import { ToolsWaiterSet, type ToolsWaiter } from './shared/tools-waiters.js'
 import { bridgeLifePath, type BridgeLifeEvent } from './shared/bridge-life.js'
 import { appendBridgeLife } from './infra/bridge-life-file.js'
@@ -53,8 +54,7 @@ function resolveSocketPath(): string {
       }
       if (config.socket) {
         if (!platformExplicit) {
-          const otherPlatform = platform === 'discord' ? 'slack' : 'discord'
-          if (existsSync(join(bridgeDir, `daemon-${otherPlatform}.json`))) {
+          if (GATEWAY_PLATFORMS.some(other => other !== platform && existsSync(join(bridgeDir, `daemon-${other}.json`)))) {
             process.stderr.write(`bridge: WARNING: CHAT_PLATFORM not set, defaulting to '${platform}' — set CHAT_PLATFORM to route to the correct daemon\n`)
           }
         }

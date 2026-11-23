@@ -9,7 +9,7 @@ process.stderr.write = (() => true) as any
 const sent: string[] = []
 function captureAlerts() {
   sent.length = 0
-  _setUsageAlertsIO({ send: t => sent.push(t), log: () => {}, now: () => 0, platform: 'slack', load: () => ({}), save: () => {} })
+  _setUsageAlertsIO({ send: t => sent.push(t), log: () => {}, now: () => 0, relativeTime: () => undefined, load: () => ({}), save: () => {} })
 }
 afterEach(() => _resetUsageAlertsIO())
 

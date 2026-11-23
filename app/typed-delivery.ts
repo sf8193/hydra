@@ -23,6 +23,8 @@ import type { SessionInfo } from '../sessions/registry.js'
 import { sessionDrift, unverified } from './restricted.js'
 import { replyContextLine } from '../shared/reply-context.js'
 import { engineProfile } from '../shared/engines/index.js'
+import { gatewayProfile } from '../shared/gateways/index.js'
+import type { ChatPlatform } from '../config/types.js'
 
 // ---------------------------------------------------------------------------
 // The rule: one place that knows when each path applies
@@ -63,8 +65,8 @@ const clean = (s: string): string => s.replace(/[\s\]]+/g, ' ').trim()
  * (reply_to, chat_id) and keeps a message starting with `/` or `!` from being read
  * as a slash command or bash mode.
  */
-export function typedDeliveryText(content: string, meta: Record<string, string>, platform: string = PLATFORM): string {
-  const label = platform === 'slack' ? 'Slack' : 'Discord'
+export function typedDeliveryText(content: string, meta: Record<string, string>, platform: ChatPlatform = PLATFORM): string {
+  const label = gatewayProfile(platform).label
   const reply = replyContextLine(meta)
   const tag = `[${label} · ${clean(meta.user ?? '')} · msg ${clean(meta.message_id ?? '')} · thread ${clean(meta.chat_id ?? '')}${reply ? ` · ${reply}` : ''}] `
   const files = meta.downloaded_files ? `\n[attachments: ${meta.downloaded_files}]` : ''

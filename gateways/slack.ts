@@ -16,6 +16,7 @@ import { HOME_STATUS_ACTION_PREFIX, MAX_ATTACHMENT_BYTES } from '../shared/const
 import { buildSocketApp, parseAuth, unfurlFields } from '../shared/slack-client.js'
 import { parseHomeStatusClick } from '../infra/home-status.js'
 import { linkPreviewsOff } from '../shared/link-previews.js'
+import { gatewayProfile } from '../shared/gateways/index.js'
 import { archiveUrl } from '../shared/slack-conversation.js'
 import { SlackEventDedupe } from './slack-event-dedupe.js'
 import type {
@@ -118,6 +119,7 @@ export class SlackGateway implements ChatGateway {
   readonly platform = 'slack' as const
   readonly canThreadInDM = true
   readonly dmThreadsAreExclusive = true
+  readonly postsReactions = false // a bot's reaction pushes a notification; reactions people post are heard regardless
   readonly healthCheckUrl = 'https://slack.com/api/api.test'
   readonly maxMessageLength = 4000 // block-kit section text limit
   readonly maxAttachments = 10 // what the daemon has always capped a message at
@@ -283,8 +285,8 @@ export class SlackGateway implements ChatGateway {
         messageId: event.item.ts,
         userId: event.user,
         emoji: event.reaction,
-        // A Slack thread reply lives in its parent's channel; DM channel ids start with D.
-        isDM: event.item.channel.startsWith('D'),
+        // A Slack thread reply lives in its parent's channel.
+        isDM: gatewayProfile('slack').isDmId(event.item.channel),
         parentChannelId: null,
       }).catch(e =>
         process.stderr.write(`slack gateway: reaction handler error: ${e}\n`),
@@ -543,7 +545,7 @@ export class SlackGateway implements ChatGateway {
 
   async react(_channelId: string, _messageId: string, _emoji: string): Promise<void> {
     // no-op: bot reactions trigger push notifications on Slack
-    // NOTE: re-enable with unreact, and drop the PLATFORM check on reply-guard's react-settle in bridge-server.ts
+    // NOTE: re-enable with unreact and `postsReactions = true`
   }
 
   async unreact(_channelId: string, _messageId: string, _emoji: string): Promise<void> {
@@ -997,7 +999,7 @@ export class SlackGateway implements ChatGateway {
 
     // In Slack, thread_ts !== ts means this is a threaded reply
     const isThread = !!msg.thread_ts && msg.thread_ts !== msg.ts
-    // DM detection: channel type starts with 'D'
+    // DM detection: Slack says so in the channel type
     const isDM = msg.channel_type === 'im'
 
     return {
