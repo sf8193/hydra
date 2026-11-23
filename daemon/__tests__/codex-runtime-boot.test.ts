@@ -14,8 +14,9 @@ import { getLastCodexMessage, isCodexTurnComplete, isCodexWorking, noteCodexTurn
 import { notePendingReply, _pendingForTesting } from '../../app/reply-guard.js'
 import { registerProtocol } from '../../sessions/protocol-registry.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
-import { reconnectCodexAfterDisconnect, reconnectCodexSessions, reconnectDeps, startCodexRuntime } from '../../app/codex-runtime.js'
+import { reconnectCodexAfterDisconnect, reconnectCodexSessions, reconnectDeps, startCodexRuntime, bindCodexRuntime } from '../../app/codex-runtime.js'
 import { codexAdapter } from './codex-adapter.js'
+bindCodexRuntime()
 
 // The boot sweep over every Codex record in the registry.
 const sweep = (adapter: CodexEngineAdapter) => startCodexRuntime(engineRecords(adapter))

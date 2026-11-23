@@ -1,12 +1,10 @@
 /**
- * Codex runtime — the CodexEngine's events wired into the daemon at module
- * init (daemon.ts imports this), and the boot sweep daemon.ts runs.
+ * Codex runtime — the CodexEngine's events wired into the daemon
+ * (bindCodexRuntime) and the boot sweep (startCodexRuntime); daemon.ts calls
+ * both at boot.
  *
  * Codex app-servers outlive their replaceable tmux TUIs. This module owns the
  * engine event plumbing and reconnects transiently lost daemon connections.
- * Its listeners bind their dependencies (registry, reply guard, safeSend,
- * dispatchDisconnect) at import, so an event that arrives before
- * startCodexRuntime() behaves exactly as one after it.
  */
 
 import type { ReconciledTurn } from '../engines/codex-engine.js'
@@ -60,37 +58,8 @@ export function scheduleCodexSurfaceRepairs(
 }
 
 // ---------------------------------------------------------------------------
-// Event wiring — Codex engine events → daemon protocol dispatch
+// Event handlers and helpers — Codex engine events → daemon protocol dispatch (bindCodexRuntime binds them)
 // ---------------------------------------------------------------------------
-
-codexEngine.on('message', (sessionId: string, text: string) => {
-  const info = registry.get(sessionId)
-  if (!info) return
-  info.lastActive = Date.now()
-  noteActivityForSession(info.tmuxName) // idempotent: sets a flag on this session's pending entries
-  noteCodexMessage(sessionId, text)
-  noteCodexTurnState(sessionId, false) // still producing — not the final answer yet
-})
-
-codexEngine.on('autoApproved', (sessionId: string, method: string) => {
-  const info = registry.get(sessionId)
-  if (info?.spawnLogPath) {
-    try { appendFileSync(info.spawnLogPath, `[${new Date().toISOString()}] auto-approved: ${method}\n`) } catch {}
-  }
-})
-
-codexEngine.on('turnCompleted', (sessionId: string) => {
-  const info = registry.get(sessionId)
-  if (!info) return
-  noteCodexTurnState(sessionId, true)
-  // The remote TUI may exit with the completed turn. Repair its tmux surface
-  // immediately so the next protocol turn/keys command has somewhere to land.
-  info.adapter?.surface(info)
-  // The remote TUI may disappear just after turn/completed. Recheck after that
-  // teardown window; the provider is idempotent when the surface stayed alive.
-  scheduleCodexSurfaceRepairs(sessionId)
-  handleSilenceEvent(info.tmuxName)
-})
 
 // After a restart or reconnect: record what thread/resume says the last turn
 // did, for the reply guard. Observation only — no surface repair, key flush or
@@ -104,35 +73,6 @@ export function onTurnReconciled(sessionId: string, t: ReconciledTurn): void {
   // No completedAt → at 0: an answer of unknown age is never relayed as new.
   if (t.lastAgentText) noteCodexMessage(sessionId, t.lastAgentText, t.completedAt ? t.completedAt * 1000 : 0)
 }
-codexEngine.on('turnReconciled', onTurnReconciled)
-
-codexEngine.on('turnStalled', (sessionId: string, reason: string) => {
-  const info = registry.get(sessionId)
-  if (!info) return
-  markYourTurn(info, info.threadId)
-  registry.debouncedPersist()
-  void safeSend(info.threadId, `⚠️ Codex needs attention: ${reason || 'turn progress is unresolved.'}`)
-})
-
-codexEngine.on('turnDeliveryUnknown', (sessionId: string, _text: string, err: unknown) => {
-  const info = registry.get(sessionId)
-  if (!info) return
-  void safeSend(info.threadId, `⚠️ Codex input delivery is uncertain; retaining it while checking thread history. ${String(err)}`)
-})
-
-codexEngine.on('usageWarning', (sessionId: string, usedPercent: number) => {
-  const info = registry.get(sessionId)
-  if (!info) return
-  void safeSend(info.threadId, `⚠️ Codex usage at **${usedPercent}%** of weekly limit.`)
-})
-
-codexEngine.on('contextUsage', (sessionId: string, usage: { usedTokens: number; contextWindow: number; percent: number }) => {
-  const info = registry.get(sessionId)
-  if (!info) return
-  info.contextUsage = { ...usage, updatedAt: Date.now() }
-  registry.persist()
-  logContextUsageSample(sessionId, info.tmuxName, usage)
-})
 
 // Append-only samples, one per turn (contextUsage fires once per completed
 // turn). Registry only ever keeps the latest snapshot per session, so there's
@@ -216,11 +156,73 @@ export async function reconnectCodexAfterDisconnect(
   return false
 }
 
-codexEngine.on('disconnected', (sessionId: string) => {
-  if (reconnecting.has(sessionId)) return
-  reconnecting.add(sessionId)
-  void reconnectCodexAfterDisconnect(sessionId).finally(() => reconnecting.delete(sessionId))
-})
+/** Binds the Codex engine's events to the daemon; daemon.ts calls it once at boot. */
+export function bindCodexRuntime(): void {
+  codexEngine.on('message', (sessionId: string, text: string) => {
+    const info = registry.get(sessionId)
+    if (!info) return
+    info.lastActive = Date.now()
+    noteActivityForSession(info.tmuxName) // idempotent: sets a flag on this session's pending entries
+    noteCodexMessage(sessionId, text)
+    noteCodexTurnState(sessionId, false) // still producing — not the final answer yet
+  })
+
+  codexEngine.on('autoApproved', (sessionId: string, method: string) => {
+    const info = registry.get(sessionId)
+    if (info?.spawnLogPath) {
+      try { appendFileSync(info.spawnLogPath, `[${new Date().toISOString()}] auto-approved: ${method}\n`) } catch {}
+    }
+  })
+
+  codexEngine.on('turnCompleted', (sessionId: string) => {
+    const info = registry.get(sessionId)
+    if (!info) return
+    noteCodexTurnState(sessionId, true)
+    // The remote TUI may exit with the completed turn. Repair its tmux surface
+    // immediately so the next protocol turn/keys command has somewhere to land.
+    info.adapter?.surface(info)
+    // The remote TUI may disappear just after turn/completed. Recheck after that
+    // teardown window; the provider is idempotent when the surface stayed alive.
+    scheduleCodexSurfaceRepairs(sessionId)
+    handleSilenceEvent(info.tmuxName)
+  })
+
+  codexEngine.on('turnReconciled', onTurnReconciled)
+
+  codexEngine.on('turnStalled', (sessionId: string, reason: string) => {
+    const info = registry.get(sessionId)
+    if (!info) return
+    markYourTurn(info, info.threadId)
+    registry.debouncedPersist()
+    void safeSend(info.threadId, `⚠️ Codex needs attention: ${reason || 'turn progress is unresolved.'}`)
+  })
+
+  codexEngine.on('turnDeliveryUnknown', (sessionId: string, _text: string, err: unknown) => {
+    const info = registry.get(sessionId)
+    if (!info) return
+    void safeSend(info.threadId, `⚠️ Codex input delivery is uncertain; retaining it while checking thread history. ${String(err)}`)
+  })
+
+  codexEngine.on('usageWarning', (sessionId: string, usedPercent: number) => {
+    const info = registry.get(sessionId)
+    if (!info) return
+    void safeSend(info.threadId, `⚠️ Codex usage at **${usedPercent}%** of weekly limit.`)
+  })
+
+  codexEngine.on('contextUsage', (sessionId: string, usage: { usedTokens: number; contextWindow: number; percent: number }) => {
+    const info = registry.get(sessionId)
+    if (!info) return
+    info.contextUsage = { ...usage, updatedAt: Date.now() }
+    registry.persist()
+    logContextUsageSample(sessionId, info.tmuxName, usage)
+  })
+
+  codexEngine.on('disconnected', (sessionId: string) => {
+    if (reconnecting.has(sessionId)) return
+    reconnecting.add(sessionId)
+    void reconnectCodexAfterDisconnect(sessionId).finally(() => reconnecting.delete(sessionId))
+  })
+}
 
 // ---------------------------------------------------------------------------
 // Reconnection — on daemon startup, reconnect persisted codex sessions
@@ -274,7 +276,7 @@ export async function reconnectCodexSessions(records: readonly SessionInfo[]): P
   if (reconnected > 0) process.stderr.write(`codex-bootstrap: reconnected ${reconnected} codex session(s)\n`)
 }
 
-/** The boot sweep, logging how it ended. Never rejects. */
+/** The boot sweep, logging how it ended. Never rejects. Call bindCodexRuntime() first: the sweep connects sessions whose events need its handlers. */
 export function startCodexRuntime(records: readonly SessionInfo[]): Promise<void> {
   return reconnectCodexSessions(records).then(() => {
     process.stderr.write('daemon: codex reconnection sweep complete\n')

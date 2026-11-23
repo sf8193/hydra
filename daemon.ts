@@ -58,7 +58,7 @@ import { registry, threadRegistry, reattachAdapters, engineRecords } from './ses
 import { isPlainWorker } from './shared/policy-record.js'
 import { emojiOfName } from './sessions/anchor-state.js'
 import { engines, resolveEngine } from './sessions/engine-instances.js'
-import { startCodexRuntime } from './app/codex-runtime.js'
+import { bindCodexRuntime, startCodexRuntime } from './app/codex-runtime.js'
 import { transport, setDeliveryGate } from './sessions/bridge-transport.js'
 import { deliveryRefusal } from './app/restricted.js'
 import { operatorIds, notifyOperator } from './sessions/access.js'
@@ -107,6 +107,7 @@ setDeliveryGate(deliveryRefusal)
 transport.restorePersistedQueues()
 startBridgeServer()
 
+bindCodexRuntime()
 // Start each engine over its persisted records. Not awaited; each start logs its own outcome.
 // Codex has no start of its own: its sweep (startCodexRuntime) reconnects its sessions to their app-server sockets.
 for (const adapter of Object.values(engines)) {

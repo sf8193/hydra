@@ -11,7 +11,8 @@ test('daemon.ts hands the specialist delivery its stuck-state lookup', () => {
 })
 
 test('daemon.ts imports the Codex runtime and starts its boot sweep', () => {
-  expect(daemon).toMatch(/^import \{ startCodexRuntime \} from '\.\/app\/codex-runtime\.js'$/m)
+  expect(daemon).toMatch(/^import \{ bindCodexRuntime, startCodexRuntime \} from '\.\/app\/codex-runtime\.js'$/m)
+  expect(daemon).toMatch(/^bindCodexRuntime\(\)$/m)
   expect(daemon).toMatch(/^void startCodexRuntime\(engineRecords\(engines\.codex\)\)$/m)
 })
 
