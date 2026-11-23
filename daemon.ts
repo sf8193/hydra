@@ -59,7 +59,8 @@ import { isPlainWorker } from './shared/policy-record.js'
 import { emojiOfName } from './sessions/anchor-state.js'
 import { engines, resolveEngine } from './sessions/engine-instances.js'
 import { startCodexRuntime } from './app/codex-runtime.js'
-import { transport } from './sessions/bridge-transport.js'
+import { transport, setDeliveryGate } from './sessions/bridge-transport.js'
+import { deliveryRefusal } from './app/restricted.js'
 import { operatorIds, notifyOperator } from './sessions/access.js'
 import { setupPermissionHandler } from './app/permission.js'
 import { socketServer, startBridgeServer } from './app/bridge-server.js'
@@ -101,6 +102,8 @@ process.on('exit', () => {
   try { if (readFileSync(PID_FILE, 'utf8').trim() === String(process.pid)) unlinkSync(PID_FILE) } catch {}
 })
 
+// What was queued for a session is held to the same rule when it is flushed (bridge-transport.ts).
+setDeliveryGate(deliveryRefusal)
 transport.restorePersistedQueues()
 startBridgeServer()
 

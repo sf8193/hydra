@@ -14,6 +14,7 @@ import { ClaudeEngine } from '../../engines/claude-engine.js'
 import { fakeCodexAdapter } from './test-harness.js'
 import { deliverToSession } from '../../app/targets.js'
 import { __test } from '../../app/protocol-runner.js'
+import './arm-gate.js'
 
 const { notifyNextActor, notifyActorOfTimeout, notifyParticipant } = __test!
 const NOW = new Date('2026-09-27T12:00:00.000Z')

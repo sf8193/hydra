@@ -37,7 +37,7 @@ export function setDeliveryGate(gate: ((info: SessionInfo) => string | undefined
 
 /** Why this session may not be delivered to, or undefined. No gate set (app/restricted.ts has not loaded) refuses: a delivery and a queue flush both fail closed. */
 function gateReason(info: SessionInfo): string | undefined {
-  return deliveryGate ? deliveryGate(info) : 'the delivery gate is not set (app/restricted.ts sets it when it loads)'
+  return deliveryGate ? deliveryGate(info) : 'the delivery gate is not set (daemon.ts sets it at boot)'
 }
 
 /**

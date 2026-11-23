@@ -15,6 +15,7 @@ import { threadNotices } from '../../shared/notice-limit.js'
 import type { HydraConfig, Specialist } from '../../config/types.js'
 import '../../app/codex-runtime.js'
 import { codexAdapter } from './codex-adapter.js'
+import './arm-gate.js'
 
 process.stderr.write = (() => true) as any
 

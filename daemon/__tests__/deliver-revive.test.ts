@@ -10,6 +10,7 @@ import { _setDaemonStartedAtForTesting } from '../../sessions/occupancy.js'
 import { fakeAdapter } from './test-harness.js'
 import { removeSpecialist, setSpecialist } from '../../sessions/specialists.js'
 import { getBackoff } from '../../infra/recovery-backoff.js'
+import './arm-gate.js'
 
 process.stderr.write = (() => true) as any
 
