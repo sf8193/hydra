@@ -234,7 +234,6 @@ graph TD
   sessions_idle-limit --> sessions_protocol-registry
   sessions_idle-limit --> shared_constants
   app_session-health --> sessions_registry
-  app_session-health --> infra_config
   app_session-health --> infra_util
   app_session-health --> sessions_anchor-state
   app_session-health --> sessions_access
@@ -275,6 +274,7 @@ graph TD
   app_commands_thread --> app_auto-handoff
   app_commands_thread --> app_recovery
   app_commands_review --> infra_config
+  app_commands_review --> infra_util
   app_commands_review --> sessions_registry
   app_commands_review --> sessions_protocol-registry
   app_commands_review --> shared_constants

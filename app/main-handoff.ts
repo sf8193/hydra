@@ -75,7 +75,7 @@ async function finish(path: string, asked?: Request): Promise<void> {
   // The note rides only with the letter that was asked for; a note on another letter is reported, not passed.
   const req = asked?.artifact === path ? asked : undefined
   const channel = (asked?.channelId) || mainChannel()
-  const say = (text: string) => { if (channel) void gateway.send(channel, text).catch(() => {}) }
+  const say = (text: string) => { if (channel) void safeSend(channel, text) }
   try {
     const before = await waitIdle()
     const main = mainSubject()

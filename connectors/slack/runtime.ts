@@ -208,7 +208,7 @@ export async function deliverForSlack(target: RouteTarget, message: string, idem
 export function showLine(threadId: string, make: (emoji: string) => string): void {
   if (!gateway.isThreadId(threadId)) return
   const line = make(resolveLineEmoji(hydraConfig().slackLineEmoji, gateway))
-  gateway.send(threadId, line, { subtext: true, unfurl: false }).catch(err => log(`daemon: slack connector: line for thread ${threadId} not posted: ${errText(err)}\n`))
+  void safeSend(threadId, line, { subtext: true, unfurl: false })
 }
 
 /** A per-conversation specialist gives the conversation its own session (targets.ts counts `max_sessions`); any other is one target. */

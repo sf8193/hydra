@@ -11,7 +11,7 @@ import { gateway } from '../../infra/config.js'
 import { registry } from '../../sessions/registry.js'
 import { transport } from '../../sessions/bridge-transport.js'
 import { safeEdit, safeSend } from '../../infra/util.js'
-import type { Outbound } from '../../gateways/gateway.js'
+import type { ButtonDef, Outbound } from '../../gateways/gateway.js'
 import { setHydra } from './test-hydra.js'
 
 const DIR = mkdtempSync(join(tmpdir(), 'outbound-test-'))
@@ -20,7 +20,7 @@ const OWN = join(DIR, 'own.txt')
 writeFileSync(DRAWN, 'png')
 writeFileSync(OWN, 'own')
 
-const sends: { channel: string; text: string; files?: string[]; replyTo?: string }[] = []
+const sends: { channel: string; text: string; files?: string[]; replyTo?: string; buttons?: ButtonDef[]; subtext?: boolean }[] = []
 const shapes: { text: string; room: number }[] = []
 const events: string[] = []
 let spies: { mockRestore(): void }[] = []
@@ -46,8 +46,16 @@ beforeEach(() => {
   }
   ;(transport as any).deliver = async () => ({ status: 'accepted' })
   spies = [
-    spyOn(gateway, 'send').mockImplementation((async (channel: string, text: string, opts?: { files?: string[]; replyTo?: string }) => {
-      sends.push({ channel, text, ...(opts?.files ? { files: opts.files } : {}), ...(opts?.replyTo ? { replyTo: opts.replyTo } : {}) }); events.push('sent'); return { id: 'm1', channelId: channel }
+    spyOn(gateway, 'send').mockImplementation((async (channel: string, text: string, opts?: { files?: string[]; replyTo?: string; buttons?: ButtonDef[]; subtext?: boolean }) => {
+      sends.push({
+        channel, text,
+        ...(opts?.files ? { files: opts.files } : {}),
+        ...(opts?.replyTo ? { replyTo: opts.replyTo } : {}),
+        ...(opts?.buttons ? { buttons: opts.buttons } : {}),
+        ...(opts?.subtext ? { subtext: opts.subtext } : {}),
+      })
+      events.push('sent')
+      return { id: 'm1', channelId: channel }
     }) as any),
     spyOn(gateway, 'fetchChannel').mockImplementation((async (id: string) => ({ id, isThread: true, parentId: 'ob-parent' })) as any),
     setHydra({ operators: ['u1'], channels: { 'ob-parent': {} } }),
@@ -121,6 +129,24 @@ test('the daemon\'s own messages: safeSend attaches what was drawn to the first 
   expect(sends).toHaveLength(2)
   expect(sends[0].files).toEqual([DRAWN])
   expect(sends[1].files).toBeUndefined()
+})
+
+test('safeSend puts caller files ahead of drawn files and reserves their slots', async () => {
+  await safeSend('ob-chan', `TABLE\n${'x'.repeat(gateway.maxMessageLength + 10)}`, { files: [OWN] })
+  expect(shapes[0].room).toBe(9)
+  expect(sends).toHaveLength(2)
+  expect(sends[0].files).toEqual([OWN, DRAWN])
+  expect(sends[1].files).toBeUndefined()
+})
+
+test('safeSend attaches buttons only to the last chunk and forwards subtext', async () => {
+  const buttons: ButtonDef[] = [{ id: 'perm:allow:1', label: 'Allow', style: 'success' }]
+  await safeSend('ob-chan', 'x'.repeat(gateway.maxMessageLength + 10), { buttons, subtext: true })
+  expect(sends).toHaveLength(2)
+  expect(sends[0].buttons).toBeUndefined()
+  expect(sends[1].buttons).toEqual(buttons)
+  expect(sends[0].subtext).toBe(true)
+  expect(sends[1].subtext).toBe(true)
 })
 
 test('an edit cannot add files: safeEdit asks for no room', async () => {

@@ -159,9 +159,10 @@ function persist(): void {
 async function pinWatch(entry: WatchEntry): Promise<void> {
   if (!gateway?.pin) return
   try {
-    const sent = await gateway.send(entry.threadId, `[#${entry.prNumber}](${entry.prUrl})${entry.title ? ` ${entry.title}` : ''}`)
-    await gateway.pin(entry.threadId, sent.id)
-    entry.pinMessageId = sent.id
+    const [id] = await safeSend(entry.threadId, `[#${entry.prNumber}](${entry.prUrl})${entry.title ? ` ${entry.title}` : ''}`)
+    if (!id) return
+    await gateway.pin(entry.threadId, id)
+    entry.pinMessageId = id
     if (watches.get(entry.prUrl) === entry) persist()
   } catch (err) {
     process.stderr.write(`daemon: pr-watch: pin failed for ${entry.prUrl}: ${err}\n`)

@@ -113,3 +113,21 @@ describe('check-owners: raw tmux liveness and exec only in owners', () => {
     expect(hits('cli/x.test.ts', 'tmuxHasSession(n)')).toEqual([])
   })
 })
+
+describe('check-owners: raw gateway.send() outside safeSend', () => {
+  const raw = (path: string, ...lines: string[]) => hits(path, ...lines).filter(v => v.includes('raw gateway.send() outside safeSend'))
+
+  test('caught in non-owner daemon files (same line, spaced, or wrapped)', () => {
+    expect(raw('app/router.ts', "void gateway.send(msg.channelId, 'hi')")).toHaveLength(1)
+    expect(raw('app/commands/global.ts', "await gateway.send (ch, 'hi')")).toHaveLength(1)
+    expect(raw('app/commands/thread.ts', 'await gateway.send(', "  ch, 'hi',", ')')).toHaveLength(1)
+  })
+
+  test('allowed in safeSend and the legitimate owners, and in tests; gateway.sendDM and comments pass', () => {
+    expect(raw('infra/util.ts', "await gateway.send(channelId, chunks[i], opts)")).toEqual([])
+    expect(raw('app/bridge-dispatch.ts', "await gateway.send(chatId, text)")).toEqual([])
+    expect(raw('daemon/__tests__/a.test.ts', "spyOn(gateway, 'send'); await gateway.send('t1', 'hi')")).toEqual([])
+    expect(raw('app/router.ts', "await gateway.sendDM(userId, 'hi')")).toEqual([])
+    expect(raw('app/router.ts', '// never call gateway.send directly')).toEqual([])
+  })
+})

@@ -70,7 +70,7 @@ function autoWatchPrUrls(sessionId: string, text: string): void {
     watchPr(url, sessionId, info.threadId).then(msg => {
       process.stderr.write(`daemon: auto-watch: ${msg}\n`)
       if (!msg.startsWith('already watching')) {
-        gateway.send(info.threadId, `_Auto-watching_ ${url}`).catch(() => {})
+        void safeSend(info.threadId, `_Auto-watching_ ${url}`)
       }
     }).catch(err => {
       process.stderr.write(`daemon: auto-watch failed for ${url}: ${err instanceof Error ? err.message : err}\n`)
@@ -169,7 +169,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
             process.stderr.write(`daemon: circuit breaker: ${info.tmuxName} flapping (${FLAP_THRESHOLD}+ registrations in ${FLAP_WINDOW_MS / 1000}s) — killing session\n`)
             try { tmuxSync(['kill-session', '-t', info.tmuxName]) } catch {}
             markDead(info)
-            void gateway.send(info.threadId, `⚠️ **${info.tmuxName}** killed by circuit breaker — bridge was flapping (${FLAP_THRESHOLD}+ reconnects in ${FLAP_WINDOW_MS / 1000}s). Use \`respawn\` to start fresh.`).catch(() => {})
+            void safeSend(info.threadId, `⚠️ **${info.tmuxName}** killed by circuit breaker — bridge was flapping (${FLAP_THRESHOLD}+ reconnects in ${FLAP_WINDOW_MS / 1000}s). Use \`respawn\` to start fresh.`)
           } else {
             process.stderr.write(`daemon: circuit breaker: stray bridge ${sessionId} flapping — disconnecting\n`)
           }
@@ -411,9 +411,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       // Post buttons in the session's thread (if it's a spawned session), otherwise DM the operator
       const permInfo = sessionId !== 'main' ? registry.get(sessionId) : undefined
       if (permInfo) {
-        void gateway.send(permInfo.threadId, text, { buttons }).catch(e => {
-          process.stderr.write(`daemon: permission_request send to thread ${permInfo.threadId} failed: ${e}\n`)
-        })
+        void safeSend(permInfo.threadId, text, { buttons })
       } else {
         for (const userId of operatorIds()) {
           void gateway.sendDM(userId, text, buttons).catch(e => {

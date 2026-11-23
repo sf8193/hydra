@@ -12,7 +12,7 @@ import { getSpecialist } from '../sessions/specialists.js'
 import { ensureSpecialist } from './specialist-deliver.js'
 import { envelopeFor, sendToThread, sendsToRefusal } from './sends-to.js'
 import { READ_ONLY_DISALLOWED_TOOLS, claudeLaunchCwd, doSpawnSession, handOff, handoffNoteFate, killSession, predecessorOf, runPreHandoffHook, sessionDir, type PreHandoffVerdict } from './session-lifecycle.js'
-import { fallbackDescription, formatDuration, chunk, assertSendable, parseDuration, withOutbound } from '../infra/util.js'
+import { fallbackDescription, formatDuration, chunk, assertSendable, parseDuration, safeSend, withOutbound } from '../infra/util.js'
 import { tmuxHasSession } from '../infra/tmux.js'
 import { occupancy, resolveSendTarget } from '../sessions/session-reachability.js'
 import { deliverable, occupied } from '../sessions/occupancy.js'
@@ -618,9 +618,9 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         setTimeout(() => {
           release()  // handOff holds its own in-flight guard from here
           handOff(info, path).then(
-            r => gateway.send(info.threadId, `🤝 \`${info.tmuxName}\` handed off to \`${r.name}\` — fresh context from \`${path}\`${noteLine(r.name)}`),
-            err => gateway.send(info.threadId, `⚠️ handoff from \`${info.tmuxName}\` failed: ${err instanceof Error ? err.message : err}\nRecover: type \`respawn\`, then tell it to read \`${path}\` and continue from its Next action.`),
-          ).catch(() => {})
+            r => safeSend(info.threadId, `🤝 \`${info.tmuxName}\` handed off to \`${r.name}\` — fresh context from \`${path}\`${noteLine(r.name)}`),
+            err => safeSend(info.threadId, `⚠️ handoff from \`${info.tmuxName}\` failed: ${err instanceof Error ? err.message : err}\nRecover: type \`respawn\`, then tell it to read \`${path}\` and continue from its Next action.`),
+          )
         }, handoffWait.ms)
         return { content: [{ type: 'text', text: `handing off — a fresh session will continue from ${path}` }] }
       }

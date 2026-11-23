@@ -633,11 +633,7 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
   try {
     // Join members and ephemeral sessions don't own a real thread
     if (info.sessionType !== 'thread_guest' && !info.ephemeral) {
-      try {
-        await gateway.send(info.threadId, `_${reason}_`)
-      } catch (err) {
-        process.stderr.write(`daemon: failed to post session end message: ${err}\n`)
-      }
+      await safeSend(info.threadId, `_${reason}_`)
 
       refreshSessionVisual(info.threadId, { state: 'killed' })
     }
@@ -649,9 +645,7 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
       if (parent) {
         const msgs = info.messageCount ?? 0
         const emoji = emojiOf(info)
-        void gateway.send(parent.threadId, `${emoji} \`${info.tmuxName}\` ${opts?.ended ?? 'died'}${opts?.ended === 'handed off' ? '' : ` — _${reason}_`} (${msgs} msgs)`).catch(err => {
-          process.stderr.write(`daemon: failed to notify parent of child death: ${err}\n`)
-        })
+        void safeSend(parent.threadId, `${emoji} \`${info.tmuxName}\` ${opts?.ended ?? 'died'}${opts?.ended === 'handed off' ? '' : ` — _${reason}_`} (${msgs} msgs)`)
       }
     }
 
@@ -1577,7 +1571,7 @@ export async function tryResume(dead: {
         if (occupancy(s) === 'dead') {
           process.stderr.write(`daemon: resume recheck: ${s.tmuxName} died after orphan classification — marking dead\n`)
           markDead(s)
-          void gateway.send(s.threadId, `💀 **${s.tmuxName}** died. Use \`resume\` to restore context or \`respawn\` for a fresh start.`).catch(() => {})
+          void safeSend(s.threadId, `💀 **${s.tmuxName}** died. Use \`resume\` to restore context or \`respawn\` for a fresh start.`)
           refreshSessionVisual(s.threadId, { state: 'crashed' })
         }
       }, 30_000)

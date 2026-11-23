@@ -37,7 +37,7 @@ export async function resolveSpawnTarget(msg: InboundMessage): Promise<string> {
         // exists for), that fallback would silently reproduce the bug, so abort instead.
         const redirectTo = staleInfo.anchorChannelId ?? (msg.channelId !== resolvedThreadId ? msg.channelId : undefined)
         if (!redirectTo) throw new Error(`thread has a live session (${staleInfo.tmuxName}) — kill it first or spawn in a new thread`)
-        try { await gateway.send(msg.channelId, `Thread already has a live session (**${staleInfo.tmuxName}**). Spawning in a new thread instead.`, { replyTo: msg.id }) } catch {}
+        await safeSend(msg.channelId, `Thread already has a live session (**${staleInfo.tmuxName}**). Spawning in a new thread instead.`, { replyTo: msg.id })
         chatId = redirectTo
       } else {
         chatId = resolvedThreadId
@@ -92,7 +92,7 @@ async function spawnAndNotify(
       if (label) parts.push(`**${label}** template`)
       if (resolvedModel) parts.push(`model \`${resolvedModel}\``)
       process.stderr.write(`daemon: ${label ? `template "${label}" ` : ''}spawned ${result.name} for: ${topic}${resolvedModel ? ` (model: ${resolvedModel})` : ''}\n`)
-      void gateway.send(result.threadId, `_Using ${parts.join(' · ')}_`).catch(() => {})
+      void safeSend(result.threadId, `_Using ${parts.join(' · ')}_`)
     }
 
     if (template?.template.action) {
@@ -102,7 +102,7 @@ async function spawnAndNotify(
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err)
         process.stderr.write(`daemon: template action "${template.template.action}" failed: ${errMsg}\n`)
-        void gateway.send(result.threadId, `_Action **${template.template.action}** failed: ${errMsg}_`).catch(() => {})
+        void safeSend(result.threadId, `_Action **${template.template.action}** failed: ${errMsg}_`)
       }
     }
 
@@ -113,7 +113,7 @@ async function spawnAndNotify(
         ? `Spawned ${e} \`${result.name}\`${suffix} — ${result.url}`
         : `Spawned ${e} \`${result.name}\`${suffix}`
       const reply = `${base}\nView in any terminal: \`tmux attach -t ${result.name}\``
-      await gateway.send(msg.channelId, reply, { replyTo: msg.id })
+      await safeSend(msg.channelId, reply, { replyTo: msg.id })
     }
 
     const mainBridge = transport.get('main')
@@ -132,7 +132,7 @@ async function spawnAndNotify(
     const rawMsg = err instanceof Error ? err.message : String(err)
     process.stderr.write(`daemon: spawn failed: ${rawMsg}\n`)
     const friendlyMsg = friendlySpawnError(err)
-    try { await gateway.send(msg.channelId, `Spawn failed: ${friendlyMsg}`, { replyTo: msg.id }) } catch {}
+    await safeSend(msg.channelId, `Spawn failed: ${friendlyMsg}`, { replyTo: msg.id })
   }
 }
 
@@ -149,7 +149,7 @@ export async function handleSpawnIntercept(msg: InboundMessage, topic: string, m
 
 export async function handleTemplateSpawn(msg: InboundMessage, templateName: string, topic: string, template: SpawnTemplate, model?: string): Promise<void> {
   if (!topic.trim()) {
-    await gateway.send(msg.channelId, `_\`${templateName}:\` needs a topic — e.g. \`${templateName}: describe the task\`_`, { replyTo: msg.id })
+    await safeSend(msg.channelId, `_\`${templateName}:\` needs a topic — e.g. \`${templateName}: describe the task\`_`, { replyTo: msg.id })
     return
   }
   await spawnAndNotify(msg, topic, { name: templateName, template }, model)
@@ -165,11 +165,11 @@ export async function handleKillIntercept(msg: InboundMessage, name: string): Pr
     }
   }
   if (!target) {
-    try { await gateway.send(msg.channelId, `No session found matching "${name}"`, { replyTo: msg.id }) } catch {}
+    await safeSend(msg.channelId, `No session found matching "${name}"`, { replyTo: msg.id })
     return
   }
   await killSession(target, 'session ended', { ended: 'killed' })
-  try { await gateway.send(msg.channelId, `Killed session **${target.tmuxName}**`, { replyTo: msg.id }) } catch {}
+  await safeSend(msg.channelId, `Killed session **${target.tmuxName}**`, { replyTo: msg.id })
   debouncedRefreshListDisplay()
 }
 
@@ -184,7 +184,7 @@ export async function handleRestartIntercept(msg: InboundMessage): Promise<void>
     }, (err, _out, stderr) => resolve(err ? (String(stderr).trim() || err.message).slice(0, 1500) : undefined))
   })
   if (dryRun !== undefined) {
-    try { await gateway.send(msg.channelId, `❌ Not restarting: ${dryRun}\nThe running daemon is left as it is.`, { replyTo: msg.id }) } catch {}
+    await safeSend(msg.channelId, `❌ Not restarting: ${dryRun}\nThe running daemon is left as it is.`, { replyTo: msg.id })
     return
   }
   void gateway.react(msg.channelId, msg.id, '🔄').catch(() => {})
@@ -204,9 +204,7 @@ export async function handleRestartIntercept(msg: InboundMessage): Promise<void>
   const fast = /\+fast\b/.test(msg.content)
   const fastFlag = fast ? ' --fast' : ''
   const modeNote = fast ? '' : ' (validating)'
-  try {
-    await gateway.send(msg.channelId, `🔄 Restarting daemon${cancelNote}${modeNote} — back in a moment...`, { replyTo: msg.id })
-  } catch {}
+  await safeSend(msg.channelId, `🔄 Restarting daemon${cancelNote}${modeNote} — back in a moment...`, { replyTo: msg.id })
 
   try {
     const restartChatId = registry.resolveThreadId(msg)
@@ -229,9 +227,7 @@ export async function handleRestartIntercept(msg: InboundMessage): Promise<void>
   }
   if (restartFailed) {
     try { unlinkSync(RESTART_PENDING_FILE) } catch {}
-    try {
-      await gateway.send(msg.channelId, `❌ Restart failed — daemon is still running on old code.`, { replyTo: msg.id })
-    } catch {}
+    await safeSend(msg.channelId, `❌ Restart failed — daemon is still running on old code.`, { replyTo: msg.id })
   }
 }
 
@@ -241,19 +237,19 @@ export async function announceRestartComplete(): Promise<void> {
     const { chatId, messageId, ts } = JSON.parse(raw) as { chatId: string; messageId: string; ts: number }
     unlinkSync(RESTART_PENDING_FILE)
     const elapsedSec = Math.round((Date.now() - ts) / 1000)
-    await gateway.send(chatId, `✨ Back online — restart took ${elapsedSec}s.`, { replyTo: messageId })
+    await safeSend(chatId, `✨ Back online — restart took ${elapsedSec}s.`, { replyTo: messageId })
   } catch {}
 }
 
 export async function handleReconnectIntercept(msg: InboundMessage): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '🔌').catch(() => {})
   if (!gateway.forceReconnect) {
-    try { await gateway.send(msg.channelId, `Reconnect not supported on this platform.`, { replyTo: msg.id }) } catch {}
+    await safeSend(msg.channelId, `Reconnect not supported on this platform.`, { replyTo: msg.id })
     return
   }
   const result = await gateway.forceReconnect()
   const emoji = result.ok ? '✅' : '❌'
-  try { await gateway.send(msg.channelId, `${emoji} ${result.message}`, { replyTo: msg.id }) } catch {}
+  await safeSend(msg.channelId, `${emoji} ${result.message}`, { replyTo: msg.id })
 }
 
 export async function handleCommandsIntercept(msg: InboundMessage): Promise<void> {

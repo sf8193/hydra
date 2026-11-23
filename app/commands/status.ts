@@ -393,7 +393,7 @@ export async function handleProtocolsIntercept(msg: InboundMessage): Promise<voi
   const runs = getActiveRuns()
 
   if (runs.length === 0) {
-    try { await gateway.send(msg.channelId, `No active protocols.`, { replyTo: msg.id }) } catch {}
+    await safeSend(msg.channelId, `No active protocols.`, { replyTo: msg.id })
     return
   }
 

@@ -88,6 +88,19 @@ export const RULES: Rule[] = [
     tests: false, ts: true,
     why: 'run tmux through tmuxSync in infra/tmux.ts (bounded, SIGKILL), not a raw sync exec',
   },
+  {
+    name: 'raw gateway.send() outside safeSend',
+    pattern: /\bgateway\.send\b/g,
+    // infra/util.ts owns safeSend. The remaining five need raw throws, retrySend, thread anchors, or non-thread Slack user IDs:
+    // bridge-dispatch (MCP reply/send_to_thread retrySend), session-lifecycle (thread anchor), connectors/slack/runtime (bindNotice DM fallback),
+    // app/reply-guard (screenshot fallback dep seam), daemon.ts (Slack Home spawn errors to userId).
+    allowed: [
+      'infra/util.ts', 'app/bridge-dispatch.ts', 'app/session-lifecycle.ts',
+      'connectors/slack/runtime.ts', 'app/reply-guard.ts', 'daemon.ts',
+    ],
+    tests: false, ts: true,
+    why: 'send through safeSend (infra/util.ts) so messages are chunked, shaped, address-checked and logged',
+  },
 ]
 
 const isTest = (path: string) => /(^|\/)__tests__\//.test(path) || /\.test\.ts$/.test(path)
