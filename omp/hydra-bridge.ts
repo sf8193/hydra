@@ -4,6 +4,7 @@
 import { connect, type Socket } from 'node:net'
 import { randomUUID } from 'node:crypto'
 import { SESSION_INSTRUCTIONS, formatNotification } from '../shared/constants.js'
+import { parseDaemonToBridgeMessage, type BridgeToDaemonMessage, type BridgeToolContent, type BridgeToolDef } from '../shared/bridge-protocol.js'
 
 // The part of omp's ExtensionAPI this file uses (omp is not a hydra dependency, so its types are not imported).
 type ExtensionAPI = {
@@ -12,8 +13,6 @@ type ExtensionAPI = {
   getActiveTools(): string[]
   sendUserMessage(text: string, options?: { deliverAs?: 'aside' }): void
 }
-type Wire = Record<string, any>
-type Tool = { name: string; description?: string; inputSchema?: Record<string, unknown> }
 
 const SOCK = process.env.DAEMON_SOCK
 const SESSION_ID = process.env.HYDRA_SESSION_ID
@@ -24,6 +23,8 @@ const SINGLETON = Symbol.for('hydra.omp.bridge')
 
 export default function (pi: ExtensionAPI) {
   if (!SOCK || !SESSION_ID || (globalThis as any)[SINGLETON]) return
+  const sockPath = SOCK
+  const sessionId = SESSION_ID
   ;(globalThis as any)[SINGLETON] = true
 
   let sock: Socket | null = null
@@ -32,8 +33,8 @@ export default function (pi: ExtensionAPI) {
   const toolNames: string[] = []
   // Only the tools of the first `registered` gate readiness: a tool that arrives later must not stall delivery if omp activates it late.
   let gate: string[] | null = null
-  const pending = new Map<string, (r: { content: any[]; isError?: boolean }) => void>()
-  const send = (m: Wire) => { sock?.write(JSON.stringify(m) + '\n') }
+  const pending = new Map<string, (r: { content: BridgeToolContent[]; isError?: boolean }) => void>()
+  const send = (m: BridgeToDaemonMessage) => { sock?.write(JSON.stringify(m) + '\n') }
 
   // Nothing is injected before omp's runtime is bound (sendUserMessage throws until then), the daemon has
   // answered `register` and omp has activated the hydra tools: a first turn must be able to call `reply`.
@@ -49,7 +50,7 @@ export default function (pi: ExtensionAPI) {
     for (let m = outbox.shift(); m; m = outbox.shift()) pi.sendUserMessage(m.text, m.first ? undefined : { deliverAs: 'aside' })
   }
 
-  function registerTools(tools: Tool[]) {
+  function registerTools(tools: BridgeToolDef[]) {
     gate ??= tools.map(t => t.name)
     for (const t of tools) {
       if (toolNames.includes(t.name)) continue
@@ -60,10 +61,11 @@ export default function (pi: ExtensionAPI) {
         async execute(_id: string, params: unknown) {
           if (!sock) return { content: [{ type: 'text', text: `${t.name} failed: not connected to daemon` }], details: {}, isError: true }
           const id = randomUUID()
-          const result = await new Promise<{ content: any[]; isError?: boolean }>(resolve => {
+          const args = typeof params === 'object' && params !== null && !Array.isArray(params) ? params as Record<string, unknown> : {}
+          const result = await new Promise<{ content: BridgeToolContent[]; isError?: boolean }>(resolve => {
             const timer = setTimeout(() => { pending.delete(id); resolve({ content: [{ type: 'text', text: `${t.name} failed: timeout waiting for daemon response` }], isError: true }) }, 60_000)
             pending.set(id, r => { clearTimeout(timer); resolve(r) })
-            send({ type: 'tool_call', id, name: t.name, args: params })
+            send({ type: 'tool_call', id, name: t.name, args })
           })
           return { content: result.content, details: {}, ...(result.isError ? { isError: true } : {}) }
         },
@@ -71,7 +73,13 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  function handle(m: Wire) {
+  function handle(raw: unknown) {
+    const parsed = parseDaemonToBridgeMessage(raw)
+    if (!parsed.ok) {
+      process.stderr.write(`hydra-bridge: invalid daemon message (${parsed.error})\n`)
+      return
+    }
+    const m = parsed.msg
     switch (m.type) {
       case 'registered': case 'tools_update': registerTools(m.tools ?? []); flush(); break
       case 'notification': outbox.push({ text: formatNotification(m.content, m.meta) }); flush(); break
@@ -80,8 +88,8 @@ export default function (pi: ExtensionAPI) {
   }
 
   function connectSocket() {
-    const s = connect(SOCK!)
-    s.on('connect', () => { sock = s; buf = ''; send({ type: 'register', sessionId: SESSION_ID }) })
+    const s = connect(sockPath)
+    s.on('connect', () => { sock = s; buf = ''; send({ type: 'register', sessionId }) })
     s.on('data', d => {
       buf += d.toString()
       let i
