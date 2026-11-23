@@ -20,7 +20,8 @@ import { hydraLoadEnv, currentHydraConfig } from '../infra/hydra-config.js'
 import { workdirRestrictionIssues } from '../config/restricted-workdir.js'
 import { removeLaunchFiles } from '../infra/launch-files.js'
 import { capturedSpawnVars } from '../shared/spawn-env.js'
-import { authorityId, markDead, parentSessionOf, registry, repointChildren, threadRegistry } from '../sessions/registry.js'
+import { authorityId, markDead, registry, repointChildren, threadRegistry } from '../sessions/registry.js'
+import { notifyParentOfEnd, type SessionEnd } from './parent-notice.js'
 import { ownsLineage, spawnIntoRefusal } from '../sessions/lineage.js'
 import { clearPendingSessionToken, issueSessionToken, notePendingSessionToken } from '../sessions/cli-caller.js'
 import type { Predecessor, SessionInfo, SessionMetadata, SessionWorktree, SpawnOpts, SpawnResult } from '../sessions/registry.js'
@@ -601,9 +602,6 @@ export function splitOwnFromHistory(allIds: readonly string[], ownId: string | u
   return { own, history }
 }
 
-/** The verb in the parent's notice: who ended the session, and how. `died` alone is what an end nobody classified yet says. */
-export type SessionEnd = 'killed' | 'killed & destroyed' | 'killed by hydra' | 'died from crash' | 'finished' | 'handed off'
-
 // skipWorktreeDestroy: the conversation continues elsewhere (handoff, reattach) — keep the
 // Hydra worktree and scratchpads. keepScratch: only the scratchpads (a resume or fork of
 // this conversation still names their paths, and a resume reuses the scratchpad itself).
@@ -639,16 +637,9 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
       refreshSessionVisual(info.threadId, { state: 'killed' })
     }
 
-    // Notify the parent session when a child dies. Gated on lineage as before; the notice
-    // goes to whoever holds authority (by sessionId, so a recycled name can't receive it).
-    if (info.originFrom && info.sessionType !== 'thread_guest' && !info.suppressDeathMessage) {
-      const parent = parentSessionOf(info)
-      if (parent) {
-        const msgs = info.messageCount ?? 0
-        const emoji = emojiOf(info)
-        void safeSend(parent.threadId, `${emoji} \`${info.tmuxName}\` ${opts?.ended ?? 'died'}${opts?.ended === 'handed off' ? '' : ` — _${reason}_`} (${msgs} msgs)`)
-      }
-    }
+    // Notify the parent session when a live child ends, gated on authority (parentId) rather than originFrom (#736).
+    // Skip records already stamped dead (e.g. a crashed or keepRecord child later replaced by resume/respawn): the parent already heard.
+    if (!info.deadAt) notifyParentOfEnd(info, opts?.ended, reason)
 
     // Edit spawn announce to show completion
     if (info.spawnAnnounceId && info.sessionType === 'thread_guest') {
@@ -1560,7 +1551,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   if (opts?.name && !opts.handedOffFrom) {
     for (const s of registry.values()) {
       if (s.tmuxName !== tmuxName || occupancy(s) !== 'dead') continue
-      markDead(s)
+      if (markDead(s)) notifyParentOfEnd(s, 'died from crash', 'process exited')
       clearIdleLimit(s.sessionId)
       clearPhaseBudget(s.sessionId)
     }
@@ -1790,7 +1781,7 @@ export async function tryResume(dead: {
         if (!s || s.deadAt) return
         if (occupancy(s) === 'dead') {
           process.stderr.write(`daemon: resume recheck: ${s.tmuxName} died after orphan classification — marking dead\n`)
-          markDead(s)
+          if (markDead(s)) notifyParentOfEnd(s, 'died from crash', 'died after orphan classification')
           void safeSend(s.threadId, `💀 **${s.tmuxName}** died. Use \`resume\` to restore context or \`respawn\` for a fresh start.`)
           refreshSessionVisual(s.threadId, { state: 'crashed' })
         }

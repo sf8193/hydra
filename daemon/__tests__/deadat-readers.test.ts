@@ -74,11 +74,12 @@ const ALLOWED: Record<string, { why: string; lines: string[] }> = {
     ],
   },
   'app/session-lifecycle.ts': {
-    why: 'the resume count of the latest death, restoring a replaced record (keeps its first stamp), the resume recheck\'s "already written" guard',
+    why: 'skipping a second parent notice for an already-dead record, the resume count of the latest death, restoring a replaced record (keeps its first stamp), and the resume recheck\'s "already written" guard',
     lines: [
       ".filter(s => s.claudeSessionId === resumeFrom && s.deadAt)",
       ".sort((a, b) => (b.deadAt ?? 0) - (a.deadAt ?? 0))[0]",
       "old.deadAt ??= Date.now()",
+      "if (!info.deadAt) notifyParentOfEnd(info, opts?.ended, reason)",
       "if (!s || s.deadAt) return",
     ],
   },

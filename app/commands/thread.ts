@@ -5,6 +5,7 @@ import { gateway } from '../../infra/config.js'
 import { markDead, registry, threadRegistry } from '../../sessions/registry.js'
 import { transport } from '../../sessions/bridge-transport.js'
 import { killSession, requestHandoff } from '../session-lifecycle.js'
+import { notifyParentOfEnd } from '../parent-notice.js'
 import type { SessionInfo } from '../../sessions/registry.js'
 import { COUNT_EMOJI, emojiOf, emojiOfName } from '../../sessions/anchor-state.js'
 import { debouncedRefreshListDisplay } from './status.js'
@@ -301,7 +302,7 @@ async function resumeThread(msg: RecoveryAnchor, claudeSessionIdArg?: string): P
       // carries, so the cascade can reattach to its conversation.
       if (occ === 'orphaned') orphan = { info: liveInfo, reason: 'bridge was unreachable — reattaching to this conversation' }
       // Gone: mark it dead as the health poll would, so the poll doesn't announce a second death after this resume.
-      else markDead(liveInfo)
+      else if (markDead(liveInfo)) notifyParentOfEnd(liveInfo, 'died from crash', 'process exited before resume')
     }
   }
 
