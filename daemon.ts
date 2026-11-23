@@ -60,6 +60,7 @@ import { emojiOfName } from './sessions/anchor-state.js'
 import { engines, resolveEngine } from './sessions/engine-instances.js'
 import { bindCodexRuntime, startCodexRuntime } from './app/codex-runtime.js'
 import { transport, setDeliveryGate } from './sessions/bridge-transport.js'
+import { bindDeliveryNotice } from './sessions/delivery-notice.js'
 import { deliveryRefusal } from './app/restricted.js'
 import { operatorIds, notifyOperator } from './sessions/access.js'
 import { setupPermissionHandler } from './app/permission.js'
@@ -107,6 +108,7 @@ setDeliveryGate(deliveryRefusal)
 transport.restorePersistedQueues()
 startBridgeServer()
 
+bindDeliveryNotice()
 bindCodexRuntime()
 // Start each engine over its persisted records. Not awaited; each start logs its own outcome.
 // Codex has no start of its own: its sweep (startCodexRuntime) reconnects its sessions to their app-server sockets.

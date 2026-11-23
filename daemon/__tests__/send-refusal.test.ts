@@ -16,6 +16,8 @@ import type { HydraConfig, Specialist } from '../../config/types.js'
 import { bindCodexRuntime } from '../../app/codex-runtime.js'
 import { codexAdapter } from './codex-adapter.js'
 import './arm-gate.js'
+import { bindDeliveryNotice } from '../../sessions/delivery-notice.js'
+bindDeliveryNotice()
 
 process.stderr.write = (() => true) as any
 

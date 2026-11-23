@@ -25,6 +25,10 @@ test('daemon.ts arms the delivery gate before the bridge server starts', () => {
   expect(daemon.search(/^setDeliveryGate\(deliveryRefusal\)$/m)).toBeLessThan(daemon.search(/^startBridgeServer\(\)$/m))
 })
 
+test('daemon.ts binds the delivery notice listener', () => {
+  expect(daemon).toMatch(/^bindDeliveryNotice\(\)$/m)
+})
+
 test('daemon.ts hands the Slack gateway its operator ids', () => {
   expect(daemon).toMatch(/\(gateway as any\)\.operators = operatorIds\b/)
 })

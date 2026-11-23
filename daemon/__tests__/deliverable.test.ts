@@ -9,6 +9,8 @@ import { ORPHAN_GRACE_MS, _setDaemonStartedAtForTesting } from '../../sessions/o
 import { registry } from '../../sessions/registry.js'
 import { engines } from '../../sessions/engine-instances.js'
 import './arm-gate.js'
+import { bindDeliveryNotice } from '../../sessions/delivery-notice.js'
+bindDeliveryNotice()
 
 process.stderr.write = (() => true) as any
 
