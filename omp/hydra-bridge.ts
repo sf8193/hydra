@@ -5,6 +5,7 @@ import { connect, type Socket } from 'node:net'
 import { randomUUID } from 'node:crypto'
 import { SESSION_INSTRUCTIONS, formatNotification } from '../shared/constants.js'
 import { parseDaemonToBridgeMessage, type BridgeToDaemonMessage, type BridgeToolContent, type BridgeToolDef } from '../shared/bridge-protocol.js'
+import { SESSION_TOKEN_VAR } from '../shared/caller.js'
 
 // The part of omp's ExtensionAPI this file uses (omp is not a hydra dependency, so its types are not imported).
 type OmpToolDefinition = {
@@ -25,6 +26,7 @@ type ExtensionAPI = {
 
 const SOCK = process.env.DAEMON_SOCK
 const SESSION_ID = process.env.HYDRA_SESSION_ID
+const SESSION_TOKEN = process.env[SESSION_TOKEN_VAR] || undefined
 const RECONNECT_MS = 1000
 const POLL_MS = 100
 // omp re-runs extension factories for child sessions (Task subagents) in the same process: one bridge per process.
@@ -99,7 +101,7 @@ export default function (pi: ExtensionAPI) {
 
   function connectSocket() {
     const s = connect(sockPath)
-    s.on('connect', () => { sock = s; buf = ''; send({ type: 'register', sessionId }) })
+    s.on('connect', () => { sock = s; buf = ''; send({ type: 'register', sessionId, ...(SESSION_TOKEN ? { sessionToken: SESSION_TOKEN } : {}) }) })
     s.on('data', d => {
       buf += d.toString()
       let i

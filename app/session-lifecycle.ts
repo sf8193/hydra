@@ -22,7 +22,7 @@ import { removeLaunchFiles } from '../infra/launch-files.js'
 import { capturedSpawnVars } from '../shared/spawn-env.js'
 import { authorityId, markDead, parentSessionOf, registry, repointChildren, threadRegistry } from '../sessions/registry.js'
 import { ownsLineage, spawnIntoRefusal } from '../sessions/lineage.js'
-import { issueSessionToken } from '../sessions/cli-caller.js'
+import { clearPendingSessionToken, issueSessionToken, notePendingSessionToken } from '../sessions/cli-caller.js'
 import type { Predecessor, SessionInfo, SessionMetadata, SessionWorktree, SpawnOpts, SpawnResult } from '../sessions/registry.js'
 import { notePendingReply } from './reply-guard.js'
 import { transport } from '../sessions/bridge-transport.js'
@@ -1567,65 +1567,76 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   }
   const adapter = resolveEngine(engine)
   const spawnType: SessionType = restrictedPolicy ? 'thread_owner' : opts?.sessionType ?? (isJoin ? 'thread_guest' : 'thread_owner')
-  // Its token for the hydra CLI (cli-caller.ts): the session gets the token, its record only the hash.
+  // Its token for the hydra CLI and bridge registration (cli-caller.ts): the session gets the token, its record only the hash.
   const issued = issueSessionToken()
-  const launched = await adapter.launch({
-    sessionId, tmuxName, cwd: effectiveCwd, originalCwd: spawnCwd, model,
-    // A restricted kickoff starts with hydra's fixed preamble: a prompt, not a control. Operator and non-specialist kickoffs are untouched.
-    prompt: restrictedPolicy ? `${RESTRICTED_PREAMBLE} ${prompt}` : prompt, sessionToken: issued.token,
-    worktreePath: worktree?.path, forkFromOriginalCwd: !!worktreeTarget,
-    tools: opts?.tools, disallowedTools: carry.disallowedTools,
-    ...(continuation && { continuation }),
-    threadId: thread.threadId, sessionType: spawnType, ...(policy && { policy }),
-  }).catch(async (err: unknown) => {
-    // A refusal the launch itself makes (an old Claude Code, a folder it cannot make) is told to the thread, as the checks above are.
-    if (writeConfinedPolicy && err instanceof PolicyRefusal && thread.threadId) await tellThread(thread.threadId, err.message)
-    throw err
-  })
+  // Note the hash before launch so a bridge connecting before registry.set() is authenticated against it.
+  notePendingSessionToken(sessionId, issued.hash)
+  let launched: Awaited<ReturnType<EngineAdapter['launch']>>
+  let now: number
+  let url: string
+  let sessionMetadata: SessionMetadata
+  try {
+    launched = await adapter.launch({
+      sessionId, tmuxName, cwd: effectiveCwd, originalCwd: spawnCwd, model,
+      // A restricted kickoff starts with hydra's fixed preamble: a prompt, not a control. Operator and non-specialist kickoffs are untouched.
+      prompt: restrictedPolicy ? `${RESTRICTED_PREAMBLE} ${prompt}` : prompt, sessionToken: issued.token,
+      worktreePath: worktree?.path, forkFromOriginalCwd: !!worktreeTarget,
+      tools: opts?.tools, disallowedTools: carry.disallowedTools,
+      ...(continuation && { continuation }),
+      threadId: thread.threadId, sessionType: spawnType, ...(policy && { policy }),
+    }).catch(async (err: unknown) => {
+      // A refusal the launch itself makes (an old Claude Code, a folder it cannot make) is told to the thread, as the checks above are.
+      if (writeConfinedPolicy && err instanceof PolicyRefusal && thread.threadId) await tellThread(thread.threadId, err.message)
+      throw err
+    })
 
-  const now = Date.now()
-  const sessionMetadata = {
-    role: 'worker' as const,
-    tools: spawnToolNames(adapter, restrictedPolicy ? 'restricted' : spawnType),
-    model: launched.model,
-    cwd: effectiveCwd,
-    platform: PLATFORM,
+    now = Date.now()
+    sessionMetadata = {
+      role: 'worker' as const,
+      tools: spawnToolNames(adapter, restrictedPolicy ? 'restricted' : spawnType),
+      model: launched.model,
+      cwd: effectiveCwd,
+      platform: PLATFORM,
+    }
+    url = await gateway.getThreadUrl(thread.threadId)
+
+    if (restrictedPolicy || writeConfinedPolicy) startVerifying(sessionId)   // the record below is refused every message until its start passes (restricted.ts `unverified`)
+    registry.set(sessionId, {
+      sessionId, topic, threadId: thread.threadId, anchorMessageId: thread.anchorMessageId, anchorChannelId: thread.anchorChannelId,
+      createdAt: now, lastActive: now,
+      tmuxName, listening: resolveListenState(thread.threadId, thread.chatId), originType, originFrom, sessionMetadata,
+      sessionType: spawnType,
+      ...(policy && { policy }),
+      ...(kickoffHash !== undefined && { kickoffHash }),
+      ...labelFields,
+      threadUrl: url || undefined,
+      engine,
+      ...launched.identity,
+      ...(thread.respawnCount > 0 ? { respawnCount: thread.respawnCount } : {}),
+      ...(thread.resumeCount > 0 ? { resumeCount: thread.resumeCount } : {}),
+      ...(worktree && { worktree }),
+      ...(launched.spawnLogPath ? { spawnLogPath: launched.spawnLogPath } : {}),
+      ...(launched.exitFilePath ? { exitFilePath: launched.exitFilePath } : {}),
+      ...(launched.stderrLogPath ? { stderrLogPath: launched.stderrLogPath } : {}),
+      ...(launched.debugLogPath ? { debugLogPath: launched.debugLogPath } : {}),
+      ...(launched.channelNote ? { channelNote: launched.channelNote } : {}),
+      ...(engineProfile(engine).losesFirstTurnToExpiredLogin ? { spawnPrompt: prompt } : {}),
+      initiator: carry.initiator,
+      sessionTokenHash: issued.hash,
+      bridgeToken: true,
+      parentId: carry.parentId ?? null,
+      ephemeral: opts?.ephemeral,
+      ...(opts?.ephemeral && opts.idleTtlMs ? { idleTtlMs: opts.idleTtlMs } : {}),
+      forceWorktreeCleanup: opts?.forceWorktreeCleanup,
+      ...(phaseBudgetMs ? { budgetDeadline: now + phaseBudgetMs } : {}),
+      ...(carry.predecessor ? { predecessor: carry.predecessor } : {}),
+      ...(launchCwd ? { launchCwd } : {}),
+      ...(carry.disallowedTools?.length ? { disallowedTools: carry.disallowedTools } : {}),
+      adapter,
+    })
+  } finally {
+    clearPendingSessionToken(sessionId)
   }
-  const url = await gateway.getThreadUrl(thread.threadId)
-
-  if (restrictedPolicy || writeConfinedPolicy) startVerifying(sessionId)   // the record below is refused every message until its start passes (restricted.ts `unverified`)
-  registry.set(sessionId, {
-    sessionId, topic, threadId: thread.threadId, anchorMessageId: thread.anchorMessageId, anchorChannelId: thread.anchorChannelId,
-    createdAt: now, lastActive: now,
-    tmuxName, listening: resolveListenState(thread.threadId, thread.chatId), originType, originFrom, sessionMetadata,
-    sessionType: spawnType,
-    ...(policy && { policy }),
-    ...(kickoffHash !== undefined && { kickoffHash }),
-    ...labelFields,
-    threadUrl: url || undefined,
-    engine,
-    ...launched.identity,
-    ...(thread.respawnCount > 0 ? { respawnCount: thread.respawnCount } : {}),
-    ...(thread.resumeCount > 0 ? { resumeCount: thread.resumeCount } : {}),
-    ...(worktree && { worktree }),
-    ...(launched.spawnLogPath ? { spawnLogPath: launched.spawnLogPath } : {}),
-    ...(launched.exitFilePath ? { exitFilePath: launched.exitFilePath } : {}),
-    ...(launched.stderrLogPath ? { stderrLogPath: launched.stderrLogPath } : {}),
-    ...(launched.debugLogPath ? { debugLogPath: launched.debugLogPath } : {}),
-    ...(launched.channelNote ? { channelNote: launched.channelNote } : {}),
-    ...(engineProfile(engine).losesFirstTurnToExpiredLogin ? { spawnPrompt: prompt } : {}),
-    initiator: carry.initiator,
-    sessionTokenHash: issued.hash,
-    parentId: carry.parentId ?? null,
-    ephemeral: opts?.ephemeral,
-    ...(opts?.ephemeral && opts.idleTtlMs ? { idleTtlMs: opts.idleTtlMs } : {}),
-    forceWorktreeCleanup: opts?.forceWorktreeCleanup,
-    ...(phaseBudgetMs ? { budgetDeadline: now + phaseBudgetMs } : {}),
-    ...(carry.predecessor ? { predecessor: carry.predecessor } : {}),
-    ...(launchCwd ? { launchCwd } : {}),
-    ...(carry.disallowedTools?.length ? { disallowedTools: carry.disallowedTools } : {}),
-    adapter,
-  })
   // A claimed name took over from dead records of that name in other threads (a specialist that moved): retire them,
   // so a lookup by name finds this session, and boot recovery does not revive them into threads left behind.
   if (opts?.name) {

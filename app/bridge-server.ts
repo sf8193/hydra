@@ -32,6 +32,7 @@ import { pidAlive, pruneBridgeLife, readBridgeLife } from '../infra/bridge-life-
 import type { ButtonDef } from '../gateways/gateway.js'
 import { engineProfile } from '../shared/engines/index.js'
 import { parseBridgeToDaemonMessage } from '../shared/bridge-protocol.js'
+import { bridgeRegistrationPolicy, verifyBridgeRegistration } from '../sessions/cli-caller.js'
 
 const DEATH_DETECT_DELAY_MS = 3_000
 const BRIDGE_LIFE_READ_DELAY_MS = BRIDGE_SHUTDOWN_GRACE_MS + 1_000
@@ -138,7 +139,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
     process.stderr.write(parsed.unknownType
       ? `daemon: unknown message type from bridge: ${parsed.unknownType}\n`
       : `daemon: invalid message from bridge (${parsed.error}): ${raw.slice(0, 200)}\n`)
-    if (parsed.toolCallId !== undefined) {
+    if (parsed.toolCallId !== undefined && conn.sessionId) {
       transport.sendToBridge(conn, {
         type: 'tool_result',
         id: parsed.toolCallId,
@@ -150,9 +151,29 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
   }
   const msg = parsed.msg
 
+  // Every message except `register` and `cli` requires an authenticated bridge session:
+  // an unregistered socket must never invoke tools, list tools, or inject permission prompts.
+  if (msg.type !== 'register' && msg.type !== 'cli' && !conn.sessionId) {
+    process.stderr.write(`daemon: unregistered bridge sent ${msg.type} — closing socket\n`)
+    try { conn.socket.destroy() } catch {}
+    return
+  }
+
   switch (msg.type) {
     case 'register': {
       const sessionId = msg.sessionId
+      // Authenticate BEFORE setting conn.sessionId, tracking flaps, or mutating the record:
+      // a refused connection must never touch the live session or run pipelined tool calls as it.
+      const auth = verifyBridgeRegistration({
+        sessionToken: msg.sessionToken,
+        ...bridgeRegistrationPolicy(sessionId),
+      })
+      if (!auth.ok) {
+        process.stderr.write(`daemon: bridge for ${sessionId} refused (${auth.reason})\n`)
+        try { conn.socket.destroy() } catch {}
+        break
+      }
+
       conn.sessionId = sessionId
       if (msg.pid !== undefined) conn.bridgePid = msg.pid
 
@@ -583,6 +604,7 @@ export const socketServer = createServer((socket: Socket) => {
     conn.buf += data.toString()
     let nl: number
     while ((nl = conn.buf.indexOf('\n')) !== -1) {
+      if (socket.destroyed || socket.writableEnded) break
       const line = conn.buf.slice(0, nl).trim()
       conn.buf = conn.buf.slice(nl + 1)
       if (line) handleBridgeMessage(conn, line)

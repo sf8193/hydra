@@ -46,6 +46,10 @@ export type SessionInfo = {
   // The sha256 of the token this launch was given (HYDRA_SESSION_TOKEN): a CLI caller that presents the token is this session (cli-caller.ts).
   // Absent on a session launched before tokens: its CLI calls are a session's that cannot show which.
   sessionTokenHash?: string
+  // Set at spawn once bridge clients send HYDRA_SESSION_TOKEN on `register` (#844).
+  // Absent on pre-deploy records whose running bridges predate token registration: missing tokens
+  // stay accepted for those records until they end, while a wrong token is always refused.
+  bridgeToken?: true
   // The sessionId with authority over this one (kill, peek, private send, death notice).
   // null: no parent. undefined: a record from before parentId existed — see isParentOf.
   parentId?: string | null

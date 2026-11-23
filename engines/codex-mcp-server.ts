@@ -18,9 +18,11 @@
 import { connect, type Socket } from 'net'
 import { createInterface } from 'readline'
 import { parseDaemonToBridgeMessage, type BridgeToDaemonMessage, type DaemonToolResultMessage } from '../shared/bridge-protocol.js'
+import { SESSION_TOKEN_VAR } from '../shared/caller.js'
 
 const DAEMON_SOCK = process.env.DAEMON_SOCK
 const SESSION_ID = process.env.HYDRA_SESSION_ID
+const SESSION_TOKEN = process.env[SESSION_TOKEN_VAR] || undefined
 
 if (!DAEMON_SOCK || !SESSION_ID) {
   process.stderr.write('codex-mcp-server: DAEMON_SOCK and HYDRA_SESSION_ID required\n')
@@ -50,7 +52,7 @@ function connectToDaemon(): Promise<void> {
       connected = true
       sock.removeListener('error', onError)
       daemonSocket = sock
-      writeDaemon(sock, { type: 'register', sessionId: SESSION_ID!, connectionRole: 'control' })
+      writeDaemon(sock, { type: 'register', sessionId: SESSION_ID!, ...(SESSION_TOKEN ? { sessionToken: SESSION_TOKEN } : {}), connectionRole: 'control' })
       sock.on('error', (err) => {
         process.stderr.write(`codex-mcp-server: daemon socket error: ${err.message}\n`)
       })

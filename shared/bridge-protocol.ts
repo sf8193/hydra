@@ -18,6 +18,7 @@ export type BridgeToolDef = {
 export type BridgeRegisterMessage = {
   type: 'register'
   sessionId: string
+  sessionToken?: string
   claudeSessionId?: string
   pid?: number
   connectionRole?: ConnectionRole
@@ -159,6 +160,7 @@ export function parseBridgeToDaemonMessage(raw: unknown): ParseResult<BridgeToDa
         msg: {
           type: 'register',
           sessionId: raw.sessionId,
+          ...(typeof raw.sessionToken === 'string' && raw.sessionToken ? { sessionToken: raw.sessionToken } : {}),
           ...(typeof raw.claudeSessionId === 'string' ? { claudeSessionId: raw.claudeSessionId } : {}),
           ...(typeof raw.pid === 'number' && Number.isInteger(raw.pid) && raw.pid > 0 ? { pid: raw.pid } : {}),
           ...(raw.connectionRole === 'control' || raw.connectionRole === 'session' ? { connectionRole: raw.connectionRole } : {}),

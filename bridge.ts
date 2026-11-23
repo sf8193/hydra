@@ -26,6 +26,7 @@ import { fileURLToPath } from 'url'
 import { GATEWAY_PLATFORMS } from './shared/gateways/index.js'
 import { ToolsWaiterSet, type ToolsWaiter } from './shared/tools-waiters.js'
 import { parseDaemonToBridgeMessage, type BridgeToDaemonMessage, type BridgeToolDef } from './shared/bridge-protocol.js'
+import { SESSION_TOKEN_VAR } from './shared/caller.js'
 import { bridgeLifePath, type BridgeLifeEvent } from './shared/bridge-life.js'
 import { appendBridgeLife } from './infra/bridge-life-file.js'
 import { BRIDGE_SHUTDOWN_GRACE_MS, LONG_TOOL_TIMEOUTS_MS, SESSION_INSTRUCTIONS } from './shared/constants.js'
@@ -98,6 +99,7 @@ function resolveSessionIdentity(): { sessionId: string; isMain: boolean } {
 }
 
 const { sessionId: SESSION_ID, isMain: IS_MAIN } = resolveSessionIdentity()
+const SESSION_TOKEN = process.env[SESSION_TOKEN_VAR] || undefined
 const IS_STRAY = SESSION_ID.startsWith('stray-')
 const RECONNECT_INTERVAL = 5000
 
@@ -308,7 +310,7 @@ function connectSocket(): void {
     process.stderr.write(`bridge: connected to daemon\n`)
     lineBuf = ''
     const claudeId = resolveClaudeSessionId()
-    sendToSocket({ type: 'register', sessionId: SESSION_ID, claudeSessionId: claudeId, pid: IS_STRAY ? undefined : process.pid, sessionType: process.env.HYDRA_SESSION_TYPE || undefined, restricted: process.env.HYDRA_RESTRICTED === '1' || undefined, writeConfined: process.env.HYDRA_WRITE_CONFINED === '1' || undefined })
+    sendToSocket({ type: 'register', sessionId: SESSION_ID, ...(SESSION_TOKEN ? { sessionToken: SESSION_TOKEN } : {}), claudeSessionId: claudeId, pid: IS_STRAY ? undefined : process.pid, sessionType: process.env.HYDRA_SESSION_TYPE || undefined, restricted: process.env.HYDRA_RESTRICTED === '1' || undefined, writeConfined: process.env.HYDRA_WRITE_CONFINED === '1' || undefined })
   })
 
   sock.on('data', (data: Buffer) => {
