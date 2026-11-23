@@ -58,7 +58,7 @@ export const RULES: Rule[] = [
     allowed: [
       'daemon.ts', 'infra/tmux.ts', 'app/bridge-dispatch.ts', 'app/commands/thread.ts',
       'engines/claude-engine.ts', 'engines/codex-engine-adapter.ts', 'app/recovery.ts',
-      'app/session-lifecycle.ts', 'sessions/occupancy.ts', 'app/bridge-server.ts', 'app/cli-handler.ts',
+      'app/lifecycle/kill.ts', 'app/lifecycle/revive.ts', 'sessions/occupancy.ts', 'app/bridge-server.ts', 'app/cli-handler.ts',
       'sessions/registry.ts',
     ],
     tests: false, ts: true,
@@ -99,14 +99,14 @@ export const RULES: Rule[] = [
     // infra/util.ts owns safeSend. Every other file below is pinned to its exact sanctioned count so no new raw send can enter
     // and removals tighten the cap. Lexical (aliases like `const { send } = gateway` aren't tracked); `gateway.sendDM` is out of scope (user IDs, not threads):
     // - app/bridge-dispatch.ts (3): MCP reply, loud send_to_thread, and quiet-send subtext helper (all wrap raw gateway.send in retrySend and propagate errors/IDs)
-    // - app/session-lifecycle.ts (1): thread anchor creation must throw on failure and return anchor.id
+    // - app/lifecycle/spawn-stages.ts (1): thread anchor creation must throw on failure and return anchor.id
     // - connectors/slack/runtime.ts (1): bindNotice catches failure to fall back to toOperatorDm
     // - app/reply-guard.ts (1): defaultDeps.gatewaySend seam for screenshot fallback on throw
     // - app/home-actions.ts (2): Slack Home spawn errors sent to Slack userId (U..., not a thread ID)
     allowed: ['infra/util.ts'],
     max: {
       'app/bridge-dispatch.ts': 3,
-      'app/session-lifecycle.ts': 1,
+      'app/lifecycle/spawn-stages.ts': 1,
       'connectors/slack/runtime.ts': 1,
       'app/reply-guard.ts': 1,
       'app/home-actions.ts': 2,

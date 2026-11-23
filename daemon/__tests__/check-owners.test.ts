@@ -136,7 +136,7 @@ describe('check-owners: raw gateway.send() outside safeSend', () => {
 
   test('block and JSDoc comments are ignored without shifting line numbers or eating code after // /*', () => {
     expect(raw('app/router.ts', '/** posts via gateway.send(ch, text) */', '/* gateway.send(a, b) */')).toEqual([])
-    expect(raw('app/session-lifecycle.ts', '/**', ' * note: gateway.send(a, b)', ' */', 'gateway.send(a, b)')).toEqual([])
+    expect(raw('app/lifecycle/spawn-stages.ts', '/**', ' * note: gateway.send(a, b)', ' */', 'gateway.send(a, b)')).toEqual([])
     const afterBlock = raw('app/router.ts', '/**', ' * line 2', ' */', 'gateway.send(a, b)')
     expect(afterBlock).toHaveLength(1)
     expect(afterBlock[0]).toContain('app/router.ts:4:')
