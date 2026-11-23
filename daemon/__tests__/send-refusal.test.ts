@@ -17,7 +17,6 @@ import { bindCodexRuntime } from '../../app/codex-runtime.js'
 import { codexAdapter } from './codex-adapter.js'
 import './arm-gate.js'
 import { bindDeliveryNotice } from '../../sessions/delivery-notice.js'
-bindDeliveryNotice()
 
 process.stderr.write = (() => true) as any
 
@@ -135,6 +134,7 @@ import { deliveryWait } from '../../app/bridge-dispatch.js'
 import { registerProtocol } from '../../sessions/protocol-registry.js'
 import { CodexEngineAdapter } from '../../engines/codex-engine-adapter.js'
 
+bindDeliveryNotice()
 bindCodexRuntime()
 
 const accepts = { status: 'accepted', via: 'bridge-socket' }
