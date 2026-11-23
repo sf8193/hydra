@@ -6,6 +6,7 @@ import { ConversationTable, placesOf, type SlackReactionEvent } from '../watch.j
 import { alsoHeard, hydra as load, hydra, oneListener, view, BASE } from './slack-config.js'
 import { EMPTY_CONFIG } from '../../../config/load.js'
 import { mustParsePlace, type HydraConfig } from '../../../config/types.js'
+import { MARKDOWN_TEXT_MAX } from '../../../shared/slack-client.js'
 import { SlackListener, DM_LIST_BACKOFF_MS, postPayload, DOWN_ALERT_AFTER_MS, implicitScopeOptions, scopesNeeded, type ToldScopes, CATCH_UP_STALE_AFTER_MS, EVENTS_OFF_AFTER_PASSES, explainSlackError, readReplies, READ_MAX_PAGES, type SlackAppLike, type RawEvent } from '../listener.js'
 import type { SlackApi, RawMessage } from '../catchup.js'
 import type { SocketEmitter } from '../../../shared/socket-supervisor.js'
@@ -346,9 +347,30 @@ describe('posting where link previews are off', () => {
     expect(t.apps[0].apiCalls.filter(c => c.startsWith('post:'))).toEqual([`post:${CH}:-:see https://example.com`, `post:${CH}:-:see https://example.com and <https://example.org|this>:{"unfurl":false}`])
   })
   test('the Slack arguments: unfurl_links and unfurl_media false with the option, and exactly today\'s arguments without it', () => {
-    expect(postPayload('C1', '1.0', 'hi', { unfurl: false })).toEqual({ channel: 'C1', text: 'hi', thread_ts: '1.0', unfurl_links: false, unfurl_media: false })
-    expect(postPayload('C1', undefined, 'hi')).toEqual({ channel: 'C1', text: 'hi' })
-    expect(postPayload('C1', '1.0', 'hi', {})).toEqual({ channel: 'C1', text: 'hi', thread_ts: '1.0' })
+    expect(postPayload('C1', '1.0', 'hi', { unfurl: false })).toEqual({ channel: 'C1', markdown_text: 'hi', thread_ts: '1.0', unfurl_links: false, unfurl_media: false })
+    expect(postPayload('C1', undefined, 'hi')).toEqual({ channel: 'C1', markdown_text: 'hi' })
+    expect(postPayload('C1', '1.0', 'hi', {})).toEqual({ channel: 'C1', markdown_text: 'hi', thread_ts: '1.0' })
+  })
+  test('a reply goes as markdown_text, so **bold** and tables render; links and code reach Slack byte for byte', () => {
+    const md = 'Fixed **it** in [#889](https://github.com/o/r/pull/889)\n\n| a | b |\n|---|---|\n| 1 | 2 |\n```ts\nconst a = `x` < 2 && b > 1\n```'
+    const p = postPayload('C1', '1.0', md)
+    expect(p.markdown_text).toBe(md)
+    expect(p).not.toHaveProperty('text')
+  })
+  test('a reply with Slack syntax goes as classic text, so a tag still reaches the tagged app (#953)', () => {
+    for (const t of ['over to <@U0OTHER> **now**', 'cc <@U0OTHER|opal>', '<!here> heads up', 'see <!subteam^S1|team>', 'in <#C0123|dev>', 'see <https://example.com|this>', 'mail <mailto:a@b.co|a>']) {
+      const p = postPayload('C1', '1.0', t)
+      expect(p.text).toBe(t)
+      expect(p).not.toHaveProperty('markdown_text')
+    }
+    expect(postPayload('C1', undefined, 'a < b and <https://example.com> and [x](<https://example.com>)')).toHaveProperty('markdown_text')
+  })
+  test('the cap: at MARKDOWN_TEXT_MAX still markdown_text, one past it classic text, unchanged', () => {
+    expect(postPayload('C1', undefined, 'x'.repeat(MARKDOWN_TEXT_MAX))).toHaveProperty('markdown_text')
+    const long = 'x'.repeat(MARKDOWN_TEXT_MAX + 1)
+    const p = postPayload('C1', undefined, long)
+    expect(p.text).toBe(long)
+    expect(p).not.toHaveProperty('markdown_text')
   })
 })
 

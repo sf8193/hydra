@@ -6,7 +6,7 @@ import { SLACK_CLIENT_PING_TIMEOUT_MS } from '../constants.js'
 const built: { token: string; receiver: unknown; socketMode: boolean; logLevel: unknown }[] = []
 class FakeApp { receiver: unknown; constructor(opts: (typeof built)[number]) { built.push(opts); this.receiver = opts.receiver } }
 mock.module('@slack/bolt', () => ({ ...bolt, App: FakeApp }))
-const { buildSocketApp, parseAuth, unfurlFields } = await import('../slack-client.js')
+const { buildSocketApp, messageBody, MARKDOWN_TEXT_MAX, parseAuth, slackSyntax, unfurlFields } = await import('../slack-client.js')
 
 describe('buildSocketApp', () => {
   test('builds a Socket Mode receiver with the keepalive headroom and an App on it', () => {
@@ -23,6 +23,30 @@ describe('unfurlFields', () => {
   test('off turns both previews off; on adds nothing', () => {
     expect(unfurlFields(true)).toEqual({ unfurl_links: false, unfurl_media: false })
     expect(unfurlFields(false)).toEqual({})
+  })
+})
+
+describe('messageBody', () => {
+  const md = 'See [#1](https://example.com/1) **now** `code`\n```\na < b\n```'
+  test('markdown goes as markdown_text, untouched', () => {
+    expect(messageBody(md)).toEqual({ markdown_text: md })
+  })
+  test('classic text goes as text, so Slack never reads it as markdown', () => {
+    const mrkdwn = '*bold* <https://example.com|a link> _it_'
+    expect(messageBody(mrkdwn, true)).toEqual({ text: mrkdwn })
+  })
+  test('the cap: at the limit still markdown_text, one past it classic text', () => {
+    expect(messageBody('x'.repeat(MARKDOWN_TEXT_MAX))).toHaveProperty('markdown_text')
+    expect(messageBody('x'.repeat(MARKDOWN_TEXT_MAX + 1))).toHaveProperty('text')
+  })
+})
+
+describe('slackSyntax', () => {
+  test('tags, special mentions, channel links and labelled links are Slack syntax', () => {
+    for (const t of ['<@U1>', '<@W1|name>', '<!here>', '<!channel>', '<!subteam^S1>', '<#C1|dev>', '<https://x.co|x>', '<HTTP://x.co|x>', '<mailto:a@b.co|a>']) expect(slackSyntax(`hi ${t} there`)).toBe(true)
+  })
+  test('markdown, a bare autolink and a lone < are not', () => {
+    for (const t of ['**b** [x](https://x.co)', '<https://x.co>', '[x](<https://x.co>)', 'a < b > c', 'x <= 2', '']) expect(slackSyntax(t)).toBe(false)
   })
 })
 
