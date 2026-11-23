@@ -7,6 +7,7 @@ import { resolveLaunchModel, spawnModel, TRANSCRIBE_TMUX, byteTmuxName, claudeCo
 import { captureSpawnVars, withRaisedFdLimit } from '../shared/spawn-env.js'
 import { tmuxNewSession } from '../infra/tmux-session.js'
 import { callerClaim } from '../shared/caller.js'
+import { parseCLIResponse, type CLIRequest, type CLIRequestFor, type CLIResponse, type CLIResponseView } from '../shared/cli-protocol.js'
 import { scrubTokenVarsInFile } from '../infra/token-vars-file.js'
 import { parseEnvLine } from '../shared/env-parse.js'
 import { sourceEnvFiles } from '../infra/env-files.js'
@@ -342,7 +343,8 @@ export function probeDaemonHealth(sockPath: string, timeoutMs = 5000): Promise<{
     }, timeoutMs)
 
     socket.on('connect', () => {
-      socket.write(JSON.stringify({ type: 'cli', command: 'health', id: 'probe' }) + '\n')
+      const probe: CLIRequestFor<'health'> = { type: 'cli', command: 'health', id: 'probe', params: {} }
+      socket.write(JSON.stringify(probe) + '\n')
     })
 
     function settle(result: { ok: boolean; error?: string }): void {
@@ -358,8 +360,12 @@ export function probeDaemonHealth(sockPath: string, timeoutMs = 5000): Promise<{
       const nl = buf.indexOf('\n')
       if (nl !== -1 && !settled) {
         try {
-          const resp = JSON.parse(buf.slice(0, nl))
-          settle({ ok: !!resp.ok })
+          const parsed = parseCLIResponse(JSON.parse(buf.slice(0, nl)))
+          if (!parsed.ok) {
+            settle({ ok: false, error: 'invalid response' })
+          } else {
+            settle({ ok: parsed.response.ok, ...(parsed.response.error ? { error: parsed.response.error } : {}) })
+          }
         } catch {
           settle({ ok: false, error: 'invalid response' })
         }
@@ -431,9 +437,9 @@ export function resolveSocket(daemonName?: string): string {
  * `timeoutMs`: how long to wait for the reply; a request that spawns a session needs more than the default.
  * Every request says who is calling (shared/caller.ts): the session's token, a session's environment without one, or nothing (the operator's shell).
  */
-export function sendRequest(socketPath: string, request: Record<string, unknown>, timeoutMs = 10_000): Promise<Record<string, unknown>> {
+export function sendRequest(socketPath: string, request: CLIRequest, timeoutMs = 10_000): Promise<CLIResponse> {
   const caller = callerClaim(process.env)
-  if (caller) request = { ...request, caller }
+  const payload: CLIRequest = caller ? { ...request, caller } : request
   return new Promise((resolve, reject) => {
     const socket = connect(socketPath)
     let buf = ''
@@ -443,7 +449,7 @@ export function sendRequest(socketPath: string, request: Record<string, unknown>
     }, timeoutMs)
 
     socket.on('connect', () => {
-      socket.write(JSON.stringify(request) + '\n')
+      socket.write(JSON.stringify(payload) + '\n')
     })
 
     socket.on('data', (data: Buffer) => {
@@ -454,7 +460,12 @@ export function sendRequest(socketPath: string, request: Record<string, unknown>
         const line = buf.slice(0, nl)
         socket.end()
         try {
-          resolve(JSON.parse(line))
+          const parsed = parseCLIResponse(JSON.parse(line))
+          if (!parsed.ok) {
+            reject(new Error(`invalid response: ${line.slice(0, 200)}`))
+          } else {
+            resolve(parsed.response)
+          }
         } catch {
           reject(new Error(`invalid response: ${line.slice(0, 200)}`))
         }
@@ -477,7 +488,7 @@ export function sendRequest(socketPath: string, request: Record<string, unknown>
 // Output formatting
 // ---------------------------------------------------------------------------
 
-export function printResponse(response: Record<string, unknown>, json: boolean): void {
+export function printResponse(response: CLIResponseView, json: boolean): void {
   if (json) {
     console.log(JSON.stringify(response, null, 2))
     return

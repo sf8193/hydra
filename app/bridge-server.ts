@@ -16,7 +16,7 @@ import { getProtocolContext } from './protocol-runner.js'
 import { maybeNudgeMissingAdvance } from './advance-nudge.js'
 import { clearPendingReply, settlePendingOnReact, notePendingFromQueue } from './reply-guard.js'
 import { refreshSessionVisual } from '../sessions/anchor-state.js'
-import { handleCLIRequest, type CLIRequest } from './cli-handler.js'
+import { handleCLIRequest } from './cli-handler.js'
 import { watchPr, getWatchesBySession } from '../connectors/github/pr-watch.js'
 import { sessionFlapAction, shouldHoldIncumbentMain } from './main-guard.js'
 import { buildAutopsy, logCorrelation, tailSpawnLog, buildCrashNotice, getVitalsSample } from '../sessions/observability.js'
@@ -461,7 +461,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
     }
 
     case 'cli': {
-      void handleCLIRequest(msg as unknown as CLIRequest).then(response => {
+      void handleCLIRequest(msg).then(response => {
         conn.socket.write(JSON.stringify(response) + '\n')
       }).catch(err => {
         conn.socket.write(JSON.stringify({

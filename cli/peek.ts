@@ -2,10 +2,19 @@ import { execSync } from 'child_process'
 import { tmuxNewSession } from '../infra/tmux-session.js'
 import { randomUUID } from 'crypto'
 import { resolveSocket, sendRequest, shq, tmuxExists, tmuxKill } from './helpers.js'
+import type { CLIRequest, CLIResponseView } from '../shared/cli-protocol.js'
 
 // Everything peek touches outside itself — tests swap these fields (and restore
 // them) instead of mock.module()ing child_process for the whole test run.
-export const peekIO = {
+export const peekIO: {
+  execSync: (cmd: string, opts?: object) => string | Buffer
+  tmuxNewSession: typeof tmuxNewSession
+  resolveSocket: typeof resolveSocket
+  sendRequest: (socketPath: string, request: CLIRequest, timeoutMs?: number) => Promise<CLIResponseView>
+  tmuxExists: typeof tmuxExists
+  tmuxKill: typeof tmuxKill
+  exit: (code: number) => never
+} = {
   execSync: execSync as (cmd: string, opts?: object) => string | Buffer,
   tmuxNewSession, resolveSocket, sendRequest, tmuxExists, tmuxKill,
   exit: (code: number): never => process.exit(code),
