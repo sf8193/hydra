@@ -6,8 +6,9 @@ import { CodexEngine } from '../../engines/codex-engine.js'
 import { classifyPersisted } from '../../engines/boot.js'
 import { fakeCodexAdapter } from './test-harness.js'
 import { registry } from '../../sessions/registry.js'
-import { reconnectCodexSessions } from '../../app/codex-runtime.js'
+import { reconnectCodexSessions, reconnectSession } from '../../app/codex-runtime.js'
 import { codexEngine } from '../../sessions/engine-instances.js'
+import { reconnecting } from './reconnecting.js'
 const tick = () => new Promise(r => setTimeout(r, 0))
 function setup(id='review') {
  const engine:any = new CodexEngine(); const sent:any[]=[]; let terminated=0
@@ -54,19 +55,19 @@ test('boot matrix: thread/no thread x dead/live x tmux absent/present',()=>{
 })
 test('boot sweep cannot finalise replaced record, including a new ID in same thread',async()=>{
  for(const sameId of [true,false]){
-  let finish:any;const old:any={sessionId:'old',threadId:'same-thread',engine:'codex',ephemeral:true,adapter:{reconnect:()=>new Promise(r=>{finish=r})}};registry.set('old',old)
-  const sweep=reconnectCodexSessions([old]);registry.delete('old');const replacement:any={...old,sessionId:sameId?'old':'new'};registry.set(replacement.sessionId,replacement);finish(false);await sweep
+  let finish:any;const old:any={sessionId:'old',threadId:'same-thread',engine:'codex',ephemeral:true,adapter:{...reconnecting(()=>new Promise(r=>{finish=r}))}};registry.set('old',old)
+  const sweep=reconnectCodexSessions([old]);await new Promise(r=>setTimeout(r,0));registry.delete('old');const replacement:any={...old,sessionId:sameId?'old':'new'};registry.set(replacement.sessionId,replacement);finish(false);await sweep
   expect(old.deadAt).toBeUndefined();expect(replacement.deadAt).toBeUndefined();expect((codexEngine as any).getScheduling('old').fenced).toBe(false);registry.delete(replacement.sessionId)
  }
 })
 test('fresh-connect verdict checks actual socket',async()=>{
  const adapter=fakeCodexAdapter({isSocketLive:async()=>true,connect:async()=>({threadId:'t'}),isConnected:()=>false})
- const info:any={sessionId:'fresh',tmuxName:'fresh',adapter};registry.set('fresh',info);try{expect(await adapter.reconnect(info)).toBe(false)}finally{registry.delete('fresh')}
+ const info:any={sessionId:'fresh',tmuxName:'fresh',adapter};registry.set('fresh',info);try{expect(await reconnectSession(info)).toBe(false)}finally{registry.delete('fresh')}
 })
 test('boot sweep for all eight persisted states',async()=>{
  let n=0
  for(const thread of [false,true])for(const dead of [false,true])for(const tmux of [false,true]){
-  let probes=0;const info:any={sessionId:'matrix-'+n++,threadId:'matrix-thread',engine:'codex',ephemeral:true,codexThreadId:thread?'t':undefined,deadAt:dead?1:undefined,adapter:{reconnect:async()=>{probes++;return false}}}
+  let probes=0;const info:any={sessionId:'matrix-'+n++,threadId:'matrix-thread',engine:'codex',ephemeral:true,codexThreadId:thread?'t':undefined,deadAt:dead?1:undefined,adapter:{...reconnecting(async()=>{probes++;return false})}}
   if(classifyPersisted(info,tmux)==='live')delete info.deadAt;else info.deadAt ??= 2
   const expected=info.deadAt?0:1;registry.set(info.sessionId,info);await reconnectCodexSessions([info]);expect(probes).toBe(expected);expect(info.deadAt).toBeNumber();registry.delete(info.sessionId)
  }

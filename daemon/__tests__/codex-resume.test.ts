@@ -20,6 +20,8 @@ import { transport } from '../../sessions/bridge-transport.js'
 import type { LaunchInput } from '../../engines/engine-adapter.js'
 import type { InboundMessage } from '../../gateways/gateway.js'
 import { codexAdapter } from './codex-adapter.js'
+import { reconnecting } from './reconnecting.js'
+import { reconnectSession, resumeRetry } from '../../app/codex-runtime.js'
 
 
 // ---------------------------------------------------------------------------
@@ -429,7 +431,7 @@ describe('stale Codex reconnect', () => {
     return info
   }
 
-  test('adapter.reconnect: record replaced during the failed-resume backoff → no connect on the new owner\'s socket', async () => {
+  test('reconnectSession: record replaced during the failed-resume backoff → no connect on the new owner\'s socket', async () => {
     const engine = { ...fakeEngine(), isSocketLive: async () => true, disconnected: 0 } as any
     engine.disconnect = () => { engine.disconnected++ }
     const A = seedLive('r16-A', 'r16shared')
@@ -441,24 +443,24 @@ describe('stale Codex reconnect', () => {
     }
     const adapter = codexAdapter(engine, fakeProc() as any)
 
-    const realRetry = CodexEngineAdapter.RESUME_RETRY_MS
-    CodexEngineAdapter.RESUME_RETRY_MS = 1 // the backoff's length is not under test
+    const realRetry = resumeRetry.ms
+    resumeRetry.ms = 1 // the backoff's length is not under test
     try {
-      expect(await adapter.reconnect(A)).toBe(false)
-    } finally { CodexEngineAdapter.RESUME_RETRY_MS = realRetry }
+      expect(await reconnectSession(Object.assign(A, { adapter }))).toBe(false)
+    } finally { resumeRetry.ms = realRetry }
     expect(engine.calls.filter((c: string) => c.startsWith('connect '))).toEqual([])
     expect(A.codexThreadId).toBe('T-r16-A')
   })
 
   test('production failed-resume backoff is 2s', () => {
-    expect(CodexEngineAdapter.RESUME_RETRY_MS).toBe(2000)
+    expect(resumeRetry.ms).toBe(2000)
   })
 
-  test('adapter.reconnect: record replaced while probing the socket → nothing attempted', async () => {
+  test('reconnectSession: record replaced while probing the socket → nothing attempted', async () => {
     const A = seedLive('r16-C', 'r16shared2')
     const engine = { ...fakeEngine(), isSocketLive: async () => { registry.delete(A.sessionId); return true } } as any
     const adapter = codexAdapter(engine, fakeProc() as any)
-    expect(await adapter.reconnect(A)).toBe(false)
+    expect(await reconnectSession(Object.assign(A, { adapter }))).toBe(false)
     expect(engine.calls).toEqual([])
   })
 
@@ -467,7 +469,7 @@ describe('stale Codex reconnect', () => {
     let current: any
     let ensured = 0, persisted = 0, failed = 0
     const A: any = { sessionId: 'sid', engine: 'codex', tmuxName: 'r16a', codexThreadId: 'T', deadAt: 1,
-      adapter: { reconnect: async () => { current = { ...A, deadAt: 2 }; return true }, surface: () => { ensured++; return 'r16a:hydra-chat' } } }
+      adapter: { ...reconnecting(async () => { current = { ...A, deadAt: 2 }; return true }), surface: () => { ensured++; return 'r16a:hydra-chat' } } }
     current = A
     const ok = await reconnectCodexAfterDisconnect('sid', {
       get: () => current, wait: async () => {}, persist: () => { persisted++ }, failed: () => { failed++; return true },

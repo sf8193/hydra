@@ -62,7 +62,6 @@ export class CodexEngineAdapter implements EngineAdapter {
   // Tests shorten these; production uses the defaults.
   static COMPOSER_DEADLINE_MS = 5000
   static COMPOSER_POLL_MS = 100
-  static RESUME_RETRY_MS = 2000
   readonly provider = 'codex' as const
   readonly channel = 'engine' as const
   constructor(
@@ -370,56 +369,58 @@ export class CodexEngineAdapter implements EngineAdapter {
     return null
   }
 
-  // Boot and disconnect recovery (app/codex-runtime); not part of EngineAdapter.
-  async reconnect(info: SessionInfo): Promise<boolean> {
-    const sockPath = codexSocketPath(info.codexHomeName ?? info.tmuxName)
-    // Generation bound (invariant 10): if this record was replaced or removed while
-    // we awaited, its home may belong to a successor — touch nothing.
-    const stale = () => {
-      if (this.registry.get(info.sessionId) === info) return false
-      try { this.engine.disconnect(info.sessionId) } catch {}
-      process.stderr.write(`codex-adapter: abandoning stale reconnect for ${info.tmuxName}\n`)
-      return true
-    }
+  // Boot and disconnect recovery (app/codex-runtime decides when, how often and in what order); these are single attempts,
+  // not part of EngineAdapter. Each gives up if the record was replaced or removed while it awaited (generation bound,
+  // invariant 10): the home may belong to a successor, so it touches nothing.
+  private abandoned(info: SessionInfo): boolean {
+    if (this.registry.get(info.sessionId) === info) return false
+    try { this.engine.disconnect(info.sessionId) } catch {}
+    process.stderr.write(`codex-adapter: abandoning stale reconnect for ${info.tmuxName}\n`)
+    return true
+  }
 
-    // Check if app-server socket is reachable (survives tmux death)
+  /** Is there an app-server to reconnect to: its socket (it survives tmux death) or, failing that, the tmux session? */
+  async reachable(info: SessionInfo): Promise<boolean> {
+    const sockPath = codexSocketPath(info.codexHomeName ?? info.tmuxName)
     let socketLive = false
     try { socketLive = await this.engine.isSocketLive(sockPath) } catch {}
-    if (stale()) return false
-    if (!socketLive && !tmuxHasSession(info.tmuxName)) return false
+    if (this.abandoned(info)) return false
+    return socketLive || tmuxHasSession(info.tmuxName)
+  }
 
-    if (info.codexThreadId) {
-      try {
-        const result = await this.engine.connectAndResume(info.sessionId, sockPath, info.codexThreadId)
-        if (stale()) return false
-        if (result.model && info.sessionMetadata) info.sessionMetadata.model = result.model
-        process.stderr.write(`codex-adapter: reconnected ${info.tmuxName} (resumed)\n`)
-        // A close during the resume's queue drain can already have dropped the
-        // socket (and its event is swallowed while we're reconnecting).
-        return this.engine.isConnected(info.sessionId)
-      } catch (err: any) {
-        process.stderr.write(`codex-adapter: resume failed for ${info.tmuxName}: ${err?.message || err}\n`)
-        try { this.engine.disconnect(info.sessionId) } catch {}
-        await new Promise(r => setTimeout(r, CodexEngineAdapter.RESUME_RETRY_MS))
-        if (stale()) return false
-      }
+  /** One attempt to resume the record's own thread. 'connected': done. 'failed': the resume threw (the connection is dropped; try a new thread). 'lost': replaced meanwhile, or dropped right after connecting: stop. */
+  async resumeThread(info: SessionInfo): Promise<'connected' | 'failed' | 'lost'> {
+    const sockPath = codexSocketPath(info.codexHomeName ?? info.tmuxName)
+    try {
+      const result = await this.engine.connectAndResume(info.sessionId, sockPath, info.codexThreadId!)
+      if (this.abandoned(info)) return 'lost'
+      if (result.model && info.sessionMetadata) info.sessionMetadata.model = result.model
+      process.stderr.write(`codex-adapter: reconnected ${info.tmuxName} (resumed)\n`)
+      // A close during the resume's queue drain can already have dropped the
+      // socket (and its event is swallowed while we're reconnecting).
+      return this.engine.isConnected(info.sessionId) ? 'connected' : 'lost'
+    } catch (err: any) {
+      process.stderr.write(`codex-adapter: resume failed for ${info.tmuxName}: ${err?.message || err}\n`)
+      try { this.engine.disconnect(info.sessionId) } catch {}
+      return 'failed'
     }
+  }
 
-    const hadPriorThread = !!info.codexThreadId
+  /** One attempt on a new thread (the record's history stays behind; info.codexThreadId becomes the new one). 'failed': it threw, or the record was replaced. 'dropped': connected, then the socket went away. */
+  async connectNewThread(info: SessionInfo): Promise<'connected' | 'dropped' | 'failed'> {
+    const sockPath = codexSocketPath(info.codexHomeName ?? info.tmuxName)
+    if (this.abandoned(info)) return 'failed'
     try {
       const result = await this.engine.connect(info.sessionId, sockPath)
-      if (stale()) return false
+      if (this.abandoned(info)) return 'failed'
       info.codexThreadId = result.threadId
       if (result.model && info.sessionMetadata) info.sessionMetadata.model = result.model
-      if (hadPriorThread) {
-        void safeSend(info.threadId, `⚠️ Session resumed but conversation history was lost. The agent is starting fresh.`)
-      }
       process.stderr.write(`codex-adapter: reconnected ${info.tmuxName} (new thread)\n`)
-      return this.engine.isConnected(info.sessionId)
+      return this.engine.isConnected(info.sessionId) ? 'connected' : 'dropped'
     } catch (err: any) {
       process.stderr.write(`codex-adapter: fresh connect failed for ${info.tmuxName}: ${err?.message || err}\n`)
       try { this.engine.disconnect(info.sessionId) } catch {}
-      return false
+      return 'failed'
     }
   }
 }
