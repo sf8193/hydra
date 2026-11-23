@@ -669,7 +669,7 @@ function plistLabel(platform: string): string {
   return `com.hydra.watchdog.${platform}`
 }
 
-function plistPath(platform: string): string {
+export function plistPath(platform: string): string {
   return join(homedir(), 'Library', 'LaunchAgents', `${plistLabel(platform)}.plist`)
 }
 
