@@ -67,6 +67,7 @@ import { socketServer, startBridgeServer } from './app/bridge-server.js'
 import { announceRestartComplete } from './app/commands/global.js'
 import { deliverWatchdogAlert } from './app/watchdog-alert.js'
 import { autoRecoverAfterBoot } from './app/recovery.js'
+import { sendRecoveryReport } from './app/recovery-report.js'
 import { startJobsClock, stopJobsClock, realDeps } from './connectors/clock/jobs-clock.js'
 import { deliverToTarget, targetDeps, conversationSessionName, conversationSessionRunning, placesFree } from './app/targets.js'
 
@@ -183,30 +184,6 @@ import { flushAllHeld } from './app/typed-delivery.js'
 import { probeAllSessions, mainStuckCause, confirmedStuckState } from './app/pane-probe.js'
 import { safeSend } from './infra/util.js'
 import { tmuxHasSession } from './infra/tmux.js'
-
-// ---------------------------------------------------------------------------
-// Recovery report on reconnect
-// ---------------------------------------------------------------------------
-
-function sendRecoveryReport(gapMs: number): void {
-  const hrs = Math.floor(gapMs / 3_600_000)
-  const mins = Math.floor((gapMs % 3_600_000) / 60_000)
-  const duration = hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`
-  const connected = [...registry.values()].filter(s => transport.has(s.sessionId)).length
-  const disconnected = [...registry.values()].filter(s => !transport.has(s.sessionId)).length
-  const queuedMsgCount = [...transport.messageQueues.values()].reduce((sum, q) => sum + q.length, 0)
-  const report = [
-    `**Recovery report** — back online after ${duration} outage`,
-    `• Sessions: ${registry.size} total (${connected} connected, ${disconnected} disconnected)`,
-    `• Queued messages: ${queuedMsgCount}`,
-  ].join('\n')
-  for (const userId of operatorIds()) {
-    void gateway.sendDM(userId, report).catch(e =>
-      process.stderr.write(`daemon: recovery report DM failed: ${e}\n`),
-    )
-  }
-  process.stderr.write(`daemon: sent recovery report (offline ${duration})\n`)
-}
 
 gateway.onReconnectAfterOutage = sendRecoveryReport
 

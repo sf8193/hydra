@@ -39,6 +39,10 @@ test('daemon.ts hands the Home tab its spawn handler', () => {
   expect(daemon).toMatch(/^  ;\(gateway as any\)\.homeSpawnHandler = runHomeSpawnAction$/m)
 })
 
+test('daemon.ts hands the gateway its outage recovery report', () => {
+  expect(daemon).toMatch(/^gateway\.onReconnectAfterOutage = sendRecoveryReport$/m)
+})
+
 test('daemon.ts hands the Slack gateway its operator ids', () => {
   expect(daemon).toMatch(/\(gateway as any\)\.operators = operatorIds\b/)
 })
