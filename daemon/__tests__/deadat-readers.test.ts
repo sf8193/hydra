@@ -55,7 +55,7 @@ const ALLOWED: Record<string, { why: string; lines: string[] }> = {
       "const goneOrDead = (id: string) => { const s = registry.get(id); return !s || !!s.deadAt }",
     ],
   },
-  'app/protocol-runner.ts': {
+  'app/protocol/transitions.ts': {
     why: 'a Codex runtime\'s stamp is its verdict even while its socket lingers (C1)',
     lines: [
       "const connected = () => transport.has(sessionId) && !registry.get(sessionId)?.deadAt",

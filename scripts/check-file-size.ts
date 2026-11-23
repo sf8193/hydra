@@ -17,7 +17,6 @@ export const TIGHTEN_STEP = 50
 /** Existing oversized production files and their line-count ceilings (sorted descending). Only shrinks. */
 export const ALLOWED: Readonly<Record<string, number>> = {
   'connectors/slack/watch.ts': 1993,
-  'app/protocol-runner.ts': 1746,
   'config/load.ts': 1293,
   'app/router.ts': 1188,
   'connectors/slack/listener.ts': 1087,
