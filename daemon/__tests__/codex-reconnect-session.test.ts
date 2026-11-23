@@ -55,6 +55,18 @@ describe('reconnectSession', () => {
     await tick(); expect(sent.some(t => t.includes('conversation history was lost'))).toBe(true)
   })
 
+  test('the new thread is not started until the retry wait has passed', async () => {
+    resumeRetry.ms = 60
+    try {
+      const { info, calls } = record({ resume: 'failed' }, 'T')
+      const done = reconnectSession(info)
+      await new Promise(r => setTimeout(r, 15))
+      expect(calls).toEqual(['reachable', 'resume'])
+      expect(await done).toBe(true)
+      expect(calls).toEqual(['reachable', 'resume', 'fresh'])
+    } finally { resumeRetry.ms = 1 }
+  })
+
   test('no thread to resume: straight to a new thread, and no history-lost notice', async () => {
     const { info, calls } = record({}, undefined)
     expect(await reconnectSession(info)).toBe(true)
