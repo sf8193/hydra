@@ -5,7 +5,7 @@ stateDiagram-v2
 
     Routed --> Held: any bind by hand<br/>(boundBy = tool, home, cli or router)
     Held --> Held: another bind by hand<br/>(boundBy = the latest binder)
-    Held --> Routed: a tag takes the thread from a session<br/>or its specialist is gone and routing rebinds it<br/>(boundBy cleared)
+    Held --> Routed: a person's tag takes the thread from a session<br/>or its specialist is gone and routing rebinds it<br/>(boundBy cleared)
 
     Routed --> [*]: evicted (table full, quiet an hour, nothing owed)<br/>or idle a week
     Held --> [*]: unbound, idle a week,<br/>or its session thread stays vacant

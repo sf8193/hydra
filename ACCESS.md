@@ -28,6 +28,15 @@ listen = true           # a session thread started here listens without a tag
 
 `allow` is always written out, and an empty list does not load. `["anyone"]` is the only way to leave a channel open. People named in `allow` who have no address on this platform hear nobody.
 
+**Another app.** An app (a Slack bot) with an entry in `[people]` is a person: it goes through the same rules, so `["anyone"]` includes it and a named `allow` list restricts it like anyone else. An app with no entry is not heard. Declare one by its user id:
+
+```toml
+[people.peer]
+addresses = ["slack:U0123ABCDEF"]   # the other app's user id
+```
+
+The rule is the same in a thread a session is bound to, and on Discord. Hydra's own apps are never heard, declared or not, and a bot message under the operator's own address is never heard (no operator standing through an app). An app gets what a declared person gets on each path. This replaces the old `bots = true` on a place: `bots = true` fails to load, naming this, and `bots = false` loads with a warning to delete the line.
+
 To admit a channel, **tag the bot there as the operator**. It writes that table (`mention = true`, `allow` = the operator, `listen = true`) and runs the same message's command. If hydra.toml can't take the write, it says so once in that channel and does nothing else. Anyone else's tag admits nothing. To remove a channel, delete its `[places."…".access]` table; to change who may speak, edit `allow`.
 
 `thread_reply = true` on the same place (`[places."discord:846209781206941736"]`) makes a session reply in a thread of the message. The connector's own place options (`ack`, `messages`, `files`, …) share that table; a place with only an access table is not "named" for the Slack connector.

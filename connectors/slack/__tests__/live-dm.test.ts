@@ -188,10 +188,10 @@ describe('a DM that is passed over says why', () => {
     t.live({ channel: 'D0BOT0001', channel_type: 'im', user: 'USIB' })
     expect(logOf(t)).toMatch(dropped('D0BOT0001', TS, /another hydra app's bot/))
   })
-  test('another bot, where the place does not hear bots', async () => {
+  test('another app, which no DM names', async () => {
     const t = OPEN(); await t.listener.start()
     t.live({ channel: 'D0BOT0001', channel_type: 'im', user: undefined, bot_id: 'BOTHER' })
-    expect(logOf(t)).toMatch(dropped('D0BOT0001', TS, /another bot/))
+    expect(logOf(t)).toMatch(dropped('D0BOT0001', TS, /another app/))
   })
   test("the bot's own message in a DM", async () => {
     const t = OPEN(); await t.listener.start()

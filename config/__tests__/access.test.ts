@@ -358,9 +358,6 @@ describe('the warning for an operator-access specialist someone else can talk to
       const alone = t.replace('reachable_by = ["role:anyone"]', 'reachable_by = []')
       expect(ok(alone).warnings.filter(w => w.includes("the operator's account"))).toEqual([])
     })
-    test('a bots = true place: other bots talk to it whatever reachable_by says', () => {
-      expect(warnings('[places."slack:app-dm:*"]\nbots = true\n' + heard("slack:app-dm:*"), 'reachable_by = []')).toEqual(WARN('any other bot in slack:app-dm:*'))
-    })
   })
 
   describe('who can only read its replies', () => {

@@ -51,11 +51,6 @@ describe('toEvent', () => {
       .toEqual({ channel: CH, ts: '1.000001', threadTs: '1.000001', user: 'U1', botId: 'B1', subtype: 'bot_message', text: 'x' })
     expect(toEvent(CH, { text: 'no ts' })).toBeNull()
   })
-  test("a bot's name: its profile's, else the name it posted under", () => {
-    expect(toEvent(CH, { ts: '1.000001', bot_id: 'B1', bot_profile: { name: 'Profile' }, username: 'Posted as' })?.botName).toBe('Profile')
-    expect(toEvent(CH, { ts: '1.000001', bot_id: 'B1', username: 'Posted as' })?.botName).toBe('Posted as')
-    expect(toEvent(CH, { ts: '1.000001', user: 'U1', username: 'not a bot' })?.botName).toBeUndefined()
-  })
 })
 
 describe('catchUp: a thread a session listens to, where no specialist listens', () => {
@@ -88,15 +83,18 @@ describe('catchUp: a thread a session listens to, where no specialist listens', 
     expect(sent.join()).not.toContain('days before')
   })
 
-  test("another app's bot's reply, where the place does not hear bots, is recovered as live would hear it: delivered, named by its profile", async () => {
-    const { w, sent } = setup()
-    w.bind('C0ELSE', ROOT, SESSION, 'tool')
-    const reply = { ts: '1793000100.000001', thread_ts: ROOT, bot_id: 'BOTHER', subtype: 'bot_message', bot_profile: { name: 'Other Agent' }, text: 'from the other team' }
-    const r = await catchUp(w, rootAlways([root, reply]), cfg, opts({ deep: true }))
-    expect(r.acceptedTs).toEqual([reply.ts])
-    await w.flush()
-    expect(sent.join()).toContain('from the other team')
-    expect(sent.join()).toContain('name="Other Agent"')
+  test("another app's reply is recovered as live would hear it: delivered when hydra.toml declares it, passed over when it does not", async () => {
+    const reply = { ts: '1793000100.000001', thread_ts: ROOT, user: 'UOTHERBOT', bot_id: 'BOTHER', subtype: 'bot_message', text: 'from the other team' }
+    const named = view(oneListener(CH, 'helper', '["role:people"]', '[people.peer]\naddresses = ["slack:UOTHERBOT"]\nname = "Peer"\n'))
+    for (const [config, heard] of [[named, true], [cfg, false]] as const) {
+      const { w, sent } = setup(undefined, config)
+      w.bind('C0ELSE', ROOT, SESSION, 'tool')
+      const r = await catchUp(w, rootAlways([root, reply]), config, opts({ deep: true }))
+      expect(r.acceptedTs).toEqual(heard ? [reply.ts] : [])
+      await w.flush()
+      expect(sent.join().includes('from the other team')).toBe(heard)
+      if (heard) expect(sent.join()).toContain('name="Peer"')
+    }
   })
 
   test('the deep pass rereads it from its own last delivery, though its channel has no cursor; nothing older is replayed', async () => {

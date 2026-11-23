@@ -3,6 +3,7 @@ import { currentHydraConfig, hydraLoadEnv, reloadHydraConfig } from '../infra/hy
 import { admitChannel } from '../config/admit.js'
 import { BUSY } from '../config/append.js'
 import { chunk, safeSend } from '../infra/util.js'
+import { hearsApp } from '../config/hears.js'
 import type { GateSettings } from '../config/types.js'
 import type { InboundMessage } from '../gateways/gateway.js'
 
@@ -158,6 +159,22 @@ export async function admitTaggedChannel(msg: InboundMessage): Promise<boolean> 
 /** Whether `msg` tags the bot or matches this platform's configured mention patterns. */
 export function mentionsUs(msg: InboundMessage): Promise<boolean> {
   return gateway.isMentioned(msg, gateSettings()?.mentionPatterns)
+}
+
+/**
+ * Whether another app's message is heard at all: hydra.toml declares it as a person (`hearsApp`), and it is not this daemon's own bot. Heard, it goes
+ * through the gate as that person: `allow` and the mention rule apply to it as to anyone.
+ */
+export function heardApp(msg: Pick<InboundMessage, 'authorId'>): boolean {
+  const cfg = currentHydraConfig()
+  return msg.authorId !== gateway.botId && hearsApp(cfg.people, cfg.operator, `${PLATFORM}:${msg.authorId}`)
+}
+
+/** Whether the router drops this app message: it is undeclared. Said on stderr when it tags us in a place we're in, since its sender would otherwise wait on silence. */
+export async function droppedApp(msg: InboundMessage): Promise<boolean> {
+  if (heardApp(msg)) return false
+  if (channelAllowed(msg) && msg.authorId !== gateway.botId && await mentionsUs(msg)) process.stderr.write(`daemon: dropped a message that tags this bot, from another app (${gateway.platform}:${msg.authorId}) in ${msg.channelId}: hydra.toml's [people] does not declare it\n`)
+  return true
 }
 
 export async function gate(msg: InboundMessage): Promise<GateResult> {

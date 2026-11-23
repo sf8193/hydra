@@ -410,8 +410,6 @@ export type PlaceOptions = {
   files: boolean
   /** Which messages open a conversation: `addressed` (a DM or a tag of the app) or `all` (any top-level message). Default `addressed`. */
   messages: 'addressed' | 'all'
-  /** Hear other bots. Default false; hydra's own bot is never heard. */
-  bots: boolean
   /**
    * A Slack channel or the bot's DM. Whether a person's emoji reaction is delivered to the session that owns the conversation it is in:
    * `bot-messages` (only on a message the bot posted), `all` (on any message of a conversation hydra holds), or `off`. Default `off`.

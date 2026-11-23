@@ -32,7 +32,7 @@ const KEYS = ['slack:C1', 'slack:C2', 'slack:G1', 'slack:#ops', 'slack:#help',
 const TARGETS = ['main', 's1', 's2', 's3'] as const
 const counts = { configs: 0, decisions: 0, deliver: 0, refused: 0, unrouted: 0, ignored: 0, connectorChecks: 0, previews: 0, scopes: 0, mixedWildcardSpecific: 0, bothGroupForms: 0 }
 
-type Opt = { files: boolean; messages: 'addressed' | 'all'; bots: boolean; reactions: 'off' | 'bot-messages' | 'all'; linkPreviews: boolean; ack?: string; defaultApp?: string }
+type Opt = { files: boolean; messages: 'addressed' | 'all'; reactions: 'off' | 'bot-messages' | 'all'; linkPreviews: boolean; ack?: string; defaultApp?: string }
 
 function genNew(r: R): HydraConfig {
   const apps = ['default', ...some(r, ['sales', 'support'], 0.6)]
@@ -52,7 +52,7 @@ function genNew(r: R): HydraConfig {
   for (const k of KEYS) if (chance(r, 0.35)) {
     const p = mustParsePlace(k)
     places[k] = {
-      files: chance(r, 0.4), messages: p.kind === 'channel' && chance(r, 0.5) ? 'all' : 'addressed', bots: chance(r, 0.3), reactions: pick(r, ['off', 'bot-messages', 'all'] as const),
+      files: chance(r, 0.4), messages: p.kind === 'channel' && chance(r, 0.5) ? 'all' : 'addressed', reactions: pick(r, ['off', 'bot-messages', 'all'] as const),
       linkPreviews: chance(r, 0.6), ...(chance(r, 0.5) && { ack: pick(r, ['eyes', 'white_check_mark']) }),
       ...(p.kind === 'channel' && p.platform === 'slack' && chance(r, 0.5) && { defaultApp: pick(r, apps) }),
     }

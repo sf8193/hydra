@@ -137,13 +137,13 @@ describe('the loader: each new form is accepted, each old one refused', () => {
   test('settings that need a channel or a Slack place are checked by kind', () => {
     expect(errors(loadHydraConfig(`${SLACK}[places."slack:app-dm:*"]\ndefault_app = "app:sales"\n`, env))[0]).toContain('slack:app-dm:* is not a Slack channel')
     expect(errors(loadHydraConfig(`${SLACK}[places."slack:group-dm:*"]\nmessages = "all"\n`, env))[0]).toContain('does not apply to slack:group-dm:*')
-    expect(errors(loadHydraConfig(`${SLACK}[places."slack:person-dm:alice"]\nbots = true\n`, env))[0]).toContain('does not apply to slack:person-dm:alice')
+    expect(errors(loadHydraConfig(`${SLACK}[places."slack:person-dm:alice"]\nreactions = "all"\n`, env))[0]).toContain('does not apply to slack:person-dm:alice')
     expect(errors(loadHydraConfig(`${SLACK}[places."slack:app-dm:sales"]\nlink_previews = false\nack = "eyes"\n`, env))).toEqual([])
   })
 })
 
 describe('settings resolve the specific place before *', () => {
-  const opt = (over: Partial<PlaceOptions>): PlaceOptions => ({ files: false, messages: 'addressed', bots: false, reactions: 'off', linkPreviews: true, ...over })
+  const opt = (over: Partial<PlaceOptions>): PlaceOptions => ({ files: false, messages: 'addressed', reactions: 'off', linkPreviews: true, ...over })
   const places = { 'slack:app-dm:*': opt({ ack: 'every' }), 'slack:app-dm:sales': opt({ ack: 'sales' }), 'slack:group-dm:*': opt({ ack: 'groups' }) }
   test('an entry for the place wins over the * entry; no entry falls to *; the entry is taken whole', () => {
     expect(optionsOf(places, mustParsePlace('slack:app-dm:sales'))?.ack).toBe('sales')

@@ -7,7 +7,7 @@ import { SlackGateway } from '../slack.js'
 import { placeKey } from '../../config/types.js'
 import { linkPreviewsOff, linksPreviewed, placesFor, registerPreviewConfig, registerSlackChannelNames } from '../../shared/link-previews.js'
 
-const places = (p: Record<string, boolean | 'single'>) => ({ places: Object.fromEntries(Object.entries(p).map(([k, linkPreviews]) => [k, { files: false, messages: 'addressed', bots: false, linkPreviews }])) }) as any
+const places = (p: Record<string, boolean | 'single'>) => ({ places: Object.fromEntries(Object.entries(p).map(([k, linkPreviews]) => [k, { files: false, messages: 'addressed', linkPreviews }])) }) as any
 afterEach(() => { registerPreviewConfig(() => undefined); registerSlackChannelNames(() => undefined) })
 
 describe('which places turn previews off', () => {

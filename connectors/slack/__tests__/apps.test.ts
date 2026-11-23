@@ -789,9 +789,10 @@ describe('the owning app is fixed by the first copy', () => {
   })
 })
 
-describe('bots = true never lets two of hydra’s own apps answer each other', () => {
-  test('a sibling app’s message is passed over, another bot’s is heard', async () => {
-    const t = setup(sharedChannel(CH, `[places."slack:${CH}"]\nmessages = "all"\nbots = true\n`), { members: BOTH })
+describe('declaring an app never lets two of hydra’s own apps answer each other', () => {
+  test('a sibling app’s message is passed over, though declared; another declared app’s is heard', async () => {
+    const declared = `[people.sales]\naddresses = ["slack:${SALES_BOT}"]\n[people.other]\naddresses = ["slack:UOTHERBOT"]\n[places."slack:${CH}"]\nmessages = "all"\n`
+    const t = setup(sharedChannel(CH, declared), { members: BOTH })
     await t.start()
     t.say({ ts: '1100.000001', user: SALES_BOT, bot_id: 'BSAL', text: 'a post from the sales app' }, ['default'])
     t.say({ ts: '1101.000001', user: 'UOTHERBOT', bot_id: 'BOTHER', text: 'a post from somebody’s bot' }, ['default'])

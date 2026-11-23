@@ -75,100 +75,104 @@ describe("a thread bound to a session's own thread (any session listening)", () 
     expect(s.sent.map(x => x.specialist)).toEqual(['helper', SESSION])
   })
 
-  describe("another app's bot, where the place does not hear bots", () => {
-    const bot = (over: Partial<SlackMessageEvent> & { ts: string }): SlackMessageEvent => ({ channel: CH, botId: 'BOTHER', subtype: 'bot_message', text: 'my turn', ...over })
+  describe("another app's bot: heard as a person when hydra.toml declares it", () => {
+    const APP_USER = 'UOTHERBOT'
+    /** `peer` is the other app, declared as a person. */
+    const declared = (reachable = '["role:people"]') => oneListener(CH, 'helper', reachable, `[people.peer]\naddresses = ["slack:${APP_USER}"]\nname = "Peer"\n`)
+    const bot = (over: Partial<SlackMessageEvent> & { ts: string }): SlackMessageEvent => ({ channel: CH, botId: 'BOTHER', user: APP_USER, subtype: 'bot_message', text: 'my turn', ...over })
 
-    test('is heard in a thread bound to a session, as anyone, named by its profile', async () => {
-      const s = setup({ toml: oneListener(CH, 'helper', '["role:anyone"]') })
+    test('a declared app is heard in a thread bound to a session, as the person it is', async () => {
+      const s = setup({ toml: declared() })
       s.w.bind(CH, '6000.000001', SESSION, 'tool')
-      expect(s.w.handle(bot({ ts: '6001.000001', threadTs: '6000.000001', botName: 'Other Agent' }))).toBe('follow-up')
+      expect(s.w.handle(bot({ ts: '6001.000001', threadTs: '6000.000001' }))).toBe('follow-up')
       await s.w.flush()
       expect(s.sent.map(x => x.specialist)).toEqual([SESSION])
       expect(s.sent[0].msg).toContain('my turn')
-      expect(s.sent[0].msg).toContain('roles="anyone"')
-      expect(s.sent[0].msg).toContain('name="Other Agent"')
-      expect(s.sent[0].msg).toContain('from=other')
+      expect(s.sent[0].msg).toContain('person="peer"')
+      expect(s.sent[0].msg).toContain('name="Peer"')
     })
 
-    test('a bot user is named as Slack names it; a profile name that reads as the operator is not taken', async () => {
-      const s = setup({ toml: oneListener(CH, 'helper', '["role:anyone"]') }, undefined, async id => id === 'UOTHERBOT' ? 'Other Agent' : undefined)
-      s.w.bind(CH, '6000.000001', SESSION, 'tool')
-      s.w.handle(bot({ ts: '6001.000001', threadTs: '6000.000001', user: 'UOTHERBOT', botName: 'ignored: the user wins' }))
-      s.w.handle(bot({ ts: '6002.000001', threadTs: '6000.000001', botName: 'operator' }))
+    test('a declared app is heard where a specialist listens, as a person is: its tag opens a conversation', async () => {
+      const s = setup({ toml: declared() })
+      expect(s.w.handle(bot({ ts: '6001.000001', text: mention }))).toBe('mention')
       await s.w.flush()
-      const all = s.sent.map(x => x.msg).join('\n')
-      expect(all).toContain('name="Other Agent"')
-      expect(all).not.toContain('ignored: the user wins')
-      expect(all).not.toContain('name="operator"')
-    })
-
-    test("its tag neither takes the thread from the session nor counts as one: it is the session's chatter", async () => {
-      const s = setup()                                                    // helper answers tags in CH
-      s.w.bind(CH, '6000.000001', SESSION, 'tool')
-      expect(s.w.handle(bot({ ts: '6001.000001', threadTs: '6000.000001', text: `<@${BOT}> over to you` }))).toBe('follow-up')
-      await s.w.flush()
-      expect(s.sent.map(x => x.specialist)).toEqual([SESSION])
-      expect(s.w.get(CH, '6000.000001')?.specialist).toBe(SESSION)
-      expect(s.alerts).toEqual([])
-    })
-
-    test('its tag of another hydra app in the channel picks no app: the app the thread is bound through keeps it', async () => {
-      const toml = `${TWO_APPS}\n[specialists.crm]\nworkdir = "/w/crm"\nreachable_by = ["role:anyone"]\n[[rules]]\nplace = "slack:${CH}"\ntarget = "specialist:crm"\n`
-      const s = setup({ toml, identities: { sales: { botUserId: 'USALESBOT' } }, heardBy: () => ['default', 'sales'], connected: () => ['default', 'sales'] })
-      s.w.bind(CH, '6000.000001', SESSION, 'tool')
-      expect(s.w.handle(bot({ ts: '6001.000001', threadTs: '6000.000001', text: '<@USALESBOT> your turn' }))).toBe('follow-up')
-      await s.w.flush()
-      expect(s.sent.map(x => x.specialist)).toEqual([SESSION])
-    })
-
-    test('taken for a session, it never reaches the specialist that takes the thread before it is delivered', async () => {
-      const s = setup()                                                    // helper answers tags in CH; the place does not hear bots
-      s.w.bind(CH, '6000.000001', SESSION, 'tool')
-      s.w.handle(bot({ ts: '6001.000001', threadTs: '6000.000001' }))
-      s.w.handle(ev({ ts: '6002.000001', threadTs: '6000.000001', text: mention }))   // a person's tag: helper takes the thread before the batch goes out
-      await s.w.flush()
-      expect(s.w.get(CH, '6000.000001')?.specialist).toBe('helper')
       expect(s.sent.map(x => x.specialist)).toEqual(['helper'])
-      expect(s.sent[0].msg).not.toContain('my turn')
-      expect(s.w.get(CH, '6000.000001')!.owed).toBeUndefined()
-      expect(s.logs.join()).toMatch(/6001\.000001.*not a session/)
     })
 
-    test('owed to a session with none in its thread, it is let go when replayed after a specialist took the thread', async () => {
-      const s = setup({}, to => to === SESSION ? refused('no session') : LANDED)
+    test('an app no [people] entry holds is not heard, in a thread bound to a session or not', async () => {
+      const s = setup({ toml: oneListener(CH, 'helper', '["role:anyone"]', `[places."slack:${CH}"]\nmessages = "all"\n`) })
+      s.w.bind(CH, '6000.000001', SESSION, 'tool')
+      expect(s.w.handle(bot({ ts: '6001.000001', threadTs: '6000.000001' }))).toBe('ignored')
+      expect(s.w.handle(bot({ ts: '7001.000001', text: mention }))).toBe('ignored')
+      await s.w.flush()
+      expect(s.sent).toEqual([])
+    })
+
+    test("a bot message under the operator's address is not heard, bound to a session or not", async () => {
+      const s = setup({ toml: declared() })
+      s.w.bind(CH, '6000.000001', SESSION, 'tool')
+      expect(s.w.handle(bot({ ts: '6001.000001', threadTs: '6000.000001', user: 'UOP' }))).toBe('ignored')
+      expect(s.w.handle(bot({ ts: '7001.000001', user: 'UOP', text: mention }))).toBe('ignored')
+      await s.w.flush()
+      expect(s.sent).toEqual([])
+    })
+
+    test('an app with no user id cannot be declared, so is not heard', () => {
+      const s = setup({ toml: declared() })
+      expect(s.w.handle(bot({ ts: '6001.000001', user: undefined }))).toBe('ignored')
+    })
+
+    test('a sibling hydra app is never heard, though declared', async () => {
+      const s = setup({ toml: declared(), identities: { sibling: { botUserId: APP_USER, botId: 'BSIB' } } })
+      s.w.bind(CH, '6000.000001', SESSION, 'tool')
+      expect(s.w.handle(bot({ ts: '6001.000001', threadTs: '6000.000001', botId: 'BSIB' }))).toBe('ignored')
+      expect(s.w.handle(bot({ ts: '6002.000001', threadTs: '6000.000001', botId: undefined, subtype: undefined }))).toBe('ignored')
+      await s.w.flush()
+      expect(s.sent).toEqual([])
+    })
+
+    test('an undeclared app in a bound conversation is said every time, once per message, tag or not', async () => {
+      const s = setup({ toml: oneListener(CH, 'helper', '["role:anyone"]') })
+      s.w.bind(CH, '6000.000001', SESSION, 'tool')
+      expect(s.w.handle(bot({ ts: '6001.000001', threadTs: '6000.000001' }))).toBe('ignored')
+      s.w.handle(bot({ ts: '6001.000001', threadTs: '6000.000001' }))
+      expect(s.logs.filter(l => l.includes('6001.000001') && l.includes('from another app that hydra.toml does not declare')).length).toBe(1)
+    })
+
+    test('a dropped undeclared app message that tags us is said, once; one that does not is not', async () => {
+      const s = setup({ toml: oneListener(CH, 'helper', '["role:anyone"]', `[places."slack:${CH}"]\nmessages = "all"\n`) })
+      expect(s.w.handle(bot({ ts: '7000.000001' }))).toBe('ignored')
+      expect(s.logs.join()).not.toContain('another app')
+      expect(s.w.handle(bot({ ts: '7001.000001', text: `<@${BOT}> hi` }))).toBe('ignored')
+      expect(s.logs.join()).toMatch(new RegExp(`dropped ${CH} 7001\\.000001 from ${APP_USER} .*from another app that hydra.toml does not declare`))
+      s.w.handle(bot({ ts: '7001.000001', text: `<@${BOT}> hi` }))       // a deep catch-up pass reads it again: said once
+      expect(s.logs.filter(l => l.includes('7001.000001')).length).toBe(1)
+    })
+
+    test("a declared app's tag in a thread a session listens to does not take the thread: it is delivered to the session like any message there; a person's tag still takes it", async () => {
+      const s = setup({ toml: declared('["role:anyone"]') })
+      s.w.bind(CH, '4000.000001', SESSION, 'tool')
+      s.w.handle(bot({ ts: '4001.000001', threadTs: '4000.000001', text: mention }))
+      await s.w.flush()
+      expect(s.w.get(CH, '4000.000001')?.specialist).toBe(SESSION)
+      expect(s.sent.map(x => x.specialist)).toEqual([SESSION])
+      expect(s.sent[0].msg).toContain('person="peer"')
+      expect(s.alertTo).not.toContain(SESSION)
+      s.w.handle(ev({ ts: '4002.000001', threadTs: '4000.000001', text: mention }))
+      await s.w.flush()
+      expect(s.w.get(CH, '4000.000001')?.specialist).toBe('helper')
+      expect(s.alertTo).toContain(SESSION)
+    })
+
+    test('an app message owed to a session, replayed after hydra.toml stopped declaring the app, is let go and settled', async () => {
+      const s = setup({ toml: declared() }, () => refused('no session'))
       s.w.bind(CH, '6000.000001', SESSION, 'tool')
       s.w.handle(bot({ ts: '6001.000001', threadTs: '6000.000001' }))
       await s.w.flush()
       expect(s.w.get(CH, '6000.000001')!.owed).toEqual(['6001.000001'])
-      s.w.handle(ev({ ts: '6002.000001', threadTs: '6000.000001', text: mention }))
-      await s.w.flush()
-      expect(s.w.handle(bot({ ts: '6001.000001', threadTs: '6000.000001' }))).toBe('refused')   // catch-up reads it again: let go, as a refused one is
-      await s.w.flush()
-      expect(s.sent.filter(x => x.specialist === 'helper').map(x => x.msg).join()).not.toContain('my turn')
+      s.setConfig(view(oneListener(CH, 'helper', '["role:people"]')))
+      expect(s.w.handle(bot({ ts: '6001.000001', threadTs: '6000.000001' }))).toBe('refused')
       expect(s.w.get(CH, '6000.000001')!.owed ?? []).not.toContain('6001.000001')
-    })
-
-    test('a sibling hydra app is still never heard there', async () => {
-      const s = setup({ identities: { sibling: { botUserId: 'USIBBOT', botId: 'BSIB' } } })
-      s.w.bind(CH, '6000.000001', SESSION, 'tool')
-      expect(s.w.handle(bot({ ts: '6001.000001', threadTs: '6000.000001', botId: 'BSIB' }))).toBe('ignored')
-      expect(s.w.handle(bot({ ts: '6002.000001', threadTs: '6000.000001', botId: undefined, subtype: undefined, user: 'USIBBOT' }))).toBe('ignored')
-      await s.w.flush()
-      expect(s.sent).toEqual([])
-    })
-
-    test('unbound, it is not heard, and nothing is said; in a thread bound to a specialist it is not heard either, and that is said', async () => {
-      const s = setup({ toml: oneListener(CH, 'helper', '["role:anyone"]', `[places."slack:${CH}"]\nmessages = "all"\n`) })
-      expect(s.w.handle(bot({ ts: '7000.000001' }))).toBe('ignored')
-      expect(s.w.handle(bot({ ts: '7001.000001', text: `<@${BOT}> hi` }))).toBe('ignored')
-      expect(s.logs.join()).not.toContain('does not hear bots')
-      s.w.bind(CH, '8000.000001', 'helper', 'tool')
-      expect(s.w.handle(bot({ ts: '8001.000001', threadTs: '8000.000001' }))).toBe('ignored')
-      await s.w.flush()
-      expect(s.sent).toEqual([])
-      expect(s.logs.join()).toMatch(new RegExp(`dropped ${CH} 8001\\.000001 from BOTHER .*another bot and the place does not hear bots`))
-      s.w.handle(bot({ ts: '8001.000001', threadTs: '8000.000001' }))       // a deep catch-up pass reads it again: said once
-      expect(s.logs.filter(l => l.includes('8001.000001')).length).toBe(1)
     })
   })
 
@@ -476,11 +480,6 @@ describe('what opens and continues a conversation', () => {
     expect(learned.w.handle({ channel: CH, ts: '3000.000001', botId: 'BLEARNED', subtype: 'bot_message', text: 'cart' })).toBe('subscribed')
   })
 
-  test('other bots are heard only where the place says bots = true', () => {
-    const on = setup({ toml: oneListener(CH, 'helper', '["role:anyone"]', `[places."slack:${CH}"]\nbots = true\n`) })
-    expect(on.w.handle({ channel: CH, ts: '1.000001', botId: 'BOTHER', subtype: 'bot_message', text: `<@${BOT}> hi` })).toBe('mention')
-  })
-
   test('edits, deletes, joins and malformed timestamps are ignored', () => {
     const { w } = setup()
     expect(w.handle(ev({ subtype: 'message_changed', text: mention }))).toBe('ignored')
@@ -581,11 +580,11 @@ describe('🚫: a refused or unrouted mention or DM', () => {
     expect(reactions).toHaveLength(4)
   })
 
-  test('another bot (where bots = true) has its 🚫 capped by its bot id', async () => {
+  test('a declared app the specialist does not admit has its 🚫 capped, as a person does', async () => {
     const { a, reactions } = actions()
-    const s = setup({ toml: oneListener(CH, 'helper', '["role:people"]', `[places."slack:${CH}"]\nbots = true\n`), maxMentionsPer10Min: 2 })
+    const s = setup({ toml: oneListener(CH, 'helper', '["role:ops"]', `[people.dan]\naddresses = ["slack:UDAN"]\nroles = ["ops"]\n[people.peer]\naddresses = ["slack:UOTHERBOT"]\n`), maxMentionsPer10Min: 2 })
     s.w.setSlackActions(a)
-    for (let i = 1; i <= 5; i++) s.w.handle({ channel: CH, ts: `${i}.000001`, botId: 'BOTHER', subtype: 'bot_message', text: mention })
+    for (let i = 1; i <= 5; i++) s.w.handle({ channel: CH, ts: `${i}.000001`, botId: 'BOTHER', user: 'UOTHERBOT', subtype: 'bot_message', text: mention })
     await Bun.sleep(1)
     expect(reactions).toHaveLength(2)
   })
@@ -1023,7 +1022,7 @@ describe('delivery', () => {
 describe('what the specialist reads', () => {
   const where = { place: 'slack:#food', workspaceUrl: 'https://x.slack.com' }
 
-  test('the delivery a Slack specialist reads is pinned byte for byte (unchanged by trimming the sends_to envelope)', () => {
+  test('the delivery a Slack specialist reads is pinned peer for peer (unchanged by trimming the sends_to envelope)', () => {
     const item: Item = { ts: '1.1', user: 'U1', name: 'Alice', person: 'alice', roles: ['staff', 'anyone'], operator: false, kind: 'mention', text: 'hello\nworld' }
     expect(renderItem(item)).toBe('[mention ts="1.1" person="alice" roles="staff,anyone" operator=false address="slack:U1" name="Alice"]\n| hello\n| world')
     expect(formatDelivery({ channel: CH, threadTs: '1.1' }, [{ ...item, name: undefined }], where, 'abc123'))

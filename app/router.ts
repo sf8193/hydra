@@ -7,7 +7,7 @@ import { refreshDashboard } from './dashboard.js'
 import { registry, threadRegistry, type SessionInfo } from '../sessions/registry.js'
 import { flagStranger, acknowledged } from './stranger.js'
 import { transport } from '../sessions/bridge-transport.js'
-import { operatorIds, gate, channelAllowed, channelPolicy, admitTaggedChannel, ackReactionOf, mentionsUs } from '../sessions/access.js'
+import { operatorIds, gate, channelAllowed, channelPolicy, admitTaggedChannel, ackReactionOf, mentionsUs, droppedApp } from '../sessions/access.js'
 import type { DownloadedFile } from '../gateways/gateway.js'
 import type { InboundMessage } from '../gateways/gateway.js'
 import { transcribeDownloads, mergeTranscripts } from '../infra/transcription.js'
@@ -435,7 +435,7 @@ export function bindRouter(): void {
 
   // Inbound message routing
   gateway.onMessage(async (inbound: InboundMessage) => {
-    if (inbound.isBot) return
+    if (inbound.isBot && await droppedApp(inbound)) return   // another app is heard only when hydra.toml declares it as a person
 
     // The one chokepoint: nothing below, operator command or not, acts in a place this daemon is not allowed in.
     if (!channelAllowed(inbound) && !(await admitTaggedChannel(inbound))) return
