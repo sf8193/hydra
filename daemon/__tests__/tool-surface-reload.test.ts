@@ -16,6 +16,8 @@ import { testLoadEnv } from '../../config/__tests__/load-env.js'
 import { engines } from '../../sessions/engine-instances.js'
 import type { HydraConfig } from '../../config/types.js'
 import type { SessionInfo } from '../../sessions/registry.js'
+import { bindToolSurface } from '../../sessions/tool-surface.js'
+bindToolSurface()
 
 process.stderr.write = (() => true) as any
 

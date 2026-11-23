@@ -30,7 +30,7 @@ test('daemon.ts calls bindDaemon() before any engine starts, and bindDaemon() bi
   expect(daemon.search(/^bindDaemon\(\)$/m)).toBeGreaterThan(-1)
   expect(daemon.search(/^bindDaemon\(\)$/m)).toBeLessThan(start)
   const bind = readFileSync(join(import.meta.dir, '..', '..', 'app', 'bind.ts'), 'utf8')
-  for (const name of ['bindDeliveryNotice', 'bindPiggybackCleanup', 'bindCodexRuntime', 'bindRouter', 'bindCliIdempotency', 'bindPermissionCleanup', 'bindReplyGuardCleanup', 'bindSpecialistThreadDrop', 'bindTypedDeliveryFlush']) {
+  for (const name of ['bindPreviewConfig', 'bindSpecialistPointers', 'bindToolSurface', 'bindRestrictedLog', 'bindDeliveryNotice', 'bindPiggybackCleanup', 'bindCodexRuntime', 'bindRouter', 'bindCliIdempotency', 'bindPermissionCleanup', 'bindReplyGuardCleanup', 'bindSpecialistThreadDrop', 'bindTypedDeliveryFlush']) {
     expect(bind).toMatch(new RegExp(`^  ${name}\\(\\)$`, 'm'))
   }
 })

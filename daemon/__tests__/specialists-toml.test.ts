@@ -6,6 +6,8 @@ import { _reloadSpecialists, getSpecialist, listSpecialists, removeSpecialist, s
 import { _setHydraConfigForTesting, hydraConfigPath, onHydraConfigLoad, startHydraConfig, stopHydraConfig } from '../../infra/hydra-config.js'
 import type { HydraConfig, Specialist as Declared } from '../../config/types.js'
 import { testLoadEnv } from '../../config/__tests__/load-env.js'
+import { bindSpecialistPointers } from '../../sessions/specialists.js'
+bindSpecialistPointers()
 
 const threads = join(STATE_DIR, 'specialist-threads.json')
 const legacy = join(STATE_DIR, 'specialists.json')

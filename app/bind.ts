@@ -4,6 +4,10 @@
  * (The delivery gate is armed separately in daemon.ts: it must be set before queued messages are restored.)
  */
 import { bindDeliveryNotice } from '../sessions/delivery-notice.js'
+import { bindSpecialistPointers } from '../sessions/specialists.js'
+import { bindToolSurface } from '../sessions/tool-surface.js'
+import { bindPreviewConfig } from '../infra/hydra-config.js'
+import { bindRestrictedLog } from './restricted.js'
 import { bindPiggybackCleanup } from '../sessions/codex-piggyback.js'
 import { bindCodexRuntime } from './codex-runtime.js'
 import { bindRouter } from './router.js'
@@ -14,6 +18,10 @@ import { bindSpecialistThreadDrop } from './specialist-thread.js'
 import { bindTypedDeliveryFlush } from './typed-delivery.js'
 
 export function bindDaemon(): void {
+  bindPreviewConfig()
+  bindSpecialistPointers()
+  bindToolSurface()
+  bindRestrictedLog()
   bindDeliveryNotice()
   bindPiggybackCleanup()
   bindCodexRuntime()

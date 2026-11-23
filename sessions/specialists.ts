@@ -285,9 +285,11 @@ export function _reloadSpecialists(): void {
 
 load()
 loadPointers()
-onHydraConfigLoad(config => {
-  try { reconcilePointers(config) } catch (e) { process.stderr.write(`daemon: ${(e as Error).message}\n`) }
-})
+export function bindSpecialistPointers(): void {
+  onHydraConfigLoad(config => {
+    try { reconcilePointers(config) } catch (e) { process.stderr.write(`daemon: ${(e as Error).message}\n`) }
+  })
+}
 
 /**
  * The per-conversation specialist a session named `<id>_<conversation>` belongs to, by its current id (a rename through

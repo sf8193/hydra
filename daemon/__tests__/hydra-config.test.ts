@@ -7,6 +7,8 @@ import { _setHydraConfigForTesting, currentHydraConfig, hydraConfigPath, onHydra
 import { _resetScrubbedForTesting, capturedSpawnVars, scrubbedSpawnEnv } from '../../shared/spawn-env.js'
 import type { LoadEnv } from '../../config/types.js'
 import { testLoadEnv } from '../../config/__tests__/load-env.js'
+import { bindRestrictedLog } from '../../app/restricted.js'
+bindRestrictedLog()
 
 const env: LoadEnv = testLoadEnv({ home: '/home/op', sessionNames: [] })
 // Discord addresses: the suite runs as the discord platform, and an operator with none there is alerted.
