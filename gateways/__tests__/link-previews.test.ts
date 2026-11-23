@@ -256,7 +256,7 @@ describe('link_previews = "single": at most one preview per post', () => {
   test('Slack, a message with buttons (Block Kit text and blocks): two links go out with unfurl off; one link is not forced off', async () => {
     registerPreviewConfig(() => places({ 'slack:C0OPS': 'single' }))
     const { gw, calls } = slack()
-    const buttons = [{ id: 'ok', label: 'OK' }]
+    const buttons = [{ id: 'ok', label: 'OK', style: 'secondary' as const }]
     await gw.send('C0OPS', 'see https://example.com and <https://example.org|this>', { buttons })
     await gw.send('C0OPS', 'see https://example.com', { buttons })
     expect(calls[0].blocks).toBeDefined()

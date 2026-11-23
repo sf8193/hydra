@@ -141,6 +141,41 @@ export type SessionVisualOpts = {
 /** Text on its way out, as a gateway's shapeOutbound left it, with the files that made (attached to the first chunk). */
 export type Outbound = { text: string; files: string[] }
 
+/** Block Kit subset built by the home-tab dashboard (app/dashboard.ts) and published by gateways with a home tab (Slack). */
+export type HomeTabPlainText = { type: 'plain_text'; text: string; emoji?: boolean }
+export type HomeTabMrkdwnText = { type: 'mrkdwn'; text: string }
+export type HomeTabButton = {
+  type: 'button'
+  action_id: string
+  text: HomeTabPlainText
+  style?: 'primary' | 'danger'
+  value?: string
+  url?: string
+  confirm?: {
+    title: HomeTabPlainText
+    text: HomeTabPlainText
+    confirm: HomeTabPlainText
+    deny: HomeTabPlainText
+  }
+}
+export type HomeTabBlock =
+  | { type: 'header'; text: HomeTabPlainText }
+  | { type: 'section'; text: HomeTabMrkdwnText; accessory?: HomeTabButton }
+  | { type: 'context'; elements: HomeTabMrkdwnText[] }
+  | { type: 'divider' }
+  | {
+      type: 'input'
+      dispatch_action: true
+      element: {
+        type: 'plain_text_input'
+        action_id: string
+        placeholder: HomeTabPlainText
+        max_length: number
+        dispatch_action_config: { trigger_actions_on: ['on_enter_pressed'] }
+      }
+      label: HomeTabPlainText
+    }
+
 export interface ChatGateway {
   readonly platform: 'discord' | 'slack'
   readonly botId: string | null
@@ -253,6 +288,14 @@ export interface ChatGateway {
 
   // Session lifecycle visual — platform-specific rendering of lifecycle state
   updateSessionVisual?(threadId: string, opts: SessionVisualOpts): Promise<void>
+
+  // Home tab dashboard & operator DM (optional — Slack App Home)
+  operators?: () => string[]
+  homeTabHandler?: ((userId: string) => Promise<void>) | null
+  homeSpawnHandler?: ((topic: string, userId: string) => Promise<void>) | null
+  homeStatusHandler?: ((sessionId: string, shown: string) => Promise<void>) | null
+  publishHomeTab?(userId: string, blocks: HomeTabBlock[]): Promise<void>
+  openDMChannel?(userId: string): Promise<string | null>
 
   // Thread structure
   getThreadAnchor(threadId: string): { channelId: string; messageId: string } | null

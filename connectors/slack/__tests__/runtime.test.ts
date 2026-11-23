@@ -14,7 +14,7 @@ import { readEvents } from '../../../cli/events.js'
 import { sessionCapabilities, isSpecialistOccupant, isToolAllowed, advertiseTools } from '../../../sessions/tool-surface.js'
 import { emit } from '../../../infra/event-bus.js'
 import { transport } from '../../../sessions/bridge-transport.js'
-import { handleCLIRequest, type CLIRequest } from '../../../app/cli-handler.js'
+import { handleCLIRequest } from '../../../app/cli-handler.js'
 import { executeTool } from '../../../app/bridge-dispatch.js'
 import { alsoHeard, BASE, hydra, view } from './slack-config.js'
 import { tokenEnvNames } from '../../../config/token-vars.js'
@@ -61,7 +61,7 @@ function configure(toml = TOML, over: Parameters<typeof view>[1] = {}) {
 const food = { threadId: FOOD_THREAD }
 const stranger = { threadId: 'some-other-thread' }
 let n = 0
-const req = (command: string, params: Record<string, unknown>): CLIRequest => ({ type: 'cli', command, id: `sw-${++n}`, params })
+const req = (command: string, params: Record<string, unknown>) => ({ type: 'cli', command, id: `sw-${++n}`, params })
 
 const sessionIds: string[] = []
 const realPost = slackRuntimeDeps.post

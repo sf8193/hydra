@@ -5,5 +5,6 @@ export const DISCORD_DM_ID = 'dm'
 
 export const discord: GatewayProfile = {
   label: 'Discord', channelNames: false, perAppDms: false, previewsWrappedLinks: false,
+  postsReactions: true, accessSkill: '/hydra:access',
   isDmId: id => id === DISCORD_DM_ID,
 }

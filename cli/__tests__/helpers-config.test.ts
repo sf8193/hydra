@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync, existsSync,
 import { join } from 'node:path'
 import { tmpdir, homedir } from 'node:os'
 import { resolveConfig, defaultPlatform, pickSocket, sourceStateDirEnv, buildDaemonEnvs, printResponse, byteModel } from '../helpers.js'
+import type { CLIResponseView } from '../../shared/cli-protocol.js'
 import { SCRUBBED_SPAWN_VARS } from '../../shared/spawn-env.js'
 import { watchdogCovers } from '../migrate.js'
 import { platformStateDir } from '../../shared/constants.js'
@@ -263,7 +264,7 @@ test('buildDaemonEnvs leaves PATH alone when no bun path resolved', () => {
 })
 
 describe('a refused deliver, in text mode', () => {
-  const refused = (response: Record<string, unknown>): { stderr: string[]; exit: number | undefined } => {
+  const refused = (response: CLIResponseView): { stderr: string[]; exit: number | undefined } => {
     const stderr: string[] = []
     let exit: number | undefined
     const err = console.error, ex = process.exit

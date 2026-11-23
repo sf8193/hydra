@@ -3,37 +3,62 @@
 // Loaded with `omp -e`; the session runs in tmux like Claude's.
 import { connect, type Socket } from 'node:net'
 import { randomUUID } from 'node:crypto'
-import { SESSION_INSTRUCTIONS, formatNotification } from '../shared/constants.js'
+import { formatNotification } from '../shared/constants.js'
+import { buildSessionInstructions, initialToolsForBridgeEnv, parseChatPlatform } from '../shared/session-instructions.js'
+import type { ChatPlatform } from '../shared/gateways/index.js'
+import { parseDaemonToBridgeMessage, type BridgeToDaemonMessage, type BridgeToolContent, type BridgeToolDef } from '../shared/bridge-protocol.js'
+import { SESSION_TOKEN_VAR } from '../shared/caller.js'
 
 // The part of omp's ExtensionAPI this file uses (omp is not a hydra dependency, so its types are not imported).
+type OmpToolDefinition = {
+  name: string
+  label: string
+  description: string
+  parameters: Record<string, unknown>
+  execute(id: string, params: unknown): Promise<{ content: BridgeToolContent[]; details: Record<string, unknown>; isError?: boolean }>
+}
+
 type ExtensionAPI = {
-  registerTool(tool: any): void
-  on(event: string, handler: (e: any) => unknown): void
+  registerTool(tool: OmpToolDefinition): void
+  on(event: 'session_start', handler: () => unknown): void
+  on(event: 'before_agent_start', handler: (e: { systemPrompt: string[] }) => unknown): void
   getActiveTools(): string[]
   sendUserMessage(text: string, options?: { deliverAs?: 'aside' }): void
 }
-type Wire = Record<string, any>
-type Tool = { name: string; description?: string; inputSchema?: Record<string, unknown> }
 
 const SOCK = process.env.DAEMON_SOCK
 const SESSION_ID = process.env.HYDRA_SESSION_ID
+const SESSION_TOKEN = process.env[SESSION_TOKEN_VAR] || undefined
 const RECONNECT_MS = 1000
 const POLL_MS = 100
 // omp re-runs extension factories for child sessions (Task subagents) in the same process: one bridge per process.
 const SINGLETON = Symbol.for('hydra.omp.bridge')
 
 export default function (pi: ExtensionAPI) {
-  if (!SOCK || !SESSION_ID || (globalThis as any)[SINGLETON]) return
-  ;(globalThis as any)[SINGLETON] = true
+  const globalState = globalThis as Record<symbol, boolean | undefined>
+  if (!SOCK || !SESSION_ID || globalState[SINGLETON]) return
+  const sockPath = SOCK
+  const sessionId = SESSION_ID
+  globalState[SINGLETON] = true
 
   let sock: Socket | null = null
   let buf = ''
   let started = false
   const toolNames: string[] = []
+  let activePlatform: ChatPlatform = parseChatPlatform(process.env.CHAT_PLATFORM)
+  // Live tool set pushed by the daemon on `registered`/`tools_update`; falls back to env until first registration.
+  // omp has limitsAccess: false, so sessions are never restricted or write-confined.
+  let liveTools: ReadonlySet<string> = initialToolsForBridgeEnv({
+    sessionType: process.env.HYDRA_SESSION_TYPE,
+  })
+
+  function updateLiveTools(tools: BridgeToolDef[]) {
+    liveTools = new Set(tools.map(t => t.name))
+  }
   // Only the tools of the first `registered` gate readiness: a tool that arrives later must not stall delivery if omp activates it late.
   let gate: string[] | null = null
-  const pending = new Map<string, (r: { content: any[]; isError?: boolean }) => void>()
-  const send = (m: Wire) => { sock?.write(JSON.stringify(m) + '\n') }
+  const pending = new Map<string, (r: { content: BridgeToolContent[]; isError?: boolean }) => void>()
+  const send = (m: BridgeToDaemonMessage) => { sock?.write(JSON.stringify(m) + '\n') }
 
   // Nothing is injected before omp's runtime is bound (sendUserMessage throws until then), the daemon has
   // answered `register` and omp has activated the hydra tools: a first turn must be able to call `reply`.
@@ -49,39 +74,56 @@ export default function (pi: ExtensionAPI) {
     for (let m = outbox.shift(); m; m = outbox.shift()) pi.sendUserMessage(m.text, m.first ? undefined : { deliverAs: 'aside' })
   }
 
-  function registerTools(tools: Tool[]) {
+  function registerTools(tools: BridgeToolDef[]) {
     gate ??= tools.map(t => t.name)
     for (const t of tools) {
       if (toolNames.includes(t.name)) continue
       toolNames.push(t.name)
       pi.registerTool({
         name: t.name, label: t.name, description: t.description ?? t.name,
-        parameters: (t.inputSchema ?? { type: 'object', properties: {} }) as any,
+        parameters: t.inputSchema ?? { type: 'object', properties: {} },
         async execute(_id: string, params: unknown) {
           if (!sock) return { content: [{ type: 'text', text: `${t.name} failed: not connected to daemon` }], details: {}, isError: true }
           const id = randomUUID()
-          const result = await new Promise<{ content: any[]; isError?: boolean }>(resolve => {
+          const args = typeof params === 'object' && params !== null && !Array.isArray(params) ? params as Record<string, unknown> : {}
+          const result = await new Promise<{ content: BridgeToolContent[]; isError?: boolean }>(resolve => {
             const timer = setTimeout(() => { pending.delete(id); resolve({ content: [{ type: 'text', text: `${t.name} failed: timeout waiting for daemon response` }], isError: true }) }, 60_000)
             pending.set(id, r => { clearTimeout(timer); resolve(r) })
-            send({ type: 'tool_call', id, name: t.name, args: params })
+            send({ type: 'tool_call', id, name: t.name, args })
           })
           return { content: result.content, details: {}, ...(result.isError ? { isError: true } : {}) }
         },
-      } as any)
+      })
     }
   }
 
-  function handle(m: Wire) {
+  function handle(raw: unknown) {
+    const parsed = parseDaemonToBridgeMessage(raw)
+    if (!parsed.ok) {
+      process.stderr.write(`hydra-bridge: invalid daemon message (${parsed.error})\n`)
+      return
+    }
+    const m = parsed.msg
     switch (m.type) {
-      case 'registered': case 'tools_update': registerTools(m.tools ?? []); flush(); break
+      case 'registered':
+        if (m.platform) activePlatform = parseChatPlatform(m.platform)
+        if (m.tools) updateLiveTools(m.tools)
+        registerTools(m.tools ?? [])
+        flush()
+        break
+      case 'tools_update':
+        if (m.tools) updateLiveTools(m.tools)
+        registerTools(m.tools ?? [])
+        flush()
+        break
       case 'notification': outbox.push({ text: formatNotification(m.content, m.meta) }); flush(); break
       case 'tool_result': { const done = pending.get(m.id); if (done) { pending.delete(m.id); done({ content: m.content, isError: m.isError }) } break }
     }
   }
 
   function connectSocket() {
-    const s = connect(SOCK!)
-    s.on('connect', () => { sock = s; buf = ''; send({ type: 'register', sessionId: SESSION_ID }) })
+    const s = connect(sockPath)
+    s.on('connect', () => { sock = s; buf = ''; send({ type: 'register', sessionId, ...(SESSION_TOKEN ? { sessionToken: SESSION_TOKEN } : {}) }) })
     s.on('data', d => {
       buf += d.toString()
       let i
@@ -97,6 +139,8 @@ export default function (pi: ExtensionAPI) {
 
   pi.on('session_start', async () => { started = true; flush() })
   // Claude gets these rules as MCP instructions; omp has no such channel, so they go in the system prompt each turn.
-  pi.on('before_agent_start', async (e) => ({ systemPrompt: [...e.systemPrompt, SESSION_INSTRUCTIONS] }))
+  pi.on('before_agent_start', async (e) => ({
+    systemPrompt: [...e.systemPrompt, buildSessionInstructions({ tools: liveTools, platform: activePlatform })],
+  }))
   connectSocket()
 }

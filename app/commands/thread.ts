@@ -5,6 +5,7 @@ import { gateway } from '../../infra/config.js'
 import { markDead, registry, threadRegistry } from '../../sessions/registry.js'
 import { transport } from '../../sessions/bridge-transport.js'
 import { killSession, requestHandoff } from '../session-lifecycle.js'
+import { notifyParentOfEnd } from '../parent-notice.js'
 import type { SessionInfo } from '../../sessions/registry.js'
 import { COUNT_EMOJI, emojiOf, emojiOfName } from '../../sessions/anchor-state.js'
 import { debouncedRefreshListDisplay } from './status.js'
@@ -18,7 +19,7 @@ import { recoveryEntry } from '../../infra/recovery-selection.js'
 import { autoHandoffIO, canAskHandoff, canHandOff, handoffProtocolFor } from '../auto-handoff.js'
 import { NotReplaced } from '../specialist-deliver.js'
 import { recoveryEngine } from '../../engines/history.js'
-import { formatContextPercent, type ProviderId } from '../../engines/engine-adapter.js'
+import { formatContextPercent, type EngineAdapter, type ProviderId } from '../../engines/engine-adapter.js'
 import { claudeEngine, resolveEngine } from '../../sessions/engine-instances.js'
 import { occupancy } from '../../sessions/session-reachability.js'
 import { blocksRecovery } from '../../sessions/occupancy.js'
@@ -28,7 +29,7 @@ import { targetKeyForThread, threadLockHeld, withThreadLock } from '../../sessio
 import { isForMain, mainContext, mainStartedAt, mainSubject, mainTmux } from '../../sessions/main.js'
 import { ENGINE_PROFILES } from '../../shared/engines/index.js'
 
-function adapterFor(info: { engine?: ProviderId; adapter?: any }) {
+function adapterFor(info: { engine?: ProviderId; adapter: EngineAdapter }): EngineAdapter {
   return info.adapter
 }
 
@@ -301,7 +302,7 @@ async function resumeThread(msg: RecoveryAnchor, claudeSessionIdArg?: string): P
       // carries, so the cascade can reattach to its conversation.
       if (occ === 'orphaned') orphan = { info: liveInfo, reason: 'bridge was unreachable — reattaching to this conversation' }
       // Gone: mark it dead as the health poll would, so the poll doesn't announce a second death after this resume.
-      else markDead(liveInfo)
+      else if (markDead(liveInfo)) notifyParentOfEnd(liveInfo, 'died from crash', 'process exited before resume')
     }
   }
 

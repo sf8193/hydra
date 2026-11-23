@@ -296,7 +296,7 @@ export function deliveryRefusal(info: SessionInfo): string | undefined {
       ? `specialist ${info.policy?.specialist ?? '?'}: its session ${name} is still being checked against its policy and takes no message until that passes; send it again in a moment.`
       : `specialist ${info.policy?.specialist ?? '?'}: its running session ${name} has not been checked against its policy (hydra restarted while it was being checked, or it started before hydra checked each start), so nothing is delivered to it. ${remedy(name)}`
     process.stderr.write(`daemon: delivery to ${name} refused: its start is not verified\n`)
-    if (threadNotices.allow(refusalNoticeKey(info.threadId, reason))) void safeSend(info.threadId, `⚠️ ${reason.replace(/^specialist [^:]+: /, '')}`).catch(() => {})
+    if (threadNotices.allow(refusalNoticeKey(info.threadId, reason))) void safeSend(info.threadId, `⚠️ ${reason.replace(/^specialist [^:]+: /, '')}`)
     return reason
   }
   let found: ReturnType<typeof sessionDrift>
@@ -307,7 +307,7 @@ export function deliveryRefusal(info: SessionInfo): string | undefined {
   const changed = found.drift.join('; ')
   const reason = `specialist ${found.specialist}: its running session ${info.tmuxName} was born with ${was}, and hydra.toml now says ${now} (changed: ${changed}); nothing was delivered. ${remedy(info.tmuxName)}`
   process.stderr.write(`daemon: delivery to ${info.tmuxName} refused: specialist ${found.specialist} was born with ${was}; hydra.toml now says ${now} (changed: ${changed})\n`)
-  if (threadNotices.allow(refusalNoticeKey(info.threadId, reason))) void safeSend(info.threadId, `⚠️ ${reason.replace(/^specialist [^:]+: /, '')}`).catch(() => {})
+  if (threadNotices.allow(refusalNoticeKey(info.threadId, reason))) void safeSend(info.threadId, `⚠️ ${reason.replace(/^specialist [^:]+: /, '')}`)
   return reason
 }
 

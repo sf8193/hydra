@@ -55,6 +55,10 @@ jobs:
       - name: Rules
         run: bun scripts/check-rules.ts
 
+      # Production file-size ratchet (#893): no production .ts file may exceed 800 lines; today's oversized files are capped in scripts/check-file-size.ts and only shrink.
+      - name: File sizes
+        run: bun scripts/check-file-size.ts
+
       - name: Install tmux
         run: sudo apt-get install -y tmux
 

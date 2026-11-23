@@ -25,10 +25,22 @@ graph TD
     app_templates["templates.ts"]
     app_auto-handoff["auto-handoff.ts"]
     app_permission["permission.ts"]
-    app_session-lifecycle["session-lifecycle.ts"]
-    app_reply-guard["reply-guard.ts"]
     app_commands_status["status.ts"]
     app_commands_review["review.ts"]
+    app_protocol-runner["protocol-runner.ts"]
+    app_protocol_transitions["transitions.ts"]
+    app_protocol_tools["tools.ts"]
+    app_protocol_notify["notify.ts"]
+    app_protocol_state["state.ts"]
+    app_session-lifecycle["session-lifecycle.ts"]
+    app_lifecycle_handoff["handoff.ts"]
+    app_lifecycle_revive["revive.ts"]
+    app_lifecycle_spawn["spawn.ts"]
+    app_lifecycle_spawn-stages["spawn-stages.ts"]
+    app_lifecycle_kill["kill.ts"]
+    app_lifecycle_hooks["hooks.ts"]
+    app_lifecycle_channel["channel.ts"]
+    app_reply-guard["reply-guard.ts"]
     app_commands_watch["watch.ts"]
   end
 
@@ -114,6 +126,7 @@ graph TD
   app_bridge-dispatch --> sessions_anchor-state
   app_bridge-dispatch --> app_dashboard
   app_bridge-dispatch --> shared_tool-definitions
+  app_bridge-dispatch --> app_protocol-runner
   app_bridge-dispatch --> shared_constants
   app_bridge-dispatch --> sessions_tool-surface
   app_bridge-dispatch --> app_usage-alerts
@@ -127,6 +140,7 @@ graph TD
   app_bridge-server --> sessions_access
   app_bridge-server --> sessions_protocol-registry
   app_bridge-server --> sessions_tool-surface
+  app_bridge-server --> app_protocol-runner
   app_bridge-server --> app_advance-nudge
   app_bridge-server --> app_reply-guard
   app_bridge-server --> sessions_anchor-state
@@ -137,6 +151,34 @@ graph TD
   app_bridge-server --> infra_tmux
   app_bridge-server --> sessions_idle-limit
   sessions_protocol-registry --> sessions_registry
+  app_protocol-runner --> sessions_registry
+  app_protocol-runner --> infra_util
+  app_protocol-runner --> sessions_anchor-state
+  app_protocol-runner --> sessions_protocol-registry
+  app_protocol-runner --> app_protocol_state
+  app_protocol-runner --> app_protocol_tools
+  app_protocol-runner --> app_protocol_notify
+  app_protocol-runner --> app_protocol_transitions
+  app_protocol_state --> app_session-lifecycle
+  app_protocol_tools --> sessions_registry
+  app_protocol_tools --> app_session-lifecycle
+  app_protocol_tools --> sessions_tool-surface
+  app_protocol_tools --> app_protocol_state
+  app_protocol_notify --> sessions_registry
+  app_protocol_notify --> sessions_bridge-transport
+  app_protocol_notify --> infra_util
+  app_protocol_notify --> sessions_anchor-state
+  app_protocol_notify --> app_protocol_state
+  app_protocol_transitions --> infra_config
+  app_protocol_transitions --> sessions_registry
+  app_protocol_transitions --> app_session-lifecycle
+  app_protocol_transitions --> sessions_bridge-transport
+  app_protocol_transitions --> infra_util
+  app_protocol_transitions --> sessions_anchor-state
+  app_protocol_transitions --> infra_transcript-dump
+  app_protocol_transitions --> app_protocol_state
+  app_protocol_transitions --> app_protocol_tools
+  app_protocol_transitions --> app_protocol_notify
   app_permission --> sessions_bridge-transport
   app_permission --> sessions_access
   app_cli-handler --> sessions_registry
@@ -150,22 +192,67 @@ graph TD
   app_cli-handler --> infra_config
   app_cli-handler --> sessions_access
   app_cli-handler --> connectors_clock_jobs-clock
-  app_session-lifecycle --> infra_config
-  app_session-lifecycle --> infra_util
-  app_session-lifecycle --> infra_tmux
-  app_session-lifecycle --> sessions_registry
-  app_session-lifecycle --> app_reply-guard
-  app_session-lifecycle --> sessions_bridge-transport
-  app_session-lifecycle --> engines_bridge-tools
-  app_session-lifecycle --> sessions_tool-surface
-  app_session-lifecycle --> sessions_phase-budget
-  app_session-lifecycle --> sessions_idle-limit
-  app_session-lifecycle --> shared_constants
-  app_session-lifecycle --> infra_usage
-  app_session-lifecycle --> sessions_anchor-state
-  app_session-lifecycle --> connectors_github_pr-watch
-  app_session-lifecycle --> sessions_access
-  app_session-lifecycle --> infra_worktree-manager
+  app_session-lifecycle --> app_lifecycle_channel
+  app_session-lifecycle --> app_lifecycle_hooks
+  app_session-lifecycle --> app_lifecycle_kill
+  app_session-lifecycle --> app_lifecycle_spawn-stages
+  app_session-lifecycle --> app_lifecycle_spawn
+  app_session-lifecycle --> app_lifecycle_handoff
+  app_session-lifecycle --> app_lifecycle_revive
+  app_lifecycle_spawn --> infra_config
+  app_lifecycle_spawn --> infra_util
+  app_lifecycle_spawn --> sessions_registry
+  app_lifecycle_spawn --> sessions_phase-budget
+  app_lifecycle_spawn --> sessions_idle-limit
+  app_lifecycle_spawn --> shared_constants
+  app_lifecycle_spawn --> sessions_anchor-state
+  app_lifecycle_spawn --> app_lifecycle_channel
+  app_lifecycle_spawn --> app_lifecycle_spawn-stages
+  app_lifecycle_spawn-stages --> infra_config
+  app_lifecycle_spawn-stages --> infra_util
+  app_lifecycle_spawn-stages --> sessions_registry
+  app_lifecycle_spawn-stages --> app_reply-guard
+  app_lifecycle_spawn-stages --> sessions_bridge-transport
+  app_lifecycle_spawn-stages --> sessions_tool-surface
+  app_lifecycle_spawn-stages --> sessions_phase-budget
+  app_lifecycle_spawn-stages --> sessions_idle-limit
+  app_lifecycle_spawn-stages --> sessions_anchor-state
+  app_lifecycle_spawn-stages --> infra_worktree-manager
+  app_lifecycle_spawn-stages --> app_lifecycle_channel
+  app_lifecycle_spawn-stages --> app_lifecycle_kill
+  app_lifecycle_kill --> infra_config
+  app_lifecycle_kill --> infra_util
+  app_lifecycle_kill --> infra_tmux
+  app_lifecycle_kill --> sessions_registry
+  app_lifecycle_kill --> sessions_bridge-transport
+  app_lifecycle_kill --> sessions_phase-budget
+  app_lifecycle_kill --> sessions_idle-limit
+  app_lifecycle_kill --> sessions_anchor-state
+  app_lifecycle_kill --> connectors_github_pr-watch
+  app_lifecycle_kill --> infra_worktree-manager
+  app_lifecycle_kill --> app_lifecycle_hooks
+  app_lifecycle_handoff --> infra_config
+  app_lifecycle_handoff --> infra_util
+  app_lifecycle_handoff --> sessions_registry
+  app_lifecycle_handoff --> sessions_bridge-transport
+  app_lifecycle_handoff --> app_lifecycle_channel
+  app_lifecycle_handoff --> app_lifecycle_hooks
+  app_lifecycle_handoff --> app_lifecycle_kill
+  app_lifecycle_handoff --> app_lifecycle_spawn
+  app_lifecycle_revive --> infra_util
+  app_lifecycle_revive --> infra_tmux
+  app_lifecycle_revive --> sessions_registry
+  app_lifecycle_revive --> sessions_bridge-transport
+  app_lifecycle_revive --> sessions_anchor-state
+  app_lifecycle_revive --> app_lifecycle_kill
+  app_lifecycle_revive --> app_lifecycle_spawn
+  app_lifecycle_hooks --> infra_config
+  app_lifecycle_channel --> infra_config
+  app_lifecycle_channel --> infra_util
+  app_lifecycle_channel --> sessions_registry
+  app_lifecycle_channel --> engines_bridge-tools
+  app_lifecycle_channel --> infra_usage
+  app_lifecycle_channel --> sessions_access
   app_recovery --> infra_config
   app_recovery --> sessions_registry
   app_recovery --> sessions_anchor-state
@@ -189,6 +276,7 @@ graph TD
   app_router --> app_commands_thread
   app_router --> app_commands_review
   app_router --> sessions_protocol-registry
+  app_router --> app_protocol-runner
   app_router --> sessions_anchor-state
   app_router --> app_commands_status
   app_router --> app_commands_watch
@@ -201,6 +289,7 @@ graph TD
   sessions_access --> infra_config
   sessions_access --> infra_util
   app_templates --> shared_constants
+  app_templates --> app_protocol-runner
   connectors_github_pr-watch --> infra_config
   connectors_github_pr-watch --> sessions_registry
   connectors_github_pr-watch --> infra_util
@@ -242,6 +331,7 @@ graph TD
   app_auto-handoff --> sessions_tool-surface
   app_auto-handoff --> infra_config
   app_auto-handoff --> sessions_bridge-transport
+  app_auto-handoff --> app_protocol-runner
   app_auto-handoff --> app_permission
   app_auto-handoff --> app_session-lifecycle
   app_auto-handoff --> infra_util
@@ -255,6 +345,7 @@ graph TD
   app_commands_global --> app_session-lifecycle
   app_commands_global --> infra_util
   app_commands_global --> app_commands_status
+  app_commands_global --> app_protocol-runner
   app_commands_global --> app_templates
   app_commands_status --> infra_config
   app_commands_status --> sessions_registry
@@ -262,6 +353,7 @@ graph TD
   app_commands_status --> sessions_bridge-transport
   app_commands_status --> infra_util
   app_commands_status --> connectors_github_pr-watch
+  app_commands_status --> app_protocol-runner
   app_commands_thread --> infra_config
   app_commands_thread --> sessions_registry
   app_commands_thread --> sessions_bridge-transport
@@ -276,6 +368,7 @@ graph TD
   app_commands_review --> infra_config
   app_commands_review --> infra_util
   app_commands_review --> sessions_registry
+  app_commands_review --> app_protocol-runner
   app_commands_review --> sessions_protocol-registry
   app_commands_review --> shared_constants
   app_commands_watch --> infra_config

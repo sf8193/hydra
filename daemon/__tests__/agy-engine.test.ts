@@ -6,7 +6,8 @@ import { join } from 'path'
 import { AGY_API_KEY_FILE, AgyEngine, agySettings } from '../../engines/agy-engine.js'
 import { ClaudeEngine } from '../../engines/claude-engine.js'
 import { BridgeTransport } from '../../sessions/bridge-transport.js'
-import { SESSION_INSTRUCTIONS } from '../../shared/constants.js'
+import { BASE_TOOLS } from '../../shared/constants.js'
+import { buildSessionInstructions } from '../../shared/session-instructions.js'
 import { _setTmuxForTesting } from '../../infra/tmux.js'
 import { agyStateDir, agyStateFile } from '../../engines/agy-session.js'
 import { STATE_DIR } from '../../infra/config.js'
@@ -52,7 +53,7 @@ test('launch runs agy on the model, trusting only its folder, approving tools, w
 test('the first prompt is hydra\'s reply rules, then the spawn prompt', async () => {
   const cmd = await launchCommand('say hi')
   const file = /cat '([^']+\.prompt)'/.exec(cmd)![1]
-  expect(readFileSync(file, 'utf8')).toBe(`${SESSION_INSTRUCTIONS}\n\nsay hi`)
+  expect(readFileSync(file, 'utf8')).toBe(`${buildSessionInstructions({ tools: BASE_TOOLS.thread_owner, platform: 'discord' })}\n\nsay hi`)
 })
 
 test('the spawn env names the session, its thread and type, empty when unknown', async () => {
@@ -215,14 +216,14 @@ test('the turn reports agy\'s own word: working or idle, the answer once it is o
 test('a resume continues the dead session\'s conversation, found in the dead session\'s record', async () => {
   mkdirSync(agyStateDir(), { recursive: true })
   writeFileSync(agyStateFile('dead-1'), '{"conversationId":"conv-dead","transcriptPath":"/t","live":"idle","backgroundWork":false}')
-  const cmd = await launchCommand('hello', { resumeSession: { fromSessionId: 'dead-1' } })
+  const cmd = await launchCommand('hello', { continuation: { kind: 'resume-session', fromSessionId: 'dead-1' } })
   expect(cmd).toContain("--conversation 'conv-dead'")
   expect(await launchCommand('hello')).not.toContain('--conversation')
 })
 
 test('a resume with no conversation on record fails before agy starts, so the caller falls back to a fresh session', async () => {
   rmSync(agyStateFile('gone-1'), { force: true })
-  await expect(launchCommand('hello', { resumeSession: { fromSessionId: 'gone-1' } })).rejects.toThrow('has no conversation to resume')
+  await expect(launchCommand('hello', { continuation: { kind: 'resume-session', fromSessionId: 'gone-1' } })).rejects.toThrow('has no conversation to resume')
 })
 
 test('recoveryPlan resumes the dead session by id, is not generic, and cannot fork', () => {

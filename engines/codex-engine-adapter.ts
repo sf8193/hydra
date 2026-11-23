@@ -140,7 +140,12 @@ export class CodexEngineAdapter implements EngineAdapter {
   }
 
   async launch(input: LaunchInput): Promise<LaunchResult> {
-    const { sessionId, tmuxName, model, prompt, resumeCodex } = input
+    const { sessionId, tmuxName, model, prompt, continuation } = input
+    if (continuation && continuation.kind !== 'resume-codex' && continuation.kind !== 'fork-codex') {
+      throw new Error(`codex engine: unsupported launch continuation "${continuation.kind}"`)
+    }
+    const resumeCodex = continuation?.kind === 'resume-codex' ? continuation : undefined
+    const forkCodexThreadId = continuation?.kind === 'fork-codex' ? continuation.codexThreadId : undefined
     // Resume reuses the ORIGINAL home: the rollout lives there, and a fresh home cannot see it.
     const codexHomeName = resumeCodex?.homeName ?? tmuxName
     const sockPath = codexSocketPath(codexHomeName)
@@ -161,8 +166,8 @@ export class CodexEngineAdapter implements EngineAdapter {
           const r = await this.engine.connectAndResume(sessionId, sockPath, resumeCodex.threadId)
           codexThreadId = resumeCodex.threadId
           resolvedModel = r.model ?? resolvedModel
-        } else if (input.forkFrom?.codexThreadId) {
-          const r = await this.engine.connectAndFork(sessionId, sockPath, input.forkFrom.codexThreadId, model)
+        } else if (forkCodexThreadId) {
+          const r = await this.engine.connectAndFork(sessionId, sockPath, forkCodexThreadId, model)
           codexThreadId = r.threadId
           resolvedModel = r.model ?? resolvedModel
         } else {
@@ -171,8 +176,8 @@ export class CodexEngineAdapter implements EngineAdapter {
           resolvedModel = r.model ?? resolvedModel
         }
         break
-      } catch (err: any) {
-        lastErr = err?.message || String(err)
+      } catch (err: unknown) {
+        lastErr = err instanceof Error && err.message ? err.message : String(err)
         try { this.engine.disconnect(sessionId) } catch {}
         await new Promise(r => setTimeout(r, 500))
       }
@@ -399,8 +404,8 @@ export class CodexEngineAdapter implements EngineAdapter {
       // A close during the resume's queue drain can already have dropped the
       // socket (and its event is swallowed while we're reconnecting).
       return this.engine.isConnected(info.sessionId) ? 'connected' : 'lost'
-    } catch (err: any) {
-      process.stderr.write(`codex-adapter: resume failed for ${info.tmuxName}: ${err?.message || err}\n`)
+    } catch (err: unknown) {
+      process.stderr.write(`codex-adapter: resume failed for ${info.tmuxName}: ${err instanceof Error && err.message ? err.message : err}\n`)
       try { this.engine.disconnect(info.sessionId) } catch {}
       return 'failed'
     }
@@ -417,8 +422,8 @@ export class CodexEngineAdapter implements EngineAdapter {
       if (result.model && info.sessionMetadata) info.sessionMetadata.model = result.model
       process.stderr.write(`codex-adapter: reconnected ${info.tmuxName} (new thread)\n`)
       return this.engine.isConnected(info.sessionId) ? 'connected' : 'dropped'
-    } catch (err: any) {
-      process.stderr.write(`codex-adapter: fresh connect failed for ${info.tmuxName}: ${err?.message || err}\n`)
+    } catch (err: unknown) {
+      process.stderr.write(`codex-adapter: fresh connect failed for ${info.tmuxName}: ${err instanceof Error && err.message ? err.message : err}\n`)
       try { this.engine.disconnect(info.sessionId) } catch {}
       return 'failed'
     }

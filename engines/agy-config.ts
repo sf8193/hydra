@@ -14,9 +14,9 @@ const TOOL_SERVER = join(import.meta.dir, 'codex-mcp-server.ts')
 const HOOK_SCRIPT = join(import.meta.dir, 'agy-hook.ts')
 
 // Rewrites `file` only when `edit` changes something. Throws if the file is not JSON. An empty file counts as `{}`: agy itself leaves a 0-byte mcp_config.json.
-function update(file: string, edit: (config: any) => boolean): void {
+function update(file: string, edit: (config: Record<string, unknown>) => boolean): void {
   const text = existsSync(file) ? readFileSync(file, 'utf8').trim() : ''
-  const config = text ? JSON.parse(text) : {}
+  const config = (text ? JSON.parse(text) : {}) as Record<string, unknown>
   if (!edit(config)) return
   mkdirSync(dirname(file), { recursive: true })
   const temp = `${file}.${process.pid}.tmp`   // a reader never sees a half-written file
@@ -27,9 +27,10 @@ function update(file: string, edit: (config: any) => boolean): void {
 /** Make `hydra` an MCP server in agy's config, pointing at this checkout's tool server. Everything else in the file is kept. Throws if the file is not JSON. */
 export function registerHydraTools(file = AGY_MCP_CONFIG): void {
   update(file, config => {
-    const have = config.mcpServers?.hydra
-    if (have?.command === process.execPath && have.args?.length === 1 && have.args[0] === TOOL_SERVER) return false
-    config.mcpServers = { ...config.mcpServers, hydra: { ...have, command: process.execPath, args: [TOOL_SERVER] } }
+    const servers = (config.mcpServers && typeof config.mcpServers === 'object' ? config.mcpServers : undefined) as Record<string, Record<string, unknown> | undefined> | undefined
+    const have = servers?.hydra
+    if (have?.command === process.execPath && Array.isArray(have.args) && have.args.length === 1 && have.args[0] === TOOL_SERVER) return false
+    config.mcpServers = { ...servers, hydra: { ...have, command: process.execPath, args: [TOOL_SERVER] } }
     return true
   })
 }

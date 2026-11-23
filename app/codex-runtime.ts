@@ -20,6 +20,7 @@ import { safeSend } from '../infra/util.js'
 import { noteCodexMessage, noteCodexTurnState } from '../engines/codex-observation.js'
 import { codexPiggyback } from '../sessions/codex-piggyback.js'
 import { refreshSessionVisual } from '../sessions/anchor-state.js'
+import { notifyParentOfEnd } from './parent-notice.js'
 import type { EngineAdapter } from '../engines/engine-adapter.js'
 import type { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
 import { markYourTurn } from '../infra/home-status.js'
@@ -117,17 +118,18 @@ function logContextUsageSample(sessionId: string, tmuxName: string, usage: { use
 // with a notice (Sam, 2026-09-28); piggyback items may be lost.
 export function finaliseCodexDeath(info: SessionInfo): void {
   reconnecting.delete(info.sessionId)
-  markDead(info)
+  const freshDeath = markDead(info)
   codexPiggyback.clear(info.sessionId)
   const { queued, unknown } = codexEngine.discardSession(info.sessionId)
   process.stderr.write(`codex-bootstrap: ${info.tmuxName} is dead (app-server unreachable); dropped ${queued} queued, ${unknown} unknown\n`)
+  if (freshDeath) notifyParentOfEnd(info, 'died from crash', 'app-server unreachable')
   if (info.ephemeral) return
   refreshSessionVisual(info.threadId, { state: 'crashed' })
   const lost = [
     queued ? `${queued} queued message(s) were not delivered.` : '',
     unknown ? 'Delivery of 1 message is unknown.' : '',
   ].filter(Boolean).join(' ')
-  void safeSend(info.threadId, `⚠️ \`${info.tmuxName}\` (Codex) lost its app-server and could not reconnect — it is dead.${lost ? ` ${lost}` : ''} Type \`resume\` or \`respawn\`.`).catch(() => {})
+  void safeSend(info.threadId, `⚠️ \`${info.tmuxName}\` (Codex) lost its app-server and could not reconnect — it is dead.${lost ? ` ${lost}` : ''} Type \`resume\` or \`respawn\`.`)
 }
 
 type ReconnectDeps = {

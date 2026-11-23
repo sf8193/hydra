@@ -3,6 +3,7 @@ import { fallbackDescription, safeSend } from '../infra/util.js'
 import { formatContextPercent } from '../engines/engine-adapter.js'
 import { mainChannel, mainContext, mainTmux } from '../sessions/main.js'
 import { refreshSessionVisual } from '../sessions/anchor-state.js'
+import { notifyParentOfEnd } from './parent-notice.js'
 import { occupancy } from '../sessions/session-reachability.js'
 import { bridgeWaitMs } from '../sessions/occupancy.js'
 import { notifyOperator } from '../sessions/access.js'
@@ -35,6 +36,7 @@ export function pollSessionsOnce(now: number): void {
       process.stderr.write(`daemon: crash detected: ${info.tmuxName}\n`)
       void safeSend(info.threadId, `💀 **${info.tmuxName}** died. Use \`resume\` to restore context or \`respawn\` for a fresh start.`)
       refreshSessionVisual(info.threadId, { state: 'crashed' })
+      notifyParentOfEnd(info, 'died from crash', 'session died')
       continue
     }
 
@@ -49,7 +51,7 @@ export function pollSessionsOnce(now: number): void {
         registry.persist()
         const thread = threadRegistry.get(info.threadId)
         if (thread) {
-          const histEntry = thread.sessionHistory.find((h: any) => h.sessionId === info.sessionId && !h.endedAt)
+          const histEntry = thread.sessionHistory.find(h => h.sessionId === info.sessionId && !h.endedAt)
           if (histEntry) histEntry.claudeSessionId = discovered
           threadRegistry.persist()
         }

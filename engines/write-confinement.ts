@@ -246,7 +246,8 @@ export function claudeSettingsProblems(settings: { allowedMcpServers?: unknown }
   const list = settings.allowedMcpServers
   if (list === undefined) return out
   if (!Array.isArray(list)) return ['allowedMcpServers is not a list']
-  list.forEach((e: any, i) => {
+  list.forEach((raw, i) => {
+    const e = (raw && typeof raw === 'object' ? raw : null) as { serverName?: unknown; serverCommand?: unknown; serverUrl?: unknown } | null
     if (e?.serverName !== undefined && !(typeof e.serverName === 'string' && /^[a-zA-Z0-9_-]+$/.test(e.serverName))) out.push(`allowedMcpServers[${i}]: server name ${JSON.stringify(e.serverName)} can only contain letters, numbers, hyphens and underscores`)
     if (e?.serverCommand !== undefined && !(Array.isArray(e.serverCommand) && e.serverCommand.length >= 1 && e.serverCommand.every((x: unknown) => typeof x === 'string'))) out.push(`allowedMcpServers[${i}]: serverCommand must be a non-empty list of strings`)
     if (e?.serverName === undefined && e?.serverCommand === undefined && e?.serverUrl === undefined) out.push(`allowedMcpServers[${i}]: names no server`)

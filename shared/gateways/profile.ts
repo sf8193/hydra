@@ -13,4 +13,8 @@ export type GatewayProfile = {
   perAppDms: boolean
   /** A link wrapped to hold a preview back (`<url>`, or a markdown link's `(<url>)`) still shows one. Discord suppresses it. */
   previewsWrappedLinks: boolean
+  /** Whether the `react` tool posts a real reaction (Discord) vs. a no-op (Slack). */
+  postsReactions: boolean
+  /** Slash-command skill that edits hydra.toml for this platform, if one exists. */
+  accessSkill?: string
 }

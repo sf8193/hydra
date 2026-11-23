@@ -16,13 +16,15 @@ import { join } from 'path'
 // Counts, not presence: several of these appear more than once (each recovery
 // tier passes its own), and dropping one of two is the likelier regression.
 const REQUIRED_WIRING: Record<string, Record<string, number>> = {
-  'session-lifecycle.ts': {
+  'lifecycle/spawn.ts': {
     // rawTopic, because `topic` has had the flag stripped out of it by then —
     // resolveSpawnLabel's own tests cannot see which string it is handed. All
     // three arguments, because dropping one silently disables that tier.
     'resolveSpawnLabel(rawTopic, opts?.label, opts?.inheritedLabel)': 1,
     // Into the live registry entry, which is what factsFromRegistry reads.
     '...labelFields,': 1,
+  },
+  'lifecycle/spawn-stages.ts': {
     // And into the durable history entry a later resume reads.
     'label: sessionLabel,': 1,
   },

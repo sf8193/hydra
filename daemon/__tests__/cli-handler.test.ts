@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { handleCLIRequest, bindCliIdempotency, type CLIRequest } from '../../app/cli-handler.js'
+import { handleCLIRequest, bindCliIdempotency } from '../../app/cli-handler.js'
 import { registry } from '../../sessions/registry.js'
 import { checkIdempotency } from '../../infra/idempotency.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
@@ -16,7 +16,7 @@ bindCliIdempotency()
 // Suppress stderr from daemon modules
 process.stderr.write = (() => true) as any
 
-function makeReq(overrides: Partial<CLIRequest> = {}): CLIRequest {
+function makeReq(overrides: { command?: string; id?: string; params?: Record<string, unknown>; caller?: unknown } = {}) {
   return {
     type: 'cli',
     command: 'health',

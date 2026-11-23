@@ -56,7 +56,7 @@ export type OccupancySubject = {
   tmuxName: string
   createdAt: number
   deadAt?: number
-  adapter?: { isAlive(info: any): boolean }
+  adapter?: { isAlive(info: never): boolean }
 }
 
 export function classifyOccupancy(input: {
@@ -85,7 +85,7 @@ export function occupancyOf(
   if (bridge.connected) return 'connected'
   if (nameHeldByAnother(info, records)) return 'dead'
   return classifyOccupancy({
-    running: info.adapter ? info.adapter.isAlive(info) : tmuxHasSession(info.tmuxName),
+    running: info.adapter ? info.adapter.isAlive(info as never) : tmuxHasSession(info.tmuxName),
     connected: false,
     waitMs: bridgeWaitMs(Math.max(info.createdAt, bridge.droppedAt ?? 0), now),
     givenUp: !!info.deadAt,

@@ -28,8 +28,8 @@ export function operatorId(stateDir: string, platform: string): string | undefin
   return undefined
 }
 
-const post = async (url: string, token: string, body: object, bearer: string): Promise<any> =>
-  (await fetch(url, { method: 'POST', signal: AbortSignal.timeout(10_000), headers: { Authorization: `${bearer} ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json()
+const post = async <T>(url: string, token: string, body: object, bearer: string): Promise<T> =>
+  (await fetch(url, { method: 'POST', signal: AbortSignal.timeout(10_000), headers: { Authorization: `${bearer} ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json() as Promise<T>
 
 /** Sends `text` to the operator's DM. Returns why it could not, or undefined. Never throws: an alert that fails is a log line. */
 export async function alertOperator(stateDir: string, platform: string, text: string): Promise<string | undefined> {
@@ -39,16 +39,16 @@ export async function alertOperator(stateDir: string, platform: string, text: st
     if (platform === 'slack') {
       const token = envToken(stateDir, 'SLACK_BOT_TOKEN')
       if (!token) return 'no SLACK_BOT_TOKEN in .env'
-      const opened = await post('https://slack.com/api/conversations.open', token, { users: user }, 'Bearer')
-      if (!opened.ok) return `conversations.open: ${opened.error}`
-      const sent = await post('https://slack.com/api/chat.postMessage', token, { channel: opened.channel.id, text }, 'Bearer')
+      const opened = await post<{ ok?: boolean; error?: string; channel?: { id: string } }>('https://slack.com/api/conversations.open', token, { users: user }, 'Bearer')
+      if (!opened.ok || !opened.channel?.id) return `conversations.open: ${opened.error}`
+      const sent = await post<{ ok?: boolean; error?: string }>('https://slack.com/api/chat.postMessage', token, { channel: opened.channel.id, text }, 'Bearer')
       return sent.ok ? undefined : `chat.postMessage: ${sent.error}`
     }
     const token = envToken(stateDir, 'DISCORD_BOT_TOKEN')
     if (!token) return 'no DISCORD_BOT_TOKEN in .env'
-    const dm = await post('https://discord.com/api/v10/users/@me/channels', token, { recipient_id: user }, 'Bot')
+    const dm = await post<{ id?: string; message?: string }>('https://discord.com/api/v10/users/@me/channels', token, { recipient_id: user }, 'Bot')
     if (!dm.id) return `open DM: ${dm.message ?? 'failed'}`
-    const sent = await post(`https://discord.com/api/v10/channels/${dm.id}/messages`, token, { content: text }, 'Bot')
+    const sent = await post<{ id?: string; message?: string }>(`https://discord.com/api/v10/channels/${dm.id}/messages`, token, { content: text }, 'Bot')
     return sent.id ? undefined : `send: ${sent.message ?? 'failed'}`
   } catch (e) {
     return (e as Error).message

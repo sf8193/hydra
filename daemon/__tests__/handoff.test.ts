@@ -500,3 +500,29 @@ test('a handoff successor never inherits its grandparent as predecessor', async 
     registry.delete('ho-gp')
   }
 })
+
+test('handoffSpawnOpts carries sessionType into the successor spawn (#442)', async () => {
+  const { handOff, handoffIO, handoffSpawnOpts } = await import('../../app/session-lifecycle.js')
+  const orig = { ...handoffIO }
+  mk('ho-mo', 'flint', 'ho-thread-mo')
+  try {
+    const info = registry.get('ho-mo')!
+    expect(handoffSpawnOpts(info, '/h.md').sessionType).toBe('thread_owner')
+    info.sessionType = 'master_orchestrator'
+    expect(handoffSpawnOpts(info, '/h.md').sessionType).toBe('master_orchestrator')
+
+    let spawnedOpts: any
+    handoffIO.killSession = (async (i: any) => { registry.delete(i.sessionId) }) as any
+    handoffIO.doSpawnSession = (async (_t: string, _c?: string, _m?: string, o?: any) => {
+      spawnedOpts = o
+      mk('ho-mo-2', 'fresh', 'ho-thread-mo')
+      return { name: 'fresh', sessionId: 'ho-mo-2', threadId: 'ho-thread-mo', url: '' }
+    }) as any
+    await handOff(info, '/h.md')
+    expect(spawnedOpts.sessionType).toBe('master_orchestrator')
+  } finally {
+    Object.assign(handoffIO, orig)
+    registry.delete('ho-mo')
+    registry.delete('ho-mo-2')
+  }
+})

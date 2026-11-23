@@ -33,7 +33,7 @@ async function launched(extra: Record<string, unknown>): Promise<string> {
 
 test('fresh, resume and fork launches are pinned byte for byte', async () => {
   expect(await launched({})).toMatchSnapshot('fresh')
-  expect(await launched({ resumeFrom: 'C-old' })).toMatchSnapshot('resume')
-  expect(await launched({ forkFrom: { claudeSessionId: 'C-parent' } })).toMatchSnapshot('fork')
+  expect(await launched({ continuation: { kind: 'resume-claude', claudeSessionId: 'C-old' } })).toMatchSnapshot('resume')
+  expect(await launched({ continuation: { kind: 'fork-claude', claudeSessionId: 'C-parent' } })).toMatchSnapshot('fork')
   expect(await launched({ tools: ['Read', 'Grep'], disallowedTools: ['Bash'] })).toMatchSnapshot('tools-and-disallowed')
 })

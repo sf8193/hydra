@@ -13,8 +13,8 @@ describe('the table', () => {
     expect([...GATEWAY_PLATFORMS].sort()).toEqual(['discord', 'slack'])
   })
   test.each([
-    ['discord', { label: 'Discord', channelNames: false, perAppDms: false, previewsWrappedLinks: false }],
-    ['slack', { label: 'Slack', channelNames: true, perAppDms: true, previewsWrappedLinks: true }],
+    ['discord', { label: 'Discord', channelNames: false, perAppDms: false, previewsWrappedLinks: false, postsReactions: true, accessSkill: '/hydra:access' }],
+    ['slack', { label: 'Slack', channelNames: true, perAppDms: true, previewsWrappedLinks: true, postsReactions: false }],
   ] as const)('%s flags', (platform, flags) => {
     const { isDmId: _i, ...rest } = GATEWAY_PROFILES[platform]
     expect(rest).toEqual(flags)

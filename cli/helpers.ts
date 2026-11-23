@@ -7,6 +7,7 @@ import { resolveLaunchModel, spawnModel, TRANSCRIBE_TMUX, byteTmuxName, claudeCo
 import { captureSpawnVars, withRaisedFdLimit } from '../shared/spawn-env.js'
 import { tmuxNewSession } from '../infra/tmux-session.js'
 import { callerClaim } from '../shared/caller.js'
+import { parseCLIResponse, type CLIRequest, type CLIRequestFor, type CLIResponse, type CLIResponseView } from '../shared/cli-protocol.js'
 import { scrubTokenVarsInFile } from '../infra/token-vars-file.js'
 import { parseEnvLine } from '../shared/env-parse.js'
 import { sourceEnvFiles } from '../infra/env-files.js'
@@ -342,7 +343,8 @@ export function probeDaemonHealth(sockPath: string, timeoutMs = 5000): Promise<{
     }, timeoutMs)
 
     socket.on('connect', () => {
-      socket.write(JSON.stringify({ type: 'cli', command: 'health', id: 'probe' }) + '\n')
+      const probe: CLIRequestFor<'health'> = { type: 'cli', command: 'health', id: 'probe', params: {} }
+      socket.write(JSON.stringify(probe) + '\n')
     })
 
     function settle(result: { ok: boolean; error?: string }): void {
@@ -358,8 +360,12 @@ export function probeDaemonHealth(sockPath: string, timeoutMs = 5000): Promise<{
       const nl = buf.indexOf('\n')
       if (nl !== -1 && !settled) {
         try {
-          const resp = JSON.parse(buf.slice(0, nl))
-          settle({ ok: !!resp.ok })
+          const parsed = parseCLIResponse(JSON.parse(buf.slice(0, nl)))
+          if (!parsed.ok) {
+            settle({ ok: false, error: 'invalid response' })
+          } else {
+            settle({ ok: parsed.response.ok, ...(parsed.response.error ? { error: parsed.response.error } : {}) })
+          }
         } catch {
           settle({ ok: false, error: 'invalid response' })
         }
@@ -431,9 +437,9 @@ export function resolveSocket(daemonName?: string): string {
  * `timeoutMs`: how long to wait for the reply; a request that spawns a session needs more than the default.
  * Every request says who is calling (shared/caller.ts): the session's token, a session's environment without one, or nothing (the operator's shell).
  */
-export function sendRequest(socketPath: string, request: Record<string, unknown>, timeoutMs = 10_000): Promise<Record<string, unknown>> {
+export function sendRequest(socketPath: string, request: CLIRequest, timeoutMs = 10_000): Promise<CLIResponse> {
   const caller = callerClaim(process.env)
-  if (caller) request = { ...request, caller }
+  const payload: CLIRequest = caller ? { ...request, caller } : request
   return new Promise((resolve, reject) => {
     const socket = connect(socketPath)
     let buf = ''
@@ -443,7 +449,7 @@ export function sendRequest(socketPath: string, request: Record<string, unknown>
     }, timeoutMs)
 
     socket.on('connect', () => {
-      socket.write(JSON.stringify(request) + '\n')
+      socket.write(JSON.stringify(payload) + '\n')
     })
 
     socket.on('data', (data: Buffer) => {
@@ -454,7 +460,12 @@ export function sendRequest(socketPath: string, request: Record<string, unknown>
         const line = buf.slice(0, nl)
         socket.end()
         try {
-          resolve(JSON.parse(line))
+          const parsed = parseCLIResponse(JSON.parse(line))
+          if (!parsed.ok) {
+            reject(new Error(`invalid response: ${line.slice(0, 200)}`))
+          } else {
+            resolve(parsed.response)
+          }
         } catch {
           reject(new Error(`invalid response: ${line.slice(0, 200)}`))
         }
@@ -477,7 +488,7 @@ export function sendRequest(socketPath: string, request: Record<string, unknown>
 // Output formatting
 // ---------------------------------------------------------------------------
 
-export function printResponse(response: Record<string, unknown>, json: boolean): void {
+export function printResponse(response: CLIResponseView, json: boolean): void {
   if (json) {
     console.log(JSON.stringify(response, null, 2))
     return
@@ -488,17 +499,26 @@ export function printResponse(response: Record<string, unknown>, json: boolean):
     process.exit(typeof response.exitCode === 'number' ? response.exitCode : 1)
   }
 
-  const data = response.data as any
-  const command = response.command as string | undefined
+  const rawData = response.data
+  const command = response.command
 
-  if (!data) {
+  if (!rawData) {
     console.log('ok')
     return
   }
 
   switch (command) {
     case 'list': {
-      const items = data as any[]
+      const items = rawData as Array<{
+        status?: string
+        name?: string
+        description?: string
+        ended_ago?: string
+        thread_id?: string
+        context?: string
+        cpu?: string
+        running_for?: string
+      }>
       if (items.length === 0) { console.log('(none)'); return }
       for (const item of items) {
         if (item.status === 'ended') { console.log(`✕ ${item.name}  ${item.description ?? ''}  (ended ${item.ended_ago} ago · thread ${item.thread_id})`); continue }
@@ -509,15 +529,29 @@ export function printResponse(response: Record<string, unknown>, json: boolean):
       }
       return
     }
-    case 'spawn':
+    case 'spawn': {
+      const data = rawData as { name?: string; sessionId?: string; url?: string; idempotencyKey?: string }
       console.log(`spawned: ${data.name} (${data.sessionId})`)
       if (data.url) console.log(`thread:  ${data.url}`)
       if (data.idempotencyKey) console.log(`key:     ${data.idempotencyKey}`)
       return
-    case 'kill':
+    }
+    case 'kill': {
+      const data = rawData as { killed?: string }
       console.log(`killed: ${data.killed}`)
       return
-    case 'health':
+    }
+    case 'health': {
+      const data = rawData as {
+        sessions: { total: number; connected: number; disconnected: number }
+        tmux: unknown
+        idempotency: { active: number }
+        loopLagMaxMs?: number
+        loopLastStall?: { ms: number; callback?: string; callbackMs?: number; at: string }
+        refusedLaunches?: Array<{ specialist: string; ageMin: number; why: string }>
+        macosGate?: { allowed: boolean; specialists: string[]; version: string }
+        slack?: SlackHealthView
+      }
       console.log(`sessions: ${data.sessions.total} (${data.sessions.connected} connected, ${data.sessions.disconnected} disconnected)`)
       console.log(`tmux: ${data.tmux}`)
       console.log(`idempotency: ${data.idempotency.active} active keys`)
@@ -529,7 +563,13 @@ export function printResponse(response: Record<string, unknown>, json: boolean):
       if (data.macosGate) console.log(`${data.macosGate.allowed ? 'WARNING' : 'REFUSED'}: restricted specialist${data.macosGate.specialists.length > 1 ? 's' : ''} ${data.macosGate.specialists.join(', ')}: ${macosGateIssue(data.macosGate.version, data.macosGate.allowed)}`)
       if (data.slack) for (const line of slackHealthLines(data.slack)) console.log(line)
       return
-    case 'status':
+    }
+    case 'status': {
+      const data = rawData as {
+        name?: string; sessionId?: string; topic?: string; description?: string
+        bridge?: string; tmux?: string; running_for?: string
+        context?: string; cpu?: string; url?: string; origin?: string
+      }
       console.log(`${data.name} (${data.sessionId})`)
       console.log(`  topic:   ${data.topic}`)
       if (data.description) console.log(`  desc:    ${data.description}`)
@@ -541,15 +581,20 @@ export function printResponse(response: Record<string, unknown>, json: boolean):
       if (data.url) console.log(`  url:     ${data.url}`)
       if (data.origin) console.log(`  origin:  ${data.origin}`)
       return
-    case 'clear-key':
+    }
+    case 'clear-key': {
+      const data = rawData as { cleared?: unknown }
       console.log(`cleared: ${data.cleared}`)
       return
-    case 'deliver':
+    }
+    case 'deliver': {
+      const data = rawData as { status?: string; sessionName?: string; proof?: string; target?: string }
       console.log(`${data.status}: ${data.sessionName} (${data.proof})`)
       if (data.target) console.log(`delivers to ${data.target}`)
       return
+    }
     default:
-      console.log(JSON.stringify(data, null, 2))
+      console.log(JSON.stringify(rawData, null, 2))
   }
 }
 

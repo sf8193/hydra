@@ -25,9 +25,12 @@ import { fileURLToPath } from 'url'
 
 import { GATEWAY_PLATFORMS } from './shared/gateways/index.js'
 import { ToolsWaiterSet, type ToolsWaiter } from './shared/tools-waiters.js'
+import { parseDaemonToBridgeMessage, type BridgeToDaemonMessage, type BridgeToolDef } from './shared/bridge-protocol.js'
+import { SESSION_TOKEN_VAR } from './shared/caller.js'
 import { bridgeLifePath, type BridgeLifeEvent } from './shared/bridge-life.js'
 import { appendBridgeLife } from './infra/bridge-life-file.js'
-import { BRIDGE_SHUTDOWN_GRACE_MS, LONG_TOOL_TIMEOUTS_MS, SESSION_INSTRUCTIONS } from './shared/constants.js'
+import { BRIDGE_SHUTDOWN_GRACE_MS, LONG_TOOL_TIMEOUTS_MS } from './shared/constants.js'
+import { buildSessionInstructions, initialToolsForBridgeEnv, parseChatPlatform } from './shared/session-instructions.js'
 import { RESUME_GAP_MS } from './shared/loop-watch.js'
 
 // Resolve daemon socket path. Priority:
@@ -97,6 +100,7 @@ function resolveSessionIdentity(): { sessionId: string; isMain: boolean } {
 }
 
 const { sessionId: SESSION_ID, isMain: IS_MAIN } = resolveSessionIdentity()
+const SESSION_TOKEN = process.env[SESSION_TOKEN_VAR] || undefined
 const IS_STRAY = SESSION_ID.startsWith('stray-')
 const RECONNECT_INTERVAL = 5000
 
@@ -142,12 +146,12 @@ let socketReady = false
 
 // ── Dynamic tool list (updated on daemon registration) ────────────────
 
-let dynamicTools: Array<Record<string, unknown>> | null = null
+let dynamicTools: BridgeToolDef[] | null = null
 let sessionMetadata: Record<string, unknown> | null = null
 
 // Every in-flight tools/list waits here. See ToolsWaiterSet for why this cannot
 // be a single slot.
-const pendingToolsWaiters = new ToolsWaiterSet<Array<Record<string, unknown>>>()
+const pendingToolsWaiters = new ToolsWaiterSet<BridgeToolDef[]>()
 
 // ── Tool refresh fallback ────────────────────────────────────────────
 // Notifications from the daemon often coincide with phase transitions that
@@ -163,7 +167,7 @@ let sock: Socket | null = null
 let lineBuf = ''
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
-function sendToSocket(obj: Record<string, unknown>): void {
+function sendToSocket(obj: BridgeToDaemonMessage): void {
   if (!sock || sock.destroyed) {
     process.stderr.write('bridge: socket not connected, dropping message\n')
     return
@@ -171,27 +175,32 @@ function sendToSocket(obj: Record<string, unknown>): void {
   sock.write(JSON.stringify(obj) + '\n')
 }
 
-function handleDaemonMessage(msg: Record<string, unknown>): void {
-  const type = msg.type as string
-  const size = typeof msg.content === 'string' ? msg.content.length : undefined
-  process.stderr.write(`bridge: ← daemon msg type=${type}${size !== undefined ? ` size=${size}b` : ''} ts=${new Date().toISOString()}\n`)
+function handleDaemonMessage(raw: unknown): void {
+  const parsed = parseDaemonToBridgeMessage(raw)
+  if (!parsed.ok) {
+    process.stderr.write(parsed.unknownType
+      ? `bridge: unknown daemon message type: ${parsed.unknownType}\n`
+      : `bridge: invalid daemon message: ${parsed.error}\n`)
+    return
+  }
+  const msg = parsed.msg
+  const size = msg.type === 'notification' ? msg.content.length : undefined
+  process.stderr.write(`bridge: ← daemon msg type=${msg.type}${size !== undefined ? ` size=${size}b` : ''} ts=${new Date().toISOString()}\n`)
 
-  switch (type) {
+  switch (msg.type) {
     case 'registered': {
       process.stderr.write(`bridge: registered as session ${msg.sessionId}\n`)
       socketReady = true
 
-      const meta = msg.sessionMetadata as Record<string, unknown> | undefined
-      if (meta) {
-        sessionMetadata = meta
-        process.stderr.write(`bridge: session metadata received: role=${meta.role}\n`)
+      if (msg.sessionMetadata) {
+        sessionMetadata = msg.sessionMetadata
+        process.stderr.write(`bridge: session metadata received: role=${msg.sessionMetadata.role}\n`)
       }
 
       // Update tool list if daemon sent one (dynamic tool refresh)
-      const tools = msg.tools as Array<Record<string, unknown>> | undefined
-      if (tools && tools.length > 0) {
-        dynamicTools = tools
-        process.stderr.write(`bridge: received ${tools.length} tool definitions from daemon\n`)
+      if (msg.tools && msg.tools.length > 0) {
+        dynamicTools = msg.tools
+        process.stderr.write(`bridge: received ${msg.tools.length} tool definitions from daemon\n`)
         mcp.notification({ method: 'notifications/tools/list_changed' }).catch(err => {
           process.stderr.write(`bridge: failed to send tools/list_changed: ${err}\n`)
         })
@@ -211,23 +220,21 @@ function handleDaemonMessage(msg: Record<string, unknown>): void {
     }
 
     case 'tool_result': {
-      const id = msg.id as string
-      const pending = pendingCalls.get(id)
+      const pending = pendingCalls.get(msg.id)
       if (!pending) {
-        process.stderr.write(`bridge: received tool_result for unknown id ${id}\n`)
+        process.stderr.write(`bridge: received tool_result for unknown id ${msg.id}\n`)
         return
       }
-      pendingCalls.delete(id)
+      pendingCalls.delete(msg.id)
       pending.resolve({
-        content: msg.content as Array<{ type: string; text: string }>,
+        content: msg.content,
         ...(msg.isError ? { isError: true } : {}),
       })
       break
     }
 
     case 'notification': {
-      const content = msg.content as string
-      const meta = msg.meta as Record<string, string>
+      const { content, meta } = msg
       mcp.notification({
         method: 'notifications/claude/channel',
         params: { content, meta },
@@ -253,10 +260,10 @@ function handleDaemonMessage(msg: Record<string, unknown>): void {
       mcp.notification({
         method: 'notifications/claude/channel/permission_request',
         params: {
-          request_id: msg.request_id as string,
-          tool_name: msg.tool_name as string,
-          description: msg.description as string,
-          input_preview: msg.input_preview as string,
+          request_id: msg.request_id,
+          tool_name: msg.tool_name,
+          description: msg.description,
+          input_preview: msg.input_preview,
         },
       }).catch(err => {
         process.stderr.write(`bridge: failed to deliver permission_request: ${err}\n`)
@@ -265,33 +272,33 @@ function handleDaemonMessage(msg: Record<string, unknown>): void {
     }
 
     case 'tools_update': {
-      const tools = msg.tools as Array<Record<string, unknown>> | undefined
+      const tools: BridgeToolDef[] = msg.tools
       const prevCount = dynamicTools?.length ?? 0
-      process.stderr.write(`bridge: ← daemon tools_update received: ${tools?.length ?? 0} tools (was ${prevCount}) ts=${new Date().toISOString()}\n`)
-      if (tools) {
-        dynamicTools = tools
-        // This update answers a `request_tools` we sent — almost always on behalf
-        // of a `tools/list` the client just made. Settling the waiters IS the
-        // delivery; announcing `list_changed` on top of it tells the client its
-        // own answer is news, and it asks again. That is a closed cycle with
-        // nothing to damp it. Only an unsolicited push below is news.
-        //
-        // Asked before settling, because settleAll empties the set — afterwards
-        // there is no way to tell a pull answer from an unsolicited push.
-        const answeredPull = pendingToolsWaiters.size > 0
-        pendingToolsWaiters.settleAll(tools)
-        if (answeredPull) break
-        mcp.notification({ method: 'notifications/tools/list_changed' }).then(() => {
-          process.stderr.write(`bridge: → CC notifications/tools/list_changed delivered ts=${new Date().toISOString()} tools=${tools.length}\n`)
-        }).catch(err => {
-          process.stderr.write(`bridge: → CC notifications/tools/list_changed FAILED: ${err} ts=${new Date().toISOString()}\n`)
-        })
-      }
+      process.stderr.write(`bridge: ← daemon tools_update received: ${tools.length} tools (was ${prevCount}) ts=${new Date().toISOString()}\n`)
+      dynamicTools = tools
+      // This update answers a `request_tools` we sent — almost always on behalf
+      // of a `tools/list` the client just made. Settling the waiters IS the
+      // delivery; announcing `list_changed` on top of it tells the client its
+      // own answer is news, and it asks again. That is a closed cycle with
+      // nothing to damp it. Only an unsolicited push below is news.
+      //
+      // Asked before settling, because settleAll empties the set — afterwards
+      // there is no way to tell a pull answer from an unsolicited push.
+      const answeredPull = pendingToolsWaiters.size > 0
+      pendingToolsWaiters.settleAll(tools)
+      if (answeredPull) break
+      mcp.notification({ method: 'notifications/tools/list_changed' }).then(() => {
+        process.stderr.write(`bridge: → CC notifications/tools/list_changed delivered ts=${new Date().toISOString()} tools=${tools.length}\n`)
+      }).catch(err => {
+        process.stderr.write(`bridge: → CC notifications/tools/list_changed FAILED: ${err} ts=${new Date().toISOString()}\n`)
+      })
       break
     }
 
-    default:
-      process.stderr.write(`bridge: unknown daemon message type: ${type}\n`)
+    case 'tools_result':
+    case 'permission_response':
+      process.stderr.write(`bridge: ignoring unhandled daemon message type=${msg.type}\n`)
+      break
   }
 }
 
@@ -304,7 +311,7 @@ function connectSocket(): void {
     process.stderr.write(`bridge: connected to daemon\n`)
     lineBuf = ''
     const claudeId = resolveClaudeSessionId()
-    sendToSocket({ type: 'register', sessionId: SESSION_ID, claudeSessionId: claudeId, pid: IS_STRAY ? undefined : process.pid, sessionType: process.env.HYDRA_SESSION_TYPE || undefined, restricted: process.env.HYDRA_RESTRICTED === '1' || undefined, writeConfined: process.env.HYDRA_WRITE_CONFINED === '1' || undefined })
+    sendToSocket({ type: 'register', sessionId: SESSION_ID, ...(SESSION_TOKEN ? { sessionToken: SESSION_TOKEN } : {}), claudeSessionId: claudeId, pid: IS_STRAY ? undefined : process.pid, sessionType: process.env.HYDRA_SESSION_TYPE || undefined, restricted: process.env.HYDRA_RESTRICTED === '1' || undefined, writeConfined: process.env.HYDRA_WRITE_CONFINED === '1' || undefined })
   })
 
   sock.on('data', (data: Buffer) => {
@@ -315,8 +322,7 @@ function connectSocket(): void {
       lineBuf = lineBuf.slice(newlineIdx + 1)
       if (!line.trim()) continue
       try {
-        const msg = JSON.parse(line) as Record<string, unknown>
-        handleDaemonMessage(msg)
+        handleDaemonMessage(JSON.parse(line))
       } catch (err) {
         process.stderr.write(`bridge: failed to parse daemon message: ${err}\n`)
       }
@@ -360,6 +366,20 @@ function scheduleReconnect(): void {
 
 // ── MCP server ─────────────────────────────────────────────────────────
 
+// MCP sends `instructions` once in the initialize response, so this captures the session's startup tool set;
+// tools added later via `tools_update` (e.g. protocol_spawn phases) are advertised through `notifications/tools/list_changed`.
+const INITIAL_INSTRUCTIONS = buildSessionInstructions({
+  tools: initialToolsForBridgeEnv({
+    isMain: IS_MAIN,
+    sessionType: process.env.HYDRA_SESSION_TYPE,
+    restricted: process.env.HYDRA_RESTRICTED === '1',
+    writeConfined: process.env.HYDRA_WRITE_CONFINED === '1',
+  }),
+  platform: parseChatPlatform(process.env.CHAT_PLATFORM),
+  // Write-confined sessions can attach files (checked via snapshotConfinedFiles); only restricted sessions are refused.
+  replyAcceptsFiles: process.env.HYDRA_RESTRICTED !== '1',
+})
+
 const mcp = new Server(
   { name: 'hydra-bridge', version: '1.0.0' },
   {
@@ -370,7 +390,7 @@ const mcp = new Server(
         'claude/channel/permission': {},
       },
     },
-    instructions: SESSION_INSTRUCTIONS,
+    instructions: INITIAL_INSTRUCTIONS,
   },
 )
 
@@ -408,8 +428,8 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => {
   // Falls back to cached dynamicTools if the daemon is unreachable.
   if (socketReady) {
     try {
-      const fresh = await new Promise<Array<Record<string, unknown>> | null>(resolve => {
-        const waiter: ToolsWaiter<Array<Record<string, unknown>>> = tools => resolve(tools)
+      const fresh = await new Promise<BridgeToolDef[] | null>(resolve => {
+        const waiter: ToolsWaiter<BridgeToolDef[]> = tools => resolve(tools)
         pendingToolsWaiters.add(waiter)
         sendToSocket({ type: 'request_tools' })
         setTimeout(() => pendingToolsWaiters.timeout(waiter), 2_000)

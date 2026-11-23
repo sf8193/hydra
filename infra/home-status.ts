@@ -1,5 +1,6 @@
 import type { LiveState } from '../engines/engine-adapter.js'
 import type { BlockingKind, BlockingState } from '../engines/engine-adapter.js'
+import type { HomeTabButton } from '../gateways/gateway.js'
 import { HOME_STATUS_ACTION_PREFIX } from '../shared/constants.js'
 
 export type HomeStatusInputs = {
@@ -67,8 +68,8 @@ export function parseHomeStatusClick(actionId: string, value: string | undefined
   return { sessionId: actionId.slice(HOME_STATUS_ACTION_PREFIX.length), shown: value }
 }
 
-export function homeStatusAccessory(status: HomeStatus, sessionId: string, url: string, actionable = true): object {
-  const button: { glyph: string; label: string; style?: string } = BUTTONS[status]
+export function homeStatusAccessory(status: HomeStatus, sessionId: string, url: string, actionable = true): HomeTabButton {
+  const button: { glyph: string; label: string; style?: 'primary' | 'danger' } = BUTTONS[status]
   const action = actionable ? ACTIONS[status] : undefined
   return {
     type: 'button',

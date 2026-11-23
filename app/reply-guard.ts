@@ -33,6 +33,7 @@ import { transport } from '../sessions/bridge-transport.js'
 import { registry } from '../sessions/registry.js'
 import type { SessionInfo } from '../sessions/registry.js'
 import { gateway } from '../infra/config.js'
+import type { ChatGateway } from '../gateways/gateway.js'
 import { on } from '../infra/event-bus.js'
 import type { TurnOutcome } from '../engines/engine-adapter.js'
 import { safeSend } from '../infra/util.js'
@@ -47,12 +48,12 @@ export type ReplyGuardDeps = {
   registryValues: () => Iterable<SessionInfo>
   transportHas: (sessionId: string) => boolean
   occupancy: (info: SessionInfo) => Occupancy
-  transportSendOrQueue: (sessionId: string, msg: any) => void
-  gatewaySend: (channelId: string, text: string, opts?: any) => Promise<any>
+  transportSendOrQueue: (sessionId: string, msg: Record<string, unknown>) => void
+  gatewaySend: (channelId: string, text: string, opts?: Parameters<ChatGateway['send']>[2]) => Promise<unknown>
   // Chunks over-length text into multiple messages instead of Discord rejecting
   // the whole send at 2000 chars (BASE_TYPE_MAX_LENGTH) — the relay/text-fallback
   // paths below carry unbounded session text and must not silently no-op on length.
-  safeSend: (channelId: string, text: string, opts?: any) => Promise<string[]>
+  safeSend: typeof safeSend
   capturePaneScreenshot: (tmuxName: string) => string | null
   capturePaneText: (tmuxName: string, lines?: number) => string | null
   turnOutcome: (info: SessionInfo, sinceMs: number) => TurnOutcome

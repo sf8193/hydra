@@ -359,13 +359,13 @@ describe('posting where link previews are off', () => {
   })
   test('a reply goes as markdown_text, so **bold** and tables render; links and code reach Slack byte for byte', () => {
     const md = 'Fixed **it** in [#889](https://github.com/o/r/pull/889)\n\n| a | b |\n|---|---|\n| 1 | 2 |\n```ts\nconst a = `x` < 2 && b > 1\n```'
-    const p = replyPayload('C1', '1.0', md)
+    const p: Record<string, unknown> = replyPayload('C1', '1.0', md)
     expect(p.markdown_text).toBe(md)
     expect(p).not.toHaveProperty('text')
   })
   test('a reply with Slack syntax goes as classic text, so a tag still reaches the tagged app (#953)', () => {
     for (const t of ['over to <@U0OTHER> **now**', 'cc <@U0OTHER|opal>', '<!here> heads up', '<!everyone> heads up', 'see <!subteam^S1|team>', 'in <#C0123|dev>']) {
-      const p = replyPayload('C1', '1.0', t)
+      const p: Record<string, unknown> = replyPayload('C1', '1.0', t)
       expect(p.text).toBe(t)
       expect(p).not.toHaveProperty('markdown_text')
     }
@@ -378,7 +378,7 @@ describe('posting where link previews are off', () => {
   test('the cap: at MARKDOWN_TEXT_MAX still markdown_text, one past it classic text, unchanged', () => {
     expect(replyPayload('C1', undefined, 'x'.repeat(MARKDOWN_TEXT_MAX))).toHaveProperty('markdown_text')
     const long = 'x'.repeat(MARKDOWN_TEXT_MAX + 1)
-    const p = replyPayload('C1', undefined, long)
+    const p: Record<string, unknown> = replyPayload('C1', undefined, long)
     expect(p.text).toBe(long)
     expect(p).not.toHaveProperty('markdown_text')
   })

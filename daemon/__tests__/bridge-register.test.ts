@@ -1,7 +1,7 @@
 // T4 (adapter-policy): pins the bridge-register connection role (D1) and the
 // spawn sessionMetadata tool list (D7).
 import { describe, test, expect } from 'bun:test'
-import { connectionRoleFor } from '../../app/bridge-server.js'
+import { connectionRoleFor, __test as bridgeServerTest } from '../../app/bridge-server.js'
 import { spawnToolNames } from '../../app/session-lifecycle.js'
 import { computeToolsForSession } from '../../engines/bridge-tools.js'
 import type { SessionInfo } from '../../sessions/registry.js'
@@ -36,5 +36,36 @@ describe('spawnToolNames', () => {
   })
   test('Codex gets []', () => {
     expect(spawnToolNames(engines.codex, 'thread_owner')).toEqual([])
+  })
+})
+
+describe('handleBridgeMessage malformed tool_call reply', () => {
+  test('replies with an error tool_result when tool_call has a string id but invalid name or args', () => {
+    const written: string[] = []
+    const conn = {
+      sessionId: 's-malformed',
+      socket: {
+        destroyed: false,
+        write: (chunk: string) => { written.push(chunk); return true },
+      },
+    } as any
+
+    bridgeServerTest!.handleBridgeMessage(conn, JSON.stringify({ type: 'tool_call', id: 'tc-1', name: 'reply', args: null }))
+    bridgeServerTest!.handleBridgeMessage(conn, JSON.stringify({ type: 'tool_call', id: 'tc-2' }))
+
+    expect(written.map(line => JSON.parse(line))).toEqual([
+      {
+        type: 'tool_result',
+        id: 'tc-1',
+        content: [{ type: 'text', text: 'Invalid tool_call: tool_call: args must be an object' }],
+        isError: true,
+      },
+      {
+        type: 'tool_result',
+        id: 'tc-2',
+        content: [{ type: 'text', text: 'Invalid tool_call: tool_call: id and name must be strings' }],
+        isError: true,
+      },
+    ])
   })
 })

@@ -1,7 +1,7 @@
 // Who sent a CLI request (shared/caller.ts has the model). Each launch is issued a token; its session's record keeps only the hash, so the
 // state files hold nothing a caller could present.
 
-import { createHash, randomBytes } from 'crypto'
+import { createHash, randomBytes, timingSafeEqual } from 'crypto'
 import { registry } from './registry.js'
 import { occupancy } from './session-reachability.js'
 
@@ -11,6 +11,60 @@ export function issueSessionToken(): { token: string; hash: string } {
 }
 
 export const sessionTokenHash = (token: string): string => createHash('sha256').update(token).digest('hex')
+
+/** Constant-time check that `token` hashes to `expectedHash` (hex sha256). */
+export function verifySessionToken(token: string | undefined, expectedHash: string): boolean {
+  if (!token) return false
+  const got = Buffer.from(sessionTokenHash(token), 'utf8')
+  const want = Buffer.from(expectedHash, 'utf8')
+  return got.length === want.length && timingSafeEqual(got, want)
+}
+
+// Holds token hashes for sessions between adapter.launch() and registry.set() so a bridge
+// registering during startup is authenticated against its issued hash before the record lands.
+const pendingSessionTokenHashes = new Map<string, string>()
+
+export function notePendingSessionToken(sessionId: string, hash: string): void {
+  pendingSessionTokenHashes.set(sessionId, hash)
+}
+
+export function clearPendingSessionToken(sessionId: string): void {
+  pendingSessionTokenHashes.delete(sessionId)
+}
+
+export function bridgeRegistrationPolicy(sessionId: string): { expectedHash?: string; requireToken: boolean } {
+  const record = registry.get(sessionId)
+  if (record) {
+    return {
+      expectedHash: record.sessionTokenHash,
+      requireToken: Boolean(record.sessionTokenHash && record.bridgeToken),
+    }
+  }
+  const pending = pendingSessionTokenHashes.get(sessionId)
+  if (pending) return { expectedHash: pending, requireToken: true }
+  return { expectedHash: undefined, requireToken: false }
+}
+
+/**
+ * Authenticate a bridge's `register` message against the session's stored token hash.
+ * - Sessions spawned with token-aware bridges (`requireToken: true`) must present the matching token.
+ * - Pre-deploy live sessions that already have a `sessionTokenHash` but no `bridgeToken` flag
+ *   keep their old bridge alive across a rolling restart (missing token accepted), while a wrong
+ *   token is still refused.
+ * - Records without a hash (`main`, stray bridges, pre-token legacy records) remain accepted.
+ */
+export function verifyBridgeRegistration(opts: {
+  sessionToken?: string
+  expectedHash?: string
+  requireToken: boolean
+}): { ok: true } | { ok: false; reason: string } {
+  if (!opts.expectedHash) return { ok: true }
+  if (!opts.sessionToken) {
+    return opts.requireToken ? { ok: false, reason: 'missing session token' } : { ok: true }
+  }
+  if (!verifySessionToken(opts.sessionToken, opts.expectedHash)) return { ok: false, reason: 'session token does not match' }
+  return { ok: true }
+}
 
 /**
  * Who sent a CLI request: the operator's shell (no claim), the session whose token it presented, or a session that could not show which

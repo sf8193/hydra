@@ -3,12 +3,13 @@ import { normalizeAddress } from '../config/load.js'
 import { noSuchApp } from '../config/pins.js'
 import { DEFAULT_SLACK_APP, isEvery, parsePlace, type Address, type HydraConfig, type Place } from '../config/types.js'
 import { readValue, spelledApp } from '../shared/value-kind.js'
+import type { CLIRouteParams } from '../shared/cli-protocol.js'
 import { explain, answersLines, route } from './route.js'
 
 export const ROUTE_USAGE = 'usage: hydra route --person <person:id|address|stranger> --place <place> [--app <app:id>] [--heard-by <app:id,app:id>] [--mentioned <app:id,app:id>] [--bound <specialist> [--bound-app <app:id>]]'
 
 /** What `hydra route` asks. The app lists are comma-separated apps, each `app:<id>`. */
-export type RouteParams = { person?: string; place?: string; bound?: string; app?: string; heardBy?: string; mentioned?: string; boundApp?: string }
+export type RouteParams = CLIRouteParams
 
 /** The flags of `hydra route`, read from its arguments. */
 export function routeFlags(args: string[]): { ok: true; params: RouteParams } {

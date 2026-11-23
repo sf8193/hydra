@@ -18,7 +18,8 @@ import { CLAUDE_WORKING_SILENCE_S, type ClaudeEngine } from './claude-engine.js'
 import { FRESH_START_MS, SOCK_PATH, PLATFORM, SPAWN_LOGS_DIR, STATE_DIR } from '../infra/config.js'
 import { removeSessionToken, removeSpawnPrompt, shq, writeSessionToken, writeSpawnPrompt } from '../infra/launch-files.js'
 import { tmuxCreateSession, tmuxSync, tmuxWindowActivity } from '../infra/tmux.js'
-import { SESSION_INSTRUCTIONS, contextWindowOf, formatNotification } from '../shared/constants.js'
+import { contextWindowOf, formatNotification } from '../shared/constants.js'
+import { buildSessionInstructions, initialToolsForBridgeEnv, parseChatPlatform } from '../shared/session-instructions.js'
 import { withRaisedFdLimit } from '../shared/spawn-env.js'
 import { AGY_HOOKS_CONFIG, AGY_MCP_CONFIG, registerHydraHooks, registerHydraTools } from './agy-config.js'
 import { agyContextTokens, agyState, agyStateDir, agyStateFile, agyTurn } from './agy-session.js'
@@ -52,10 +53,14 @@ export class AgyEngine implements EngineAdapter {
   async launch(input: LaunchInput): Promise<LaunchResult> {
     const { sessionId, tmuxName } = input
     const model = input.model!   // doSpawnSession always gives agy one (its flash model when none is named)
+    const cont = input.continuation
+    if (cont && cont.kind !== 'resume-session') {
+      throw new Error(`agy engine: unsupported launch continuation "${cont.kind}"`)
+    }
     // Resume: agy continues the dead session's conversation (agy keeps conversations per folder: the caller launches in the folder the session had).
     // With no conversation on record agy would start a fresh one that the caller reports as resumed, so that fails the resume instead.
-    const conversation = input.resumeSession ? agyState(input.resumeSession.fromSessionId)?.conversationId : undefined
-    if (input.resumeSession && !conversation) throw new Error(`agy session ${input.resumeSession.fromSessionId} has no conversation to resume`)
+    const conversation = cont ? agyState(cont.fromSessionId)?.conversationId : undefined
+    if (cont && !conversation) throw new Error(`agy session ${cont.fromSessionId} has no conversation to resume`)
     registerHydraTools(this.mcpConfig)
     registerHydraHooks(this.hooksConfig)
     mkdirSync(agyStateDir(), { recursive: true, mode: 0o700 })
@@ -69,7 +74,12 @@ export class AgyEngine implements EngineAdapter {
     mkdirSync(SPAWN_LOGS_DIR, { recursive: true, mode: 0o700 })
     let promptFile: ReturnType<typeof writeSpawnPrompt>, tokenFile: ReturnType<typeof writeSessionToken> | null = null
     try {
-      promptFile = writeSpawnPrompt(tmuxName, sessionId, `${SESSION_INSTRUCTIONS}\n\n${input.prompt}`)
+      // agy has limitsAccess: false, so sessions are never restricted or write-confined.
+      const instructions = buildSessionInstructions({
+        tools: initialToolsForBridgeEnv({ sessionType: input.sessionType }),
+        platform: parseChatPlatform(PLATFORM),
+      })
+      promptFile = writeSpawnPrompt(tmuxName, sessionId, `${instructions}\n\n${input.prompt}`)
       if (input.sessionToken) tokenFile = writeSessionToken(tmuxName, sessionId, input.sessionToken)
     } catch (err) { removeSpawnPrompt({ tmuxName, sessionId }); removeSessionToken({ tmuxName, sessionId }); throw err }
     const args = [agy, `--model ${shq(model)}`, `--settings ${shq(agySettings(input.cwd, apiKeyMode))}`, '--dangerously-skip-permissions', ...(conversation ? [`--conversation ${shq(conversation)}`] : []), `-i ${promptFile.ref}`]

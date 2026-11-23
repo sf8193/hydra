@@ -19,10 +19,11 @@ import { spawnSpecialist, specialistStatus, SpecialistError } from './specialist
 import { declaredInToml, getSpecialist, listSpecialists, removeSpecialist, setSpecialist, setSpecialistThread, withTargetLock, type Specialist } from '../sessions/specialists.js'
 import { slackConversationHealth, formatConversations, operatorBind, operatorUnbind, placeAliases } from '../connectors/slack/runtime.js'
 import { currentHydraConfig } from '../infra/hydra-config.js'
-import { routeFor, type RouteParams } from '../routing/route-request.js'
+import { routeFor } from '../routing/route-request.js'
 import { deliverToTarget, deliverVia, sessionByName, toSession, toThread, type DeliverOutcome } from './targets.js'
 import { readTarget, spelled } from '../shared/target-kind.js'
-import { deliverWord, type DeliverWord } from '../shared/exit-codes.js'
+import { deliverWord } from '../shared/exit-codes.js'
+import { parseCLIRequest, type CLIRequest, type CLIRequestFor, type CLIResponse } from '../shared/cli-protocol.js'
 import { gateway } from '../infra/config.js'
 import { operatorIds } from '../sessions/access.js'
 import { on } from '../infra/event-bus.js'
@@ -46,37 +47,18 @@ export function bindCliIdempotency(): void {
 }
 
 // ---------------------------------------------------------------------------
-// CLI request/response types
+// CLI request/response types (re-exported from Tier-0 shared/cli-protocol.ts)
 // ---------------------------------------------------------------------------
 
-export type CLIRequest = {
-  type: 'cli'
-  command: string
-  id: string
-  params: Record<string, unknown>
-  /** Who is calling, as the CLI says (shared/caller.ts); read by cliCaller, never believed as given. */
-  caller?: unknown
-}
-
-export type CLIResponse = {
-  type: 'cli-response'
-  command: string
-  id: string
-  ok: boolean
-  data?: unknown
-  error?: string
-  exitCode?: number
-  /** deliver only: the one word the outcome means (shared/exit-codes.ts). */
-  result?: DeliverWord
-}
+export type { CLIRequest, CLIResponse }
 
 // ---------------------------------------------------------------------------
 // Response helper
 // ---------------------------------------------------------------------------
 
-function respond(req: CLIRequest, ok: true, data?: unknown): CLIResponse
-function respond(req: CLIRequest, ok: false, error: string, data?: unknown, exitCode?: number): CLIResponse
-function respond(req: CLIRequest, ok: boolean, dataOrError?: unknown, maybeData?: unknown, exitCode?: number): CLIResponse {
+function respond(req: { command: string; id: string }, ok: true, data?: unknown): CLIResponse
+function respond(req: { command: string; id: string }, ok: false, error: string, data?: unknown, exitCode?: number): CLIResponse
+function respond(req: { command: string; id: string }, ok: boolean, dataOrError?: unknown, maybeData?: unknown, exitCode?: number): CLIResponse {
   if (ok) {
     return { type: 'cli-response', command: req.command, id: req.id, ok: true, data: dataOrError }
   }
@@ -97,20 +79,8 @@ function withResult(r: CLIResponse): CLIResponse {
 // Command handlers
 // ---------------------------------------------------------------------------
 
-async function handleSpawn(req: CLIRequest): Promise<CLIResponse> {
-  const { prompt, initiator, idempotencyKey, channel, message, ephemeral, idleTtl, forceWorktreeCleanup, quiet, model, specialist } = req.params as {
-    specialist?: string
-    prompt?: string
-    initiator?: string
-    idempotencyKey?: string
-    channel?: string
-    message?: string
-    ephemeral?: boolean
-    idleTtl?: string
-    forceWorktreeCleanup?: boolean
-    quiet?: boolean
-    model?: string
-  }
+async function handleSpawn(req: CLIRequestFor<'spawn'>): Promise<CLIResponse> {
+  const { prompt, initiator, idempotencyKey, channel, message, ephemeral, idleTtl, forceWorktreeCleanup, quiet, model, specialist } = req.params
 
   if (specialist) {
     // The declaration is the recipe: its kickoff is the prompt, and its channel and model are the spawn's.
@@ -178,8 +148,8 @@ function cpuField(sessionId: string): { cpu?: string } {
   return v && (v.claudePct !== undefined || v.bridgePct !== undefined) ? { cpu: formatCpuSummary(v) } : {}
 }
 
-function handleList(req: CLIRequest): CLIResponse {
-  const { ended: withEnded, withinDays } = req.params as { ended?: unknown; withinDays?: unknown }
+function handleList(req: CLIRequestFor<'list'>): CLIResponse {
+  const { ended: withEnded, withinDays } = req.params
   let ended: ReturnType<typeof endedSessions> = []
   if (withEnded === true) {
     try { ended = endedSessions(endedWithinDays(withinDays)) } catch (err) { return respond(req, false, err instanceof Error ? err.message : String(err)) }
@@ -201,8 +171,8 @@ function handleList(req: CLIRequest): CLIResponse {
   return respond(req, true, [...list, ...ended.filter(e => !list.some(l => l.threadId === e.thread_id))])
 }
 
-function handleStatus(req: CLIRequest): CLIResponse {
-  const { name } = req.params as { name?: string }
+function handleStatus(req: CLIRequestFor<'status'>): CLIResponse {
+  const { name, attach } = req.params
   if (!name) return respond(req, false, 'name is required')
 
   const info = sessionByName(name)
@@ -222,7 +192,7 @@ function handleStatus(req: CLIRequest): CLIResponse {
     ...cpuField(info.sessionId),
     origin: info.originType,
     // Only `hydra attach` asks: surface() may recreate tmux and relaunch the Codex TUI.
-    attachTarget: (req.params as { attach?: unknown }).attach === true ? info.adapter.surface(info) : undefined,
+    attachTarget: attach === true ? info.adapter.surface(info) : undefined,
   })
 }
 
@@ -232,8 +202,8 @@ function endedThreadsOf(name: string): string[] {
   return [...threadRegistry.threads.values()].filter(t => t.sessionHistory.at(-1)?.tmuxName === name && !registry.getByThread(t.threadId)).map(t => t.threadId)
 }
 
-async function handleKill(req: CLIRequest): Promise<CLIResponse> {
-  const { name, destroy } = req.params as { name?: string; destroy?: boolean }
+async function handleKill(req: CLIRequestFor<'kill'>): Promise<CLIResponse> {
+  const { name, destroy } = req.params
   if (!name) return respond(req, false, 'name is required')
   // A destroy acts on the caller's authority: the operator's shell may destroy any, a session as the kill_session tool allows, and a
   // caller that cannot show which session it is, none.
@@ -277,7 +247,7 @@ async function handleKill(req: CLIRequest): Promise<CLIResponse> {
   return respond(req, true, { killed: info.tmuxName, ...(res && { destroyed: info.threadId }) })
 }
 
-function handleHealth(req: CLIRequest): CLIResponse {
+function handleHealth(req: CLIRequestFor<'health'>): CLIResponse {
   const sessions = [...registry.values()]
   const connected = sessions.filter(s => transport.has(s.sessionId)).length
   const disconnected = sessions.length - connected
@@ -298,8 +268,8 @@ function handleHealth(req: CLIRequest): CLIResponse {
 }
 
 // `hydra jobs mark-done`: the latest slot is recorded as done without running anything.
-function handleJobsMarkDone(req: CLIRequest): CLIResponse {
-  const { name } = req.params as { name?: string }
+function handleJobsMarkDone(req: CLIRequestFor<'jobs-mark-done'>): CLIResponse {
+  const { name } = req.params
   if (!name) return respond(req, false, 'name is required')
   const clock = jobsClock()
   if (!clock) return respond(req, false, 'the schedule clock is not running in this daemon')
@@ -308,7 +278,7 @@ function handleJobsMarkDone(req: CLIRequest): CLIResponse {
 }
 
 // `hydra jobs sync`: the clock loads jobs.toml now; answered with the jobs before and after, after a tick.
-async function handleJobsSync(req: CLIRequest): Promise<CLIResponse> {
+async function handleJobsSync(req: CLIRequestFor<'jobs-sync'>): Promise<CLIResponse> {
   const clock = jobsClock()
   if (!clock) return respond(req, false, 'the schedule clock is not running in this daemon')
   const r = await clock.requestSync()
@@ -316,8 +286,8 @@ async function handleJobsSync(req: CLIRequest): Promise<CLIResponse> {
 }
 
 // `hydra jobs run`: a manual dispatch through the clock. Answered after the spawn, with {id, pid, lstart}.
-function handleJobsRun(req: CLIRequest): CLIResponse {
-  const { name } = req.params as { name?: string }
+function handleJobsRun(req: CLIRequestFor<'jobs-run'>): CLIResponse {
+  const { name } = req.params
   if (!name) return respond(req, false, 'name is required')
   const clock = jobsClock()
   if (!clock) return respond(req, false, 'the schedule clock is not running in this daemon')
@@ -325,16 +295,16 @@ function handleJobsRun(req: CLIRequest): CLIResponse {
   return r.ok ? respond(req, true, r.reply) : respond(req, false, r.error)
 }
 
-function handleClearKey(req: CLIRequest): CLIResponse {
-  const { key } = req.params as { key?: string }
+function handleClearKey(req: CLIRequestFor<'clear-key'>): CLIResponse {
+  const { key } = req.params
   if (!key) return respond(req, false, 'key is required')
   const cleared = clearIdempotency(key)
   if (!cleared) return respond(req, false, `key "${key}" not found`)
   return respond(req, true, { cleared: key })
 }
 
-function handleCheckKey(req: CLIRequest): CLIResponse {
-  const { key } = req.params as { key?: string }
+function handleCheckKey(req: CLIRequestFor<'check-key'>): CLIResponse {
+  const { key } = req.params
   if (!key) return respond(req, false, 'key is required')
   const entries = listIdempotencyEntries()
   const entry = entries.find(e => e.key === key)
@@ -347,20 +317,8 @@ function handleCheckKey(req: CLIRequest): CLIResponse {
 // ---------------------------------------------------------------------------
 
 
-async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
-  const { to, thread, session, specialist, message, initiator, idempotencyKey, idempotencyTtl, queue, revive, conversation } = req.params as {
-    to?: string
-    conversation?: string
-    thread?: string
-    session?: string
-    specialist?: string
-    message?: string
-    initiator?: string
-    idempotencyKey?: string
-    idempotencyTtl?: string
-    queue?: boolean
-    revive?: boolean
-  }
+async function handleDeliver(req: CLIRequestFor<'deliver'>): Promise<CLIResponse> {
+  const { to, thread, session, specialist, message, initiator, idempotencyKey, idempotencyTtl, queue, revive, conversation } = req.params
 
   if (!message) return respond(req, false, 'message is required')
   const idempotencyTtlMs = idempotencyTtl === undefined ? undefined : parseIdempotencyTtl(idempotencyTtl)
@@ -425,8 +383,8 @@ async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
 // Specialists — named, refillable addresses (see specialists.ts)
 // ---------------------------------------------------------------------------
 
-async function handleSpecialist(req: CLIRequest): Promise<CLIResponse> {
-  const p = req.params as { action?: string; name?: string; thread?: string; channel?: string; kickoff?: string; kickoffFile?: string; model?: string; idle?: string }
+async function handleSpecialist(req: CLIRequestFor<'specialist'>): Promise<CLIResponse> {
+  const p = req.params
   // hydra.toml's restricted (with the tools and servers a restricted specialist may use) and sessions mode, and maxSessions only where it applies (per-conversation).
   const mode = (name: string) => {
     const d = Object.hasOwn(currentHydraConfig().specialists, name) ? currentHydraConfig().specialists[name] : undefined
@@ -509,14 +467,14 @@ function setSpecialistUnderLock(
 // Conversations and routing: the operator's view
 // ---------------------------------------------------------------------------
 
-async function handleConversations(req: CLIRequest): Promise<CLIResponse> {
-  const p = req.params as { action?: string; conversation?: string; to?: string; why?: string }
+async function handleConversations(req: CLIRequestFor<'conversations'>): Promise<CLIResponse> {
+  const p = req.params
   try {
     switch (p.action ?? 'list') {
       case 'list': return respond(req, true, { conversations: formatConversations(), health: slackConversationHealth() })
       case 'bind':
         if (!p.conversation || !p.to) return respond(req, false, 'a conversation and a specialist are required')
-        return respond(req, true, { bound: await operatorBind(p.conversation, p.to, typeof p.why === 'string' ? p.why : undefined) })
+        return respond(req, true, { bound: await operatorBind(p.conversation, p.to, p.why) })
       case 'unbind':
         if (!p.conversation) return respond(req, false, 'a conversation is required')
         return respond(req, true, { unbound: operatorUnbind(p.conversation) })
@@ -525,8 +483,8 @@ async function handleConversations(req: CLIRequest): Promise<CLIResponse> {
   } catch (err) { return respond(req, false, err instanceof Error ? err.message : String(err)) }
 }
 
-function handleRoute(req: CLIRequest): CLIResponse {
-  const r = routeFor(currentHydraConfig(), req.params as RouteParams, placeAliases)
+function handleRoute(req: CLIRequestFor<'route'>): CLIResponse {
+  const r = routeFor(currentHydraConfig(), req.params, placeAliases)
   return r.ok ? respond(req, true, { fate: r.fate, ...(r.to && { to: r.to }), report: r.report }) : respond(req, false, r.error)
 }
 
@@ -534,10 +492,13 @@ function handleRoute(req: CLIRequest): CLIResponse {
 // Dispatch
 // ---------------------------------------------------------------------------
 
-export async function handleCLIRequest(req: CLIRequest): Promise<CLIResponse> {
-  if (typeof req.params !== 'object' || req.params === null) {
-    return respond(req, false, 'params must be an object')
+export async function handleCLIRequest(raw: unknown): Promise<CLIResponse> {
+  const parsed = parseCLIRequest(raw)
+  if (!parsed.ok) {
+    process.stderr.write(`daemon: cli ${parsed.command || '(invalid)'} failed: ${parsed.error}\n`)
+    return respond({ command: parsed.command, id: parsed.id }, false, parsed.error)
   }
+  const req = parsed.request
   process.stderr.write(`daemon: cli ${req.command} (id: ${req.id})\n`)
   try {
     let response: CLIResponse
@@ -556,8 +517,6 @@ export async function handleCLIRequest(req: CLIRequest): Promise<CLIResponse> {
       case 'jobs-run': response = handleJobsRun(req); break
       case 'jobs-mark-done': response = handleJobsMarkDone(req); break
       case 'jobs-sync': response = await handleJobsSync(req); break
-      default:
-        response = respond(req, false, `unknown command: ${req.command}`)
     }
     if (!response.ok) {
       process.stderr.write(`daemon: cli ${req.command} failed: ${response.error}\n`)

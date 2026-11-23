@@ -109,6 +109,42 @@ export type TmuxKeyAction =
 // Launch
 // ---------------------------------------------------------------------------
 
+/**
+ * How a launch continues an existing conversation — at most one per launch.
+ * Replaces four flat optional fields so mutually exclusive modes are
+ * unrepresentable at compile time and every engine adapter can fail closed
+ * on a continuation meant for another engine.
+ */
+export type LaunchContinuation =
+  | { readonly kind: 'fork-claude'; readonly claudeSessionId: string }
+  | { readonly kind: 'fork-codex'; readonly codexThreadId: string }
+  | { readonly kind: 'resume-claude'; readonly claudeSessionId: string }
+  | { readonly kind: 'resume-codex'; readonly threadId: string; readonly homeName: string }
+  | { readonly kind: 'resume-session'; readonly fromSessionId: string }
+
+/** Build a single LaunchContinuation from SpawnOpts continuation fields; throws on conflicting or malformed options. */
+export function launchContinuationFrom(
+  opts?: Pick<SpawnOpts, 'forkFrom' | 'resumeFrom' | 'resumeCodex' | 'resumeSession'>,
+): LaunchContinuation | undefined {
+  if (!opts) return undefined
+  const found: LaunchContinuation[] = []
+  if (opts.resumeFrom) found.push({ kind: 'resume-claude', claudeSessionId: opts.resumeFrom })
+  if (opts.resumeCodex) found.push({ kind: 'resume-codex', threadId: opts.resumeCodex.threadId, homeName: opts.resumeCodex.homeName })
+  if (opts.resumeSession) found.push({ kind: 'resume-session', fromSessionId: opts.resumeSession.fromSessionId })
+  if (opts.forkFrom) {
+    if (opts.forkFrom.claudeSessionId && opts.forkFrom.codexThreadId) {
+      throw new Error('cannot combine claudeSessionId and codexThreadId in forkFrom')
+    }
+    if (opts.forkFrom.claudeSessionId) found.push({ kind: 'fork-claude', claudeSessionId: opts.forkFrom.claudeSessionId })
+    else if (opts.forkFrom.codexThreadId) found.push({ kind: 'fork-codex', codexThreadId: opts.forkFrom.codexThreadId })
+    else throw new Error('forkFrom must name either claudeSessionId or codexThreadId')
+  }
+  if (found.length > 1) {
+    throw new Error(`conflicting launch continuations: ${found.map(c => c.kind).join(', ')}`)
+  }
+  return found[0]
+}
+
 export type LaunchInput = {
   readonly sessionId: string
   readonly tmuxName: string
@@ -121,10 +157,7 @@ export type LaunchInput = {
   readonly forkFromOriginalCwd?: boolean
   readonly tools?: string[]
   readonly disallowedTools?: string[]
-  readonly forkFrom?: { claudeSessionId?: string; codexThreadId?: string }
-  readonly resumeFrom?: string
-  readonly resumeCodex?: { threadId: string; homeName: string }  // Codex: resume this thread in its original CODEX_HOME
-  readonly resumeSession?: { fromSessionId: string }             // omp, agy: continue the conversation this dead hydra session's own files hold
+  readonly continuation?: LaunchContinuation
   readonly threadId?: string                                     // the chat thread this session serves; exported to its env
   readonly sessionType?: SessionInfo['sessionType']              // and its role there; exported to its env
   readonly sessionToken?: string                                 // the token this launch's session presents to the CLI (cli-caller.ts): handed over by file or process env, never on a command line

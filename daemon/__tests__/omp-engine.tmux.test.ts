@@ -109,7 +109,7 @@ test.skipIf(!run)('a resumed omp session continues the dead session\'s conversat
     await must(() => daemon.replies().includes('noted'), 90_000)
     await engine.stop(first)
 
-    await engine.launch({ ...base, sessionId: second.sessionId, tmuxName: second.tmuxName, resumeSession: { fromSessionId: first.sessionId },
+    await engine.launch({ ...base, sessionId: second.sessionId, tmuxName: second.tmuxName, continuation: { kind: 'resume-session', fromSessionId: first.sessionId },
       prompt: 'What was the secret word? Call the reply tool with chat_id "1" and just that word as the text.' })
     await must(() => daemon.replies().some(t => t.toUpperCase().includes('MANGO')), 90_000)
     // The resumed session reads its own (copied) file: its turn and context are visible under the new id.

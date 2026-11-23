@@ -112,7 +112,12 @@ export type PostOptions = { unfurl?: false; classic: boolean }
  * reply tags someone) or the text is past the cap, the thread when there is one, and unfurling off exactly when asked. Tagged text differs from the gateway here:
  * the gateway's `applyMessageBody` keeps classic `text` only for buttons, so its tagged replies go as `markdown_text`.
  */
-export function postPayload(channel: string, threadTs: string | undefined, text: string, opts: PostOptions): Record<string, unknown> {
+export function postPayload(
+  channel: string,
+  threadTs: string | undefined,
+  text: string,
+  opts: PostOptions,
+): { channel: string; thread_ts?: string; unfurl_links?: false; unfurl_media?: false } & ({ text: string } | { markdown_text: string }) {
   return { channel, ...messageBody(text, opts.classic), ...(threadTs && { thread_ts: threadTs }), ...unfurlFields(opts.unfurl === false) }
 }
 
@@ -1028,7 +1033,7 @@ export function boltApp(tokens: { app: string; bot: string; user?: string }): Sl
     },
     react: async (channel, ts, name) => { await client.reactions.add({ token: tokens.bot, channel, timestamp: ts, name }) },
     post: async (channel, threadTs, text, opts) => {
-      const r = await poster.chat.postMessage(postPayload(channel, threadTs, text, opts) as any).catch(e => { throw explainSlackError(e) })
+      const r = await poster.chat.postMessage(postPayload(channel, threadTs, text, opts)).catch(e => { throw explainSlackError(e) })
       if (!r.ts) throw new Error('Slack accepted the message but returned no ts')
       return r.ts
     },

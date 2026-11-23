@@ -1,6 +1,6 @@
 {
   "name": "discord",
-  "description": "Discord channel for Claude Code \u2014 messaging bridge with built-in access control. Manage who it hears (people, channels) via /discord:access, which edits hydra.toml.",
+  "description": "Discord channel for Claude Code \u2014 messaging bridge with built-in access control. Manage who it hears (people, channels) via /hydra:access, which edits hydra.toml.",
   "version": "0.0.4",
   "keywords": [
     "discord",

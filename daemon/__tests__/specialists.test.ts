@@ -2,7 +2,7 @@ import { describe, test, expect, afterEach } from 'bun:test'
 import { writeFileSync, mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { handleCLIRequest, type CLIRequest } from '../../app/cli-handler.js'
+import { handleCLIRequest } from '../../app/cli-handler.js'
 import { registry, threadRegistry } from '../../sessions/registry.js'
 import { transport } from '../../sessions/bridge-transport.js'
 import { specialistDeps } from '../../app/specialist-deliver.js'
@@ -26,7 +26,7 @@ import './arm-gate.js'
 process.stderr.write = (() => true) as any
 
 let n = 0
-const req = (command: string, params: Record<string, unknown>): CLIRequest => ({ type: 'cli', command, id: `specialist-${++n}`, params })
+const req = (command: string, params: Record<string, unknown>) => ({ type: 'cli', command, id: `specialist-${++n}`, params })
 const deliver = (specialist: string, extra: Record<string, unknown> = {}) =>
   handleCLIRequest(req('deliver', { specialist, message: 'a mention', initiator: 'forwarder', ...extra }))
 

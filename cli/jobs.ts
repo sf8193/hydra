@@ -15,6 +15,7 @@ import { MAX_DELIVER_IDEMPOTENCY_TTL_MS, platformStateDir } from '../shared/cons
 import { LAUNCHD_PATH, LAUNCH_AGENTS_DIR, jobAgentLabel, plistEntry, launchdCalendar, launchdPlist, parseLegacyTitle } from '../shared/jobs-launchd.js'
 import { legacyTitles, runnerJobs, stableBun } from '../infra/launch-agents.js'
 import { resolveConfig, sendRequest } from './helpers.js'
+import type { CLIRequest, CLIResponseView } from '../shared/cli-protocol.js'
 import { isUnder } from '../infra/path-containment.js'
 import { cliSchedules, schedulesAreSource } from '../infra/schedule-source.js'
 import { latestSlot, nextSlot } from '../shared/cron-local.js'
@@ -325,7 +326,7 @@ export async function jobsLaunchdRun(platform: string, name: string, stateDir: s
 // ---------------------------------------------------------------------------
 
 export const runIO = {
-  send: (sock: string, req: Record<string, unknown>) => sendRequest(sock, req, 15_000),
+  send: (sock: string, req: CLIRequest): Promise<CLIResponseView> => sendRequest(sock, req, 15_000),
   now: () => Date.now(),
   sleep: (ms: number) => new Promise<void>(r => setTimeout(r, ms)),
   onSigint: (fn: () => void) => { process.on('SIGINT', fn) },
@@ -364,7 +365,7 @@ export async function jobsRun(platform: string, name: string, stateDirOverride?:
   })
 
   if (!existsSync(sock)) { runIO.error(`error: daemon not running (no socket at ${sock})`); return 1 }
-  let resp: Record<string, unknown>
+  let resp: CLIResponseView
   try {
     resp = await runIO.send(sock, { type: 'cli', command: 'jobs-run', id: randomUUID(), params: { name } })
   } catch (err) {
@@ -405,7 +406,7 @@ export async function jobsRun(platform: string, name: string, stateDirOverride?:
 export async function jobsMarkDone(platform: string, name: string, stateDirOverride?: string): Promise<number> {
   const sock = join(stateDirFor(platform, stateDirOverride), 'daemon.sock')
   if (!existsSync(sock)) { runIO.error(`error: daemon not running (no socket at ${sock})`); return 1 }
-  let resp: Record<string, unknown>
+  let resp: CLIResponseView
   try { resp = await runIO.send(sock, { type: 'cli', command: 'jobs-mark-done', id: randomUUID(), params: { name } }) } catch (err) {
     runIO.error(`error: daemon not running: ${err instanceof Error ? err.message : err}`)
     return 1
@@ -515,7 +516,7 @@ export async function jobsSync(platform: string, stateDirOverride?: string): Pro
     return 1
   }
   const sock = join(stateDir, 'daemon.sock')
-  let resp: Record<string, unknown> | null = null
+  let resp: CLIResponseView | null = null
   let unreachable = ''
   if (existsSync(sock)) {
     try { resp = await runIO.send(sock, { type: 'cli', command: 'jobs-sync', id: randomUUID(), params: {} }) } catch (err) {

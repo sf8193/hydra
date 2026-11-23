@@ -378,8 +378,8 @@ export async function lifecycleWatchdog(platform: string): Promise<void> {
 
   try {
     execFileSync('tmux', ['-V'], { stdio: 'pipe', env: process.env as Record<string, string> })
-  } catch (err: any) {
-    if (err?.code === 'ENOENT') {
+  } catch (err: unknown) {
+    if ((err as { code?: unknown } | null)?.code === 'ENOENT') {
       appendLog(cfg.watchdogLog, `ERROR: tmux not found in PATH (${process.env.PATH})`)
       process.exit(1)
     }

@@ -46,6 +46,10 @@ export type SessionInfo = {
   // The sha256 of the token this launch was given (HYDRA_SESSION_TOKEN): a CLI caller that presents the token is this session (cli-caller.ts).
   // Absent on a session launched before tokens: its CLI calls are a session's that cannot show which.
   sessionTokenHash?: string
+  // Set at spawn once bridge clients send HYDRA_SESSION_TOKEN on `register` (#844).
+  // Absent on pre-deploy records whose running bridges predate token registration: missing tokens
+  // stay accepted for those records until they end, while a wrong token is always refused.
+  bridgeToken?: true
   // The sessionId with authority over this one (kill, peek, private send, death notice).
   // null: no parent. undefined: a record from before parentId existed — see isParentOf.
   parentId?: string | null
@@ -72,7 +76,6 @@ export type SessionInfo = {
   idleTtlMs?: number       // see SpawnOpts
   idleDeadline?: number    // epoch ms; idle-limit nudge fires here, reap at +grace (persisted so restarts re-arm with what was left)
   forceWorktreeCleanup?: boolean  // see SpawnOpts
-  suppressDeathMessage?: boolean // skip "died" notification to parent on kill
   suppressAutoRecover?: boolean // skip the automatic boot recovery batch (e.g. a dead record whose worktree is gone); a manual `recover` asks again
   budgetDeadline?: number  // epoch ms; phase-budget nudge fires here, reap at +grace (persisted so restarts re-arm)
   spawnAnnounceId?: string // message ID of the spawn announce line — edited on death to show completion
@@ -543,7 +546,7 @@ export class SessionRegistry {
       let pruned = 0
       for (const info of data) {
         // Migrate renamed fields from pre-rename persisted sessions
-        const raw = info as any
+        const raw = info as unknown as Record<string, unknown>
         if (raw.capabilities && !Array.isArray(raw.capabilities) && !raw.sessionMetadata) {
           raw.sessionMetadata = raw.capabilities
           delete raw.capabilities
@@ -561,7 +564,7 @@ export class SessionRegistry {
           delete raw.toolDescriptionOverrides
         }
 
-        migrateWorktree(raw)
+        migrateWorktree(info)
 
         // Backfill explicit engine for pre-adapter sessions
         if (!raw.engine) raw.engine = 'claude'
@@ -913,8 +916,8 @@ export class ThreadRegistry {
 
 export const threadRegistry = new ThreadRegistry()
 
-/** The one writer of a death (markRevived is its undoing): `deadAt` on the record and `endedAt` on its history entry, together. Keeps the first stamp. */
-export function markDead(info: SessionInfo, at = Date.now()): void {
+/** The one writer of a death (markRevived is its undoing): `deadAt` on the record and `endedAt` on its history entry, together. Keeps the first stamp. Returns true on the alive -> dead transition. */
+export function markDead(info: SessionInfo, at = Date.now()): boolean {
   const fresh = info.deadAt === undefined
   info.deadAt ??= at
   // What a launch wrote for the session goes with it: a restricted session's generated config (it holds token values) and the
@@ -923,6 +926,7 @@ export function markDead(info: SessionInfo, at = Date.now()): void {
   registry.persist()
   threadRegistry.closeHistoryEntry(info.threadId, info)
   if (fresh) emit('session:marked-dead', { sessionId: info.sessionId, tmuxName: info.tmuxName })
+  return fresh
 }
 
 /** The pair of markDead: the session is alive again, so its record and its history entry say so together. Persists the thread file when it reopens an entry; the caller persists the session record. */

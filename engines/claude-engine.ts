@@ -148,7 +148,7 @@ function writeConfinementConfig(w: NonNullable<LaunchPolicy['canOnlyWriteTo']>, 
 //   lineage:      the Claude session a fork continues, for hooks keyed on Claude's session_id (fresh: unset)
 //   unset:        a restricted or write-confined launch keeps only the allowlisted part of the state .env (stateEnvUnsets)
 function buildSpawnEnv(input: LaunchInput): string[] {
-  const forkedFromClaudeSessionId = input.forkFrom?.claudeSessionId
+  const forkedFromClaudeSessionId = input.continuation?.kind === 'fork-claude' ? input.continuation.claudeSessionId : undefined
   const dropped = isRestrictedPolicy(input.policy) || input.policy?.canOnlyWriteTo ? stateEnvUnsets() : []
   return [
     ...(dropped.length ? [`unset ${dropped.join(' ')}`] : []),
@@ -369,8 +369,14 @@ export class ClaudeEngine implements EngineAdapter {
     const spawnCwd = restricted ? restricted.workdir : writes ? writes.workdir : input.originalCwd
     const worktreePath = input.worktreePath
     const worktreeTarget = !!input.forkFromOriginalCwd
-    const isFork = !!input.forkFrom?.claudeSessionId
-    const isResume = !!input.resumeFrom
+    const cont = input.continuation
+    if (cont && cont.kind !== 'fork-claude' && cont.kind !== 'resume-claude') {
+      throw new Error(`claude engine: unsupported launch continuation "${cont.kind}"`)
+    }
+    const forkId = cont?.kind === 'fork-claude' ? cont.claudeSessionId : undefined
+    const resumeId = cont?.kind === 'resume-claude' ? cont.claudeSessionId : undefined
+    const isFork = !!forkId
+    const isResume = !!resumeId
 
     if (!isKnownModel(model)) {
       process.stderr.write(`daemon: unrecognized model ${model} — may be a new release or typo. Spawning anyway.\n`)
@@ -405,28 +411,28 @@ export class ClaudeEngine implements EngineAdapter {
       // prompt positional before the variadic flags, and the generated settings and MCP config (see restrictedConfig).
       const files = writeRestrictedConfig(restricted, tmuxName, sessionId)
       const restrictedFlags = ` --restricted --tools ${shq(restricted.tools.join(','))} --settings ${shq(files.settings)} --mcp-config ${shq(files.mcp)} --permission-mode dontAsk`
-      if (isFork) {
-        claudeArgs = `claude --resume ${shq(input.forkFrom!.claudeSessionId!)} --fork-session --model ${shq(model)} ${promptFile!.ref} --channels ${shq(channelFlag)}${restrictedFlags}${disallowed}`
-      } else if (isResume) {
-        claudeArgs = `claude --resume ${shq(input.resumeFrom!)} --model ${shq(model)} --channels ${shq(channelFlag)}${restrictedFlags}${disallowed}`
+      if (forkId) {
+        claudeArgs = `claude --resume ${shq(forkId)} --fork-session --model ${shq(model)} ${promptFile!.ref} --channels ${shq(channelFlag)}${restrictedFlags}${disallowed}`
+      } else if (resumeId) {
+        claudeArgs = `claude --resume ${shq(resumeId)} --model ${shq(model)} --channels ${shq(channelFlag)}${restrictedFlags}${disallowed}`
       } else {
         assignedClaudeSessionId = randomUUID()
         claudeArgs = `claude --session-id ${shq(assignedClaudeSessionId)} --model ${shq(model)} ${promptFile!.ref} --channels ${shq(channelFlag)}${restrictedFlags}${disallowed}`
       }
-    } else if (isFork) {
+    } else if (forkId) {
       claudeArgs = [
         `claude`,
-        `--resume ${shq(input.forkFrom!.claudeSessionId!)}`,
+        `--resume ${shq(forkId)}`,
         `--fork-session`,
         `--model ${shq(model)}`,
         `--channels ${shq(channelFlag)}`,
         `--dangerously-skip-permissions`,
         promptFile!.ref,
       ].join(' ') + disallowed + toolsFlag + confinementFlags
-    } else if (isResume) {
+    } else if (resumeId) {
       claudeArgs = [
         `claude`,
-        `--resume ${shq(input.resumeFrom!)}`,
+        `--resume ${shq(resumeId)}`,
         `--model ${shq(model)}`,
         `--channels ${shq(channelFlag)}`,
         `--dangerously-skip-permissions`,

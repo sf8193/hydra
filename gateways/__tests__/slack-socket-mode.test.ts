@@ -41,7 +41,7 @@ describe('Socket Mode keepalive headroom', () => {
     expect(built.opts.socketMode).toBe(true)
     expect(built.opts.receiver).toBeInstanceOf(bolt.SocketModeReceiver)
     const client = app.emitter()
-    expect(client).toBe((built.opts.receiver as { client: unknown }).client)
+    expect(client as unknown).toBe((built.opts.receiver as { client: unknown }).client)
     expect(pingTimeout(client)).toBe(SLACK_CLIENT_PING_TIMEOUT_MS)
   })
 
@@ -82,7 +82,7 @@ async function outlivesBlock(clientPingTimeoutMS: number, blockMs: number): Prom
   let closed = false
   client.on('close', () => { closed = true })
   client.on('error', () => {})
-  const socket = new SlackWebSocket({ url: `ws://127.0.0.1:${(server.address() as { port: number }).port}`, client, clientPingTimeoutMS, logLevel: LogLevel.ERROR }) as unknown as { connect(): void; disconnect(): void; lastPongReceivedTimestamp?: number }
+  const socket = new SlackWebSocket({ url: `ws://127.0.0.1:${(server.address() as { port: number }).port}`, client, clientPingTimeoutMS, serverPingTimeoutMS: 30_000, logLevel: LogLevel.ERROR }) as unknown as { connect(): void; disconnect(): void; lastPongReceivedTimestamp?: number }
   try {
     socket.connect()
     while (socket.lastPongReceivedTimestamp === undefined) await sleep(5)

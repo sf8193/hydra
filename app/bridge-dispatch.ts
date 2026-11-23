@@ -31,6 +31,7 @@ import { refreshDashboard } from './dashboard.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from '../infra/artifacts.js'
 import { fetchPrTitle, parsePrUrl } from '../connectors/github/pr-watch.js'
 import { SEND_TYPES, type SendType } from '../shared/tool-definitions.js'
+import { parseToolCall } from '../shared/tool-args.js'
 import { onRunExtend } from './protocol-runner.js'
 import { ASK_PREDECESSOR_TIMEOUT_MS, engineOfModel, MAX_ATTACHMENT_BYTES, normalizeReviewRounds } from '../shared/constants.js'
 import { ENGINE_PROFILES, type EngineName } from '../shared/engines/index.js'
@@ -166,10 +167,6 @@ function str(v: unknown): string | undefined {
   return typeof v === 'string' && v.trim() ? v.trim() : undefined
 }
 
-function num(v: unknown): number | undefined {
-  return typeof v === 'number' ? v : undefined
-}
-
 function isRetryable(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err)
   return RETRYABLE_PATTERNS.test(msg)
@@ -287,15 +284,20 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
     if (callerSessionId && protocolChildRequiresPrivate(callerSessionId) && !PRIVATE_HELPER_ALLOWED_TOOLS.has(name)) {
       throw new Error(`${name} is unavailable to a private protocol helper`)
     }
-    switch (name) {
+    const parsedCall = parseToolCall(name, args)
+    if (!parsedCall.ok) {
+      if (parsedCall.unknownTool) {
+        return { content: [{ type: 'text', text: parsedCall.error }], isError: true }
+      }
+      throw new Error(parsedCall.error)
+    }
+    const call = parsedCall.call
+    switch (call.name) {
       case 'reply': {
-        const chat_id = args.chat_id as string
-        const text = args.text as string
-        const reply_to = args.reply_to as string | undefined
-        const files = (args.files as string[] | undefined) ?? []
+        const { chat_id, text = '', reply_to, files = [] } = call.args
         // A conversation id from a Slack delivery: the answer goes back into that conversation, and only there. `reply_to` is handed on as given: the conversation says what it can mean.
-        if (typeof chat_id === 'string' && chat_id.startsWith('slack:')) {
-          return { content: [{ type: 'text', text: await replyInConversation(callerSessionId, chat_id, text ?? '', files, reply_to) }] }
+        if (chat_id.startsWith('slack:')) {
+          return { content: [{ type: 'text', text: await replyInConversation(callerSessionId, chat_id, text, files, reply_to) }] }
         }
 
         const ch = await gateway.fetchChannel(chat_id)
@@ -387,12 +389,12 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       }
 
       case 'fetch_messages': {
-        const channelId = args.channel as string
-        const asked = args.limit ?? 20
+        const channelId = call.args.channel
+        const asked = call.args.limit ?? 20
         if (typeof asked !== 'number' || !Number.isFinite(asked) || asked < 1) throw new Error(`fetch_messages: limit ${JSON.stringify(asked)} is not a number of messages: pass a whole number from 1 to 100 (20 when left out)`)
         const limit = Math.min(Math.floor(asked), 100)
         // A conversation id from a Slack delivery: read through the app that heard it, never the chat gateway. Who may read it was settled above (ownPlaceRefusal).
-        if (typeof channelId === 'string' && channelId.startsWith('slack:')) {
+        if (channelId.startsWith('slack:')) {
           // A caller with no record that did not declare itself restricted (a stray bridge) is held as a restricted one is: a missing record never widens a read.
           if (callerSessionId && callerSessionId !== 'main' && !registry.get(callerSessionId)) {
             const why = ownConversationRefusal(callerSessionId, channelId, 'a read')
@@ -408,35 +410,45 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
 
       case 'react': {
         if (!gateway.postsReactions) return { content: [{ type: 'text', text: `no-op on ${gatewayProfile(gateway.platform).label} (reactions disabled)` }] }
-        await retrySend(() => gateway.react(args.chat_id as string, args.message_id as string, args.emoji as string))
+        const { chat_id, message_id, emoji } = call.args
+        await retrySend(() => gateway.react(chat_id, message_id, emoji))
         return { content: [{ type: 'text', text: 'reacted' }] }
       }
 
       case 'edit_message': {
+        const { chat_id, message_id, text } = call.args
         // A Slack conversation's message: rewritten through the app that heard the conversation (connectors/slack/runtime.ts holds who may).
-        if (typeof args.chat_id === 'string' && args.chat_id.startsWith('slack:')) {
-          return { content: [{ type: 'text', text: await editInConversation(callerSessionId, args.chat_id, args.message_id, args.text as string) }] }
+        if (chat_id?.startsWith('slack:')) {
+          if (text === undefined) throw new Error('chat_id, message_id, and text are required')
+          return { content: [{ type: 'text', text: await editInConversation(callerSessionId, chat_id, message_id, text) }] }
+        }
+        if (!chat_id || typeof message_id !== 'string' || text === undefined) {
+          throw new Error('chat_id, message_id, and text are required')
         }
         // An edit cannot add files: the gateway shapes the text with no room for any.
-        const edited = await withOutbound(args.text as string, 0, out => retrySend(() => gateway.edit(args.chat_id as string, args.message_id as string, out.text)))
+        const edited = await withOutbound(text, 0, out => retrySend(() => gateway.edit(chat_id, message_id, out.text)))
         return { content: [{ type: 'text', text: `edited (id: ${edited})` }] }
       }
 
       case 'delete_message': {
-        if (typeof args.chat_id === 'string' && args.chat_id.startsWith('slack:')) {
-          return { content: [{ type: 'text', text: await deleteInConversation(callerSessionId, args.chat_id, args.message_id) }] }
+        const { chat_id, message_id } = call.args
+        if (chat_id?.startsWith('slack:')) {
+          return { content: [{ type: 'text', text: await deleteInConversation(callerSessionId, chat_id, message_id) }] }
         }
-        await gateway.delete(args.chat_id as string, args.message_id as string)
+        if (!chat_id || typeof message_id !== 'string') {
+          throw new Error('chat_id and message_id are required')
+        }
+        await gateway.delete(chat_id, message_id)
         return { content: [{ type: 'text', text: 'deleted' }] }
       }
 
       case 'create_thread': {
-        const threadName = (args.name as string).slice(0, 100)
-        const thread = await gateway.createThread(args.chat_id as string, threadName, {
-          messageId: args.message_id as string | undefined,
-          archiveDuration: (args.auto_archive_minutes as number | undefined) ?? 1440,
-          text: args.text as string | undefined,
-          files: (args.files as string[] | undefined),
+        const threadName = call.args.name.slice(0, 100)
+        const thread = await gateway.createThread(call.args.chat_id, threadName, {
+          messageId: call.args.message_id,
+          archiveDuration: call.args.auto_archive_minutes ?? 1440,
+          text: call.args.text,
+          files: call.args.files,
         })
         return {
           content: [{
@@ -450,13 +462,13 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         // The one answer for where this session's files go (app/attachment-target.ts); a confined session with no record gets a refusal.
         const { dir, limits } = attachmentTarget(callerSessionId)
         const results = await gateway.downloadAttachments(
-          args.chat_id as string,
-          args.message_id as string,
+          call.args.chat_id,
+          call.args.message_id,
           dir,
           limits,
         )
         if (results.length === 0) {
-          return { content: [{ type: 'text', text: `message ${args.message_id} has no downloadable attachments` }] }
+          return { content: [{ type: 'text', text: `message ${call.args.message_id} has no downloadable attachments` }] }
         }
         const lines = results.map(r => `  ${r.path}  (${r.name}, ${r.contentType}, ${r.sizeKB}KB)`)
         return {
@@ -471,13 +483,13 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const protocolScopedSpawn = !!(callerSessionId && registry.get(callerSessionId)?.capabilities?.includes('protocol_spawn'))
         const spawnMode = resolveProtocolSpawnMode(callerSessionId)
         const privateProtocolSpawn = spawnMode.privateSpawn
-        const worktree = args.worktree as string | undefined
-        const forkFromRaw = (args.fork_from as string | undefined)?.trim() || undefined
+        const worktree = call.args.worktree
+        const forkFromRaw = call.args.fork_from?.trim() || undefined
         if (forkFromRaw && worktree) throw new Error('fork_from cannot be combined with worktree — a fork runs where its source ran')
         const source = forkFromRaw ? resolveForkSource(forkFromRaw, callerSessionId) : undefined
-        const readOnly = args.read_only === true
-        const topic = worktree ? `worktree:${worktree} ${args.topic}` : args.topic as string
-        const modelArg = (args.model as string | undefined)?.trim()
+        const readOnly = call.args.read_only === true
+        const topic = worktree ? `worktree:${worktree} ${call.args.topic}` : call.args.topic
+        const modelArg = call.args.model?.trim()
         // A Codex, omp or agy alias selects its engine (doSpawnSession reads it); what a spawn_session may ask of that engine is refused here.
         const aliasOf = modelArg ? engineOfModel(modelArg) : undefined
         const aliasEngine = aliasOf && ENGINE_PROFILES[aliasOf]
@@ -485,10 +497,10 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         if (aliasEngine && readOnly && !aliasEngine.enforcesReadOnly) throw new Error(`read_only is not enforced on ${aliasEngine.label} sessions — use a Claude model`)
         const model = modelArg || source?.model
         if (model) process.stderr.write(`daemon: spawn_session model override: ${model}\n`)
-        const budgetRaw = (args.phase_budget as string | undefined)?.trim() || undefined
+        const budgetRaw = call.args.phase_budget?.trim() || undefined
         const phaseBudgetMs = budgetRaw ? parseDuration(budgetRaw) ?? undefined : undefined
         if (budgetRaw && !phaseBudgetMs) throw new Error(`invalid phase_budget "${budgetRaw}" — use e.g. "90s", "20m", "1h"`)
-        const readThreadRaw = args.read_thread as boolean | number | undefined
+        const readThreadRaw = call.args.read_thread
         const spawnerName = callerSessionId ? registry.get(callerSessionId)?.tmuxName ?? 'main' : 'main'
         let readThreadPrefix = ''
         if (readThreadRaw) {
@@ -505,7 +517,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         let allocatedSessionId: string | undefined
         let result: Awaited<ReturnType<typeof doSpawnSession>>
         try {
-          result = await doSpawnSession(topic, args.chat_id as string | undefined, args.message_id as string | undefined, {
+          result = await doSpawnSession(topic, call.args.chat_id, call.args.message_id, {
           ...(model ? { model } : {}),
           // The source's engine, which resolveForkSource has already checked can fork.
           ...(source ? { forkFrom: source.fork, launchCwd: source.cwd, engine: source.engine } : {}),
@@ -551,8 +563,8 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         }
         if (allocatedSessionId) finishPrivateProtocolChildLaunch(allocatedSessionId)
         // The mention renders in the gateway's own chat; a Slack conversation (a `slack:` chat_id) is read elsewhere, where it would show as raw text, so the url alone points there.
-        const spawnChat = args.chat_id
-        const mention = typeof spawnChat === 'string' && spawnChat.startsWith('slack:') ? undefined : gateway.threadMention?.(result.threadId)
+        const spawnChat = call.args.chat_id
+        const mention = spawnChat?.startsWith('slack:') ? undefined : gateway.threadMention?.(result.threadId)
         return { content: [{ type: 'text', text: `session spawned (name: ${result.name}, session_id: ${result.sessionId}, thread_id: ${result.threadId}${mention ? `, mention: ${mention}` : ''}${result.url ? `, url: ${result.url}` : ''})` }] }
       }
 
@@ -575,13 +587,13 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           }
         })
         // Ended sessions, read off the thread history (a restricted session never gets this far: list_sessions is not its tool).
-        const ended = args.include_ended === true ? endedSessions(endedWithinDays(args.ended_within_days)) : []
+        const ended = call.args.include_ended === true ? endedSessions(endedWithinDays(call.args.ended_within_days)) : []
         return { content: [{ type: 'text', text: JSON.stringify([...list, ...ended], null, 2) }] }
       }
 
       case 'handoff': {
         if (callerSessionId === 'main') {
-          const raw = args.path as string | undefined
+          const raw = call.args.path
           if (!raw || !isAbsolute(raw)) throw new Error('handoff: path must be absolute')
           let size = 0
           try { size = statSync(raw).size } catch {}
@@ -593,7 +605,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const info = callerSessionId ? registry.get(callerSessionId) : undefined
         if (!info) throw new Error('handoff: calling session not found')
         // One absolute path for every reader: a relative one means the session's dir, not the daemon's.
-        const raw = args.path as string | undefined
+        const raw = call.args.path
         const path = raw && (isAbsolute(raw) ? raw : resolvePath(sessionDir(info) ?? process.cwd(), raw))
         let size = 0
         try { size = path ? statSync(path).size : 0 } catch {}
@@ -626,7 +638,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       }
 
       case 'ask_predecessor': {
-        const question = str(args.question)
+        const question = str(call.args.question)
         if (!question) throw new Error('ask_predecessor: question is required')
         // The gate above has already refused a session that can't ask; this also covers a caller without a session id.
         const caller = callerSessionId ? registry.get(callerSessionId) : undefined
@@ -643,8 +655,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       }
 
       case 'set_description': {
-        const sessionId = args.session_id as string | undefined
-        const description = args.description as string | undefined
+        const { session_id: sessionId, description } = call.args
         if (!sessionId || !description) throw new Error('session_id and description are required')
         const info = registry.get(sessionId)
         if (!info) throw new Error('session not found')
@@ -656,8 +667,8 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       }
 
       case 'kill_session': {
-        const sessionId = args.session_id as string | undefined
-        const threadId = args.thread_id as string | undefined
+        const sessionId = call.args.session_id
+        const threadId = call.args.thread_id
 
         let targetId: string | undefined
         if (sessionId) {
@@ -669,7 +680,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         if (!targetId || !registry.has(targetId)) {
           // A thread id with no live session in it, and destroy: with no session left, a destroy by thread id (`[threads] allow_destroy`).
           // Main, or the session that spawned the ended one (endedDestroyRefusal): the ended session's history names its spawner's thread.
-          if (!sessionId && threadId && args.destroy === true) {
+          if (!sessionId && threadId && call.args.destroy === true) {
             const refusal = endedDestroyRefusal(callerSessionId, threadId, threadRegistry.get(threadId)?.sessionHistory.at(-1)?.tmuxName ?? threadId)
             if (refusal) throw new Error(refusal)
             const out = await destroyThreadById(threadId, callerSessionId && callerSessionId !== 'main' ? (registry.get(callerSessionId)?.tmuxName ?? 'agent') : 'main')
@@ -680,7 +691,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         }
 
         const info = registry.get(targetId)!
-        const destroy = args.destroy === true
+        const destroy = call.args.destroy === true
 
         // Non-main sessions can only kill (and destroy) sessions they spawned
         let reason = 'session ended'
@@ -702,7 +713,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       }
 
       case 'watch_pr': {
-        let prUrl = args.pr_url as string | undefined
+        let prUrl = call.args.pr_url
         const sessionId = callerSessionId ?? 'main'
         const info = registry.get(sessionId)
         if (!prUrl) {
@@ -712,19 +723,19 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           if (!detected.ok) throw new Error(detected.reason)
           prUrl = detected.url
         }
-        const threadId = (args.chat_id as string | undefined) ?? info?.threadId ?? ''
+        const threadId = call.args.chat_id ?? info?.threadId ?? ''
         if (!threadId) throw new Error('could not determine thread — pass chat_id')
-        const result = await watchPr(prUrl, sessionId, threadId, { notifyGreen: args.notify_green === true })
+        const result = await watchPr(prUrl, sessionId, threadId, { notifyGreen: call.args.notify_green === true })
         return { content: [{ type: 'text', text: result }] }
       }
 
       case 'unwatch_pr': {
-        const result = unwatchPr(args.pr_url as string, callerSessionId)
+        const result = unwatchPr(call.args.pr_url, callerSessionId)
         return { content: [{ type: 'text', text: result }] }
       }
 
       case 'list_watches': {
-        const all = args.all as boolean | undefined
+        const all = call.args.all
         const entries = all ? listWatches() : getWatchesBySession(callerSessionId ?? 'main')
         const lines = entries.map(e => `• ${formatWatchEntry(e)}`)
         // A specialist's session also sees the conversations bound to it, and no other specialist's.
@@ -736,26 +747,26 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
 
       case 'bind_conversation': {
         const caller = callerSessionId ? registry.get(callerSessionId) : undefined
-        return { content: [{ type: 'text', text: await bindConversation(caller, args.conversation, { target: args.target, why: args.why, callerSessionId }) }] }
+        return { content: [{ type: 'text', text: await bindConversation(caller, call.args.conversation, { target: call.args.target, why: call.args.why, callerSessionId }) }] }
       }
 
       case 'unbind_conversation': {
         const caller = callerSessionId ? registry.get(callerSessionId) : undefined
-        return { content: [{ type: 'text', text: unbindConversation(caller, args.conversation) }] }
+        return { content: [{ type: 'text', text: unbindConversation(caller, call.args.conversation) }] }
       }
 
       case 'send_to_thread': {
         // A restricted caller was held to its sends_to above (restrictedRefusal): what it sends is rendered and landed by sends-to.ts, not by the route below.
-        if (callerSessionId && isRestrictedSession(callerSessionId)) return { content: [{ type: 'text', text: await sendToThread(callerSessionId, args) }] }
-        const target = (args.target as string)?.trim()
-        const msgType = (args.type as string)?.trim()
-        const text = args.text as string
-        const files = (args.files as string[] | undefined) ?? []
+        if (callerSessionId && isRestrictedSession(callerSessionId)) return { content: [{ type: 'text', text: await sendToThread(callerSessionId, call.args) }] }
+        const target = call.args.target?.trim()
+        const msgType = call.args.type?.trim()
+        const text = call.args.text
+        const files = call.args.files ?? []
         if (!target) throw new Error('target is required (session name, e.g. "cedar")')
         if (!msgType || !(SEND_TYPES as readonly string[]).includes(msgType)) throw new Error(`type is required: ${SEND_TYPES.join(', ')}`)
         if (!text) throw new Error('text is required')
-        const summary = args.summary as string | undefined
-        const visibility = (args.visibility as string | undefined)?.trim() || 'public'
+        const summary = call.args.summary
+        const visibility = call.args.visibility?.trim() || 'public'
         if (visibility !== 'public' && visibility !== 'private') throw new Error('visibility must be "public" or "private"')
         const isPrivate = visibility === 'private'
         if (!isPrivate && callerSessionId && protocolChildRequiresPrivate(callerSessionId)) {
@@ -907,9 +918,9 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       }
 
       case 'peek_session': {
-        const name = (args.name as string)?.trim()
+        const name = call.args.name?.trim()
         if (!name) throw new Error('name is required')
-        const lines = Math.min(Math.max((args.lines as number) ?? 50, 1), 500)
+        const lines = Math.min(Math.max(call.args.lines ?? 50, 1), 500)
 
         const found = [...registry.values()].find(s => s.tmuxName === name)
         if (!found) throw new Error(`no session named "${name}"`)
@@ -935,10 +946,10 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       }
 
       case 'advance': {
-        const content = (args.content as string)?.trim()
+        const content = call.args.content?.trim()
         if (!content) throw new Error('advance requires content')
         if (!callerSessionId) throw new Error('advance requires a session context')
-        const verdict = (args.verdict as string)?.trim() || undefined
+        const verdict = call.args.verdict?.trim() || undefined
 
         const result = await dispatchAdvance(callerSessionId, content, verdict)
         if (!result.ok) throw new Error(result.reason)
@@ -948,10 +959,10 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       }
 
       case 'extend_phase': {
-        const reason = (args.reason as string)?.trim()
+        const reason = call.args.reason?.trim()
         if (!reason) throw new Error('extend_phase requires a reason')
         if (!callerSessionId) throw new Error('extend_phase requires a session context')
-        const minutes = Math.max(1, Math.min(Number(args.minutes) || 5, 15))
+        const minutes = Math.max(1, Math.min(Number(call.args.minutes) || 5, 15))
 
         const result = onRunExtend(callerSessionId, reason, minutes)
         if (!result.ok) throw new Error(result.reason)
@@ -961,16 +972,16 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
 
       case 'report_usage': {
         // An observer's report: malformed or unknown entries are dropped, never an error to the caller.
-        const readings = parseRateLimits(args)
+        const readings = parseRateLimits(call.args)
         for (const r of readings) reportUsage(r)
         return { content: [{ type: 'text', text: `recorded ${readings.length} window(s)` }] }
       }
 
-      default:
-        return {
-          content: [{ type: 'text', text: `unknown tool: ${name}` }],
-          isError: true,
-        }
+      default: {
+        const _exhaustive: never = call
+        void _exhaustive
+        throw new Error('unreachable')
+      }
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)

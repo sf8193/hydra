@@ -4,6 +4,7 @@ import { spawnSync } from 'child_process'
 import { randomUUID } from 'crypto'
 import { join, resolve } from 'path'
 import { resolveConfig, resolveSocket, sendRequest, printResponse } from './helpers.js'
+import type { CLIResponse } from '../shared/cli-protocol.js'
 import {
   lifecycleUp, lifecycleDown, lifecycleRestart,
   lifecycleWatchdog, lifecyclePreflight,
@@ -464,17 +465,15 @@ async function main(): Promise<void> {
         console.error('error: session name required')
         process.exit(1)
       }
-      // callerSessionId: the old form, for a daemon from before session tokens (it reads nothing else). A daemon with tokens reads the
-      // request's caller claim (sendRequest) and never believes this. Dropped one release on.
       const response = await sendRequest(socketPath(), {
-        type: 'cli', command: 'kill', id: randomUUID(), params: { name, ...(destroy && { destroy, ...(process.env.HYDRA_SESSION_ID && { callerSessionId: process.env.HYDRA_SESSION_ID }) }) },
+        type: 'cli', command: 'kill', id: randomUUID(), params: { name, ...(destroy && { destroy }) },
       })
       printResponse(response, json)
       break
     }
 
     case 'health': {
-      let response: Record<string, unknown>
+      let response: CLIResponse
       try {
         response = await sendRequest(socketPath(), { type: 'cli', command: 'health', id: randomUUID(), params: {} })
       } catch (err) {

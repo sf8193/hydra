@@ -13,7 +13,10 @@ type Rule = {
   name: string
   // Matched against the normalized text (see normalize): quotes/brackets/commas/parens are spaces,
   // `//` comments are gone, and consecutive lines are joined, so wrapped calls still match.
+  // When `codeOnly` is true, matched line-by-line against comment- and string-stripped code instead
+  // (preserving template `${...}` expressions) so English prose in strings never triggers false positives.
   pattern: RegExp
+  codeOnly?: boolean
   allowed: string[]
   // Optional per-file match ceilings so adding a new call site fails even inside a sanctioned file.
   max?: Record<string, number>
@@ -55,7 +58,7 @@ export const RULES: Rule[] = [
     allowed: [
       'daemon.ts', 'infra/tmux.ts', 'app/bridge-dispatch.ts', 'app/commands/thread.ts',
       'engines/claude-engine.ts', 'engines/codex-engine-adapter.ts', 'app/recovery.ts',
-      'app/session-lifecycle.ts', 'sessions/occupancy.ts', 'app/bridge-server.ts', 'app/cli-handler.ts',
+      'app/lifecycle/kill.ts', 'app/lifecycle/revive.ts', 'sessions/occupancy.ts', 'app/bridge-server.ts', 'app/cli-handler.ts',
       'sessions/registry.ts',
     ],
     tests: false, ts: true,
@@ -96,14 +99,14 @@ export const RULES: Rule[] = [
     // infra/util.ts owns safeSend. Every other file below is pinned to its exact sanctioned count so no new raw send can enter
     // and removals tighten the cap. Lexical (aliases like `const { send } = gateway` aren't tracked); `gateway.sendDM` is out of scope (user IDs, not threads):
     // - app/bridge-dispatch.ts (3): MCP reply, loud send_to_thread, and quiet-send subtext helper (all wrap raw gateway.send in retrySend and propagate errors/IDs)
-    // - app/session-lifecycle.ts (1): thread anchor creation must throw on failure and return anchor.id
+    // - app/lifecycle/spawn-stages.ts (1): thread anchor creation must throw on failure and return anchor.id
     // - connectors/slack/runtime.ts (1): bindNotice catches failure to fall back to toOperatorDm
     // - app/reply-guard.ts (1): defaultDeps.gatewaySend seam for screenshot fallback on throw
     // - app/home-actions.ts (2): Slack Home spawn errors sent to Slack userId (U..., not a thread ID)
     allowed: ['infra/util.ts'],
     max: {
       'app/bridge-dispatch.ts': 3,
-      'app/session-lifecycle.ts': 1,
+      'app/lifecycle/spawn-stages.ts': 1,
       'connectors/slack/runtime.ts': 1,
       'app/reply-guard.ts': 1,
       'app/home-actions.ts': 2,
@@ -111,9 +114,132 @@ export const RULES: Rule[] = [
     tests: false, ts: true,
     why: 'send through safeSend (infra/util.ts) so messages are chunked, shaped, address-checked and logged',
   },
+  {
+    name: 'explicit `any` in production code',
+    // Standalone `any` type keyword in comment/string/regex-stripped code, excluding property access
+    // (single `.any`, while allowing `...any[]`), variable declarations (`const/let/var any`),
+    // object/param keys (`any:` unless in a conditional/ternary `? any :`), calls (`any(`),
+    // optional chaining (`any?`), and identifier prefixes/suffixes.
+    pattern: /(?<=\?\s*)any(?![\w$])|(?<![\w$]|\b(?:const|let|var)\s+)(?:(?<!\.)|(?<=\.\.\.))any(?![\w$]|\s*[:(?])/g,
+    codeOnly: true,
+    // Zero explicit `any` allowed anywhere in production TypeScript files.
+    allowed: [],
+    max: {},
+    tests: false, ts: true,
+    why: 'type the boundary or narrow `unknown` instead of introducing `any`',
+  },
 ]
 
 const isTest = (path: string) => /(^|\/)__tests__\//.test(path) || /\.test\.ts$/.test(path)
+
+const REGEX_PREV_CHAR = new Set('(,=: [!&|?{};+-*%<>~^'.split(''))
+const REGEX_PREV_KEYWORDS = new Set(['return', 'typeof', 'case', 'in', 'of', 'throw', 'yield', 'await', 'new', 'delete', 'void', 'else'])
+
+function startsRegex(out: string): boolean {
+  let j = out.length - 1
+  while (j >= 0 && /\s/.test(out[j])) j--
+  if (j < 0) return true
+  const ch = out[j]
+  if (REGEX_PREV_CHAR.has(ch)) return true
+  if (/[A-Za-z0-9_$]/.test(ch)) {
+    let k = j
+    while (k >= 0 && /[A-Za-z0-9_$]/.test(out[k])) k--
+    return REGEX_PREV_KEYWORDS.has(out.slice(k + 1, j + 1))
+  }
+  return false
+}
+
+/**
+ * Blank comments (`//`, `/* ... *\/`), string literals (single, double, and template
+ * chunks outside `${...}`), and regex literals, preserving newlines and `${...}` code
+ * so line numbers stay exact and expressions inside template interpolations are still checked.
+ */
+export function stripCommentsAndStrings(src: string): string {
+  let out = ''
+  let i = 0
+  const n = src.length
+  const tplDepths: number[] = []
+  let braceDepth = 0
+
+  const scanTemplateChunk = (): void => {
+    while (i < n) {
+      if (src[i] === '\\') {
+        out += src[i + 1] === '\n' ? ' \n' : '  '
+        i += 2
+        continue
+      }
+      if (src[i] === '`') {
+        out += ' '
+        i++
+        return
+      }
+      if (src[i] === '$' && src[i + 1] === '{') {
+        out += '${'
+        i += 2
+        tplDepths.push(braceDepth)
+        braceDepth++
+        return
+      }
+      out += src[i] === '\n' ? '\n' : ' '
+      i++
+    }
+  }
+
+  while (i < n) {
+    const c = src[i]
+    const next = src[i + 1]
+    if (c === '/' && next === '/') {
+      while (i < n && src[i] !== '\n') { out += ' '; i++ }
+    } else if (c === '/' && next === '*') {
+      out += '  '; i += 2
+      while (i < n && !(src[i] === '*' && src[i + 1] === '/')) {
+        out += src[i] === '\n' ? '\n' : ' '
+        i++
+      }
+      if (i < n) { out += '  '; i += 2 }
+    } else if (c === '/' && startsRegex(out)) {
+      out += ' '; i++
+      let inClass = false
+      while (i < n && src[i] !== '\n') {
+        if (src[i] === '\\') { out += '  '; i += 2; continue }
+        if (src[i] === '[') { inClass = true; out += ' '; i++; continue }
+        if (src[i] === ']') { inClass = false; out += ' '; i++; continue }
+        if (src[i] === '/' && !inClass) { out += ' '; i++; break }
+        out += ' '; i++
+      }
+    } else if (c === "'" || c === '"') {
+      const q = c
+      out += ' '; i++
+      while (i < n && src[i] !== q) {
+        if (src[i] === '\\') {
+          out += src[i + 1] === '\n' ? ' \n' : '  '
+          i += 2
+          continue
+        }
+        out += src[i] === '\n' ? '\n' : ' '
+        i++
+      }
+      if (i < n) { out += ' '; i++ }
+    } else if (c === '`') {
+      out += ' '; i++
+      scanTemplateChunk()
+    } else if (c === '{') {
+      braceDepth++; out += c; i++
+    } else if (c === '}') {
+      braceDepth--
+      if (tplDepths.length > 0 && tplDepths[tplDepths.length - 1] === braceDepth) {
+        tplDepths.pop()
+        out += '}'; i++
+        scanTemplateChunk()
+      } else {
+        out += c; i++
+      }
+    } else {
+      out += c; i++
+    }
+  }
+  return out
+}
 
 // One line per source line (so offsets map back), each with tokens separated by single spaces.
 export function normalize(text: string): { flat: string; lines: string[]; lineAt: (offset: number) => number } {
@@ -126,15 +252,28 @@ export function normalize(text: string): { flat: string; lines: string[]; lineAt
   return { flat, lines, lineAt: off => { let i = 0; while (i + 1 < starts.length && starts[i + 1] <= off) i++; return i + 1 } }
 }
 
-export function violations(files: Array<{ path: string; text: string }>): string[] {
+export function violations(files: Array<{ path: string; text: string }>, rules: readonly Rule[] = RULES): string[] {
   const out: string[] = []
   for (const { path, text } of files) {
     if (path === 'scripts/check-owners.ts' || path === 'daemon/__tests__/check-owners.test.ts') continue // its own fixtures
     const { flat, lines, lineAt } = normalize(text)
     const raw = text.split('\n')
-    for (const r of RULES) {
+    let codeLines: string[] | undefined
+    for (const r of rules) {
       if (r.allowed.includes(path) || (!r.tests && isTest(path)) || (r.ts && !path.endsWith('.ts'))) continue
-      const hitLines = [...new Set([...flat.matchAll(r.pattern)].filter(m => !r.okAt?.(flat, m.index!)).map(m => lineAt(m.index!)).filter(n => !r.skipLine?.(lines[n - 1])))]
+      let hitLines: number[]
+      if (r.codeOnly) {
+        codeLines ??= stripCommentsAndStrings(text).split('\n')
+        hitLines = []
+        for (let idx = 0; idx < codeLines.length; idx++) {
+          const line = codeLines[idx]
+          if (r.skipLine?.(line)) continue
+          r.pattern.lastIndex = 0
+          for (const _ of line.matchAll(r.pattern)) hitLines.push(idx + 1)
+        }
+      } else {
+        hitLines = [...new Set([...flat.matchAll(r.pattern)].filter(m => !r.okAt?.(flat, m.index!)).map(m => lineAt(m.index!)).filter(n => !r.skipLine?.(lines[n - 1])))]
+      }
       const limit = r.max?.[path]
       if (limit !== undefined) {
         if (hitLines.length > limit) {

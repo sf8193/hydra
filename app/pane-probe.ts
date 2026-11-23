@@ -77,7 +77,7 @@ export type PaneProbeIO = {
   getSessions: () => Iterable<SessionInfo>
   transportHas: (sessionId: string) => boolean
   occupancy: (info: SessionInfo) => Occupancy
-  transportSendOrQueue: (sessionId: string, msg: any) => void
+  transportSendOrQueue: (sessionId: string, msg: Record<string, unknown>) => void
   platform: string
   defaultChannel: string
   // Hands a usage reading to the alert owner; optional so tests need not fake it.
@@ -125,8 +125,11 @@ const defaultIO: PaneProbeIO = {
     const raw = path ? this.readFile(path) : null
     const line = raw?.split('\n').find(l => l.includes('"type":"assistant"'))
     if (!line) return null
-    const content = JSON.parse(line).message?.content
-    return Array.isArray(content) ? content.find((c: any) => c.type === 'text')?.text ?? '' : ''
+    const content = (JSON.parse(line) as { message?: { content?: unknown } } | null)?.message?.content
+    if (!Array.isArray(content)) return ''
+    const textBlock = content.find((c): c is { type: 'text'; text?: unknown } =>
+      typeof c === 'object' && c !== null && (c as { type?: unknown }).type === 'text')
+    return typeof textBlock?.text === 'string' ? textBlock.text : ''
   },
 
   async pastePrompt(tmuxName, text, opts) {

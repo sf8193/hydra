@@ -9,6 +9,7 @@ import { BRIDGE_SHUTDOWN_GRACE_MS } from '../shared/constants.js'
 import { gatewayProfile } from '../shared/gateways/index.js'
 import { pendingPermissions } from './permission.js'
 import { discoverClaudeSessionId, killSession } from './session-lifecycle.js'
+import { notifyParentOfEnd } from './parent-notice.js'
 import { operatorIds } from '../sessions/access.js'
 import { dispatchReconnect, dispatchSessionReply, dispatchDisconnect } from '../sessions/protocol-registry.js'
 import { advertiseTools, isToolAllowed, noteDeclaredRestrictions, refusalText } from '../sessions/tool-surface.js'
@@ -16,7 +17,7 @@ import { getProtocolContext } from './protocol-runner.js'
 import { maybeNudgeMissingAdvance } from './advance-nudge.js'
 import { clearPendingReply, settlePendingOnReact, notePendingFromQueue } from './reply-guard.js'
 import { refreshSessionVisual } from '../sessions/anchor-state.js'
-import { handleCLIRequest, type CLIRequest } from './cli-handler.js'
+import { handleCLIRequest } from './cli-handler.js'
 import { watchPr, getWatchesBySession } from '../connectors/github/pr-watch.js'
 import { sessionFlapAction, shouldHoldIncumbentMain } from './main-guard.js'
 import { buildAutopsy, logCorrelation, tailSpawnLog, buildCrashNotice, getVitalsSample } from '../sessions/observability.js'
@@ -31,6 +32,8 @@ import { bridgeLifePath, describeBridgeExit } from '../shared/bridge-life.js'
 import { pidAlive, pruneBridgeLife, readBridgeLife } from '../infra/bridge-life-file.js'
 import type { ButtonDef } from '../gateways/gateway.js'
 import { engineProfile } from '../shared/engines/index.js'
+import { parseBridgeToDaemonMessage } from '../shared/bridge-protocol.js'
+import { bridgeRegistrationPolicy, verifyBridgeRegistration } from '../sessions/cli-caller.js'
 
 const DEATH_DETECT_DELAY_MS = 3_000
 const BRIDGE_LIFE_READ_DELAY_MS = BRIDGE_SHUTDOWN_GRACE_MS + 1_000
@@ -125,21 +128,57 @@ export function connectionRoleFor(msg: { connectionRole?: unknown }, info: Sessi
 }
 
 function handleBridgeMessage(conn: BridgeConn, raw: string): void {
-  let msg: any
+  let parsedJson: unknown
   try {
-    msg = JSON.parse(raw)
+    parsedJson = JSON.parse(raw)
   } catch {
     process.stderr.write(`daemon: invalid JSON from bridge: ${raw.slice(0, 200)}\n`)
+    return
+  }
+  const parsed = parseBridgeToDaemonMessage(parsedJson)
+  if (!parsed.ok) {
+    process.stderr.write(parsed.unknownType
+      ? `daemon: unknown message type from bridge: ${parsed.unknownType}\n`
+      : `daemon: invalid message from bridge (${parsed.error}): ${raw.slice(0, 200)}\n`)
+    if (parsed.toolCallId !== undefined && conn.sessionId) {
+      transport.sendToBridge(conn, {
+        type: 'tool_result',
+        id: parsed.toolCallId,
+        content: [{ type: 'text', text: `Invalid tool_call: ${parsed.error}` }],
+        isError: true,
+      })
+    }
+    return
+  }
+  const msg = parsed.msg
+
+  // Every message except `register` and `cli` requires an authenticated bridge session:
+  // an unregistered socket must never invoke tools, list tools, or inject permission prompts.
+  if (msg.type !== 'register' && msg.type !== 'cli' && !conn.sessionId) {
+    process.stderr.write(`daemon: unregistered bridge sent ${msg.type} — closing socket\n`)
+    try { conn.socket.destroy() } catch {}
     return
   }
 
   switch (msg.type) {
     case 'register': {
-      const sessionId = msg.sessionId as string
-      conn.sessionId = sessionId
-      if (Number.isInteger(msg.pid) && (msg.pid as number) > 0) conn.bridgePid = msg.pid as number
+      const sessionId = msg.sessionId
+      // Authenticate BEFORE setting conn.sessionId, tracking flaps, or mutating the record:
+      // a refused connection must never touch the live session or run pipelined tool calls as it.
+      const auth = verifyBridgeRegistration({
+        sessionToken: msg.sessionToken,
+        ...bridgeRegistrationPolicy(sessionId),
+      })
+      if (!auth.ok) {
+        process.stderr.write(`daemon: bridge for ${sessionId} refused (${auth.reason})\n`)
+        try { conn.socket.destroy() } catch {}
+        break
+      }
 
-      const claudeSessionId = msg.claudeSessionId as string | undefined
+      conn.sessionId = sessionId
+      if (msg.pid !== undefined) conn.bridgePid = msg.pid
+
+      const claudeSessionId = msg.claudeSessionId
       const info = registry.get(sessionId)
       // Existing Codex MCP processes may predate the explicit role field. Codex
       // session traffic uses codexEngine, so daemon-socket registrations for a
@@ -168,8 +207,9 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
           if (info) {
             process.stderr.write(`daemon: circuit breaker: ${info.tmuxName} flapping (${FLAP_THRESHOLD}+ registrations in ${FLAP_WINDOW_MS / 1000}s) — killing session\n`)
             try { tmuxSync(['kill-session', '-t', info.tmuxName]) } catch {}
-            markDead(info)
+            const freshDeath = markDead(info)
             void safeSend(info.threadId, `⚠️ **${info.tmuxName}** killed by circuit breaker — bridge was flapping (${FLAP_THRESHOLD}+ reconnects in ${FLAP_WINDOW_MS / 1000}s). Use \`respawn\` to start fresh.`)
+            if (freshDeath) notifyParentOfEnd(info, 'killed by hydra', 'bridge flapping (circuit breaker)')
           } else {
             process.stderr.write(`daemon: circuit breaker: stray bridge ${sessionId} flapping — disconnecting\n`)
           }
@@ -310,7 +350,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
     }
 
     case 'tool_call': {
-      const { id, name, args } = msg as { id: string; name: string; args: Record<string, unknown> }
+      const { id, name, args } = msg
 
       if (!isToolAllowed(conn.sessionId ?? '', name)) {
         transport.sendToBridge(conn, {
@@ -389,7 +429,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
     }
 
     case 'tools_request': {
-      const { id } = msg as { id: string }
+      const { id } = msg
       transport.sendToBridge(conn, { type: 'tools_result', id, tools: advertiseTools(conn.sessionId ?? '') })
       break
     }
@@ -444,23 +484,22 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
     }
 
     case 'cli': {
-      void handleCLIRequest(msg as CLIRequest).then(response => {
+      void handleCLIRequest(msg).then(response => {
         conn.socket.write(JSON.stringify(response) + '\n')
       }).catch(err => {
         conn.socket.write(JSON.stringify({
           type: 'cli-response',
-          id: msg.id ?? '',
+          id: typeof msg.id === 'string' ? msg.id : '',
           ok: false,
           error: `internal error: ${err instanceof Error ? err.message : String(err)}`,
         }) + '\n')
       })
       break
     }
-
-    default:
-      process.stderr.write(`daemon: unknown message type from bridge: ${msg.type}\n`)
   }
 }
+
+export const __test = process.env.NODE_ENV === 'test' ? { handleBridgeMessage } : undefined
 
 // ---------------------------------------------------------------------------
 // Session death detection
@@ -542,6 +581,7 @@ export async function checkSessionDeath(sessionId: string): Promise<void> {
 
     markDead(info)
     clearInterceptsForSession(info.tmuxName)
+    notifyParentOfEnd(info, 'died from crash', 'tmux dead, bridge disconnected')
 
     // Ephemeral sessions die silently — no crash message or skull visual
     if (!info.ephemeral) {
@@ -567,6 +607,7 @@ export const socketServer = createServer((socket: Socket) => {
     conn.buf += data.toString()
     let nl: number
     while ((nl = conn.buf.indexOf('\n')) !== -1) {
+      if (socket.destroyed || socket.writableEnded) break
       const line = conn.buf.slice(0, nl).trim()
       conn.buf = conn.buf.slice(nl + 1)
       if (line) handleBridgeMessage(conn, line)
