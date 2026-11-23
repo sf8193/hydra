@@ -31,11 +31,11 @@ import { canAskPredecessor, pushToolSurface } from '../sessions/tool-surface.js'
 import { parseSpawnTopic, resolveSpawnLabel } from '../infra/util.js'
 import { startPhaseBudget, clearPhaseBudget } from '../sessions/phase-budget.js'
 import { clearIdleLimit, resumeIdleLimit } from '../sessions/idle-limit.js'
-import { AGY_MODEL_ALIASES, resolveLaunchSelection, spawnModel, withContextSuffix } from '../shared/constants.js'
+import { resolveLaunchSelection, spawnModel, withContextSuffix } from '../shared/constants.js'
 import type { SessionType, ToolBase, SessionLabel } from '../shared/constants.js'
 import { isRestricted, isRestrictedPolicy } from '../shared/policy-record.js'
 import { resolveEngine } from '../sessions/engine-instances.js'
-import { engineLimitsAccess } from '../shared/engines/index.js'
+import { engineLimitsAccess, engineProfile } from '../shared/engines/index.js'
 import type { EngineAdapter, ProviderId } from '../engines/engine-adapter.js'
 import { resumeHomeOwner } from '../engines/codex-engine-adapter.js'
 import { buildSpawnPrompt, buildForkPrompt, buildHandoffPrompt, buildResurrectPrompt } from '../shared/prompts/session.js'
@@ -315,7 +315,7 @@ export function handoffSpawnOpts(info: SessionInfo, artifact: string): SpawnOpts
   return {
     existingThreadId: info.threadId,
     handedOffFrom: info.tmuxName,
-    handoffFromClaudeSessionId: (info.engine ?? 'claude') === 'claude' ? info.claudeSessionId : undefined,
+    handoffFromClaudeSessionId: engineProfile(info.engine).recordsClaudeSessionId ? info.claudeSessionId : undefined,
     ...(predecessor && { predecessor }),
     artifact,
     // Only for the letter that request asked for: an abandoned request's note must not reach a later handoff.
@@ -1228,8 +1228,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   if (opts?.promptBuilder) {
     prompt = opts.promptBuilder(sessionId, tmuxName)
   } else if (isHandoff) {
-    // Only Claude predecessors can be forked today.
-    const hasPredecessor = carriedPredecessor?.engine === 'claude'
+    const hasPredecessor = !!carriedPredecessor && engineProfile(carriedPredecessor.engine).forkable
     const arrival = handoffArrival(opts ?? {}, { from: originFrom!, session: tmuxName, cwd: effectiveCwd, worktree: worktree?.path ?? '', branch: worktree?.branch ?? '' })
     prompt = buildHandoffPrompt({ ...promptParams, originFrom: originFrom!, artifact: opts?.artifact, note: opts?.handoffNote, arrival, hasPredecessor, canAsk: canAskPredecessor({ engine, predecessor: carriedPredecessor }) })
   } else if (isFork) {
@@ -1250,7 +1249,8 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   // Central model resolution (see `selected` above): callers can pass raw aliases (e.g. "sonnet", "astra") or full IDs.
   // Codex with no model picks its own default (it asks its app-server); the spawn default is a Claude id, which Codex cannot run. agy is given its
   // flash model (the one agy itself starts on, and every plan has it): it needs a model named, and the Claude spawn default is not one it should run.
-  const model = selected?.model ?? (engine === 'codex' ? undefined : engine === 'agy' ? AGY_MODEL_ALIASES.flash : withContextSuffix(spawnModel()))
+  const { defaultModel, aliases } = engineProfile(engine)
+  const model = selected?.model ?? (defaultModel === 'own' ? undefined : defaultModel === 'spawn' ? withContextSuffix(spawnModel()) : aliases[defaultModel.alias])
 
 
   // --- Launch via engine adapter ---
@@ -1314,7 +1314,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     ...(launched.stderrLogPath ? { stderrLogPath: launched.stderrLogPath } : {}),
     ...(launched.debugLogPath ? { debugLogPath: launched.debugLogPath } : {}),
     ...(launched.channelNote ? { channelNote: launched.channelNote } : {}),
-    ...(engine === 'claude' ? { spawnPrompt: prompt } : {}),
+    ...(engineProfile(engine).losesFirstTurnToExpiredLogin ? { spawnPrompt: prompt } : {}),
     initiator: carriedInitiator,
     sessionTokenHash: issued.hash,
     parentId: carriedParentId ?? null,

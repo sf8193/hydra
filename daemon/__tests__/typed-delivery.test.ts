@@ -62,7 +62,7 @@ afterEach(() => {
 })
 
 describe('deliveryDecision', () => {
-  const f = (o: Partial<DeliveryFacts> = {}): DeliveryFacts => ({ trusted: true, claudeLive: true, working: true, holdFull: false, ...o })
+  const f = (o: Partial<DeliveryFacts> = {}): DeliveryFacts => ({ trusted: true, needsTyping: true, working: true, holdFull: false, ...o })
   test('off is always channel', () => expect(deliveryDecision('off', f()).kind).toBe('channel'))
   test('paste: working -> paste, idle -> channel', () => {
     expect(deliveryDecision('paste', f()).kind).toBe('paste')
@@ -73,10 +73,10 @@ describe('deliveryDecision', () => {
     expect(deliveryDecision('hold', f({ holdFull: true })).kind).toBe('paste')
     expect(deliveryDecision('hold', f({ working: false })).kind).toBe('channel')
   })
-  test('untrusted or non-claude is channel in every mode', () => {
+  test('untrusted, or a session that needs no typing, is channel in every mode', () => {
     for (const m of ['off', 'paste', 'hold'] as const) {
       expect(deliveryDecision(m, f({ trusted: false })).kind).toBe('channel')
-      expect(deliveryDecision(m, f({ claudeLive: false })).kind).toBe('channel')
+      expect(deliveryDecision(m, f({ needsTyping: false })).kind).toBe('channel')
     }
   })
 })
@@ -96,7 +96,7 @@ describe('mode paste', () => {
     expect(await send('m1', { user_id: '999' })).toEqual({ by: 'channel' })
     expect(pasted).toHaveLength(0); expect(sent).toEqual(['m1'])
   })
-  test('non-claude and dead sessions take the channel', async () => {
+  test('sessions that need no typing, and dead ones, take the channel', async () => {
     sess = session({ engine: 'codex' }); await send('a')
     sess = session({ deadAt: 1 }); await send('b')
     expect(pasted).toHaveLength(0); expect(sent).toEqual(['a', 'b'])

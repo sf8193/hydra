@@ -11,6 +11,7 @@ import type { SessionInfo } from '../sessions/registry.js'
 import { automaticHandoffSentence, autoHandoff } from './auto-handoff.js'
 import { CONTEXT_ALERT_LINES } from '../shared/context-lines.js'
 import { timed } from '../shared/loop-watch.js'
+import { engineProfile } from '../shared/engines/index.js'
 
 const SESSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
@@ -29,7 +30,7 @@ export function pollSessionsOnce(now: number): void {
     const occ = info.sessionType === 'thread_guest' ? undefined : occupancy(info, now)
     // Bridge-only disconnects are handled by the bridge-server disconnect handler (3s delay + tmux check).
     // Codex owns its deaths: finaliseCodexDeath drops its queue. Claude and agy are judged by their tmux here.
-    if (occ === 'dead' && !info.deadAt && info.engine !== 'codex' && !crashAlerted.has(info.sessionId)) {
+    if (occ === 'dead' && !info.deadAt && !engineProfile(info.engine).judgesOwnDeath && !crashAlerted.has(info.sessionId)) {
       crashAlerted.add(info.sessionId)
       markDead(info, now)
       process.stderr.write(`daemon: crash detected: ${info.tmuxName}\n`)

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { ENGINES, ENGINE_PROFILES, engineLabel, engineLimitsAccess, type EngineName, type EngineProfile } from '../engines/index.js'
+import { ENGINES, ENGINE_PROFILES, engineProfile, engineLabel, engineLimitsAccess, type EngineName, type EngineProfile } from '../engines/index.js'
 
 // What the spawn, respawn and notice paths used to decide by naming engines: Claude does everything, Codex takes templates only, omp and agy take none of them.
 test('each engine\'s profile says what its sessions can be asked', () => {
@@ -31,4 +31,45 @@ test('an engine\'s label and access come from its own profile; a session with no
   }
   expect(engineLabel(undefined)).toBe('Claude')
   expect(engineLimitsAccess(undefined)).toBe(true)
+})
+
+// What the daemon used to decide by naming an engine, one capability per question. Each row is the four engines in order: claude, codex, omp, agy.
+test('each capability that replaced an engine-name branch gives the answer the name did', () => {
+  const table: Record<string, (e: EngineName) => unknown> = {
+    recordsClaudeSessionId: e => engineProfile(e).recordsClaudeSessionId,
+    dropsNotificationsAtStart: e => engineProfile(e).dropsNotificationsAtStart,
+    reportsTurnEnd: e => engineProfile(e).reportsTurnEnd,
+    judgesOwnDeath: e => engineProfile(e).judgesOwnDeath,
+    hasHourPromptCache: e => engineProfile(e).hasHourPromptCache,
+    losesFirstTurnToExpiredLogin: e => engineProfile(e).losesFirstTurnToExpiredLogin,
+    waitsOutLongTools: e => engineProfile(e).waitsOutLongTools,
+    distrustsMidTurnChannel: e => engineProfile(e).distrustsMidTurnChannel,
+    defaultModel: e => engineProfile(e).defaultModel,
+    forkable: e => engineProfile(e).forkable,
+  }
+  const T = true, F = false
+  const expected: Record<string, unknown[]> = {
+    recordsClaudeSessionId: [T, F, F, F],
+    dropsNotificationsAtStart: [T, F, F, F],
+    reportsTurnEnd: [T, F, F, F],
+    judgesOwnDeath: [F, T, F, F],
+    hasHourPromptCache: [T, F, F, F],
+    losesFirstTurnToExpiredLogin: [T, F, F, F],
+    waitsOutLongTools: [T, F, F, F],
+    distrustsMidTurnChannel: [T, F, F, F],
+    defaultModel: ['spawn', 'own', 'spawn', { alias: 'flash' }],
+    forkable: [T, F, F, F],
+  }
+  for (const [name, read] of Object.entries(table)) expect({ [name]: ENGINES.map(read) }).toEqual({ [name]: expected[name]! })
+})
+
+test('an engine whose default model is an alias names one it has', () => {
+  for (const engine of ENGINES) {
+    const { defaultModel, aliases } = engineProfile(engine)
+    if (typeof defaultModel === 'object') expect(aliases).toHaveProperty(defaultModel.alias)
+  }
+})
+
+test('a record with no engine reads as Claude\'s profile', () => {
+  expect(engineProfile(undefined)).toBe(ENGINE_PROFILES.claude)
 })

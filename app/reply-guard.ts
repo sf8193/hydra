@@ -40,6 +40,7 @@ import { hasFreeze, paneScreenshot, tmuxSync, tmuxWindowActivity } from '../infr
 import { probeByteTmuxName } from './pane-probe.js'
 import { blockedReason, readClaudeStatus } from '../engines/claude-status.js'
 import { markYourTurn } from '../infra/home-status.js'
+import { engineProfile } from '../shared/engines/index.js'
 
 export type ReplyGuardDeps = {
   registryGet: (sessionId: string) => SessionInfo | undefined
@@ -438,10 +439,9 @@ export function pollActivityOnce(nowSec: number, pollDeps: PollActivityDeps = de
     if (secSinceActivity < MIN_IDLE_BEFORE_SILENCE_S) {
       handleActivityEvent(tmuxName)
       // Claude's own status says the turn is over: relay now instead of waiting for pane silence.
-      // Claude only: Codex's confirmedComplete is a flag that can be stale between turns
+      // Only an engine that reportsTurnEnd: Codex's confirmedComplete is a flag that can be stale between turns
       // (PINNED R15 in observability.test.ts), so it must not act while the pane is active.
-      // ponytail: engine check in the guard; if a third engine confirms reliably, let the adapter opt in.
-      if (info && (info.engine ?? 'claude') === 'claude') handleSilenceEvent(tmuxName, Date.now(), true)
+      if (info && engineProfile(info.engine).reportsTurnEnd) handleSilenceEvent(tmuxName, Date.now(), true)
     } else {
       handleSilenceEvent(tmuxName)
     }

@@ -2,6 +2,8 @@ import type { EngineProfile } from './profile.js'
 
 export const claude: EngineProfile = {
   label: 'Claude', limitsAccess: true, forkable: true, enforcesReadOnly: true, takesTemplates: true,
+  defaultModel: 'spawn', recordsClaudeSessionId: true, dropsNotificationsAtStart: true, reportsTurnEnd: true, judgesOwnDeath: false,
+  hasHourPromptCache: true, losesFirstTurnToExpiredLogin: true, waitsOutLongTools: true, distrustsMidTurnChannel: true,
   aliases: {
     'sonnet': 'claude-sonnet-5-5[1m]',
     'sonnet-5': 'claude-sonnet-5[1m]',

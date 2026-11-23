@@ -76,21 +76,8 @@ export const RULES: readonly Rule[] = [
     pattern: nameBranch('engine', ['claude', 'codex', 'agy', 'omp']),
     // engines/ is where an engine's behaviour lives; config/ and cli/ as for platform-name-branch.
     owners: ['engines/', 'config/', 'cli/'],
-    allowed: [
-      "auto-handoff.ts: info.engine !== 'claude'",
-      "bridge-server.ts: (info.engine ?? 'claude') === 'claude'",
-      "bridge-server.ts: info?.engine === 'claude'",
-      "reply-guard.ts: (info.engine ?? 'claude') === 'claude'",
-      "session-health.ts: info.engine !== 'codex'",
-      "session-lifecycle.ts: (info.engine ?? 'claude') === 'claude'",
-      "session-lifecycle.ts: carriedPredecessor?.engine === 'claude'",
-      "session-lifecycle.ts: engine === 'agy'",
-      "session-lifecycle.ts: engine === 'claude'",
-      "session-lifecycle.ts: engine === 'codex'",
-      "tool-surface.ts: info.engine !== 'claude'",
-      "typed-delivery.ts: info.engine === 'claude'",
-    ],
-    fix: 'give the engine a capability (a field or method on EngineAdapter, engines/engine-adapter.ts) and branch on that',
+    allowed: [],
+    fix: 'give the engine a capability (a field on EngineProfile, shared/engines/profile.ts, or a method on EngineAdapter, engines/engine-adapter.ts) and branch on that',
   },
   {
     id: 'io-in-core',
