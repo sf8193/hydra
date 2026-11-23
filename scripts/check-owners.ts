@@ -99,14 +99,14 @@ export const RULES: Rule[] = [
     // - app/session-lifecycle.ts (1): thread anchor creation must throw on failure and return anchor.id
     // - connectors/slack/runtime.ts (1): bindNotice catches failure to fall back to toOperatorDm
     // - app/reply-guard.ts (1): defaultDeps.gatewaySend seam for screenshot fallback on throw
-    // - daemon.ts (4): 2 Slack Home errors to userId (U..., not a thread ID) + 2 threadId notices in the same homeSpawnHandler deferred while #964 moves that handler
+    // - app/home-actions.ts (2): Slack Home spawn errors sent to Slack userId (U..., not a thread ID)
     allowed: ['infra/util.ts'],
     max: {
       'app/bridge-dispatch.ts': 3,
       'app/session-lifecycle.ts': 1,
       'connectors/slack/runtime.ts': 1,
       'app/reply-guard.ts': 1,
-      'daemon.ts': 4,
+      'app/home-actions.ts': 2,
     },
     tests: false, ts: true,
     why: 'send through safeSend (infra/util.ts) so messages are chunked, shaped, address-checked and logged',

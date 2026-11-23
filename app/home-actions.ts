@@ -96,13 +96,13 @@ export async function runHomeSpawnAction(topic: string, userId: string): Promise
     if (parsed) {
       const parts: string[] = [`**${parsed.templateName}** template`]
       if (modelOverride) parts.push(`model \`${modelOverride}\``)
-      void gateway.send(result.threadId, `_Using ${parts.join(' · ')}_`).catch(() => {})
+      void safeSend(result.threadId, `_Using ${parts.join(' · ')}_`)
       if (parsed.template.action) {
         try {
           await runTemplateAction(parsed.template.action, result.threadId, result.sessionId, cleanTopic)
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err)
-          void gateway.send(result.threadId, `_Action **${parsed.template.action}** failed: ${errMsg}_`).catch(() => {})
+          void safeSend(result.threadId, `_Action **${parsed.template.action}** failed: ${errMsg}_`)
         }
       }
     }
