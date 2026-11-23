@@ -6,7 +6,8 @@ import { join } from 'path'
 import { AGY_API_KEY_FILE, AgyEngine, agySettings } from '../../engines/agy-engine.js'
 import { ClaudeEngine } from '../../engines/claude-engine.js'
 import { BridgeTransport } from '../../sessions/bridge-transport.js'
-import { SESSION_INSTRUCTIONS } from '../../shared/constants.js'
+import { BASE_TOOLS } from '../../shared/constants.js'
+import { buildSessionInstructions } from '../../shared/session-instructions.js'
 import { _setTmuxForTesting } from '../../infra/tmux.js'
 import { agyStateDir, agyStateFile } from '../../engines/agy-session.js'
 import { STATE_DIR } from '../../infra/config.js'
@@ -52,7 +53,7 @@ test('launch runs agy on the model, trusting only its folder, approving tools, w
 test('the first prompt is hydra\'s reply rules, then the spawn prompt', async () => {
   const cmd = await launchCommand('say hi')
   const file = /cat '([^']+\.prompt)'/.exec(cmd)![1]
-  expect(readFileSync(file, 'utf8')).toBe(`${SESSION_INSTRUCTIONS}\n\nsay hi`)
+  expect(readFileSync(file, 'utf8')).toBe(`${buildSessionInstructions({ tools: BASE_TOOLS.thread_owner, platform: 'discord' })}\n\nsay hi`)
 })
 
 test('the spawn env names the session, its thread and type, empty when unknown', async () => {

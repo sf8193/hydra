@@ -131,7 +131,7 @@ export class SlackGateway implements ChatGateway {
   readonly platform = 'slack' as const
   readonly canThreadInDM = true
   readonly dmThreadsAreExclusive = true
-  readonly postsReactions = false // a bot's reaction pushes a notification; reactions people post are heard regardless
+  readonly postsReactions = gatewayProfile('slack').postsReactions // a bot's reaction pushes a notification; reactions people post are heard regardless
   readonly healthCheckUrl = 'https://slack.com/api/api.test'
   readonly maxMessageLength = 4000 // block-kit section text limit
   readonly maxAttachments = 10 // what the daemon has always capped a message at

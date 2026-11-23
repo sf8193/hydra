@@ -46,7 +46,7 @@ Read both state files and give the user a complete picture:
    - An `access.json` still in the folder → *"Run `hydra down discord`,
      `hydra migrate discord`, `hydra up discord`: the daemon won't start until it
      is moved into hydra.toml."*
-   - Everything set → say so; `/discord:access` changes who is let in.
+   - Everything set → say so; `/hydra:access` changes who is let in.
 
 Don't dwell on access: the point of this skill is the token.
 
@@ -76,4 +76,4 @@ Delete the `DISCORD_BOT_TOKEN=` line (or the file if that's the only line).
 - The server reads `.env` once at boot. Token changes need a session restart
   or `/reload-plugins`. Say so after saving.
 - `hydra.toml` is re-read within a second of a change: access changes via
-  `/discord:access` take effect without a restart.
+  `/hydra:access` take effect without a restart.
