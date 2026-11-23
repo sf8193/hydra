@@ -9,6 +9,7 @@ import { resolveEngine } from './engine-instances.js'
 import { specialistOf, boundAs, sendsToOf } from './specialists.js'
 import { currentHydraConfig, onHydraConfigLoad } from '../infra/hydra-config.js'
 import { slackConfigured } from '../config/types.js'
+import { engineProfile } from '../shared/engines/index.js'
 
 // Widened views: isToolAllowed checks arbitrary wire names, not just known ToolNames.
 const BASE_TOOLS: Readonly<Record<ToolBase, ReadonlySet<string>>> = TYPED_BASE_TOOLS
@@ -21,7 +22,7 @@ const ALL_CAPABILITY_TOOLS: Readonly<Record<Capability | DerivedCapability, Read
 export function predecessorAsker(info: Pick<SessionInfo, 'engine' | 'predecessor'>): ((question: string, timeoutMs: number) => Promise<string>) | undefined {
   const p = info.predecessor
   const engine = p && resolveEngine(p.engine)
-  if (!p || !engine?.askFork || info.engine !== 'claude') return undefined
+  if (!p || !engine?.askFork || !engineProfile(info.engine).waitsOutLongTools) return undefined
   return (question, timeoutMs) => engine.askFork!(p.fork, p.cwd, question, timeoutMs, p.model)  // a method call, so the adapter keeps its this
 }
 

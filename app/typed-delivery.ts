@@ -22,6 +22,7 @@ import { on } from '../infra/event-bus.js'
 import type { SessionInfo } from '../sessions/registry.js'
 import { sessionDrift, unverified } from './restricted.js'
 import { replyContextLine } from '../shared/reply-context.js'
+import { engineProfile } from '../shared/engines/index.js'
 
 // ---------------------------------------------------------------------------
 // The rule: one place that knows when each path applies
@@ -31,13 +32,13 @@ export type DeliveryDecision = { kind: 'channel' } | { kind: 'paste' } | { kind:
 
 export type DeliveryFacts = {
   trusted: boolean      // sender is in HYDRA_TYPED_DELIVERY_USER_IDS
-  claudeLive: boolean   // a live claude session (typing needs its pane)
+  needsTyping: boolean  // a live session of an engine that distrusts a mid-turn channel message: a trusted sender's message is typed into its pane
   working: boolean      // mid-turn right now
   holdFull: boolean     // this session's hold queue is at its bound
 }
 
 export function deliveryDecision(mode: TypedDeliveryMode, f: DeliveryFacts): DeliveryDecision {
-  if (!f.trusted || !f.claudeLive) return { kind: 'channel' }
+  if (!f.trusted || !f.needsTyping) return { kind: 'channel' }
   switch (mode) {
     case 'off': return { kind: 'channel' }
     case 'paste': return f.working ? { kind: 'paste' } : { kind: 'channel' }
@@ -124,12 +125,13 @@ export function _heldCount(sessionId: string): number { return held.get(sessionI
 /** A drifted session (its stored policy is not what hydra.toml gives its specialist) is not typed into: the channel path refuses it. */
 const drifted = (info: SessionInfo): boolean => { try { return unverified(info) || sessionDrift(info).drift.length > 0 } catch { return true } }
 
-const claudeLive = (info: SessionInfo | undefined): info is SessionInfo =>
-  !!info && deliverable(deps.occupancy(info)).ok && info.engine === 'claude' && !drifted(info)
+/** A live, verified session whose engine distrusts a mid-turn channel message: the one kind a trusted message is typed into. */
+const needsTyping = (info: SessionInfo | undefined): info is SessionInfo =>
+  !!info && deliverable(deps.occupancy(info)).ok && engineProfile(info.engine).distrustsMidTurnChannel && !drifted(info)
 
 /** Release one held message: channel when asked, else paste with the channel as fallback. */
 async function release(info: SessionInfo | undefined, h: Held, how: 'channel' | 'paste', reason: 'idle' | 'max-hold' | 'death'): Promise<void> {
-  const pasted = how === 'paste' && claudeLive(info) && await deps.paste(info, h.content, h.meta)
+  const pasted = how === 'paste' && needsTyping(info) && await deps.paste(info, h.content, h.meta)
   if (!pasted) h.channel()
   deps.onOutcome(info?.sessionId ?? '', h.meta, { by: 'flushed', via: pasted ? 'paste' : 'channel', reason })
 }
@@ -147,10 +149,10 @@ export async function deliverUserMessage(
   const info = deps.getSession(sessionId)
   const mode = typedDeliveryMode()
   const trusted = !!meta.user_id && typedDeliveryUserIds().has(meta.user_id)
-  const live = claudeLive(info)
+  const live = needsTyping(info)
   const queue = held.get(sessionId)
   const working = mode !== 'off' && trusted && live ? await deps.isWorking(info) : false
-  const decision = deliveryDecision(mode, { trusted, claudeLive: live, working, holdFull: (queue?.length ?? 0) >= HOLD_QUEUE_MAX })
+  const decision = deliveryDecision(mode, { trusted, needsTyping: live, working, holdFull: (queue?.length ?? 0) >= HOLD_QUEUE_MAX })
 
   let outcome: DeliveryOutcome
   switch (decision.kind) {
@@ -197,7 +199,7 @@ export async function flushHeld(sessionId: string, dead = false): Promise<void> 
   const q = held.get(sessionId)
   if (!q?.length) return
   const info = deps.getSession(sessionId)
-  if (dead || !claudeLive(info)) {
+  if (dead || !needsTyping(info)) {
     held.delete(sessionId)
     for (const h of q) await release(info, h, 'channel', 'death')
     return

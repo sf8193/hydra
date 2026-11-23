@@ -14,6 +14,7 @@ import { specialistOf } from '../sessions/specialists.js'
 import { killAndRespawn, NotReplaced } from './specialist-deliver.js'
 import { safeSend } from '../infra/util.js'
 import { CACHE_HANDOFF_LINE, FULL_HANDOFF_DEFAULT_LINE } from '../shared/context-lines.js'
+import { engineProfile } from '../shared/engines/index.js'
 
 // Cache handoff, opt-in with AUTO_HANDOFF_CACHE=1: a Claude session at 50%+ context that nobody has touched for 50 minutes
 // hands off while its 1-hour prompt cache is still warm (the 5-minute poll lands the request 50-55 minutes after the last touch).
@@ -134,7 +135,7 @@ function cacheHandoff(info: SessionInfo, pct: number, now: number): void {
   if (!autoHandoffOn('CACHE') || Number.isNaN(pct)) return
   // Below the threshold, re-arm: a later climb past it asks again.
   if (pct < CACHE_HANDOFF_LINE) { cacheHandoffAsked.delete(info.sessionId); idleSince.delete(info.sessionId); return }
-  if (cacheHandoffAsked.has(info.sessionId) || info.engine !== 'claude') return
+  if (cacheHandoffAsked.has(info.sessionId) || !engineProfile(info.engine).hasHourPromptCache) return
   if (isSessionWorking(info)) { idleSince.delete(info.sessionId); return }
   const since = idleSince.get(info.sessionId) ?? idleSince.set(info.sessionId, now).get(info.sessionId)!
   const idleMs = now - Math.max(info.lastActive, since)

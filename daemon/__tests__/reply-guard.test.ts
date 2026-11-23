@@ -88,6 +88,7 @@ function liveSession(sessionId: string, over: Partial<SessionInfo> = {}): Sessio
     lastActive: T0,
     tmuxName: 'cedar',
     listening: false,
+    engine: 'claude',
     ...over,
   } as SessionInfo // deliberately partial: no adapter unless `over` supplies one (see comment above)
   testSessions.set(sessionId, info)

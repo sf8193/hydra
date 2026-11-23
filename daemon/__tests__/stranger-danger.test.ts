@@ -75,7 +75,7 @@ test("a granted stranger's permission answer is not an approval", async () => {
 describe('a muted thread and an admitted stranger', () => {
   const landed: string[] = []
   let spies2: Array<{ mockRestore(): void }> = []
-  const info = { sessionId: 'sess', tmuxName: 'sess-name', threadId: 'ch:T1', listening: false, sessionType: 'thread_owner', adapter: fakeAdapter({ isAlive: () => true, usage: () => null }) } as any
+  const info = { sessionId: 'sess', tmuxName: 'sess-name', threadId: 'ch:T1', listening: false, engine: 'claude', sessionType: 'thread_owner', adapter: fakeAdapter({ isAlive: () => true, usage: () => null }) } as any
   beforeEach(() => {
     landed.length = 0
     threadRegistry.allowSenders('ch:T1', ['s5'])
@@ -113,7 +113,7 @@ describe('a muted thread and an admitted stranger', () => {
 describe('a muted thread and a sender admitted by a mention', () => {
   const landed: string[] = []
   let spies3: Array<{ mockRestore(): void }> = []
-  const info = { sessionId: 'sess', tmuxName: 'sess-name', threadId: 'ch:T1', listening: false, sessionType: 'thread_owner', adapter: fakeAdapter({ isAlive: () => true, usage: () => null }) } as any
+  const info = { sessionId: 'sess', tmuxName: 'sess-name', threadId: 'ch:T1', listening: false, engine: 'claude', sessionType: 'thread_owner', adapter: fakeAdapter({ isAlive: () => true, usage: () => null }) } as any
   beforeEach(() => {
     landed.length = 0
     setHydra({ operators: ['op'], channels: { ch: { requireMention: true } }, gate: { off: false, mentionPatterns: ['hydra,'] } })

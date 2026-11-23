@@ -9,15 +9,18 @@ import { codex } from './codex.js'
 import { omp } from './omp.js'
 import type { EngineProfile } from './profile.js'
 
-export type { EngineProfile } from './profile.js'
+export type { EngineProfile, DefaultModel } from './profile.js'
 
 export const ENGINE_PROFILES = { claude, codex, omp, agy } as const satisfies Record<string, EngineProfile>
 
 export type EngineName = keyof typeof ENGINE_PROFILES
 export const ENGINES = Object.keys(ENGINE_PROFILES) as readonly EngineName[]
 
+/** What the engine can do, read where a branch used to name it. Absent: the default, claude, as the adapter lookup (sessions/engine-instances.ts) takes it: a record with no engine runs as Claude everywhere, never as an error in one place. */
+export const engineProfile = (engine: EngineName | undefined): EngineProfile => ENGINE_PROFILES[engine ?? 'claude']
+
 /** Whether a session started on this engine (absent: the default, claude) can be restricted or write-confined. */
-export const engineLimitsAccess = (engine: EngineName | undefined): boolean => ENGINE_PROFILES[engine ?? 'claude'].limitsAccess
+export const engineLimitsAccess = (engine: EngineName | undefined): boolean => engineProfile(engine).limitsAccess
 
 /** The engine as a person reads it (absent: the default, claude). */
-export const engineLabel = (engine: EngineName | undefined): string => ENGINE_PROFILES[engine ?? 'claude'].label
+export const engineLabel = (engine: EngineName | undefined): string => engineProfile(engine).label

@@ -30,6 +30,7 @@ import { emit } from '../infra/event-bus.js'
 import { bridgeLifePath, describeBridgeExit } from '../shared/bridge-life.js'
 import { pidAlive, pruneBridgeLife, readBridgeLife } from '../infra/bridge-life-file.js'
 import type { ButtonDef } from '../gateways/gateway.js'
+import { engineProfile } from '../shared/engines/index.js'
 
 const DEATH_DETECT_DELAY_MS = 3_000
 const BRIDGE_LIFE_READ_DELAY_MS = BRIDGE_SHUTDOWN_GRACE_MS + 1_000
@@ -178,7 +179,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       }
 
       // Only a Claude record carries a Claude session id; the Codex MCP sidecar registers here too.
-      if (info && (info.engine ?? 'claude') === 'claude') {
+      if (info && engineProfile(info.engine).recordsClaudeSessionId) {
         const resolved = claudeSessionId || discoverClaudeSessionId(info.tmuxName)
         if (resolved) {
           info.claudeSessionId = resolved
@@ -288,7 +289,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       // Reply guard: re-arm from queued user messages before the flush hands
       // them over — the queue survives daemon restarts, the guard map doesn't.
       notePendingFromQueue(sessionId, transport.messageQueues.get(sessionId))
-      if (info?.engine === 'claude' && info.adapter && Date.now() - info.createdAt < FRESH_START_MS) transport.settleThenFlush(sessionId, () => info.adapter!.turn(info, 0).live === 'idle')
+      if (info && engineProfile(info.engine).dropsNotificationsAtStart && info.adapter && Date.now() - info.createdAt < FRESH_START_MS) transport.settleThenFlush(sessionId, () => info.adapter!.turn(info, 0).live === 'idle')
       else transport.flushQueue(sessionId)
       dispatchReconnect(sessionId)
       if (info && info.sessionType !== 'thread_guest') refreshSessionVisual(info.threadId)
