@@ -107,14 +107,14 @@ export const MEMBERSHIP_WAIT_MS = 5_000
 export type PostOptions = { unfurl?: false }
 
 /**
- * The chat.postMessage arguments for one reply: the text as the gateway sends it (`messageBody`, so markdown renders) unless it carries Slack syntax
- * (`slackSyntax`: a tag must still reach the tagged app), the thread when there is one, and unfurling off exactly when asked.
+ * The chat.postMessage arguments for one reply: the text as the gateway sends it (`messageBody`, so markdown renders) unless it carries a tag
+ * (`slackSyntax`: a tag must still reach the tagged app; links stay markdown), the thread when there is one, and unfurling off exactly when asked.
  */
 export function postPayload(channel: string, threadTs: string | undefined, text: string, opts?: PostOptions): Record<string, unknown> {
   return { channel, ...replyBody(text), ...(threadTs && { thread_ts: threadTs }), ...unfurlFields(opts?.unfurl === false) }
 }
 
-/** A connector reply's or edit's body field: `markdown_text`, or classic `text` when it carries Slack syntax or is past the cap. */
+/** A connector reply's or edit's body field: `markdown_text`, or classic `text` when it carries a tag or is past the cap. */
 export const replyBody = (text: string): { text: string } | { markdown_text: string } => messageBody(text, slackSyntax(text))
 
 export type SlackAppLike = {

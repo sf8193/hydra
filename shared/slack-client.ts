@@ -27,7 +27,7 @@ export const MARKDOWN_TEXT_MAX = 12000
 /**
  * The body field for chat.postMessage and chat.update. Sessions write GitHub-flavoured markdown, and Slack renders that (tables, lists, headings,
  * `**bold**`, `[text](url)`) only through `markdown_text`; Slack does the conversion, so the text goes byte for byte. `classic` text goes as `text`:
- * text that is already mrkdwn (the gateway's Block Kit button messages), or text with Slack syntax `markdown_text` is not proven to carry
+ * text that is already mrkdwn (the gateway's Block Kit button messages), or text with a tag `markdown_text` is not proven to deliver
  * (`slackSyntax`). So does text past `MARKDOWN_TEXT_MAX`. `markdown_text` cannot be combined with `text` or `blocks`.
  */
 export function messageBody(text: string, classic = false): { text: string } | { markdown_text: string } {
@@ -35,12 +35,13 @@ export function messageBody(text: string, classic = false): { text: string } | {
 }
 
 /**
- * True when the text carries Slack's own angle-bracket syntax: a tag (`<@U…>`), a special mention or user group (`<!here>`, `<!subteam^…>`),
- * a channel link (`<#C…>`), or a labelled link (`<url|label>`). A post tagging another app sent as `markdown_text` never reached that app (#948, reverted in #953),
- * and Slack's docs don't say whether the rest render there. Such text keeps going as classic `text`, as it did before markdown.
+ * True when the text carries a Slack tag or reference: a tag (`<@U…>`), a special mention or user group (`<!here>`, `<!channel>`, `<!everyone>`,
+ * `<!subteam^…>`), or a channel link (`<#C…>`). A post tagging another app sent as `markdown_text` never reached that app (#948, reverted in #953),
+ * and nothing shows mentions or channel links work there, so such text keeps going as classic `text`. A labelled link (`<url|label>`) is not one:
+ * under `markdown_text` it renders as a link, as `[label](url)` does (seen live, 23 Nov).
  */
 export function slackSyntax(text: string): boolean {
-  return /<[@!#]|<(?:https?|mailto):[^\s<>|]*\|/i.test(text)
+  return /<[@!#]/.test(text)
 }
 
 /** The bot's identity in an auth.test response; a field Slack left out is absent. */

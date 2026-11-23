@@ -358,11 +358,15 @@ describe('posting where link previews are off', () => {
     expect(p).not.toHaveProperty('text')
   })
   test('a reply with Slack syntax goes as classic text, so a tag still reaches the tagged app (#953)', () => {
-    for (const t of ['over to <@U0OTHER> **now**', 'cc <@U0OTHER|opal>', '<!here> heads up', 'see <!subteam^S1|team>', 'in <#C0123|dev>', 'see <https://example.com|this>', 'mail <mailto:a@b.co|a>']) {
+    for (const t of ['over to <@U0OTHER> **now**', 'cc <@U0OTHER|opal>', '<!here> heads up', '<!everyone> heads up', 'see <!subteam^S1|team>', 'in <#C0123|dev>']) {
       const p = postPayload('C1', '1.0', t)
       expect(p.text).toBe(t)
       expect(p).not.toHaveProperty('markdown_text')
     }
+  })
+  test('a reply with Slack links but no tag stays markdown_text: <url|label> renders as a link there', () => {
+    const t = '**SO** <https://example.com/so/1|10183> and [10184](https://example.com/so/2), mail <mailto:a@b.co|a>\n\n| a | b |\n|---|---|\n| 1 | 2 |'
+    expect(postPayload('C1', '1.0', t)).toEqual({ channel: 'C1', markdown_text: t, thread_ts: '1.0' })
     expect(postPayload('C1', undefined, 'a < b and <https://example.com> and [x](<https://example.com>)')).toHaveProperty('markdown_text')
   })
   test('the cap: at MARKDOWN_TEXT_MAX still markdown_text, one past it classic text, unchanged', () => {

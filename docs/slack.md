@@ -177,7 +177,7 @@ What a restricted or write-confined specialist can and cannot do, and how to dec
 - bullet lists (`- ` / `* `, nested), numbered lists (`1.`), and **tables** (`| a | b |`)
 - headings (`#`), links (`[label](url)`), and emoji (`:tada:` / unicode)
 
-Constraints: `markdown_text` caps at ~12k chars (longer messages fall back to classic mrkdwn), and **button/permission prompts** use Block Kit (classic mrkdwn, fewer features). A connector reply or edit that carries Slack's own syntax (a tag `<@U…>`, `<!here>`, `<#C…>`, or a labelled link `<url|label>`) goes as classic mrkdwn, so a tag still reaches the tagged app (#953): write links as `[label](url)` to keep markdown. Under `markdown_text`, `*x*` is italic; bold is `**x**`. This layer only guarantees the palette renders — it imposes **no house style**. How a given bot *presents* (terse vs detailed, emoji, when to use a table vs bullets) belongs in that bot's own instructions / `CLAUDE.md`.
+Constraints: `markdown_text` caps at ~12k chars (longer messages fall back to classic mrkdwn), and **button/permission prompts** use Block Kit (classic mrkdwn, fewer features). A connector reply or edit that tags someone or links a channel (`<@U…>`, `<!here>`, `<!channel>`, `<!everyone>`, `<!subteam^…>`, `<#C…>`) goes as classic mrkdwn, so a tag still reaches the tagged app (#953); that message gets no tables or `**bold**`. Links of either form (`[label](url)` or `<url|label>`) render under `markdown_text`. Under `markdown_text`, `*x*` is italic; bold is `**x**`. This layer only guarantees the palette renders — it imposes **no house style**. How a given bot *presents* (terse vs detailed, emoji, when to use a table vs bullets) belongs in that bot's own instructions / `CLAUDE.md`.
 
 ## Spawned sessions
 

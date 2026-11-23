@@ -42,11 +42,11 @@ describe('messageBody', () => {
 })
 
 describe('slackSyntax', () => {
-  test('tags, special mentions, channel links and labelled links are Slack syntax', () => {
-    for (const t of ['<@U1>', '<@W1|name>', '<!here>', '<!channel>', '<!subteam^S1>', '<#C1|dev>', '<https://x.co|x>', '<HTTP://x.co|x>', '<mailto:a@b.co|a>']) expect(slackSyntax(`hi ${t} there`)).toBe(true)
+  test('tags, special mentions and channel links are Slack syntax', () => {
+    for (const t of ['<@U1>', '<@W1|name>', '<!here>', '<!channel>', '<!everyone>', '<!subteam^S1>', '<#C1|dev>']) expect(slackSyntax(`hi ${t} there`)).toBe(true)
   })
-  test('markdown, a bare autolink and a lone < are not', () => {
-    for (const t of ['**b** [x](https://x.co)', '<https://x.co>', '[x](<https://x.co>)', 'a < b > c', 'x <= 2', '']) expect(slackSyntax(t)).toBe(false)
+  test('links of either form, markdown and a lone < are not: they render under markdown_text', () => {
+    for (const t of ['**b** [x](https://x.co)', '<https://x.co>', '<https://x.co|x>', '<HTTP://x.co|x>', '<mailto:a@b.co|a>', '[x](<https://x.co>)', 'a < b > c', 'x <= 2', '']) expect(slackSyntax(t)).toBe(false)
   })
 })
 
