@@ -12,7 +12,7 @@ It runs in tmux like a Claude session, so `tmux attach -t <name>` shows it and y
 
 ## How it works
 
-- **Messages in:** there is no channel into agy, so hydra pastes each message into the pane (a bracketed paste, then Enter, one at a time per session) and waits for the pane to show it. agy queues a message that arrives mid-turn. A message the pane never shows is reported as a non-retryable rejection: it may have been sent, and a retry could paste it twice.
+- **Messages in:** there is no channel into agy, so hydra pastes each message into the pane (a bracketed paste, then Enter, one at a time per session) and waits for either the pane or agy's transcript (`USER_INPUT` step) to show it. agy queues a message that arrives mid-turn. A message neither shows is reported as a non-retryable rejection: it may have been sent, and a retry could paste it twice.
 - **Tools out:** reply, react, send_to_thread and the rest are MCP tools of the `hydra` server.
 - **Turn end, answer, tokens:** agy's hook (`engines/agy-hook.ts`) records the conversation and working/idle in `<state>/agy-sessions/<session>.json`; the turn's answer and token counts come from agy's transcript (`~/.gemini/antigravity-cli/brain/<conversation>/.system_generated/logs/`).
 - **Resume:** `respawn` and revive continue the conversation with `agy --conversation <id>`; boot recovery does not relaunch agy sessions (a daemon restart leaves the tmux pane running; a machine reboot needs `respawn`).
@@ -21,6 +21,6 @@ It runs in tmux like a Claude session, so `tmux attach -t <name>` shows it and y
 
 - `fork_from`, `read_only` and templates (`+f`) are refused.
 - Run one hydra daemon per user: agy's MCP and hook entries (`~/.gemini/config`) point at the checkout that launched last, so a second daemon would repoint a running session's hook.
-- The pane check for a delivered message proves the paste reached the pane, not (for a short message) that Enter sent it.
+- Delivery confirmation checks the pane first, then agy's transcript (`USER_INPUT`) within the 8 s wait. For a short message the pane check proves the paste reached the pane, not that Enter sent it; for a message queued while agy is mid-turn for longer than 8 s, agy writes `USER_INPUT` only when the turn ends, so confirmation can still time out.
 - Context percent assumes a 1,048,576-token window for every Gemini model, and token spend leaves out thinking tokens: unverified.
 - agy's first-run screens (colour scheme, terms, data sharing) are answered once by hand; the launch trusts each session's folder through `--settings`, which agy does not save.

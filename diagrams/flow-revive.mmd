@@ -99,7 +99,7 @@ flowchart TD
   end
 
   subgraph D["(d) deliverToTarget(t): targets.ts"]
-    T0["size cap → permanent exit 3 · idempotency: in flight → 5, landed → ok duplicate, else reserve"] --> TK{"target"}
+    T0["size cap → permanent exit 3 · idempotency: in flight → 7, unconfirmed → permanent exit 3, landed → ok duplicate, else reserve"] --> TK{"target"}
     TK -- "to" --> TR{"resolveTo"}
     TR -- main --> TM["main: bridge or --queue (exit 4); never revived"]
     TR -- "declared specialist" --> TS["ensureSpecialist(name) (b) → orphaned: exit 4"]
@@ -107,7 +107,7 @@ flowchart TD
     TR -- "anything else" --> T8["exit 8: no such specialist"]
     TK -- "spawn" --> TF["a fresh session from the recipe (idle → reaped when quiet)"]
     TS & TT & TF --> LS["deliverToSession: deliverable? dead 3 · orphaned 4 · booting 5 (unless queued)<br/>connected but stuck on a dialog → 5 'stuck: kind'<br/>→ adapter.deliver"]
-    LS --> TO["landed: key kept · else key released"]
+    LS --> TO["landed / unconfirmed: key kept · else key released"]
     ST["send_to_thread(target = a specialist)"] --> TS
     SET["specialist set / rm"] --> SL["withTargetLock(name)"] --> SG{"set --thread elsewhere while the old thread is occupied?"}
     SG -- yes --> G3["G: exit 3 'is live in T1; hydra kill X first'"]

@@ -193,8 +193,8 @@ export type SlackMessageEvent = {
 export type ConversationDeps = {
   now: () => number
   /**
-   * The delivery's outcome as targets.ts gives it. A refusal that is `permanent` (it can never be delivered: too large) is dropped,
-   * never retried. Exit 8 (the binding names no such specialist, or, `malformed`, a target hydra cannot read) is kept owed, since a
+   * The delivery's outcome as targets.ts gives it. A refusal that is `permanent` is settled and never retried (`unconfirmed`:
+   * already pasted and may have landed; otherwise `too-large`: can never be delivered). Exit 8 (the binding names no such specialist, or, `malformed`, a target hydra cannot read) is kept owed, since a
    * fixed config delivers it, and alerted. `wait` (its specialist runs `max_sessions` conversation sessions already) is kept owed,
    * and never expires while it waits.
    */
@@ -231,7 +231,7 @@ export type HandleOutcome = 'mention' | 'follow-up' | 'dm' | 'subscribed' | 'ref
 
 /** Why an accepted (or would-be accepted) message will never be delivered. */
 /** `refused` / `unrouted`: accepted and owed, then `reachable_by` or the config changed so it can no longer go anywhere. `unbound`: owed when its conversation was let go. */
-export type DropKind = 'reaction-cap' | 'expired' | 'owed-full' | 'too-large' | 'tag-cap' | 'table-full' | 'guard' | 'catch-up-gap' | 'refused' | 'unrouted' | 'unbound'
+export type DropKind = 'reaction-cap' | 'expired' | 'owed-full' | 'too-large' | 'unconfirmed' | 'tag-cap' | 'table-full' | 'guard' | 'catch-up-gap' | 'refused' | 'unrouted' | 'unbound'
 
 /** An owed message that has waited past the health threshold: the conversation, who it is for, how many, how long, and why (with what to do). */
 export type LateOwed = { conversation: string; to?: string; count: number; oldestAgeMin: number; cause: string }
@@ -1896,7 +1896,7 @@ export class ConversationTable {
         if (cut.length && this.entries.get(key) === entry) this.drop('owed-full', entry, cut, OWED_FULL_WHY)
         continue
       }
-      if (!result.ok) this.drop('too-large', entry, batch.map(i => i.ts), `it can never be delivered: ${result.reason}`)
+      if (!result.ok) this.drop(result.permanent!, entry, batch.map(i => i.ts), result.permanent === 'unconfirmed' ? `already pasted, not resent: ${result.reason}` : `it can never be delivered: ${result.reason}`)
       else {
         this.failing.delete(key)
         // Every landed delivery names its target, whoever it is (main, a specialist, a thread).

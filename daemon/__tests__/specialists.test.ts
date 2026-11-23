@@ -805,7 +805,7 @@ describe('specialists', () => {
     expect((await deliverToTarget({ to: name }, 'hi', { source: 'slack-watch', initiator: 'slack-watch' })).ok).toBe(true)
     expect(seen[0].meta).toMatchObject({ source: 'slack-watch', specialist: name, initiator: 'slack-watch' })
     const big = await deliverToTarget({ to: name }, 'x'.repeat(10_001), { initiator: 'unknown' })
-    expect(big).toMatchObject({ ok: false, permanent: true })
+    expect(big).toMatchObject({ ok: false, permanent: 'too-large' })
     expect(seen).toHaveLength(1)
   })
 

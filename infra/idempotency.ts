@@ -6,7 +6,7 @@ import { atomicWriteFileSync } from './util.js'
 export type IdempotencyEntry = {
   key: string
   sessionId: string
-  status: 'pending' | 'spawned' | 'completed' | 'failed' | 'timed_out'
+  status: 'pending' | 'spawned' | 'completed' | 'failed' | 'timed_out' | 'unconfirmed'
   createdAt: number
   expiresAt: number
 }

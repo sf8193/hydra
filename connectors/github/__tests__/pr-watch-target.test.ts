@@ -124,6 +124,19 @@ describe('poll → target', () => {
     expect(entry()!.lastReviewCommentId).toBe(11)
   })
 
+  test('a permanent refusal advances the read position, notifies the thread, and does not resend (e.g. unconfirmed agy paste)', async () => {
+    seed()
+    answer = { ok: false, exit: 3, reason: 'delivery rejected: already pasted', permanent: 'unconfirmed' }
+    await _pollForTesting(entry()!)
+    expect(calls).toHaveLength(1)
+    expect(entry()!.lastReviewCommentId).toBe(11)
+    expect(posted).toHaveLength(1)
+    expect(posted[0]).toContain('was not retried')
+    answer = landed()
+    await _pollForTesting(entry()!)
+    expect(calls).toHaveLength(1)
+  })
+
   test('a CI change that does not land is reported again on the next poll', async () => {
     seed({ lastCheckStatus: 'pending' })
     comments = []

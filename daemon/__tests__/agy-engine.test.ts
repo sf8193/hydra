@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test'
 import { mkdirSync, readdirSync } from 'fs'
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { appendFileSync, chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { AGY_API_KEY_FILE, AgyEngine, agySettings } from '../../engines/agy-engine.js'
@@ -183,7 +183,7 @@ test('an Enter that fails after the paste is a non-retryable rejection (the text
   _setTmuxForTesting({ exec: ((_cmd: string, args: string[]) => { calls.push(args[0]); if (args[0] === 'send-keys') throw new Error('no server'); return '' }) as any })
   try {
     const r = await engine.deliver({ sessionId: 'deliver-5', tmuxName: 'x' } as any, { type: 'notification', content: 'hi' })
-    expect(r).toMatchObject({ status: 'rejected', retryable: false })
+    expect(r).toMatchObject({ status: 'rejected', retryable: false, permanent: 'unconfirmed' })
     expect(calls).toEqual(['capture-pane', 'load-buffer', 'paste-buffer', 'send-keys'])
   } finally { _setTmuxForTesting() }
 })
@@ -193,7 +193,141 @@ test('a message the paste cannot reach is a retryable rejection, and leaves no p
   try {
     const r = await engine.deliver({ sessionId: 'deliver-6', tmuxName: 'x' } as any, { type: 'notification', content: 'hi' })
     expect(r).toMatchObject({ status: 'rejected', retryable: true })
+    expect('permanent' in r).toBe(false)
   } finally { _setTmuxForTesting() }
+})
+
+test('delivery is confirmed from the transcript when the pane never shows the pasted text', async () => {
+  const sid = 'deliver-transcript-ok'
+  const transcriptPath = join(configDir, `${sid}.jsonl`)
+  writeFileSync(transcriptPath, '')
+  mkdirSync(agyStateDir(), { recursive: true })
+  writeFileSync(agyStateFile(sid), JSON.stringify({ conversationId: 'c', transcriptPath, live: 'working', backgroundWork: false }))
+  let captures = 0
+  _setTmuxForTesting({
+    exec: ((_cmd: string, args: string[]) => {
+      // 1st capture is pre-paste baseline, 2nd is poll #1 (not landed yet), 3rd is poll #2 (USER_INPUT lands).
+      if (args[0] === 'capture-pane' && ++captures === 3) {
+        const created_at = new Date().toISOString().replace(/\.\d+Z$/, 'Z')
+        appendFileSync(transcriptPath, JSON.stringify({
+          type: 'USER_INPUT', created_at,
+          content: '<USER_REQUEST>\n<channel source="hydra" chat_id="1" message_id="m-ok">\nqueued while working\n</channel>\n</USER_REQUEST>',
+        }) + '\n')
+      }
+      return ''
+    }) as any,
+  })
+  try {
+    const confirmEngine = new AgyEngine(new ClaudeEngine(new BridgeTransport()), mcpConfig, hooksConfig, { landedWaitMs: 500, pollMs: 5, enterDelayMs: 0 })
+    const r = await confirmEngine.deliver({ sessionId: sid, tmuxName: 'x' } as any, { type: 'notification', content: 'queued while working', meta: { chat_id: '1', message_id: 'm-ok' } })
+    expect(r).toEqual({ status: 'accepted', via: 'tmux-paste' })
+    expect(captures).toBe(3)
+  } finally {
+    _setTmuxForTesting()
+    rmSync(agyStateFile(sid), { force: true })
+  }
+})
+
+test('a late USER_INPUT from an earlier message with an identical >40-char tail does not confirm a different message', async () => {
+  const sid = 'deliver-transcript-wrong-id'
+  const transcriptPath = join(configDir, `${sid}.jsonl`)
+  writeFileSync(transcriptPath, '')
+  mkdirSync(agyStateDir(), { recursive: true })
+  writeFileSync(agyStateFile(sid), JSON.stringify({ conversationId: 'c', transcriptPath, live: 'working', backgroundWork: false }))
+  // Longer than 40 collapsed chars so the 40-char pane tail excludes the opening <channel ... message_id="..."> tag.
+  const sharedBody = 'this shared message body is intentionally longer than forty characters to push message_id outside the tail'
+  let wrote = false
+  _setTmuxForTesting({
+    exec: ((_cmd: string, args: string[]) => {
+      if (args[0] === 'send-keys' && !wrote) {
+        wrote = true
+        const created_at = new Date().toISOString().replace(/\.\d+Z$/, 'Z')
+        // Message A (message_id="m-A") arrives late during message B's (message_id="m-B") wait with identical >40-char body.
+        appendFileSync(transcriptPath, JSON.stringify({
+          type: 'USER_INPUT', created_at,
+          content: `<USER_REQUEST>\n<channel source="hydra" chat_id="1" message_id="m-A">\n${sharedBody}\n</channel>\n</USER_REQUEST>`,
+        }) + '\n')
+      }
+      return ''
+    }) as any,
+  })
+  try {
+    const quickReject = new AgyEngine(new ClaudeEngine(new BridgeTransport()), mcpConfig, hooksConfig, { landedWaitMs: 40, pollMs: 5, enterDelayMs: 0 })
+    const r = await quickReject.deliver({ sessionId: sid, tmuxName: 'x' } as any, { type: 'notification', content: sharedBody, meta: { chat_id: '1', message_id: 'm-B' } })
+    expect(r).toMatchObject({ status: 'rejected', retryable: false, permanent: 'unconfirmed' })
+  } finally {
+    _setTmuxForTesting()
+    rmSync(agyStateFile(sid), { force: true })
+  }
+})
+
+test('a timed-out delivery whose USER_INPUT lands after the wait still rejects, and does not break or spoof the next delivery', async () => {
+  const sid = 'deliver-transcript-after-wait'
+  const transcriptPath = join(configDir, `${sid}.jsonl`)
+  writeFileSync(transcriptPath, '')
+  mkdirSync(agyStateDir(), { recursive: true })
+  writeFileSync(agyStateFile(sid), JSON.stringify({ conversationId: 'c', transcriptPath, live: 'working', backgroundWork: false }))
+  const sharedBody = 'this shared message body is intentionally longer than forty characters so only message_id distinguishes them'
+  let phase: 'first' | 'second' = 'first'
+  let secondCaptures = 0
+  _setTmuxForTesting({
+    exec: ((_cmd: string, args: string[]) => {
+      if (phase === 'second' && args[0] === 'capture-pane') {
+        secondCaptures++
+        const created_at = new Date().toISOString().replace(/\.\d+Z$/, 'Z')
+        // Poll #1 of B: A's late USER_INPUT finally drains from agy's queue (must NOT confirm B).
+        if (secondCaptures === 2) {
+          appendFileSync(transcriptPath, JSON.stringify({
+            type: 'USER_INPUT', created_at,
+            content: `<USER_REQUEST>\n<channel source="hydra" chat_id="1" message_id="m-first">\n${sharedBody}\n</channel>\n</USER_REQUEST>`,
+          }) + '\n')
+        }
+        // Poll #2 of B: B's own USER_INPUT lands (must confirm B).
+        if (secondCaptures === 3) {
+          appendFileSync(transcriptPath, JSON.stringify({
+            type: 'USER_INPUT', created_at,
+            content: `<USER_REQUEST>\n<channel source="hydra" chat_id="1" message_id="m-second">\n${sharedBody}\n</channel>\n</USER_REQUEST>`,
+          }) + '\n')
+        }
+      }
+      return ''
+    }) as any,
+  })
+  try {
+    const quickEngine = new AgyEngine(new ClaudeEngine(new BridgeTransport()), mcpConfig, hooksConfig, { landedWaitMs: 30, pollMs: 5, enterDelayMs: 0 })
+    const r1 = await quickEngine.deliver({ sessionId: sid, tmuxName: 'x' } as any, { type: 'notification', content: sharedBody, meta: { chat_id: '1', message_id: 'm-first' } })
+    expect(r1).toMatchObject({ status: 'rejected', retryable: false, permanent: 'unconfirmed' })
+    phase = 'second'
+    const confirmEngine = new AgyEngine(new ClaudeEngine(new BridgeTransport()), mcpConfig, hooksConfig, { landedWaitMs: 500, pollMs: 5, enterDelayMs: 0 })
+    const r2 = await confirmEngine.deliver({ sessionId: sid, tmuxName: 'x' } as any, { type: 'notification', content: sharedBody, meta: { chat_id: '1', message_id: 'm-second' } })
+    expect(r2).toEqual({ status: 'accepted', via: 'tmux-paste' })
+    expect(secondCaptures).toBe(3)
+  } finally {
+    _setTmuxForTesting()
+    rmSync(agyStateFile(sid), { force: true })
+  }
+})
+
+test('delivery is rejected when neither the pane nor the transcript gains a new matching USER_INPUT', async () => {
+  const sid = 'deliver-transcript-miss'
+  const transcriptPath = join(configDir, `${sid}.jsonl`)
+  // Pre-seed an identical USER_INPUT with a timestamp pinned ahead of any second boundary so it can never be filtered out by time alone — only the pre-paste byte cursor excludes it.
+  const created_at = new Date(Date.now() + 60_000).toISOString().replace(/\.\d+Z$/, 'Z')
+  writeFileSync(transcriptPath, JSON.stringify({
+    type: 'USER_INPUT', created_at,
+    content: '<USER_REQUEST>\n<channel source="hydra" chat_id="1">\nsame text\n</channel>\n</USER_REQUEST>',
+  }) + '\n')
+  mkdirSync(agyStateDir(), { recursive: true })
+  writeFileSync(agyStateFile(sid), JSON.stringify({ conversationId: 'c', transcriptPath, live: 'working', backgroundWork: false }))
+  _setTmuxForTesting({ exec: (() => '') as any })
+  try {
+    const quickReject = new AgyEngine(new ClaudeEngine(new BridgeTransport()), mcpConfig, hooksConfig, { landedWaitMs: 40, pollMs: 5, enterDelayMs: 0 })
+    const r = await quickReject.deliver({ sessionId: sid, tmuxName: 'x' } as any, { type: 'notification', content: 'same text', meta: { chat_id: '1' } })
+    expect(r).toMatchObject({ status: 'rejected', retryable: false })
+  } finally {
+    _setTmuxForTesting()
+    rmSync(agyStateFile(sid), { force: true })
+  }
 })
 
 test('a relaunch of a session id starts with no word from the earlier agy', async () => {

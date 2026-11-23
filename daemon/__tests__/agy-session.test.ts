@@ -1,8 +1,9 @@
 import { afterAll, beforeEach, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { agyContextTokens, agyState, agyStateDir, agyStateFile, agyTurn } from '../../engines/agy-session.js'
+import { agyContextTokens, agyHasNewUserInput, agyState, agyStateDir, agyStateFile, agyTranscriptCursor, agyTurn, collapse } from '../../engines/agy-session.js'
+import { formatNotification } from '../../shared/constants.js'
 
 // A transcript as agy writes it (the shape of a real one: a user input, a tool call, its result, the answer).
 const at = (s: number) => new Date(Date.UTC(2026, 10, 21, 4, 55, s)).toISOString().replace('.000Z', 'Z')
@@ -86,4 +87,78 @@ test('context is the last model call\'s input plus what came from cache', () => 
 
 test('no word from agy yet reads as no state', () => {
   expect(agyState('nobody')).toBeNull()
+})
+
+test('agyHasNewUserInput reads only newly appended bytes, matches USER_INPUT at or after delivery second, and ignores older or non-input steps', () => {
+  const body = (t: string) => `<USER_REQUEST>\n<channel source="hydra">\n${t}\n</channel>\n</USER_REQUEST>`
+  const needle = collapse('<channel source="hydra">\ncheck the build\n</channel>').slice(-40)
+  // Pre-existing identical USER_INPUT before cursor is never matched.
+  const { id, transcriptPath } = session(lines({ ...ask(0, 17), content: body('check the build') }))
+  const cursor = agyTranscriptCursor(id)
+  expect(agyHasNewUserInput(id, needle, since(17), cursor)).toBe(false)
+
+  // Non-qualifying appends (older timestamp, PLANNER_RESPONSE, missing created_at) advance cursor without matching.
+  appendFileSync(transcriptPath, lines(
+    { ...ask(1, 10), content: body('check the build') },
+    { ...answer(2, 17, body('check the build')) },
+    { ...ask(3, 17), created_at: undefined, content: body('check the build') },
+  ))
+  expect(agyHasNewUserInput(id, needle, since(17), cursor)).toBe(false)
+  expect(cursor.offset).toBeGreaterThan(0)
+
+  // A large tool output appended before the matching input is scanned once, cursor advances, and the subsequent USER_INPUT matches.
+  appendFileSync(transcriptPath, lines({ ...result(4, 18), content: 'x'.repeat(1_200_000) }))
+  expect(agyHasNewUserInput(id, needle, since(17), cursor)).toBe(false)
+  const afterBig = cursor.offset
+  expect(afterBig).toBeGreaterThan(1_200_000)
+
+  appendFileSync(transcriptPath, lines({ ...ask(5, 19), content: body('check  the\n  build') }))
+  expect(agyHasNewUserInput(id, needle, since(17), cursor)).toBe(true)
+
+  // Missing session or missing transcript returns false cleanly.
+  expect(agyHasNewUserInput('no-such-session', needle, since(17), agyTranscriptCursor('no-such-session'))).toBe(false)
+  writeFileSync(agyStateFile('missing-transcript'), JSON.stringify({ conversationId: 'c', transcriptPath: join(dir, 'does-not-exist.jsonl'), live: 'idle', backgroundWork: false }))
+  expect(agyHasNewUserInput('missing-transcript', needle, since(17), agyTranscriptCursor('missing-transcript'))).toBe(false)
+})
+
+test('agyHasNewUserInput handles partial lines across poll ticks without losing a line being written', () => {
+  const needle = collapse('<channel source="hydra">\nsplit write\n</channel>').slice(-40)
+  const { id, transcriptPath } = session('')
+  const cursor = agyTranscriptCursor(id)
+  const full = JSON.stringify({ ...ask(0, 17), content: '<USER_REQUEST>\n<channel source="hydra">\nsplit write\n</channel>\n</USER_REQUEST>' }) + '\n'
+  appendFileSync(transcriptPath, full.slice(0, 40))
+  expect(agyHasNewUserInput(id, needle, since(17), cursor)).toBe(false)
+  expect(cursor.offset).toBe(0)   // no newline yet, so cursor stayed before the partial line
+  expect(cursor.lastSize).toBe(40)
+  // Unchanged file size short-circuits without re-reading the trailing partial line
+  expect(agyHasNewUserInput(id, needle, since(17), cursor)).toBe(false)
+  appendFileSync(transcriptPath, full.slice(40))
+  expect(agyHasNewUserInput(id, needle, since(17), cursor)).toBe(true)
+})
+
+test('agyHasNewUserInput matches a real multi-line agy USER_INPUT fixture built via formatNotification', () => {
+  const fixturePath = join(import.meta.dir, 'fixtures', 'agy-session.jsonl')
+  const fixtureBody = readFileSync(fixturePath, 'utf8')
+  const { id, transcriptPath } = session('')
+  const cursor = agyTranscriptCursor(id)
+  appendFileSync(transcriptPath, fixtureBody)
+  const body = [
+    '[PR Feedback] **acme/repo#988** — 3 new item(s)',
+    '',
+    '💬 **Review from @reviewer** — COMMENTED',
+    '> Review of `f98fe025`: multi-line paste with "quotes", \'singles\', `backticks`, and URLs.',
+    '',
+    '💬 **@reviewer** `cli/init.ts:360`',
+    '> **Should-fix.** `Bun.spawnSync([\'claude\', ...])` throws when `claude` is not on `$PATH`.',
+    '> https://github.com/acme/repo/pull/988#discussion_r1001',
+    '',
+    '💬 **@reviewer** `cli/init.ts:465`',
+    '> **Should-fix.** Use `{ mode: 0o600, flag: \'wx\' }` for both writes.',
+    '> https://github.com/acme/repo/pull/988#discussion_r1002',
+    '',
+    '---',
+    'Categorize the above into: **real bugs to fix**, **valid suggestions**, **false positives/noise**, **nits**.',
+  ].join('\n')
+  const pasted = formatNotification(body, { source: 'pr-watch', initiator: 'pr-watch' })
+  expect(agyHasNewUserInput(id, collapse(pasted), Date.UTC(2026, 10, 23, 21, 39, 10), cursor)).toBe(true)
 })

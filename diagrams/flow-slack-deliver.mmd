@@ -19,7 +19,7 @@ flowchart TD
   nsend["files: only where the place sets files<br/>2 messages at a time, 20 MB each<br/>a file not saved is listed, with why"]
   g5{"5. the answer?"}
   ok(["delivered: settled,<br/>the place's ack reaction if set;<br/>replies go out through the same <b>App</b>"])
-  big(["dropped: too-large"])
+  big(["dropped: too-large / unconfirmed"])
   waits(["waits for a session of its own;<br/>stays owed, alerted"])
   owed(["stays owed: catch-up replays it"])
 
@@ -40,7 +40,7 @@ flowchart TD
   send -.- nsend
   send --> g5
   g5 -->|"ok, or already delivered"| ok
-  g5 -->|"over 10000 bytes"| big
+  g5 -->|"over 10000 bytes, or<br/>unconfirmed paste"| big
   g5 -->|"at max_sessions,<br/>or older waiters ahead"| waits
   g5 -->|"exit 8 after a redirect:<br/>sent to the binding, alerted"| send
   g5 -->|"exit 8, alerted;<br/>or another error"| owed

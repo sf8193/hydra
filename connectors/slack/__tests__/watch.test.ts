@@ -989,11 +989,20 @@ describe('delivery', () => {
   })
 
   test('a permanent refusal drops the message instead of retrying forever', async () => {
-    const { w, logs } = setup({}, () => ({ ok: false, exit: 3, reason: 'message too large', permanent: true }))
+    const { w, logs } = setup({}, () => ({ ok: false, exit: 3, reason: 'message too large', permanent: 'too-large' }))
     w.handle(ev({ ts: '1000.000001', text: mention }))
     await w.flush()
     expect(w.get(CH, '1000.000001')!.owed).toBeUndefined()
     expect(logs.join()).toContain('can never be delivered')
+  })
+
+  test('an unconfirmed permanent refusal (e.g. agy paste timeout) settles as unconfirmed and is never resent', async () => {
+    const { w, logs } = setup({}, () => ({ ok: false, exit: 3, reason: 'delivery rejected: the message was pasted into agy-1 but neither the pane nor its transcript showed it', permanent: 'unconfirmed' }))
+    w.handle(ev({ ts: '1000.000001', text: mention }))
+    await w.flush()
+    expect(w.get(CH, '1000.000001')!.owed).toBeUndefined()
+    expect(w.stats().dropped).toEqual({ unconfirmed: 1 })
+    expect(logs.join()).toContain('already pasted, not resent')
   })
 
   test('what was accepted but not yet sent survives a crash as owed, and replay then delivers it', async () => {
@@ -1320,7 +1329,7 @@ roles = ["guest"]
 
 describe('no silent drops', () => {
   test('a message too large to deliver is logged and alerted', async () => {
-    const { w, alerts } = setup({}, () => ({ ok: false, exit: 3, reason: 'message too large', permanent: true }))
+    const { w, alerts } = setup({}, () => ({ ok: false, exit: 3, reason: 'message too large', permanent: 'too-large' }))
     w.handle(ev({ ts: '1000.000001', text: mention }))
     await w.flush()
     expect(alerts).toHaveLength(1)

@@ -13,7 +13,7 @@ import { gateway } from '../infra/config.js'
 import { occupancy } from '../sessions/session-reachability.js'
 import { deliverable, occupied, ORPHAN_GRACE_MS, bridgeWaitMs } from '../sessions/occupancy.js'
 import type { BlockingState, DeliveryResult } from '../engines/engine-adapter.js'
-import { checkIdempotency, clearIdempotency, registerIdempotency, DELIVER_IDEMPOTENCY_TTL_MS } from '../infra/idempotency.js'
+import { checkIdempotency, clearIdempotency, registerIdempotency, DELIVER_IDEMPOTENCY_TTL_MS, type IdempotencyEntry } from '../infra/idempotency.js'
 import { DELIVER_MAX_MESSAGE_BYTES, parseIdleTtl } from '../shared/constants.js'
 import { getSpecialist, specialistForThread, withTargetLock, type Specialist } from '../sessions/specialists.js'
 import { currentHydraConfig } from '../infra/hydra-config.js'
@@ -37,15 +37,16 @@ export type Target =
  * are. The engine level below it is `DeliveryResult` (engine-adapter.ts): what one engine did with one notification, which
  * `outcomeOf` reads into this.
  */
+export type PermanentRefusal = 'too-large' | 'unconfirmed'
 export type DeliverOutcome =
   /** `duplicate`: this idempotency key already landed; a sender counts it as sent (the CLI's exit 2). */
   | { ok: true; sessionName: string; threadId: string; revived: boolean; sessionId: string; status: 'delivered' | 'queued'; proof?: string; duplicate?: true; specialist?: string }
   /** 3 gone/refused, 4 orphaned, 5 booting or busy (deferred), or stuck on a dialog (failed), 6 backing off or failed, 7 a delivery with this key
-   *  is still in flight, 8 no such specialist, or a target hydra cannot read (`malformed`). `permanent`: this message can never be delivered (too large); drop it,
-   *  alert, never retry. */
+   *  is still in flight, 8 no such specialist, or a target hydra cannot read (`malformed`). `permanent`: this message must not be retried (`'too-large'`
+   *  or `'unconfirmed'`, already pasted into a pane); drop/settle it, alert, never resend. */
   /** `wait`: places are short for a per-conversation specialist (it runs `max_sessions` sessions, or the free ones go to older
    *  waiters); this conversation waits its turn (exit 5). */
-  | { ok: false; exit: 3 | 4 | 5 | 6 | 7 | 8; reason: string; permanent?: true; wait?: true; malformed?: true }
+  | { ok: false; exit: 3 | 4 | 5 | 6 | 7 | 8; reason: string; permanent?: PermanentRefusal; wait?: true; malformed?: true }
 
 /** `lowPriority`: an engine where every delivery is a priced turn (Codex) may hold it for the next turn. `wanted`: a sender
  *  that can withdraw (a PR watch ended by a kill), asked under the thread's lock just before a revive; false is exit 3. */
@@ -109,12 +110,13 @@ export function parseTarget(raw: unknown, where: string): Target {
  */
 export function outcomeOf(result: DeliveryResult, queued: boolean):
   | { ok: true; status: 'delivered' | 'queued'; proof: 'socket_write' | 'persisted' | 'adapter' }
-  | { ok: false; exit: 3 | 5 | 6; reason: string } {
+  | { ok: false; exit: 3 | 5 | 6; reason: string; permanent?: PermanentRefusal } {
   const via = result.status === 'accepted' ? result.via : undefined
-  // A rejection the engine says may clear is exit 5, `deferred` ("busy, try again later"); one that cannot is exit 3.
+  // A rejection the engine says may clear is exit 5, `deferred` ("busy, try again later"); one that cannot is exit 3
+  // (with `permanent` when retrying would duplicate or can never succeed, so connectors settle instead of resending).
   if (result.status === 'rejected') return result.retryable
     ? { ok: false, exit: 5, reason: `delivery rejected: ${result.reason} — transient, retry` }
-    : { ok: false, exit: 3, reason: `delivery rejected: ${result.reason}` }
+    : { ok: false, exit: 3, reason: `delivery rejected: ${result.reason}`, ...(result.permanent && { permanent: result.permanent }) }
   if (result.status === 'unknown') return { ok: false, exit: 6, reason: `delivery outcome unknown: ${result.reason} — transient, retry` }
   if (via === 'requeued' && !queued) return { ok: false, exit: 6, reason: 'bridge write failed (socket destroyed) — transient, retry' }
   if (via === 'requeued') return { ok: true, status: 'queued', proof: 'persisted' }
@@ -164,22 +166,34 @@ export function deliverToTarget(t: Target, text: string, opts: DeliverOpts): Pro
   return deliverVia(() => route(t, text, opts), text, opts)
 }
 
+/** Shared idempotency lookup for `deliverVia` and CLI `handleDeliver` so pending, unconfirmed, and completed keys share one message and contract. */
+export function checkDeliverIdempotency(key: string):
+  | { kind: 'pending' | 'unconfirmed' | 'completed'; entry: IdempotencyEntry; reason: string }
+  | null {
+  const check = checkIdempotency(key)
+  if (!check.blocked) return null
+  if (check.entry.status === 'pending') return { kind: 'pending', entry: check.entry, reason: `delivery with key "${key}" still in flight — retry shortly` }
+  if (check.entry.status === 'unconfirmed') return { kind: 'unconfirmed', entry: check.entry, reason: `delivery with key "${key}" was already pasted with an unconfirmed outcome — not resending` }
+  return { kind: 'completed', entry: check.entry, reason: `already delivered with key "${key}"` }
+}
+
 /**
- * The size cap and the idempotency key around one delivery: the key is reserved while in flight and kept only on a
- * landing. `land` resolves the address and lands the message.
+ * The size cap and the idempotency key around one delivery: the key is reserved while in flight and kept on a
+ * landing or an unconfirmed paste (so retries never paste twice). `land` resolves the address and lands the message.
  */
 export async function deliverVia(land: () => Promise<DeliverOutcome>, text: string, opts: DeliverOpts): Promise<DeliverOutcome> {
   const bytes = Buffer.byteLength(text)
-  if (bytes > DELIVER_MAX_MESSAGE_BYTES) return { ok: false, exit: 3, reason: `message too large (${bytes} bytes, max ${DELIVER_MAX_MESSAGE_BYTES})`, permanent: true }
+  if (bytes > DELIVER_MAX_MESSAGE_BYTES) return { ok: false, exit: 3, reason: `message too large (${bytes} bytes, max ${DELIVER_MAX_MESSAGE_BYTES})`, permanent: 'too-large' }
 
   const key = opts.idempotencyKey
   const ttl = opts.idempotencyTtlMs ?? DELIVER_IDEMPOTENCY_TTL_MS
   if (key) {
-    const check = checkIdempotency(key)
-    if (check.blocked && check.entry.status === 'pending') return { ok: false, exit: 7, reason: `delivery with key "${key}" still in flight — retry shortly` }
-    if (check.blocked) {
-      const s = registry.get(check.entry.sessionId)
-      return { ok: true, duplicate: true, status: 'delivered', revived: false, sessionId: check.entry.sessionId, sessionName: s?.tmuxName ?? check.entry.sessionId, threadId: s?.threadId ?? '' }
+    const existing = checkDeliverIdempotency(key)
+    if (existing?.kind === 'pending') return { ok: false, exit: 7, reason: existing.reason }
+    if (existing?.kind === 'unconfirmed') return { ok: false, exit: 3, reason: existing.reason, permanent: 'unconfirmed' }
+    if (existing) {
+      const s = registry.get(existing.entry.sessionId)
+      return { ok: true, duplicate: true, status: 'delivered', revived: false, sessionId: existing.entry.sessionId, sessionName: s?.tmuxName ?? existing.entry.sessionId, threadId: s?.threadId ?? '' }
     }
     // Reserved without a session id, so a death's bookkeeping can't claim an in-flight key. Never shorter than the
     // default: a short TTL that lapsed mid-delivery would let a retry deliver a second time.
@@ -190,6 +204,7 @@ export async function deliverVia(land: () => Promise<DeliverOutcome>, text: stri
   }))
   if (key) {
     if (r.ok) registerIdempotency(key, r.sessionId, ttl, 'completed')
+    else if (r.permanent === 'unconfirmed') registerIdempotency(key, '', ttl, 'unconfirmed')
     else clearIdempotency(key)
   }
   return r

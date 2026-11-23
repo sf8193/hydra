@@ -36,11 +36,14 @@ sequenceDiagram
         alt ok (delivered, queued, or duplicate key)
             T-->>W: ok
             W->>W: persist the new read position
-        else 3, 4, 5, 6, 7: not landed
+        else 3, 4, 5, 6, 7 (non-permanent): not landed
             T-->>W: exit + reason
             W->>W: restore the held read position: owed, fetched and sent again next poll
-        else 8 or permanent
-            T-->>W: no such specialist / too large
+        else permanent (too-large / unconfirmed)
+            T-->>W: exit 3 + permanent
+            W->>W: persist the new read position, post notice in thread; watch stays on
+        else 8 (no such specialist)
+            T-->>W: exit 8
             W->>W: drop the watch, say why in its thread
         end
     end

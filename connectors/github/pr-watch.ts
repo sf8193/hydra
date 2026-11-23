@@ -635,7 +635,7 @@ async function pollPr(entry: WatchEntry): Promise<void> {
     initiator: 'pr-watch', source: 'pr-watch', idempotencyKey: key, queue: true, lowPriority: true,
     wanted: () => watches.get(entry.prUrl) === entry,
   })
-  if (!r.ok) {
+  if (!r.ok && !r.permanent) {
     Object.assign(entry, held)
     if (r.exit === 8 && !r.malformed) {
       process.stderr.write(`daemon: pr-watch: ${entry.prUrl} → ${spelledBare(entry.to)}: ${r.reason} — unwatching\n`)
@@ -651,7 +651,7 @@ async function pollPr(entry: WatchEntry): Promise<void> {
     return
   }
   if (watches.get(entry.prUrl) === entry) persist()
-  process.stderr.write(`daemon: pr-watch: delivered ${allComments.length} comment(s) + ${reviews.length} review(s) for ${entry.prUrl} → ${r.sessionName}${r.revived ? ' (revived)' : ''}\n`)
+  if (!r.ok) { void safeSend(entry.threadId, `⚠️ Update for [#${entry.prNumber}](${entry.prUrl}) was not retried (${r.reason})`, { unfurl: false }); process.stderr.write(`daemon: pr-watch: ${entry.prUrl} → ${spelledTo(entry.to)} not retried (permanent=${r.permanent}, exit ${r.exit}: ${r.reason})\n`) } else process.stderr.write(`daemon: pr-watch: delivered ${allComments.length} comment(s) + ${reviews.length} review(s) for ${entry.prUrl} → ${r.sessionName}${r.revived ? ' (revived)' : ''}\n`)
 }
 
 /** A burst of feedback can outgrow one delivery: keep the lines that fit, and the closing instruction, and point at the PR. */

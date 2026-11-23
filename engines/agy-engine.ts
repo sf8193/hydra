@@ -22,7 +22,7 @@ import { contextWindowOf, formatNotification } from '../shared/constants.js'
 import { buildSessionInstructions, initialToolsForBridgeEnv, parseChatPlatform } from '../shared/session-instructions.js'
 import { withRaisedFdLimit } from '../shared/spawn-env.js'
 import { AGY_HOOKS_CONFIG, AGY_MCP_CONFIG, registerHydraHooks, registerHydraTools } from './agy-config.js'
-import { agyContextTokens, agyState, agyStateDir, agyStateFile, agyTurn } from './agy-session.js'
+import { agyContextTokens, agyHasNewUserInput, agyState, agyStateDir, agyStateFile, agyTranscriptCursor, agyTurn, collapse } from './agy-session.js'
 
 /** A Gemini API key, if the operator keeps one: agy then runs in its API-key mode, else on its own login. Only this file's path is on a command line. */
 export const AGY_API_KEY_FILE = join(STATE_DIR, 'agy-api-key')
@@ -36,8 +36,6 @@ export function agySettings(cwd: string, apiKeyMode: boolean): string {
   return JSON.stringify({ trustedWorkspaces: [cwd], ...(apiKeyMode ? { modelProvider: 'gemini' } : {}) })
 }
 
-const collapse = (s: string) => s.replace(/\s+/g, '')
-
 export class AgyEngine implements EngineAdapter {
   readonly provider = 'agy' as const
   readonly channel = 'engine' as const
@@ -45,7 +43,7 @@ export class AgyEngine implements EngineAdapter {
     private readonly claude: ClaudeEngine,
     private readonly mcpConfig = AGY_MCP_CONFIG,
     private readonly hooksConfig = AGY_HOOKS_CONFIG,
-    private readonly timing: { landedWaitMs?: number; pollMs?: number } = {},
+    private readonly timing: { landedWaitMs?: number; pollMs?: number; enterDelayMs?: number } = {},
   ) {}
 
   async start(): Promise<void> {}
@@ -107,9 +105,9 @@ export class AgyEngine implements EngineAdapter {
     return run
   }
 
-  // Paste the message into the pane as one bracketed paste, then Enter, then wait for the pane to show it once more than before. agy shows a big paste as
-  // "[Pasted text +N lines]" until Enter, so a big message counts only once sent; a short one is shown in the input box already, so for it this proves the
-  // paste reached the pane, not that Enter sent it.
+  // Paste the message into the pane as one bracketed paste, then Enter, then wait for the pane or transcript to show it once more than before. agy shows a big
+  // paste as "[Pasted text +N lines]" until Enter, so a big message counts on the pane only once sent; a short one is shown in the input box already, so for it
+  // the pane check proves the paste reached the pane, not that Enter sent it. Checking the transcript (`USER_INPUT`) also confirms when the pane scrolls or redraws.
   private async paste(info: SessionInfo, msg: Notification): Promise<DeliveryResult> {
     const { content, meta } = withoutIntents(msg)
     const text = formatNotification(content, meta as Record<string, string> | undefined)
@@ -121,9 +119,11 @@ export class AgyEngine implements EngineAdapter {
       }
     }
     // A busy agy queues the message and draws only its first line, so the head counts as landed too.
-    const flat = collapse(text), tail = flat.slice(-40), head = flat.slice(0, 40)
+    const collapsed = collapse(text), tail = collapsed.slice(-40), head = collapsed.slice(0, 40)
     const seen = () => { const pane = collapse(this.peek(info, 200)); return pane.split(tail).length + pane.split(head).length - 2 }
     const before = seen()
+    const deliveredAt = Date.now()
+    const transcriptCursor = agyTranscriptCursor(info.sessionId)
     mkdirSync(PASTE_DIR, { recursive: true, mode: 0o700 })
     const file = join(PASTE_DIR, `${info.sessionId}.txt`)
     try {
@@ -133,17 +133,17 @@ export class AgyEngine implements EngineAdapter {
     } catch (err) {
       return { status: 'rejected', retryable: true, reason: `tmux paste into ${info.tmuxName} failed: ${err instanceof Error ? err.message : err}` }
     } finally { rmSync(file, { force: true }) }
-    // The text is in agy's input now: a failed Enter must not be retried as a whole message, or it would be pasted twice. A caller retries an `unknown` (targets.ts `outcomeOf`), so these are non-retryable rejections.
+    // The text is in agy's input now: a failed Enter or unconfirmed wait must not be retried as a whole message, or it would be pasted twice (`permanent: 'unconfirmed'` keeps connectors from resending).
     try {
-      await Bun.sleep(150)   // the pane takes the paste before the Enter that sends it
+      await Bun.sleep(this.timing.enterDelayMs ?? 150)   // the pane takes the paste before the Enter that sends it
       tmuxSync(['send-keys', '-t', info.tmuxName, 'Enter'])
     } catch (err) {
-      return { status: 'rejected', retryable: false, reason: `the message was pasted into ${info.tmuxName} but Enter failed: ${err instanceof Error ? err.message : err}` }
+      return { status: 'rejected', retryable: false, permanent: 'unconfirmed', reason: `the message was pasted into ${info.tmuxName} but Enter failed: ${err instanceof Error ? err.message : err}` }
     }
     for (const start = Date.now(); Date.now() - start < landedWaitMs; await Bun.sleep(pollMs)) {
-      if (seen() > before) return { status: 'accepted', via: 'tmux-paste' }
+      if (seen() > before || agyHasNewUserInput(info.sessionId, collapsed, deliveredAt, transcriptCursor)) return { status: 'accepted', via: 'tmux-paste' }
     }
-    return { status: 'rejected', retryable: false, reason: `the message was pasted into ${info.tmuxName} but the pane never showed it, so it may or may not have been sent` }
+    return { status: 'rejected', retryable: false, permanent: 'unconfirmed', reason: `the message was pasted into ${info.tmuxName} but neither the pane nor its transcript showed it, so it may or may not have been sent` }
   }
   isConnected(info: SessionInfo): boolean { return this.claude.isAlive(info) }
   stop(info: SessionInfo): Promise<StopResult> { return this.claude.stop(info) }

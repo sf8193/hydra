@@ -205,6 +205,20 @@ describe('cli-handler: deliver (Z2)', () => {
     expect(getIdempotencyEntry(k)!.sessionId).toBe(info.sessionId)
   })
 
+  test('CLI retry after an unconfirmed refusal returns exit 3 (permanent: unconfirmed), not exit 2 duplicate', async () => {
+    let calls = 0
+    const info = codex(async () => {
+      calls++
+      return { status: 'rejected', retryable: false, permanent: 'unconfirmed', reason: 'already pasted' }
+    })
+    const k = key()
+    const first = await deliver(info.sessionId, { idempotencyKey: k })
+    expect(first).toMatchObject({ ok: false, exitCode: 3, data: { permanent: 'unconfirmed' } })
+    const retry = await deliver(info.sessionId, { idempotencyKey: k })
+    expect(calls).toBe(1)
+    expect(retry).toMatchObject({ ok: false, exitCode: 3, result: 'failed', data: { permanent: 'unconfirmed' } })
+  })
+
   test('--idempotency-ttl: the key is remembered that long; a bad duration, or one without a key, is refused', async () => {
     const info = codex(async () => ({ status: 'accepted', via: 'steer' }))
     const k = key()

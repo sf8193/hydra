@@ -70,6 +70,50 @@ export function agyTurn(sessionId: string, sinceMs: number): { complete: boolean
   return { complete: true, text: last.content! }
 }
 
+/** Strip all whitespace so wrapped terminal text and transcript content match the same tail. */
+export const collapse = (s: string) => s.replace(/\s+/g, '')
+
+export type TranscriptCursor = { path: string | null; offset: number; lastSize?: number }
+
+/** Byte offset at the current end of the session's transcript (offset 0 before agy reports one). */
+export function agyTranscriptCursor(sessionId: string): TranscriptCursor {
+  const state = agyState(sessionId)
+  if (!state) return { path: null, offset: 0 }
+  try {
+    const size = statSync(state.transcriptPath).size
+    return { path: state.transcriptPath, offset: size, lastSize: size }
+  } catch { return { path: state.transcriptPath, offset: 0 } }
+}
+
+/**
+ * Scan only bytes appended to the session's transcript since `cursor.offset` for a `USER_INPUT` step
+ * at or after `sinceMs`'s whole second whose collapsed content includes `needle`.
+ * Advances `cursor` past the last complete newline so no byte is re-read or re-parsed across polls,
+ * and remembers `lastSize` so an unchanged trailing partial line is not re-read on every tick.
+ */
+export function agyHasNewUserInput(sessionId: string, needle: string, sinceMs: number, cursor: TranscriptCursor): boolean {
+  const state = agyState(sessionId)
+  if (!state) return false
+  if (cursor.path !== state.transcriptPath) { cursor.path = state.transcriptPath; cursor.offset = 0; cursor.lastSize = undefined }
+  let size: number
+  try { size = statSync(state.transcriptPath).size } catch { return false }
+  if (size < cursor.offset) { cursor.offset = 0; cursor.lastSize = undefined }
+  if (size <= cursor.offset || size === cursor.lastSize) return false
+  const from = Math.max(cursor.offset, size - MAX_TAIL_BYTES)
+  let buf: Buffer
+  try { buf = readRange(state.transcriptPath, from, size - from) } catch { return false }
+  cursor.lastSize = size
+  const lastNl = buf.lastIndexOf(0x0a)
+  if (lastNl >= 0) cursor.offset = from + lastNl + 1
+  const sinceSec = Math.floor(sinceMs / 1000) * 1000
+  for (const line of buf.toString('utf8').split('\n')) {
+    let s: Step
+    try { s = JSON.parse(line) } catch { continue }
+    if (s.type === 'USER_INPUT' && Date.parse(s.created_at ?? '') >= sinceSec && typeof s.content === 'string' && collapse(s.content).includes(needle)) return true
+  }
+  return false
+}
+
 /** Tokens in context after the last model call: its input plus what came from cache. Null before the first call. */
 export function agyContextTokens(sessionId: string): number | null {
   const state = agyState(sessionId)

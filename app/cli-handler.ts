@@ -20,7 +20,7 @@ import { declaredInToml, getSpecialist, listSpecialists, removeSpecialist, setSp
 import { slackConversationHealth, formatConversations, operatorBind, operatorUnbind, placeAliases } from '../connectors/slack/runtime.js'
 import { currentHydraConfig } from '../infra/hydra-config.js'
 import { routeFor } from '../routing/route-request.js'
-import { deliverToTarget, deliverVia, sessionByName, toSession, toThread, type DeliverOutcome } from './targets.js'
+import { checkDeliverIdempotency, deliverToTarget, deliverVia, sessionByName, toSession, toThread, type DeliverOutcome } from './targets.js'
 import { readTarget, spelled } from '../shared/target-kind.js'
 import { deliverWord } from '../shared/exit-codes.js'
 import { parseCLIRequest, type CLIRequest, type CLIRequestFor, type CLIResponse } from '../shared/cli-protocol.js'
@@ -341,15 +341,10 @@ async function handleDeliver(req: CLIRequestFor<'deliver'>): Promise<CLIResponse
   }
 
   if (idempotencyKey) {
-    const check = checkIdempotency(idempotencyKey)
-    // Exit 7: a delivery with this key is still awaiting its adapter — retry once
-    // it settles (it then answers 2 if it landed, or proceeds if it failed).
-    if (check.blocked && check.entry.status === 'pending') {
-      return respond(req, false, `delivery with key "${idempotencyKey}" still in flight — retry shortly`, { existing: check.entry }, 7)
-    }
-    if (check.blocked) {
-      return respond(req, false, `already delivered with key "${idempotencyKey}"`, { existing: check.entry }, 2)
-    }
+    const existing = checkDeliverIdempotency(idempotencyKey)
+    if (existing?.kind === 'pending') return respond(req, false, existing.reason, { existing: existing.entry }, 7)
+    if (existing?.kind === 'unconfirmed') return respond(req, false, existing.reason, { existing: existing.entry, permanent: 'unconfirmed' }, 3)
+    if (existing) return respond(req, false, existing.reason, { existing: existing.entry }, 2)
   }
 
   const opts = { initiator: initiator ?? 'unknown', ...(idempotencyKey && { idempotencyKey }), ...(idempotencyTtlMs && { idempotencyTtlMs }), ...(queue && { queue }) }

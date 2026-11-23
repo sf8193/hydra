@@ -163,7 +163,7 @@ describe('the landing', () => {
   test('a message too large is refused permanently (exit 3), never retried', async () => {
     const name = specialist('tg-big')
     occupy('tg-big')
-    expect(await deliverToTarget({ to: name }, 'x'.repeat(200_000), opts)).toMatchObject({ ok: false, exit: 3, permanent: true })
+    expect(await deliverToTarget({ to: name }, 'x'.repeat(200_000), opts)).toMatchObject({ ok: false, exit: 3, permanent: 'too-large' })
   })
 
   test('an idempotency key that already landed answers ok and duplicate, without a second delivery', async () => {
@@ -380,7 +380,7 @@ describe('names on every verb', () => {
   test('the CLI passes `permanent` through, so a sender can drop rather than retry', async () => {
     const name = specialist('tg-perm')
     occupy('tg-perm')
-    expect(await cli('deliver', { to: `specialist:${name}`, message: 'x'.repeat(200_000), initiator: 't' })).toMatchObject({ ok: false, exitCode: 3, data: { permanent: true } })
+    expect(await cli('deliver', { to: `specialist:${name}`, message: 'x'.repeat(200_000), initiator: 't' })).toMatchObject({ ok: false, exitCode: 3, data: { permanent: 'too-large' } })
   })
 
   test('specialist show reads the stored entry, flagged, as rm does', async () => {
