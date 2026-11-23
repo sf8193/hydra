@@ -117,4 +117,11 @@ describe('a kept tool works only in the session\'s own conversation', () => {
     const a = restricted(); const b = restricted()
     expect(restrictedRefusal(a, 'reply', { chat_id: own(b), text: 'x' })).toContain("not this session's own conversation")
   })
+  test('security refusal runs before argument type validation', async () => {
+    const id = restricted()
+    const r = await executeTool('reply', { chat_id: 'th-someone-else', text: 'x', files: 42 }, id)
+    expect(r.isError).toBe(true)
+    expect(r.content[0].text).toContain("not this session's own conversation")
+    expect(r.content[0].text).not.toContain('invalid argument')
+  })
 })
