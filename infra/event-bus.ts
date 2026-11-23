@@ -12,7 +12,7 @@
 import type { Resume } from '../shared/resume.js'
 
 export interface EventMap {
-  'delivery:failed': { sessionId: string; status: 'rejected' | 'unknown'; reason: string; messageId?: string }
+  'delivery:failed': { sessionId: string; status: 'rejected' | 'unknown'; reason: string; messageId?: string; standing?: true }
   // A session found dead, by any path (a kill, a crash the health poll sees, a lost bridge): fires once, when its deadAt is set.
   'session:marked-dead': { sessionId: string; tmuxName: string }
   // `deliberate`: ended on purpose (a kill), not by a crash, a handoff, a respawn or a resumable idle end.

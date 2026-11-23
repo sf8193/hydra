@@ -101,6 +101,18 @@ describe('mode paste', () => {
     sess = session({ deadAt: 1 }); await send('b')
     expect(pasted).toHaveLength(0); expect(sent).toEqual(['a', 'b'])
   })
+  test('an orphaned session is not typed into: it takes the channel, where the transport refuses it out loud', async () => {
+    _setDeliveryDeps({ isWorking: async () => working, now: () => clock, getSession: () => sess, occupancy: () => 'orphaned', onOutcome: (_s, _m, o) => { outcomes.push(o) } })
+    expect(await send('a')).toEqual({ by: 'channel' })
+    expect(pasted).toHaveLength(0); expect(sent).toEqual(['a'])
+  })
+  test('a held message stays held while the session is booting (a bridge that just dropped), and is not released to a refusal', async () => {
+    process.env.HYDRA_TYPED_DELIVERY_MODE = 'hold'
+    _setDeliveryDeps({ isWorking: async () => working, now: () => clock, getSession: () => sess, occupancy: () => 'starting', onOutcome: (_s, _m, o) => { outcomes.push(o) } })
+    expect(await send('a')).toMatchObject({ by: 'held' })
+    await flushAllHeld()
+    expect(_heldCount('s1')).toBe(1); expect(sent).toEqual([])
+  })
   test('paste failure, throw and unreadable pane fall back to the channel', async () => {
     pasteOk = false; expect(await send('a')).toEqual({ by: 'channel' })
     pasteOk = true; tail = null; expect(await send('b')).toEqual({ by: 'channel' })

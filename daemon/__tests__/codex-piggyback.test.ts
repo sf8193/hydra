@@ -547,7 +547,7 @@ describe('piggyback delivery paths (adapter-policy T7)', () => {
     let flushes = 0
     put('t7-x4', {
       engine: 'codex',
-      adapter: { provider: 'codex', deliver: async () => { flushes++; return { status: 'rejected', retryable: false, reason: 'session is retiring' } } },
+      adapter: { provider: 'codex', isConnected: () => true, isAlive: () => true, deliver: async () => { flushes++; return { status: 'rejected', retryable: false, reason: 'session is retiring' } } },
     })
     writeFileSync(join(STATE_DIR, 'piggyback-buffer.json'), JSON.stringify({
       't7-x4': { items: ['overdue'], bufferedAt: Date.now() - 61 * 60_000 },

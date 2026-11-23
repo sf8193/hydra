@@ -41,7 +41,7 @@ import {
 } from '../../app/pane-probe.js'
 import { detectBlockingState } from '../../engines/claude-blocking.js'
 import type { BlockingState } from '../../engines/engine-adapter.js'
-import type { Occupancy } from '../../sessions/session-reachability.js'
+import type { Occupancy } from '../../sessions/occupancy.js'
 // Liveness is occupancy()'s answer, set per record; a stand-in's stamp (`deadAt`) is not consulted: a stamped record may still run.
 const occupancies = new Map<string, Occupancy>()
 const occupancyOf = (s: { sessionId: string }): Occupancy => occupancies.get(s.sessionId) ?? 'connected'

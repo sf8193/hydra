@@ -6,6 +6,7 @@ import { registry, type SessionInfo } from './registry.js'
 import { atomicWriteFileSync } from '../infra/util.js'
 import { emit } from '../infra/event-bus.js'
 import './delivery-notice.js'
+import { deliverable, occupancyOf, type BridgeState } from './occupancy.js'
 import { withoutIntents, type DeliveryResult, type Notification } from '../engines/engine-adapter.js'
 
 // ---------------------------------------------------------------------------
@@ -41,11 +42,16 @@ function gateReason(info: SessionInfo): string | undefined {
 
 /**
  * The one way to hand a message to a session's engine: the drift gate first (a session whose policy no longer matches hydra.toml, or that
- * was never verified, is not delivered to), then the adapter. Every adapter delivery goes through here, so no engine checks it (a session with no adapter, such as main, is not one).
+ * was never verified, is not delivered to), then `deliverable` (an orphaned or dead session is refused, not queued behind a bridge that
+ * will never read it), then the adapter. Every adapter delivery goes through here, so no engine checks either (a session with no adapter,
+ * such as main, is not one). `bridge` is the caller's transport's `bridgeState`.
  */
-export function deliverToAdapter(info: SessionInfo, msg: Notification): Promise<DeliveryResult> {
+export function deliverToAdapter(info: SessionInfo, msg: Notification, bridge: BridgeState): Promise<DeliveryResult> {
   const refused = gateReason(info)
-  return refused ? Promise.resolve({ status: 'rejected', retryable: false, reason: refused }) : info.adapter.deliver(info, msg)
+  if (refused) return Promise.resolve({ status: 'rejected', retryable: false, reason: refused })
+  const can = deliverable(occupancyOf(info, bridge))
+  if (!can.ok) return Promise.resolve({ status: 'rejected', retryable: false, reason: `${info.tmuxName} is ${can.reason}`, standing: true })
+  return info.adapter.deliver(info, msg)
 }
 
 /** Set (`true`) on the message that asks main to write a handoff letter: it means something only to the daemon run that asked, which holds the request's state. */
@@ -54,6 +60,8 @@ export const DEPARTING_NOTICE = 'departingNotice'
 export class BridgeTransport {
   readonly bridges = new Map<string, BridgeConn>()
   readonly controlBridges = new Map<string, Set<BridgeConn>>()
+  /** When each session's bridge last dropped; cleared when it registers again. A drop is not an orphan until the grace passes. */
+  private readonly droppedAt = new Map<string, number>()
   readonly messageQueues = new Map<string, Array<Record<string, unknown>>>()
   private readonly maxQueueSize = 50
   private readonly queueFile: string
@@ -75,7 +83,13 @@ export class BridgeTransport {
     return info?.adapter ? info.adapter.isConnected(info) : false
   }
 
+  /** The bridge as occupancy reads it: connected (`has`) and when it last dropped. */
+  bridgeState(sessionId: string): BridgeState {
+    return { connected: this.has(sessionId), droppedAt: this.droppedAt.get(sessionId) }
+  }
+
   set(sessionId: string, conn: BridgeConn): void {
+    this.droppedAt.delete(sessionId)
     this.bridges.set(sessionId, conn)
   }
 
@@ -95,7 +109,7 @@ export class BridgeTransport {
   delete(sessionId: string): void {
     const t = this.settling.get(sessionId)
     if (t !== undefined) { clearInterval(t); this.settling.delete(sessionId) }
-    this.bridges.delete(sessionId)
+    if (this.bridges.delete(sessionId)) this.droppedAt.set(sessionId, Date.now())
     this.queueFullLogged.delete(sessionId)
   }
 
@@ -187,7 +201,7 @@ export class BridgeTransport {
       return result
     }
     try {
-      return deliverToAdapter(info, msg as Notification).then(complete, err => complete({ status: 'unknown', reason: String(err) }))
+      return deliverToAdapter(info, msg as Notification, this.bridgeState(sessionId)).then(complete, err => complete({ status: 'unknown', reason: String(err) }))
     } catch (err) {
       return Promise.resolve(complete({ status: 'unknown', reason: String(err) }))
     }
@@ -262,6 +276,7 @@ export class BridgeTransport {
     if (bridge) {
       try { bridge.socket.end() } catch {}
       this.bridges.delete(sessionId)
+      this.droppedAt.set(sessionId, Date.now())
     }
   }
 
@@ -317,6 +332,6 @@ export const transport = new BridgeTransport()
 /** A text delivery that was not accepted: log it and tell the session's chat (delivery:failed). */
 export function reportDeliveryFailure(sessionId: string, result: Exclude<DeliveryResult, { status: 'accepted' }>, messageId?: string): void {
   process.stderr.write(`daemon: delivery failed for ${sessionId}: ${result.status}: ${result.reason}\n`)
-  emit('delivery:failed', { sessionId, status: result.status, reason: result.reason, ...(messageId ? { messageId } : {}) })
+  emit('delivery:failed', { sessionId, status: result.status, reason: result.reason, ...(messageId ? { messageId } : {}), ...(result.status === 'rejected' && result.standing ? { standing: true as const } : {}) })
 }
 

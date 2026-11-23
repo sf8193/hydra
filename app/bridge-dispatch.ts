@@ -14,7 +14,8 @@ import { envelopeFor, sendToThread, sendsToRefusal } from './sends-to.js'
 import { READ_ONLY_DISALLOWED_TOOLS, claudeLaunchCwd, doSpawnSession, handOff, handoffNoteFate, killSession, predecessorOf, runPreHandoffHook, sessionDir, type PreHandoffVerdict } from './session-lifecycle.js'
 import { fallbackDescription, formatDuration, chunk, assertSendable, parseDuration, withOutbound } from '../infra/util.js'
 import { tmuxHasSession } from '../infra/tmux.js'
-import { occupancy, occupied, resolveSendTarget } from '../sessions/session-reachability.js'
+import { occupancy, resolveSendTarget } from '../sessions/session-reachability.js'
+import { deliverable, occupied } from '../sessions/occupancy.js'
 import { endedSessions, endedWithinDays } from '../sessions/ended-sessions.js'
 import { formatContextPercent, type DeliveryResult } from '../engines/engine-adapter.js'
 import { resolveEngine } from '../sessions/engine-instances.js'
@@ -781,6 +782,9 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         // The delivery gate speaks before anything is posted or recorded: a refused message is neither shown in the thread nor counted as a protocol result.
         const refusal = deliveryRefusal(targetSession)
         if (refusal) throw new Error(`send_to_thread failed: nothing was posted or sent. ${refusal}`)
+        // A session that cannot take a message (orphaned or dead) is refused here too, before the text lands in its thread.
+        const can = deliverable(occupancy(targetSession))
+        if (!can.ok) throw new Error(`send_to_thread failed: nothing was posted or sent. ${targetSession.tmuxName} is ${can.reason}`)
         // Private delivery: child → its own parent only, straight to the parent's
         // session. Never touches the gateway, so nothing lands in any thread.
         if (isPrivate) {

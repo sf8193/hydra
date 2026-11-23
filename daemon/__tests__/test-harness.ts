@@ -109,10 +109,11 @@ export class TestHarness {
         tmuxName: role,
         listening: false,
         engine: 'claude',
-        adapter: engines.claude,
+        adapter: runningClaude,
         sessionType: role === ownerRole ? 'thread_owner' : 'thread_guest',
       }
       registry.set(sid, info)
+      this.bridgeUp(sid)
     }
 
     const ownerSessionId = this.sessionIds.get(ownerRole)!
@@ -183,10 +184,11 @@ export class TestHarness {
       tmuxName: ownerRole,
       listening: false,
       engine: 'claude',
-      adapter: engines.claude,
+      adapter: runningClaude,
       sessionType: 'thread_owner',
       ...(opts.ownerLabel && { label: opts.ownerLabel }),
     })
+    this.bridgeUp(ownerSid)
     this.sessionIds.set(ownerRole, ownerSid)
 
     // startProtocolRun spawns every non-owner role for real — stub the lifecycle
@@ -240,11 +242,21 @@ export class TestHarness {
     await this.flush()
   }
 
+  /** A session's bridge: connected, so a message is written to the wire. A real session has one, which is what keeps it from being an orphan as the test's clock runs. */
+  private readonly wire = new Map<string, Array<Record<string, unknown>>>()
+  private bridgeUp(sid: string): void {
+    const written: Array<Record<string, unknown>> = this.wire.get(sid) ?? []
+    this.wire.set(sid, written)
+    transport.set(sid, { sessionId: sid, buf: '', socket: { write: (d: string) => { written.push(JSON.parse(d)); return true }, end() {}, destroyed: false } as any })
+  }
+
   disconnect(role: string): void {
+    transport.delete(this.sessionId(role))
     onRunDisconnect(this.sessionId(role))
   }
 
   reconnect(role: string): void {
+    this.bridgeUp(this.sessionId(role))
     onRunReconnect(this.sessionId(role))
   }
 
@@ -273,6 +285,7 @@ export class TestHarness {
     const info = registry.get(this.sessionId(role))
     if (info) {
       info.deadAt = Date.now()
+      transport.delete(info.sessionId)
       // Its execution is gone too: a stamp alone over a running session reads orphaned.
       info.adapter = Object.assign(Object.create(info.adapter), { isAlive: () => false })
       if (claudeSessionId) (info as any).claudeSessionId = claudeSessionId
@@ -304,11 +317,12 @@ export class TestHarness {
           tmuxName: `resumed-${sid.slice(14)}`,
           listening: false,
           engine: 'claude',
-          adapter: engines.claude,
+          adapter: runningClaude,
           sessionType: spawnOpts?.joinThread ? 'thread_guest' : 'thread_owner',
           ...resolveSpawnLabel(topic, spawnOpts?.label, spawnOpts?.inheritedLabel),
         }
         registry.set(sid, info)
+        harness.bridgeUp(sid)
         return { name: info.tmuxName, sessionId: sid, threadId: info.threadId, url: '' }
       },
       waitForBridge: async (_sid: string, _timeoutMs: number) => {
@@ -353,7 +367,7 @@ export class TestHarness {
 
   actorMessages(role: string): Array<Record<string, unknown>> {
     const sid = this.sessionId(role)
-    return transport.messageQueues.get(sid) ?? []
+    return [...(this.wire.get(sid) ?? []), ...(transport.messageQueues.get(sid) ?? [])]
   }
 
   actorNotifications(role: string): string[] {
@@ -417,6 +431,7 @@ export class TestHarness {
     for (const sid of this.sessionIds.values()) {
       sessionToRun.delete(sid)
       registry.delete(sid)
+      transport.delete(sid)
       transport.messageQueues.delete(sid)
     }
     if (run) {
@@ -443,11 +458,15 @@ export function createStartedHarness(proto: Protocol, opts?: HarnessOpts): Promi
   return TestHarness.started(proto, opts)
 }
 
+/** The real Claude adapter reporting its pane alive; harness sessions connect a bridge (`bridgeUp`), as real ones do. */
+export const runningClaude = Object.assign(Object.create(engines.claude), { isAlive: () => true }) as typeof engines.claude
+
 /**
  * Shared fake EngineAdapter. Defaults are the members neutral code calls on
  * every record; override anything else per test. isConnected defaults to the
  * Claude answer (session bridge on the singleton transport).
  */
+
 export function fakeAdapter(overrides: Record<string, unknown> = {}): EngineAdapter {
   return {
     provider: 'claude',

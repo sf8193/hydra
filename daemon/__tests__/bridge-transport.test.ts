@@ -259,7 +259,7 @@ describe('delivery outcomes', () => {
   let unsubscribe: () => void
   const settle = async () => { await Promise.resolve(); await Promise.resolve() }
   function adapter(deliver: (...args: any[]) => any) {
-    registry.set(sid, { sessionId: sid, threadId: 'chat', adapter: { deliver } } as any)
+    registry.set(sid, { sessionId: sid, threadId: 'chat', adapter: { deliver, isConnected: () => true, isAlive: () => true } } as any)
   }
   beforeEach(() => {
     registry.delete(sid)
@@ -403,7 +403,8 @@ describe('delivery paths (adapter-policy T7)', () => {
   const queueFile = () => join(STATE_DIR, 'message-queue.json')
   const put = (sessionId: string, extra: Record<string, unknown>) =>
     registry.set(sessionId, { sessionId, threadId: 'chat1', tmuxName: sessionId, ...extra } as any)
-  const claude = (sessionId: string, owner = t) => put(sessionId, { engine: 'claude', adapter: new ClaudeEngine(owner) })
+  // A booting session: running, its bridge not yet up, inside the grace window.
+  const claude = (sessionId: string, owner = t) => put(sessionId, { engine: 'claude', createdAt: Date.now(), adapter: Object.assign(new ClaudeEngine(owner), { isAlive: () => true }) })
   const codex = (sessionId: string, calls: string[]) =>
     put(sessionId, { engine: 'codex', adapter: fakeCodexAdapter({ calls }) })
   const socketOn = (owner: BridgeTransport, sessionId: string, write: (d: string) => boolean = () => true) => {

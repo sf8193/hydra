@@ -9,7 +9,8 @@
 // are replaceable for testing.
 
 import { execFile } from 'child_process'
-import { occupancy, type Occupancy } from '../sessions/session-reachability.js'
+import { occupancy } from '../sessions/session-reachability.js'
+import { type Occupancy } from '../sessions/occupancy.js'
 import { promisify } from 'util'
 import { readFileSync } from 'fs'
 import { join } from 'path'

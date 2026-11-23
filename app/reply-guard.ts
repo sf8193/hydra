@@ -24,7 +24,8 @@
 //
 // The daemon polls tmux's window_activity timestamp every 20s to detect
 // idle sessions. No monitor-silence/activity options needed.
-import { occupancy, type Occupancy } from '../sessions/session-reachability.js'
+import { occupancy } from '../sessions/session-reachability.js'
+import { type Occupancy } from '../sessions/occupancy.js'
 import { writeFileSync, unlinkSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'

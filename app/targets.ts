@@ -10,7 +10,8 @@
 import { registry, threadRegistry, type SessionInfo } from '../sessions/registry.js'
 import { transport, deliverToAdapter } from '../sessions/bridge-transport.js'
 import { gateway } from '../infra/config.js'
-import { occupancy, occupied, ORPHAN_GRACE_MS, bridgeWaitMs } from '../sessions/session-reachability.js'
+import { occupancy } from '../sessions/session-reachability.js'
+import { deliverable, occupied, ORPHAN_GRACE_MS, bridgeWaitMs } from '../sessions/occupancy.js'
 import type { BlockingState, DeliveryResult } from '../engines/engine-adapter.js'
 import { checkIdempotency, clearIdempotency, registerIdempotency, DELIVER_IDEMPOTENCY_TTL_MS } from '../infra/idempotency.js'
 import { DELIVER_MAX_MESSAGE_BYTES, parseIdleTtl } from '../shared/constants.js'
@@ -124,16 +125,16 @@ export function outcomeOf(result: DeliveryResult, queued: boolean):
 }
 
 /**
- * Land one message on a session. The occupancy exits apply unless `queue` (a revived or booting session's bridge
- * flushes the queue when it connects); a session stuck on a dialog or prompt is never a landing.
+ * Land one message on a session. A session that cannot take it (`deliverable`) is refused, with exit 3 (gone) or 4 (orphaned);
+ * a booting one is refused (5) unless `queue` (its bridge flushes the queue when it connects); a session stuck on a dialog or prompt is never a landing.
  */
 export async function deliverToSession(info: SessionInfo, text: string, opts: { initiator?: string; queue?: boolean; source?: string; meta?: Record<string, string>; lowPriority?: boolean }): Promise<
   | { ok: true; status: 'delivered' | 'queued'; proof?: string }
   | Extract<DeliverOutcome, { ok: false }>
 > {
   const occ = occupancy(info)
-  if (occ === 'dead' || occ === 'none') return { ok: false, exit: 3, reason: `${info.tmuxName} is gone — revive it (deliver --revive, or resume in its thread)` }
-  if (occ === 'orphaned' && !opts.queue) return { ok: false, exit: 4, reason: `${info.tmuxName} is orphaned (running, bridge not connected) — resume it in its thread, or kill it to restart` }
+  const can = deliverable(occ)
+  if (!can.ok) return { ok: false, exit: can.why === 'orphaned' ? 4 : 3, reason: `${info.tmuxName} is ${can.reason}` }
   if (occ === 'starting' && !opts.queue) return { ok: false, exit: 5, reason: `${info.tmuxName} is still booting — retry in ~${Math.max(1, Math.ceil((ORPHAN_GRACE_MS - bridgeWaitMs(info.createdAt)) / 1000))}s` }
   if (occ === 'connected') {
     const stuck = targetDeps.stuckState(info.tmuxName)
@@ -147,7 +148,7 @@ export async function deliverToSession(info: SessionInfo, text: string, opts: { 
   }
   let result: DeliveryResult
   try {
-    result = await deliverToAdapter(info, notification)
+    result = await deliverToAdapter(info, notification, transport.bridgeState(info.sessionId))
   } catch (err) {
     result = { status: 'unknown', reason: String(err) }
   }
@@ -261,7 +262,6 @@ export const conversationSessionRunning = (to: string, conversation: string): bo
 
 /** A conversation's running session gets the message, as a specialist's would: queued, unless it is orphaned (exit 4). */
 function landRunning(info: SessionInfo, text: string, opts: DeliverOpts): Promise<DeliverOutcome> | DeliverOutcome {
-  if (occupancy(info) === 'orphaned') return { ok: false, exit: 4, reason: `${info.tmuxName} is orphaned (running, bridge not connected) — hydra kill ${info.tmuxName} to restart it` }
   return land(info, text, { ...opts, queue: true }, false, info.tmuxName)
 }
 
@@ -327,9 +327,6 @@ async function toConversation(to: string, conversation: string, text: string, op
 /** A specialist always queues: whoever is home (or is filled now, by the rule) gets it once its bridge is up. */
 async function toSpecialist(name: string, text: string, opts: DeliverOpts, unstored?: Specialist): Promise<DeliverOutcome> {
   const { info, spawned } = await ensureSpecialist(name, opts.initiator, unstored)
-  if (!spawned && occupancy(info) === 'orphaned') {
-    return { ok: false, exit: 4, reason: `specialist "${name}": ${info.tmuxName} is orphaned (running, bridge not connected) — hydra kill ${name} to restart it` }
-  }
   return land(info, text, { ...opts, queue: true }, spawned, name)
 }
 

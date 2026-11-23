@@ -7,6 +7,8 @@ import { protocol } from '../../protocols/dsl.js'
 import { resolveModifier } from '../../protocols/modifiers.js'
 import { getActiveRuns } from '../../app/protocol-runner.js'
 import { registry } from '../../sessions/registry.js'
+import { transport } from '../../sessions/bridge-transport.js'
+import { on } from '../../infra/event-bus.js'
 import { reviewResult } from '../../shared/review-result.js'
 
 // Real protocol definitions — the harness exercises them as-is
@@ -167,6 +169,19 @@ describe('review: warning notification at T-2m', () => {
     expect(notes.some(n => n.includes('advance('))).toBe(true)
 
     expect(h.threadMessages.some(m => m.text.includes('warned'))).toBe(true)
+  })
+
+  test('an actor whose bridge is gone past the grace window is refused the warning out loud, and nothing is queued for it', async () => {
+    h = createHarness(review, { rounds: 3 })
+    const sid = h.sessionId('critic')
+    const failed: Array<{ sessionId: string }> = []
+    const off = on('delivery:failed', e => { failed.push(e) }, 'protocol-scenarios-orphan')
+    try {
+      transport.delete(sid)   // the bridge dropped and never came back
+      await h.tickToWarning()
+      expect(h.actorNotifications('critic').some(n => n.includes('Phase timeout in 2 minutes'))).toBe(false)
+      expect(failed.some(f => f.sessionId === sid)).toBe(true)
+    } finally { off() }
   })
 
   test('working actor does not receive warning', async () => {

@@ -2,7 +2,8 @@
 // now. Read-only: it changes nothing and starts nothing. The router reads it to find a thread whose session could be revived for a Slack
 // thread (`hydra deliver --to thread:<id> --revive`).
 import { registry, threadRegistry, type ThreadMetadata } from './registry.js'
-import { occupancy, occupied } from './session-reachability.js'
+import { occupancy } from './session-reachability.js'
+import { occupied } from './occupancy.js'
 import { fallbackDescription, formatDuration } from '../infra/util.js'
 
 export const ENDED_WITHIN_DAYS_DEFAULT = 14

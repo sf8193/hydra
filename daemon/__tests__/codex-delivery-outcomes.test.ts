@@ -123,9 +123,9 @@ describe('acknowledged Codex steering', () => {
     expect(sent).toEqual([])
     expect(await result).toMatchObject({ status: 'rejected', retryable: false })
   })
-  // The engine queues threadless/disconnected input (a reconnect drains it); the
-  // adapter only admits it while the session is alive (connected or reconnecting).
-  test('threadless/disconnected input transfers ownership; keepalive never queues; dead is rejected', async () => {
+  // The engine queues threadless/disconnected input (a reconnect drains it). Whether the session may take a message at all
+  // is not the adapter's call: the transport asks `deliverable` first (deliverable.test.ts).
+  test('threadless/disconnected input transfers ownership; keepalive never queues', async () => {
     const { engine, conn } = setup(null)
     conn.threadId = null
     expect(await engine.steer('s', 'early')).toMatchObject({ via: 'queued-turn' })
@@ -133,7 +133,6 @@ describe('acknowledged Codex steering', () => {
     expect(await adapter.deliver({ sessionId: 's' } as any, { type: 'notification', content: '[system] keepalive', deferUntilTurnComplete: true })).toMatchObject({ status: 'rejected' })
     engine.disconnect('s')
     expect(await engine.steer('s', 'offline')).toMatchObject({ via: 'queued-turn' })
-    expect(await adapter.deliver({ sessionId: 's' } as any, { type: 'notification', content: 'to the dead' })).toMatchObject({ status: 'rejected', reason: 'session is dead — resume or respawn' })
     expect(engine.getScheduling('s').deferredTurnQueue).toEqual(['early', 'offline'])
   })
 })

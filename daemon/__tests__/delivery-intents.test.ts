@@ -35,7 +35,8 @@ const run = (actorSid: string) => ({
 
 const put = (id: string, extra: Record<string, unknown>) =>
   registry.set(id, { sessionId: id, threadId: THREAD, tmuxName: id, sessionType: 'thread_owner', ...extra } as any)
-const claude = (id: string) => put(id, { engine: 'claude', adapter: new ClaudeEngine(transport) })
+// A booting session: running, no bridge yet, inside the grace window.
+const claude = (id: string) => put(id, { engine: 'claude', createdAt: Date.now(), adapter: Object.assign(new ClaudeEngine(transport), { isAlive: () => true }) })
 const codex = (id: string, calls: string[], extra: Record<string, unknown> = {}) => put(id, {
   engine: 'codex', ...extra,
   adapter: fakeCodexAdapter({ calls, isConnected: () => !extra.deadAt }), // dead ⇔ its app-server socket is gone

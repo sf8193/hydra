@@ -8,7 +8,7 @@ import { transport } from '../../sessions/bridge-transport.js'
 import { engines } from '../../sessions/engine-instances.js'
 import { emit } from '../../infra/event-bus.js'
 import { getIdempotencyEntry } from '../../infra/idempotency.js'
-import { _setDaemonStartedAtForTesting } from '../../sessions/session-reachability.js'
+import { _setDaemonStartedAtForTesting } from '../../sessions/occupancy.js'
 import { targetDeps } from '../../app/targets.js'
 
 // Suppress stderr from daemon modules
@@ -319,13 +319,13 @@ describe('cli-handler: deliver (Z2)', () => {
     expect(checkIdempotency(k)).toEqual({ blocked: false })
   })
 
-  test('claude --queue with no bridge past grace → queued/persisted, key completed', async () => {
+  test('claude --queue with no bridge past grace → exit 4 orphaned, nothing queued, no key (nothing will read that queue)', async () => {
     const info = seed('claude', { createdAt: 1 })
     const k = key()
     const res = await deliver(info.sessionId, { idempotencyKey: k, queue: true })
-    expect(res).toEqual({ type: 'cli-response', command: 'deliver', id: res.id, ok: true,
-      data: { status: 'queued', proof: 'persisted', ...common(info) }, result: 'done' })
-    expect(checkIdempotency(k)).toMatchObject({ blocked: true, entry: { status: 'completed' } })
+    expect(res).toMatchObject({ ok: false, exitCode: 4, result: 'failed' })
+    expect(transport.messageQueues.get(info.sessionId) ?? []).toEqual([])
+    expect(checkIdempotency(k)).toEqual({ blocked: false })
   })
 
   test('claude no bridge past grace without --queue → exit 4 orphaned, no key', async () => {
