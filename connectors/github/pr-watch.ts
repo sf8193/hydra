@@ -80,9 +80,63 @@ export type PrWatchPorts = {
 // Set by startPrWatcher before the first poll (the poll timer is started there), or by a test through _setPortsForTesting.
 let ports!: PrWatchPorts
 
+type GhUser = { login?: string }
+
+type GhPullRequest = {
+  title?: string
+  merged?: boolean
+  state?: string
+  mergeable?: boolean | null
+  head?: { sha?: string }
+}
+
+type GhReviewComment = {
+  id: number
+  user?: GhUser | null
+  body?: string | null
+  path?: string
+  original_line?: number
+  line?: number
+  created_at: string
+  html_url: string
+}
+
+type GhReview = {
+  id: number
+  user?: GhUser | null
+  state: string
+  body?: string | null
+  submitted_at: string
+}
+
+type GhIssueComment = {
+  id: number
+  user?: GhUser | null
+  body?: string | null
+  created_at: string
+  html_url: string
+}
+
+type GhCheckRun = {
+  name: string
+  status: string
+  conclusion: string | null
+  html_url: string
+}
+
+type GhCheckRunsResponse = { check_runs?: GhCheckRun[] }
+
+type GhCommitStatus = {
+  context: string
+  state: string
+  target_url?: string | null
+}
+
+type GhCombinedStatusResponse = { statuses?: GhCommitStatus[] }
+
 /** Test seam: GitHub. */
 export const prWatchDeps = {
-  api: (endpoint: string): Promise<any> => ghApiFetch(endpoint),
+  api: (endpoint: string): Promise<unknown> => ghApiFetch(endpoint),
 }
 
 /** The target a session's watches deliver to: `main`, its thread's specialist, or its thread, revived when dead. */
@@ -247,9 +301,9 @@ function loadGhToken(): string | null {
   }
 }
 
-const ghApi = (endpoint: string): Promise<any> => prWatchDeps.api(endpoint)
+const ghApi = <T = unknown>(endpoint: string): Promise<T | null> => prWatchDeps.api(endpoint) as Promise<T | null>
 
-async function ghApiFetch(endpoint: string): Promise<any> {
+async function ghApiFetch(endpoint: string): Promise<unknown> {
   const token = loadGhToken()
   if (!token) return null
 
@@ -296,11 +350,11 @@ async function ghApiFetch(endpoint: string): Promise<any> {
 // Both WatchEntry and a parsed PR URL carry these three fields.
 type PrRef = { owner: string; repo: string; prNumber: number }
 const prPath = (r: PrRef) => `repos/${r.owner}/${r.repo}/pulls/${r.prNumber}`
-const fetchPr = (r: PrRef) => ghApi(prPath(r))
+const fetchPr = (r: PrRef) => ghApi<GhPullRequest>(prPath(r))
 
-export function maxId(items: any[] | null): number {
+export function maxId(items: ReadonlyArray<{ id?: number; [key: string]: unknown }> | null): number {
   if (!items || !Array.isArray(items) || items.length === 0) return 0
-  return Math.max(...items.map((i: any) => i.id ?? 0))
+  return Math.max(...items.map(i => i.id ?? 0))
 }
 
 // ---------------------------------------------------------------------------
@@ -308,7 +362,7 @@ export function maxId(items: any[] | null): number {
 // ---------------------------------------------------------------------------
 
 async function fetchNewReviewComments(entry: WatchEntry): Promise<PRComment[] | null> {
-  const data = await ghApi(`${prPath(entry)}/comments?since=${entry.lastCheckedAt}&per_page=100`)
+  const data = await ghApi<GhReviewComment[]>(`${prPath(entry)}/comments?since=${entry.lastCheckedAt}&per_page=100`)
   if (!data || !Array.isArray(data)) return null
 
   if (data.length >= 100) {
@@ -316,8 +370,8 @@ async function fetchNewReviewComments(entry: WatchEntry): Promise<PRComment[] | 
   }
 
   return data
-    .filter((c: any) => c.id > entry.lastReviewCommentId)
-    .map((c: any) => ({
+    .filter(c => c.id > entry.lastReviewCommentId)
+    .map(c => ({
       id: c.id,
       user: c.user?.login ?? 'unknown',
       body: c.body ?? '',
@@ -330,10 +384,10 @@ async function fetchNewReviewComments(entry: WatchEntry): Promise<PRComment[] | 
 
 // GitHub's /reviews endpoint ignores sort/direction and returns oldest-first, so take the
 // whole page (max 100) and filter; never stop at the first old review.
-export function selectNewReviews(data: any[], entry: Pick<WatchEntry, 'lastReviewId' | 'lastCheckedAt'>): PRReview[] {
+export function selectNewReviews(data: ReadonlyArray<GhReview>, entry: Pick<WatchEntry, 'lastReviewId' | 'lastCheckedAt'>): PRReview[] {
   return data
-    .filter((r: any) => r.id > entry.lastReviewId && new Date(r.submitted_at) > new Date(entry.lastCheckedAt))
-    .map((r: any) => ({
+    .filter(r => r.id > entry.lastReviewId && new Date(r.submitted_at) > new Date(entry.lastCheckedAt))
+    .map(r => ({
       id: r.id,
       user: r.user?.login ?? 'unknown',
       state: r.state,
@@ -343,13 +397,13 @@ export function selectNewReviews(data: any[], entry: Pick<WatchEntry, 'lastRevie
 }
 
 async function fetchNewReviews(entry: WatchEntry): Promise<PRReview[] | null> {
-  const data = await ghApi(`${prPath(entry)}/reviews?per_page=100`)
+  const data = await ghApi<GhReview[]>(`${prPath(entry)}/reviews?per_page=100`)
   if (!data || !Array.isArray(data)) return null
   return selectNewReviews(data, entry)
 }
 
 async function fetchNewIssueComments(entry: WatchEntry): Promise<PRComment[] | null> {
-  const data = await ghApi(`repos/${entry.owner}/${entry.repo}/issues/${entry.prNumber}/comments?since=${entry.lastCheckedAt}&per_page=100`)
+  const data = await ghApi<GhIssueComment[]>(`repos/${entry.owner}/${entry.repo}/issues/${entry.prNumber}/comments?since=${entry.lastCheckedAt}&per_page=100`)
   if (!data || !Array.isArray(data)) return null
 
   if (data.length >= 100) {
@@ -357,8 +411,8 @@ async function fetchNewIssueComments(entry: WatchEntry): Promise<PRComment[] | n
   }
 
   return data
-    .filter((c: any) => c.id > entry.lastIssueCommentId)
-    .map((c: any) => ({
+    .filter(c => c.id > entry.lastIssueCommentId)
+    .map(c => ({
       id: c.id,
       user: c.user?.login ?? 'unknown',
       body: c.body ?? '',
@@ -378,15 +432,15 @@ export type CheckResult = {
   total: number // check runs + commit statuses on headSha
 }
 
-async function fetchCheckStatus(entry: WatchEntry, prData?: any): Promise<CheckResult | null> {
+async function fetchCheckStatus(entry: WatchEntry, prData?: GhPullRequest | null): Promise<CheckResult | null> {
   const pr = prData ?? await fetchPr(entry)
   if (!pr?.head?.sha) return null
 
-  const headSha = pr.head.sha as string
+  const headSha = pr.head.sha
 
   const [checks, combinedStatus] = await Promise.all([
-    ghApi(`repos/${entry.owner}/${entry.repo}/commits/${headSha}/check-runs?per_page=100`),
-    ghApi(`repos/${entry.owner}/${entry.repo}/commits/${headSha}/status`),
+    ghApi<GhCheckRunsResponse>(`repos/${entry.owner}/${entry.repo}/commits/${headSha}/check-runs?per_page=100`),
+    ghApi<GhCombinedStatusResponse>(`repos/${entry.owner}/${entry.repo}/commits/${headSha}/status`),
   ])
 
   // null = API failure. If either endpoint failed, return null so pollPr
@@ -403,25 +457,25 @@ async function fetchCheckStatus(entry: WatchEntry, prData?: any): Promise<CheckR
   let total = 0
 
   if (checks?.check_runs) {
-    const runs = checks.check_runs as Array<{ name: string; status: string; conclusion: string | null; html_url: string }>
+    const runs = checks.check_runs
     hasAnyCheck = hasAnyCheck || runs.length > 0
     total += runs.length
-    hasPending = hasPending || runs.some((r: any) => r.status !== 'completed')
+    hasPending = hasPending || runs.some(r => r.status !== 'completed')
     for (const r of runs) {
       if (r.conclusion === 'failure' || r.conclusion === 'cancelled' || r.conclusion === 'timed_out' || r.conclusion === 'startup_failure' || r.conclusion === 'action_required') {
-        failed.push({ name: r.name, conclusion: r.conclusion!, url: r.html_url })
+        failed.push({ name: r.name, conclusion: r.conclusion, url: r.html_url })
       }
     }
   }
 
   if (combinedStatus?.statuses) {
-    const statuses = combinedStatus.statuses as Array<{ context: string; state: string; target_url: string }>
+    const statuses = combinedStatus.statuses
     if (statuses.length >= 100) {
       process.stderr.write(`daemon: pr-watch: ${entry.prUrl} hit 100 commit statuses — some may be missed\n`)
     }
     hasAnyCheck = hasAnyCheck || statuses.length > 0
     total += statuses.length
-    hasPending = hasPending || statuses.some((s: any) => s.state === 'pending')
+    hasPending = hasPending || statuses.some(s => s.state === 'pending')
     for (const s of statuses) {
       if (s.state === 'failure' || s.state === 'error') {
         failed.push({ name: s.context, conclusion: s.state, url: s.target_url ?? '' })
@@ -467,7 +521,7 @@ async function pollPr(entry: WatchEntry): Promise<void> {
   const held = readPosition(entry)
 
   // Fetch PR state once — reused for merge check and check status
-  let prData: any = null
+  let prData: GhPullRequest | null = null
   try {
     prData = await fetchPr(entry)
     if (prData?.merged || prData?.state === 'closed') {
@@ -747,9 +801,9 @@ export async function watchPr(prUrl: string, sessionId: string, threadId: string
   // Seed watermarks with max IDs so we only report NEW comments/status
   try {
     const [reviewComments, issueComments, reviews, checkResult, prData] = await Promise.all([
-      ghApi(`${prPath(parsed)}/comments?per_page=1&sort=created&direction=desc`),
-      ghApi(`repos/${parsed.owner}/${parsed.repo}/issues/${parsed.prNumber}/comments?per_page=1&sort=created_at&direction=desc`),
-      ghApi(`${prPath(parsed)}/reviews?per_page=100`),
+      ghApi<GhReviewComment[]>(`${prPath(parsed)}/comments?per_page=1&sort=created&direction=desc`),
+      ghApi<GhIssueComment[]>(`repos/${parsed.owner}/${parsed.repo}/issues/${parsed.prNumber}/comments?per_page=1&sort=created_at&direction=desc`),
+      ghApi<GhReview[]>(`${prPath(parsed)}/reviews?per_page=100`),
       fetchCheckStatus(entry),
       fetchPr(parsed),
     ])
