@@ -4,7 +4,7 @@
 
 import { describe, test, expect, afterEach } from 'bun:test'
 import { fakeCodexAdapter } from './test-harness.js'
-import { reconnectCodexSessions, reconnectDeps } from '../../app/codex-runtime.js'
+import { reconnectCodexSessions, reconnectDeps, bindCodexRuntime } from '../../app/codex-runtime.js'
 import { codexReconnecting } from '../../engines/codex-reconnecting.js'
 import { engines } from '../../sessions/engine-instances.js'
 import { occupancy } from '../../sessions/session-reachability.js'
@@ -13,6 +13,7 @@ const isAlive = (info: any) => occupied(occupancy(info))
 import { registry } from '../../sessions/registry.js'
 import { transport } from '../../sessions/bridge-transport.js'
 import { withFakeTmux } from './fake-tmux.js'
+bindCodexRuntime()
 
 const codex = (connected: boolean) => fakeCodexAdapter({ isConnected: () => connected })
 const ids: string[] = []

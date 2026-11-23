@@ -13,10 +13,11 @@
 
 import { describe, expect, test } from 'bun:test'
 import { CodexEngine } from '../../engines/codex-engine.js'
-import { onTurnReconciled } from '../../app/codex-runtime.js'
+import { onTurnReconciled, bindCodexRuntime } from '../../app/codex-runtime.js'
 import { codexEngine } from '../../sessions/engine-instances.js'
 import { getLastCodexMessage, isCodexTurnComplete, isCodexWorking } from '../../engines/codex-observation.js'
 import { registry, type SessionInfo } from '../../sessions/registry.js'
+bindCodexRuntime()
 
 // The resume shape is the live one recorded at the top of this file.
 const liveTurn = (over: Record<string, unknown> = {}) => ({

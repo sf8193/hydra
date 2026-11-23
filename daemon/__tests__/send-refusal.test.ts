@@ -13,7 +13,8 @@ import { type LaunchPolicy } from '../../shared/launch-policy.js'
 import { policyIdFor } from '../../app/restricted.js'
 import { threadNotices } from '../../shared/notice-limit.js'
 import type { HydraConfig, Specialist } from '../../config/types.js'
-import '../../app/codex-runtime.js'
+import { bindCodexRuntime } from '../../app/codex-runtime.js'
+bindCodexRuntime()
 import { codexAdapter } from './codex-adapter.js'
 import './arm-gate.js'
 
