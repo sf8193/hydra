@@ -50,7 +50,7 @@ export function deliverToAdapter(info: SessionInfo, msg: Notification, bridge: B
   const refused = gateReason(info)
   if (refused) return Promise.resolve({ status: 'rejected', retryable: false, reason: refused })
   const can = deliverable(occupancyOf(info, bridge))
-  if (!can.ok) return Promise.resolve({ status: 'rejected', retryable: false, reason: `${info.tmuxName} is ${can.reason}` })
+  if (!can.ok) return Promise.resolve({ status: 'rejected', retryable: false, reason: `${info.tmuxName} is ${can.reason}`, standing: true })
   return info.adapter.deliver(info, msg)
 }
 
@@ -332,6 +332,6 @@ export const transport = new BridgeTransport()
 /** A text delivery that was not accepted: log it and tell the session's chat (delivery:failed). */
 export function reportDeliveryFailure(sessionId: string, result: Exclude<DeliveryResult, { status: 'accepted' }>, messageId?: string): void {
   process.stderr.write(`daemon: delivery failed for ${sessionId}: ${result.status}: ${result.reason}\n`)
-  emit('delivery:failed', { sessionId, status: result.status, reason: result.reason, ...(messageId ? { messageId } : {}) })
+  emit('delivery:failed', { sessionId, status: result.status, reason: result.reason, ...(messageId ? { messageId } : {}), ...(result.status === 'rejected' && result.standing ? { standing: true as const } : {}) })
 }
 

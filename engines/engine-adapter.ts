@@ -52,7 +52,8 @@ export function withoutIntents<T extends Record<string, unknown>>(msg: T): T {
 
 export type DeliveryResult =
   | { readonly status: 'accepted'; readonly via?: string }
-  | { readonly status: 'rejected'; readonly retryable: boolean; readonly reason: string }
+  /** `standing`: the refusal holds until something changes (an orphaned session stays one), so a thread is told once per window, not once per message. */
+  | { readonly status: 'rejected'; readonly retryable: boolean; readonly reason: string; readonly standing?: true }
   | { readonly status: 'unknown'; readonly reason: string }
 
 // ---------------------------------------------------------------------------
