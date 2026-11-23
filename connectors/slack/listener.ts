@@ -113,7 +113,7 @@ export type PostOptions = { unfurl?: false; classic: boolean }
  * the gateway's `applyMessageBody` keeps classic `text` only for buttons, so its tagged replies go as `markdown_text`.
  */
 export function postPayload(channel: string, threadTs: string | undefined, text: string, opts: PostOptions): Record<string, unknown> {
-  return { channel, ...messageBody(text, opts.classic), ...(threadTs && { thread_ts: threadTs }), ...unfurlFields(opts?.unfurl === false) }
+  return { channel, ...messageBody(text, opts.classic), ...(threadTs && { thread_ts: threadTs }), ...unfurlFields(opts.unfurl === false) }
 }
 
 /**
