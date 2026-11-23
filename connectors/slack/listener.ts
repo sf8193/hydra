@@ -12,7 +12,9 @@ import { SLACK_APP_NEEDS, NO_SLACK_APP, appKey, appName, appSuffix, type Apps, t
 import { ConnectedApps } from './apps.js'
 import { timed } from '../../shared/loop-watch.js'
 import { awakeSince, suspendedSince, describeCause, type ResumeDetector } from '../../shared/resume.js'
-import { buildSocketApp, messageBody, parseAuth, unfurlFields } from '../../shared/slack-client.js'
+import { buildSocketApp, parseAuth } from '../../shared/slack-client.js'
+import { postPayload, replyBody, type PostOptions } from './reply-body.js'
+export { postPayload, slackSyntax, type PostOptions } from './reply-body.js'
 
 /**
  * The Slack connector for one app: one Socket Mode connection that feeds `message` events to the watcher, and the catch-up pass
@@ -103,38 +105,6 @@ export const EVENTS_OFF_AFTER_PASSES = 3
 export const MEMBERSHIP_WAIT_MS = 5_000
 
 /** What the Slack SDK offers the listener, narrowed so the rest is testable without it. */
-/** `unfurl: false` posts without link previews (a place's `link_previews = false`, or `"single"` and 2+ links); absent, Slack's own default. */
-/** `classic`: the body is classic `text`, decided once on the whole reply (`slackSyntax`) so every part of a split reply renders alike. */
-export type PostOptions = { unfurl?: false; classic: boolean }
-
-/**
- * The chat.postMessage arguments for one reply: `markdown_text`, so markdown renders; classic `text` when `opts.classic` says so (the
- * reply tags someone) or the text is past the cap, the thread when there is one, and unfurling off exactly when asked. Tagged text differs from the gateway here:
- * the gateway's `applyMessageBody` keeps classic `text` only for buttons, so its tagged replies go as `markdown_text`.
- */
-export function postPayload(
-  channel: string,
-  threadTs: string | undefined,
-  text: string,
-  opts: PostOptions,
-): { channel: string; thread_ts?: string; unfurl_links?: false; unfurl_media?: false } & ({ text: string } | { markdown_text: string }) {
-  return { channel, ...messageBody(text, opts.classic), ...(threadTs && { thread_ts: threadTs }), ...unfurlFields(opts.unfurl === false) }
-}
-
-/**
- * True when the text carries a Slack tag or reference: a tag (`<@U…>`), a special mention or user group (`<!here>`, `<!channel>`, `<!everyone>`,
- * `<!subteam^…>`), or a channel link (`<#C…>`). A post tagging another app sent as `markdown_text` never reached that app (#948, reverted in #953),
- * and nothing shows mentions or channel links work there, so such text keeps going as classic `text`. A labelled link (`<url|label>`) is not one:
- * under `markdown_text` it renders as a link, as `[label](url)` does (seen live, 23 Nov). The test is plain text: `<!--`, `<!DOCTYPE` or a tag
- * inside a code span also count, so such a reply goes classic and loses tables and `**bold**`. That only costs rendering, never delivery.
- */
-export function slackSyntax(text: string): boolean {
-  return /<[@!#]/.test(text)
-}
-
-/** A connector reply's or edit's body field: `markdown_text`, or classic `text` when it carries a tag or is past the cap. */
-const replyBody = (text: string): { text: string } | { markdown_text: string } => messageBody(text, slackSyntax(text))
-
 export type SlackAppLike = {
   onMessage(handler: (event: RawEvent) => void): void
   /** Every message event the socket delivers, before Bolt's own filters (`ignoreSelf` among them) see it. Absent: not offered. */

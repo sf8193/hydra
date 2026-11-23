@@ -52,7 +52,6 @@ export const slackRuntimeDeps = {
   view: (app: string = DEFAULT_SLACK_APP): ConversationConfig | null => connections.listener(app)?.view() ?? null,
   /** A place freed under max: catch-up refetches what waits, the oldest waiter first, through the apps that have waiters. */
   wake: (apps?: string[], why = 'a place freed'): void => { for (const [id, l] of connections.listeners()) if (!apps || apps.includes(id)) void l.runCatchUp(false, why) },
-  /** `classic`: the whole reply's choice of body (`slackSyntax` on all of it), so a split reply's parts render alike. */
   post: (channel: string, threadTs: string | undefined, text: string, app: string, classic: boolean): Promise<string> => {
     const l = connections.listener(app)
     if (!l) return Promise.reject(new Error(notConnected(hydraConfig().slackApps, app)))
@@ -839,14 +838,12 @@ async function toOperatorDm(app: string, id: string, why: string, text: string, 
 }
 
 /**
- * The text as written, split under Slack's limit, posted part by part while `allowed()` still holds. `thread` undefined:
+ * The text as written, split under Slack's limit, posted part by part while `allowed()` still holds, every part in the body `slackSyntax` picks for the whole text (so a reply never renders two ways). `thread` undefined:
  * the first part at the top level, and with `threadRest` the others in its thread. Posting never retries on its own, so
  * a part either landed, failed, or (past the deadline) is unknown: said as such, so a resend is the caller's choice.
  */
 async function postParts(app: string, channel: string, thread: string | undefined, text: string, where: string, threadRest: boolean, allowed: () => boolean, onFirst?: (ts: string) => void): Promise<{ first: string; posted: number }> {
   const parts = chunk(text, SLACK_CHUNK, 'markdown')
-  // Decided once for the whole reply: a tag in one part sends every part as classic `text`, so the reply never renders two ways.
-  const classic = slackSyntax(text)
   let posted = 0
   let first: string | undefined
   for (const part of parts) {
@@ -855,7 +852,7 @@ async function postParts(app: string, channel: string, thread: string | undefine
     let ts: string
     try {
       ts = await Promise.race([
-        postPart(app, channel, thread, part, classic),
+        postPart(app, channel, thread, part, slackSyntax(text)),
         new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('timeout')), POST_BACKSTOP_MS) }),
       ]).finally(() => clearTimeout(timer))
     } catch (err) {
