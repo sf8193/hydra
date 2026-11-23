@@ -20,6 +20,10 @@ const SANCTIONED_RAW_SENDS: Record<string, number> = {
   // The v2 protocol engine routes every content-bearing send through safeSend —
   // baseline 0 makes this a hard floor: no raw gateway.send may enter it.
   'protocol-runner.ts': 0,
+  'protocol/state.ts': 0,
+  'protocol/tools.ts': 0,
+  'protocol/notify.ts': 0,
+  'protocol/transitions.ts': 0,
 }
 
 describe('raw gateway.send ratchet (protocol files)', () => {

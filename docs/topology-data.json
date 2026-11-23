@@ -147,6 +147,48 @@
       "desc": "Permission request routing to DM"
     },
     {
+      "id": "app_commands_status",
+      "label": "app/commands/status.ts",
+      "tier": 4,
+      "desc": "sessions list, status display"
+    },
+    {
+      "id": "app_commands_review",
+      "label": "app/commands/review.ts",
+      "tier": 4,
+      "desc": "review command handler"
+    },
+    {
+      "id": "app_protocol-runner",
+      "label": "app/protocol-runner.ts",
+      "tier": 4,
+      "desc": "Protocol entry handlers (start, advance, extend, disconnect, reconnect) + hook wiring"
+    },
+    {
+      "id": "app_protocol_transitions",
+      "label": "app/protocol/transitions.ts",
+      "tier": 4,
+      "desc": "Protocol phase transitions, timeouts, health monitor, fallback/resume, cancel/complete"
+    },
+    {
+      "id": "app_protocol_tools",
+      "label": "app/protocol/tools.ts",
+      "tier": 4,
+      "desc": "Protocol tool surface, participant/child registration, deliverable validation"
+    },
+    {
+      "id": "app_protocol_notify",
+      "label": "app/protocol/notify.ts",
+      "tier": 4,
+      "desc": "Protocol status line and participant notifications"
+    },
+    {
+      "id": "app_protocol_state",
+      "label": "app/protocol/state.ts",
+      "tier": 4,
+      "desc": "ProtocolRun state, event bus, lookups, phase/event helpers"
+    },
+    {
       "id": "app_session-lifecycle",
       "label": "app/session-lifecycle.ts",
       "tier": 4,
@@ -199,18 +241,6 @@
       "label": "app/reply-guard.ts",
       "tier": 4,
       "desc": "Reply guard: nudge sessions that go silent on user-authored messages"
-    },
-    {
-      "id": "app_commands_status",
-      "label": "app/commands/status.ts",
-      "tier": 4,
-      "desc": "sessions list, status display"
-    },
-    {
-      "id": "app_commands_review",
-      "label": "app/commands/review.ts",
-      "tier": 4,
-      "desc": "review command handler"
     },
     {
       "id": "app_commands_watch",
@@ -546,6 +576,10 @@
     ],
     [
       "app_bridge-dispatch",
+      "app_protocol-runner"
+    ],
+    [
+      "app_bridge-dispatch",
       "shared_constants"
     ],
     [
@@ -598,6 +632,10 @@
     ],
     [
       "app_bridge-server",
+      "app_protocol-runner"
+    ],
+    [
+      "app_bridge-server",
       "app_advance-nudge"
     ],
     [
@@ -635,6 +673,118 @@
     [
       "sessions_protocol-registry",
       "sessions_registry"
+    ],
+    [
+      "app_protocol-runner",
+      "sessions_registry"
+    ],
+    [
+      "app_protocol-runner",
+      "infra_util"
+    ],
+    [
+      "app_protocol-runner",
+      "sessions_anchor-state"
+    ],
+    [
+      "app_protocol-runner",
+      "sessions_protocol-registry"
+    ],
+    [
+      "app_protocol-runner",
+      "app_protocol_state"
+    ],
+    [
+      "app_protocol-runner",
+      "app_protocol_tools"
+    ],
+    [
+      "app_protocol-runner",
+      "app_protocol_notify"
+    ],
+    [
+      "app_protocol-runner",
+      "app_protocol_transitions"
+    ],
+    [
+      "app_protocol_state",
+      "app_session-lifecycle"
+    ],
+    [
+      "app_protocol_tools",
+      "sessions_registry"
+    ],
+    [
+      "app_protocol_tools",
+      "app_session-lifecycle"
+    ],
+    [
+      "app_protocol_tools",
+      "sessions_tool-surface"
+    ],
+    [
+      "app_protocol_tools",
+      "app_protocol_state"
+    ],
+    [
+      "app_protocol_notify",
+      "sessions_registry"
+    ],
+    [
+      "app_protocol_notify",
+      "sessions_bridge-transport"
+    ],
+    [
+      "app_protocol_notify",
+      "infra_util"
+    ],
+    [
+      "app_protocol_notify",
+      "sessions_anchor-state"
+    ],
+    [
+      "app_protocol_notify",
+      "app_protocol_state"
+    ],
+    [
+      "app_protocol_transitions",
+      "infra_config"
+    ],
+    [
+      "app_protocol_transitions",
+      "sessions_registry"
+    ],
+    [
+      "app_protocol_transitions",
+      "app_session-lifecycle"
+    ],
+    [
+      "app_protocol_transitions",
+      "sessions_bridge-transport"
+    ],
+    [
+      "app_protocol_transitions",
+      "infra_util"
+    ],
+    [
+      "app_protocol_transitions",
+      "sessions_anchor-state"
+    ],
+    [
+      "app_protocol_transitions",
+      "infra_transcript-dump"
+    ],
+    [
+      "app_protocol_transitions",
+      "app_protocol_state"
+    ],
+    [
+      "app_protocol_transitions",
+      "app_protocol_tools"
+    ],
+    [
+      "app_protocol_transitions",
+      "app_protocol_notify"
     ],
     [
       "app_permission",
@@ -1026,6 +1176,10 @@
     ],
     [
       "app_router",
+      "app_protocol-runner"
+    ],
+    [
+      "app_router",
       "sessions_anchor-state"
     ],
     [
@@ -1071,6 +1225,10 @@
     [
       "app_templates",
       "shared_constants"
+    ],
+    [
+      "app_templates",
+      "app_protocol-runner"
     ],
     [
       "connectors_github_pr-watch",
@@ -1238,6 +1396,10 @@
     ],
     [
       "app_auto-handoff",
+      "app_protocol-runner"
+    ],
+    [
+      "app_auto-handoff",
       "app_permission"
     ],
     [
@@ -1290,6 +1452,10 @@
     ],
     [
       "app_commands_global",
+      "app_protocol-runner"
+    ],
+    [
+      "app_commands_global",
       "app_templates"
     ],
     [
@@ -1315,6 +1481,10 @@
     [
       "app_commands_status",
       "connectors_github_pr-watch"
+    ],
+    [
+      "app_commands_status",
+      "app_protocol-runner"
     ],
     [
       "app_commands_thread",
@@ -1371,6 +1541,10 @@
     [
       "app_commands_review",
       "sessions_registry"
+    ],
+    [
+      "app_commands_review",
+      "app_protocol-runner"
     ],
     [
       "app_commands_review",
