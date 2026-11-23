@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { gateway } from '../../infra/config.js'
-import { migrateWorktree, registry, threadRegistry, withLegacyWorktree, type SessionInfo, type ThreadSessionEntry } from '../../sessions/registry.js'
+import { migrateWorktree, registry, threadRegistry, type SessionInfo, type ThreadSessionEntry } from '../../sessions/registry.js'
 import { engines } from '../../sessions/engine-instances.js'
 import { autoRecoverAfterBoot, handleRecoverIntercept, reviveThread, _resetRecoveryDeps, _setRecoveryDeps } from '../../app/recovery.js'
 import { handleResumeIntercept, handleRespawnIntercept } from '../../app/commands/thread.js'
@@ -213,14 +213,5 @@ describe('the persisted shape', () => {
   test('half a worktree is no worktree; a record without one is unchanged', () => {
     expect(migrateWorktree({ tmuxName: 'n', worktreePath: '/p' } as any)).toEqual({ tmuxName: 'n' })
     expect(migrateWorktree({ tmuxName: 'n' } as any)).toEqual({ tmuxName: 'n' })
-  })
-
-  test('written with the old fields beside it, holding the same worktree, for a build from before `worktree` (rollback)', () => {
-    const w = { repo: '/r', path: '/p', branch: 'wt/b' }
-    const written = withLegacyWorktree({ tmuxName: 'n', worktree: w })
-    expect(written).toMatchObject({ worktreeRepo: '/r', worktreePath: '/p', worktreeBranch: 'wt/b' })
-    expect(migrateWorktree(JSON.parse(JSON.stringify(written))).worktree).toEqual(w)
-    const bare: { tmuxName: string; worktree?: { repo: string; path: string; branch: string } } = { tmuxName: 'n' }
-    expect(withLegacyWorktree(bare)).toEqual({ tmuxName: 'n' })
   })
 })
