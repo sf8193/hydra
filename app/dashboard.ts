@@ -300,9 +300,11 @@ export function refreshDashboardNow(): void {
   void doUpdate()
 }
 
-// Periodic fallback refresh — keeps dashboard fresh even when no session changes occur
-setInterval(() => timed('dashboard', () => void doUpdate()), PERIODIC_REFRESH_MS)
+/** Periodic fallback refresh — keeps the dashboard fresh even when no session changes occur. daemon.ts starts it once at boot. */
+export function startDashboardTimers(): void {
+  setInterval(() => timed('dashboard', () => void doUpdate()), PERIODIC_REFRESH_MS)
 
-setInterval(() => timed('dashboard-status', () => void doUpdate(true)), STATUS_CHECK_MS)
+  setInterval(() => timed('dashboard-status', () => void doUpdate(true)), STATUS_CHECK_MS)
+}
 
 export const __test = process.env.NODE_ENV === 'test' ? { statusKey, coalesced, buttonTarget } : undefined

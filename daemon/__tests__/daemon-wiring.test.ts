@@ -35,6 +35,10 @@ test('daemon.ts calls bindDaemon() before any engine starts, and bindDaemon() bi
   }
 })
 
+test('daemon.ts starts the dashboard timers', () => {
+  expect(daemon).toMatch(/^startDashboardTimers\(\)$/m)
+})
+
 test('daemon.ts hands the Home tab its spawn handler', () => {
   expect(daemon).toMatch(/^  ;\(gateway as any\)\.homeSpawnHandler = runHomeSpawnAction$/m)
 })
