@@ -11,6 +11,7 @@ import { selectDelegatedBuildProtocol } from '../../protocols/delegated-build-se
 import reviewProto from '../../protocols/review.js'
 import buildProto from '../../protocols/build.js'
 import spikeProto from '../../protocols/spike.js'
+import './arm-gate.js'
 
 let origStderrWrite: typeof process.stderr.write
 
