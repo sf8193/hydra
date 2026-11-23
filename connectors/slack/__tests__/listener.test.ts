@@ -7,7 +7,7 @@ import { alsoHeard, hydra as load, hydra, oneListener, view, BASE } from './slac
 import { EMPTY_CONFIG } from '../../../config/load.js'
 import { mustParsePlace, type HydraConfig } from '../../../config/types.js'
 import { MARKDOWN_TEXT_MAX } from '../../../shared/slack-client.js'
-import { SlackListener, DM_LIST_BACKOFF_MS, postPayload, slackSyntax, DOWN_ALERT_AFTER_MS, implicitScopeOptions, scopesNeeded, type ToldScopes, CATCH_UP_STALE_AFTER_MS, EVENTS_OFF_AFTER_PASSES, explainSlackError, readReplies, READ_MAX_PAGES, type SlackAppLike, type RawEvent } from '../listener.js'
+import { SlackListener, DM_LIST_BACKOFF_MS, postPayload, slackSyntax, toMrkdwn, DOWN_ALERT_AFTER_MS, implicitScopeOptions, scopesNeeded, type ToldScopes, CATCH_UP_STALE_AFTER_MS, EVENTS_OFF_AFTER_PASSES, explainSlackError, readReplies, READ_MAX_PAGES, type SlackAppLike, type RawEvent } from '../listener.js'
 import type { SlackApi, RawMessage } from '../catchup.js'
 import type { SocketEmitter } from '../../../shared/socket-supervisor.js'
 import { createResumeDetector, type LastSleep } from '../../../shared/resume.js'
@@ -354,7 +354,7 @@ describe('posting where link previews are off', () => {
     expect(postPayload('C1', undefined, 'hi', { classic: false })).toEqual({ channel: 'C1', markdown_text: 'hi' })
     expect(postPayload('C1', '1.0', 'hi', { classic: false })).toEqual({ channel: 'C1', markdown_text: 'hi', thread_ts: '1.0' })
     // The body follows `classic` (the whole reply's choice), whatever this part's text holds.
-    expect(postPayload('C1', undefined, '**b**', { classic: true })).toEqual({ channel: 'C1', text: '**b**' })
+    expect(postPayload('C1', undefined, '**b**', { classic: true })).toEqual({ channel: 'C1', text: '*b*' })
     expect(postPayload('C1', undefined, 'hi <@U1>', { classic: false })).toEqual({ channel: 'C1', markdown_text: 'hi <@U1>' })
   })
   test('a reply goes as markdown_text, so **bold** and tables render; links and code reach Slack byte for byte', () => {
@@ -366,7 +366,7 @@ describe('posting where link previews are off', () => {
   test('a reply with Slack syntax goes as classic text, so a tag still reaches the tagged app (#953)', () => {
     for (const t of ['over to <@U0OTHER> **now**', 'cc <@U0OTHER|opal>', '<!here> heads up', '<!everyone> heads up', 'see <!subteam^S1|team>', 'in <#C0123|dev>']) {
       const p: Record<string, unknown> = replyPayload('C1', '1.0', t)
-      expect(p.text).toBe(t)
+      expect(p.text).toBe(toMrkdwn(t))
       expect(p).not.toHaveProperty('markdown_text')
     }
   })
@@ -1090,6 +1090,20 @@ describe('reading a conversation through the connection (fetch_messages)', () =>
     await t.listener.start()
     expect((await t.listener.read(CH, undefined, 2, false)).map(m => [m.ts, m.author])).toEqual([['1002.000001', 'me'], ['1003.000001', 'Bea B']])
     expect((await t.listener.read(CH, undefined, 100, false)).map(m => m.ts)).toEqual(['1001.000001', '1002.000001', '1003.000001'])
+  })
+})
+
+describe('toMrkdwn: a reply kept classic keeps its bold and links', () => {
+  test('markdown becomes mrkdwn; code, Slack links, bullets and lone stars stay as written', () => {
+    expect(toMrkdwn('over to <@U1> **now** and *maybe*')).toBe('over to <@U1> *now* and _maybe_')
+    expect(toMrkdwn('[SO-1](https://x.co/a_b) ~~gone~~ <https://x.co|10183>')).toBe('<https://x.co/a_b|SO-1> ~gone~ <https://x.co|10183>')
+    expect(toMrkdwn('# Stock\n- one\n* two\n2*3*4 snake_case')).toBe('*Stock*\n- one\n* two\n2*3*4 snake_case')
+    expect(toMrkdwn('`**a**` and ```\n**b** [x](https://x.co)\n``` **c**')).toBe('`**a**` and ```\n**b** [x](https://x.co)\n``` *c*')
+    expect(toMrkdwn('| a | b |\n|---|---|')).toBe('| a | b |\n|---|---|')
+  })
+  test('a tag-like string inside a code span still sends the whole reply classic: the cost stays visible', () => {
+    const t = 'Paste `<!DOCTYPE html>` at the top, then **save**\n\n| a | b |\n|---|---|'
+    expect(replyPayload('C1', undefined, t)).toEqual({ channel: 'C1', text: 'Paste `<!DOCTYPE html>` at the top, then *save*\n\n| a | b |\n|---|---|' })
   })
 })
 

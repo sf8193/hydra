@@ -59,8 +59,8 @@ describe('the real client writes with the token of whoever wrote the message', (
   test('an edit that tags someone goes as classic text, as its post does', async () => {
     calls.length = 0
     const a = boltApp(TOKENS)
-    await a.edit!('C1', '5.000001', 'over to <@U0OTHER>', 'app')
-    expect(calls).toEqual([{ token: 'xoxb-BOT', method: 'chat.update', args: { channel: 'C1', ts: '5.000001', text: 'over to <@U0OTHER>' } }])
+    await a.edit!('C1', '5.000001', 'over to <@U0OTHER> **now**', 'app')
+    expect(calls).toEqual([{ token: 'xoxb-BOT', method: 'chat.update', args: { channel: 'C1', ts: '5.000001', text: 'over to <@U0OTHER> *now*' } }])
   })
 
   test('the operator’s user id is read once, with the operator’s token', async () => {

@@ -14,7 +14,7 @@ import { timed } from '../../shared/loop-watch.js'
 import { awakeSince, suspendedSince, describeCause, type ResumeDetector } from '../../shared/resume.js'
 import { buildSocketApp, parseAuth } from '../../shared/slack-client.js'
 import { postPayload, replyBody, type PostOptions } from './reply-body.js'
-export { postPayload, slackSyntax, type PostOptions } from './reply-body.js'
+export { postPayload, slackSyntax, toMrkdwn, type PostOptions } from './reply-body.js'
 
 /**
  * The Slack connector for one app: one Socket Mode connection that feeds `message` events to the watcher, and the catch-up pass
