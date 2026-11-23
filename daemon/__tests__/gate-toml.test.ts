@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { gateway } from '../../infra/config.js'
-import { ackReactionOf, channelAllowed, channelPolicy, defaultListenOf, gate } from '../../sessions/access.js'
+import { ackReactionOf, channelAllowed, channelPolicy, defaultListenOf, gate, heardApp } from '../../sessions/access.js'
 import { _setHydraConfigForTesting } from '../../infra/hydra-config.js'
 import { resolveListenStatePure } from '../../app/session-lifecycle.js'
 import { planMigrate } from '../../infra/migrate.js'
@@ -16,7 +16,7 @@ import type { HydraConfig } from '../../config/types.js'
 import type { InboundMessage } from '../../gateways/gateway.js'
 
 // The suite runs as the discord platform (CHAT_PLATFORM unset).
-const place = (): PlaceOptions => ({ files: false, messages: 'addressed', bots: false, reactions: 'off', linkPreviews: true })
+const place = (): PlaceOptions => ({ files: false, messages: 'addressed', reactions: 'off', linkPreviews: true })
 const chan = (access: PlaceAccess, threadReply?: boolean): ChannelGate => ({ access, ...(threadReply !== undefined && { threadReply }) })
 const config = (channels: Record<string, ChannelGate> = {}, gateSettings?: GateSettings, places: Record<string, PlaceOptions> = {}): HydraConfig => ({
   operator: 'op', connectors: {}, gateways: {}, slackApps: {}, specialists: {}, schedules: {}, rules: [], places, channels,
@@ -25,6 +25,7 @@ const config = (channels: Record<string, ChannelGate> = {}, gateSettings?: GateS
     op: { id: 'op', addresses: ['discord:100'], roles: [], name: 'op' },
     alice: { id: 'alice', addresses: ['discord:200', 'slack:U0ALICE'], roles: [], name: 'alice' },
     slacker: { id: 'slacker', addresses: ['slack:U0SLACK'], roles: [], name: 'slacker' },
+    peer: { id: 'peer', addresses: ['discord:300'], roles: [], name: 'peer' },
   },
 })
 const msg = (authorId: string, channelId = 'C1', parentChannelId: string | null = null) => ({ isDM: false, authorId, channelId, parentChannelId, content: 'hi' }) as unknown as InboundMessage
@@ -62,6 +63,31 @@ describe('allow', () => {
   test('anyone hears whoever tags', async () => {
     _setHydraConfigForTesting(config({ 'discord:C1': chan({ mention: false, allow: 'anyone' }) }))
     expect((await gate(msg('999'))).action).toBe('deliver')
+  })
+})
+
+describe('another app', () => {
+  const app = (authorId: string, channelId = 'C1', parentChannelId: string | null = null) => ({ ...msg(authorId, channelId, parentChannelId), isBot: true }) as InboundMessage
+  test('is heard when hydra.toml declares it, and then goes through the gate as that person', async () => {
+    _setHydraConfigForTesting(config({ 'discord:C1': chan({ mention: false, allow: 'anyone' }), 'discord:C2': chan({ mention: false, allow: ['alice', 'peer'] }), 'discord:C3': chan({ mention: false, allow: ['alice'] }) }))
+    expect(heardApp(app('300'))).toBe(true)
+    expect((await gate(app('300'))).action).toBe('deliver')                   // "anyone" includes a declared app
+    expect((await gate(app('300', 'C2'))).action).toBe('deliver')             // a named list names it
+    expect((await gate(app('300', 'T9', 'C2'))).action).toBe('deliver')       // in a thread of the channel too
+    expect((await gate(app('300', 'C3'))).action).toBe('drop')                // a list that does not name it restricts it as anyone else
+  })
+  test("is not heard under the operator's address", () => {
+    _setHydraConfigForTesting(config({ 'discord:C1': chan({ mention: false, allow: 'anyone' }) }))
+    expect(heardApp(app('100'))).toBe(false)
+  })
+  test('is not heard when no [people] entry holds it', () => {
+    _setHydraConfigForTesting(config({ 'discord:C1': chan({ mention: false, allow: 'anyone' }) }))
+    expect(heardApp(app('999'))).toBe(false)
+  })
+  test("this daemon's own bot is never heard, though declared", () => {
+    _setHydraConfigForTesting(config({ 'discord:C1': chan({ mention: false, allow: 'anyone' }) }))
+    Object.defineProperty(gateway, 'botId', { get: () => '300', configurable: true })
+    try { expect(heardApp(app('300'))).toBe(false) } finally { delete (gateway as any).botId }
   })
 })
 

@@ -50,7 +50,7 @@ describe('Discord send with unfurl: false', () => {
 
 describe('Discord send: unfurl: false beside link_previews = "single"', () => {
   test('an explicit unfurl: false suppresses even a one-link post the place would let preview; the place alone still lets it', async () => {
-    registerPreviewConfig(() => ({ places: { 'discord:100': { files: false, messages: 'addressed', bots: false, linkPreviews: 'single' } } }) as any)
+    registerPreviewConfig(() => ({ places: { 'discord:100': { files: false, messages: 'addressed', linkPreviews: 'single' } } }) as any)
     const sent: any[] = []
     const gw = Object.create(DiscordGateway.prototype) as DiscordGateway
     const ch = { id: '100', isTextBased: () => true, isThread: () => false, parentId: null, send: async (p: any) => { sent.push(p); return { id: 'm1', channelId: '100' } } }

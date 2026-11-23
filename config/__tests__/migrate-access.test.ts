@@ -69,7 +69,7 @@ describe('what stops the migration', () => {
     expect(errors(planMigrate(state({ 'access.json': { allowFrom: [OP], groups: { '300000000000000001': { threadArchiveMinutes: 60 } } } })))[0]).toContain('groups.300000000000000001.threadArchiveMinutes')
   })
   test('a place hydra.toml already has cannot take the access table appended: it is refused with the edit to make', () => {
-    const toml = `operator = "me"\n[people.me]\naddresses = ["discord:${OP}"]\n[places."discord:300000000000000001"]\nbots = true\n`
+    const toml = `operator = "me"\n[people.me]\naddresses = ["discord:${OP}"]\n[places."discord:300000000000000001"]\nfiles = true\n`
     const [e] = errors(planMigrate(state({ 'hydra.toml': toml, 'access.json': { allowFrom: [], groups: { '300000000000000001': { allowFrom: [OP] } } } })))
     expect(e).toContain('by hand')
   })

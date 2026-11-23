@@ -44,7 +44,7 @@ const OLD_PLACES = ['slack:C1', 'slack:C2', 'slack:G1', 'slack:#ops', 'slack:#he
 const APPS = ['default', 'sales', 'support'] as const
 const TARGETS = ['main', 's1', 's2', 's3'] as const
 
-type OldOptions = { files: boolean; messages: 'addressed' | 'all'; bots: boolean; reactions: 'off' | 'bot-messages' | 'all'; linkPreviews: boolean; ack?: string; defaultApp?: string }
+type OldOptions = { files: boolean; messages: 'addressed' | 'all'; reactions: 'off' | 'bot-messages' | 'all'; linkPreviews: boolean; ack?: string; defaultApp?: string }
 function genOld(r: R): HydraConfig {
   const apps = ['default', ...some(r, ['sales', 'support'], 0.6)]
   const specialists = Object.fromEntries(['s1', 's2', 's3'].map(id => [id, {
@@ -63,7 +63,7 @@ function genOld(r: R): HydraConfig {
   for (const p of OLD_PLACES) if (chance(r, 0.35)) {
     const channel = !p.startsWith('slack:dm:') && p !== 'slack:group-dm' && p !== 'slack:dm'
     places[p] = {
-      files: chance(r, 0.4), messages: channel && chance(r, 0.5) ? 'all' : 'addressed', bots: chance(r, 0.3), reactions: pick(r, ['off', 'bot-messages', 'all'] as const),
+      files: chance(r, 0.4), messages: channel && chance(r, 0.5) ? 'all' : 'addressed', reactions: pick(r, ['off', 'bot-messages', 'all'] as const),
       linkPreviews: chance(r, 0.6), ...(chance(r, 0.5) && { ack: pick(r, ['eyes', 'white_check_mark']) }),
       ...(channel && p.startsWith('slack:') && chance(r, 0.5) && { defaultApp: pick(r, apps) }),
     }

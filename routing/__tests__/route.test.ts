@@ -334,7 +334,7 @@ describe('two apps in one channel: exactly one app is the owning app', () => {
   /** Route the same message as each hearing app sees it. */
   const asEach = (cfg: HydraConfig, extra: Partial<Inbound>) => Object.fromEntries((extra.heardBy ?? []).map(a => [a, route(cfg, inApp(a, extra))]))
   const owningApps = (r: Record<string, ReturnType<typeof route>>) => Object.entries(r).filter(([, d]) => d.fate !== 'ignored' || d.trace.every(s => s.via !== 'owning-app')).map(([a]) => a)
-  const placeDefault = (cfg: HydraConfig, defaultApp: string) => { cfg.places['slack:#help'] = { files: false, messages: 'addressed', bots: false, reactions: 'off', linkPreviews: true, defaultApp } }
+  const placeDefault = (cfg: HydraConfig, defaultApp: string) => { cfg.places['slack:#help'] = { files: false, messages: 'addressed', reactions: 'off', linkPreviews: true, defaultApp } }
 
   test('no tag, no default_app: the app named `default` is the owning app, and the other stands down', () => {
     const r = asEach(TWO, both())
@@ -367,7 +367,7 @@ describe('two apps in one channel: exactly one app is the owning app', () => {
   })
   test('a default_app on the channel\'s id applies as on its name', () => {
     const cfg = structuredClone(TWO)
-    cfg.places['slack:C0HELP'] = { files: false, messages: 'addressed', bots: false, reactions: 'off', linkPreviews: true, defaultApp: 'sales' }
+    cfg.places['slack:C0HELP'] = { files: false, messages: 'addressed', reactions: 'off', linkPreviews: true, defaultApp: 'sales' }
     expect(owningApps(asEach(cfg, both()))).toEqual(['sales'])
   })
   test('a tag always wins: over default_app, `default`, and the app that opened the conversation', () => {
@@ -398,7 +398,7 @@ describe('two apps in one channel: exactly one app is the owning app', () => {
   })
   test('an app that is not the owning app is ignored even when addressed, messages = "all", or bound: never a second answer', () => {
     const cfg = structuredClone(TWO)
-    cfg.places['slack:#help'] = { files: false, messages: 'all', bots: false, reactions: 'off', linkPreviews: true }
+    cfg.places['slack:#help'] = { files: false, messages: 'all', reactions: 'off', linkPreviews: true }
     for (const extra of [{}, { addressed: false }, { bound: 'crm', boundApp: 'default' }]) {
       const r = asEach(cfg, both(extra))
       expect(Object.values(r).filter(d => d.fate !== 'ignored').length).toBe(1)

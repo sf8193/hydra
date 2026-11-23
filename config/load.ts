@@ -822,7 +822,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     return { mention, allow: names, ...(listen !== undefined && { listen }) }
   }
 
-  const CONNECTOR_KEYS = ['ack', 'files', 'messages', 'bots', 'reactions', 'default_app', 'link_previews']
+  const CONNECTOR_KEYS = ['ack', 'files', 'messages', 'reactions', 'default_app', 'link_previews']
   const places: Record<string, PlaceOptions> = {}
   const channels: Record<string, ChannelGate> = {}
   for (const [rawPlace, raw] of Object.entries(table(doc.places, 'places') ?? {})) {
@@ -831,7 +831,12 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     const t = table(raw, path)
     if (!p || !t) continue
     if (has(places, placeKey(p))) { error(path, `${placeKey(p)} is already set: places compare without case on GitHub`); continue }
-    unknownKeys(t, [...CONNECTOR_KEYS, 'thread_reply', 'access'], path)
+    unknownKeys(t, [...CONNECTOR_KEYS, 'thread_reply', 'access', 'bots'], path)
+    // `bots` was removed. `bots = false` is the old default, still in configs copied from the example: it loads, with a warning. Anything else asked for something now said another way.
+    if (Object.hasOwn(t, 'bots')) {
+      if (t.bots === false) warn(join2(path, 'bots'), 'was removed and `false` was its default: delete the line')
+      else error(join2(path, 'bots'), 'was removed: another app is heard when hydra.toml declares it as a person. Give the app a [people] entry (addresses = ["<platform>:<its user id>"]) and delete this line')
+    }
     const ack = str(t, 'ack', path)
     const ackWhy = ack === undefined ? undefined : reactionNameProblem(ack)
     if (ackWhy) error(join2(path, 'ack'), ackWhy)
@@ -844,7 +849,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     }
     if (Object.hasOwn(t, 'reactions') && p.platform !== 'slack') error(`${path}.reactions`, `${placeKey(p)} is not a Slack place: \`reactions\` is heard only from Slack`)
     // Hydra reads a Discord channel by id: a place named `discord:#name` can never be matched to a channel, so previews could not be switched off there.
-    if (namesDmWithOthers(p)) for (const key of ['link_previews', 'messages', 'bots', 'reactions', 'thread_reply']) if (Object.hasOwn(t, key)) error(`${path}.${key}`, `${key} does not apply to ${placeKey(p)}: only ack and files do. Remove it.`)
+    if (namesDmWithOthers(p)) for (const key of ['link_previews', 'messages', 'reactions', 'thread_reply']) if (Object.hasOwn(t, key)) error(`${path}.${key}`, `${key} does not apply to ${placeKey(p)}: only ack and files do. Remove it.`)
     if (p.platform === 'discord' && p.kind === 'channel' && p.ref.startsWith('#') && (t.link_previews === false || t.link_previews === 'single')) error(`${path}.link_previews`, 'cannot be set on a Discord channel by name: hydra reads a Discord channel by id, so name it discord:<channel id>')
     const access = placeAccess(p, t, path)
     const threadReply = bool(t, 'thread_reply', path)
@@ -857,7 +862,6 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       ...(defaultApp !== undefined && { defaultApp }),
       files: bool(t, 'files', path) ?? false,
       messages: oneOf(t, 'messages', path, ['addressed', 'all'] as const) ?? 'addressed',
-      bots: bool(t, 'bots', path) ?? false,
       reactions: oneOf(t, 'reactions', path, ['off', 'bot-messages', 'all'] as const) ?? 'off',
       linkPreviews: linkPreviews(t, path) ?? true,
     }
@@ -1144,7 +1148,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
 
   /**
    * Who, besides the operator, can reach this specialist: the people `reachable_by` lets in (other than the operator), anyone if
-   * `reachable_by` says so (with where they would be: a shared or public place, a repo), and other bots where a place hears them.
+   * `reachable_by` says so (with where they would be: a shared or public place, a repo).
    * Reading its replies is not talking to it: a place others only read adds nothing here.
    */
   function reachedBy(s: Specialist): string[] {
@@ -1167,7 +1171,6 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
         who.push(role === 'people' ? `${listJoin(fresh)} (reachable_by = ${JSON.stringify(s.reachableBy.map(spelledRole))})` : `${listJoin(fresh)} (${spelledRole(role)})`)
       }
     }
-    for (const p of answered(s.id)) if (p.kind !== 'cli' && optionsOf(places, p)?.bots) who.push(`any other bot in ${placeKey(p)}`)
     return who
   }
   const listJoin = (items: string[]) => items.length <= 2 ? items.join(' and ') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`

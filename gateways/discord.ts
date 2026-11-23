@@ -182,7 +182,6 @@ export class DiscordGateway implements ChatGateway {
 
     this.client.on('messageCreate', msg => {
       this.health.markAlive()
-      if (msg.author.bot) return
       if (!this.messageHandler) return
       this.messageHandler(this.normalizeMessage(msg)).catch(e =>
         process.stderr.write(`discord gateway: messageCreate handler error: ${e}\n`),

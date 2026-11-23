@@ -216,7 +216,6 @@ deny_tools = ["browser_run_code_unsafe"]
 messages = "all"                      # "addressed" (default): only a DM or a tag opens a conversation; "all": any top-level message
 ack = "eyes"                          # the reaction (by name, not "👀" or ":eyes:"; a skin tone is "+1::skin-tone-3") added once a message is delivered
 files = true                          # download attachments (default false)
-bots = false                          # hear other bots (default false; a thread bound to a session hears them anyway; hydra's own bots are never heard)
 reactions = "bot-messages"            # a Slack place: a person's emoji reaction is delivered to the session that owns the conversation it is in. "bot-messages": only on a message the bot posted; "all": on any message of a conversation hydra holds; "off" (default). Who may be heard is the place's rules, as for a message
 default_app = "app:default"           # a Slack channel only: when two apps are in it, the app that answers a message that tags neither (a tag always picks the app); not the app named `default`
                                       # (here they happen to match). Absent: the app named `default`, else the first app above, among those that deliver to someone here. An untagged follow-up stays with the app that opened the conversation.

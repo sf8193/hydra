@@ -108,7 +108,7 @@ target = "specialist:review"
     expect(config.specialists.ops).toMatchObject({ kickoffFile: '/home/op/agents/ops/kickoff.md', reachableBy: [], engine: 'codex', renamedFrom: ['old-ops'], sessions: 'shared', maxSessions: 20 })
     expect(config.specialists.ops.kickoff).toBeUndefined()
     expect(config.specialists.review.reachableBy).toEqual(['people'])
-    expect(config.places['slack:#help']).toEqual({ ack: 'eyes', files: false, messages: 'all', bots: false, reactions: 'off', linkPreviews: true })
+    expect(config.places['slack:#help']).toEqual({ ack: 'eyes', files: false, messages: 'all', reactions: 'off', linkPreviews: true })
     expect(config.schedules.nightly).toEqual({ id: 'nightly', cron: '0 3 * * *', target: 'ops', message: 'Nightly run.', runner: 'launchd' })
     expect(ruleKeys(config.rules)).toEqual([{ place: 'slack:#help', person: 'alice', target: 'ops' }, { place: 'slack:#help', target: 'crm' }, { place: 'slack:app-dm:*', target: 'ops' }, { place: 'github:acme/widget', target: 'review' }])
     // `crm` and `ops` hear where the rules say.
@@ -371,13 +371,28 @@ addresses = ["github:alice"]
     expect(errorsOf(`${BASE}\n[[rules]]\nplace = "slack:person-dm:ghost"\ntarget = "main"\n`)).toEqual(['rules[0].place: "slack:person-dm:ghost": ghost is not a person: declare [people.ghost]'])
   })
 
-  test('link_previews, messages and bots on a DM with a person or a group DM are errors (ack and files apply); the bot\'s DM keeps them', () => {
+  test('link_previews, messages and reactions on a DM with a person or a group DM are errors (ack and files apply); the bot\'s DM keeps them', () => {
     const people = '[people.alice]\naddresses = ["slack:U0A"]\n'
-    for (const [place, key, value] of [['slack:group-dm:*', 'link_previews', 'false'], ['slack:person-dm:alice', 'link_previews', 'false'], ['slack:person-dm:alice', 'messages', '"all"'], ['slack:group-dm:*', 'bots', 'true']]) {
+    for (const [place, key, value] of [['slack:group-dm:*', 'link_previews', 'false'], ['slack:person-dm:alice', 'link_previews', 'false'], ['slack:person-dm:alice', 'messages', '"all"'], ['slack:group-dm:*', 'reactions', '"all"']]) {
       expect(errorsOf(`${BASE}\n${people}[places."${place}"]\n${key} = ${value}\n`)).toEqual([`places."${place}".${key}: ${key} does not apply to ${place}: only ack and files do. Remove it.`])
     }
-    expect(ok(`${BASE}\n[places."slack:app-dm:*"]\nlink_previews = false\nbots = true\n`).config.places['slack:app-dm:*'].linkPreviews).toBe(false)
+    expect(ok(`${BASE}\n[places."slack:app-dm:*"]\nlink_previews = false\n`).config.places['slack:app-dm:*'].linkPreviews).toBe(false)
     expect(ok(`${BASE}\n[places."slack:group-dm:*"]\nack = "eyes"\nfiles = true\n`).config.places['slack:group-dm:*']).toMatchObject({ ack: 'eyes', files: true })
+  })
+
+  test('`bots = true` was removed: a hydra.toml that still sets it fails to load at the key, naming the [people] entry that replaces it', () => {
+    for (const place of ['slack:#help', 'slack:group-dm:*']) {
+      const [e, ...rest] = errorsOf(`${BASE}\n[places."${place}"]\nbots = true\n`)
+      expect(rest).toEqual([])
+      expect(e).toStartWith(`places."${place}".bots: was removed: another app is heard when hydra.toml declares it as a person. Give the app a [people] entry`)
+      expect(e).toContain('delete this line')
+    }
+  })
+
+  test('`bots = false`, the old default that copied configs carry, loads with a warning to delete the line', () => {
+    const r = ok(`${BASE}\n[places."slack:#help"]\nbots = false\nack = "eyes"\n`)
+    expect(r.config.places['slack:#help'].ack).toBe('eyes')
+    expect(r.warnings).toEqual(['places."slack:#help".bots: was removed and `false` was its default: delete the line'])
   })
 
   test('ack is a Slack reaction name: eyes and a skin tone load; a character, a :name: and anything else is refused with what to write', () => {

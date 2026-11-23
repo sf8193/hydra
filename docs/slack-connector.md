@@ -46,7 +46,7 @@ Each app is its own connection, with its own bot, reconnects and catch-up. A mes
 - **Pinning:** `pinned_to = ["app:sales"]` on a specialist makes it answer only through those apps, and makes those apps deliver only to specialists pinned to them. `main` is exempt.
 - **One owning app answers each message** when several apps share a channel: the app the message tags (first tag wins, even over the bound app), else the app the conversation is bound through, else the place's `default_app`, else the app named `default`, else the first app that delivers there. The others do nothing.
 - Hydra reads which bots are in a channel with `conversations.info` (a member is believed for 10 minutes, a non-member for 30 seconds). Adding a second app means adding the `member_joined_channel` and `member_left_channel` events to every existing app and reinstalling each ([Adding an app](slack.md#adding-an-app)).
-- Another app's bot message is passed over unless the place has `bots = true` or the thread is bound to a session. Hydra's own apps are never heard.
+- Another app's bot message is heard when `hydra.toml` declares it as a person (a `[people]` entry whose address is the app's user id), in a thread bound to a session as anywhere else, and is then judged as that person (never under the operator's address); an undeclared app is not heard. An app is declared by its user id, so a message with only a `bot_id` and no user (a webhook or legacy bot) is never heard. A message from an app that tags the bot and is not heard is logged. Hydra's own apps are never heard.
 
 ## Which app listens
 
