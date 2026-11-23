@@ -4,7 +4,7 @@
 
 import { describe, test, expect, afterEach } from 'bun:test'
 import { fakeCodexAdapter } from './test-harness.js'
-import { reconnectCodexSessions, reconnectDeps, bindCodexRuntime } from '../../app/codex-runtime.js'
+import { reconnectCodexSessions, reconnectDeps, bindCodexRuntime, reconnectSession } from '../../app/codex-runtime.js'
 import { codexReconnecting } from '../../engines/codex-reconnecting.js'
 import { engines } from '../../sessions/engine-instances.js'
 import { occupancy } from '../../sessions/session-reachability.js'
@@ -13,6 +13,7 @@ const isAlive = (info: any) => occupied(occupancy(info))
 import { registry } from '../../sessions/registry.js'
 import { transport } from '../../sessions/bridge-transport.js'
 import { withFakeTmux } from './fake-tmux.js'
+import { reconnecting } from './reconnecting.js'
 bindCodexRuntime()
 
 const codex = (connected: boolean) => fakeCodexAdapter({ isConnected: () => connected })
@@ -75,12 +76,13 @@ describe('boot sweep grace', () => {
   test('a record waiting its turn in the sweep reads alive; nothing is stranded after a throw', async () => {
     let release!: () => void
     const first = codex(false) as any, second = codex(false) as any
-    first.reconnect = () => new Promise<boolean>(r => { release = () => r(false) })
-    second.reconnect = async () => { throw new Error('boom') }
+    Object.assign(first, reconnecting(() => new Promise<boolean>(r => { release = () => r(false) })))
+    Object.assign(second, reconnecting(async () => { throw new Error('boom') }))
     const a = rec(first), b = rec(second)
     for (const r of [a, b]) { ids.push(r.sessionId); registry.set(r.sessionId, r) }
 
     const sweep = reconnectCodexSessions([a, b])
+    await new Promise(r => setTimeout(r, 0)) // the first record's attempt starts after the adapter's socket probe
     expect(codexReconnecting.has(b.sessionId)).toBe(true)
     expect(isAlive(b)).toBe(true)
     // Long past the grace window and even with a stale stamp, a Codex mid-reconnect is reachable (a queued turn waits
@@ -96,10 +98,10 @@ describe('boot sweep grace', () => {
 
   test('a throw after a successful reconnect (e.g. surface) neither aborts the sweep nor strands grace', async () => {
     const first = codex(true) as any, second = codex(false) as any
-    first.reconnect = async () => true
+    Object.assign(first, reconnecting(async () => true))
     first.surface = () => { throw new Error('surface boom') }
     let secondRan = false
-    second.reconnect = async () => { secondRan = true; return false }
+    Object.assign(second, reconnecting(async () => { secondRan = true; return false }))
     const a = rec(first, { ephemeral: true }), b = rec(second, { ephemeral: true })
     for (const r of [a, b]) { ids.push(r.sessionId); registry.set(r.sessionId, r) }
     await reconnectCodexSessions([a, b])
@@ -118,14 +120,14 @@ describe('reconnect verdicts (step 2)', () => {
     })
     const info = rec(a, { codexThreadId: 'T' })
     ids.push(info.sessionId); registry.set(info.sessionId, info)
-    expect(await a.reconnect(info)).toBe(false)
+    expect(await reconnectSession(Object.assign(info, { adapter: a }))).toBe(false)
   })
 
   test('exhaustion: the session reads dead before the protocol layer is told', async () => {
     const { codexEngine } = await import('../../sessions/engine-instances.js')
     const { registerProtocol } = await import('../../sessions/protocol-registry.js')
     const a = codex(false) as any
-    a.reconnect = async () => false
+    Object.assign(a, reconnecting(async () => false))
     const info = rec(a, { codexThreadId: 'T', ephemeral: true })
     ids.push(info.sessionId); registry.set(info.sessionId, info)
     let aliveWhenTold: boolean | undefined

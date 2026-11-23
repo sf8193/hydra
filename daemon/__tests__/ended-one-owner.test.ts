@@ -3,6 +3,7 @@
 import { describe, expect, test } from 'bun:test'
 import { SessionRegistry, ThreadRegistry, markDead, markRevived, registry, threadRegistry, type SessionInfo } from '../../sessions/registry.js'
 import { reconnectCodexAfterDisconnect, reconnectCodexSessions } from '../../app/codex-runtime.js'
+import { reconnecting } from './reconnecting.js'
 
 const threadsIn = (): ThreadRegistry => {
   const threads = new ThreadRegistry()
@@ -53,7 +54,7 @@ describe('markRevived', () => {
 
   test('a Codex reconnect that succeeds revives through it', async () => {
     threadRegistry.recordSpawn('th-c', { topic: 't', respawnCount: 0, sessionId: 's-c', tmuxName: 'revive-c', originType: 'spawn', label: undefined, engine: 'codex' })
-    const info = recordOf('s-c', 'th-c', { engine: 'codex', codexThreadId: 'cx', codexHomeName: 'revive-c', adapter: { reconnect: async () => true, surface: () => 'x' } as any })
+    const info = recordOf('s-c', 'th-c', { engine: 'codex', codexThreadId: 'cx', codexHomeName: 'revive-c', adapter: { ...reconnecting(async () => true), surface: () => 'x' } as any })
     registry.set(info.sessionId, info)
     markDead(info)
     const ok = await reconnectCodexAfterDisconnect('s-c', { get: () => info, wait: async () => {}, persist: () => {}, failed: () => {} })
@@ -65,8 +66,8 @@ describe('markRevived', () => {
   test('a record ended while it waited its turn in the boot sweep stays ended and is not surfaced', async () => {
     threadRegistry.recordSpawn('th-w', { topic: 't', respawnCount: 0, sessionId: 's-w', tmuxName: 'sweep-w', originType: 'spawn', label: undefined, engine: 'codex' })
     let surfaced = 0
-    const waiting = recordOf('s-w', 'th-w', { engine: 'codex', codexThreadId: 'cx-w', codexHomeName: 'sweep-w', adapter: { reconnect: async () => true, surface: () => { surfaced++; return 'x' } } as any })
-    const first = recordOf('s-f', 'th-f', { engine: 'codex', codexThreadId: 'cx-f', codexHomeName: 'sweep-f', adapter: { reconnect: async () => { waiting.suppressAutoRecover = true; markDead(waiting); return true }, surface: () => 'x' } as any })
+    const waiting = recordOf('s-w', 'th-w', { engine: 'codex', codexThreadId: 'cx-w', codexHomeName: 'sweep-w', adapter: { ...reconnecting(async () => true), surface: () => { surfaced++; return 'x' } } as any })
+    const first = recordOf('s-f', 'th-f', { engine: 'codex', codexThreadId: 'cx-f', codexHomeName: 'sweep-f', adapter: { ...reconnecting(async () => { waiting.suppressAutoRecover = true; markDead(waiting); return true }), surface: () => 'x' } as any })
     registry.set(first.sessionId, first)
     registry.set(waiting.sessionId, waiting)
     await reconnectCodexSessions([first, waiting])
@@ -77,7 +78,7 @@ describe('markRevived', () => {
 
   test('a late disconnect does not bring back a record whose end was deliberate', async () => {
     let tried = 0
-    const info = recordOf('s-k', 'th-k', { engine: 'codex', codexThreadId: 'cx', codexHomeName: 'k', deadAt: 5, suppressAutoRecover: true, adapter: { reconnect: async () => { tried++; return true }, surface: () => 'x' } as any })
+    const info = recordOf('s-k', 'th-k', { engine: 'codex', codexThreadId: 'cx', codexHomeName: 'k', deadAt: 5, suppressAutoRecover: true, adapter: { ...reconnecting(async () => { tried++; return true }), surface: () => 'x' } as any })
     const ok = await reconnectCodexAfterDisconnect('s-k', { get: () => info, wait: async () => {}, persist: () => {}, failed: () => {} })
     expect(ok).toBe(false)
     expect(tried).toBe(0)

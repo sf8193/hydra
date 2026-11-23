@@ -16,6 +16,7 @@ import { registerProtocol } from '../../sessions/protocol-registry.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import { reconnectCodexAfterDisconnect, reconnectCodexSessions, reconnectDeps, startCodexRuntime, bindCodexRuntime } from '../../app/codex-runtime.js'
 import { codexAdapter } from './codex-adapter.js'
+import { reconnecting } from './reconnecting.js'
 bindCodexRuntime()
 
 // The boot sweep over every Codex record in the registry.
@@ -137,7 +138,7 @@ describe('Codex start: outcome logging', () => {
   test('a throwing reconnect resolves start and logs the failure', async () => {
     const adapter = fakeCodexAdapter() as any
     const info = put({ sessionId: 't07-throw', adapter })
-    adapter.reconnect = async () => { throw new Error('boom') }
+    Object.assign(adapter, reconnecting(async () => { throw new Error('boom') }))
     let settled = 'pending'
     const lines = await stderrOf(() => startCodexRuntime([info]).then(() => { settled = 'resolved' }, () => { settled = 'rejected' }))
     expect(settled).toBe('resolved')
@@ -261,7 +262,7 @@ describe('T0.7 engine events', () => {
   test('disconnected → reconnect: revived and its surface ensured', async () => {
     let reconnects = 0, surfaced = 0
     const info = put({ sessionId: 't07-dc-ok', codexThreadId: 'T', deadAt: 1,
-      adapter: { reconnect: async () => { reconnects++; return true }, surface: () => { surfaced++; return null } } as any })
+      adapter: { ...reconnecting(async () => { reconnects++; return true }), surface: () => { surfaced++; return null } } as any })
     codexEngine.emit('disconnected', 't07-dc-ok')
     await tick(50)
     expect(reconnects).toBe(1)
@@ -283,7 +284,7 @@ describe('T0.7 engine events', () => {
   test('disconnected, reconnect exhausted: stamps, persists, dispatches', async () => {
     let reconnects = 0
     const info = put({ sessionId: 't07-dc-fail', codexThreadId: 'T',
-      adapter: { reconnect: async () => { reconnects++; return false }, surface: () => null } as any })
+      adapter: { ...reconnecting(async () => { reconnects++; return false }), surface: () => null } as any })
     // 3 mocked 1ms waits plus persist/dispatch; margin widened after this flaked once under loaded CI (Sep 2026).
     const { n } = await counting(registry, async () => { codexEngine.emit('disconnected', 't07-dc-fail'); await tick(500) })
     expect(reconnects).toBe(3)
@@ -294,7 +295,7 @@ describe('T0.7 engine events', () => {
 
   test('production reconnect backoff is 250/750/1500ms', async () => {
     const waits: number[] = []
-    const info = { sessionId: 't07-backoff', engine: 'codex', codexThreadId: 'T', adapter: { reconnect: async () => false } } as any
+    const info = { sessionId: 't07-backoff', engine: 'codex', codexThreadId: 'T', adapter: { ...reconnecting(async () => false)} } as any
     await reconnectCodexAfterDisconnect('t07-backoff', {
       get: () => info, wait: async ms => { waits.push(ms) }, failed: () => {}, finalise: () => {},
     })

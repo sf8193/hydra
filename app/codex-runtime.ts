@@ -21,17 +21,40 @@ import { noteCodexMessage, noteCodexTurnState } from '../engines/codex-observati
 import { codexPiggyback } from '../sessions/codex-piggyback.js'
 import { refreshSessionVisual } from '../sessions/anchor-state.js'
 import type { EngineAdapter } from '../engines/engine-adapter.js'
+import type { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
 import { markYourTurn } from '../infra/home-status.js'
 
-// reconnect is Codex-internal: not on EngineAdapter, but on every Codex record's adapter.
+// The reconnect attempts are Codex-internal: not on EngineAdapter, but on every Codex record's adapter.
 // A typed guard rather than instanceof: test fixtures stand in duck-typed adapters.
-type Reconnectable = { reconnect(info: SessionInfo): Promise<boolean> }
+type Reconnectable = Pick<CodexEngineAdapter, 'reachable' | 'resumeThread' | 'connectNewThread'>
 const isReconnectable = (a: EngineAdapter): a is EngineAdapter & Reconnectable =>
-  typeof (a as Partial<Reconnectable>).reconnect === 'function'
-function reconnectOf(info: SessionInfo): Promise<boolean> {
-  if (isReconnectable(info.adapter)) return info.adapter.reconnect(info)
-  process.stderr.write(`codex-runtime: ${info.tmuxName} has no reconnectable adapter (${info.adapter.provider}); skipped\n`)
-  return Promise.resolve(false)
+  typeof (a as Partial<Reconnectable>).reachable === 'function'
+
+/** How long a failed resume waits before the session is started on a new thread. Tests shorten it. */
+export const resumeRetry = { ms: 2000 }
+
+/**
+ * One reconnect of a Codex record: resume its thread; if that fails, wait, then start a new thread and say the
+ * history was lost. The adapter makes each single attempt; the order, the wait and the notice are decided here.
+ */
+export async function reconnectSession(info: SessionInfo): Promise<boolean> {
+  const adapter = info.adapter
+  if (!isReconnectable(adapter)) {
+    process.stderr.write(`codex-runtime: ${info.tmuxName} has no reconnectable adapter (${adapter.provider}); skipped\n`)
+    return false
+  }
+  if (!await adapter.reachable(info)) return false
+  const hadPriorThread = !!info.codexThreadId
+  if (hadPriorThread) {
+    const resumed = await adapter.resumeThread(info)
+    if (resumed === 'connected') return true
+    if (resumed === 'lost') return false
+    await new Promise(r => setTimeout(r, resumeRetry.ms))
+  }
+  const started = await adapter.connectNewThread(info)
+  if (started === 'failed') return false
+  if (hadPriorThread) void safeSend(info.threadId, `⚠️ Session resumed but conversation history was lost. The agent is starting fresh.`)
+  return started === 'connected'
 }
 
 // ---------------------------------------------------------------------------
@@ -113,6 +136,7 @@ type ReconnectDeps = {
   persist: () => void
   failed: (id: string) => void
   finalise: (info: SessionInfo) => void
+  reconnect: (info: SessionInfo) => Promise<boolean>
 }
 export const reconnectDeps: ReconnectDeps = {
   get: (id: string) => registry.get(id),
@@ -120,6 +144,7 @@ export const reconnectDeps: ReconnectDeps = {
   persist: () => registry.persist(),
   failed: (id: string) => dispatchDisconnect(id),
   finalise: finaliseCodexDeath,
+  reconnect: reconnectSession,
 }
 
 export async function reconnectCodexAfterDisconnect(
@@ -134,7 +159,7 @@ export async function reconnectCodexAfterDisconnect(
     // suppressAutoRecover: its end was deliberate (a keepRecord kill), so a late disconnect event does not bring it back.
     if (!info || !info.codexThreadId || !info.adapter || info.suppressAutoRecover) return false
     try {
-      const ok = await reconnectOf(info)
+      const ok = await deps.reconnect(info)
       if (deps.get(sessionId) !== info) return false // replaced/removed meanwhile (invariant 10)
       if (!ok) continue
       markRevived(info)
@@ -246,7 +271,7 @@ export async function reconnectCodexSessions(records: readonly SessionInfo[]): P
       if (!info.adapter) continue
       let connected = false
       try {
-        connected = await reconnectOf(info)
+        connected = await reconnectDeps.reconnect(info)
       } catch (err) {
         process.stderr.write(`codex-bootstrap: reconnect threw for ${info.tmuxName}: ${err}\n`)
       }
