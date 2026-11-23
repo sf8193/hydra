@@ -1322,10 +1322,11 @@ export class ConversationTable {
     // A DM is addressed to the bot by being one, and so is every message in a conversation whose binding still holds (route decides that).
     const addressed = dm || tagged || (!!existing && !existing.specialist)
     if (existing?.delivered?.includes(ev.ts)) return skip(() => `it was already delivered`)
-    // A tag in a thread bound to a session is for whoever answers a fresh one here, when someone does: they take the thread, and the session is told.
+    // A person's tag in a thread bound to a session is for whoever answers a fresh one here, when someone does: they take the thread, and the session is told.
+    // Another app's tag does not: it is delivered to the session like any message in the thread, so two apps cannot trade a thread between sessions by tagging.
     // A catch-all and a router take only what nothing is bound to, so neither takes a thread from a session: the fresh route is read without them.
     // Not in a thread that has since become a session's own: the listener is let go at delivery (`releasedByHost`), and no specialist takes it.
-    if (tagged && !hosted && existing?.specialist && isSessionThread(existing.specialist)) {
+    if (tagged && !ev.botId && !hosted && existing?.specialist && isSessionThread(existing.specialist)) {
       const fresh = route(withoutFallbacks(cfg.hydra), { from: addressOf(ev.user), at, addressed: true, app })
       if (fresh.fate === 'deliver') {
         const from = existing.specialist

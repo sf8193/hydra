@@ -149,13 +149,18 @@ describe("a thread bound to a session's own thread (any session listening)", () 
       expect(s.logs.filter(l => l.includes('7001.000001')).length).toBe(1)
     })
 
-    test("a declared app's tag in a thread a session listens to is a person's tag: the specialist that answers there takes the thread, and the session is told", async () => {
+    test("a declared app's tag in a thread a session listens to does not take the thread: it is delivered to the session like any message there; a person's tag still takes it", async () => {
       const s = setup({ toml: declared('["role:anyone"]') })
       s.w.bind(CH, '4000.000001', SESSION, 'tool')
-      expect(s.w.handle(bot({ ts: '4001.000001', threadTs: '4000.000001', text: mention }))).toBe('mention')
+      s.w.handle(bot({ ts: '4001.000001', threadTs: '4000.000001', text: mention }))
+      await s.w.flush()
+      expect(s.w.get(CH, '4000.000001')?.specialist).toBe(SESSION)
+      expect(s.sent.map(x => x.specialist)).toEqual([SESSION])
+      expect(s.sent[0].msg).toContain('person="peer"')
+      expect(s.alertTo).not.toContain(SESSION)
+      s.w.handle(ev({ ts: '4002.000001', threadTs: '4000.000001', text: mention }))
       await s.w.flush()
       expect(s.w.get(CH, '4000.000001')?.specialist).toBe('helper')
-      expect(s.sent.map(x => x.specialist)).toEqual(['helper'])
       expect(s.alertTo).toContain(SESSION)
     })
 
