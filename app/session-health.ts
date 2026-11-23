@@ -1,6 +1,5 @@
 import { markDead, registry, threadRegistry } from '../sessions/registry.js'
-import { gateway } from '../infra/config.js'
-import { fallbackDescription } from '../infra/util.js'
+import { fallbackDescription, safeSend } from '../infra/util.js'
 import { formatContextPercent } from '../engines/engine-adapter.js'
 import { mainChannel, mainContext, mainTmux } from '../sessions/main.js'
 import { refreshSessionVisual } from '../sessions/anchor-state.js'
@@ -34,7 +33,7 @@ export function pollSessionsOnce(now: number): void {
       crashAlerted.add(info.sessionId)
       markDead(info, now)
       process.stderr.write(`daemon: crash detected: ${info.tmuxName}\n`)
-      void gateway.send(info.threadId, `💀 **${info.tmuxName}** died. Use \`resume\` to restore context or \`respawn\` for a fresh start.`).catch(() => {})
+      void safeSend(info.threadId, `💀 **${info.tmuxName}** died. Use \`resume\` to restore context or \`respawn\` for a fresh start.`)
       refreshSessionVisual(info.threadId, { state: 'crashed' })
       continue
     }
@@ -90,7 +89,7 @@ function alertContext(id: string, name: string, pct: string, channel: string, in
     for (const t of CONTEXT_ALERT_LINES) if (t <= threshold) contextAlerted.add(`${id}:${t}`)
     process.stderr.write(`daemon: context alert: ${name} at ${pct}\n`)
     const auto = info ? automaticHandoffSentence(info) : ''
-    void gateway.send(channel, `**${name}** is at **${pct}** context, at its ${threshold}% alert line.${auto ? ` ${auto}` : ''} Consider a \`handoff\` to a fresh session (\`handoff: <note>\` passes a note to it).`).catch(() => {})
+    void safeSend(channel, `**${name}** is at **${pct}** context, at its ${threshold}% alert line.${auto ? ` ${auto}` : ''} Consider a \`handoff\` to a fresh session (\`handoff: <note>\` passes a note to it).`)
   }
 }
 
@@ -99,7 +98,7 @@ function channelNoteSentence(info: SessionInfo): string {
 }
 
 function alertOrphanThread(info: SessionInfo): void {
-  void gateway.send(info.threadId, `⚠️ **${info.tmuxName}** is running but its bridge isn't connected — replies can't reach this thread.${channelNoteSentence(info)} Use \`resume\` to reattach with its context, or \`respawn\` to start fresh.`).catch(() => {})
+  void safeSend(info.threadId, `⚠️ **${info.tmuxName}** is running but its bridge isn't connected — replies can't reach this thread.${channelNoteSentence(info)} Use \`resume\` to reattach with its context, or \`respawn\` to start fresh.`)
 }
 
 function alertOrphans(orphans: SessionInfo[], detectedAt: number): void {

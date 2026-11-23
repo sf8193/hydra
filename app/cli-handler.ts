@@ -6,7 +6,7 @@ import { macosGateHealth } from './restricted.js'
 import { callerRefusal, endedDestroyRefusal, destroyDeclinedText, destroyThreadById, killThenDestroy } from './destroy.js'
 import { cliCaller } from '../sessions/cli-caller.js'
 import { UNVERIFIED_SESSION } from '../sessions/lineage.js'
-import { fallbackDescription, formatDuration } from '../infra/util.js'
+import { fallbackDescription, formatDuration, safeSend } from '../infra/util.js'
 import { tmuxServerState, tmuxSessionState } from '../infra/tmux.js'
 import { parseIdempotencyTtl, parseIdleTtl } from '../shared/constants.js'
 import { occupancy } from '../sessions/session-reachability.js'
@@ -159,7 +159,7 @@ async function handleSpawn(req: CLIRequest): Promise<CLIResponse> {
     const operator = operatorIds()
     if (operator.length > 0) {
       const mentions = operator.map(id => `<@${id}>`).join(' ')
-      void gateway.send(result.threadId, `${mentions} spawned via CLI by **${initiator}**`).catch(() => {})
+      void safeSend(result.threadId, `${mentions} spawned via CLI by **${initiator}**`)
     }
   }
 

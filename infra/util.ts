@@ -2,7 +2,7 @@ import { realpathSync } from 'fs'
 import { join, sep } from 'path'
 import { gateway, STATE_DIR, STATE_WRITABLE } from './config.js'
 import { isUnder } from './path-containment.js'
-import type { Outbound } from '../gateways/gateway.js'
+import type { ButtonDef, Outbound } from '../gateways/gateway.js'
 import { parseSessionLabel, type SessionLabel } from '../shared/constants.js'
 
 import { atomicWriteFileSync as writeAtomically } from '../shared/atomic-write.js'
@@ -313,7 +313,7 @@ export async function reportError(
   void gateway.react(channelId, messageId, '❌').catch(() => {})
   const lines = [`:x: \`${command}\` failed: ${reason}`]
   if (suggestion) lines.push(suggestion)
-  try { await gateway.send(channelId, lines.join('\n'), { replyTo: messageId }) } catch {}
+  await safeSend(channelId, lines.join('\n'), { replyTo: messageId })
 }
 
 /**
@@ -376,35 +376,53 @@ export function tellOnce(key: string, line: string): boolean {
   return true
 }
 
+/**
+ * Daemon-owned send path: address-checks, shapes, chunks, and logs failures — never throws.
+ * Returns the sent message IDs (`[]` when nothing landed: unaddressable thread, shaping error, or send error).
+ * `files` (ahead of shapeOutbound-drawn files, reserving attachment slots) and `replyTo` attach to the first chunk;
+ * `buttons` attach only to the last chunk; `subtext` and `unfurl` apply to every chunk.
+ */
 export async function safeSend(
-  channelId: string, text: string, opts?: { replyTo?: string; unfurl?: boolean },
+  channelId: string, text: string,
+  opts?: { replyTo?: string; unfurl?: boolean; files?: string[]; buttons?: ButtonDef[]; subtext?: boolean },
 ): Promise<string[]> {
   // A thread the gateway cannot address (a record that stored a session id as its thread) fails every post forever: dropped, and told once.
   if (!gateway.isThreadId(channelId)) {
     tellOnce(`post:${channelId}`, `safeSend: "${channelId}" is not a ${gateway.platform} thread; posts to it are dropped`)
     return []
   }
-  return withOutbound(text, gateway.maxAttachments, async ({ text: formatted, files }) => {
-    const chunks = chunk(formatted, gateway.maxMessageLength, 'markdown')
-    const sentIds: string[] = []
-    for (let i = 0; i < chunks.length; i++) {
-      try {
-        const sent = await gateway.send(channelId, chunks[i], {
-          ...(i === 0 && files.length ? { files } : {}),
-          ...(i === 0 && opts?.replyTo ? { replyTo: opts.replyTo } : {}),
-          ...(opts?.unfurl !== undefined ? { unfurl: opts.unfurl } : {}),
-        })
-        sentIds.push(sent.id)
-      } catch (err) {
-        process.stderr.write(`daemon: safeSend failed on chunk ${i + 1}/${chunks.length}: ${String(err)}\n`)
-        if (sentIds.length > 0 && i < chunks.length - 1) {
-          try { await gateway.send(channelId, '_[message truncated]_') } catch {}
+  const callerFiles = opts?.files ?? []
+  const maxExtra = Math.max(0, gateway.maxAttachments - callerFiles.length)
+  try {
+    return await withOutbound(text, maxExtra, async ({ text: formatted, files }) => {
+      const allFiles = [...callerFiles, ...files]
+      const chunks = chunk(formatted, gateway.maxMessageLength, 'markdown')
+      const sentIds: string[] = []
+      for (let i = 0; i < chunks.length; i++) {
+        try {
+          const sent = await gateway.send(channelId, chunks[i], {
+            ...(i === 0 && allFiles.length ? { files: allFiles } : {}),
+            ...(i === 0 && opts?.replyTo ? { replyTo: opts.replyTo } : {}),
+            ...(i === chunks.length - 1 && opts?.buttons?.length ? { buttons: opts.buttons } : {}),
+            ...(opts?.unfurl !== undefined ? { unfurl: opts.unfurl } : {}),
+            ...(opts?.subtext ? { subtext: opts.subtext } : {}),
+          })
+          sentIds.push(sent.id)
+        } catch (err) {
+          const btnNote = opts?.buttons?.length ? ' (buttons not delivered)' : ''
+          process.stderr.write(`daemon: safeSend failed on chunk ${i + 1}/${chunks.length} for ${channelId}${btnNote}: ${String(err)}\n`)
+          if (sentIds.length > 0 && i < chunks.length - 1) {
+            try { await gateway.send(channelId, '_[message truncated]_') } catch {}
+          }
+          break
         }
-        break
       }
-    }
-    return sentIds
-  })
+      return sentIds
+    })
+  } catch (err) {
+    process.stderr.write(`daemon: safeSend failed for ${channelId}: ${String(err)}\n`)
+    return []
+  }
 }
 
 /**

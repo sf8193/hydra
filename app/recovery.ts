@@ -478,13 +478,13 @@ export async function handleRecoverIntercept(msg: InboundMessage, targetName?: s
   void gateway.react(msg.channelId, msg.id, '🔮').catch(() => {})
 
   if (recoveryInProgress) {
-    try { await gateway.send(msg.channelId, 'Recovery already in progress.', { replyTo: msg.id }) } catch {}
+    await safeSend(msg.channelId, 'Recovery already in progress.', { replyTo: msg.id })
     return
   }
 
   const deadSessions = findDeadSessions()
   if (deadSessions.length === 0) {
-    try { await gateway.send(msg.channelId, 'No dead sessions found.', { replyTo: msg.id }) } catch {}
+    await safeSend(msg.channelId, 'No dead sessions found.', { replyTo: msg.id })
     return
   }
 
@@ -493,7 +493,7 @@ export async function handleRecoverIntercept(msg: InboundMessage, targetName?: s
   if (single) {
     candidates = candidates.filter(d => d.tmuxName === targetName)
     if (candidates.length === 0) {
-      try { await gateway.send(msg.channelId, `"${targetName}" not found in dead sessions.`, { replyTo: msg.id }) } catch {}
+      await safeSend(msg.channelId, `"${targetName}" not found in dead sessions.`, { replyTo: msg.id })
       return
     }
   }
@@ -514,10 +514,8 @@ export async function handleRecoverIntercept(msg: InboundMessage, targetName?: s
     // Most-recently-active first (dedupForRecovery already sorts; sort the single/no-dedup case too).
     unique.sort((a, b) => b.lastActive - a.lastActive)
 
-    try {
-      const skipNote = skipped.length > 0 ? ` (${skipped.length} deduped)` : ''
-      await gateway.send(msg.channelId, `Recovering ${unique.length} session(s)${skipNote}...`, { replyTo: msg.id })
-    } catch {}
+    const skipNote = skipped.length > 0 ? ` (${skipped.length} deduped)` : ''
+    await safeSend(msg.channelId, `Recovering ${unique.length} session(s)${skipNote}...`, { replyTo: msg.id })
 
     for (let i = 0; i < unique.length; i += MAX_CONCURRENT) {
       const wave = unique.slice(i, i + MAX_CONCURRENT)
@@ -527,7 +525,7 @@ export async function handleRecoverIntercept(msg: InboundMessage, targetName?: s
           const r = await recoverLocked(info, toRecoverInput(info))
           if (r.method !== 'failed') {
             const e = emojiOfName(r.newName)
-            void gateway.send(info.threadId, `${e} \`${r.newName}\` recovered (${r.method})`).catch(() => {})
+            void safeSend(info.threadId, `${e} \`${r.newName}\` recovered (${r.method})`)
           }
           return r
         } catch (err) {
@@ -558,7 +556,7 @@ export async function handleRecoverIntercept(msg: InboundMessage, targetName?: s
   if (failed.length > 0) lines.push(`• ${failed.length} failed: ${failed.map(r => `${fmtName(r)} (${r.reason})`).join(', ')}`)
   if (skipped.length > 0) lines.push(`• ${skipped.length} skipped (duplicate work): ${skipped.map(s => `\`${s.info.tmuxName}\` — ${s.reason}`).join(', ')}`)
 
-  try { await gateway.send(msg.channelId, lines.join('\n'), { replyTo: msg.id }) } catch {}
+  await safeSend(msg.channelId, lines.join('\n'), { replyTo: msg.id })
 }
 
 // ---------------------------------------------------------------------------

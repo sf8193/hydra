@@ -85,7 +85,7 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
   if (!tmuxHasSession(info.tmuxName)) provider.surface(info)
   if (!tmuxHasSession(info.tmuxName) && occupancy(info) === 'dead') {
     void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
-    void gateway.send(msg.channelId, `Cannot fork — **${info.tmuxName}** is no longer running.`, { replyTo: msg.id }).catch(() => {})
+    void safeSend(msg.channelId, `Cannot fork — **${info.tmuxName}** is no longer running.`, { replyTo: msg.id })
     return
   }
 
@@ -114,11 +114,11 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
       const reason = targetEngine !== sourceEngine
         ? `cross-engine continuation from **${info.tmuxName}** — reading thread context`
         : `session not forkable yet — reading thread from **${info.tmuxName}**`
-      await gateway.send(msg.channelId, `${e} \`${result.name}\` spawned (${reason})${result.url ? ` — ${result.url}` : ''}`, { replyTo: msg.id })
+      await safeSend(msg.channelId, `${e} \`${result.name}\` spawned (${reason})${result.url ? ` — ${result.url}` : ''}`, { replyTo: msg.id })
       debouncedRefreshListDisplay()
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err)
-      try { await gateway.send(msg.channelId, `Fork fallback failed: ${errMsg}`, { replyTo: msg.id }) } catch {}
+      await safeSend(msg.channelId, `Fork fallback failed: ${errMsg}`, { replyTo: msg.id })
     }
     return
   }
@@ -144,7 +144,7 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
 
     const pe = emojiOf(info)
     const ce = emojiOfName(result.name)
-    await gateway.send(msg.channelId, [
+    await safeSend(msg.channelId, [
       `${ce} \`${result.name}\` — forked from ${pe} \`${parentName}\``,
       forkTopic.startsWith('continuing:') ? '' : forkTopic,
       `${result.url ? result.url : ''}`,
@@ -164,7 +164,7 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
     const errMsg = err instanceof Error ? err.message : String(err)
     process.stderr.write(`daemon: fork failed, falling back to spawn: ${errMsg}\n`)
     try {
-      await gateway.send(msg.channelId, `⚠️ Fork failed — spawning fresh session that will read the thread for context.`, { replyTo: msg.id })
+      await safeSend(msg.channelId, `⚠️ Fork failed — spawning fresh session that will read the thread for context.`, { replyTo: msg.id })
       const result = await currentRecoveryDeps().doSpawnSession(forkTopic, baseChatId, undefined, {
         resurrectFrom: parentName,
         parentId: info.sessionId,  // a human fork answers to its source
@@ -175,11 +175,11 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
         ephemeral: opts?.ephemeral,
       })
       const e = emojiOfName(result.name)
-      await gateway.send(msg.channelId, `${e} \`${result.name}\` spawned (reading thread from **${parentName}**)${result.url ? ` — ${result.url}` : ''}`, { replyTo: msg.id })
+      await safeSend(msg.channelId, `${e} \`${result.name}\` spawned (reading thread from **${parentName}**)${result.url ? ` — ${result.url}` : ''}`, { replyTo: msg.id })
       debouncedRefreshListDisplay()
     } catch (spawnErr) {
       const spawnErrMsg = spawnErr instanceof Error ? spawnErr.message : String(spawnErr)
-      try { await gateway.send(msg.channelId, `Fork and fallback spawn both failed: ${spawnErrMsg}`, { replyTo: msg.id }) } catch {}
+      await safeSend(msg.channelId, `Fork and fallback spawn both failed: ${spawnErrMsg}`, { replyTo: msg.id })
     }
   }
 }
@@ -194,7 +194,7 @@ export async function handleForksIntercept(msg: InboundMessage): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '🍽️').catch(() => {})
   const forks = [...registry.values()].filter(s => s.originType === 'fork' && s.originFrom === info.tmuxName)
   if (forks.length === 0) {
-    try { await gateway.send(msg.channelId, `No forks from ${emojiOf(info)} \`${info.tmuxName}\`.`, { replyTo: msg.id }) } catch {}
+    await safeSend(msg.channelId, `No forks from ${emojiOf(info)} \`${info.tmuxName}\`.`, { replyTo: msg.id })
     return
   }
 
@@ -211,7 +211,7 @@ export async function handleForksIntercept(msg: InboundMessage): Promise<void> {
   })
 
   const pe = emojiOf(info)
-  try { await gateway.send(msg.channelId, `Forks from ${pe} \`${info.tmuxName}\`\n\n${lines.join('\n')}`, { replyTo: msg.id }) } catch {}
+  await safeSend(msg.channelId, `Forks from ${pe} \`${info.tmuxName}\`\n\n${lines.join('\n')}`, { replyTo: msg.id })
 }
 
 // ---------------------------------------------------------------------------
@@ -229,10 +229,8 @@ async function announceRecovery(
   const e = emojiOfName(result.name)
   const count = thread.respawnCount
   const countLabel = count > 0 ? ` ${COUNT_EMOJI[Math.min(count - 1, COUNT_EMOJI.length - 1)]}` : ''
-  try {
-    const sent = await gateway.send(msg.channelId, `${emoji} ${e} \`${result.name}\` ${method}${countLabel}.\nView in any terminal: \`tmux attach -t ${result.name}\``, { replyTo: msg.id })
-    if (count > 0) void gateway.react(msg.channelId, sent.id, '🧟').catch(() => {})
-  } catch {}
+  const [sentId] = await safeSend(msg.channelId, `${emoji} ${e} \`${result.name}\` ${method}${countLabel}.\nView in any terminal: \`tmux attach -t ${result.name}\``, { replyTo: msg.id })
+  if (count > 0 && sentId) void gateway.react(msg.channelId, sentId, '🧟').catch(() => {})
   const mainBridge = transport.get('main')
   if (mainBridge) {
     transport.sendToBridge(mainBridge, {
@@ -257,7 +255,7 @@ const byHand = (threadId: string) => ({ backoffKey: targetKeyForThread(threadId)
 async function oneRecoveryPerThread(msg: RecoveryAnchor, run: () => Promise<void>): Promise<void> {
   const threadId = msg.effectiveThreadId ?? msg.channelId
   if (threadLockHeld(threadId)) {
-    await gateway.send(msg.channelId, `⏳ A recovery of this thread is already in progress.`, { replyTo: msg.id }).catch(() => {})
+    await safeSend(msg.channelId, `⏳ A recovery of this thread is already in progress.`, { replyTo: msg.id })
     return
   }
   await withThreadLock(threadId, run)
@@ -296,7 +294,7 @@ async function resumeThread(msg: RecoveryAnchor, claudeSessionIdArg?: string): P
         const note = occ === 'starting'
           ? `Session **${liveInfo.tmuxName}** is still starting up — give its bridge a moment to connect.`
           : `Session **${liveInfo.tmuxName}** is already running.${surfaceReady ? '' : ' Its interactive surface is unavailable; the server is alive and may still be reconnecting.'}`
-        try { await gateway.send(msg.channelId, note, { replyTo: msg.id }) } catch {}
+        await safeSend(msg.channelId, note, { replyTo: msg.id })
         return
       }
       // Orphaned: the process is up but unreachable. The revive tears it down (worktree kept) after taking what it
@@ -329,7 +327,7 @@ async function resumeThread(msg: RecoveryAnchor, claudeSessionIdArg?: string): P
         : ['respawned (resume unavailable — reading thread history)', '🔁']
     await announceRecovery(msg, result, thread, method, emoji, outcome.lastTmuxName)
   } else if (outcome.busy) {
-    await gateway.send(msg.channelId, `⏳ A resume of this session is already in progress.`, { replyTo: msg.id }).catch(() => {})
+    await safeSend(msg.channelId, `⏳ A resume of this session is already in progress.`, { replyTo: msg.id })
   } else {
     await reportError(msg.channelId, msg.id, 'resume', outcome.worktree ? outcome.reason : 'all recovery methods failed')
   }
@@ -399,10 +397,8 @@ async function respawnThread(msg: InboundMessage, topic?: string, templateName?:
     const count = thread?.respawnCount ?? 0
     const countLabel = count > 0 ? ` ${COUNT_EMOJI[Math.min(count - 1, COUNT_EMOJI.length - 1)]}` : ''
     const tplLabel = templateName ? ` (${templateName})` : ''
-    try {
-      const sent = await gateway.send(msg.channelId, `🔁 ${e} \`${result.name}\`${tplLabel} respawned${countLabel} — reading thread history.\nView in any terminal: \`tmux attach -t ${result.name}\``, { replyTo: msg.id })
-      if (count > 0) void gateway.react(msg.channelId, sent.id, '🧟').catch(() => {})
-    } catch {}
+    const [sentId] = await safeSend(msg.channelId, `🔁 ${e} \`${result.name}\`${tplLabel} respawned${countLabel} — reading thread history.\nView in any terminal: \`tmux attach -t ${result.name}\``, { replyTo: msg.id })
+    if (count > 0 && sentId) void gateway.react(msg.channelId, sentId, '🧟').catch(() => {})
     const mainBridge = transport.get('main')
     if (mainBridge) {
       transport.sendToBridge(mainBridge, {
@@ -444,7 +440,7 @@ export async function handlePeekIntercept(msg: InboundMessage, targetName?: stri
     if (!info && isForMain(msg) && (targetName === mainTmux() || targetName === 'main')) return peekMain(msg)
     if (!info) {
       void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
-      void gateway.send(msg.channelId, `No session named **${targetName}**`, { replyTo: msg.id }).catch(() => {})
+      void safeSend(msg.channelId, `No session named **${targetName}**`, { replyTo: msg.id })
       return
     }
     name = info.tmuxName
@@ -476,7 +472,7 @@ async function peekMain(msg: InboundMessage): Promise<void> {
 async function sendPeek(msg: InboundMessage, name: string, target: string | null, header: () => string): Promise<void> {
   if (target === null) {
     void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
-    void gateway.send(msg.channelId, `**${name}** interactive surface unavailable`, { replyTo: msg.id }).catch(() => {})
+    void safeSend(msg.channelId, `**${name}** interactive surface unavailable`, { replyTo: msg.id })
     return
   }
 
@@ -487,11 +483,11 @@ async function sendPeek(msg: InboundMessage, name: string, target: string | null
     const outPath = join(tmpdir(), `hydra-peek-${name}-${Date.now()}.png`)
     try {
       paneScreenshot(target, outPath)
-      await gateway.send(msg.channelId, head, { files: [outPath], replyTo: msg.id })
-      try { unlinkSync(outPath) } catch {}
-      return
+      const ids = await safeSend(msg.channelId, head, { files: [outPath], replyTo: msg.id })
+      if (ids.length > 0) return
     } catch (err) {
       process.stderr.write(`daemon: peek screenshot failed: ${err}\n`)
+    } finally {
       try { unlinkSync(outPath) } catch {}
     }
   }

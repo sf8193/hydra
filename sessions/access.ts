@@ -146,7 +146,7 @@ export async function admitTaggedChannel(msg: InboundMessage): Promise<boolean> 
     // A busy lock passes in a moment: it does not use up the channel's one telling.
     if (admitted.error !== BUSY && !refusedAdmits.has(channelId)) {
       refusedAdmits.add(channelId)
-      void gateway.send(msg.channelId, `I can't add this channel to hydra.toml, so I did nothing here: ${admitted.error}\nFix that, then tag me again.`, { replyTo: msg.id }).catch(() => {})
+      void safeSend(msg.channelId, `I can't add this channel to hydra.toml, so I did nothing here: ${admitted.error}\nFix that, then tag me again.`, { replyTo: msg.id })
     }
     return false
   }

@@ -17,7 +17,7 @@ import type {
 } from './engine-adapter.js'
 import { withoutIntents } from './engine-adapter.js'
 import type { BridgeTransport } from '../sessions/bridge-transport.js'
-import { parseContextFooter, type ContextFooter } from '../infra/util.js'
+import { parseContextFooter, safeSend, type ContextFooter } from '../infra/util.js'
 import { tmuxCreateSession, tmuxHasSession, tmuxSessionState, tmuxSync, tmuxTimedOut, tmuxWindowActivity } from '../infra/tmux.js'
 import { claudeConfigDir, contextWindowOf, isKnownModel } from '../shared/constants.js'
 import { projectDirName, projectsRoot, transcriptContext, transcriptPathFor } from '../infra/usage.js'
@@ -25,7 +25,6 @@ import { claudeTurnOutcome } from './claude-transcript.js'
 import { readClaudeStatus } from './claude-status.js'
 import { defaultTurnSources } from './codex-observation.js'
 import { CLAUDE_CONFIG, SOCK_PATH, PLATFORM, SPAWN_LOGS_DIR, STATE_DIR } from '../infra/config.js'
-import { gateway } from '../infra/config.js'
 import { SESSION_IDENTITY_VARS, capturedSpawnVars, stateEnvUnsets, scrubbedSpawnEnv, withRaisedFdLimit } from '../shared/spawn-env.js'
 import { modsExport } from '../infra/mods.js'
 import { BRIDGE_CHANNEL_FLAG, BRIDGE_MCP_SERVER_KEY, BRIDGE_PLUGIN_ID, BRIDGE_TOOLS_PERMISSION, BUILTIN_TOOL_PLUGIN_IDS } from '../infra/plugin-manifest.js'
@@ -375,7 +374,7 @@ export class ClaudeEngine implements EngineAdapter {
 
     if (!isKnownModel(model)) {
       process.stderr.write(`daemon: unrecognized model ${model} — may be a new release or typo. Spawning anyway.\n`)
-      if (input.threadId) void gateway.send(input.threadId, `⚠️ Unrecognized model \`${model}\` — may be a new release or typo. Spawning anyway.`).catch(() => {})
+      if (input.threadId) void safeSend(input.threadId, `⚠️ Unrecognized model \`${model}\` — may be a new release or typo. Spawning anyway.`)
     }
 
     let prompt = input.prompt

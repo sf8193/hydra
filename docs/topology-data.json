@@ -984,10 +984,6 @@
     ],
     [
       "app_session-health",
-      "infra_config"
-    ],
-    [
-      "app_session-health",
       "infra_util"
     ],
     [
@@ -1145,6 +1141,10 @@
     [
       "app_commands_review",
       "infra_config"
+    ],
+    [
+      "app_commands_review",
+      "infra_util"
     ],
     [
       "app_commands_review",

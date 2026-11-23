@@ -36,7 +36,7 @@ import { notePendingReply } from './reply-guard.js'
 import { deliverUserMessage } from './typed-delivery.js'
 import { replyContextMeta, resolveReplyContext } from '../shared/reply-context.js'
 import { getThreadIntercept } from './pane-probe.js'
-import { reportError } from '../infra/util.js'
+import { reportError, safeSend } from '../infra/util.js'
 import { occupancy } from '../sessions/session-reachability.js'
 import { occupied } from '../sessions/occupancy.js'
 import type { ProviderId, TmuxKeyAction } from '../engines/engine-adapter.js'
@@ -172,7 +172,7 @@ function resolveProtocolModel(alias: string | undefined, channelId: string, repl
   const resolved = resolveAnyEngineAlias(alias)
   if (!resolved) {
     const available = ENGINE_ALIAS_KEYS.join(', ')
-    void gateway.send(channelId, `_Unknown model \`${alias}\`. Available: ${available}_`, { replyTo }).catch(() => {})
+    void safeSend(channelId, `_Unknown model \`${alias}\`. Available: ${available}_`, { replyTo })
     return false
   }
   return resolved
@@ -500,16 +500,16 @@ export function bindRouter(): void {
         const { template: templateMod, ignored } = partitionSpawnModifiers(modNames)
         const topic = spawnModMatch[2].trim()
         if (!templateMod) {
-          void gateway.send(msg.channelId, `_No spawn template matched \`${modNames.map(n => `+${n}`).join(' ')}\`. There are no template modifiers._`, { replyTo: msg.id }).catch(() => {})
+          void safeSend(msg.channelId, `_No spawn template matched \`${modNames.map(n => `+${n}`).join(' ')}\`. There are no template modifiers._`, { replyTo: msg.id })
           return
         }
         const template = getTemplate(templateMod.templateName)
         if (!template) {
-          void gateway.send(msg.channelId, `_Template \`${templateMod.templateName}\` is registered as a modifier but missing from the template registry._`, { replyTo: msg.id }).catch(() => {})
+          void safeSend(msg.channelId, `_Template \`${templateMod.templateName}\` is registered as a modifier but missing from the template registry._`, { replyTo: msg.id })
           return
         }
         if (ignored.length > 0) {
-          void gateway.send(msg.channelId, `_Ignored ${ignored.map(n => `\`+${n}\``).join(' ')} — a spawn applies a single template modifier._`, { replyTo: msg.id }).catch(() => {})
+          void safeSend(msg.channelId, `_Ignored ${ignored.map(n => `\`+${n}\``).join(' ')} — a spawn applies a single template modifier._`, { replyTo: msg.id })
         }
         void handleTemplateSpawn(msg, templateMod.templateName, topic, template)
         return
@@ -522,7 +522,7 @@ export function bindRouter(): void {
         const bareAlias = topic.match(BARE_ALIAS_RE) || ENGINE_ALIAS_FORMS.map(({ bare }) => topic.match(bare)).find(Boolean) || topic.match(BARE_CODEX_RE)
         if (bareAlias) {
           const alias = bareAlias[1] || 'codex'
-          void gateway.send(msg.channelId, `_\`spawn ${alias}:\` needs a topic — e.g. \`spawn ${alias}: describe the task\`_`, { replyTo: msg.id })
+          void safeSend(msg.channelId, `_\`spawn ${alias}:\` needs a topic — e.g. \`spawn ${alias}: describe the task\`_`, { replyTo: msg.id })
           return
         }
         if (topic) {
@@ -581,14 +581,14 @@ export function bindRouter(): void {
       if (templatesMatch) {
         const templates = listTemplates()
         if (templates.length === 0) {
-          void gateway.send(msg.channelId, 'No templates configured.', { replyTo: msg.id })
+          void safeSend(msg.channelId, 'No templates configured.', { replyTo: msg.id })
         } else {
           const lines = templates.map(t => {
             const actionTag = t.action ? ` _(+ ${t.action} protocol)_` : ''
             const modelTag = t.model ? ` \`[${t.model}]\`` : ''
             return `**${t.name}**${actionTag}${modelTag} — ${t.prompt.slice(0, 80)}${t.prompt.length > 80 ? '...' : ''}`
           })
-          void gateway.send(msg.channelId, `**Spawn Templates**\n${lines.join('\n')}`, { replyTo: msg.id })
+          void safeSend(msg.channelId, `**Spawn Templates**\n${lines.join('\n')}`, { replyTo: msg.id })
         }
         return
       }
@@ -661,11 +661,11 @@ export function bindRouter(): void {
         if (respawnModNames.length > 0) {
           const { template: respawnTemplateMod, ignored } = partitionSpawnModifiers(respawnModNames)
           if (!respawnTemplateMod) {
-            void gateway.send(msg.channelId, `_No template matched \`${respawnModNames.map(n => `+${n}`).join(' ')}\`. There are no template modifiers._`, { replyTo: msg.id }).catch(() => {})
+            void safeSend(msg.channelId, `_No template matched \`${respawnModNames.map(n => `+${n}`).join(' ')}\`. There are no template modifiers._`, { replyTo: msg.id })
             return
           }
           if (ignored.length > 0) {
-            void gateway.send(msg.channelId, `_Ignored ${ignored.map(n => `\`+${n}\``).join(' ')} — a respawn applies a single template modifier._`, { replyTo: msg.id }).catch(() => {})
+            void safeSend(msg.channelId, `_Ignored ${ignored.map(n => `\`+${n}\``).join(' ')} — a respawn applies a single template modifier._`, { replyTo: msg.id })
           }
           void handleRespawnIntercept(msg, respawnTopic, respawnTemplateMod.templateName, selection)
         } else {
@@ -687,7 +687,7 @@ export function bindRouter(): void {
         return
       }
       if (msg.isThread && isHandoffNearMiss(msg.content)) {
-        void gateway.send(msg.channelId, `_Not run as a handoff. To hand off with a note: \`handoff: <note>\` (or \`handoff <model>: <note>\`)._`, { replyTo: msg.id }).catch(() => {})
+        void safeSend(msg.channelId, `_Not run as a handoff. To hand off with a note: \`handoff: <note>\` (or \`handoff <model>: <note>\`)._`, { replyTo: msg.id })
       }
 
       const resumeMatch = msg.content.match(/^(?:resume|\/resume)(?:\s+([\w-]+))?\s*$/i)
@@ -785,7 +785,7 @@ export function bindRouter(): void {
           if (!selection && topic) {
             const hint = misplacedModelHint('review', topic)
             if (hint) {
-              void gateway.send(msg.channelId, hint, { replyTo: msg.id }).catch(() => {})
+              void safeSend(msg.channelId, hint, { replyTo: msg.id })
               return
             }
           }
@@ -820,7 +820,7 @@ export function bindRouter(): void {
           if (!selection && v2Task) {
             const hint = misplacedModelHint('build', v2Task)
             if (hint) {
-              void gateway.send(msg.channelId, hint, { replyTo: msg.id }).catch(() => {})
+              void safeSend(msg.channelId, hint, { replyTo: msg.id })
               return
             }
           }
@@ -859,7 +859,7 @@ export function bindRouter(): void {
           void gateway.react(msg.channelId, msg.id, '🛑').catch(() => {})
           const threadId = registry.resolveThreadId(msg)
           const run = getRunByThread(threadId)
-          if (!run) { await gateway.send(msg.channelId, `No delegated build in progress.`, { replyTo: msg.id }); return }
+          if (!run) { await safeSend(msg.channelId, `No delegated build in progress.`, { replyTo: msg.id }); return }
           await cancelRun(run, 'cancelled by user')
           return
         }
@@ -887,9 +887,9 @@ export function bindRouter(): void {
           if (occupied === 'spike_v2') {
             void handleCancelSpikeV2Intercept(msg)
           } else if (!occupied) {
-            void gateway.send(msg.channelId, `No spike in progress in this thread.`, { replyTo: msg.id }).catch(() => {})
+            void safeSend(msg.channelId, `No spike in progress in this thread.`, { replyTo: msg.id })
           } else {
-            void gateway.send(msg.channelId, `A ${occupied} is running, not a spike.`, { replyTo: msg.id }).catch(() => {})
+            void safeSend(msg.channelId, `A ${occupied} is running, not a spike.`, { replyTo: msg.id })
           }
           return
         }
@@ -922,7 +922,7 @@ export function bindRouter(): void {
         const letIn = PERMISSION_REPLY_RE.test(msg.content) ? [] : acknowledged(resolvedThreadId, msg.content)
         if (letIn.length) {
           threadRegistry.allowSenders(resolvedThreadId, letIn)
-          void gateway.send(resolvedThreadId, `Listening to ${letIn.map(id => `<@${id}>`).join(', ')} in this thread.`, { replyTo: msg.id }).catch(() => {})
+          void safeSend(resolvedThreadId, `Listening to ${letIn.map(id => `<@${id}>`).join(', ')} in this thread.`, { replyTo: msg.id })
         }
 
         // Behind an answer already held for this thread's specialist: the started session may already be registered, and
@@ -984,7 +984,7 @@ export function bindRouter(): void {
                 pendingPermissions.delete(foundId)
                 void gateway.react(msg.channelId, msg.id, behavior === 'allow' ? '✅' : '❌').catch(() => {})
               } else {
-                void gateway.send(msg.channelId, '_No pending permission for this session._', { replyTo: msg.id }).catch(() => {})
+                void safeSend(msg.channelId, '_No pending permission for this session._', { replyTo: msg.id })
               }
               return
             }
@@ -1100,7 +1100,7 @@ export function bindRouter(): void {
     if (result.action === 'drop') {
       if (strangerThread && registry.getByThread(strangerThread) && flagStranger(strangerThread, senderId)) {
         const operator = operatorIds()[0]
-        void gateway.send(strangerThread, `Stranger danger: <@${senderId}> is not the operator. <@${operator}>, reply "yes" and I'll listen to them in this thread.`, { replyTo: msg.id }).catch(() => {})
+        void safeSend(strangerThread, `Stranger danger: <@${senderId}> is not the operator. <@${operator}>, reply "yes" and I'll listen to them in this thread.`, { replyTo: msg.id })
       }
       return
     }

@@ -1,7 +1,7 @@
 import { gateway } from '../../infra/config.js'
 import { registry } from '../../sessions/registry.js'
 import { watchPr, unwatchPr, listWatches, formatWatchEntry, detectPrUrl, WATCH_ERRORS, type WatchOpts } from '../../connectors/github/pr-watch.js'
-import { reportError } from '../../infra/util.js'
+import { reportError, safeSend } from '../../infra/util.js'
 import type { InboundMessage } from '../../gateways/gateway.js'
 
 // `watch [pr-url] [+green]` — the URL may arrive Slack-wrapped (<url|label>).
@@ -45,7 +45,7 @@ export async function handleWatchIntercept(msg: InboundMessage, url?: string, op
 
   try {
     const result = await watchPr(resolvedUrl, targetSessionId, threadId, opts)
-    await gateway.send(msg.channelId, result, { replyTo: msg.id })
+    await safeSend(msg.channelId, result, { replyTo: msg.id })
   } catch (err) {
     await reportError(msg.channelId, msg.id, 'watch', err instanceof Error ? err.message : String(err))
   }
@@ -59,7 +59,7 @@ export async function handleUnwatchIntercept(msg: InboundMessage, url: string): 
 
   try {
     const result = unwatchPr(url, sessionId)
-    await gateway.send(msg.channelId, result, { replyTo: msg.id })
+    await safeSend(msg.channelId, result, { replyTo: msg.id })
   } catch (err) {
     await reportError(msg.channelId, msg.id, 'unwatch', err instanceof Error ? err.message : String(err))
   }
@@ -69,10 +69,10 @@ export async function handleWatchesIntercept(msg: InboundMessage): Promise<void>
   void gateway.react(msg.channelId, msg.id, '📡').catch(e => process.stderr.write(`daemon: watches react failed: ${e}\n`))
   const entries = listWatches()
   if (entries.length === 0) {
-    await gateway.send(msg.channelId, 'No PRs being watched.', { replyTo: msg.id })
+    await safeSend(msg.channelId, 'No PRs being watched.', { replyTo: msg.id })
     return
   }
 
   const lines = entries.map(e => `• ${formatWatchEntry(e)}`)
-  await gateway.send(msg.channelId, `**Watched PRs:**\n${lines.join('\n')}`, { replyTo: msg.id })
+  await safeSend(msg.channelId, `**Watched PRs:**\n${lines.join('\n')}`, { replyTo: msg.id })
 }

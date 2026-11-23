@@ -1,4 +1,5 @@
 import { gateway } from '../../infra/config.js'
+import { safeSend } from '../../infra/util.js'
 import { registry } from '../../sessions/registry.js'
 import { startProtocolRun, getRunByThread, cancelRun } from '../protocol-runner.js'
 import { isThreadOccupied } from '../../sessions/protocol-registry.js'
@@ -15,20 +16,20 @@ export async function handleDelegatedBuildIntercept(msg: InboundMessage, rounds:
   const sessionId = registry.getByThread(resolvedThreadId)
 
   if (!sessionId) {
-    await gateway.send(msg.channelId, `No session owns this thread. Use \`delegate\` in a session thread.`, { replyTo: msg.id })
+    await safeSend(msg.channelId, `No session owns this thread. Use \`delegate\` in a session thread.`, { replyTo: msg.id })
     return
   }
 
   const info = registry.get(sessionId)
   if (!info) {
-    await gateway.send(msg.channelId, `Session not found.`, { replyTo: msg.id })
+    await safeSend(msg.channelId, `Session not found.`, { replyTo: msg.id })
     return
   }
 
   const threadId = info.threadId
   const occupied = isThreadOccupied(threadId)
   if (occupied) {
-    await gateway.send(msg.channelId, `A ${occupied} is already in progress in this thread.`, { replyTo: msg.id })
+    await safeSend(msg.channelId, `A ${occupied} is already in progress in this thread.`, { replyTo: msg.id })
     return
   }
 
@@ -42,6 +43,6 @@ export async function handleDelegatedBuildIntercept(msg: InboundMessage, rounds:
     await startProtocolRun(p, threadId, sessionId, { rounds: clampedRounds, task, model, engine, strike: true, skipClarify: opts?.skipClarify })
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err)
-    await gateway.send(msg.channelId, `Delegated build failed to start: ${errMsg}`, { replyTo: msg.id })
+    await safeSend(msg.channelId, `Delegated build failed to start: ${errMsg}`, { replyTo: msg.id })
   }
 }

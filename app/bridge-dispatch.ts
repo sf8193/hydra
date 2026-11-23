@@ -12,7 +12,7 @@ import { getSpecialist } from '../sessions/specialists.js'
 import { ensureSpecialist } from './specialist-deliver.js'
 import { envelopeFor, sendToThread, sendsToRefusal } from './sends-to.js'
 import { READ_ONLY_DISALLOWED_TOOLS, claudeLaunchCwd, doSpawnSession, handOff, handoffNoteFate, killSession, predecessorOf, runPreHandoffHook, sessionDir, type PreHandoffVerdict } from './session-lifecycle.js'
-import { fallbackDescription, formatDuration, chunk, assertSendable, parseDuration, withOutbound } from '../infra/util.js'
+import { fallbackDescription, formatDuration, chunk, assertSendable, parseDuration, safeSend, withOutbound } from '../infra/util.js'
 import { tmuxHasSession } from '../infra/tmux.js'
 import { occupancy, resolveSendTarget } from '../sessions/session-reachability.js'
 import { deliverable, occupied } from '../sessions/occupancy.js'
@@ -618,9 +618,9 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         setTimeout(() => {
           release()  // handOff holds its own in-flight guard from here
           handOff(info, path).then(
-            r => gateway.send(info.threadId, `🤝 \`${info.tmuxName}\` handed off to \`${r.name}\` — fresh context from \`${path}\`${noteLine(r.name)}`),
-            err => gateway.send(info.threadId, `⚠️ handoff from \`${info.tmuxName}\` failed: ${err instanceof Error ? err.message : err}\nRecover: type \`respawn\`, then tell it to read \`${path}\` and continue from its Next action.`),
-          ).catch(() => {})
+            r => safeSend(info.threadId, `🤝 \`${info.tmuxName}\` handed off to \`${r.name}\` — fresh context from \`${path}\`${noteLine(r.name)}`),
+            err => safeSend(info.threadId, `⚠️ handoff from \`${info.tmuxName}\` failed: ${err instanceof Error ? err.message : err}\nRecover: type \`respawn\`, then tell it to read \`${path}\` and continue from its Next action.`),
+          )
         }, handoffWait.ms)
         return { content: [{ type: 'text', text: `handing off — a fresh session will continue from ${path}` }] }
       }
@@ -843,13 +843,14 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           url: await partyLink({ ...s, threadId: routeThreadId(s) ?? s.threadId }, id => gateway.getThreadUrl(id), m => process.stderr.write(`daemon: ${m}\n`)),
         })
         const echoThread = caller?.threadId && caller.threadId !== threadId ? caller.threadId : undefined
+        const postSubtext = (t: string, line: string) => retrySend(() => gateway.send(t, line, { subtext: true }))
         const quietOutcome = wantsQuiet
           ? await Promise.all([caller ? party(caller) : { name: senderName, emoji: emojiOfName(senderName) }, party(targetSession)])
             .then(([from, to]) => quietSend(
               { from, to, type: msgType as SendType, text, summary, dir: join(STATE_DIR, 'messages') },
               {
-                postLine: line => postThread ? retrySend(() => gateway.send(postThread, line, { subtext: true })) : Promise.reject(new Error(`${targetSession.tmuxName} has no thread the gateway can address`)),
-                ...(echoThread ? { postEcho: (line: string) => retrySend(() => gateway.send(echoThread, line, { subtext: true })) } : {}),
+                postLine: line => postThread ? postSubtext(postThread, line) : Promise.reject(new Error(`${targetSession.tmuxName} has no thread the gateway can address`)),
+                ...(echoThread ? { postEcho: (line: string) => postSubtext(echoThread, line) } : {}),
                 log: m => process.stderr.write(`daemon: ${m}\n`),
               },
             ))

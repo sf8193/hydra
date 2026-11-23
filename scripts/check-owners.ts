@@ -15,6 +15,8 @@ type Rule = {
   // `//` comments are gone, and consecutive lines are joined, so wrapped calls still match.
   pattern: RegExp
   allowed: string[]
+  // Optional per-file match ceilings so adding a new call site fails even inside a sanctioned file.
+  max?: Record<string, number>
   skipLine?: (normalizedLine: string) => boolean
   okAt?: (flat: string, index: number) => boolean   // a match that is fine in context
   tests: boolean   // does the rule also apply to test files?
@@ -88,13 +90,36 @@ export const RULES: Rule[] = [
     tests: false, ts: true,
     why: 'run tmux through tmuxSync in infra/tmux.ts (bounded, SIGKILL), not a raw sync exec',
   },
+  {
+    name: 'raw gateway.send() outside safeSend',
+    pattern: /\bgateway(?:\s*[!?]?\s*\.send|\s+as\s+\w+\s*\.send)\b/g,
+    // infra/util.ts owns safeSend. Every other file below is pinned to its exact sanctioned count so no new raw send can enter
+    // and removals tighten the cap. Lexical (aliases like `const { send } = gateway` aren't tracked); `gateway.sendDM` is out of scope (user IDs, not threads):
+    // - app/bridge-dispatch.ts (3): MCP reply, loud send_to_thread, and quiet-send subtext helper (all wrap raw gateway.send in retrySend and propagate errors/IDs)
+    // - app/session-lifecycle.ts (1): thread anchor creation must throw on failure and return anchor.id
+    // - connectors/slack/runtime.ts (1): bindNotice catches failure to fall back to toOperatorDm
+    // - app/reply-guard.ts (1): defaultDeps.gatewaySend seam for screenshot fallback on throw
+    // - app/home-actions.ts (2): Slack Home spawn errors sent to Slack userId (U..., not a thread ID)
+    allowed: ['infra/util.ts'],
+    max: {
+      'app/bridge-dispatch.ts': 3,
+      'app/session-lifecycle.ts': 1,
+      'connectors/slack/runtime.ts': 1,
+      'app/reply-guard.ts': 1,
+      'app/home-actions.ts': 2,
+    },
+    tests: false, ts: true,
+    why: 'send through safeSend (infra/util.ts) so messages are chunked, shaped, address-checked and logged',
+  },
 ]
 
 const isTest = (path: string) => /(^|\/)__tests__\//.test(path) || /\.test\.ts$/.test(path)
 
 // One line per source line (so offsets map back), each with tokens separated by single spaces.
 export function normalize(text: string): { flat: string; lines: string[]; lineAt: (offset: number) => number } {
-  const lines = text.split('\n').map(l => l.replace(/(^|\s)\/\/.*$/, '$1').replace(/['"`,()[\]{}]/g, ' ').replace(/\s+/g, ' ').trim())
+  // Strip // and /* ... */ comments in one left-to-right pass (anchored to start-of-line/whitespace so URLs and string globs like 'a/**/*.ts' stay intact), keeping newlines for line numbers.
+  const noComments = text.replace(/(^|\s)(?:\/\/[^\n]*|\/\*[\s\S]*?\*\/)/gm, (m, pre: string) => pre + m.slice(pre.length).replace(/[^\n]/g, ' '))
+  const lines = noComments.split('\n').map(l => l.replace(/['"`,()[\]{}]/g, ' ').replace(/\s+/g, ' ').trim())
   const starts: number[] = []
   let flat = ''
   for (const l of lines) { starts.push(flat.length); flat += l + ' ' }
@@ -109,8 +134,17 @@ export function violations(files: Array<{ path: string; text: string }>): string
     const raw = text.split('\n')
     for (const r of RULES) {
       if (r.allowed.includes(path) || (!r.tests && isTest(path)) || (r.ts && !path.endsWith('.ts'))) continue
-      const hits = [...flat.matchAll(r.pattern)].filter(m => !r.okAt?.(flat, m.index!)).map(m => lineAt(m.index!)).filter(n => !r.skipLine?.(lines[n - 1]))
-      for (const n of new Set(hits)) out.push(`${path}:${n}: ${r.name} — ${r.why}\n    ${raw[n - 1]?.trim()}`)
+      const hitLines = [...new Set([...flat.matchAll(r.pattern)].filter(m => !r.okAt?.(flat, m.index!)).map(m => lineAt(m.index!)).filter(n => !r.skipLine?.(lines[n - 1])))]
+      const limit = r.max?.[path]
+      if (limit !== undefined) {
+        if (hitLines.length > limit) {
+          out.push(`${path}: ${hitLines.length} occurrences of ${r.name} (max ${limit}, lines ${hitLines.join(', ')}) — ${r.why}`)
+        } else if (hitLines.length < limit) {
+          out.push(`${path}: ${hitLines.length} occurrences of ${r.name} (cap is ${limit} — lower the cap in scripts/check-owners.ts to ${hitLines.length})`)
+        }
+        continue
+      }
+      for (const n of hitLines) out.push(`${path}:${n}: ${r.name} — ${r.why}\n    ${raw[n - 1]?.trim()}`)
     }
   }
   return out

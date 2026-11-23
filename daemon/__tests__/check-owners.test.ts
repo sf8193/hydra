@@ -113,3 +113,42 @@ describe('check-owners: raw tmux liveness and exec only in owners', () => {
     expect(hits('cli/x.test.ts', 'tmuxHasSession(n)')).toEqual([])
   })
 })
+
+describe('check-owners: raw gateway.send() outside safeSend', () => {
+  const raw = (path: string, ...lines: string[]) => hits(path, ...lines).filter(v => v.includes('raw gateway.send() outside safeSend'))
+
+  test('caught in non-owner daemon files (plain, optional-chained, cast, or wrapped)', () => {
+    expect(raw('app/router.ts', "void gateway.send(msg.channelId, 'hi')")).toHaveLength(1)
+    expect(raw('app/router.ts', "await gateway?.send(ch, 'hi')")).toHaveLength(1)
+    expect(raw('app/router.ts', "await (gateway as any).send(ch, 'hi')")).toHaveLength(1)
+    expect(raw('app/commands/thread.ts', 'await gateway', "  .send(ch, 'hi')")).toHaveLength(1)
+  })
+
+  test('capped files pass at their exact cap, fail above (with line numbers), and fail below (self-tightening)', () => {
+    expect(raw('app/bridge-dispatch.ts', 'gateway.send(a, b)', 'gateway.send(a, b)', 'gateway.send(a, b)')).toEqual([])
+    const over = raw('app/bridge-dispatch.ts', 'gateway.send(a, b)', 'gateway.send(a, b)', 'gateway.send(a, b)', 'gateway.send(a, b)')
+    expect(over).toHaveLength(1)
+    expect(over[0]).toContain('lines 1, 2, 3, 4')
+    const under = raw('app/bridge-dispatch.ts', 'gateway.send(a, b)', 'gateway.send(a, b)')
+    expect(under).toHaveLength(1)
+    expect(under[0]).toContain('lower the cap')
+  })
+
+  test('block and JSDoc comments are ignored without shifting line numbers or eating code after // /*', () => {
+    expect(raw('app/router.ts', '/** posts via gateway.send(ch, text) */', '/* gateway.send(a, b) */')).toEqual([])
+    expect(raw('app/session-lifecycle.ts', '/**', ' * note: gateway.send(a, b)', ' */', 'gateway.send(a, b)')).toEqual([])
+    const afterBlock = raw('app/router.ts', '/**', ' * line 2', ' */', 'gateway.send(a, b)')
+    expect(afterBlock).toHaveLength(1)
+    expect(afterBlock[0]).toContain('app/router.ts:4:')
+    const afterLineCommentOpen = raw('app/router.ts', '// see /* x', 'gateway.send(a, b)', '/* y */')
+    expect(afterLineCommentOpen).toHaveLength(1)
+    expect(afterLineCommentOpen[0]).toContain('app/router.ts:2:')
+  })
+
+  test('allowed in safeSend and tests; gateway.sendDM and line comments pass', () => {
+    expect(raw('infra/util.ts', "await gateway.send(channelId, chunks[i], opts)")).toEqual([])
+    expect(raw('daemon/__tests__/a.test.ts', "spyOn(gateway, 'send'); await gateway.send('t1', 'hi')")).toEqual([])
+    expect(raw('app/router.ts', "await gateway.sendDM(userId, 'hi')")).toEqual([])
+    expect(raw('app/router.ts', '// never call gateway.send directly')).toEqual([])
+  })
+})

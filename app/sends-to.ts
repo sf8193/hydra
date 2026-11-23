@@ -17,6 +17,7 @@ import { noteLine } from '../infra/quiet-send.js'
 import { RESTRICTED_SEND_TYPES, type SendType } from '../shared/tool-definitions.js'
 import { currentHydraConfig } from '../infra/hydra-config.js'
 import { gateway } from '../infra/config.js'
+import { safeSend } from '../infra/util.js'
 import { specialistOf, sendsToOf } from '../sessions/specialists.js'
 import { ensureSpecialist } from './specialist-deliver.js'
 import { deliverToSession } from './targets.js'
@@ -47,7 +48,7 @@ export const sendDeps = {
   /** One subtext line in the receiving specialist's thread (quiet-send's line, the same one send_to_thread posts there). */
   /** How long the note may take before the send is reported without waiting for it. */
   noteTimeoutMs: 3000,
-  note: async (threadId: string, line: string): Promise<unknown> => gateway.send(threadId, line, { subtext: true }),
+  note: async (threadId: string, line: string): Promise<unknown> => safeSend(threadId, line, { subtext: true }),
 }
 
 /** The sentence every envelope carries, the same each time: it is hydra's, not the sender's, and it sits outside the quoted body. */
