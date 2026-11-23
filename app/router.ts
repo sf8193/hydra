@@ -385,24 +385,6 @@ function enqueueUserMessage(msg: InboundMessage, targetSessionId: string, chatId
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Reaction-based message deletion (:hocho: on bot messages)
-// ---------------------------------------------------------------------------
-
-if (gateway.onReaction) {
-  gateway.onReaction(async (event) => {
-    if (!isDeleteReaction(event.emoji)) return
-    if (!operatorIds().includes(event.userId)) return
-    if (!channelAllowed(event)) return
-    try {
-      await gateway.delete(event.channelId, event.messageId)
-      process.stderr.write(`daemon: deleted message ${event.messageId} via reaction from ${event.userId}\n`)
-    } catch (err) {
-      process.stderr.write(`daemon: failed to delete message ${event.messageId}: ${err}\n`)
-    }
-  })
-}
-
-// ---------------------------------------------------------------------------
 // Inbound message routing
 // ---------------------------------------------------------------------------
 
@@ -444,6 +426,21 @@ export function bindRouter(): void {
       }
     }
   })
+
+  // Reaction-based message deletion (:hocho: on bot messages)
+  if (gateway.onReaction) {
+    gateway.onReaction(async (event) => {
+      if (!isDeleteReaction(event.emoji)) return
+      if (!operatorIds().includes(event.userId)) return
+      if (!channelAllowed(event)) return
+      try {
+        await gateway.delete(event.channelId, event.messageId)
+        process.stderr.write(`daemon: deleted message ${event.messageId} via reaction from ${event.userId}\n`)
+      } catch (err) {
+        process.stderr.write(`daemon: failed to delete message ${event.messageId}: ${err}\n`)
+      }
+    })
+  }
 
   gateway.onMessage(async (inbound: InboundMessage) => {
     if (inbound.isBot) return
