@@ -31,6 +31,7 @@ import { bridgeLifePath, describeBridgeExit } from '../shared/bridge-life.js'
 import { pidAlive, pruneBridgeLife, readBridgeLife } from '../infra/bridge-life-file.js'
 import type { ButtonDef } from '../gateways/gateway.js'
 import { engineProfile } from '../shared/engines/index.js'
+import { parseBridgeToDaemonMessage } from '../shared/bridge-protocol.js'
 
 const DEATH_DETECT_DELAY_MS = 3_000
 const BRIDGE_LIFE_READ_DELAY_MS = BRIDGE_SHUTDOWN_GRACE_MS + 1_000
@@ -125,21 +126,37 @@ export function connectionRoleFor(msg: { connectionRole?: unknown }, info: Sessi
 }
 
 function handleBridgeMessage(conn: BridgeConn, raw: string): void {
-  let msg: any
+  let parsedJson: unknown
   try {
-    msg = JSON.parse(raw)
+    parsedJson = JSON.parse(raw)
   } catch {
     process.stderr.write(`daemon: invalid JSON from bridge: ${raw.slice(0, 200)}\n`)
     return
   }
+  const parsed = parseBridgeToDaemonMessage(parsedJson)
+  if (!parsed.ok) {
+    process.stderr.write(parsed.unknownType
+      ? `daemon: unknown message type from bridge: ${parsed.unknownType}\n`
+      : `daemon: invalid message from bridge (${parsed.error}): ${raw.slice(0, 200)}\n`)
+    if (parsed.toolCallId !== undefined) {
+      transport.sendToBridge(conn, {
+        type: 'tool_result',
+        id: parsed.toolCallId,
+        content: [{ type: 'text', text: `Invalid tool_call: ${parsed.error}` }],
+        isError: true,
+      })
+    }
+    return
+  }
+  const msg = parsed.msg
 
   switch (msg.type) {
     case 'register': {
-      const sessionId = msg.sessionId as string
+      const sessionId = msg.sessionId
       conn.sessionId = sessionId
-      if (Number.isInteger(msg.pid) && (msg.pid as number) > 0) conn.bridgePid = msg.pid as number
+      if (msg.pid !== undefined) conn.bridgePid = msg.pid
 
-      const claudeSessionId = msg.claudeSessionId as string | undefined
+      const claudeSessionId = msg.claudeSessionId
       const info = registry.get(sessionId)
       // Existing Codex MCP processes may predate the explicit role field. Codex
       // session traffic uses codexEngine, so daemon-socket registrations for a
@@ -310,7 +327,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
     }
 
     case 'tool_call': {
-      const { id, name, args } = msg as { id: string; name: string; args: Record<string, unknown> }
+      const { id, name, args } = msg
 
       if (!isToolAllowed(conn.sessionId ?? '', name)) {
         transport.sendToBridge(conn, {
@@ -389,7 +406,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
     }
 
     case 'tools_request': {
-      const { id } = msg as { id: string }
+      const { id } = msg
       transport.sendToBridge(conn, { type: 'tools_result', id, tools: advertiseTools(conn.sessionId ?? '') })
       break
     }
@@ -444,23 +461,22 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
     }
 
     case 'cli': {
-      void handleCLIRequest(msg as CLIRequest).then(response => {
+      void handleCLIRequest(msg as unknown as CLIRequest).then(response => {
         conn.socket.write(JSON.stringify(response) + '\n')
       }).catch(err => {
         conn.socket.write(JSON.stringify({
           type: 'cli-response',
-          id: msg.id ?? '',
+          id: typeof msg.id === 'string' ? msg.id : '',
           ok: false,
           error: `internal error: ${err instanceof Error ? err.message : String(err)}`,
         }) + '\n')
       })
       break
     }
-
-    default:
-      process.stderr.write(`daemon: unknown message type from bridge: ${msg.type}\n`)
   }
 }
+
+export const __test = process.env.NODE_ENV === 'test' ? { handleBridgeMessage } : undefined
 
 // ---------------------------------------------------------------------------
 // Session death detection

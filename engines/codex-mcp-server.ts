@@ -17,6 +17,7 @@
 
 import { connect, type Socket } from 'net'
 import { createInterface } from 'readline'
+import { parseDaemonToBridgeMessage, type BridgeToDaemonMessage, type DaemonToolResultMessage } from '../shared/bridge-protocol.js'
 
 const DAEMON_SOCK = process.env.DAEMON_SOCK
 const SESSION_ID = process.env.HYDRA_SESSION_ID
@@ -33,7 +34,11 @@ if (!DAEMON_SOCK || !SESSION_ID) {
 let daemonSocket: Socket | null = null
 let daemonBuf = ''
 let toolCallCounter = 0
-const pendingToolCalls = new Map<string, (result: any) => void>()
+const pendingToolCalls = new Map<string, (result: DaemonToolResultMessage) => void>()
+
+function writeDaemon(sock: Socket, msg: BridgeToDaemonMessage): void {
+  sock.write(JSON.stringify(msg) + '\n')
+}
 
 function connectToDaemon(): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -45,7 +50,7 @@ function connectToDaemon(): Promise<void> {
       connected = true
       sock.removeListener('error', onError)
       daemonSocket = sock
-      sock.write(JSON.stringify({ type: 'register', sessionId: SESSION_ID, connectionRole: 'control' }) + '\n')
+      writeDaemon(sock, { type: 'register', sessionId: SESSION_ID!, connectionRole: 'control' })
       sock.on('error', (err) => {
         process.stderr.write(`codex-mcp-server: daemon socket error: ${err.message}\n`)
       })
@@ -74,12 +79,16 @@ function connectToDaemon(): Promise<void> {
 
 function handleDaemonMessage(line: string): void {
   try {
-    const msg = JSON.parse(line)
-    if (msg.type === 'tool_result' && msg.id) {
-      const resolve = pendingToolCalls.get(msg.id)
+    const parsed = parseDaemonToBridgeMessage(JSON.parse(line))
+    if (!parsed.ok) {
+      process.stderr.write(`codex-mcp-server: ignoring malformed daemon message: ${parsed.error}\n`)
+      return
+    }
+    if (parsed.msg.type === 'tool_result') {
+      const resolve = pendingToolCalls.get(parsed.msg.id)
       if (resolve) {
-        pendingToolCalls.delete(msg.id)
-        resolve(msg)
+        pendingToolCalls.delete(parsed.msg.id)
+        resolve(parsed.msg)
       }
     }
     // Ignore 'registered', 'notification', etc. — those are for the session, not us
@@ -95,7 +104,7 @@ async function waitForDaemon(): Promise<void> {
   if (!daemonSocket) throw new Error('not connected to daemon after 15s')
 }
 
-async function callDaemonTool(id: string, name: string, args: Record<string, unknown>): Promise<any> {
+async function callDaemonTool(id: string, name: string, args: Record<string, unknown>): Promise<DaemonToolResultMessage> {
   await waitForDaemon()
   if (!daemonSocket) throw new Error('not connected to daemon')
   return new Promise((resolve, reject) => {
@@ -105,8 +114,8 @@ async function callDaemonTool(id: string, name: string, args: Record<string, unk
         reject(new Error(`tool call ${name} timed out`))
       }
     }, 30_000)
-    pendingToolCalls.set(id, (result: any) => { clearTimeout(timer); resolve(result) })
-    daemonSocket!.write(JSON.stringify({ type: 'tool_call', id, name, args }) + '\n')
+    pendingToolCalls.set(id, (result) => { clearTimeout(timer); resolve(result) })
+    writeDaemon(daemonSocket!, { type: 'tool_call', id, name, args })
   })
 }
 
@@ -135,7 +144,7 @@ async function handleToolCall(id: number, params: any): Promise<void> {
   try {
     const callId = `codex-${SESSION_ID}-${toolCallCounter++}`
     const result = await callDaemonTool(callId, toolName, toolArgs)
-    send({ id, result: { content: result.content ?? [{ type: 'text', text: 'ok' }], isError: result.isError ?? false } })
+    send({ id, result: { content: result.content, isError: result.isError ?? false } })
   } catch (err) {
     send({ id, result: { content: [{ type: 'text', text: `Tool error: ${err instanceof Error ? err.message : err}` }], isError: true } })
   }
