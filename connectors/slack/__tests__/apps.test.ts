@@ -1000,8 +1000,8 @@ describe('a two-app config routes, replies and catches up per app', () => {
       ['deals', `slack:${SALES}:${CH}:1200.000001`],
     ])
     // Replies leave through the app that heard the conversation, and no other.
-    await t.listeners[SALES].post(CH, '1200.000001', 'answer', false)
-    await t.listeners.default.post(CH, '1100.000001', 'answer', false)
+    await t.listeners[SALES].post(CH, '1200.000001', 'answer')
+    await t.listeners.default.post(CH, '1100.000001', 'answer')
     expect(t.fakes[SALES].calls.filter(c => c.startsWith('post:'))).toEqual([`post:${CH}:1200.000001:answer`])
     expect(t.fakes.default.calls.filter(c => c.startsWith('post:'))).toEqual([`post:${CH}:1100.000001:answer`])
     // Catch-up: each app’s cursor is its own.

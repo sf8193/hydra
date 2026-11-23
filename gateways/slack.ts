@@ -40,7 +40,7 @@ const RECENT_SENT_CAP = 200
 
 /**
  * Slack renders FULL Markdown — tables, `-`/`*` lists, headings, code fences — only via the
- * `markdown_text` field (`messageBody`, shared/slack-client.ts, which the Slack connector's replies use too). It can't be combined with `blocks`/`text` and caps at ~12k chars.
+ * `markdown_text` field (`messageBody`, shared/slack-client.ts, the one rule the Slack connector's replies and edits follow too). It can't be combined with `blocks`/`text` and caps at ~12k chars.
  * So: plain replies go through `markdown_text` (rich); button messages must use Block Kit (which
  * only does classic mrkdwn); anything past the cap falls back to classic mrkdwn `text`.
  *

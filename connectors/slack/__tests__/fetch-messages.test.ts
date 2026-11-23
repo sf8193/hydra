@@ -231,18 +231,6 @@ describe('a slack: id is routed as it is checked', () => {
   })
   afterEach(() => { for (const s of spies.splice(0)) s.mockRestore() })
 
-  test('a reply split into parts goes one way: a tag in its last part sends every part as classic text', async () => {
-    const classics: (boolean | undefined)[] = []
-    slackRuntimeDeps.post = async (_c, _t, _text, _app, classic) => { classics.push(classic); return '9.000001' }
-    expect((await executeTool('reply', { chat_id: 'slack:C1:6.000001', text: `${'| a | b |\n'.repeat(800)}\nthanks <@U1>` }, 'crm-session')).isError).toBeUndefined()
-    expect(classics.length).toBeGreaterThan(1)
-    expect(classics.every(c => c === true)).toBe(true)
-    classics.length = 0
-    expect((await executeTool('reply', { chat_id: 'slack:C1:6.000001', text: '| a | b |\n'.repeat(800) }, 'crm-session')).isError).toBeUndefined()
-    expect(classics.length).toBeGreaterThan(1)
-    expect(classics.every(c => c === false)).toBe(true)
-  })
-
   test('with a leading space, fetch_messages, reply, edit_message and delete_message all go to Slack, never the chat gateway', async () => {
     const id = ' slack:C1:6.000001'
     for (const [tool, args] of [

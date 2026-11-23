@@ -25,13 +25,16 @@ export function unfurlFields(off: boolean): { unfurl_links?: false; unfurl_media
 export const MARKDOWN_TEXT_MAX = 12000
 
 /**
- * The body field for chat.postMessage and chat.update. Sessions write GitHub-flavoured markdown, and Slack renders that (tables, lists, headings,
- * `**bold**`, `[text](url)`) only through `markdown_text`; Slack does the conversion, so the text goes byte for byte. `classic` text goes as `text`:
- * text that is already mrkdwn (the gateway's Block Kit button messages), or text the caller keeps classic for its own reason
- * (the Slack connector's tagged replies, `slackSyntax` in connectors/slack/reply-body.ts). So does text past `MARKDOWN_TEXT_MAX`. `markdown_text` cannot be combined with `text` or `blocks`.
+ * The body field for chat.postMessage and chat.update, one rule for the Slack gateway and the Slack connector. Sessions write GitHub-flavoured
+ * markdown, and Slack renders that (tables, lists, headings, `**bold**`, `[text](url)`) only through `markdown_text`; Slack does the conversion,
+ * so the text goes byte for byte. Classic `text` goes only for text that is already Slack mrkdwn (`mrkdwn`: the gateway's Block Kit button messages)
+ * and for text past `MARKDOWN_TEXT_MAX`. `markdown_text` cannot be combined with `text` or `blocks`.
+ *
+ * Tags need no exception. A `<@U…>` sent in `markdown_text` is stored as the same `rich_text` `user` element as one sent in `text` (read back
+ * with conversations.replies on 23 Nov, two posts of each kind), and a mention is that element, not the field it was sent in.
  */
-export function messageBody(text: string, classic = false): { text: string } | { markdown_text: string } {
-  return classic || text.length > MARKDOWN_TEXT_MAX ? { text } : { markdown_text: text }
+export function messageBody(text: string, mrkdwn = false): { text: string } | { markdown_text: string } {
+  return mrkdwn || text.length > MARKDOWN_TEXT_MAX ? { text } : { markdown_text: text }
 }
 
 /** The bot's identity in an auth.test response; a field Slack left out is absent. */

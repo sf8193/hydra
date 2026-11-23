@@ -52,15 +52,19 @@ describe('the real client writes with the token of whoever wrote the message', (
     await expect(a.edit!('C1', '6.000001', 'x', 'operator')).rejects.toThrow('no operator token')
     expect(await a.operatorUserId!()).toBeUndefined()
     const b = boltApp(TOKENS)
-    await b.post('C1', undefined, 'hi', { classic: false })
+    await b.post('C1', undefined, 'hi')
     expect(calls).toEqual([{ token: 'xoxb-BOT', method: 'chat.postMessage', args: { channel: 'C1', markdown_text: 'hi' } }])
   })
 
-  test('an edit that tags someone goes as classic text, as its post does', async () => {
+  test('an edit renders as markdown like its post, tag or not; past the cap both go as classic text', async () => {
     calls.length = 0
     const a = boltApp(TOKENS)
     await a.edit!('C1', '5.000001', 'over to <@U0OTHER> **now**', 'app')
-    expect(calls).toEqual([{ token: 'xoxb-BOT', method: 'chat.update', args: { channel: 'C1', ts: '5.000001', text: 'over to <@U0OTHER> *now*' } }])
+    await a.edit!('C1', '5.000001', 'x'.repeat(12001), 'app')
+    expect(calls).toEqual([
+      { token: 'xoxb-BOT', method: 'chat.update', args: { channel: 'C1', ts: '5.000001', markdown_text: 'over to <@U0OTHER> **now**' } },
+      { token: 'xoxb-BOT', method: 'chat.update', args: { channel: 'C1', ts: '5.000001', text: 'x'.repeat(12001) } },
+    ])
   })
 
   test('the operator’s user id is read once, with the operator’s token', async () => {

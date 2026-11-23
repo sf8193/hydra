@@ -12,9 +12,7 @@ import { SLACK_APP_NEEDS, NO_SLACK_APP, appKey, appName, appSuffix, type Apps, t
 import { ConnectedApps } from './apps.js'
 import { timed } from '../../shared/loop-watch.js'
 import { awakeSince, suspendedSince, describeCause, type ResumeDetector } from '../../shared/resume.js'
-import { buildSocketApp, parseAuth } from '../../shared/slack-client.js'
-import { postPayload, replyBody, type PostOptions } from './reply-body.js'
-export { postPayload, slackSyntax, toMrkdwn, type PostOptions } from './reply-body.js'
+import { buildSocketApp, messageBody, parseAuth, unfurlFields } from '../../shared/slack-client.js'
 
 /**
  * The Slack connector for one app: one Socket Mode connection that feeds `message` events to the watcher, and the catch-up pass
@@ -105,6 +103,19 @@ export const EVENTS_OFF_AFTER_PASSES = 3
 export const MEMBERSHIP_WAIT_MS = 5_000
 
 /** What the Slack SDK offers the listener, narrowed so the rest is testable without it. */
+/** `unfurl: false` posts without link previews (a place's `link_previews = false`, or `"single"` and 2+ links); absent, Slack's own default. */
+export type PostOptions = { unfurl?: false }
+
+/** The chat.postMessage arguments for one reply: the body `messageBody` picks (shared with the gateway), the thread when there is one, and unfurling off exactly when asked. */
+export function postPayload(
+  channel: string,
+  threadTs: string | undefined,
+  text: string,
+  opts?: PostOptions,
+): { channel: string; thread_ts?: string; unfurl_links?: false; unfurl_media?: false } & ({ text: string } | { markdown_text: string }) {
+  return { channel, ...messageBody(text), ...(threadTs && { thread_ts: threadTs }), ...unfurlFields(opts?.unfurl === false) }
+}
+
 export type SlackAppLike = {
   onMessage(handler: (event: RawEvent) => void): void
   /** Every message event the socket delivers, before Bolt's own filters (`ignoreSelf` among them) see it. Absent: not offered. */
@@ -125,7 +136,7 @@ export type SlackAppLike = {
   onMembership?(handler: (channel: string) => void): void
   userName(userId: string): Promise<string | undefined>
   /** A message in a channel, or in a thread when `threadTs` is set. Resolves to its ts. */
-  post(channel: string, threadTs: string | undefined, text: string, opts: PostOptions): Promise<string>
+  post(channel: string, threadTs: string | undefined, text: string, opts?: PostOptions): Promise<string>
   /** Rewrites a message (chat.update), as its bot or as the operator (user token, scope chat:write). Absent: not offered. */
   edit?(channel: string, ts: string, text: string, as: Writer): Promise<void>
   /** Deletes a message (chat.delete), as its bot or as the operator. Absent: not offered. */
@@ -394,11 +405,11 @@ export class SlackListener {
   get api(): SlackApi | null { return this.app?.api ?? null }
 
   /** A specialist's reply, into its conversation. Throws when Slack isn't connected. */
-  async post(channel: string, threadTs: string | undefined, text: string, classic: boolean): Promise<string> {
+  async post(channel: string, threadTs: string | undefined, text: string): Promise<string> {
     if (!this.app || !this.sup?.state.connected) throw new Error(`Slack is not connected${this.appSuffix()}; try again once it is (hydra health shows the slack connector)`)
     // The same predicate the gateway asks (shared/link-previews.ts), with this app's own view of hydra.toml and channel names.
     const unfurl = linkPreviewsOff('slack', [channel], { config: this.d.hydra(), slackName: id => this.directory.nameOf(id), app: this.id }, text) ? { unfurl: false as const } : undefined
-    return this.app.post(channel, threadTs, text, { classic, ...unfurl })
+    return this.app.post(channel, threadTs, text, unfurl)
   }
 
   private live(): SlackAppLike {
@@ -994,7 +1005,7 @@ export function boltApp(tokens: { app: string; bot: string; user?: string }): Sl
       const scopes = (r as { response_metadata?: { scopes?: string[] } }).response_metadata?.scopes
       return { ...parseAuth(r), ...(scopes && { scopes }) }
     },
-    edit: async (channel, ts, text, as) => { await writer(as).chat.update({ channel, ts, ...replyBody(text) }).catch(e => { throw explainSlackError(e) }) },
+    edit: async (channel, ts, text, as) => { await writer(as).chat.update({ channel, ts, ...messageBody(text) }).catch(e => { throw explainSlackError(e) }) },
     remove: async (channel, ts, as) => { await writer(as).chat.delete({ channel, ts }).catch(e => { throw explainSlackError(e) }) },
     operatorUserId: () => {
       if (!operator) return Promise.resolve(undefined)

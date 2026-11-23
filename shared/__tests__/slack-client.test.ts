@@ -31,9 +31,12 @@ describe('messageBody', () => {
   test('markdown goes as markdown_text, untouched', () => {
     expect(messageBody(md)).toEqual({ markdown_text: md })
   })
-  test('classic text goes as text, so Slack never reads it as markdown', () => {
+  test('text that is already mrkdwn goes as text, so Slack never reads it as markdown', () => {
     const mrkdwn = '*bold* <https://example.com|a link> _it_'
     expect(messageBody(mrkdwn, true)).toEqual({ text: mrkdwn })
+  })
+  test('a tag, a channel link and a labelled link are no exception: they go as markdown_text', () => {
+    for (const t of ['<@U1> hi', '<!here>', '<#C1|dev>', '<https://x.co|x>']) expect(messageBody(t)).toEqual({ markdown_text: t })
   })
   test('the cap: at the limit still markdown_text, one past it classic text', () => {
     expect(messageBody('x'.repeat(MARKDOWN_TEXT_MAX))).toHaveProperty('markdown_text')

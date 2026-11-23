@@ -14,7 +14,7 @@ type Delivery = Pick<typeof targets, 'deliverToTarget' | 'conversationSessionNam
 let delivery!: Delivery
 export function bindSlackDelivery(d: Delivery): void { delivery = d }
 import { on } from '../../infra/event-bus.js'
-import { SlackListener, boltApp, slackSyntax, POST_TIMEOUT_MS, OWED_LATE_AFTER_MS, type ToldScopes, type MessageAuthor, type Writer, type ReadMessage } from './listener.js'
+import { SlackListener, boltApp, POST_TIMEOUT_MS, OWED_LATE_AFTER_MS, type ToldScopes, type MessageAuthor, type Writer, type ReadMessage } from './listener.js'
 import { SlackConnections, type AppHealth } from './connections.js'
 import { STATE_DIR } from '../../infra/config.js'
 import { ENV_NAME_RE, capturedSpawnVars, scrubbedSpawnVars, tokenVarRefusal } from '../../shared/spawn-env.js'
@@ -52,10 +52,10 @@ export const slackRuntimeDeps = {
   view: (app: string = DEFAULT_SLACK_APP): ConversationConfig | null => connections.listener(app)?.view() ?? null,
   /** A place freed under max: catch-up refetches what waits, the oldest waiter first, through the apps that have waiters. */
   wake: (apps?: string[], why = 'a place freed'): void => { for (const [id, l] of connections.listeners()) if (!apps || apps.includes(id)) void l.runCatchUp(false, why) },
-  post: (channel: string, threadTs: string | undefined, text: string, app: string, classic: boolean): Promise<string> => {
+  post: (channel: string, threadTs: string | undefined, text: string, app: string = DEFAULT_SLACK_APP): Promise<string> => {
     const l = connections.listener(app)
     if (!l) return Promise.reject(new Error(notConnected(hydraConfig().slackApps, app)))
-    return l.post(channel, threadTs, text, classic)
+    return l.post(channel, threadTs, text)
   },
   /** Whose a message is, to one app: its own bot's, the operator's, or someone else's. Read from Slack. */
   author: (channel: string, ts: string, threadTs: string | undefined, app: string = DEFAULT_SLACK_APP): Promise<MessageAuthor> => {
@@ -809,8 +809,8 @@ const errText = (err: unknown): string => err instanceof Error ? err.message : S
  * threads in channels its bot is not in: Slack's refusal there is `NotInChannel`, so the caller can take the words to the operator instead.
  * An app without the token is a member wherever it hears, so its refusal stands as Slack gave it.
  */
-async function postPart(app: string, channel: string, thread: string | undefined, part: string, classic: boolean): Promise<string> {
-  try { return await slackRuntimeDeps.post(channel, thread, part, app, classic) } catch (err) {
+async function postPart(app: string, channel: string, thread: string | undefined, part: string): Promise<string> {
+  try { return await slackRuntimeDeps.post(channel, thread, part, app) } catch (err) {
     // A DM or a group DM between people never takes a bot's post: that refusal is not a channel the bot could be invited to.
     if (NOT_A_MEMBER.test(errText(err)) && !isDm(channel) && !config(app)?.directory.isGroupDm?.(channel) && hydraConfig().slackApps[app]?.operatorTokenEnv) throw new NotInChannel(`the bot isn't in that channel (${errText(err)}); invite it to the channel to post there`)
     throw err
@@ -838,7 +838,7 @@ async function toOperatorDm(app: string, id: string, why: string, text: string, 
 }
 
 /**
- * The text as written, split under Slack's limit, posted part by part while `allowed()` still holds, every part in the body `slackSyntax` picks for the whole text (so a reply never renders two ways). `thread` undefined:
+ * The text as written, split under Slack's limit, posted part by part while `allowed()` still holds. `thread` undefined:
  * the first part at the top level, and with `threadRest` the others in its thread. Posting never retries on its own, so
  * a part either landed, failed, or (past the deadline) is unknown: said as such, so a resend is the caller's choice.
  */
@@ -852,7 +852,7 @@ async function postParts(app: string, channel: string, thread: string | undefine
     let ts: string
     try {
       ts = await Promise.race([
-        postPart(app, channel, thread, part, slackSyntax(text)),
+        postPart(app, channel, thread, part),
         new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('timeout')), POST_BACKSTOP_MS) }),
       ]).finally(() => clearTimeout(timer))
     } catch (err) {
