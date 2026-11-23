@@ -92,9 +92,9 @@ export const RULES: Rule[] = [
   },
   {
     name: 'raw gateway.send() outside safeSend',
-    pattern: /\bgateway(?:[!?]?\.send|\s+as\s+\w+\s*\.send)\b/g,
+    pattern: /\bgateway(?:\s*[!?]?\s*\.send|\s+as\s+\w+\s*\.send)\b/g,
     // infra/util.ts owns safeSend. Every other file below is pinned to its exact sanctioned count so no new raw send can enter
-    // and removals tighten the cap:
+    // and removals tighten the cap. Lexical (aliases like `const { send } = gateway` aren't tracked); `gateway.sendDM` is out of scope (user IDs, not threads):
     // - app/bridge-dispatch.ts (3): MCP reply, loud send_to_thread, and quiet-send subtext helper (all wrap raw gateway.send in retrySend and propagate errors/IDs)
     // - app/session-lifecycle.ts (1): thread anchor creation must throw on failure and return anchor.id
     // - connectors/slack/runtime.ts (1): bindNotice catches failure to fall back to toOperatorDm
@@ -117,9 +117,9 @@ const isTest = (path: string) => /(^|\/)__tests__\//.test(path) || /\.test\.ts$/
 
 // One line per source line (so offsets map back), each with tokens separated by single spaces.
 export function normalize(text: string): { flat: string; lines: string[]; lineAt: (offset: number) => number } {
-  // Strip /* ... */ blocks (anchored to start-of-line/whitespace so string globs like 'a/**/*.ts' stay intact), keeping newlines for line numbers.
-  const noBlocks = text.replace(/(^|\s)\/\*[\s\S]*?\*\//gm, m => m.replace(/[^\n]/g, ' '))
-  const lines = noBlocks.split('\n').map(l => l.replace(/(^|\s)\/\/.*$/, '$1').replace(/['"`,()[\]{}]/g, ' ').replace(/\s+/g, ' ').trim())
+  // Strip // and /* ... */ comments in one left-to-right pass (anchored to start-of-line/whitespace so URLs and string globs like 'a/**/*.ts' stay intact), keeping newlines for line numbers.
+  const noComments = text.replace(/(^|\s)(?:\/\/[^\n]*|\/\*[\s\S]*?\*\/)/gm, (m, pre: string) => pre + m.slice(pre.length).replace(/[^\n]/g, ' '))
+  const lines = noComments.split('\n').map(l => l.replace(/['"`,()[\]{}]/g, ' ').replace(/\s+/g, ' ').trim())
   const starts: number[] = []
   let flat = ''
   for (const l of lines) { starts.push(flat.length); flat += l + ' ' }

@@ -121,7 +121,7 @@ describe('check-owners: raw gateway.send() outside safeSend', () => {
     expect(raw('app/router.ts', "void gateway.send(msg.channelId, 'hi')")).toHaveLength(1)
     expect(raw('app/router.ts', "await gateway?.send(ch, 'hi')")).toHaveLength(1)
     expect(raw('app/router.ts', "await (gateway as any).send(ch, 'hi')")).toHaveLength(1)
-    expect(raw('app/commands/thread.ts', 'await gateway.send(', "  ch, 'hi',", ')')).toHaveLength(1)
+    expect(raw('app/commands/thread.ts', 'await gateway', "  .send(ch, 'hi')")).toHaveLength(1)
   })
 
   test('capped files pass at their exact cap, fail above (with line numbers), and fail below (self-tightening)', () => {
@@ -134,12 +134,15 @@ describe('check-owners: raw gateway.send() outside safeSend', () => {
     expect(under[0]).toContain('lower the cap')
   })
 
-  test('block and JSDoc comments are ignored without shifting line numbers', () => {
+  test('block and JSDoc comments are ignored without shifting line numbers or eating code after // /*', () => {
     expect(raw('app/router.ts', '/** posts via gateway.send(ch, text) */', '/* gateway.send(a, b) */')).toEqual([])
     expect(raw('app/session-lifecycle.ts', '/**', ' * note: gateway.send(a, b)', ' */', 'gateway.send(a, b)')).toEqual([])
     const afterBlock = raw('app/router.ts', '/**', ' * line 2', ' */', 'gateway.send(a, b)')
     expect(afterBlock).toHaveLength(1)
     expect(afterBlock[0]).toContain('app/router.ts:4:')
+    const afterLineCommentOpen = raw('app/router.ts', '// see /* x', 'gateway.send(a, b)', '/* y */')
+    expect(afterLineCommentOpen).toHaveLength(1)
+    expect(afterLineCommentOpen[0]).toContain('app/router.ts:2:')
   })
 
   test('allowed in safeSend and tests; gateway.sendDM and line comments pass', () => {
