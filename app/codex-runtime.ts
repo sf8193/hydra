@@ -276,7 +276,7 @@ export async function reconnectCodexSessions(records: readonly SessionInfo[]): P
   if (reconnected > 0) process.stderr.write(`codex-bootstrap: reconnected ${reconnected} codex session(s)\n`)
 }
 
-/** The boot sweep, logging how it ended. Never rejects. */
+/** The boot sweep, logging how it ended. Never rejects. Call bindCodexRuntime() first: the sweep connects sessions whose events need its handlers. */
 export function startCodexRuntime(records: readonly SessionInfo[]): Promise<void> {
   return reconnectCodexSessions(records).then(() => {
     process.stderr.write('daemon: codex reconnection sweep complete\n')
