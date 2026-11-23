@@ -7,8 +7,9 @@ import { gateway, STATE_DIR } from '../../infra/config.js'
 import { registry, threadRegistry } from '../../sessions/registry.js'
 import { emitSessionDeath, killSession } from '../../app/session-lifecycle.js'
 import { removeSpecialist, setSpecialist } from '../../sessions/specialists.js'
-import { _forgetMemory, _resetHeld, heldCount, holdForSpecialist, restoreHeld, setHeldDelivery, specialistThreadDeps } from '../../app/specialist-thread.js'
+import { bindSpecialistThreadDrop, _forgetMemory, _resetHeld, heldCount, holdForSpecialist, restoreHeld, setHeldDelivery, specialistThreadDeps } from '../../app/specialist-thread.js'
 import type { SessionInfo } from '../../sessions/registry.js'
+bindSpecialistThreadDrop()
 
 process.stderr.write = (() => true) as any
 

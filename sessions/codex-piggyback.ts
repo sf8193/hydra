@@ -200,6 +200,8 @@ export const codexPiggyback = new CodexPiggyback()
 
 // A session that's gone (killed/crashed/ended) has no turn left to ride
 // buffered content out on and no chat to standalone-flush it to.
-on('session:death', ({ sessionId }: { sessionId: string }) => {
-  codexPiggyback.clear(sessionId)
-}, 'bridge-transport:piggyback-cleanup')
+export function bindPiggybackCleanup(): void {
+  on('session:death', ({ sessionId }: { sessionId: string }) => {
+    codexPiggyback.clear(sessionId)
+  }, 'bridge-transport:piggyback-cleanup')
+}

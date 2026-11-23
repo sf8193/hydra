@@ -208,7 +208,9 @@ function dropOnKill(threadId: string): void {
   persist()
   if (dropped) void tell(threadId, hold, `⚠️ ${hold.specialist} was ended on purpose, so ${count(dropped)} waiting for it not delivered. Send ${dropped === 1 ? 'it' : 'them'} again to start it, or run \`hydra spawn --specialist ${hold.specialist}\`.`)
 }
-on('session:death', ({ threadId, deliberate }) => { if (deliberate) dropOnKill(threadId) }, 'specialist-thread: drop the messages waiting for a specialist that was killed on purpose')
+export function bindSpecialistThreadDrop(): void {
+  on('session:death', ({ threadId, deliberate }) => { if (deliberate) dropOnKill(threadId) }, 'specialist-thread: drop the messages waiting for a specialist that was killed on purpose')
+}
 
 function expire(threadId: string, hold: Hold): void {
   const cutoff = specialistThreadDeps.now() - MAX_HOLD_MS

@@ -377,14 +377,16 @@ async function escalateWithCapture(
 // Clean up pending state for a session when it dies.
 // Without this, entries for crashed sessions accumulate until the
 // next silence event fires for that session — which may never happen.
-on('session:death', ({ sessionId }: { sessionId: string }) => {
-  for (const [key, p] of pending) {
-    if (p.sessionId === sessionId) {
-      pending.delete(key)
-      silenceFirstSeenAt.delete(key)
+export function bindReplyGuardCleanup(): void {
+  on('session:death', ({ sessionId }: { sessionId: string }) => {
+    for (const [key, p] of pending) {
+      if (p.sessionId === sessionId) {
+        pending.delete(key)
+        silenceFirstSeenAt.delete(key)
+      }
     }
-  }
-}, 'reply-guard:cleanup')
+  }, 'reply-guard:cleanup')
+}
 
 export function _resetReplyGuardForTesting(): void {
   pending.clear()

@@ -9,6 +9,8 @@ import { emit } from '../../infra/event-bus.js'
 import { _setHydraConfigForTesting } from '../../infra/hydra-config.js'
 import { bornPolicy } from '../../app/restricted.js'
 import type { SessionInfo } from '../../sessions/registry.js'
+import { bindTypedDeliveryFlush } from '../../app/typed-delivery.js'
+bindTypedDeliveryFlush()
 
 process.stderr.write = (() => true) as any
 

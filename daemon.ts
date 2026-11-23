@@ -57,9 +57,9 @@ import { syncDaemonBridge } from './engines/bridge-sync.js'
 import { registry, threadRegistry, reattachAdapters, engineRecords } from './sessions/registry.js'
 import { isPlainWorker } from './shared/policy-record.js'
 import { engines, resolveEngine } from './sessions/engine-instances.js'
-import { bindCodexRuntime, startCodexRuntime } from './app/codex-runtime.js'
+import { startCodexRuntime } from './app/codex-runtime.js'
+import { bindDaemon } from './app/bind.js'
 import { transport, setDeliveryGate } from './sessions/bridge-transport.js'
-import { bindDeliveryNotice } from './sessions/delivery-notice.js'
 import { deliveryRefusal } from './app/restricted.js'
 import { operatorIds, notifyOperator } from './sessions/access.js'
 import { setupPermissionHandler } from './app/permission.js'
@@ -110,9 +110,7 @@ setDeliveryGate(deliveryRefusal)
 transport.restorePersistedQueues()
 startBridgeServer()
 
-bindDeliveryNotice()
-bindCodexRuntime()
-bindRouter()
+bindDaemon()
 // Start each engine over its persisted records. Not awaited; each start logs its own outcome.
 // Codex has no start of its own: its sweep (startCodexRuntime) reconnects its sessions to their app-server sockets.
 for (const adapter of Object.values(engines)) {
@@ -171,7 +169,6 @@ if ('homeSpawnHandler' in gateway) {
   ;(gateway as any).homeSpawnHandler = runHomeSpawnAction
 }
 
-import { bindRouter } from './app/router.js'
 import { restoreHeld } from './app/specialist-thread.js'
 import { startPrWatcher } from './connectors/github/pr-watch.js'
 import { startConversationTable, stopConversationTable, startSlackListener, bindSlackDelivery } from './connectors/slack/runtime.js'
