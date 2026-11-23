@@ -320,10 +320,6 @@
     ],
     [
       "daemon",
-      "sessions_anchor-state"
-    ],
-    [
-      "daemon",
       "sessions_bridge-transport"
     ],
     [
@@ -364,19 +360,7 @@
     ],
     [
       "daemon",
-      "app_templates"
-    ],
-    [
-      "daemon",
-      "shared_constants"
-    ],
-    [
-      "daemon",
       "app_dashboard"
-    ],
-    [
-      "daemon",
-      "app_commands_status"
     ],
     [
       "daemon",

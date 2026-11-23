@@ -35,6 +35,10 @@ test('daemon.ts binds the notice and Codex listeners before any engine starts', 
   }
 })
 
+test('daemon.ts hands the Home tab its spawn handler', () => {
+  expect(daemon).toMatch(/^  ;\(gateway as any\)\.homeSpawnHandler = runHomeSpawnAction$/m)
+})
+
 test('daemon.ts hands the Slack gateway its operator ids', () => {
   expect(daemon).toMatch(/\(gateway as any\)\.operators = operatorIds\b/)
 })

@@ -56,7 +56,6 @@ import { syncMods } from './infra/mods.js'
 import { syncDaemonBridge } from './engines/bridge-sync.js'
 import { registry, threadRegistry, reattachAdapters, engineRecords } from './sessions/registry.js'
 import { isPlainWorker } from './shared/policy-record.js'
-import { emojiOfName } from './sessions/anchor-state.js'
 import { engines, resolveEngine } from './sessions/engine-instances.js'
 import { bindCodexRuntime, startCodexRuntime } from './app/codex-runtime.js'
 import { transport, setDeliveryGate } from './sessions/bridge-transport.js'
@@ -125,10 +124,8 @@ queueMicrotask(logSubscriptions)
 
 import { initPhaseBudgets } from './sessions/phase-budget.js'
 import { initIdleLimits } from './sessions/idle-limit.js'
-import { killSession, backfillAnchorChannelIds, doSpawnSession } from './app/session-lifecycle.js'
-import { runHomeStatusAction } from './app/home-actions.js'
-import { parseTemplateTopic, buildTemplateSpawnOpts, runTemplateAction, getTemplate } from './app/templates.js'
-import { resolveModelAlias } from './shared/constants.js'
+import { killSession, backfillAnchorChannelIds } from './app/session-lifecycle.js'
+import { runHomeStatusAction, runHomeSpawnAction } from './app/home-actions.js'
 initPhaseBudgets((info, reason) => killSession(info, reason, { ended: 'killed by hydra' }))
 initIdleLimits((info, reason, opts) => killSession(info, reason, { ...opts, ended: 'killed by hydra' }))
 
@@ -149,9 +146,7 @@ import { startVitalsSnapshots } from './sessions/observability.js'
 startVitalsSnapshots((id) => transport.has(id), { alert: notifyOperator })
 
 import { refreshDashboard, refreshDashboardNow } from './app/dashboard.js'
-import { debouncedRefreshListDisplay } from './app/commands/status.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './infra/artifacts.js'
-import type { ProviderId } from './engines/engine-adapter.js'
 registry.onPersist = refreshDashboard
 targetDeps.stuckState = confirmedStuckState
 bindSlackDelivery({ deliverToTarget, conversationSessionName, conversationSessionRunning, placesFree })
@@ -170,89 +165,7 @@ if ('homeStatusHandler' in gateway) {
 }
 
 if ('homeSpawnHandler' in gateway) {
-  ;(gateway as any).homeSpawnHandler = async (topic: string, userId: string) => {
-    try {
-      let parsed = parseTemplateTopic(topic)
-      let modelOverride: string | undefined
-      let engine: ProviderId | undefined
-
-      // "review sonnet: topic" — parseTemplateTopic sees "review sonnet" as candidate, misses it.
-      // Fall back: split prefix on space to find "template model: topic".
-      if (!parsed) {
-        const colonIdx = topic.indexOf(':')
-        if (colonIdx > 0) {
-          const prefix = topic.slice(0, colonIdx).trim().toLowerCase()
-          const spaceIdx = prefix.indexOf(' ')
-          if (spaceIdx > 0) {
-            const tplName = prefix.slice(0, spaceIdx)
-            const modelAlias = prefix.slice(spaceIdx + 1)
-            const tpl = getTemplate(tplName)
-            const resolved = resolveModelAlias(modelAlias)
-            if (tpl && resolved) {
-              parsed = { templateName: tplName, template: tpl, topic: topic.slice(colonIdx + 1).trim() }
-              modelOverride = resolved
-            }
-          }
-        }
-      }
-
-      let cleanTopic = parsed?.topic || topic
-
-      // --codex flag support
-      if (/\s*--codex\b/.test(cleanTopic)) {
-        engine = 'codex'
-        cleanTopic = cleanTopic.replace(/\s*--codex\b/, '').trim()
-      }
-      if (!cleanTopic.trim()) {
-        const hint = parsed?.templateName ?? 'review'
-        void gateway.send(userId, `_Need a topic — e.g. \`${hint}: describe the task\`_`).catch(() => {})
-        return
-      }
-
-      const spawnOpts = {
-        ...(parsed && buildTemplateSpawnOpts(parsed.templateName, parsed.template, modelOverride)),
-        ...(engine && { engine }),
-        initiator: userId,
-      }
-
-      const result = await doSpawnSession(cleanTopic, undefined, undefined, spawnOpts)
-
-      if (parsed) {
-        const parts: string[] = [`**${parsed.templateName}** template`]
-        if (modelOverride) parts.push(`model \`${modelOverride}\``)
-        void gateway.send(result.threadId, `_Using ${parts.join(' · ')}_`).catch(() => {})
-        if (parsed.template.action) {
-          try {
-            await runTemplateAction(parsed.template.action, result.threadId, result.sessionId, cleanTopic)
-          } catch (err) {
-            const errMsg = err instanceof Error ? err.message : String(err)
-            void gateway.send(result.threadId, `_Action **${parsed.template.action}** failed: ${errMsg}_`).catch(() => {})
-          }
-        }
-      }
-
-      // Notify main bridge so the main session sees the spawn
-      const mainBridge = transport.get('main')
-      if (mainBridge) {
-        const label = parsed?.templateName
-        const labelSuffix = label ? ` (${label})` : ''
-        const modelSuffix = modelOverride ? ` [${modelOverride}]` : ''
-        transport.sendToBridge(mainBridge, {
-          type: 'notification',
-          content: `[system] Spawned ${emojiOfName(result.name)} \`${result.name}\`${labelSuffix}${modelSuffix} for: ${cleanTopic}${result.url ? ` — ${result.url}` : ''}`,
-          meta: { chat_id: 'home', message_id: '', user: 'system', user_id: userId, ts: new Date().toISOString() },
-        })
-      }
-
-      process.stderr.write(`daemon: home:spawn created session ${result.name}${parsed ? ` (template: ${parsed.templateName})` : ''}\n`)
-      refreshDashboardNow()
-      debouncedRefreshListDisplay()
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err)
-      process.stderr.write(`daemon: home:spawn failed: ${errMsg}\n`)
-      void gateway.send(userId, `_Spawn failed: ${errMsg}_`).catch(() => {})
-    }
-  }
+  ;(gateway as any).homeSpawnHandler = runHomeSpawnAction
 }
 
 // Importing router wires up gateway.onMessage / onThreadDelete / onMessageDelete

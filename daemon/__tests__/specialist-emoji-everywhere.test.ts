@@ -554,8 +554,8 @@ describe('the spawn-time sites (source-pinned)', () => {
     expect(src).toMatch(/const spawnLine = formatSpawnLine\(\{[^}]*emoji: emojiOfName\(tmuxName\),/s)
   })
 
-  test('the home spawn announcement in daemon.ts', () => {
-    const src = read('daemon.ts')
+  test('the home spawn announcement in app/home-actions.ts', () => {
+    const src = read('app/home-actions.ts')
     expect(src).toMatch(/\[system\] Spawned \$\{emojiOfName\(result\.name\)\} \\`\$\{result\.name\}\\`/)
   })
 })
