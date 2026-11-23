@@ -6,6 +6,7 @@ import { discord } from './discord.js'
 import type { GatewayProfile } from './profile.js'
 import { slack } from './slack.js'
 
+export type { ChatPlatform } from '../../config/types.js'
 export type { GatewayProfile } from './profile.js'
 
 export const GATEWAY_PROFILES = { discord, slack } as const satisfies Record<ChatPlatform, GatewayProfile>

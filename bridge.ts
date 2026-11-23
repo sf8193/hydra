@@ -29,7 +29,8 @@ import { parseDaemonToBridgeMessage, type BridgeToDaemonMessage, type BridgeTool
 import { SESSION_TOKEN_VAR } from './shared/caller.js'
 import { bridgeLifePath, type BridgeLifeEvent } from './shared/bridge-life.js'
 import { appendBridgeLife } from './infra/bridge-life-file.js'
-import { BRIDGE_SHUTDOWN_GRACE_MS, LONG_TOOL_TIMEOUTS_MS, SESSION_INSTRUCTIONS } from './shared/constants.js'
+import { BRIDGE_SHUTDOWN_GRACE_MS, LONG_TOOL_TIMEOUTS_MS } from './shared/constants.js'
+import { buildSessionInstructions, initialToolsForBridgeEnv, parseChatPlatform } from './shared/session-instructions.js'
 import { RESUME_GAP_MS } from './shared/loop-watch.js'
 
 // Resolve daemon socket path. Priority:
@@ -365,6 +366,20 @@ function scheduleReconnect(): void {
 
 // ── MCP server ─────────────────────────────────────────────────────────
 
+// MCP sends `instructions` once in the initialize response, so this captures the session's startup tool set;
+// tools added later via `tools_update` (e.g. protocol_spawn phases) are advertised through `notifications/tools/list_changed`.
+const INITIAL_INSTRUCTIONS = buildSessionInstructions({
+  tools: initialToolsForBridgeEnv({
+    isMain: IS_MAIN,
+    sessionType: process.env.HYDRA_SESSION_TYPE,
+    restricted: process.env.HYDRA_RESTRICTED === '1',
+    writeConfined: process.env.HYDRA_WRITE_CONFINED === '1',
+  }),
+  platform: parseChatPlatform(process.env.CHAT_PLATFORM),
+  // Write-confined sessions can attach files (checked via snapshotConfinedFiles); only restricted sessions are refused.
+  replyAcceptsFiles: process.env.HYDRA_RESTRICTED !== '1',
+})
+
 const mcp = new Server(
   { name: 'hydra-bridge', version: '1.0.0' },
   {
@@ -375,7 +390,7 @@ const mcp = new Server(
         'claude/channel/permission': {},
       },
     },
-    instructions: SESSION_INSTRUCTIONS,
+    instructions: INITIAL_INSTRUCTIONS,
   },
 )
 

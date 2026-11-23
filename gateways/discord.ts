@@ -29,6 +29,7 @@ import { GatewayHealth } from '../infra/gateway-health.js'
 import { planReactionReconciliation } from '../shared/reaction-reconcile.js'
 import { linkPreviewsOff } from '../shared/link-previews.js'
 import { DISCORD_DM_ID } from '../shared/gateways/discord.js'
+import { gatewayProfile } from '../shared/gateways/index.js'
 import { customEmojiId } from '../shared/slack-lines.js'
 import type {
   ChatGateway,
@@ -130,7 +131,7 @@ export class DiscordGateway implements ChatGateway {
   readonly platform = 'discord' as const
   readonly canThreadInDM = false
   readonly dmThreadsAreExclusive = false
-  readonly postsReactions = true
+  readonly postsReactions = gatewayProfile('discord').postsReactions
   readonly healthCheckUrl = 'https://discord.com/api/v10/gateway'
   readonly maxMessageLength = 2000 // Discord API hard limit
   readonly maxAttachments = 10

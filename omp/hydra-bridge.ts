@@ -3,7 +3,9 @@
 // Loaded with `omp -e`; the session runs in tmux like Claude's.
 import { connect, type Socket } from 'node:net'
 import { randomUUID } from 'node:crypto'
-import { SESSION_INSTRUCTIONS, formatNotification } from '../shared/constants.js'
+import { formatNotification } from '../shared/constants.js'
+import { buildSessionInstructions, initialToolsForBridgeEnv, parseChatPlatform } from '../shared/session-instructions.js'
+import type { ChatPlatform } from '../shared/gateways/index.js'
 import { parseDaemonToBridgeMessage, type BridgeToDaemonMessage, type BridgeToolContent, type BridgeToolDef } from '../shared/bridge-protocol.js'
 import { SESSION_TOKEN_VAR } from '../shared/caller.js'
 
@@ -43,6 +45,16 @@ export default function (pi: ExtensionAPI) {
   let buf = ''
   let started = false
   const toolNames: string[] = []
+  let activePlatform: ChatPlatform = parseChatPlatform(process.env.CHAT_PLATFORM)
+  // Live tool set pushed by the daemon on `registered`/`tools_update`; falls back to env until first registration.
+  // omp has limitsAccess: false, so sessions are never restricted or write-confined.
+  let liveTools: ReadonlySet<string> = initialToolsForBridgeEnv({
+    sessionType: process.env.HYDRA_SESSION_TYPE,
+  })
+
+  function updateLiveTools(tools: BridgeToolDef[]) {
+    liveTools = new Set(tools.map(t => t.name))
+  }
   // Only the tools of the first `registered` gate readiness: a tool that arrives later must not stall delivery if omp activates it late.
   let gate: string[] | null = null
   const pending = new Map<string, (r: { content: BridgeToolContent[]; isError?: boolean }) => void>()
@@ -93,7 +105,17 @@ export default function (pi: ExtensionAPI) {
     }
     const m = parsed.msg
     switch (m.type) {
-      case 'registered': case 'tools_update': registerTools(m.tools ?? []); flush(); break
+      case 'registered':
+        if (m.platform) activePlatform = parseChatPlatform(m.platform)
+        if (m.tools) updateLiveTools(m.tools)
+        registerTools(m.tools ?? [])
+        flush()
+        break
+      case 'tools_update':
+        if (m.tools) updateLiveTools(m.tools)
+        registerTools(m.tools ?? [])
+        flush()
+        break
       case 'notification': outbox.push({ text: formatNotification(m.content, m.meta) }); flush(); break
       case 'tool_result': { const done = pending.get(m.id); if (done) { pending.delete(m.id); done({ content: m.content, isError: m.isError }) } break }
     }
@@ -117,6 +139,8 @@ export default function (pi: ExtensionAPI) {
 
   pi.on('session_start', async () => { started = true; flush() })
   // Claude gets these rules as MCP instructions; omp has no such channel, so they go in the system prompt each turn.
-  pi.on('before_agent_start', async (e) => ({ systemPrompt: [...e.systemPrompt, SESSION_INSTRUCTIONS] }))
+  pi.on('before_agent_start', async (e) => ({
+    systemPrompt: [...e.systemPrompt, buildSessionInstructions({ tools: liveTools, platform: activePlatform })],
+  }))
   connectSocket()
 }
