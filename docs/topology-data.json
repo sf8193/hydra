@@ -380,10 +380,6 @@
     ],
     [
       "daemon",
-      "infra_tmux"
-    ],
-    [
-      "daemon",
       "app_session-health"
     ],
     [

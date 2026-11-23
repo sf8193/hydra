@@ -68,6 +68,7 @@ import { announceRestartComplete } from './app/commands/global.js'
 import { deliverWatchdogAlert } from './app/watchdog-alert.js'
 import { autoRecoverAfterBoot } from './app/recovery.js'
 import { sendRecoveryReport } from './app/recovery-report.js'
+import { backfillLastReplyIds, backfillArtifacts, startBackgroundBackfills } from './app/startup-backfills.js'
 import { startJobsClock, stopJobsClock, realDeps } from './connectors/clock/jobs-clock.js'
 import { deliverToTarget, targetDeps, conversationSessionName, conversationSessionRunning, placesFree } from './app/targets.js'
 
@@ -147,7 +148,6 @@ import { startVitalsSnapshots } from './sessions/observability.js'
 startVitalsSnapshots((id) => transport.has(id), { alert: notifyOperator })
 
 import { refreshDashboard, refreshDashboardNow } from './app/dashboard.js'
-import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './infra/artifacts.js'
 registry.onPersist = refreshDashboard
 targetDeps.stuckState = confirmedStuckState
 bindSlackDelivery({ deliverToTarget, conversationSessionName, conversationSessionRunning, placesFree })
@@ -170,9 +170,9 @@ if ('homeSpawnHandler' in gateway) {
 }
 
 // Importing router wires up gateway.onMessage / onThreadDelete / onMessageDelete
-import { warmContextLink } from './app/router.js'
+import './app/router.js'
 import { restoreHeld } from './app/specialist-thread.js'
-import { startPrWatcher, backfillTitles, fetchPrTitle, parsePrUrl } from './connectors/github/pr-watch.js'
+import { startPrWatcher } from './connectors/github/pr-watch.js'
 import { startConversationTable, stopConversationTable, startSlackListener, bindSlackDelivery } from './connectors/slack/runtime.js'
 import { pruneEvents } from './infra/events.js'
 import { startHydraConfig, stopHydraConfig, retryHydraConfigAlert, currentHydraConfig, onHydraConfigLoad, reloadHydraConfig, hydraConfigLoadedOk } from './infra/hydra-config.js'
@@ -183,7 +183,6 @@ import { pollActivityOnce } from './app/reply-guard.js'
 import { flushAllHeld } from './app/typed-delivery.js'
 import { probeAllSessions, mainStuckCause, confirmedStuckState } from './app/pane-probe.js'
 import { safeSend } from './infra/util.js'
-import { tmuxHasSession } from './infra/tmux.js'
 
 gateway.onReconnectAfterOutage = sendRecoveryReport
 
@@ -265,22 +264,7 @@ async function startGateway(attempt = 0): Promise<void> {
 }
 
 void startGateway().then(async () => {
-  if (gateway.getLastReplyId) {
-    let backfilled = 0
-    for (const s of registry.values()) {
-      if (s.lastReplyId) continue
-      try {
-        const lastId = await gateway.getLastReplyId(s.threadId)
-        if (lastId) { s.lastReplyId = lastId; backfilled++ }
-      } catch (err) {
-        process.stderr.write(`daemon: backfill failed for ${s.tmuxName} (${s.threadId}): ${err instanceof Error ? err.message : err}\n`)
-      }
-    }
-    if (backfilled > 0) {
-      registry.persist()
-      process.stderr.write(`daemon: backfilled lastReplyId for ${backfilled} session(s)\n`)
-    }
-  }
+  await backfillLastReplyIds()
   await backfillArtifacts()
   // Opt-in (HYDRA_AUTO_RECOVER=1): revive dead workers after a reboot. Runs after
   // the gateway is up (respawns post to their threads). No-op otherwise.
@@ -294,43 +278,6 @@ void startGateway().then(async () => {
     process.stderr.write(`daemon: slack connector failed to start: ${err instanceof Error ? err.message : err}\n`),
   )
 })
-
-// Backfill artifacts from each live session's own recent thread posts, so
-// deliverables produced before this feature existed appear without waiting for a
-// new reply. Idempotent (mergeArtifacts dedupes), so it's safe to run every boot.
-async function backfillArtifacts(): Promise<void> {
-  if (!gateway.fetchMessages) return
-  let changedCount = 0
-  let dirty = false
-  for (const s of registry.values()) {
-    if (!tmuxHasSession(s.tmuxName)) continue
-    if (s.artifactsBackfilled) continue  // one-time scan — avoids a fetch-burst on every restart
-    try {
-      const msgs = await gateway.fetchMessages(s.threadId, 100)
-      const found: string[] = []
-      for (const m of msgs) {
-        // Only the session's own posts (bot-authored, in its own thread) — not the human's inbound refs.
-        if (gateway.botId && m.authorId !== gateway.botId) continue
-        found.push(...extractArtifactLinks(m.content))
-      }
-      // Re-canonicalize existing entries too, so this pass also self-heals any
-      // pollution captured before the extractor was tightened.
-      const before = s.artifacts ?? []
-      const { next } = mergeArtifacts(sanitizeArtifacts(before), found)
-      if (JSON.stringify(next) !== JSON.stringify(before)) { s.artifacts = next; changedCount++ }
-      s.artifactsBackfilled = true
-      dirty = true
-    } catch (err) {
-      // Leave the flag unset so a transient fetch failure retries next boot.
-      process.stderr.write(`daemon: artifact backfill failed for ${s.tmuxName}: ${err instanceof Error ? err.message : err}\n`)
-    }
-  }
-  if (dirty) registry.persist()
-  if (changedCount > 0) {
-    refreshDashboardNow()
-    process.stderr.write(`daemon: backfilled artifacts for ${changedCount} session(s)\n`)
-  }
-}
 
 // ---------------------------------------------------------------------------
 // PR watcher — polls GitHub for new PR comments/reviews
@@ -347,41 +294,7 @@ pruneEvents()
 
 // Reply guard: polls session activity every 20s (see below).
 
-// Backfill PR titles for existing watches (non-blocking)
-backfillTitles().then(n => {
-  if (n > 0) {
-    process.stderr.write(`daemon: backfilled ${n} PR title(s)\n`)
-    refreshDashboardNow()
-  }
-}).catch(err => process.stderr.write(`daemon: PR title backfill failed: ${err}\n`))
-
-// Backfill PR titles for artifact links (non-blocking)
-void (async () => {
-  let filled = 0
-  for (const s of registry.values()) {
-    for (const url of s.artifacts ?? []) {
-      if (!parsePrUrl(url)) continue
-      try {
-        const title = await fetchPrTitle(url)
-        if (title) { cachePrTitle(url, title); filled++ }
-      } catch {}
-    }
-  }
-  if (filled > 0) {
-    refreshDashboardNow()
-    process.stderr.write(`daemon: backfilled ${filled} artifact PR title(s)\n`)
-  }
-})().catch(err => process.stderr.write(`daemon: artifact title backfill failed: ${err}\n`))
-
-// Backfill Slack channel names + thread summaries for context links (non-blocking)
-void (async () => {
-  let filled = 0
-  for (const s of registry.values()) for (const url of s.contextLinks ?? []) filled += await warmContextLink(url)
-  if (filled > 0) {
-    refreshDashboardNow()
-    process.stderr.write(`daemon: backfilled ${filled} Slack context link(s)\n`)
-  }
-})().catch(err => process.stderr.write(`daemon: Slack context backfill failed: ${err}\n`))
+startBackgroundBackfills()
 
 // ---------------------------------------------------------------------------
 // Session health — crash detection, orphan detection, context alerts

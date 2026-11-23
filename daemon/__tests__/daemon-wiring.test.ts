@@ -43,6 +43,11 @@ test('daemon.ts hands the gateway its outage recovery report', () => {
   expect(daemon).toMatch(/^gateway\.onReconnectAfterOutage = sendRecoveryReport$/m)
 })
 
+test('daemon.ts runs the startup backfills in order: reply ids, then artifacts, then the background ones', () => {
+  expect(daemon).toMatch(/^  await backfillLastReplyIds\(\)\n  await backfillArtifacts\(\)$/m)
+  expect(daemon).toMatch(/^startBackgroundBackfills\(\)$/m)
+})
+
 test('daemon.ts hands the Slack gateway its operator ids', () => {
   expect(daemon).toMatch(/\(gateway as any\)\.operators = operatorIds\b/)
 })
