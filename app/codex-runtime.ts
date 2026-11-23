@@ -58,7 +58,7 @@ export function scheduleCodexSurfaceRepairs(
 }
 
 // ---------------------------------------------------------------------------
-// Event handlers — Codex engine events → daemon protocol dispatch (bound by bindCodexRuntime)
+// Event handlers and helpers — Codex engine events → daemon protocol dispatch (bindCodexRuntime binds them)
 // ---------------------------------------------------------------------------
 
 // After a restart or reconnect: record what thread/resume says the last turn
