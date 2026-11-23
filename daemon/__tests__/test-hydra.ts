@@ -7,10 +7,10 @@ import type { Address, ChannelGate, GateSettings, HydraConfig } from '../../conf
 
 type Channel = { requireMention?: boolean; threadReply?: boolean; listen?: boolean; onlyOperators?: boolean }
 /** `specialists` is hydra.toml text declaring them (`[specialists.x]` tables): the config is then loaded, as the daemon does. */
-export type TestHydra = { operators?: string[]; channels?: Record<string, Channel>; gate?: GateSettings; specialists?: string }
+export type TestHydra = { operators?: string[]; channels?: Record<string, Channel>; gate?: GateSettings; specialists?: string; botChannels?: string[] }
 
 /** Installs the config; the returned handle restores the file's own (as a spy's mockRestore does). */
-export function setHydra({ operators = [], channels = {}, gate, specialists }: TestHydra = {}): { mockRestore(): void } {
+export function setHydra({ operators = [], channels = {}, gate, specialists, botChannels = [] }: TestHydra = {}): { mockRestore(): void } {
   const gates: Record<string, ChannelGate> = Object.fromEntries(Object.entries(channels).map(([id, c]) => [`${PLATFORM}:${id}`, {
     access: { mention: c.requireMention ?? true, allow: c.onlyOperators ? ['operator'] : 'anyone' as 'anyone' | string[], ...(c.listen !== undefined && { listen: c.listen }) },
     ...(c.threadReply !== undefined && { threadReply: c.threadReply }),
@@ -18,7 +18,8 @@ export function setHydra({ operators = [], channels = {}, gate, specialists }: T
   const people: HydraConfig['people'] = operators.length ? { operator: { id: 'operator', addresses: operators.map(o => `${PLATFORM}:${o}` as Address), roles: [], name: 'operator' } } : {}
   const base: HydraConfig = {
     ...(operators.length && { operator: 'operator' }),
-    connectors: {}, gateways: {}, slackApps: {}, specialists: {}, schedules: {}, rules: [], places: {}, channels: gates,
+    connectors: {}, gateways: {}, slackApps: {}, specialists: {}, schedules: {}, rules: [], channels: gates,
+    places: Object.fromEntries(botChannels.map(id => [`${PLATFORM}:${id}`, { files: false, messages: 'addressed' as const, bots: true, reactions: 'off' as const, linkPreviews: true }])),
     ...(gate && { gateSettings: { [PLATFORM]: gate } }),
     people,
   }

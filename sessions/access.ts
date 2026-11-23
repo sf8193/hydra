@@ -3,7 +3,7 @@ import { currentHydraConfig, hydraLoadEnv, reloadHydraConfig } from '../infra/hy
 import { admitChannel } from '../config/admit.js'
 import { BUSY } from '../config/append.js'
 import { chunk, safeSend } from '../infra/util.js'
-import type { GateSettings } from '../config/types.js'
+import { optionsOf, placeOf, type GateSettings } from '../config/types.js'
 import type { InboundMessage } from '../gateways/gateway.js'
 
 // ---------------------------------------------------------------------------
@@ -123,6 +123,11 @@ export function channelPolicy(place: Place): GroupPolicy | undefined {
  */
 export function channelAllowed(place: Place): boolean {
   return place.isDM || channelPolicy(place) !== undefined
+}
+
+/** Whether this daemon hears other apps' bots in the place: `bots = true` on its `[places]` entry. Default false. */
+export function hearsBots(place: Place): boolean {
+  return optionsOf(currentHydraConfig().places, placeOf(PLATFORM, 'channel', place.parentChannelId ?? place.channelId))?.bots === true
 }
 
 /** Channels where an admit was refused and the operator told, so each hears it once. */

@@ -7,7 +7,7 @@ import { refreshDashboard } from './dashboard.js'
 import { registry, threadRegistry, type SessionInfo } from '../sessions/registry.js'
 import { flagStranger, acknowledged } from './stranger.js'
 import { transport } from '../sessions/bridge-transport.js'
-import { operatorIds, gate, channelAllowed, channelPolicy, admitTaggedChannel, ackReactionOf, mentionsUs } from '../sessions/access.js'
+import { operatorIds, gate, channelAllowed, channelPolicy, admitTaggedChannel, ackReactionOf, mentionsUs, hearsBots } from '../sessions/access.js'
 import type { DownloadedFile } from '../gateways/gateway.js'
 import type { InboundMessage } from '../gateways/gateway.js'
 import { transcribeDownloads, mergeTranscripts } from '../infra/transcription.js'
@@ -439,7 +439,7 @@ if (gateway.onReaction) {
 // ---------------------------------------------------------------------------
 
 gateway.onMessage(async (inbound: InboundMessage) => {
-  if (inbound.isBot) return
+  if (inbound.isBot && !hearsBots(inbound)) return
 
   // The one chokepoint: nothing below, operator command or not, acts in a place this daemon is not allowed in.
   if (!channelAllowed(inbound) && !(await admitTaggedChannel(inbound))) return
