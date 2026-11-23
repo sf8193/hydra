@@ -346,9 +346,13 @@ describe('posting where link previews are off', () => {
     expect(t.apps[0].apiCalls.filter(c => c.startsWith('post:'))).toEqual([`post:${CH}:-:see https://example.com`, `post:${CH}:-:see https://example.com and <https://example.org|this>:{"unfurl":false}`])
   })
   test('the Slack arguments: unfurl_links and unfurl_media false with the option, and exactly today\'s arguments without it', () => {
-    expect(postPayload('C1', '1.0', 'hi', { unfurl: false })).toEqual({ channel: 'C1', text: 'hi', thread_ts: '1.0', unfurl_links: false, unfurl_media: false })
-    expect(postPayload('C1', undefined, 'hi')).toEqual({ channel: 'C1', text: 'hi' })
-    expect(postPayload('C1', '1.0', 'hi', {})).toEqual({ channel: 'C1', text: 'hi', thread_ts: '1.0' })
+    expect(postPayload('C1', '1.0', 'hi', { unfurl: false })).toEqual({ channel: 'C1', markdown_text: 'hi', thread_ts: '1.0', unfurl_links: false, unfurl_media: false })
+    expect(postPayload('C1', undefined, 'hi')).toEqual({ channel: 'C1', markdown_text: 'hi' })
+    expect(postPayload('C1', '1.0', 'hi', {})).toEqual({ channel: 'C1', markdown_text: 'hi', thread_ts: '1.0' })
+  })
+  test('a reply renders as markdown whatever it holds: a tag, a labelled link or a channel link is no exception, and past the cap it goes as classic text', () => {
+    for (const t of ['<@U1> **now**', '<!here> | a | b |', '<#C1|dev> and <https://x.co|x>', '`<!DOCTYPE html>` **b**']) expect(postPayload('C1', undefined, t)).toEqual({ channel: 'C1', markdown_text: t })
+    expect(postPayload('C1', undefined, 'x'.repeat(12001))).toEqual({ channel: 'C1', text: 'x'.repeat(12001) })
   })
 })
 

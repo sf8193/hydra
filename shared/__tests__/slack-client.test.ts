@@ -6,7 +6,7 @@ import { SLACK_CLIENT_PING_TIMEOUT_MS } from '../constants.js'
 const built: { token: string; receiver: unknown; socketMode: boolean; logLevel: unknown }[] = []
 class FakeApp { receiver: unknown; constructor(opts: (typeof built)[number]) { built.push(opts); this.receiver = opts.receiver } }
 mock.module('@slack/bolt', () => ({ ...bolt, App: FakeApp }))
-const { buildSocketApp, parseAuth, unfurlFields } = await import('../slack-client.js')
+const { buildSocketApp, messageBody, MARKDOWN_TEXT_MAX, parseAuth, unfurlFields } = await import('../slack-client.js')
 
 describe('buildSocketApp', () => {
   test('builds a Socket Mode receiver with the keepalive headroom and an App on it', () => {
@@ -23,6 +23,24 @@ describe('unfurlFields', () => {
   test('off turns both previews off; on adds nothing', () => {
     expect(unfurlFields(true)).toEqual({ unfurl_links: false, unfurl_media: false })
     expect(unfurlFields(false)).toEqual({})
+  })
+})
+
+describe('messageBody', () => {
+  const md = 'See [#1](https://example.com/1) **now** `code`\n```\na < b\n```'
+  test('markdown goes as markdown_text, untouched', () => {
+    expect(messageBody(md)).toEqual({ markdown_text: md })
+  })
+  test('text that is already mrkdwn goes as text, so Slack never reads it as markdown', () => {
+    const mrkdwn = '*bold* <https://example.com|a link> _it_'
+    expect(messageBody(mrkdwn, true)).toEqual({ text: mrkdwn })
+  })
+  test('a tag, a channel link and a labelled link are no exception: they go as markdown_text', () => {
+    for (const t of ['<@U1> hi', '<!here>', '<#C1|dev>', '<https://x.co|x>']) expect(messageBody(t)).toEqual({ markdown_text: t })
+  })
+  test('the cap: at the limit still markdown_text, one past it classic text', () => {
+    expect(messageBody('x'.repeat(MARKDOWN_TEXT_MAX))).toHaveProperty('markdown_text')
+    expect(messageBody('x'.repeat(MARKDOWN_TEXT_MAX + 1))).toHaveProperty('text')
   })
 })
 

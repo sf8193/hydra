@@ -170,14 +170,14 @@ What a restricted or write-confined specialist can and cannot do, and how to dec
 
 ## Message formatting
 
-*Slack gateway.* Plain replies are sent via Slack's `markdown_text` field, so the bot can use the **full GitHub-flavored Markdown palette** and it renders natively:
+*Slack gateway and Slack connector.* Plain replies (the gateway's, and a specialist's reply or edit through the connector) are sent via Slack's `markdown_text` field, so the bot can use the **full GitHub-flavored Markdown palette** and it renders natively:
 
 - **bold** (`**x**`), _italic_ (`_x_`), ~strike~ (`~~x~~`), `inline code`
 - fenced ```code blocks```, `> blockquotes`, `---` dividers
 - bullet lists (`- ` / `* `, nested), numbered lists (`1.`), and **tables** (`| a | b |`)
 - headings (`#`), links (`[label](url)`), and emoji (`:tada:` / unicode)
 
-Constraints: `markdown_text` caps at ~12k chars (longer messages fall back to classic mrkdwn), and **button/permission prompts** use Block Kit (classic mrkdwn, fewer features). This layer only guarantees the palette renders — it imposes **no house style**. How a given bot *presents* (terse vs detailed, emoji, when to use a table vs bullets) belongs in that bot's own instructions / `CLAUDE.md`.
+Constraints: `markdown_text` caps at ~12k chars (longer messages fall back to classic mrkdwn), and **button/permission prompts** use Block Kit (classic mrkdwn, fewer features). One rule (`messageBody`, `shared/slack-client.ts`) serves both: a reply or edit goes as `markdown_text` unless it is over the cap or already Slack mrkdwn, so a tag (`<@U…>`, `<!here>`, `<#C…>`) needs no special case: Slack stores one in a `markdown_text` post as the same `rich_text` `user` element as in a classic `text` post (checked by reading both back, 23 Nov). Write Markdown: bold is `**x**`, and `*x*` is italic. This layer only guarantees the palette renders — it imposes **no house style**. How a given bot *presents* (terse vs detailed, emoji, when to use a table vs bullets) belongs in that bot's own instructions / `CLAUDE.md`.
 
 ## Spawned sessions
 

@@ -39,9 +39,9 @@ describe('the real client writes with the token of whoever wrote the message', (
     await a.edit!('C1', '6.000001', 'new', 'operator')
     await a.remove!('C1', '6.000001', 'operator')
     expect(calls).toEqual([
-      { token: 'xoxb-BOT', method: 'chat.update', args: { channel: 'C1', ts: '5.000001', text: 'new' } },
+      { token: 'xoxb-BOT', method: 'chat.update', args: { channel: 'C1', ts: '5.000001', markdown_text: 'new' } },
       { token: 'xoxb-BOT', method: 'chat.delete', args: { channel: 'C1', ts: '5.000001' } },
-      { token: 'xoxp-OPERATOR', method: 'chat.update', args: { channel: 'C1', ts: '6.000001', text: 'new' } },
+      { token: 'xoxp-OPERATOR', method: 'chat.update', args: { channel: 'C1', ts: '6.000001', markdown_text: 'new' } },
       { token: 'xoxp-OPERATOR', method: 'chat.delete', args: { channel: 'C1', ts: '6.000001' } },
     ])
   })
@@ -53,7 +53,18 @@ describe('the real client writes with the token of whoever wrote the message', (
     expect(await a.operatorUserId!()).toBeUndefined()
     const b = boltApp(TOKENS)
     await b.post('C1', undefined, 'hi')
-    expect(calls).toEqual([{ token: 'xoxb-BOT', method: 'chat.postMessage', args: { channel: 'C1', text: 'hi' } }])
+    expect(calls).toEqual([{ token: 'xoxb-BOT', method: 'chat.postMessage', args: { channel: 'C1', markdown_text: 'hi' } }])
+  })
+
+  test('an edit renders as markdown like its post, tag or not; past the cap both go as classic text', async () => {
+    calls.length = 0
+    const a = boltApp(TOKENS)
+    await a.edit!('C1', '5.000001', 'over to <@U0OTHER> **now**', 'app')
+    await a.edit!('C1', '5.000001', 'x'.repeat(12001), 'app')
+    expect(calls).toEqual([
+      { token: 'xoxb-BOT', method: 'chat.update', args: { channel: 'C1', ts: '5.000001', markdown_text: 'over to <@U0OTHER> **now**' } },
+      { token: 'xoxb-BOT', method: 'chat.update', args: { channel: 'C1', ts: '5.000001', text: 'x'.repeat(12001) } },
+    ])
   })
 
   test('the operator’s user id is read once, with the operator’s token', async () => {
