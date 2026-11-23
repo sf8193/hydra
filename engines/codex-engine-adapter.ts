@@ -176,8 +176,8 @@ export class CodexEngineAdapter implements EngineAdapter {
           resolvedModel = r.model ?? resolvedModel
         }
         break
-      } catch (err: any) {
-        lastErr = err?.message || String(err)
+      } catch (err: unknown) {
+        lastErr = err instanceof Error && err.message ? err.message : String(err)
         try { this.engine.disconnect(sessionId) } catch {}
         await new Promise(r => setTimeout(r, 500))
       }
@@ -404,8 +404,8 @@ export class CodexEngineAdapter implements EngineAdapter {
       // A close during the resume's queue drain can already have dropped the
       // socket (and its event is swallowed while we're reconnecting).
       return this.engine.isConnected(info.sessionId) ? 'connected' : 'lost'
-    } catch (err: any) {
-      process.stderr.write(`codex-adapter: resume failed for ${info.tmuxName}: ${err?.message || err}\n`)
+    } catch (err: unknown) {
+      process.stderr.write(`codex-adapter: resume failed for ${info.tmuxName}: ${err instanceof Error && err.message ? err.message : err}\n`)
       try { this.engine.disconnect(info.sessionId) } catch {}
       return 'failed'
     }
@@ -422,8 +422,8 @@ export class CodexEngineAdapter implements EngineAdapter {
       if (result.model && info.sessionMetadata) info.sessionMetadata.model = result.model
       process.stderr.write(`codex-adapter: reconnected ${info.tmuxName} (new thread)\n`)
       return this.engine.isConnected(info.sessionId) ? 'connected' : 'dropped'
-    } catch (err: any) {
-      process.stderr.write(`codex-adapter: fresh connect failed for ${info.tmuxName}: ${err?.message || err}\n`)
+    } catch (err: unknown) {
+      process.stderr.write(`codex-adapter: fresh connect failed for ${info.tmuxName}: ${err instanceof Error && err.message ? err.message : err}\n`)
       try { this.engine.disconnect(info.sessionId) } catch {}
       return 'failed'
     }

@@ -34,6 +34,48 @@ export function turnMovedOn(err: CodexRpcError): boolean {
 // Types
 // ---------------------------------------------------------------------------
 
+type CodexTurnItemPart = { type?: unknown; text?: unknown }
+type CodexTurnItem = {
+  type?: unknown
+  role?: unknown
+  text?: unknown
+  content?: unknown
+}
+type CodexTurn = {
+  id?: unknown
+  status?: unknown
+  completedAt?: unknown
+  items?: unknown
+}
+type CodexThreadResult = { thread?: { id?: string; turns?: CodexTurn[]; status?: { type?: string } }; model?: string }
+type CodexTurnStartResult = { turn?: { id?: string } }
+type CodexTurnSteerResult = { turnId?: string }
+type CodexNotificationParams = {
+  threadId?: string
+  turn?: { id?: string }
+  turnId?: string
+  item?: { type?: string }
+  delta?: string
+  rateLimits?: { primary?: { usedPercent?: number } }
+  tokenUsage?: { modelContextWindow?: number; last?: { totalTokens?: number } }
+}
+type CodexWireMessage = {
+  id?: number
+  method?: string
+  params?: CodexNotificationParams
+  result?: unknown
+  error?: { message: string; code: number }
+}
+
+function turnStatusOf(turn: CodexTurn | null | undefined): string | undefined {
+  const s = turn?.status
+  if (typeof s === 'string') return s
+  if (s && typeof s === 'object' && typeof (s as { type?: unknown }).type === 'string') {
+    return (s as { type: string }).type
+  }
+  return undefined
+}
+
 export type CodexConn = {
   sessionId: string
   ws: WebSocket
@@ -42,7 +84,7 @@ export type CodexConn = {
   turnPending: boolean  // true between startTurn() call and turn/started response
   turnWatchdog: ReturnType<typeof setTimeout> | null  // fires if turn stalls >5min
   nextRequestId: number
-  pendingRequests: Map<number, { resolve: (v: any) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>
+  pendingRequests: Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>
   messageBuffer: string[]
   deferredTurnQueue: string[]
   lastUsageWarning: number  // threshold of last warning sent (0, 50, 70)
@@ -73,19 +115,21 @@ export function selectDefaultCodexModel(result: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined
 }
 
-export function parseCodexContextUsage(params: any): { usedTokens: number; contextWindow: number; percent: number } | null {
-  const contextWindow = params?.tokenUsage?.modelContextWindow
-  const usedTokens = params?.tokenUsage?.last?.totalTokens
+export function parseCodexContextUsage(params: unknown): { usedTokens: number; contextWindow: number; percent: number } | null {
+  const tokenUsage = (params as { tokenUsage?: { modelContextWindow?: unknown; last?: { totalTokens?: unknown } } } | null)?.tokenUsage
+  const contextWindow = tokenUsage?.modelContextWindow
+  const usedTokens = tokenUsage?.last?.totalTokens
   if (typeof contextWindow !== 'number' || contextWindow <= 0 || typeof usedTokens !== 'number') return null
   return { usedTokens, contextWindow, percent: Math.min(100, Math.max(0, Math.round(usedTokens * 100 / contextWindow))) }
 }
 
 /** ID of the newest in-progress turn in a thread/resume history, if any. */
-export function activeTurnId(turns: any[]): string | null {
-  return turns.findLast((turn: any) => {
-    const status = turn?.status?.type ?? turn?.status
+export function activeTurnId(turns: readonly unknown[]): string | null {
+  const found = turns.findLast(raw => {
+    const status = turnStatusOf(raw as CodexTurn | null | undefined)
     return status === 'inProgress' || status === 'active'
-  })?.id ?? null
+  }) as CodexTurn | undefined
+  return typeof found?.id === 'string' ? found.id : null
 }
 
 export type ReconciledTurn = { turnId: string; status: string; completedAt: number | null; lastAgentText: string | null }
@@ -95,13 +139,14 @@ const TERMINAL_TURN = new Set(['completed', 'interrupted', 'failed'])
  *  in progress, else null. Text comes from its last agentMessage item; resume
  *  returns items with itemsView "full" (live-checked on codex-cli 0.157.1), and a
  *  "notLoaded" turn has none, so its text is null. completedAt is epoch seconds. */
-export function reconciledTurn(turns: any[]): ReconciledTurn | null {
+export function reconciledTurn(turns: readonly unknown[]): ReconciledTurn | null {
   if (activeTurnId(turns)) return null
-  const last = turns.at(-1)
-  const status = last?.status?.type ?? last?.status
-  if (typeof last?.id !== 'string' || !TERMINAL_TURN.has(status)) return null
-  const items = Array.isArray(last.items) ? last.items : []
-  const text = items.findLast((i: any) => i?.type === 'agentMessage' && typeof i.text === 'string' && i.text.trim())?.text ?? null
+  const last = turns.at(-1) as CodexTurn | null | undefined
+  const status = turnStatusOf(last)
+  if (typeof last?.id !== 'string' || !status || !TERMINAL_TURN.has(status)) return null
+  const items = Array.isArray(last.items) ? (last.items as CodexTurnItem[]) : []
+  const msg = items.findLast(i => i?.type === 'agentMessage' && typeof i.text === 'string' && i.text.trim())
+  const text = typeof msg?.text === 'string' ? msg.text : null
   return { turnId: last.id, status, completedAt: typeof last.completedAt === 'number' ? last.completedAt : null, lastAgentText: text }
 }
 
@@ -149,8 +194,8 @@ export class CodexEngine extends EventEmitter {
 
   constructor() {
     super()
-    this.on('error', (err: any) => {
-      process.stderr.write(`codex-engine: unhandled error event: ${err?.message || err}\n`)
+    this.on('error', (err: unknown) => {
+      process.stderr.write(`codex-engine: unhandled error event: ${err instanceof Error && err.message ? err.message : err}\n`)
     })
   }
 
@@ -165,21 +210,22 @@ export class CodexEngine extends EventEmitter {
         process.stderr.write(`codex-engine: model/list failed, using app-server default: ${err}\n`)
       }
     }
-    const result = await this.request(conn, 'thread/start', model ? { model } : {})
-    conn.threadId = result.thread?.id
+    const result = await this.request<CodexThreadResult>(conn, 'thread/start', model ? { model } : {})
+    conn.threadId = result?.thread?.id ?? null
     if (!conn.threadId) throw new Error('codex-engine: thread/start did not return a thread ID')
     this.drainDeferredTurns(conn)
-    return { threadId: conn.threadId, model: result.model ?? model }
+    return { threadId: conn.threadId, model: result?.model ?? model }
   }
 
   async connectAndResume(sessionId: string, socketPath: string, existingThreadId: string): Promise<{ model?: string }> {
     const conn = await this.connectBase(sessionId, socketPath, existingThreadId)
-    const result = await this.request(conn, 'thread/resume', { threadId: existingThreadId })
+    const result = await this.request<CodexThreadResult>(conn, 'thread/resume', { threadId: existingThreadId })
     // Completion can occur while the socket is absent. Reconcile against the
     // resumed thread instead of waiting forever for an event we already missed.
-    const turns = result.thread?.turns
+    const turns = result?.thread?.turns
     if (Array.isArray(turns)) {
-      conn.lastKnownTurnId = turns.at(-1)?.id ?? conn.lastKnownTurnId ?? null
+      const lastId = turns.at(-1)?.id
+      conn.lastKnownTurnId = typeof lastId === 'string' ? lastId : conn.lastKnownTurnId ?? null
       conn.currentTurnId = activeTurnId(turns)
       // Observation only (S10-lite B): a completion missed while the socket was
       // down is reported, but never as turnCompleted, whose listeners repair
@@ -196,16 +242,16 @@ export class CodexEngine extends EventEmitter {
         if (!conn.currentTurnId) this.drainDeferredTurns(conn)
       }
     }
-    return { model: result.model }
+    return { model: result?.model }
   }
 
   async connectAndFork(sessionId: string, socketPath: string, parentThreadId: string, model?: string): Promise<{ threadId: string; model?: string }> {
     const conn = await this.connectBase(sessionId, socketPath)
-    const result = await this.request(conn, 'thread/fork', { threadId: parentThreadId, ...(model ? { model } : {}) })
-    conn.threadId = result.thread?.id
+    const result = await this.request<CodexThreadResult>(conn, 'thread/fork', { threadId: parentThreadId, ...(model ? { model } : {}) })
+    conn.threadId = result?.thread?.id ?? null
     if (!conn.threadId) throw new Error('codex-engine: thread/fork did not return a thread ID')
     this.drainDeferredTurns(conn)
-    return { threadId: conn.threadId, model: result.model }
+    return { threadId: conn.threadId, model: result?.model }
   }
 
   private async connectBase(sessionId: string, socketPath: string, threadId?: string): Promise<CodexConn> {
@@ -252,7 +298,7 @@ export class CodexEngine extends EventEmitter {
     this.startSeq.set(sessionId, (this.startSeq.get(sessionId) ?? 0) + 1)
     conn.messageBuffer = []
     try {
-      const result = await this.request(conn, 'turn/start', {
+      const result = await this.request<CodexTurnStartResult>(conn, 'turn/start', {
         threadId: conn.threadId,
         input: [{ type: 'text', text }],
       })
@@ -284,7 +330,7 @@ export class CodexEngine extends EventEmitter {
     }
     const expectedTurnId = conn.currentTurnId
     try {
-      const result = await this.request(conn, 'turn/steer', {
+      const result = await this.request<CodexTurnSteerResult>(conn, 'turn/steer', {
         threadId: conn.threadId, expectedTurnId, input: [{ type: 'text', text }],
       })
       if (result?.turnId !== expectedTurnId) {
@@ -334,12 +380,13 @@ export class CodexEngine extends EventEmitter {
    * its active turn. Returns null when `conn` was replaced meanwhile (its
    * snapshot must not overwrite the live connection's state).
    */
-  private async resumeSnapshot(conn: CodexConn): Promise<any[] | null> {
-    const result = await this.request(conn, 'thread/resume', { threadId: conn.threadId })
+  private async resumeSnapshot(conn: CodexConn): Promise<CodexTurn[] | null> {
+    const result = await this.request<CodexThreadResult>(conn, 'thread/resume', { threadId: conn.threadId })
     if (this.connections.get(conn.sessionId) !== conn) return null
     const turns = result?.thread?.turns
     if (!Array.isArray(turns)) throw new Error('thread/resume returned no turns array')
-    conn.lastKnownTurnId = turns.at(-1)?.id ?? conn.lastKnownTurnId ?? null
+    const lastId = turns.at(-1)?.id
+    conn.lastKnownTurnId = typeof lastId === 'string' ? lastId : conn.lastKnownTurnId ?? null
     conn.currentTurnId = activeTurnId(turns)
     return turns
   }
@@ -364,23 +411,23 @@ export class CodexEngine extends EventEmitter {
    * Only exact user-input text on turns newer than the pre-send boundary counts.
    * null means the supplied history cannot establish that boundary.
    */
-  private findUncertainDelivery(turns: any[], afterTurnId: string | null, text: string): boolean | null {
-    let candidates = turns
+  private findUncertainDelivery(turns: readonly CodexTurn[], afterTurnId: string | null, text: string): boolean | null {
+    let candidates: readonly CodexTurn[] = turns
     if (afterTurnId) {
       const boundary = turns.findIndex(turn => turn?.id === afterTurnId)
       if (boundary < 0) return null
       candidates = turns.slice(boundary + 1)
     }
     const found = candidates.some(turn => {
-      const items = Array.isArray(turn?.items) ? turn.items : []
-      return items.some((item: any) => {
+      const items = Array.isArray(turn?.items) ? (turn.items as CodexTurnItem[]) : []
+      return items.some(item => {
         const isUser = item?.type === 'userMessage' || item?.type === 'user_message' ||
           (item?.type === 'message' && item?.role === 'user')
         if (!isUser) return false
         if (typeof item.text === 'string' && item.text === text) return true
         if (typeof item.content === 'string') return item.content === text
         if (!Array.isArray(item.content)) return false
-        return item.content.some((part: any) => {
+        return (item.content as CodexTurnItemPart[]).some(part => {
           const isText = part?.type === 'inputText' || part?.type === 'input_text' || part?.type === 'text'
           return isText && part?.text === text
         })
@@ -390,7 +437,7 @@ export class CodexEngine extends EventEmitter {
   }
 
   /** An unrelated active TUI turn is not evidence that our input arrived. */
-  private resolveUncertainStart(conn: CodexConn, turns: any[]): boolean {
+  private resolveUncertainStart(conn: CodexConn, turns: readonly CodexTurn[]): boolean {
     const scheduling = this.getScheduling(conn.sessionId, conn)
     const text = scheduling.uncertainDeferredText
     if (text === null) return false
@@ -604,10 +651,11 @@ export class CodexEngine extends EventEmitter {
         capabilities: { experimentalApi: true },
       })
       this.send(conn, { method: 'initialized' })
-      const result = await this.request(conn, 'thread/resume', { threadId })
+      const result = await this.request<CodexThreadResult>(conn, 'thread/resume', { threadId })
       const thread = result?.thread
       const turns = Array.isArray(thread?.turns) ? thread.turns : []
-      const activeId = activeTurnId(turns) ?? (thread?.status?.type === 'active' ? turns.at(-1)?.id : undefined)
+      const lastTurnId = turns.at(-1)?.id
+      const activeId = activeTurnId(turns) ?? (thread?.status?.type === 'active' && typeof lastTurnId === 'string' ? lastTurnId : undefined)
       // A successfully resumed thread with no active turn is already terminal.
       if (!activeId) return true
       await this.request(conn, 'turn/interrupt', { threadId, turnId: activeId })
@@ -711,8 +759,8 @@ export class CodexEngine extends EventEmitter {
       let ws: WebSocket
       try {
         ws = new WebSocket(`ws+unix://${socketPath}:/`, { perMessageDeflate: false })
-      } catch (err: any) {
-        reject(new Error(`codex-engine: WS constructor failed: ${err?.message || err}`))
+      } catch (err: unknown) {
+        reject(new Error(`codex-engine: WS constructor failed: ${err instanceof Error && err.message ? err.message : err}`))
         return
       }
 
@@ -725,12 +773,13 @@ export class CodexEngine extends EventEmitter {
 
       // Catch errors during connection phase only.
       // After settlement, errors are handled by the caller's ws.on('error').
-      const onError = (err: any) => {
+      const onError = (err: unknown) => {
         if (settled) return // Post-settlement errors handled by connect()'s handler
         settled = true
         clearTimeout(timeout)
         try { ws.terminate() } catch {}
-        const msg = err?.message || err?.error?.message || String(err)
+        const e = err as { message?: unknown; error?: { message?: unknown } } | null
+        const msg = (typeof e?.message === 'string' && e.message) || (typeof e?.error?.message === 'string' && e.error.message) || String(err)
         reject(new Error(`codex-engine: connect failed: ${msg}`))
       }
       ws.on('error', onError)
@@ -749,9 +798,9 @@ export class CodexEngine extends EventEmitter {
   // Protocol helpers
   // ---------------------------------------------------------------------------
 
-  private request(conn: CodexConn, method: string, params: any): Promise<any> {
+  private request<T = unknown>(conn: CodexConn, method: string, params: Record<string, unknown>): Promise<T> {
     const id = conn.nextRequestId++
-    return new Promise((resolve, reject) => {
+    return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         if (conn.pendingRequests.has(id)) {
           conn.pendingRequests.delete(id)
@@ -759,7 +808,7 @@ export class CodexEngine extends EventEmitter {
         }
       }, 30_000)
       conn.pendingRequests.set(id, {
-        resolve: (v: any) => { clearTimeout(timer); resolve(v) },
+        resolve: (v: unknown) => { clearTimeout(timer); resolve(v as T) },
         reject: (e: Error) => { clearTimeout(timer); reject(e) },
         timer,
       })
@@ -792,8 +841,10 @@ export class CodexEngine extends EventEmitter {
   }
 
   private handleMessage(conn: CodexConn, text: string): void {
-    let parsed: any
-    try { parsed = JSON.parse(text) } catch { return }
+    let raw: unknown
+    try { raw = JSON.parse(text) } catch { return }
+    if (!raw || typeof raw !== 'object') return
+    const parsed = raw as CodexWireMessage
 
     if (parsed.id !== undefined && parsed.method) {
       this.handleServerRequest(conn, parsed.id, parsed.method)
@@ -833,7 +884,7 @@ export class CodexEngine extends EventEmitter {
     this.send(conn, { id, error: { code: -32601, message: `Not handled: ${method}` } })
   }
 
-  private handleNotification(conn: CodexConn, method: string, params: any): void {
+  private handleNotification(conn: CodexConn, method: string, params: CodexNotificationParams): void {
     if (params.threadId && conn.threadId && params.threadId !== conn.threadId) return
     switch (method) {
       case 'turn/started':

@@ -33,11 +33,13 @@ export function readClaudeStatus(tmuxName: string, dir: string = join(claudeConf
   try { names = readdirSync(dir) } catch { return null }
   for (const name of names) {
     if (!name.endsWith('.json')) continue
-    let d: any
-    try { d = JSON.parse(readFileSync(join(dir, name), 'utf8')) } catch { continue }
-    if (typeof d?.tmux !== 'string' || d.tmux.split(':')[0] !== tmuxName) continue
+    let raw: unknown
+    try { raw = JSON.parse(readFileSync(join(dir, name), 'utf8')) } catch { continue }
+    if (!raw || typeof raw !== 'object') continue
+    const d = raw as Record<string, unknown>
+    if (typeof d.tmux !== 'string' || d.tmux.split(':')[0] !== tmuxName) continue
     if (typeof d.sessionId !== 'string' || typeof d.status !== 'string') continue
-    if (!Number.isInteger(d.pid) || !pidAlive(d.pid)) continue
+    if (typeof d.pid !== 'number' || !Number.isInteger(d.pid) || !pidAlive(d.pid)) continue
     live.push({ sessionId: d.sessionId, status: d.status, waitingFor: typeof d.waitingFor === 'string' ? d.waitingFor : undefined, cwd: typeof d.cwd === 'string' ? d.cwd : undefined })
   }
   // Two live claudes under one tmux name (split pane, manual claude): can't tell which is ours.
