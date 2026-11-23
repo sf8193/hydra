@@ -4,6 +4,9 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { gateway } from '../../infra/config.js'
 import { registry, threadRegistry, type SessionInfo } from '../../sessions/registry.js'
 import { executeTool } from '../../app/bridge-dispatch.js'
+import { checkSessionDeath } from '../../app/bridge-server.js'
+import { finaliseCodexDeath } from '../../app/codex-runtime.js'
+import { pollSessionsOnce } from '../../app/session-health.js'
 import { killSession } from '../../app/session-lifecycle.js'
 import { fakeAdapter } from './test-harness.js'
 
@@ -22,10 +25,10 @@ function mk(name: string, over: Record<string, unknown> = {}): SessionInfo {
   registry.set(info.sessionId, info); registry.setThread(info.threadId, info.sessionId); made.push(info)
   return info
 }
-/** A parent that spawned `kid`, so the kill notice has someone to go to. */
-function family(kid: string) {
+/** A parent that plain-spawned `kid` (parentId set, no originFrom — #736). */
+function family(kid: string, childOver: Record<string, unknown> = {}) {
   const parent = mk('kv-par')
-  const child = mk(kid, { originType: 'spawn', originFrom: 'kv-par', parentId: parent.sessionId, initiator: 'kv-par' })
+  const child = mk(kid, { originType: 'spawn', parentId: parent.sessionId, initiator: 'kv-par', ...childOver })
   return { parent, child }
 }
 const toParent = () => sent.filter(m => m.to === 'kv-thread-kv-par').map(m => m.text)
@@ -84,5 +87,47 @@ describe('the kill notice to the parent', () => {
     const { child } = family('kv-kid-c')
     await killSession(child, 'idle for 4h')
     expect(toParent()[0]).toContain('`kv-kid-c` died — _idle for 4h_')
+  })
+
+  test('crash paths notify a plain-spawned child\'s parent (bridge-server, session-health, codex-runtime)', async () => {
+    const { child: bridgeDead } = family('kv-crash-bridge')
+    await checkSessionDeath(bridgeDead.sessionId)
+    expect(toParent()).toContainEqual(expect.stringContaining('`kv-crash-bridge` died from crash — _tmux dead, bridge disconnected_ (4 msgs)'))
+    // A later killSession on the already-dead record (e.g. resume/respawn replacing it) does not send a second notice.
+    sent.length = 0
+    await killSession(bridgeDead, 'replaced by new spawn', { ended: 'killed by hydra' })
+    expect(toParent()).toEqual([])
+
+    sent.length = 0
+    const { child: pollDead } = family('kv-crash-poll', {
+      adapter: fakeAdapter({ isAlive: () => false, usage: () => null }),
+    })
+    pollSessionsOnce(Date.now())
+    expect(toParent()).toContainEqual(expect.stringContaining('`kv-crash-poll` died from crash — _session died_ (4 msgs)'))
+
+    sent.length = 0
+    const { child: codexDead } = family('kv-crash-codex', { engine: 'codex' })
+    finaliseCodexDeath(codexDead)
+    expect(toParent()).toContainEqual(expect.stringContaining('`kv-crash-codex` died from crash — _app-server unreachable_ (4 msgs)'))
+    // Calling finaliseCodexDeath twice does not send a duplicate notice.
+    sent.length = 0
+    finaliseCodexDeath(codexDead)
+    expect(toParent()).toEqual([])
+  })
+
+  test('guests, same-thread children, and parentless orphans never send a parent notice', async () => {
+    const { parent, child: guest } = family('kv-guest', { sessionType: 'thread_guest' })
+    await killSession(guest, 'guest done', { ended: 'finished' })
+    expect(toParent()).toEqual([])
+
+    const { child: sameThread } = family('kv-same', { threadId: parent.threadId })
+    await killSession(sameThread, 'done', { ended: 'finished' })
+    // Only the child's own `_done_` line — no duplicate parent notice.
+    expect(toParent()).toEqual(['_done_'])
+
+    sent.length = 0
+    const orphan = mk('kv-orphan', { originType: 'spawn', parentId: null })
+    await killSession(orphan, 'done', { ended: 'killed' })
+    expect(toParent()).toEqual([])
   })
 })

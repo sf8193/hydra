@@ -76,7 +76,6 @@ export type SessionInfo = {
   idleTtlMs?: number       // see SpawnOpts
   idleDeadline?: number    // epoch ms; idle-limit nudge fires here, reap at +grace (persisted so restarts re-arm with what was left)
   forceWorktreeCleanup?: boolean  // see SpawnOpts
-  suppressDeathMessage?: boolean // skip "died" notification to parent on kill
   suppressAutoRecover?: boolean // skip the automatic boot recovery batch (e.g. a dead record whose worktree is gone); a manual `recover` asks again
   budgetDeadline?: number  // epoch ms; phase-budget nudge fires here, reap at +grace (persisted so restarts re-arm)
   spawnAnnounceId?: string // message ID of the spawn announce line — edited on death to show completion
@@ -917,8 +916,8 @@ export class ThreadRegistry {
 
 export const threadRegistry = new ThreadRegistry()
 
-/** The one writer of a death (markRevived is its undoing): `deadAt` on the record and `endedAt` on its history entry, together. Keeps the first stamp. */
-export function markDead(info: SessionInfo, at = Date.now()): void {
+/** The one writer of a death (markRevived is its undoing): `deadAt` on the record and `endedAt` on its history entry, together. Keeps the first stamp. Returns true on the alive -> dead transition. */
+export function markDead(info: SessionInfo, at = Date.now()): boolean {
   const fresh = info.deadAt === undefined
   info.deadAt ??= at
   // What a launch wrote for the session goes with it: a restricted session's generated config (it holds token values) and the
@@ -927,6 +926,7 @@ export function markDead(info: SessionInfo, at = Date.now()): void {
   registry.persist()
   threadRegistry.closeHistoryEntry(info.threadId, info)
   if (fresh) emit('session:marked-dead', { sessionId: info.sessionId, tmuxName: info.tmuxName })
+  return fresh
 }
 
 /** The pair of markDead: the session is alive again, so its record and its history entry say so together. Persists the thread file when it reopens an entry; the caller persists the session record. */

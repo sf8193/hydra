@@ -9,6 +9,7 @@ import { BRIDGE_SHUTDOWN_GRACE_MS } from '../shared/constants.js'
 import { gatewayProfile } from '../shared/gateways/index.js'
 import { pendingPermissions } from './permission.js'
 import { discoverClaudeSessionId, killSession } from './session-lifecycle.js'
+import { notifyParentOfEnd } from './parent-notice.js'
 import { operatorIds } from '../sessions/access.js'
 import { dispatchReconnect, dispatchSessionReply, dispatchDisconnect } from '../sessions/protocol-registry.js'
 import { advertiseTools, isToolAllowed, noteDeclaredRestrictions, refusalText } from '../sessions/tool-surface.js'
@@ -206,8 +207,9 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
           if (info) {
             process.stderr.write(`daemon: circuit breaker: ${info.tmuxName} flapping (${FLAP_THRESHOLD}+ registrations in ${FLAP_WINDOW_MS / 1000}s) — killing session\n`)
             try { tmuxSync(['kill-session', '-t', info.tmuxName]) } catch {}
-            markDead(info)
+            const freshDeath = markDead(info)
             void safeSend(info.threadId, `⚠️ **${info.tmuxName}** killed by circuit breaker — bridge was flapping (${FLAP_THRESHOLD}+ reconnects in ${FLAP_WINDOW_MS / 1000}s). Use \`respawn\` to start fresh.`)
+            if (freshDeath) notifyParentOfEnd(info, 'killed by hydra', 'bridge flapping (circuit breaker)')
           } else {
             process.stderr.write(`daemon: circuit breaker: stray bridge ${sessionId} flapping — disconnecting\n`)
           }
@@ -579,6 +581,7 @@ export async function checkSessionDeath(sessionId: string): Promise<void> {
 
     markDead(info)
     clearInterceptsForSession(info.tmuxName)
+    notifyParentOfEnd(info, 'died from crash', 'tmux dead, bridge disconnected')
 
     // Ephemeral sessions die silently — no crash message or skull visual
     if (!info.ephemeral) {
