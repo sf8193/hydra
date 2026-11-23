@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { violations } from '../../scripts/check-owners.js'
+import { RULES, violations } from '../../scripts/check-owners.js'
 
 const file = (path: string, ...lines: string[]) => ({ path, text: lines.join('\n') })
 const hits = (path: string, ...lines: string[]) => violations([file(path, ...lines)])
@@ -150,5 +150,62 @@ describe('check-owners: raw gateway.send() outside safeSend', () => {
     expect(raw('daemon/__tests__/a.test.ts', "spyOn(gateway, 'send'); await gateway.send('t1', 'hi')")).toEqual([])
     expect(raw('app/router.ts', "await gateway.sendDM(userId, 'hi')")).toEqual([])
     expect(raw('app/router.ts', '// never call gateway.send directly')).toEqual([])
+  })
+})
+
+describe('check-owners: explicit `any` in production code', () => {
+  const anyHits = (path: string, ...lines: string[]) => hits(path, ...lines).filter(v => v.includes('explicit `any` in production code'))
+
+  test('catches all TypeScript `any` forms including unions, intersections, tuples, aliases, and nested templates', () => {
+    const forms = [
+      'function f(x: any) {}',
+      'const y = x as any',
+      'const p: Promise<any> = fetch()',
+      'type M = Record<string, any>',
+      'type List = any[]',
+      'type Alias = any',
+      'type Fn = () => any',
+      'type U = string | any',
+      'type I = A & any',
+      'type Tup = [any, string]',
+      'type Rest = [...any[]]',
+      'type Cond<T> = T extends string ? any : never',
+      'type K = keyof any',
+      'type Nested = Array<string | any>',
+      'const v = obj satisfies any',
+      'const url = `https://x/${(ch as any).guildId}`',
+      'const deep = `a ${`b ${(x as any).y}`}`',
+    ]
+    for (const line of forms) {
+      expect(anyHits('gateways/slack.ts', line), line).toHaveLength(1)
+    }
+  })
+
+  test('regex literals containing backticks, quotes, or escaped slashes do not hide later `any`s', () => {
+    expect(anyHits('gateways/slack.ts', 'const a = s.replace(/[*~`]/g, "")', 'const x: any = 1')).toHaveLength(1)
+    expect(anyHits('gateways/slack.ts', 'const a = s.replace(/[\\p{C}`]+/gu, " ")', 'let d: any')).toHaveLength(1)
+    expect(anyHits('gateways/slack.ts', 'const p = `x/${s.replace(/^\\.\\//, "")}`', 'arr.map((e: any) => e)')).toHaveLength(1)
+  })
+
+  test('ignores prose inside strings, template text, comments, tests, and non-type identifiers', () => {
+    expect(anyHits('shared/tool-definitions.ts', "const desc = '(main: any)'")).toEqual([])
+    expect(anyHits('connectors/slack/watch.ts', "const mode = flag ? 'ambient' : 'any'")).toEqual([])
+    expect(anyHits('app/router.ts', 'const msg = `prefix: any suffix`')).toEqual([])
+    expect(anyHits('app/router.ts', '// x: any', '/* x as any */')).toEqual([])
+    expect(anyHits('app/router.ts', 'const obj = { any: 1 }; obj.any; const any = 1')).toEqual([])
+    expect(anyHits('daemon/__tests__/foo.test.ts', 'const x: any = 1')).toEqual([])
+  })
+
+  test('enforces exact self-tightening cap on capped legacy files', () => {
+    const anyRule = RULES.find(r => r.name === 'explicit `any` in production code')!
+    const cap = anyRule.max!['app/dashboard.ts']!
+    const atCap = Array.from({ length: cap }, (_, i) => `const v${i}: any = ${i}`)
+    expect(anyHits('app/dashboard.ts', ...atCap)).toEqual([])
+    const over = anyHits('app/dashboard.ts', ...atCap, 'const extra: any = 1')
+    expect(over).toHaveLength(1)
+    expect(over[0]).toContain(`max ${cap}`)
+    const under = anyHits('app/dashboard.ts', ...atCap.slice(0, cap - 1))
+    expect(under).toHaveLength(1)
+    expect(under[0]).toContain('lower the cap')
   })
 })

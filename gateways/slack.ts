@@ -10,7 +10,7 @@ import { readFileSync, writeFileSync } from 'fs'
 import { discardInboxFiles, writeInboxFile } from '../infra/confined-inbox.js'
 import { customEmojiId } from '../shared/slack-lines.js'
 import type { InboxLimits } from '../config/write-confinement.js'
-import { SocketSupervisor } from '../shared/socket-supervisor.js'
+import { SocketSupervisor, type SocketEmitter } from '../shared/socket-supervisor.js'
 import { ThrottledQueue } from '../throttled-queue.js'
 import { HOME_STATUS_ACTION_PREFIX, MAX_ATTACHMENT_BYTES } from '../shared/constants.js'
 import { buildSocketApp, parseAuth, unfurlFields } from '../shared/slack-client.js'
@@ -110,6 +110,17 @@ export function slackSessionTitles(opts: SessionVisualOpts): string[] {
   return [...new Set([cap(`${icon} ${text}`), text, name])].filter(Boolean)
 }
 
+type SlackError = { data?: { error?: unknown } }
+function slackErrorCode(err: unknown): string | undefined {
+  const code = (err as SlackError | null)?.data?.error
+  return typeof code === 'string' ? code : undefined
+}
+
+type AppWithReceiver = { receiver?: { client?: SocketEmitter } }
+function socketEmitterOf(app: App | null): SocketEmitter | null {
+  return (app as AppWithReceiver | null)?.receiver?.client ?? null
+}
+
 /** A Slack conversation is a channel id (C, D or G), alone or with a thread's ts: `C0B6KKFNH4N:1779979488.572029`. */
 export function isSlackThreadId(id: string): boolean {
   return /^[CDG][A-Z0-9]+(:\d+\.\d+)?$/.test(id)
@@ -169,7 +180,7 @@ export class SlackGateway implements ChatGateway {
     this.sup = new SocketSupervisor({
       name: 'slack gateway',
       start: () => this.start(this.token!),
-      emitter: () => (this.app as any)?.receiver?.client ?? null,
+      emitter: () => socketEmitterOf(this.app),
       healthUrl: this.healthCheckUrl,
       staleThresholdMs: opts?.staleThresholdMs,
       writeHeartbeat: () => this.writeHeartbeat(),
@@ -241,13 +252,16 @@ export class SlackGateway implements ChatGateway {
       }
     })
 
-    this.app.action(new RegExp(`^${HOME_STATUS_ACTION_PREFIX}`), async ({ action, body, ack }: any) => {
+    this.app.action(new RegExp(`^${HOME_STATUS_ACTION_PREFIX}`), async ({ action, body, ack }) => {
       this.touchHeartbeat()
       await ack()
-      if (!action?.value || !this.homeStatusHandler) return
-      const click = parseHomeStatusClick(String(action.action_id), action.value, body?.user?.id, this.operators())
+      const value = 'value' in action && typeof action.value === 'string' ? action.value : undefined
+      const actionId = 'action_id' in action ? String(action.action_id) : ''
+      const userId = 'user' in body && body.user && typeof body.user.id === 'string' ? body.user.id : undefined
+      if (!value || !this.homeStatusHandler) return
+      const click = parseHomeStatusClick(actionId, value, userId, this.operators())
       if (!click) {
-        process.stderr.write(`slack gateway: home status action rejected for user ${body?.user?.id ?? '(none)'}\n`)
+        process.stderr.write(`slack gateway: home status action rejected for user ${userId ?? '(none)'}\n`)
         return
       }
       this.homeStatusHandler(click.sessionId, click.shown).catch((e: Error) =>
@@ -255,16 +269,17 @@ export class SlackGateway implements ChatGateway {
       )
     })
     // Home tab: spawn session on Enter in the text input
-    this.app.action('home:spawn', async ({ action, body, ack }: any) => {
+    this.app.action('home:spawn', async ({ action, body, ack }) => {
       this.touchHeartbeat()
       await ack()
-      const userId = body?.user?.id
+      const userId = 'user' in body && body.user && typeof body.user.id === 'string' ? body.user.id : undefined
       if (!userId) return
       if (!this.operators().includes(userId)) {
         process.stderr.write(`slack gateway: home:spawn rejected — user ${userId} is not the operator\n`)
         return
       }
-      const topic = (action?.value?.trim() ?? '').slice(0, 500)
+      const rawValue = 'value' in action && typeof action.value === 'string' ? action.value : ''
+      const topic = rawValue.trim().slice(0, 500)
       if (!topic || !this.homeSpawnHandler) return
       this.homeSpawnHandler(topic, userId).catch((e: Error) =>
         process.stderr.write(`slack gateway: home:spawn handler error: ${e}\n`),
@@ -308,13 +323,13 @@ export class SlackGateway implements ChatGateway {
       if (!this.buttonClickHandler) return
       if (body.type !== 'block_actions') return
 
-      const act = action as any
+      const actionId = 'action_id' in action ? String(action.action_id) : ''
       const userId = body.user.id
       const messageText = body.message?.text ?? ''
 
       this.buttonClickHandler({
         userId,
-        customId: act.action_id,
+        customId: actionId,
         messageContent: messageText,
         respond: async (text, buttons) => {
           if (buttons) {
@@ -508,7 +523,7 @@ export class SlackGateway implements ChatGateway {
     const { channel } = this.parseChannelId(channelId)
     const payload: Record<string, unknown> = { channel, ts: messageId }
     applyMessageBody(payload, text, false)
-    const result = await this.throttledSend(() => this.app!.client.chat.update(payload as any))
+    const result = await this.throttledSend(() => this.app!.client.chat.update(payload as unknown as webApi.ChatUpdateArguments))
     return result.ts!
   }
 
@@ -520,7 +535,7 @@ export class SlackGateway implements ChatGateway {
   private postMessage(payload: Record<string, unknown>) {
     // No `app`: the gateway's bot is its own Slack app, never one of hydra.toml's `[slack.apps]` (the loader refuses one app on both), so a DM it sends is `slack:app-dm:*` and no `slack:app-dm:<app>`.
     if (typeof payload.channel === 'string') Object.assign(payload, unfurlFields(linkPreviewsOff('slack', [payload.channel], {}, slackPostText(payload))))
-    return this.app!.client.chat.postMessage(payload as any)
+    return this.app!.client.chat.postMessage(payload as unknown as webApi.ChatPostMessageArguments)
   }
 
   /** Rate-limit chat.postMessage and chat.update to ~50/min (Slack Tier 4). */
@@ -565,11 +580,11 @@ export class SlackGateway implements ChatGateway {
     const isDM = ch.is_im ?? false
     return {
       id,
-      name: (ch as any).name ?? undefined,
+      name: ch.name ?? undefined,
       isDM,
       isThread: !!parsed.threadTs,
       parentId: parsed.threadTs ? parsed.channel : null,
-      recipientId: isDM ? (ch as any).user ?? '' : '',
+      recipientId: isDM && 'user' in ch && typeof ch.user === 'string' ? ch.user : '',
       sendable: true,
     }
   }
@@ -830,7 +845,7 @@ export class SlackGateway implements ChatGateway {
         inclusive: true,
       })
       const parent = result.messages?.[0]
-      return (parent as any)?.latest_reply ?? null
+      return parent?.latest_reply ?? null
     } catch { return null }
   }
 
@@ -866,10 +881,11 @@ export class SlackGateway implements ChatGateway {
 
     try {
       await this.visualApi.apiCall('agents.sessions.setStatus', { ...session, status })
-    } catch (e: any) {
-      if (!SLACK_VISUALS_UNAVAILABLE.has(e?.data?.error)) throw e
+    } catch (e: unknown) {
+      const code = slackErrorCode(e)
+      if (!code || !SLACK_VISUALS_UNAVAILABLE.has(code)) throw e
       this.visualsUnavailable = true
-      process.stderr.write(`slack gateway: session titles off (${e.data.error}): the app needs the Agents feature and assistant:write\n`)
+      process.stderr.write(`slack gateway: session titles off (${code}): the app needs the Agents feature and assistant:write\n`)
       return
     }
     for (const title of titles) {
@@ -877,8 +893,8 @@ export class SlackGateway implements ChatGateway {
         await this.visualApi.apiCall('agents.sessions.rename', { ...session, title })
         this.appliedVisuals.set(threadId, applied)
         return
-      } catch (e: any) {
-        if (e?.data?.error !== 'invalid_name') throw e
+      } catch (e: unknown) {
+        if (slackErrorCode(e) !== 'invalid_name') throw e
       }
     }
     process.stderr.write(`slack gateway: slack rejected every session title for ${threadId}\n`)
@@ -941,7 +957,7 @@ export class SlackGateway implements ChatGateway {
     } catch {}
   }
 
-  async publishHomeTab(userId: string, blocks: any[]): Promise<void> {
+  async publishHomeTab(userId: string, blocks: webApi.KnownBlock[]): Promise<void> {
     if (!this.visualApi) throw new Error('not connected')
     await this.visualApi.views.publish({
       user_id: userId,
@@ -953,7 +969,7 @@ export class SlackGateway implements ChatGateway {
   }
 
   /** An app_mention as an InboundMessage (it has no files, and no thread of its own), delivered to the daemon. */
-  private async deliverMention(event: { ts: string; channel: string; user?: string; text?: string; thread_ts?: string; bot_id?: string }, client: any): Promise<void> {
+  private async deliverMention(event: { ts: string; channel: string; user?: string; text?: string; thread_ts?: string; bot_id?: string }, client: webApi.WebClient): Promise<void> {
     const handler = this.messageHandler
     if (!handler) return
     const user = event.user ?? ''
@@ -988,8 +1004,8 @@ export class SlackGateway implements ChatGateway {
 
   // --- Internal helpers ---
 
-  private async normalizeMessage(msg: types.GenericMessageEvent, username: string, client: any): Promise<InboundMessage> {
-    const atts: AttachmentInfo[] = (msg.files ?? []).map((f: any) => ({
+  private async normalizeMessage(msg: types.GenericMessageEvent, username: string, client: webApi.WebClient): Promise<InboundMessage> {
+    const atts: AttachmentInfo[] = (msg.files ?? []).map(f => ({
       id: f.id ?? f.name ?? 'unknown',
       name: (f.name ?? f.id ?? 'unknown').replace(/[\[\]\r\n;]/g, '_'),
       contentType: f.mimetype ?? null,

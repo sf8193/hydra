@@ -17,6 +17,7 @@ import {
   ActionRowBuilder,
   MessageFlags,
   MessageReferenceType,
+  type AnyThreadChannel,
   type Message,
   type MessageMentionOptions,
 } from 'discord.js'
@@ -429,7 +430,7 @@ export class DiscordGateway implements ChatGateway {
   async typing(channelId: string): Promise<void> {
     const ch = await this.fetchTextChannel(channelId)
     if ('sendTyping' in ch) {
-      await (ch as any).sendTyping()
+      await ch.sendTyping()
     }
   }
 
@@ -440,7 +441,7 @@ export class DiscordGateway implements ChatGateway {
   async fetchChannel(id: string): Promise<ChannelInfo> {
     let ch = await this.client.channels.fetch(id)
     // A cached DM can lack its recipient; the reply allowlist keys on it, so refetch rather than reject.
-    if (ch?.type === ChannelType.DM && !(ch as any).recipientId) ch = await this.client.channels.fetch(id, { force: true })
+    if (ch?.type === ChannelType.DM && !ch.recipientId) ch = await this.client.channels.fetch(id, { force: true })
     if (!ch || !ch.isTextBased()) {
       throw new Error(`channel ${id} not found or not text-based`)
     }
@@ -449,7 +450,7 @@ export class DiscordGateway implements ChatGateway {
       isDM: ch.type === ChannelType.DM,
       isThread: ch.isThread(),
       parentId: ch.isThread() ? ch.parentId : null,
-      recipientId: ch.type === ChannelType.DM ? (ch as any).recipientId : '',
+      recipientId: ch.type === ChannelType.DM ? ch.recipientId ?? '' : '',
       sendable: 'send' in ch,
     }
   }
@@ -487,14 +488,14 @@ export class DiscordGateway implements ChatGateway {
   }): Promise<ThreadInfo> {
     const ch = await this.fetchTextChannel(channelId)
     const archiveDuration = opts?.archiveDuration ?? 1440
-    let thread: any
+    let thread: AnyThreadChannel
 
     if (opts?.messageId) {
       const msg = await ch.messages.fetch(opts.messageId)
       thread = await msg.startThread({ name: name.slice(0, 100), autoArchiveDuration: archiveDuration })
     } else {
       if (!('threads' in ch)) throw new Error('channel does not support threads')
-      thread = await (ch as any).threads.create({ name: name.slice(0, 100), autoArchiveDuration: archiveDuration })
+      thread = await ch.threads.create({ name: name.slice(0, 100), autoArchiveDuration: archiveDuration })
     }
 
     let messageId: string | undefined
@@ -620,8 +621,8 @@ export class DiscordGateway implements ChatGateway {
   async getThreadUrl(threadId: string): Promise<string> {
     try {
       const ch = await this.client.channels.fetch(threadId)
-      if (ch && 'guildId' in ch && (ch as any).guildId) {
-        return `https://discord.com/channels/${(ch as any).guildId}/${threadId}`
+      if (ch && 'guildId' in ch && ch.guildId) {
+        return `https://discord.com/channels/${ch.guildId}/${threadId}`
       }
     } catch {}
     return ''
@@ -668,10 +669,10 @@ export class DiscordGateway implements ChatGateway {
     async (messageId, { channelId, emoji, countEmoji }) => {
       const ch = await this.client.channels.fetch(channelId)
       if (!ch?.isTextBased() || !('messages' in ch)) return
-      const msg = await (ch as any).messages.fetch(messageId)
+      const msg = await ch.messages.fetch(messageId)
       if (!msg) return
       const botId = this.client.user?.id
-      const reactions = [...(msg.reactions?.cache?.values() ?? [])] as any[]
+      const reactions = [...(msg.reactions?.cache?.values() ?? [])]
       const desired = countEmoji ? [emoji, countEmoji] : [emoji]
       const plan = planReactionReconciliation(reactions.map(r => ({
         emoji: r.emoji?.toString?.() ?? r.emoji?.name ?? '',
