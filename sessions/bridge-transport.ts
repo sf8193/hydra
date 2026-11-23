@@ -5,7 +5,6 @@ import { STATE_DIR } from '../infra/config.js'
 import { registry, type SessionInfo } from './registry.js'
 import { atomicWriteFileSync } from '../infra/util.js'
 import { emit } from '../infra/event-bus.js'
-import './delivery-notice.js'
 import { deliverable, occupancyOf, type BridgeState } from './occupancy.js'
 import { withoutIntents, type DeliveryResult, type Notification } from '../engines/engine-adapter.js'
 

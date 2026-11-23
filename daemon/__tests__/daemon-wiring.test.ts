@@ -25,6 +25,16 @@ test('daemon.ts arms the delivery gate before the bridge server starts', () => {
   expect(daemon.search(/^setDeliveryGate\(deliveryRefusal\)$/m)).toBeLessThan(daemon.search(/^startBridgeServer\(\)$/m))
 })
 
+test('daemon.ts binds the notice and Codex listeners before any engine starts', () => {
+  const at = (re: RegExp) => daemon.search(re)
+  const start = at(/^for \(const adapter of Object\.values\(engines\)\) \{$/m)
+  expect(start).toBeGreaterThan(0)
+  for (const re of [/^bindDeliveryNotice\(\)$/m, /^bindCodexRuntime\(\)$/m]) {
+    expect(at(re)).toBeGreaterThan(-1)
+    expect(at(re)).toBeLessThan(start)
+  }
+})
+
 test('daemon.ts hands the Slack gateway its operator ids', () => {
   expect(daemon).toMatch(/\(gateway as any\)\.operators = operatorIds\b/)
 })
