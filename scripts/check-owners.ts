@@ -122,22 +122,9 @@ export const RULES: Rule[] = [
     // optional chaining (`any?`), and identifier prefixes/suffixes.
     pattern: /(?<=\?\s*)any(?![\w$])|(?<![\w$]|\b(?:const|let|var)\s+)(?:(?<!\.)|(?<=\.\.\.))any(?![\w$]|\s*[:(?])/g,
     codeOnly: true,
-    // Self-tightening prod `any` ratchet: new prod files may not introduce `any`, and every legacy file
-    // below is pinned to its exact count so removals tighten the cap toward zero.
+    // Zero explicit `any` allowed anywhere in production TypeScript files.
     allowed: [],
-    max: {
-      'cli/boot-refusal-alert.ts': 1,
-      'cli/helpers.ts': 2,
-      'cli/lifecycle.ts': 1,
-      'connectors/slack/listener.ts': 1,
-      'daemon.ts': 4,
-      'infra/config.ts': 1,
-      'infra/event-bus.ts': 1,
-      'omp/hydra-bridge.ts': 6,
-      'scripts/check-codex-recovery.ts': 10,
-      'sessions/occupancy.ts': 1,
-      'sessions/registry.ts': 1,
-    },
+    max: {},
     tests: false, ts: true,
     why: 'type the boundary or narrow `unknown` instead of introducing `any`',
   },

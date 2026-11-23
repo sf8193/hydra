@@ -499,17 +499,26 @@ export function printResponse(response: CLIResponseView, json: boolean): void {
     process.exit(typeof response.exitCode === 'number' ? response.exitCode : 1)
   }
 
-  const data = response.data as any
-  const command = response.command as string | undefined
+  const rawData = response.data
+  const command = response.command
 
-  if (!data) {
+  if (!rawData) {
     console.log('ok')
     return
   }
 
   switch (command) {
     case 'list': {
-      const items = data as any[]
+      const items = rawData as Array<{
+        status?: string
+        name?: string
+        description?: string
+        ended_ago?: string
+        thread_id?: string
+        context?: string
+        cpu?: string
+        running_for?: string
+      }>
       if (items.length === 0) { console.log('(none)'); return }
       for (const item of items) {
         if (item.status === 'ended') { console.log(`✕ ${item.name}  ${item.description ?? ''}  (ended ${item.ended_ago} ago · thread ${item.thread_id})`); continue }
@@ -520,15 +529,29 @@ export function printResponse(response: CLIResponseView, json: boolean): void {
       }
       return
     }
-    case 'spawn':
+    case 'spawn': {
+      const data = rawData as { name?: string; sessionId?: string; url?: string; idempotencyKey?: string }
       console.log(`spawned: ${data.name} (${data.sessionId})`)
       if (data.url) console.log(`thread:  ${data.url}`)
       if (data.idempotencyKey) console.log(`key:     ${data.idempotencyKey}`)
       return
-    case 'kill':
+    }
+    case 'kill': {
+      const data = rawData as { killed?: string }
       console.log(`killed: ${data.killed}`)
       return
-    case 'health':
+    }
+    case 'health': {
+      const data = rawData as {
+        sessions: { total: number; connected: number; disconnected: number }
+        tmux: unknown
+        idempotency: { active: number }
+        loopLagMaxMs?: number
+        loopLastStall?: { ms: number; callback?: string; callbackMs?: number; at: string }
+        refusedLaunches?: Array<{ specialist: string; ageMin: number; why: string }>
+        macosGate?: { allowed: boolean; specialists: string[]; version: string }
+        slack?: SlackHealthView
+      }
       console.log(`sessions: ${data.sessions.total} (${data.sessions.connected} connected, ${data.sessions.disconnected} disconnected)`)
       console.log(`tmux: ${data.tmux}`)
       console.log(`idempotency: ${data.idempotency.active} active keys`)
@@ -540,7 +563,13 @@ export function printResponse(response: CLIResponseView, json: boolean): void {
       if (data.macosGate) console.log(`${data.macosGate.allowed ? 'WARNING' : 'REFUSED'}: restricted specialist${data.macosGate.specialists.length > 1 ? 's' : ''} ${data.macosGate.specialists.join(', ')}: ${macosGateIssue(data.macosGate.version, data.macosGate.allowed)}`)
       if (data.slack) for (const line of slackHealthLines(data.slack)) console.log(line)
       return
-    case 'status':
+    }
+    case 'status': {
+      const data = rawData as {
+        name?: string; sessionId?: string; topic?: string; description?: string
+        bridge?: string; tmux?: string; running_for?: string
+        context?: string; cpu?: string; url?: string; origin?: string
+      }
       console.log(`${data.name} (${data.sessionId})`)
       console.log(`  topic:   ${data.topic}`)
       if (data.description) console.log(`  desc:    ${data.description}`)
@@ -552,15 +581,20 @@ export function printResponse(response: CLIResponseView, json: boolean): void {
       if (data.url) console.log(`  url:     ${data.url}`)
       if (data.origin) console.log(`  origin:  ${data.origin}`)
       return
-    case 'clear-key':
+    }
+    case 'clear-key': {
+      const data = rawData as { cleared?: unknown }
       console.log(`cleared: ${data.cleared}`)
       return
-    case 'deliver':
+    }
+    case 'deliver': {
+      const data = rawData as { status?: string; sessionName?: string; proof?: string; target?: string }
       console.log(`${data.status}: ${data.sessionName} (${data.proof})`)
       if (data.target) console.log(`delivers to ${data.target}`)
       return
+    }
     default:
-      console.log(JSON.stringify(data, null, 2))
+      console.log(JSON.stringify(rawData, null, 2))
   }
 }
 

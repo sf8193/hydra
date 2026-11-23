@@ -37,7 +37,7 @@ type ListenerOpts = {
 }
 
 type LabeledListener = {
-  listener: Listener<any>
+  listener: Listener<never>
   label: string
   onError?: (err: unknown) => void
 }
@@ -94,7 +94,7 @@ export function emit<K extends keyof EventMap>(event: K, payload: EventMap[K]): 
   // before the outer emit resumes delivering to remaining listeners.
   for (const { listener, label, onError } of [...set]) {
     try {
-      const result = listener(payload)
+      const result = listener(payload as never)
       if (result && typeof result.then === 'function') {
         result.then(undefined, (err: unknown) => {
           handleListenerError(label, event, err, 'rejected', onError)

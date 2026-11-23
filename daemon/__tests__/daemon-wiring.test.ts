@@ -40,7 +40,7 @@ test('daemon.ts starts the dashboard timers', () => {
 })
 
 test('daemon.ts hands the Home tab its spawn handler', () => {
-  expect(daemon).toMatch(/^    ;\(gateway as any\)\.homeSpawnHandler = runHomeSpawnAction$/m)
+  expect(daemon).toMatch(/^    gateway\.homeSpawnHandler = runHomeSpawnAction$/m)
 })
 
 test('daemon.ts hands the gateway its outage recovery report', () => {
@@ -72,7 +72,7 @@ test('daemon.ts exports boot() and guards startup behind import.meta.main with n
 })
 
 test('daemon.ts hands the Slack gateway its operator ids', () => {
-  expect(daemon).toMatch(/\(gateway as any\)\.operators = operatorIds\b/)
+  expect(daemon).toMatch(/^    gateway\.operators = operatorIds$/m)
 })
 
 test('the Slack gateway has the `operators` field daemon.ts assigns, and nobody is an operator until it does', async () => {
