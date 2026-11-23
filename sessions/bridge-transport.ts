@@ -29,13 +29,13 @@ export type BridgeConn = {
 // ---------------------------------------------------------------------------
 
 /**
- * Whether this session may be delivered to, now or from its queue: a reason it may not, or undefined. Set by app/restricted.ts
- * (the one drift gate; it cannot be imported here, since it reaches back to this module through the specialists).
+ * Whether this session may be delivered to, now or from its queue: a reason it may not, or undefined. Set by daemon.ts at boot
+ * (the gate is app/restricted.ts's `deliveryRefusal`, the one drift gate; it cannot be imported here, since it reaches back to this module through the specialists).
  */
 let deliveryGate: ((info: SessionInfo) => string | undefined) | undefined
 export function setDeliveryGate(gate: ((info: SessionInfo) => string | undefined) | undefined): void { deliveryGate = gate }
 
-/** Why this session may not be delivered to, or undefined. No gate set (app/restricted.ts has not loaded) refuses: a delivery and a queue flush both fail closed. */
+/** Why this session may not be delivered to, or undefined. No gate set (daemon.ts has not armed it) refuses: a delivery and a queue flush both fail closed. */
 function gateReason(info: SessionInfo): string | undefined {
   return deliveryGate ? deliveryGate(info) : 'the delivery gate is not set (daemon.ts sets it at boot)'
 }
