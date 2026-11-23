@@ -17,8 +17,9 @@ import { registry } from '../../sessions/registry.js'
 import { STATE_DIR } from '../../infra/config.js'
 import { on } from '../../infra/event-bus.js'
 import { fakeCodexAdapter } from './test-harness.js'
-import { CodexPiggyback } from '../../sessions/codex-piggyback.js'
+import { bindPiggybackCleanup, CodexPiggyback } from '../../sessions/codex-piggyback.js'
 import './arm-gate.js'
+bindPiggybackCleanup()
 
 // Suppress stderr
 process.stderr.write = (() => true) as any
@@ -571,7 +572,7 @@ describe('piggyback delivery paths (adapter-policy T7)', () => {
 describe('session:death cleanup', () => {
   test('a dying session loses its buffered content', () => {
     const code = [
-      "const { codexPiggyback } = await import('./sessions/codex-piggyback.ts')",
+      "const { codexPiggyback, bindPiggybackCleanup } = await import('./sessions/codex-piggyback.ts'); bindPiggybackCleanup()",
       "const { emit } = await import('./infra/event-bus.ts')",
       "codexPiggyback.buffer('pb-death', 'x'); codexPiggyback.buffer('pb-alive', 'y')",
       "emit('session:death', { sessionId: 'pb-death', threadId: 't', wasOwner: true, tmuxName: 'n' })",

@@ -33,7 +33,7 @@ beforeAll(async () => {
   startHydraConfig({ env: { ...testLoadEnv({ home: '/h', sessionNames: [] }), isDir: () => true } })
   spies.push(spyOn(global, 'handleSpawnIntercept').mockImplementation((async (...args: any[]) => { spawns.push(args) }) as any))
   spies.push(spyOn(status, 'handleListIntercept').mockImplementation((async (...args: any[]) => { lists.push(args) }) as any))
-  await import('../../app/router.js')
+  ;(await import('../../app/router.js')).bindRouter()
 })
 afterAll(() => { for (const s of spies) s.mockRestore(); stopHydraConfig(); rmSync(hydraConfigPath(), { force: true }) })
 beforeEach(() => { writeFileSync(hydraConfigPath(), TOML); reloadHydraConfig(); mentionCalls.length = 0; tagged = false; spawns.length = 0; lists.length = 0; deletes.length = 0 })

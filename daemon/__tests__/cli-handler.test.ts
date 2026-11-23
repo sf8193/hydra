@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { handleCLIRequest, type CLIRequest } from '../../app/cli-handler.js'
+import { handleCLIRequest, bindCliIdempotency, type CLIRequest } from '../../app/cli-handler.js'
 import { registry } from '../../sessions/registry.js'
 import { checkIdempotency } from '../../infra/idempotency.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
@@ -11,6 +11,7 @@ import { getIdempotencyEntry } from '../../infra/idempotency.js'
 import { _setDaemonStartedAtForTesting } from '../../sessions/occupancy.js'
 import { targetDeps } from '../../app/targets.js'
 import './arm-gate.js'
+bindCliIdempotency()
 
 // Suppress stderr from daemon modules
 process.stderr.write = (() => true) as any

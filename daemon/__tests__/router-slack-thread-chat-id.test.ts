@@ -21,7 +21,7 @@ beforeAll(async () => {
   spies.push(spyOn(gateway, 'react').mockImplementation((async () => {}) as any))
   spies.push(setHydra({ operators: [OP], channels: { [CHAN]: { requireMention: false } } }))
   spies.push(spyOn(transport, 'sendOrQueue').mockImplementation(((_to: string, m: any) => { if (m.type === 'notification') metas.push(m.meta) }) as any))
-  await import('../../app/router.js')
+  ;(await import('../../app/router.js')).bindRouter()
 })
 afterAll(() => { for (const s of spies) s.mockRestore() })
 

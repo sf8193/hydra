@@ -142,9 +142,11 @@ export const serverTrustLine = (specialist: string, servers: readonly string[]):
   `specialist ${specialist} lists servers (${servers.join(', ')}). ${SERVER_TRUST_SENTENCE} They run under a best-effort sandbox (hygiene, not containment); the tools list limits which of a server's tools the specialist may call`
 
 // Once per load, one line for each specialist that lists servers: the load log, not a warning (nothing is wrong).
-onHydraConfigLoad(config => {
-  for (const s of Object.values(config.specialists)) if (s.restricted && s.mcpServerNames.length) process.stderr.write(`daemon: hydra.toml: ${serverTrustLine(s.id, s.mcpServerNames)}\n`)
-})
+export function bindRestrictedLog(): void {
+  onHydraConfigLoad(config => {
+    for (const s of Object.values(config.specialists)) if (s.restricted && s.mcpServerNames.length) process.stderr.write(`daemon: hydra.toml: ${serverTrustLine(s.id, s.mcpServerNames)}\n`)
+  })
+}
 
 /**
  * Why this start must not happen on this macOS version, or undefined: a restricted policy that lists servers runs them under a sandbox

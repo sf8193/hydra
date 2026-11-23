@@ -368,10 +368,6 @@
     ],
     [
       "daemon",
-      "app_router"
-    ],
-    [
-      "daemon",
       "connectors_github_pr-watch"
     ],
     [

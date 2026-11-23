@@ -35,13 +35,15 @@ import { loopHealth } from '../shared/loop-watch.js'
 // Idempotency completion on session death
 // ---------------------------------------------------------------------------
 
-on('session:death', ({ sessionId }) => {
-  const idemEntry = getBySessionId(sessionId)
-  if (idemEntry) {
-    updateIdempotency(idemEntry.key, { status: 'completed' })
-    process.stderr.write(`daemon: cli idempotency key "${idemEntry.key}" → completed (session ${sessionId} died)\n`)
-  }
-}, 'cli:idempotency-completion')
+export function bindCliIdempotency(): void {
+  on('session:death', ({ sessionId }) => {
+    const idemEntry = getBySessionId(sessionId)
+    if (idemEntry) {
+      updateIdempotency(idemEntry.key, { status: 'completed' })
+      process.stderr.write(`daemon: cli idempotency key "${idemEntry.key}" → completed (session ${sessionId} died)\n`)
+    }
+  }, 'cli:idempotency-completion')
+}
 
 // ---------------------------------------------------------------------------
 // CLI request/response types

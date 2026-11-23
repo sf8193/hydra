@@ -18,7 +18,7 @@ beforeAll(async () => {
   spies.push(setHydra({ operators: ['op'], channels: { ch: { onlyOperators: true } } }))
   spies.push(spyOn(registry, 'getByThread').mockImplementation(((t: string) => (t === 'ch:T1' || t === 'ch:T2' ? 'sess' : undefined)) as any))
   spies.push(spyOn(threadRegistry, 'persist').mockImplementation((() => {}) as any))
-  await import('../../app/router.js')
+  ;(await import('../../app/router.js')).bindRouter()
 })
 afterAll(() => { for (const s of spies) s.mockRestore() })
 beforeEach(() => {

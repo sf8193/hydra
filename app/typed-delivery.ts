@@ -226,4 +226,6 @@ export async function flushAllHeld(): Promise<void> {
 }
 
 // A dead session takes its queue through the channel path (which queues for the bridge) so nothing is lost.
-on('session:death', ({ sessionId }) => { void flushHeld(sessionId, true) }, 'typed-delivery:flush-on-death')
+export function bindTypedDeliveryFlush(): void {
+  on('session:death', ({ sessionId }) => { void flushHeld(sessionId, true) }, 'typed-delivery:flush-on-death')
+}

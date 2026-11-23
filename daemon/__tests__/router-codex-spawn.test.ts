@@ -14,7 +14,7 @@ beforeAll(async () => {
   spies.push(spyOn(gateway, 'send').mockImplementation((async (_c: string, text: string) => { sent.push(text); return { id: 'x' } }) as any))
   spies.push(setHydra({ operators: ['u1'], channels: { c1: {} } }))
   spies.push(spyOn(global, 'handleSpawnIntercept').mockImplementation((async (...args: any[]) => { spawns.push(args) }) as any))
-  await import('../../app/router.js')
+  ;(await import('../../app/router.js')).bindRouter()
 })
 afterAll(() => { for (const s of spies) s.mockRestore() })
 beforeEach(() => { spawns.length = 0; sent.length = 0 })

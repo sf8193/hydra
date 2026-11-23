@@ -150,4 +150,6 @@ export function pushChangedToolSurfaces(): void {
   }
 }
 // Everything the list reads from hydra.toml is read live, so a load is where a config change reaches a running session's list.
-onHydraConfigLoad(() => pushChangedToolSurfaces())
+export function bindToolSurface(): void {
+  onHydraConfigLoad(() => pushChangedToolSurfaces())
+}

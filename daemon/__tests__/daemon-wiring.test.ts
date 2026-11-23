@@ -10,9 +10,8 @@ test('daemon.ts hands the specialist delivery its stuck-state lookup', () => {
   expect(daemon).toMatch(/^targetDeps\.stuckState = confirmedStuckState$/m)
 })
 
-test('daemon.ts imports the Codex runtime and starts its boot sweep', () => {
-  expect(daemon).toMatch(/^import \{ bindCodexRuntime, startCodexRuntime \} from '\.\/app\/codex-runtime\.js'$/m)
-  expect(daemon).toMatch(/^bindCodexRuntime\(\)$/m)
+test('daemon.ts starts the Codex boot sweep', () => {
+  expect(daemon).toMatch(/^import \{ startCodexRuntime \} from '\.\/app\/codex-runtime\.js'$/m)
   expect(daemon).toMatch(/^void startCodexRuntime\(engineRecords\(engines\.codex\)\)$/m)
 })
 
@@ -25,14 +24,19 @@ test('daemon.ts arms the delivery gate before the bridge server starts', () => {
   expect(daemon.search(/^setDeliveryGate\(deliveryRefusal\)$/m)).toBeLessThan(daemon.search(/^startBridgeServer\(\)$/m))
 })
 
-test('daemon.ts binds the notice and Codex listeners before any engine starts', () => {
-  const at = (re: RegExp) => daemon.search(re)
-  const start = at(/^for \(const adapter of Object\.values\(engines\)\) \{$/m)
+test('daemon.ts calls bindDaemon() before any engine starts, and bindDaemon() binds every listener module', () => {
+  const start = daemon.search(/^for \(const adapter of Object\.values\(engines\)\) \{$/m)
   expect(start).toBeGreaterThan(0)
-  for (const re of [/^bindDeliveryNotice\(\)$/m, /^bindCodexRuntime\(\)$/m]) {
-    expect(at(re)).toBeGreaterThan(-1)
-    expect(at(re)).toBeLessThan(start)
+  expect(daemon.search(/^bindDaemon\(\)$/m)).toBeGreaterThan(-1)
+  expect(daemon.search(/^bindDaemon\(\)$/m)).toBeLessThan(start)
+  const bind = readFileSync(join(import.meta.dir, '..', '..', 'app', 'bind.ts'), 'utf8')
+  for (const name of ['bindPreviewConfig', 'bindSpecialistPointers', 'bindToolSurface', 'bindRestrictedLog', 'bindDeliveryNotice', 'bindPiggybackCleanup', 'bindCodexRuntime', 'bindRouter', 'bindCliIdempotency', 'bindPermissionCleanup', 'bindReplyGuardCleanup', 'bindSpecialistThreadDrop', 'bindTypedDeliveryFlush']) {
+    expect(bind).toMatch(new RegExp(`^  ${name}\\(\\)$`, 'm'))
   }
+})
+
+test('daemon.ts starts the dashboard timers', () => {
+  expect(daemon).toMatch(/^startDashboardTimers\(\)$/m)
 })
 
 test('daemon.ts hands the Home tab its spawn handler', () => {
