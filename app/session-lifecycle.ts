@@ -314,6 +314,7 @@ export function handoffSpawnOpts(info: SessionInfo, artifact: string): SpawnOpts
   const reuseWorktree = info.worktree
   return {
     existingThreadId: info.threadId,
+    sessionType: info.sessionType,
     handedOffFrom: info.tmuxName,
     handoffFromClaudeSessionId: engineProfile(info.engine).recordsClaudeSessionId ? info.claudeSessionId : undefined,
     ...(predecessor && { predecessor }),
