@@ -7,7 +7,7 @@ import type { InboundMessage } from '../../gateways/gateway.js'
 import type { ProviderId } from '../../engines/engine-adapter.js'
 import spikeProto from '../../protocols/spike.js'
 
-export async function handleSpikeV2Intercept(msg: InboundMessage, topic?: string, model?: string, engine?: ProviderId): Promise<void> {
+export async function handleSpikeIntercept(msg: InboundMessage, topic?: string, model?: string, engine?: ProviderId): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '🔬').catch(() => {})
 
   const resolvedThreadId = registry.resolveThreadId(msg)
@@ -39,7 +39,7 @@ export async function handleSpikeV2Intercept(msg: InboundMessage, topic?: string
   }
 }
 
-export async function handleCancelSpikeV2Intercept(msg: InboundMessage): Promise<void> {
+export async function handleCancelSpikeIntercept(msg: InboundMessage): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '🛑').catch(() => {})
   const threadId = registry.resolveThreadId(msg)
   const run = getRunByThread(threadId)

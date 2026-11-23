@@ -146,8 +146,7 @@ function schedule(sessionId: string): void {
       meta: { chat_id: live.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
     })
     const back = kind === 'idle-reap' ? ' `resume` here brings it back.' : ''
-    safeSend(live.threadId, `_⏳ ${live.tmuxName}: no message here for ${idle} — ending in ${grace}m unless someone replies._${back}`)
-      .catch(err => process.stderr.write(`daemon: idle-limit: thread notice failed for ${live.tmuxName}: ${err}\n`))
+    void safeSend(live.threadId, `_⏳ ${live.tmuxName}: no message here for ${idle} — ending in ${grace}m unless someone replies._${back}`)
 
     entry.reap = setTimeout(async () => {
       const target = registry.get(sessionId)

@@ -20,9 +20,9 @@ import { isForMain, noteMainChannel } from '../sessions/main.js'
 import { handleMainHandoffIntercept } from './main-handoff.js'
 import { handleThreadKillIntercept, handleHandoffIntercept, handleDestroyIntercept, handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept, handlePeekIntercept } from './commands/thread.js'
 import { handleReviewIntercept, handleCancelReviewIntercept } from './commands/review.js'
-import { handleBuildV2Intercept, handleCancelBuildV2Intercept } from './commands/build-v2.js'
+import { handleBuildIntercept, handleCancelBuildIntercept } from './commands/build.js'
 import { handleDelegatedBuildIntercept } from './commands/delegated-build.js'
-import { handleSpikeV2Intercept, handleCancelSpikeV2Intercept } from './commands/spike-v2.js'
+import { handleSpikeIntercept, handleCancelSpikeIntercept } from './commands/spike.js'
 import { listModifierKeys, partitionSpawnModifiers } from '../protocols/modifiers.js'
 import { isThreadOccupied } from '../sessions/protocol-registry.js'
 import { getRunByThread, cancelRun } from './protocol-runner.js'
@@ -808,23 +808,23 @@ export function bindRouter(): void {
           return
         }
 
-        const buildV2Match = msg.content.match(BUILD_RE)
-        if (buildV2Match) {
-          const preModel = resolveProtocolModel(buildV2Match[1]?.toLowerCase(), msg.channelId, msg.id)
+        const buildMatch = msg.content.match(BUILD_RE)
+        if (buildMatch) {
+          const preModel = resolveProtocolModel(buildMatch[1]?.toLowerCase(), msg.channelId, msg.id)
           if (preModel === false) return
-          const postModel = resolveProtocolModel(buildV2Match[3]?.toLowerCase(), msg.channelId, msg.id)
+          const postModel = resolveProtocolModel(buildMatch[3]?.toLowerCase(), msg.channelId, msg.id)
           if (postModel === false) return
-          const v2Rounds = parseInt(buildV2Match[2] ?? '3')
-          const v2Task = buildV2Match[4]?.trim()
+          const rounds = parseInt(buildMatch[2] ?? '3')
+          const task = buildMatch[4]?.trim()
           const selection = preModel ?? postModel
-          if (!selection && v2Task) {
-            const hint = misplacedModelHint('build', v2Task)
+          if (!selection && task) {
+            const hint = misplacedModelHint('build', task)
             if (hint) {
               void safeSend(msg.channelId, hint, { replyTo: msg.id })
               return
             }
           }
-          void handleBuildV2Intercept(msg, v2Rounds, v2Task, selection?.model, selection?.engine)
+          void handleBuildIntercept(msg, rounds, task, selection?.model, selection?.engine)
           return
         }
 
@@ -866,17 +866,16 @@ export function bindRouter(): void {
 
         const cancelBuildMatch = msg.content.match(/^(?:kill build|kill build_v2)\s*$/i)
         if (cancelBuildMatch) {
-          void handleCancelBuildV2Intercept(msg)
+          void handleCancelBuildIntercept(msg)
           return
         }
 
-        // spike only exists as v2 — the unversioned name routes through the generic runner
-        const spikeV2Match = msg.content.match(/^(?:\/spike_v2|spike_v2|\/spike|spike)\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
-        if (spikeV2Match) {
-          const spikeModel = resolveProtocolModel(spikeV2Match[1]?.toLowerCase(), msg.channelId, msg.id)
+        const spikeMatch = msg.content.match(/^(?:\/spike_v2|spike_v2|\/spike|spike)\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
+        if (spikeMatch) {
+          const spikeModel = resolveProtocolModel(spikeMatch[1]?.toLowerCase(), msg.channelId, msg.id)
           if (spikeModel === false) return
-          const spikeTopic = spikeV2Match[2]?.trim()
-          void handleSpikeV2Intercept(msg, spikeTopic, spikeModel?.model, spikeModel?.engine)
+          const spikeTopic = spikeMatch[2]?.trim()
+          void handleSpikeIntercept(msg, spikeTopic, spikeModel?.model, spikeModel?.engine)
           return
         }
 
@@ -884,8 +883,8 @@ export function bindRouter(): void {
         if (cancelSpikeMatch) {
           const threadId = registry.resolveThreadId(msg)
           const occupied = isThreadOccupied(threadId)
-          if (occupied === 'spike_v2') {
-            void handleCancelSpikeV2Intercept(msg)
+          if (occupied === 'spike') {
+            void handleCancelSpikeIntercept(msg)
           } else if (!occupied) {
             void safeSend(msg.channelId, `No spike in progress in this thread.`, { replyTo: msg.id })
           } else {

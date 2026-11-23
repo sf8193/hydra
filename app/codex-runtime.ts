@@ -127,7 +127,7 @@ export function finaliseCodexDeath(info: SessionInfo): void {
     queued ? `${queued} queued message(s) were not delivered.` : '',
     unknown ? 'Delivery of 1 message is unknown.' : '',
   ].filter(Boolean).join(' ')
-  void safeSend(info.threadId, `⚠️ \`${info.tmuxName}\` (Codex) lost its app-server and could not reconnect — it is dead.${lost ? ` ${lost}` : ''} Type \`resume\` or \`respawn\`.`).catch(() => {})
+  void safeSend(info.threadId, `⚠️ \`${info.tmuxName}\` (Codex) lost its app-server and could not reconnect — it is dead.${lost ? ` ${lost}` : ''} Type \`resume\` or \`respawn\`.`)
 }
 
 type ReconnectDeps = {
