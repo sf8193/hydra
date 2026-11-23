@@ -56,7 +56,6 @@ import { syncMods } from './infra/mods.js'
 import { syncDaemonBridge } from './engines/bridge-sync.js'
 import { registry, threadRegistry, reattachAdapters, engineRecords } from './sessions/registry.js'
 import { isPlainWorker } from './shared/policy-record.js'
-import { emojiOfName } from './sessions/anchor-state.js'
 import { engines, resolveEngine } from './sessions/engine-instances.js'
 import { bindCodexRuntime, startCodexRuntime } from './app/codex-runtime.js'
 import { transport, setDeliveryGate } from './sessions/bridge-transport.js'
@@ -68,6 +67,9 @@ import { socketServer, startBridgeServer } from './app/bridge-server.js'
 import { announceRestartComplete } from './app/commands/global.js'
 import { deliverWatchdogAlert } from './app/watchdog-alert.js'
 import { autoRecoverAfterBoot } from './app/recovery.js'
+import { sendRecoveryReport } from './app/recovery-report.js'
+import { tmuxHasSession } from './infra/tmux.js'
+import { backfillLastReplyIds, backfillArtifacts, startBackgroundBackfills } from './app/startup-backfills.js'
 import { startJobsClock, stopJobsClock, realDeps } from './connectors/clock/jobs-clock.js'
 import { deliverToTarget, targetDeps, conversationSessionName, conversationSessionRunning, placesFree } from './app/targets.js'
 
@@ -125,10 +127,8 @@ queueMicrotask(logSubscriptions)
 
 import { initPhaseBudgets } from './sessions/phase-budget.js'
 import { initIdleLimits } from './sessions/idle-limit.js'
-import { killSession, backfillAnchorChannelIds, doSpawnSession } from './app/session-lifecycle.js'
-import { runHomeStatusAction } from './app/home-actions.js'
-import { parseTemplateTopic, buildTemplateSpawnOpts, runTemplateAction, getTemplate } from './app/templates.js'
-import { resolveModelAlias } from './shared/constants.js'
+import { killSession, backfillAnchorChannelIds } from './app/session-lifecycle.js'
+import { runHomeStatusAction, runHomeSpawnAction } from './app/home-actions.js'
 initPhaseBudgets((info, reason) => killSession(info, reason, { ended: 'killed by hydra' }))
 initIdleLimits((info, reason, opts) => killSession(info, reason, { ...opts, ended: 'killed by hydra' }))
 
@@ -149,9 +149,6 @@ import { startVitalsSnapshots } from './sessions/observability.js'
 startVitalsSnapshots((id) => transport.has(id), { alert: notifyOperator })
 
 import { refreshDashboard, refreshDashboardNow } from './app/dashboard.js'
-import { debouncedRefreshListDisplay } from './app/commands/status.js'
-import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './infra/artifacts.js'
-import type { ProviderId } from './engines/engine-adapter.js'
 registry.onPersist = refreshDashboard
 targetDeps.stuckState = confirmedStuckState
 bindSlackDelivery({ deliverToTarget, conversationSessionName, conversationSessionRunning, placesFree })
@@ -170,95 +167,13 @@ if ('homeStatusHandler' in gateway) {
 }
 
 if ('homeSpawnHandler' in gateway) {
-  ;(gateway as any).homeSpawnHandler = async (topic: string, userId: string) => {
-    try {
-      let parsed = parseTemplateTopic(topic)
-      let modelOverride: string | undefined
-      let engine: ProviderId | undefined
-
-      // "review sonnet: topic" — parseTemplateTopic sees "review sonnet" as candidate, misses it.
-      // Fall back: split prefix on space to find "template model: topic".
-      if (!parsed) {
-        const colonIdx = topic.indexOf(':')
-        if (colonIdx > 0) {
-          const prefix = topic.slice(0, colonIdx).trim().toLowerCase()
-          const spaceIdx = prefix.indexOf(' ')
-          if (spaceIdx > 0) {
-            const tplName = prefix.slice(0, spaceIdx)
-            const modelAlias = prefix.slice(spaceIdx + 1)
-            const tpl = getTemplate(tplName)
-            const resolved = resolveModelAlias(modelAlias)
-            if (tpl && resolved) {
-              parsed = { templateName: tplName, template: tpl, topic: topic.slice(colonIdx + 1).trim() }
-              modelOverride = resolved
-            }
-          }
-        }
-      }
-
-      let cleanTopic = parsed?.topic || topic
-
-      // --codex flag support
-      if (/\s*--codex\b/.test(cleanTopic)) {
-        engine = 'codex'
-        cleanTopic = cleanTopic.replace(/\s*--codex\b/, '').trim()
-      }
-      if (!cleanTopic.trim()) {
-        const hint = parsed?.templateName ?? 'review'
-        void gateway.send(userId, `_Need a topic — e.g. \`${hint}: describe the task\`_`).catch(() => {})
-        return
-      }
-
-      const spawnOpts = {
-        ...(parsed && buildTemplateSpawnOpts(parsed.templateName, parsed.template, modelOverride)),
-        ...(engine && { engine }),
-        initiator: userId,
-      }
-
-      const result = await doSpawnSession(cleanTopic, undefined, undefined, spawnOpts)
-
-      if (parsed) {
-        const parts: string[] = [`**${parsed.templateName}** template`]
-        if (modelOverride) parts.push(`model \`${modelOverride}\``)
-        void gateway.send(result.threadId, `_Using ${parts.join(' · ')}_`).catch(() => {})
-        if (parsed.template.action) {
-          try {
-            await runTemplateAction(parsed.template.action, result.threadId, result.sessionId, cleanTopic)
-          } catch (err) {
-            const errMsg = err instanceof Error ? err.message : String(err)
-            void gateway.send(result.threadId, `_Action **${parsed.template.action}** failed: ${errMsg}_`).catch(() => {})
-          }
-        }
-      }
-
-      // Notify main bridge so the main session sees the spawn
-      const mainBridge = transport.get('main')
-      if (mainBridge) {
-        const label = parsed?.templateName
-        const labelSuffix = label ? ` (${label})` : ''
-        const modelSuffix = modelOverride ? ` [${modelOverride}]` : ''
-        transport.sendToBridge(mainBridge, {
-          type: 'notification',
-          content: `[system] Spawned ${emojiOfName(result.name)} \`${result.name}\`${labelSuffix}${modelSuffix} for: ${cleanTopic}${result.url ? ` — ${result.url}` : ''}`,
-          meta: { chat_id: 'home', message_id: '', user: 'system', user_id: userId, ts: new Date().toISOString() },
-        })
-      }
-
-      process.stderr.write(`daemon: home:spawn created session ${result.name}${parsed ? ` (template: ${parsed.templateName})` : ''}\n`)
-      refreshDashboardNow()
-      debouncedRefreshListDisplay()
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err)
-      process.stderr.write(`daemon: home:spawn failed: ${errMsg}\n`)
-      void gateway.send(userId, `_Spawn failed: ${errMsg}_`).catch(() => {})
-    }
-  }
+  ;(gateway as any).homeSpawnHandler = runHomeSpawnAction
 }
 
 // Importing router wires up gateway.onMessage / onThreadDelete / onMessageDelete
-import { warmContextLink } from './app/router.js'
+import './app/router.js'
 import { restoreHeld } from './app/specialist-thread.js'
-import { startPrWatcher, backfillTitles, fetchPrTitle, parsePrUrl } from './connectors/github/pr-watch.js'
+import { startPrWatcher } from './connectors/github/pr-watch.js'
 import { startConversationTable, stopConversationTable, startSlackListener, bindSlackDelivery } from './connectors/slack/runtime.js'
 import { pruneEvents } from './infra/events.js'
 import { startHydraConfig, stopHydraConfig, retryHydraConfigAlert, currentHydraConfig, onHydraConfigLoad, reloadHydraConfig, hydraConfigLoadedOk } from './infra/hydra-config.js'
@@ -269,31 +184,6 @@ import { pollActivityOnce } from './app/reply-guard.js'
 import { flushAllHeld } from './app/typed-delivery.js'
 import { probeAllSessions, mainStuckCause, confirmedStuckState } from './app/pane-probe.js'
 import { safeSend } from './infra/util.js'
-import { tmuxHasSession } from './infra/tmux.js'
-
-// ---------------------------------------------------------------------------
-// Recovery report on reconnect
-// ---------------------------------------------------------------------------
-
-function sendRecoveryReport(gapMs: number): void {
-  const hrs = Math.floor(gapMs / 3_600_000)
-  const mins = Math.floor((gapMs % 3_600_000) / 60_000)
-  const duration = hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`
-  const connected = [...registry.values()].filter(s => transport.has(s.sessionId)).length
-  const disconnected = [...registry.values()].filter(s => !transport.has(s.sessionId)).length
-  const queuedMsgCount = [...transport.messageQueues.values()].reduce((sum, q) => sum + q.length, 0)
-  const report = [
-    `**Recovery report** — back online after ${duration} outage`,
-    `• Sessions: ${registry.size} total (${connected} connected, ${disconnected} disconnected)`,
-    `• Queued messages: ${queuedMsgCount}`,
-  ].join('\n')
-  for (const userId of operatorIds()) {
-    void gateway.sendDM(userId, report).catch(e =>
-      process.stderr.write(`daemon: recovery report DM failed: ${e}\n`),
-    )
-  }
-  process.stderr.write(`daemon: sent recovery report (offline ${duration})\n`)
-}
 
 gateway.onReconnectAfterOutage = sendRecoveryReport
 
@@ -375,23 +265,8 @@ async function startGateway(attempt = 0): Promise<void> {
 }
 
 void startGateway().then(async () => {
-  if (gateway.getLastReplyId) {
-    let backfilled = 0
-    for (const s of registry.values()) {
-      if (s.lastReplyId) continue
-      try {
-        const lastId = await gateway.getLastReplyId(s.threadId)
-        if (lastId) { s.lastReplyId = lastId; backfilled++ }
-      } catch (err) {
-        process.stderr.write(`daemon: backfill failed for ${s.tmuxName} (${s.threadId}): ${err instanceof Error ? err.message : err}\n`)
-      }
-    }
-    if (backfilled > 0) {
-      registry.persist()
-      process.stderr.write(`daemon: backfilled lastReplyId for ${backfilled} session(s)\n`)
-    }
-  }
-  await backfillArtifacts()
+  await backfillLastReplyIds()
+  await backfillArtifacts(tmuxHasSession)
   // Opt-in (HYDRA_AUTO_RECOVER=1): revive dead workers after a reboot. Runs after
   // the gateway is up (respawns post to their threads). No-op otherwise.
   await autoRecoverAfterBoot(startupGapMs ?? undefined).catch(err =>
@@ -404,43 +279,6 @@ void startGateway().then(async () => {
     process.stderr.write(`daemon: slack connector failed to start: ${err instanceof Error ? err.message : err}\n`),
   )
 })
-
-// Backfill artifacts from each live session's own recent thread posts, so
-// deliverables produced before this feature existed appear without waiting for a
-// new reply. Idempotent (mergeArtifacts dedupes), so it's safe to run every boot.
-async function backfillArtifacts(): Promise<void> {
-  if (!gateway.fetchMessages) return
-  let changedCount = 0
-  let dirty = false
-  for (const s of registry.values()) {
-    if (!tmuxHasSession(s.tmuxName)) continue
-    if (s.artifactsBackfilled) continue  // one-time scan — avoids a fetch-burst on every restart
-    try {
-      const msgs = await gateway.fetchMessages(s.threadId, 100)
-      const found: string[] = []
-      for (const m of msgs) {
-        // Only the session's own posts (bot-authored, in its own thread) — not the human's inbound refs.
-        if (gateway.botId && m.authorId !== gateway.botId) continue
-        found.push(...extractArtifactLinks(m.content))
-      }
-      // Re-canonicalize existing entries too, so this pass also self-heals any
-      // pollution captured before the extractor was tightened.
-      const before = s.artifacts ?? []
-      const { next } = mergeArtifacts(sanitizeArtifacts(before), found)
-      if (JSON.stringify(next) !== JSON.stringify(before)) { s.artifacts = next; changedCount++ }
-      s.artifactsBackfilled = true
-      dirty = true
-    } catch (err) {
-      // Leave the flag unset so a transient fetch failure retries next boot.
-      process.stderr.write(`daemon: artifact backfill failed for ${s.tmuxName}: ${err instanceof Error ? err.message : err}\n`)
-    }
-  }
-  if (dirty) registry.persist()
-  if (changedCount > 0) {
-    refreshDashboardNow()
-    process.stderr.write(`daemon: backfilled artifacts for ${changedCount} session(s)\n`)
-  }
-}
 
 // ---------------------------------------------------------------------------
 // PR watcher — polls GitHub for new PR comments/reviews
@@ -457,41 +295,7 @@ pruneEvents()
 
 // Reply guard: polls session activity every 20s (see below).
 
-// Backfill PR titles for existing watches (non-blocking)
-backfillTitles().then(n => {
-  if (n > 0) {
-    process.stderr.write(`daemon: backfilled ${n} PR title(s)\n`)
-    refreshDashboardNow()
-  }
-}).catch(err => process.stderr.write(`daemon: PR title backfill failed: ${err}\n`))
-
-// Backfill PR titles for artifact links (non-blocking)
-void (async () => {
-  let filled = 0
-  for (const s of registry.values()) {
-    for (const url of s.artifacts ?? []) {
-      if (!parsePrUrl(url)) continue
-      try {
-        const title = await fetchPrTitle(url)
-        if (title) { cachePrTitle(url, title); filled++ }
-      } catch {}
-    }
-  }
-  if (filled > 0) {
-    refreshDashboardNow()
-    process.stderr.write(`daemon: backfilled ${filled} artifact PR title(s)\n`)
-  }
-})().catch(err => process.stderr.write(`daemon: artifact title backfill failed: ${err}\n`))
-
-// Backfill Slack channel names + thread summaries for context links (non-blocking)
-void (async () => {
-  let filled = 0
-  for (const s of registry.values()) for (const url of s.contextLinks ?? []) filled += await warmContextLink(url)
-  if (filled > 0) {
-    refreshDashboardNow()
-    process.stderr.write(`daemon: backfilled ${filled} Slack context link(s)\n`)
-  }
-})().catch(err => process.stderr.write(`daemon: Slack context backfill failed: ${err}\n`))
+startBackgroundBackfills()
 
 // ---------------------------------------------------------------------------
 // Session health — crash detection, orphan detection, context alerts

@@ -320,10 +320,6 @@
     ],
     [
       "daemon",
-      "sessions_anchor-state"
-    ],
-    [
-      "daemon",
       "sessions_bridge-transport"
     ],
     [
@@ -348,6 +344,10 @@
     ],
     [
       "daemon",
+      "infra_tmux"
+    ],
+    [
+      "daemon",
       "connectors_clock_jobs-clock"
     ],
     [
@@ -364,19 +364,7 @@
     ],
     [
       "daemon",
-      "app_templates"
-    ],
-    [
-      "daemon",
-      "shared_constants"
-    ],
-    [
-      "daemon",
       "app_dashboard"
-    ],
-    [
-      "daemon",
-      "app_commands_status"
     ],
     [
       "daemon",
@@ -393,10 +381,6 @@
     [
       "daemon",
       "infra_util"
-    ],
-    [
-      "daemon",
-      "infra_tmux"
     ],
     [
       "daemon",
