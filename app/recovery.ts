@@ -217,7 +217,7 @@ export async function reviveThread(req: ReviveRequest): Promise<ReviveOutcome> {
   }
 
   if (revived) {
-    if (kickoffChanged && !req.newThreadIn && revived.method === 'respawned') await safeSend(revived.result.threadId, kickoffRestartNotice(specialistId!)).catch(() => {})
+    if (kickoffChanged && !req.newThreadIn && revived.method === 'respawned') await safeSend(revived.result.threadId, kickoffRestartNotice(specialistId!))
     if (dead) repointChildren(dead, revived.result.sessionId)
     if (req.backoffKey) clearBackoff(req.backoffKey)
     return revived

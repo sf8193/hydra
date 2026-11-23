@@ -127,7 +127,7 @@ function alert(text: string, to?: string, app?: string): void {
     let sent = false
     for (const t of ts) {
       const where = alertChannel(t)
-      if (where) { void safeSend(where, text).catch(() => {}); sent = true }
+      if (where) { void safeSend(where, text); sent = true }
     }
     return sent
   }

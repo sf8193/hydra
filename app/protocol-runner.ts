@@ -382,7 +382,7 @@ function retireProtocolChildren(run: ProtocolRun, phase?: string): void {
 // ---------------------------------------------------------------------------
 // Reply handler — conversational only, never advances the protocol
 // ProtocolHooks.onReply is a required interface — this stub satisfies it.
-// v2 reply is purely conversational; advancement happens via advance().
+// Replies are purely conversational; advancement happens via advance().
 
 export async function onRunReply(_sessionId: string, _text: string, _chatId: string, _sentMessageIds: string[]): Promise<void> {}
 
@@ -1590,9 +1590,9 @@ async function completeRun(run: ProtocolRun): Promise<void> {
       }
       const struck = run.messageIds.length - failures
       const failNote = failures > 0 ? ` · ⚠️ ${failures} delete${failures > 1 ? 's' : ''} failed` : ''
-      void safeSend(run.threadId, `_📼 transcript saved: \`${dumpPath}\` · ${struck}/${run.messageIds.length} messages struck${failNote}_`).catch(() => {})
+      void safeSend(run.threadId, `_📼 transcript saved: \`${dumpPath}\` · ${struck}/${run.messageIds.length} messages struck${failNote}_`)
     } else {
-      void safeSend(run.threadId, `_📼 transcript saved: \`${dumpPath}\`_`).catch(() => {})
+      void safeSend(run.threadId, `_📼 transcript saved: \`${dumpPath}\`_`)
     }
   } catch (err) {
     process.stderr.write(`daemon: ${run.protocol.name} transcript dump failed: ${err}\n`)
@@ -1672,7 +1672,7 @@ export function getActiveRuns(): ProtocolRun[] {
 }
 
 // ---------------------------------------------------------------------------
-// Protocol registry integration — register v2 protocols
+// Protocol registry integration — register protocols
 // ---------------------------------------------------------------------------
 
 function runnerHooks(name: string, protoName: string | readonly string[]) {
@@ -1718,13 +1718,11 @@ function runnerHooks(name: string, protoName: string | readonly string[]) {
   })
 }
 
-// Review has no V1 anymore, so its registry name drops the _v2 suffix — this is
-// what isThreadOccupied() surfaces to users ("A review is already in progress").
-// build/spike keep _v2 until their own V1s are removed.
+// Registry names match what isThreadOccupied() surfaces to users ("A build is already in progress").
 function registerRunnerHooks() {
   runnerHooks('review', 'review')
-  runnerHooks('build_v2', 'build')
-  runnerHooks('spike_v2', 'spike')
+  runnerHooks('build', 'build')
+  runnerHooks('spike', 'spike')
   runnerHooks('delegated_build', ['delegated-build', 'delegated-build-quick'])
 }
 registerRunnerHooks()

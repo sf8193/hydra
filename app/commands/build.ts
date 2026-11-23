@@ -7,7 +7,7 @@ import type { InboundMessage } from '../../gateways/gateway.js'
 import type { ProviderId } from '../../engines/engine-adapter.js'
 import buildProto from '../../protocols/build.js'
 
-export async function handleBuildV2Intercept(msg: InboundMessage, rounds: number, task?: string, model?: string, engine?: ProviderId): Promise<void> {
+export async function handleBuildIntercept(msg: InboundMessage, rounds: number, task?: string, model?: string, engine?: ProviderId): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '🔨').catch(() => {})
 
   if (isNaN(rounds)) rounds = 3
@@ -39,18 +39,18 @@ export async function handleBuildV2Intercept(msg: InboundMessage, rounds: number
     await startProtocolRun(buildProto, threadId, sessionId, { rounds: clampedRounds, task, model, engine, strike: true })
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err)
-    await safeSend(msg.channelId, `Build v2 failed to start: ${errMsg}`, { replyTo: msg.id })
+    await safeSend(msg.channelId, `Build failed to start: ${errMsg}`, { replyTo: msg.id })
   }
 }
 
-export async function handleCancelBuildV2Intercept(msg: InboundMessage): Promise<void> {
+export async function handleCancelBuildIntercept(msg: InboundMessage): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '🛑').catch(() => {})
 
   const threadId = registry.resolveThreadId(msg)
   const run = getRunByThread(threadId)
 
   if (!run) {
-    await safeSend(msg.channelId, `No build_v2 in progress in this thread.`, { replyTo: msg.id })
+    await safeSend(msg.channelId, `No build in progress in this thread.`, { replyTo: msg.id })
     return
   }
 
