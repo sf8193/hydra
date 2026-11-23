@@ -436,7 +436,7 @@ export async function onRunAdvance(sessionId: string, content: string, verdict?:
 
   try {
     const advancePhaseFrom = run.phase
-    const result = run.protocol.machine.transition(advancePhaseFrom as any, event as any)
+    const result = run.protocol.machine.transition(advancePhaseFrom, event)
     if (!result.ok) return { ok: false, reason: `transition failed from "${advancePhaseFrom}" on "${event}"` }
 
     // Advance state before posting — if safeSend fails, the agent retries
@@ -736,7 +736,7 @@ async function enterFallbackPhase(run: ProtocolRun, deadRole: string, cause: Fal
     sessionToRun.delete(deadSessionId)
   }
 
-  const result = run.protocol.machine.transition(from as any, 'fallback' as any)
+  const result = run.protocol.machine.transition(from, 'fallback')
   if (!result.ok || !advancePhase(run, result.to, from)) return
   run._enteredFallback = true
 
@@ -777,7 +777,7 @@ async function enterDirectSubagentPhase(run: ProtocolRun): Promise<boolean> {
   const from = run.phase
   if (!onFallback || !run.protocol.phases[from]?.on?.fallback) return false
 
-  const result = run.protocol.machine.transition(from as any, 'fallback' as any)
+  const result = run.protocol.machine.transition(from, 'fallback')
   if (!result.ok || !advancePhase(run, result.to, from)) return false
   run._enteredFallback = true
 
@@ -928,7 +928,7 @@ export async function cancelRun(run: ProtocolRun, reason: string): Promise<void>
 
   if (!isTerminal(run)) {
     if (run.protocol.phases[run.phase]?.on?.cancel) {
-      const result = run.protocol.machine.transition(run.phase as any, 'cancel' as any)
+      const result = run.protocol.machine.transition(run.phase, 'cancel')
       if (result.ok) advancePhase(run, result.to, run.phase)
     } else {
       process.stderr.write(`daemon: ${run.protocol.name} run: phase "${run.phase}" has no cancel transition — abandoning run\n`)
@@ -1270,7 +1270,7 @@ async function spawnRole(run: ProtocolRun, role: string, params: Record<string, 
   const model = (params.model as string) ?? undefined
   const engine = (params.engine as ProviderId | undefined) ?? undefined
   const result = await doSpawnSession(`${run.protocol.display} ${run.protocol.roles[role]} (${run.rounds} rounds)`, undefined, undefined, {
-    trigger: run.protocol.name as any,
+    trigger: run.protocol.name,
     joinThread: run.threadId,
     sessionType: 'thread_guest',
     model,
@@ -1448,7 +1448,7 @@ function notifyExit(run: ProtocolRun, outcome: 'complete' | 'cancelled', reason?
 }
 
 async function fireTransition(run: ProtocolRun, event: string, content: string, reason: string): Promise<void> {
-  const result = run.protocol.machine.transition(run.phase as any, event as any)
+  const result = run.protocol.machine.transition(run.phase, event)
   if (!result.ok) {
     await cancelRun(run, reason)
     return

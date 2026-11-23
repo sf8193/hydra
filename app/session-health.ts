@@ -49,7 +49,7 @@ export function pollSessionsOnce(now: number): void {
         registry.persist()
         const thread = threadRegistry.get(info.threadId)
         if (thread) {
-          const histEntry = thread.sessionHistory.find((h: any) => h.sessionId === info.sessionId && !h.endedAt)
+          const histEntry = thread.sessionHistory.find(h => h.sessionId === info.sessionId && !h.endedAt)
           if (histEntry) histEntry.claudeSessionId = discovered
           threadRegistry.persist()
         }

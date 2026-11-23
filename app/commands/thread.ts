@@ -18,7 +18,7 @@ import { recoveryEntry } from '../../infra/recovery-selection.js'
 import { autoHandoffIO, canAskHandoff, canHandOff, handoffProtocolFor } from '../auto-handoff.js'
 import { NotReplaced } from '../specialist-deliver.js'
 import { recoveryEngine } from '../../engines/history.js'
-import { formatContextPercent, type ProviderId } from '../../engines/engine-adapter.js'
+import { formatContextPercent, type EngineAdapter, type ProviderId } from '../../engines/engine-adapter.js'
 import { claudeEngine, resolveEngine } from '../../sessions/engine-instances.js'
 import { occupancy } from '../../sessions/session-reachability.js'
 import { blocksRecovery } from '../../sessions/occupancy.js'
@@ -28,7 +28,7 @@ import { targetKeyForThread, threadLockHeld, withThreadLock } from '../../sessio
 import { isForMain, mainContext, mainStartedAt, mainSubject, mainTmux } from '../../sessions/main.js'
 import { ENGINE_PROFILES } from '../../shared/engines/index.js'
 
-function adapterFor(info: { engine?: ProviderId; adapter?: any }) {
+function adapterFor(info: { engine?: ProviderId; adapter: EngineAdapter }): EngineAdapter {
   return info.adapter
 }
 

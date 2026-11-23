@@ -126,13 +126,6 @@ export const RULES: Rule[] = [
     // below is pinned to its exact count so removals tighten the cap toward zero.
     allowed: [],
     max: {
-      'app/commands/thread.ts': 1,
-      'app/dashboard.ts': 3,
-      'app/handoff-templates.ts': 1,
-      'app/pane-probe.ts': 2,
-      'app/protocol-runner.ts': 11,
-      'app/reply-guard.ts': 4,
-      'app/session-health.ts': 1,
       'cli/boot-refusal-alert.ts': 1,
       'cli/helpers.ts': 2,
       'cli/lifecycle.ts': 1,
@@ -280,14 +273,14 @@ export function normalize(text: string): { flat: string; lines: string[]; lineAt
   return { flat, lines, lineAt: off => { let i = 0; while (i + 1 < starts.length && starts[i + 1] <= off) i++; return i + 1 } }
 }
 
-export function violations(files: Array<{ path: string; text: string }>): string[] {
+export function violations(files: Array<{ path: string; text: string }>, rules: readonly Rule[] = RULES): string[] {
   const out: string[] = []
   for (const { path, text } of files) {
     if (path === 'scripts/check-owners.ts' || path === 'daemon/__tests__/check-owners.test.ts') continue // its own fixtures
     const { flat, lines, lineAt } = normalize(text)
     const raw = text.split('\n')
     let codeLines: string[] | undefined
-    for (const r of RULES) {
+    for (const r of rules) {
       if (r.allowed.includes(path) || (!r.tests && isTest(path)) || (r.ts && !path.endsWith('.ts'))) continue
       let hitLines: number[]
       if (r.codeOnly) {

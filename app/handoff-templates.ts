@@ -17,8 +17,11 @@ const warnOnce = (msg: string) => { if (!warned.has(msg)) { warned.add(msg); pro
 export function readHandoffTemplate(name: 'departing' | 'arriving' | 'notice' | 'converge', vars: Record<string, string>, dir = HANDOFF_TEMPLATE_DIR): string | undefined {
   const file = join(dir, `${name}.md`)
   let raw: string
-  try { raw = readFileSync(file, 'utf8') } catch (err: any) {
-    if (err?.code !== 'ENOENT') warnOnce(`skipping ${file}: ${err?.message ?? err}`)
+  try { raw = readFileSync(file, 'utf8') } catch (err: unknown) {
+    if ((err as { code?: unknown } | null)?.code !== 'ENOENT') {
+      const msg = err instanceof Error ? err.message : String(err)
+      warnOnce(`skipping ${file}: ${msg}`)
+    }
     return undefined
   }
   if (!raw.trim()) { warnOnce(`skipping ${file}: empty`); return undefined }

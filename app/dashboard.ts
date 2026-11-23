@@ -3,6 +3,7 @@
  */
 
 import { gateway, PLATFORM } from '../infra/config.js'
+import type { HomeTabBlock } from '../gateways/gateway.js'
 import { registry, threadRegistry, type SessionInfo } from '../sessions/registry.js'
 import { emojiOf } from '../sessions/anchor-state.js'
 import { transport } from '../sessions/bridge-transport.js'
@@ -155,8 +156,8 @@ function buildSessionText(s: SessionRow): string {
 }
 
 
-function buildHomeBlocks(sessions: SessionRow[], recent: RecentRow[] = []): any[] {
-  const blocks: any[] = [
+function buildHomeBlocks(sessions: SessionRow[], recent: RecentRow[] = []): HomeTabBlock[] {
+  const blocks: HomeTabBlock[] = [
     {
       type: 'header',
       text: { type: 'plain_text', text: `Active Sessions (${sessions.length})` },
@@ -240,7 +241,7 @@ function buildHomeBlocks(sessions: SessionRow[], recent: RecentRow[] = []): any[
 }
 
 function homeTabUser(): string | null {
-  if (!('publishHomeTab' in gateway)) return null
+  if (!gateway.publishHomeTab) return null
   return operatorIds()[0] ?? null
 }
 
@@ -250,14 +251,14 @@ const statusKey = (rows: SessionRow[]) =>
 
 async function publish(onlyIfStatusChanged: boolean): Promise<void> {
   const userId = homeTabUser()
-  if (!userId) return
+  if (!userId || !gateway.publishHomeTab) return
   const sessions = await getActiveSessions()
   const key = statusKey(sessions)
   if (onlyIfStatusChanged && key === publishedStatuses) return
   const blocks = buildHomeBlocks(sessions, getRecentCompleted())
 
   try {
-    await (gateway as any).publishHomeTab(userId, blocks)
+    await gateway.publishHomeTab(userId, blocks)
     publishedStatuses = key
   } catch (err) {
     process.stderr.write(`dashboard: home tab publish failed for ${userId}: ${err}\n`)
