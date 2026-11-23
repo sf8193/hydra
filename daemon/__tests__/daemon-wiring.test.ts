@@ -29,6 +29,14 @@ test('daemon.ts binds the delivery notice listener', () => {
   expect(daemon).toMatch(/^bindDeliveryNotice\(\)$/m)
 })
 
+test('daemon.ts binds the notice and Codex listeners before any engine starts', () => {
+  const at = (re: RegExp) => daemon.search(re)
+  const start = at(/^for \(const adapter of Object\.values\(engines\)\) \{$/m)
+  expect(start).toBeGreaterThan(0)
+  expect(at(/^bindDeliveryNotice\(\)$/m)).toBeLessThan(start)
+  expect(at(/^bindCodexRuntime\(\)$/m)).toBeLessThan(start)
+})
+
 test('daemon.ts hands the Slack gateway its operator ids', () => {
   expect(daemon).toMatch(/\(gateway as any\)\.operators = operatorIds\b/)
 })
