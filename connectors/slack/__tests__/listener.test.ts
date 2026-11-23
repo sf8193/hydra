@@ -97,7 +97,7 @@ function setup(over: { tokens?: { app?: string; bot?: string }; toml?: string | 
         edit: async (c, ts, text, as) => { rec.apiCalls.push(`edit:${as}:${c}:${ts}:${text}`) },
         remove: async (c, ts, as) => { rec.apiCalls.push(`remove:${as}:${c}:${ts}`) },
         operatorUserId: async () => over.operatorId,
-        post: async (c, thread, text, opts) => { rec.apiCalls.push(`post:${c}:${thread ?? '-'}:${text}${opts ? `:${JSON.stringify(opts)}` : ''}`); return '9999.000001' },
+        post: async (c, thread, text, opts) => { rec.apiCalls.push(`post:${c}:${thread ?? '-'}:${text}${opts.classic ? ':classic' : ''}${opts.unfurl === false ? `:${JSON.stringify({ unfurl: false })}` : ''}`); return '9999.000001' },
         download: async (url, dest) => { rec.apiCalls.push(`download:${url}`); mkdirSync(dirname(dest), { recursive: true }); writeFileSync(dest, 'bytes', { mode: 0o600 }) },
         api,
       } as SlackAppLike
@@ -316,66 +316,69 @@ describe('starting', () => {
 describe('posting', () => {
   test('a reply posts into the thread, or the top level; it waits for a connection', async () => {
     const t = setup()
-    await expect(t.listener.post(CH, '1.000001', 'x')).rejects.toThrow('Slack is not connected')
+    await expect(t.listener.post(CH, '1.000001', 'x', false)).rejects.toThrow('Slack is not connected')
     await t.listener.start()
-    expect(await t.listener.post(CH, '1.000001', 'in the thread')).toBe('9999.000001')
-    await t.listener.post('D0A', undefined, 'top level')
+    expect(await t.listener.post(CH, '1.000001', 'in the thread', false)).toBe('9999.000001')
+    await t.listener.post('D0A', undefined, 'top level', false)
     expect(t.apps[0].apiCalls.filter(c => c.startsWith('post:'))).toEqual([`post:${CH}:1.000001:in the thread`, 'post:D0A:-:top level'])
   })
 })
+
+/** The payload for a whole reply, its body decided as `postParts` decides it. */
+const replyPayload = (channel: string, thread: string | undefined, text: string) => postPayload(channel, thread, text, { classic: slackSyntax(text) })
 
 describe('posting where link previews are off', () => {
   const off = (extra = '') => oneListener(CH) + `[places."slack:${CH}"]\nlink_previews = false\n${extra}`
   test('a post into a place with link_previews = false asks for no unfurl; a place without the option posts as before', async () => {
     const t = setup({ toml: off() })
     await t.listener.start()
-    await t.listener.post(CH, '1.000001', 'see https://example.com')
-    await t.listener.post('C0OTHER', undefined, 'elsewhere')
+    await t.listener.post(CH, '1.000001', 'see https://example.com', false)
+    await t.listener.post('C0OTHER', undefined, 'elsewhere', false)
     expect(t.apps[0].apiCalls.filter(c => c.startsWith('post:'))).toEqual([`post:${CH}:1.000001:see https://example.com:{"unfurl":false}`, 'post:C0OTHER:-:elsewhere'])
   })
   test('the place may be named by its channel name once the directory knows it', async () => {
     const t = setup({ toml: oneListener('#food') + '[places."slack:#food"]\nlink_previews = false\n', channels: [{ id: CH, name: 'food' }] })
     await t.listener.start()
-    await t.listener.post(CH, undefined, 'x')
+    await t.listener.post(CH, undefined, 'x', false)
     expect(t.apps[0].apiCalls.filter(c => c.startsWith('post:'))).toEqual([`post:${CH}:-:x:{"unfurl":false}`])
   })
   test('a connected app\'s post where link_previews = "single": one link posts as before, two ask for no unfurl', async () => {
     const t = setup({ toml: oneListener(CH) + `[places."slack:${CH}"]\nlink_previews = "single"\n` })
     await t.listener.start()
-    await t.listener.post(CH, undefined, 'see https://example.com')
-    await t.listener.post(CH, undefined, 'see https://example.com and <https://example.org|this>')
+    await t.listener.post(CH, undefined, 'see https://example.com', false)
+    await t.listener.post(CH, undefined, 'see https://example.com and <https://example.org|this>', false)
     expect(t.apps[0].apiCalls.filter(c => c.startsWith('post:'))).toEqual([`post:${CH}:-:see https://example.com`, `post:${CH}:-:see https://example.com and <https://example.org|this>:{"unfurl":false}`])
   })
   test('the Slack arguments: unfurl_links and unfurl_media false with the option, and exactly today\'s arguments without it', () => {
-    expect(postPayload('C1', '1.0', 'hi', { unfurl: false })).toEqual({ channel: 'C1', markdown_text: 'hi', thread_ts: '1.0', unfurl_links: false, unfurl_media: false })
-    expect(postPayload('C1', undefined, 'hi')).toEqual({ channel: 'C1', markdown_text: 'hi' })
-    expect(postPayload('C1', '1.0', 'hi', {})).toEqual({ channel: 'C1', markdown_text: 'hi', thread_ts: '1.0' })
-    // A split reply's choice, made on the whole text, wins over the part's own.
+    expect(postPayload('C1', '1.0', 'hi', { unfurl: false, classic: false })).toEqual({ channel: 'C1', markdown_text: 'hi', thread_ts: '1.0', unfurl_links: false, unfurl_media: false })
+    expect(postPayload('C1', undefined, 'hi', { classic: false })).toEqual({ channel: 'C1', markdown_text: 'hi' })
+    expect(postPayload('C1', '1.0', 'hi', { classic: false })).toEqual({ channel: 'C1', markdown_text: 'hi', thread_ts: '1.0' })
+    // The body follows `classic` (the whole reply's choice), whatever this part's text holds.
     expect(postPayload('C1', undefined, '**b**', { classic: true })).toEqual({ channel: 'C1', text: '**b**' })
     expect(postPayload('C1', undefined, 'hi <@U1>', { classic: false })).toEqual({ channel: 'C1', markdown_text: 'hi <@U1>' })
   })
   test('a reply goes as markdown_text, so **bold** and tables render; links and code reach Slack byte for byte', () => {
     const md = 'Fixed **it** in [#889](https://github.com/o/r/pull/889)\n\n| a | b |\n|---|---|\n| 1 | 2 |\n```ts\nconst a = `x` < 2 && b > 1\n```'
-    const p = postPayload('C1', '1.0', md)
+    const p = replyPayload('C1', '1.0', md)
     expect(p.markdown_text).toBe(md)
     expect(p).not.toHaveProperty('text')
   })
   test('a reply with Slack syntax goes as classic text, so a tag still reaches the tagged app (#953)', () => {
     for (const t of ['over to <@U0OTHER> **now**', 'cc <@U0OTHER|opal>', '<!here> heads up', '<!everyone> heads up', 'see <!subteam^S1|team>', 'in <#C0123|dev>']) {
-      const p = postPayload('C1', '1.0', t)
+      const p = replyPayload('C1', '1.0', t)
       expect(p.text).toBe(t)
       expect(p).not.toHaveProperty('markdown_text')
     }
   })
   test('a reply with Slack links but no tag stays markdown_text: <url|label> renders as a link there', () => {
     const t = '**SO** <https://example.com/so/1|10183> and [10184](https://example.com/so/2), mail <mailto:a@b.co|a>\n\n| a | b |\n|---|---|\n| 1 | 2 |'
-    expect(postPayload('C1', '1.0', t)).toEqual({ channel: 'C1', markdown_text: t, thread_ts: '1.0' })
-    expect(postPayload('C1', undefined, 'a < b and <https://example.com> and [x](<https://example.com>)')).toHaveProperty('markdown_text')
+    expect(replyPayload('C1', '1.0', t)).toEqual({ channel: 'C1', markdown_text: t, thread_ts: '1.0' })
+    expect(replyPayload('C1', undefined, 'a < b and <https://example.com> and [x](<https://example.com>)')).toHaveProperty('markdown_text')
   })
   test('the cap: at MARKDOWN_TEXT_MAX still markdown_text, one past it classic text, unchanged', () => {
-    expect(postPayload('C1', undefined, 'x'.repeat(MARKDOWN_TEXT_MAX))).toHaveProperty('markdown_text')
+    expect(replyPayload('C1', undefined, 'x'.repeat(MARKDOWN_TEXT_MAX))).toHaveProperty('markdown_text')
     const long = 'x'.repeat(MARKDOWN_TEXT_MAX + 1)
-    const p = postPayload('C1', undefined, long)
+    const p = replyPayload('C1', undefined, long)
     expect(p.text).toBe(long)
     expect(p).not.toHaveProperty('markdown_text')
   })

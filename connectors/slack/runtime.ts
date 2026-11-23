@@ -52,8 +52,8 @@ export const slackRuntimeDeps = {
   view: (app: string = DEFAULT_SLACK_APP): ConversationConfig | null => connections.listener(app)?.view() ?? null,
   /** A place freed under max: catch-up refetches what waits, the oldest waiter first, through the apps that have waiters. */
   wake: (apps?: string[], why = 'a place freed'): void => { for (const [id, l] of connections.listeners()) if (!apps || apps.includes(id)) void l.runCatchUp(false, why) },
-  /** `classic`: the whole reply's choice of body (`slackSyntax` on all of it), so a split reply's parts render alike; absent, each text decides. */
-  post: (channel: string, threadTs: string | undefined, text: string, app: string = DEFAULT_SLACK_APP, classic?: boolean): Promise<string> => {
+  /** `classic`: the whole reply's choice of body (`slackSyntax` on all of it), so a split reply's parts render alike. */
+  post: (channel: string, threadTs: string | undefined, text: string, app: string, classic: boolean): Promise<string> => {
     const l = connections.listener(app)
     if (!l) return Promise.reject(new Error(notConnected(hydraConfig().slackApps, app)))
     return l.post(channel, threadTs, text, classic)

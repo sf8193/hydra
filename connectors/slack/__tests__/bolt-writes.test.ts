@@ -52,7 +52,7 @@ describe('the real client writes with the token of whoever wrote the message', (
     await expect(a.edit!('C1', '6.000001', 'x', 'operator')).rejects.toThrow('no operator token')
     expect(await a.operatorUserId!()).toBeUndefined()
     const b = boltApp(TOKENS)
-    await b.post('C1', undefined, 'hi')
+    await b.post('C1', undefined, 'hi', { classic: false })
     expect(calls).toEqual([{ token: 'xoxb-BOT', method: 'chat.postMessage', args: { channel: 'C1', markdown_text: 'hi' } }])
   })
 

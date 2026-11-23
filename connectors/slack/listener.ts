@@ -104,16 +104,16 @@ export const MEMBERSHIP_WAIT_MS = 5_000
 
 /** What the Slack SDK offers the listener, narrowed so the rest is testable without it. */
 /** `unfurl: false` posts without link previews (a place's `link_previews = false`, or `"single"` and 2+ links); absent, Slack's own default. */
-/** `classic`: the reply's body is classic `text` (whole replies decide once, so every part of a split reply renders alike); absent, decided on this text. */
-export type PostOptions = { unfurl?: false; classic?: boolean }
+/** `classic`: the body is classic `text`, decided once on the whole reply (`slackSyntax`) so every part of a split reply renders alike. */
+export type PostOptions = { unfurl?: false; classic: boolean }
 
 /**
- * The chat.postMessage arguments for one reply: `markdown_text`, so markdown renders; classic `text` when `opts.classic` says so (else when the text tags
- * someone or is past the cap), the thread when there is one, and unfurling off exactly when asked. Tagged text differs from the gateway here:
+ * The chat.postMessage arguments for one reply: `markdown_text`, so markdown renders; classic `text` when `opts.classic` says so (the
+ * reply tags someone) or the text is past the cap, the thread when there is one, and unfurling off exactly when asked. Tagged text differs from the gateway here:
  * the gateway's `applyMessageBody` keeps classic `text` only for buttons, so its tagged replies go as `markdown_text`.
  */
-export function postPayload(channel: string, threadTs: string | undefined, text: string, opts?: PostOptions): Record<string, unknown> {
-  return { channel, ...messageBody(text, opts?.classic ?? slackSyntax(text)), ...(threadTs && { thread_ts: threadTs }), ...unfurlFields(opts?.unfurl === false) }
+export function postPayload(channel: string, threadTs: string | undefined, text: string, opts: PostOptions): Record<string, unknown> {
+  return { channel, ...messageBody(text, opts.classic), ...(threadTs && { thread_ts: threadTs }), ...unfurlFields(opts?.unfurl === false) }
 }
 
 /**
@@ -150,7 +150,7 @@ export type SlackAppLike = {
   onMembership?(handler: (channel: string) => void): void
   userName(userId: string): Promise<string | undefined>
   /** A message in a channel, or in a thread when `threadTs` is set. Resolves to its ts. */
-  post(channel: string, threadTs: string | undefined, text: string, opts?: PostOptions): Promise<string>
+  post(channel: string, threadTs: string | undefined, text: string, opts: PostOptions): Promise<string>
   /** Rewrites a message (chat.update), as its bot or as the operator (user token, scope chat:write). Absent: not offered. */
   edit?(channel: string, ts: string, text: string, as: Writer): Promise<void>
   /** Deletes a message (chat.delete), as its bot or as the operator. Absent: not offered. */
@@ -419,12 +419,11 @@ export class SlackListener {
   get api(): SlackApi | null { return this.app?.api ?? null }
 
   /** A specialist's reply, into its conversation. Throws when Slack isn't connected. */
-  async post(channel: string, threadTs: string | undefined, text: string, classic?: boolean): Promise<string> {
+  async post(channel: string, threadTs: string | undefined, text: string, classic: boolean): Promise<string> {
     if (!this.app || !this.sup?.state.connected) throw new Error(`Slack is not connected${this.appSuffix()}; try again once it is (hydra health shows the slack connector)`)
     // The same predicate the gateway asks (shared/link-previews.ts), with this app's own view of hydra.toml and channel names.
     const unfurl = linkPreviewsOff('slack', [channel], { config: this.d.hydra(), slackName: id => this.directory.nameOf(id), app: this.id }, text) ? { unfurl: false as const } : undefined
-    const opts: PostOptions | undefined = unfurl || classic !== undefined ? { ...unfurl, ...(classic !== undefined && { classic }) } : undefined
-    return this.app.post(channel, threadTs, text, opts)
+    return this.app.post(channel, threadTs, text, { classic, ...unfurl })
   }
 
   private live(): SlackAppLike {
