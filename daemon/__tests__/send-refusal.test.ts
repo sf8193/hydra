@@ -14,7 +14,6 @@ import { policyIdFor } from '../../app/restricted.js'
 import { threadNotices } from '../../shared/notice-limit.js'
 import type { HydraConfig, Specialist } from '../../config/types.js'
 import { bindCodexRuntime } from '../../app/codex-runtime.js'
-bindCodexRuntime()
 import { codexAdapter } from './codex-adapter.js'
 import './arm-gate.js'
 
@@ -133,6 +132,8 @@ import { join } from 'path'
 import { deliveryWait } from '../../app/bridge-dispatch.js'
 import { registerProtocol } from '../../sessions/protocol-registry.js'
 import { CodexEngineAdapter } from '../../engines/codex-engine-adapter.js'
+
+bindCodexRuntime()
 
 const accepts = { status: 'accepted', via: 'bridge-socket' }
 const claudeWith = (deliver: (...a: any[]) => Promise<unknown>) => Object.assign(Object.create(engines.claude), { isAlive: () => true, deliver })

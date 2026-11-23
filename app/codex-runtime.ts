@@ -156,7 +156,7 @@ export async function reconnectCodexAfterDisconnect(
   return false
 }
 
-/** Binds the Codex engine's events to the daemon. daemon.ts calls it once at boot, before the sweep. */
+/** Binds the Codex engine's events to the daemon; daemon.ts calls it once at boot. */
 export function bindCodexRuntime(): void {
   codexEngine.on('message', (sessionId: string, text: string) => {
     const info = registry.get(sessionId)
