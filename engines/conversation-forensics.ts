@@ -85,15 +85,25 @@ function forensicsFromTail(transcriptPath: string, tailBytes: number): Conversat
     const lastTurnToolIds = new Set<string>()
     const answeredToolIds = new Set<string>()
 
+    type TranscriptBlock = { type?: unknown; name?: unknown; id?: unknown; text?: unknown; tool_use_id?: unknown }
+    type TranscriptEntry = {
+      type?: unknown
+      operation?: unknown
+      timestamp?: unknown
+      message?: { stop_reason?: unknown; content?: unknown; usage?: unknown }
+    }
+
     for (const line of lines) {
-      let entry: any
-      try { entry = JSON.parse(line) } catch { continue }
+      let raw: unknown
+      try { raw = JSON.parse(line) } catch { continue }
+      if (!raw || typeof raw !== 'object') continue
+      const entry = raw as TranscriptEntry
 
       if (entry.type === 'queue-operation') {
         if (entry.operation === 'enqueue') queueBacklog++
         else if (entry.operation === 'dequeue' || entry.operation === 'remove') {
           queueBacklog = Math.max(0, queueBacklog - 1)
-          if (entry.timestamp) lastConsumeTs = entry.timestamp
+          if (typeof entry.timestamp === 'string' && entry.timestamp) lastConsumeTs = entry.timestamp
         }
         continue
       }
@@ -102,20 +112,22 @@ function forensicsFromTail(transcriptPath: string, tailBytes: number): Conversat
         tailTurns++
         const msg = entry.message
         if (!msg) continue
-        lastStopReason = msg.stop_reason ?? null
+        lastStopReason = typeof msg.stop_reason === 'string' ? msg.stop_reason : null
         lastTurnToolIds.clear()
         const content = msg.content
         let sawTextThisTurn = false
         if (Array.isArray(content)) {
-          for (const block of content) {
+          for (const rawBlock of content) {
+            if (!rawBlock || typeof rawBlock !== 'object') continue
+            const block = rawBlock as TranscriptBlock
             if (block.type === 'tool_use') {
-              lastToolCalled = block.name ?? null
-              if (block.id) lastTurnToolIds.add(block.id)
+              lastToolCalled = typeof block.name === 'string' ? block.name : null
+              if (typeof block.id === 'string' && block.id) lastTurnToolIds.add(block.id)
             }
-            if (block.type === 'text' && block.text) {
+            if (block.type === 'text' && typeof block.text === 'string' && block.text) {
               lastAssistantText = block.text.slice(0, 200)
               lastAssistantFullText = block.text
-              lastAssistantTs = entry.timestamp ?? null
+              lastAssistantTs = typeof entry.timestamp === 'string' ? entry.timestamp : null
               sawTextThisTurn = true
             }
           }
@@ -136,8 +148,10 @@ function forensicsFromTail(transcriptPath: string, tailBytes: number): Conversat
       if (entry.type === 'user') {
         const content = entry.message?.content
         if (Array.isArray(content)) {
-          for (const block of content) {
-            if (block.type === 'tool_result' && block.tool_use_id) {
+          for (const rawBlock of content) {
+            if (!rawBlock || typeof rawBlock !== 'object') continue
+            const block = rawBlock as TranscriptBlock
+            if (block.type === 'tool_result' && typeof block.tool_use_id === 'string' && block.tool_use_id) {
               answeredToolIds.add(block.tool_use_id)
             }
           }

@@ -134,13 +134,19 @@ const TOOLS = codexStaticTools().map(t => ({
   name: t.name, description: t.description, inputSchema: t.inputSchema,
 }))
 
-function send(msg: any): void {
+type McpToolCallParams = { name?: unknown; arguments?: unknown }
+type McpJsonRpcRequest = { id?: number | string; method?: unknown; params?: unknown }
+
+function send(msg: Record<string, unknown>): void {
   process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...msg }) + '\n')
 }
 
-async function handleToolCall(id: number, params: any): Promise<void> {
-  const toolName = params?.name
-  const toolArgs = params?.arguments ?? {}
+async function handleToolCall(id: number | string | undefined, params: McpToolCallParams | undefined): Promise<void> {
+  const toolName = typeof params?.name === 'string' ? params.name : ''
+  const rawArgs = params?.arguments
+  const toolArgs = rawArgs && typeof rawArgs === 'object' && !Array.isArray(rawArgs)
+    ? (rawArgs as Record<string, unknown>)
+    : {}
   try {
     const callId = `codex-${SESSION_ID}-${toolCallCounter++}`
     const result = await callDaemonTool(callId, toolName, toolArgs)
@@ -151,10 +157,11 @@ async function handleToolCall(id: number, params: any): Promise<void> {
 }
 
 rl.on('line', async (line) => {
-  let parsed: any
-  try { parsed = JSON.parse(line) } catch { return }
+  let raw: unknown
+  try { raw = JSON.parse(line) } catch { return }
+  if (!raw || typeof raw !== 'object') return
 
-  const { id, method, params } = parsed
+  const { id, method, params } = raw as McpJsonRpcRequest
   switch (method) {
     case 'initialize':
       send({ id, result: { protocolVersion: '2024-11-05', capabilities: { tools: { listChanged: true } }, serverInfo: { name: 'hydra-tools', version: '1.0.0' } } })
@@ -165,7 +172,7 @@ rl.on('line', async (line) => {
       send({ id, result: { tools: TOOLS } })
       break
     case 'tools/call':
-      await handleToolCall(id, params)
+      await handleToolCall(id, params && typeof params === 'object' ? (params as McpToolCallParams) : undefined)
       break
     default:
       if (id !== undefined) send({ id, error: { code: -32601, message: `Method not found: ${method}` } })

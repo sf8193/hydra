@@ -56,11 +56,13 @@ export function codexLastTurn(homeDir: string, threadId: string): CodexLastTurn 
     const lines = buf.toString('utf8').split('\n')
     for (let i = lines.length - 1; i >= 0; i--) {
       if (!lines[i].includes('"event_msg"')) continue
-      let m: any
-      try { m = JSON.parse(lines[i]) } catch { continue }
+      let raw: unknown
+      try { raw = JSON.parse(lines[i]) } catch { continue }
+      if (!raw || typeof raw !== 'object') continue
+      const m = raw as { type?: unknown; timestamp?: unknown; payload?: { type?: unknown; last_agent_message?: unknown } }
       const type = m.type === 'event_msg' ? m.payload?.type : undefined
       if (type !== 'task_started' && type !== 'task_complete' && type !== 'turn_aborted') continue
-      const at = Date.parse(m.timestamp)
+      const at = typeof m.timestamp === 'string' ? Date.parse(m.timestamp) : NaN
       const text = type === 'task_complete' ? m.payload?.last_agent_message : undefined
       return {
         boundary: type === 'task_started' ? 'open' : 'closed',
