@@ -38,16 +38,20 @@ export class OmpEngine implements EngineAdapter {
     const omp = process.env.HYDRA_OMP_BIN || 'omp'
     // hydra records the 1M window as `[1m]`; omp names the same model without it.
     const ompModel = model.replace(/\[1m\]$/, '')
+    const cont = input.continuation
+    if (cont && cont.kind !== 'resume-session') {
+      throw new Error(`omp engine: unsupported launch continuation "${cont.kind}"`)
+    }
     // Resume: the dead session's file is copied into this session's directory (the old one stays as it was) and omp continues it.
     // With no file omp would start a fresh session that the caller reports as resumed, so that fails the resume instead.
-    if (input.resumeSession) {
-      const from = ompSessionDir(input.resumeSession.fromSessionId)
+    if (cont) {
+      const from = ompSessionDir(cont.fromSessionId)
       const files = existsSync(from) ? readdirSync(from).filter(n => n.endsWith('.jsonl')) : []
-      if (!files.length) throw new Error(`omp session ${input.resumeSession.fromSessionId} has no session file to resume`)
+      if (!files.length) throw new Error(`omp session ${cont.fromSessionId} has no session file to resume`)
       mkdirSync(ompSessionDir(sessionId), { recursive: true })
       for (const n of files) copyFileSync(join(from, n), join(ompSessionDir(sessionId), n))
     }
-    const args = [omp, `--model ${shq(`${ompProvider(ompModel)}/${ompModel}`)}`, `-e ${shq(EXTENSION)}`, `--config ${shq(OMP_CONFIG)}`, '--approval-mode yolo', `--session-dir ${shq(ompSessionDir(sessionId))}`, ...(input.resumeSession ? ['-c'] : [])]
+    const args = [omp, `--model ${shq(`${ompProvider(ompModel)}/${ompModel}`)}`, `-e ${shq(EXTENSION)}`, `--config ${shq(OMP_CONFIG)}`, '--approval-mode yolo', `--session-dir ${shq(ompSessionDir(sessionId))}`, ...(cont ? ['-c'] : [])]
     // The prompt is handed to the pane by file (launch-files.ts), so no part of it is on a command line.
     const promptFile = input.prompt ? writeSpawnPrompt(tmuxName, sessionId, input.prompt) : null
     const tokenFile = input.sessionToken ? writeSessionToken(tmuxName, sessionId, input.sessionToken) : null

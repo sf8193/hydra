@@ -132,9 +132,10 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
     provider: 'claude', channel: 'bridge',
     launch: async (input: LaunchInput) => {
       launches.push(input)
-      if (input.resumeFrom && failResume) throw new Error('resume failed')
-      if (input.forkFrom && failFork) throw new Error('fork failed')
-      return { provider: 'claude', model: 'claude-x', identity: { claudeSessionId: input.resumeFrom ?? `new-${launches.length}` } }
+      const cont = input.continuation
+      if (cont?.kind === 'resume-claude' && failResume) throw new Error('resume failed')
+      if (cont?.kind === 'fork-claude' && failFork) throw new Error('fork failed')
+      return { provider: 'claude', model: 'claude-x', identity: { claudeSessionId: cont?.kind === 'resume-claude' ? cont.claudeSessionId : `new-${launches.length}` } }
     },
     stop: async () => ({ status: 'stopped' }),
     isAlive: () => false,
@@ -355,7 +356,7 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
     const dead = seedDead({ predecessor: pred, ...kept })
     failResume = true
     await handleRecoverIntercept({ channelId: 'ch', id: 'm1' } as any, dead.tmuxName)
-    expect(launches.map(l => l.resumeFrom ? 'resume' : l.forkFrom ? 'fork' : 'other')).toEqual(['resume', 'fork'])
+    expect(launches.map(l => l.continuation?.kind === 'resume-claude' ? 'resume' : l.continuation?.kind === 'fork-claude' ? 'fork' : 'other')).toEqual(['resume', 'fork'])
     expect(live().predecessor).toEqual(pred)
     expect(launches.map(keptBy)).toEqual([kept, kept])
   })
@@ -369,7 +370,7 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
     seedDead({ predecessor: pred, ...kept })
     failResume = true
     await handleResumeIntercept(msg())
-    expect(launches.at(-1)?.forkFrom).toBeDefined()
+    expect(launches.at(-1)?.continuation?.kind).toBe('fork-claude')
     expect(live().predecessor).toEqual(pred)
     expect(launches.map(keptBy)).toEqual([kept, kept])
 
@@ -378,7 +379,7 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
     seedDead({ predecessor: pred, ...kept })
     failFork = true
     await handleResumeIntercept(msg())
-    expect(launches.map(l => l.resumeFrom ? 'resume' : l.forkFrom ? 'fork' : 'other')).toEqual(['resume', 'fork', 'other'])
+    expect(launches.map(l => l.continuation?.kind === 'resume-claude' ? 'resume' : l.continuation?.kind === 'fork-claude' ? 'fork' : 'other')).toEqual(['resume', 'fork', 'other'])
     expect(live().predecessor).toEqual(pred)
     // The respawn is a fresh conversation: SPAWN_CWD, still read-only.
     expect(launches.map(keptBy)).toEqual([kept, kept, { launchCwd: process.cwd(), disallowedTools: kept.disallowedTools }])
@@ -449,7 +450,7 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
       try {
         await handleRecoverIntercept({ channelId: 'ch', id: `m-${++seq}` } as any, dead.tmuxName)
       } finally { (transport as any).has = savedHas }
-      const fork = launches.find(l => l.forkFrom)!
+      const fork = launches.find(l => l.continuation?.kind === 'fork-claude')!
       expect(fork.prompt).toContain(RECOVERY_REVERIFY_GUARD)
     })
 
@@ -463,7 +464,7 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
         try {
           await handleRecoverIntercept({ channelId: 'ch', id: `m-${seq}` } as any, dead.tmuxName)
         } finally { (transport as any).has = savedHas }
-        expect(launches.at(-1)?.[failTier1 ? 'forkFrom' : 'resumeFrom']).toBeDefined()
+        expect(launches.at(-1)?.continuation?.kind).toBe(failTier1 ? 'fork-claude' : 'resume-claude')
         expect(live().parentId).toBe('au-parent')
         expect(live().initiator).toBe('auparent')
         expect(child.parentId).toBe(live().sessionId)
@@ -477,7 +478,7 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
       const { child } = parentAndKids(dead)
       failResume = true; failFork = true
       await handleResumeIntercept(resumeMsg())
-      expect(launches.map(l => l.resumeFrom ? 'resume' : l.forkFrom ? 'fork' : 'other')).toEqual(['resume', 'fork', 'other'])
+      expect(launches.map(l => l.continuation?.kind === 'resume-claude' ? 'resume' : l.continuation?.kind === 'fork-claude' ? 'fork' : 'other')).toEqual(['resume', 'fork', 'other'])
       expect(live().parentId).toBe('au-parent')
       expect(child.parentId).toBe(live().sessionId)
     })
@@ -511,7 +512,7 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
     rmSync(gone, { recursive: true })
     seedDead({ launchCwd: gone, disallowedTools: kept.disallowedTools })
     await handleResumeIntercept({ id: `fp-msg-${++seq}`, channelId: THREAD, isThread: true, effectiveThreadId: THREAD })
-    expect(launches.map(l => [l.resumeFrom ? 'resume' : l.forkFrom ? 'fork' : 'other', l.cwd])).toEqual([['other', process.cwd()]])
+    expect(launches.map(l => [l.continuation?.kind === 'resume-claude' ? 'resume' : l.continuation?.kind === 'fork-claude' ? 'fork' : 'other', l.cwd])).toEqual([['other', process.cwd()]])
     expect(live().deadAt).toBeUndefined()
     expect(live().launchCwd).toBeUndefined()
     expect(live().disallowedTools).toEqual(kept.disallowedTools)
@@ -532,7 +533,7 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
     try {
       await handleResumeIntercept({ id: `fp-msg-${++seq}`, channelId: THREAD, isThread: true, effectiveThreadId: THREAD })
     } finally { (transport as any).has = savedHas }
-    expect(launches.map(l => l.resumeFrom)).toEqual([orphan.claudeSessionId])
+    expect(launches.map(l => l.continuation)).toEqual([{ kind: 'resume-claude', claudeSessionId: orphan.claudeSessionId! }])
     expect(keptBy(launches[0])).toEqual(kept)
     expect(live().disallowedTools).toEqual(kept.disallowedTools)
     expect(live().parentId).toBe('fp-orphan-parent')
@@ -763,7 +764,8 @@ describe('spawn_session fork_from and read_only', () => {
     mk('fs-src', 'fssrc', { claudeSessionId: 'cl-src', worktree: { repo: '/repo', path: dir, branch: 'wt/x' }, sessionMetadata: { model: 'claude-src-model', cwd: dir } as any })
     expect((await spawn({ fork_from: 'fssrc' })).isError).toBeFalsy()
     expect(launches).toHaveLength(1)
-    expect(launches[0].forkFrom as object).toEqual({ claudeSessionId: 'cl-src', parentName: 'fssrc' })
+    expect(launches[0].continuation).toEqual({ kind: 'fork-claude', claudeSessionId: 'cl-src' })
+    expect(registry.get(launches[0].sessionId)?.originFrom).toBe('fssrc')
     expect(launches[0].cwd).toBe(dir)
     expect(launches[0].model).toBe('claude-src-model')
     expect(launches[0].worktreePath).toBeUndefined()
@@ -773,12 +775,13 @@ describe('spawn_session fork_from and read_only', () => {
   test('"predecessor" resolves to the caller\'s predecessor; an explicit model wins; read_only blocks the editing tools', async () => {
     mk('fs-caller', 'fscaller', { predecessor: { engine: 'claude', fork: { claudeSessionId: 'cl-gone', parentName: 'elder' }, cwd: dir, model: 'claude-old' } })
     expect((await spawn({ fork_from: 'predecessor', model: 'claude-explicit', read_only: true })).isError).toBeFalsy()
-    expect(launches[0].forkFrom as object).toEqual({ claudeSessionId: 'cl-gone', parentName: 'elder' })
+    expect(launches[0].continuation).toEqual({ kind: 'fork-claude', claudeSessionId: 'cl-gone' })
     expect(launches[0].cwd).toBe(dir)
     expect(launches[0].model).toBe('claude-explicit')
     expect(launches[0].disallowedTools).toEqual(['Edit', 'Write', 'NotebookEdit'])
     // Persisted, so a later resume keeps both.
     const child = registry.get(launches[0].sessionId)!
+    expect(child.originFrom).toBe('elder')
     expect({ launchCwd: child.launchCwd, disallowedTools: child.disallowedTools }).toEqual({ launchCwd: dir, disallowedTools: ['Edit', 'Write', 'NotebookEdit'] })
   })
 
@@ -797,7 +800,8 @@ describe('spawn_session fork_from and read_only', () => {
     mk('fs-caller', 'fscaller')
     mk('fs-dead', 'fsdead', { claudeSessionId: 'cl-dead', worktree: { repo: '/repo', path: dir, branch: 'wt/x' }, deadAt: Date.now() })
     expect((await spawn({ fork_from: 'fsdead' })).isError).toBeFalsy()
-    expect(launches[0].forkFrom as object).toEqual({ claudeSessionId: 'cl-dead', parentName: 'fsdead' })
+    expect(launches[0].continuation).toEqual({ kind: 'fork-claude', claudeSessionId: 'cl-dead' })
+    expect(registry.get(launches[0].sessionId)?.originFrom).toBe('fsdead')
   })
 
   test('a name known only from thread history is forked from its transcript\'s directory', async () => {
@@ -805,7 +809,8 @@ describe('spawn_session fork_from and read_only', () => {
     historyOnly('fshist', 'cl-hist', 'fs-hist-thread')
     try {
       expect((await spawn({ fork_from: 'fshist' })).isError).toBeFalsy()
-      expect(launches[0].forkFrom as object).toEqual({ claudeSessionId: 'cl-hist', parentName: 'fshist' })
+      expect(launches[0].continuation).toEqual({ kind: 'fork-claude', claudeSessionId: 'cl-hist' })
+      expect(registry.get(launches[0].sessionId)?.originFrom).toBe('fshist')
       expect(launches[0].cwd).toBe(dir)
       expect(launches[0].model).toBe('claude-hist')
     } finally { threadRegistry.threads.delete('fs-hist-thread') }
@@ -818,7 +823,8 @@ describe('spawn_session fork_from and read_only', () => {
     registry.setThread('fs-ho-thread', 'fs-new')
     try {
       expect((await spawn({ fork_from: 'fsold' })).isError).toBeFalsy()
-      expect(launches[0].forkFrom as object).toEqual({ claudeSessionId: 'cl-old', parentName: 'fsold' })
+      expect(launches[0].continuation).toEqual({ kind: 'fork-claude', claudeSessionId: 'cl-old' })
+      expect(registry.get(launches[0].sessionId)?.originFrom).toBe('fsold')
     } finally { threadRegistry.threads.delete('fs-ho-thread'); registry.deleteThread('fs-ho-thread') }
   })
 
@@ -865,7 +871,8 @@ describe('spawn_session fork_from and read_only', () => {
     mk('fs-caller', 'fscaller')
     mk('fs-cl', 'fsclaude', { claudeSessionId: 'cl-ok', worktree: { repo: '/repo', path: dir, branch: 'wt/x' } })
     expect((await spawn({ fork_from: 'fsclaude' })).isError).toBeFalsy()
-    expect(launches[0].forkFrom as object).toEqual({ claudeSessionId: 'cl-ok', parentName: 'fsclaude' })
+    expect(launches[0].continuation).toEqual({ kind: 'fork-claude', claudeSessionId: 'cl-ok' })
+    expect(registry.get(launches[0].sessionId)?.originFrom).toBe('fsclaude')
   })
 
   test('a threaded fork whose source dir is gone fails before a thread exists', async () => {
@@ -961,7 +968,7 @@ describe('spawn_session fork_from and read_only', () => {
   test('read_only without fork_from reaches the launch too', async () => {
     mk('fs-caller', 'fscaller')
     expect((await spawn({ read_only: true })).isError).toBeFalsy()
-    expect(launches[0].forkFrom).toBeUndefined()
+    expect(launches[0].continuation).toBeUndefined()
     expect(launches[0].disallowedTools).toEqual(['Edit', 'Write', 'NotebookEdit'])
   })
 })
@@ -975,7 +982,7 @@ describe('Claude fork argv', () => {
     const name = `fpargv${Math.random().toString(36).slice(2, 8)}`
     await new ClaudeEngine(transport).launch({
       sessionId: `sid-${name}`, tmuxName: name, cwd: '/src/dir', originalCwd: '/spawn', model: 'm', prompt: 'P',
-      forkFrom: { claudeSessionId: 'cl-argv' }, ...(disallowedTools ? { disallowedTools } : {}),
+      continuation: { kind: 'fork-claude', claudeSessionId: 'cl-argv' }, ...(disallowedTools ? { disallowedTools } : {}),
     })
     return fake.calls().find(c => c.startsWith('new-session') && c.includes(name)) ?? ''
   }
@@ -984,7 +991,7 @@ describe('Claude fork argv', () => {
     const name = `fpresume${Math.random().toString(36).slice(2, 8)}`
     await new ClaudeEngine(transport).launch({
       sessionId: `sid-${name}`, tmuxName: name, cwd: '/src/dir', originalCwd: '/spawn', model: 'm', prompt: 'P',
-      resumeFrom: 'cl-forked', disallowedTools: ['Edit', 'Write', 'NotebookEdit'],
+      continuation: { kind: 'resume-claude', claudeSessionId: 'cl-forked' }, disallowedTools: ['Edit', 'Write', 'NotebookEdit'],
     })
     const line = fake.calls().find(c => c.startsWith('new-session') && c.includes(name)) ?? ''
     expect(line).toContain("--resume 'cl-forked'")
@@ -1002,7 +1009,7 @@ describe('Claude fork argv', () => {
 
   test('a fork exports the Claude session it continues; a fresh launch and a resume export none', async () => {
     expect(await launchFork()).toContain("export HYDRA_FORKED_FROM_CLAUDE_SESSION_ID='cl-argv'")
-    for (const extra of [{}, { resumeFrom: 'cl-forked' }]) {
+    for (const extra of [{}, { continuation: { kind: 'resume-claude' as const, claudeSessionId: 'cl-forked' } }]) {
       const name = `fplineage${Math.random().toString(36).slice(2, 8)}`
       await new ClaudeEngine(transport).launch({ sessionId: `sid-${name}`, tmuxName: name, cwd: '/src/dir', originalCwd: '/spawn', model: 'm', prompt: 'P', ...extra })
       const line = fake.calls().find(c => c.startsWith('new-session') && c.includes(name)) ?? ''

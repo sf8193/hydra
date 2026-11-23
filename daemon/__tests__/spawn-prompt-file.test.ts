@@ -101,7 +101,7 @@ const launchOmp = (extra: object) => new OmpEngine({} as any).launch({ ...base, 
 
 describe('Claude: the prompt is absent from every command line, and arrives unchanged', () => {
   for (const [name, prompt] of Object.entries(HARD)) {
-    test.each([['fresh', {}], ['fork', { forkFrom: { claudeSessionId: 'C-parent' } }]] as [string, { forkFrom?: { claudeSessionId: string } }][])(`${name}, %s`, async (_shape, extra) => {
+    test.each([['fresh', {}], ['fork', { continuation: { kind: 'fork-claude', claudeSessionId: 'C-parent' } }]] as [string, { continuation?: { kind: 'fork-claude'; claudeSessionId: string } }][])(`${name}, %s`, async (_shape, extra) => {
       await launchClaude({ prompt, ...extra })
       expect(tmuxCalls()).not.toContain(MARKER)
       expect(tmuxCalls()).not.toContain('pwned')
@@ -109,7 +109,7 @@ describe('Claude: the prompt is absent from every command line, and arrives unch
       expect(argv).toContain(prompt)                       // one word, every byte as given
       expect(argv.filter(a => a === prompt)).toHaveLength(1)
       // Nothing around it moved: the first word of a fresh start is the session id flag, of a fork the parent.
-      expect(argv[0]).toBe(extra.forkFrom ? '--resume' : '--session-id')
+      expect(argv[0]).toBe(extra.continuation ? '--resume' : '--session-id')
     })
   }
 
@@ -121,7 +121,7 @@ describe('Claude: the prompt is absent from every command line, and arrives unch
   })
 
   test('a resume takes no prompt: no file, no read step', async () => {
-    await launchClaude({ prompt: `resume ${MARKER}`, resumeFrom: 'C-old' })
+    await launchClaude({ prompt: `resume ${MARKER}`, continuation: { kind: 'resume-claude', claudeSessionId: 'C-old' } })
     expect(existsSync(spawnPromptDir()) ? readdirSync(spawnPromptDir()) : []).toEqual([])
     expect(tmuxCalls()).not.toContain('_hydra_prompt')
     expect(claudeArgv()).toEqual(['--resume', 'C-old', '--model', 'claude-opus-4-1', '--channels', expect.any(String), '--dangerously-skip-permissions', '--debug-file', expect.any(String)])

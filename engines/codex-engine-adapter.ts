@@ -140,7 +140,12 @@ export class CodexEngineAdapter implements EngineAdapter {
   }
 
   async launch(input: LaunchInput): Promise<LaunchResult> {
-    const { sessionId, tmuxName, model, prompt, resumeCodex } = input
+    const { sessionId, tmuxName, model, prompt, continuation } = input
+    if (continuation && continuation.kind !== 'resume-codex' && continuation.kind !== 'fork-codex') {
+      throw new Error(`codex engine: unsupported launch continuation "${continuation.kind}"`)
+    }
+    const resumeCodex = continuation?.kind === 'resume-codex' ? continuation : undefined
+    const forkCodexThreadId = continuation?.kind === 'fork-codex' ? continuation.codexThreadId : undefined
     // Resume reuses the ORIGINAL home: the rollout lives there, and a fresh home cannot see it.
     const codexHomeName = resumeCodex?.homeName ?? tmuxName
     const sockPath = codexSocketPath(codexHomeName)
@@ -161,8 +166,8 @@ export class CodexEngineAdapter implements EngineAdapter {
           const r = await this.engine.connectAndResume(sessionId, sockPath, resumeCodex.threadId)
           codexThreadId = resumeCodex.threadId
           resolvedModel = r.model ?? resolvedModel
-        } else if (input.forkFrom?.codexThreadId) {
-          const r = await this.engine.connectAndFork(sessionId, sockPath, input.forkFrom.codexThreadId, model)
+        } else if (forkCodexThreadId) {
+          const r = await this.engine.connectAndFork(sessionId, sockPath, forkCodexThreadId, model)
           codexThreadId = r.threadId
           resolvedModel = r.model ?? resolvedModel
         } else {

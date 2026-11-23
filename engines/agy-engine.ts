@@ -52,10 +52,14 @@ export class AgyEngine implements EngineAdapter {
   async launch(input: LaunchInput): Promise<LaunchResult> {
     const { sessionId, tmuxName } = input
     const model = input.model!   // doSpawnSession always gives agy one (its flash model when none is named)
+    const cont = input.continuation
+    if (cont && cont.kind !== 'resume-session') {
+      throw new Error(`agy engine: unsupported launch continuation "${cont.kind}"`)
+    }
     // Resume: agy continues the dead session's conversation (agy keeps conversations per folder: the caller launches in the folder the session had).
     // With no conversation on record agy would start a fresh one that the caller reports as resumed, so that fails the resume instead.
-    const conversation = input.resumeSession ? agyState(input.resumeSession.fromSessionId)?.conversationId : undefined
-    if (input.resumeSession && !conversation) throw new Error(`agy session ${input.resumeSession.fromSessionId} has no conversation to resume`)
+    const conversation = cont ? agyState(cont.fromSessionId)?.conversationId : undefined
+    if (cont && !conversation) throw new Error(`agy session ${cont.fromSessionId} has no conversation to resume`)
     registerHydraTools(this.mcpConfig)
     registerHydraHooks(this.hooksConfig)
     mkdirSync(agyStateDir(), { recursive: true, mode: 0o700 })

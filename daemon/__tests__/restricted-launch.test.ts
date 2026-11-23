@@ -61,9 +61,10 @@ const fakeClaude = {
   provider: 'claude', channel: 'bridge',
   launch: async (input: LaunchInput) => {
     launches.push(input)
-    if (input.resumeFrom && failResume) throw new Error('resume failed')
-    if (input.forkFrom && failFork) throw new Error('fork failed')
-    return { provider: 'claude', model: 'claude-x', identity: { claudeSessionId: input.resumeFrom ?? `new-${launches.length}` }, debugLogPath: `/spawn-logs/debug-${input.tmuxName}-${input.sessionId}.log` }
+    const cont = input.continuation
+    if (cont?.kind === 'resume-claude' && failResume) throw new Error('resume failed')
+    if (cont?.kind === 'fork-claude' && failFork) throw new Error('fork failed')
+    return { provider: 'claude', model: 'claude-x', identity: { claudeSessionId: cont?.kind === 'resume-claude' ? cont.claudeSessionId : `new-${launches.length}` }, debugLogPath: `/spawn-logs/debug-${input.tmuxName}-${input.sessionId}.log` }
   },
   verifyLaunch: (policy: any, launched: any) => verifyLoaded(policy, launched.debugLogPath),   // the real check, on the fake engine's launch
   stop: async (info: SessionInfo) => { stops.push(info.sessionId); return { status: 'stopped' } }, isAlive: () => false, surface: () => null,
@@ -195,7 +196,7 @@ describe('every launch shape is restricted', () => {
     seedDead({ policy: opsPolicy() })
     const r = await revive({ name: undefined })
     expect(r).toMatchObject({ ok: true, method: 'resumed' })
-    expect(launches[0].resumeFrom).toMatch(/^C-/)
+    expect(launches[0].continuation).toMatchObject({ kind: 'resume-claude', claudeSessionId: expect.stringMatching(/^C-/) })
     expect(restrictedInput(launches[0])).toEqual(RESTRICTED)
     expect(live()).toMatchObject({ policy: opsPolicy() })
   })
@@ -205,7 +206,7 @@ describe('every launch shape is restricted', () => {
     failResume = true
     const r = await revive()
     expect(r).toMatchObject({ ok: true, method: 'forked' })
-    expect(launches.at(-1)!.forkFrom?.claudeSessionId).toMatch(/^C-/)
+    expect(launches.at(-1)!.continuation).toMatchObject({ kind: 'fork-claude', claudeSessionId: expect.stringMatching(/^C-/) })
     expect(restrictedInput(launches.at(-1))).toEqual(RESTRICTED)
   })
 
@@ -214,7 +215,7 @@ describe('every launch shape is restricted', () => {
     failResume = true; failFork = true
     const r = await revive()
     expect(r).toMatchObject({ ok: true, method: 'respawned' })
-    expect(launches.at(-1)!.resumeFrom).toBeUndefined()
+    expect(launches.at(-1)!.continuation).toBeUndefined()
     expect(restrictedInput(launches.at(-1))).toEqual(RESTRICTED)
   })
 
@@ -279,26 +280,25 @@ describe('a policy change starts fresh', () => {
     const r = await revive()
     expect(r).toMatchObject({ ok: true, method: 'respawned' })
     expect(launches).toHaveLength(1)
-    expect(launches[0].resumeFrom).toBeUndefined()
-    expect(launches[0].forkFrom).toBeUndefined()
+    expect(launches[0].continuation).toBeUndefined()
     expect(launches[0].policy?.specialist).toBe('ops')
   })
   test('the resume and fork tiers are refused where the policy is decided, and the cascade respawns: one new birth, no resume ever launched', async () => {
     seedDead({ policy: operatorPolicy() })
     expect(await revive()).toMatchObject({ ok: true, method: 'respawned' })
     expect(launches).toHaveLength(1)
-    expect(launches.every(l => l.resumeFrom === undefined && l.forkFrom === undefined)).toBe(true)
+    expect(launches.every(l => l.continuation === undefined)).toBe(true)
   })
   test('a record from before policies existed (no policy at all) counts as the operator\'s', async () => {
     seedDead({})
     expect(await revive({ specialist: 'ops' })).toMatchObject({ ok: true, method: 'respawned' })
-    expect(launches.every(l => l.resumeFrom === undefined && l.forkFrom === undefined)).toBe(true)
+    expect(launches.every(l => l.continuation === undefined)).toBe(true)
   })
   test('a workdir specialist whose tools changed is not resumed', async () => {
     seedDead({ policy: opsPolicy() })
     use({ ...OPS, tools: ['Read'] })
     expect(await revive()).toMatchObject({ ok: true, method: 'respawned' })
-    expect(launches[0].resumeFrom).toBeUndefined()
+    expect(launches[0].continuation).toBeUndefined()
   })
   test('the same policy still resumes (the control)', async () => {
     seedDead({ policy: opsPolicy() })
@@ -336,12 +336,12 @@ describe('a kickoff change starts fresh', () => {
     ;(gateway as any).send = async (c: string, text: string) => { told.push(text); return { id: 'm', channelId: c } }
   })
   afterEach(() => { ;(gateway as any).send = async (c: string) => ({ id: 'm', channelId: c }) })
-  const resumedNothing = () => expect(launches.every(l => l.resumeFrom === undefined && l.forkFrom === undefined)).toBe(true)
+  const resumedNothing = () => expect(launches.every(l => l.continuation === undefined)).toBe(true)
 
   test('the same kickoff resumes the conversation (the control)', async () => {
     ran({ kickoffHash: kickoffHash(NEW) })
     expect(await reviveThread({ thread: threadRegistry.get(THREAD)!, specialist: 'ops' })).toMatchObject({ ok: true, method: 'resumed' })
-    expect(launches[0].resumeFrom).toMatch(/^C-/)
+    expect(launches[0].continuation).toMatchObject({ kind: 'resume-claude', claudeSessionId: expect.stringMatching(/^C-/) })
     expect(live().kickoffHash).toBe(kickoffHash(NEW))   // a resume keeps the kickoff its conversation was born under
     expect(told.filter(t => t.includes('restarted fresh'))).toEqual([])
   })
@@ -627,13 +627,13 @@ describe('a launch path that passes nothing for a specialist session: restricted
   test('nothing but resumeFrom (a continuation): the stored policy is what launches', async () => {
     seedDead({ policy: opsPolicy() })
     await bare({ resumeFrom: 'C-77' })
-    expect(launches[0]).toMatchObject({ resumeFrom: 'C-77', cwd: workdir, policy: { id: opsLabel() } })
+    expect(launches[0]).toMatchObject({ continuation: { kind: 'resume-claude', claudeSessionId: 'C-77' }, cwd: workdir, policy: { id: opsLabel() } })
     never()
   })
   test('nothing but a fork source: the same', async () => {
     seedDead({ policy: opsPolicy() })
     await bare({ forkFrom: { claudeSessionId: 'C-parent', parentName: 'x' } })
-    expect(launches[0]).toMatchObject({ forkFrom: { claudeSessionId: 'C-parent' }, cwd: workdir, policy: { id: opsLabel() } })
+    expect(launches[0]).toMatchObject({ continuation: { kind: 'fork-claude', claudeSessionId: 'C-parent' }, cwd: workdir, policy: { id: opsLabel() } })
     never()
   })
   test('no record at all, nothing named: the thread is the specialist\'s by its pointer, so the session is born restricted from hydra.toml', async () => {
@@ -715,7 +715,7 @@ describe('a launch path that passes nothing for a specialist session: restricted
     test('the specialist still declared with the same policy: the revive resumes under the stored policy, restricted to its workdir', async () => {
       killed()
       expect(await revive()).toMatchObject({ ok: true, method: 'resumed' })
-      expect(launches[0]).toMatchObject({ resumeFrom: 'C-gone', cwd: workdir, sessionType: 'thread_owner', policy: { id: opsLabel() } })
+      expect(launches[0]).toMatchObject({ continuation: { kind: 'resume-claude', claudeSessionId: 'C-gone' }, cwd: workdir, sessionType: 'thread_owner', policy: { id: opsLabel() } })
     })
     test('the specialist still declared with a different policy: the old conversation is not resumed, a new birth is restricted by the new one', async () => {
       killed()
@@ -723,7 +723,7 @@ describe('a launch path that passes nothing for a specialist session: restricted
       expect(await revive()).toMatchObject({ ok: true, method: 'respawned' })
       expect(launches).toHaveLength(1)
       expect(launches[0]).toMatchObject({ cwd: workdir, policy: { tools: ['Read'] } })
-      expect(launches[0].resumeFrom).toBeUndefined()
+      expect(launches[0].continuation).toBeUndefined()
     })
     test('an operator-access conversation whose specialist is gone continues as it always did (nothing was restricted)', async () => {
       killed(operatorPolicy())

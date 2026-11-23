@@ -36,7 +36,7 @@ import type { SessionType, ToolBase, SessionLabel } from '../shared/constants.js
 import { isRestricted, isRestrictedPolicy } from '../shared/policy-record.js'
 import { resolveEngine } from '../sessions/engine-instances.js'
 import { engineLimitsAccess, engineProfile } from '../shared/engines/index.js'
-import type { EngineAdapter, ProviderId } from '../engines/engine-adapter.js'
+import { launchContinuationFrom, type EngineAdapter, type ProviderId } from '../engines/engine-adapter.js'
 import { resumeHomeOwner } from '../engines/codex-engine-adapter.js'
 import { buildSpawnPrompt, buildForkPrompt, buildHandoffPrompt, buildResurrectPrompt } from '../shared/prompts/session.js'
 import { hydraPrompt } from '../shared/prompts/request.js'
@@ -1449,6 +1449,8 @@ function recordAndAnnounceSpawn(params: {
 export async function doSpawnSession(topic: string, chatId?: string, messageId?: string, opts?: SpawnOpts): Promise<SpawnResult> {
   // Before a thread is opened: a working dir that has gone away fails the spawn without leaving an empty thread.
   if (opts?.cwd && !existsSync(opts.cwd)) throw new Error(`working directory ${opts.cwd} does not exist`)
+  // Validate continuation options up front before opening a thread or replacing a dead occupant.
+  const continuation = launchContinuationFrom(opts)
   // One place decides the engine and the model it runs: a caller's explicit engine, else the one its model alias names (a specialist's
   // `model`, `hydra spawn --model`, a recipe), else claude. Alias or full id: an explicit engine reads the alias in its own table.
   const selected = opts?.model ? resolveLaunchSelection(opts.model, opts.engine) : undefined
@@ -1517,7 +1519,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   const isJoin = !!opts?.joinThread
   const originType: SpawnOriginType = isFork ? 'fork' : isHandoff ? 'handoff' : isResurrect ? 'resurrect' : 'spawn'
   const originFrom = opts?.forkFrom?.parentName ?? opts?.handedOffFrom ?? opts?.resurrectFrom
-  const continuing = isResume || isFork || !!opts?.resumeCodex || !!opts?.resumeSession
+  const continuing = !!continuation
 
   // Stage 1: resolve/create thread and clean up any dead occupant.
   const thread = await resolveOrCreateThread(
@@ -1573,7 +1575,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     prompt: restrictedPolicy ? `${RESTRICTED_PREAMBLE} ${prompt}` : prompt, sessionToken: issued.token,
     worktreePath: worktree?.path, forkFromOriginalCwd: !!worktreeTarget,
     tools: opts?.tools, disallowedTools: carry.disallowedTools,
-    forkFrom: opts?.forkFrom, resumeFrom: opts?.resumeFrom, resumeCodex: opts?.resumeCodex, resumeSession: opts?.resumeSession,
+    ...(continuation && { continuation }),
     threadId: thread.threadId, sessionType: spawnType, ...(policy && { policy }),
   }).catch(async (err: unknown) => {
     // A refusal the launch itself makes (an old Claude Code, a folder it cannot make) is told to the thread, as the checks above are.

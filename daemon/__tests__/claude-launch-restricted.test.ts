@@ -59,8 +59,8 @@ async function launch(extra: Record<string, unknown> = {}): Promise<string> {
 describe('argv', () => {
   test('fresh, resume and fork are pinned byte for byte', async () => {
     expect(await launch()).toMatchSnapshot('fresh')
-    expect(await launch({ resumeFrom: 'C-old' })).toMatchSnapshot('resume')
-    expect(await launch({ forkFrom: { claudeSessionId: 'C-parent' } })).toMatchSnapshot('fork')
+    expect(await launch({ continuation: { kind: 'resume-claude', claudeSessionId: 'C-old' } })).toMatchSnapshot('resume')
+    expect(await launch({ continuation: { kind: 'fork-claude', claudeSessionId: 'C-parent' } })).toMatchSnapshot('fork')
   })
 
   test('the prompt comes before every variadic flag, and the confinement flags follow the channel', async () => {
@@ -72,7 +72,7 @@ describe('argv', () => {
   })
 
   test('the kickoff reaches the pane as given, on a fresh start and on a fork (the preamble is the app\'s: app/session-lifecycle.ts), and a resume has none', async () => {
-    for (const extra of [{}, { forkFrom: { claudeSessionId: 'C-parent' } }]) {
+    for (const extra of [{}, { continuation: { kind: 'fork-claude', claudeSessionId: 'C-parent' } }]) {
       const cmd = await launch(extra)
       expect(cmd).not.toContain("it's a prompt")   // the kickoff is in the prompt file, not on the command line
       expect(readFileSync(join(STATE_DIR, 'spawn-prompts', `sc-t-${base.sessionId}.prompt`), 'utf8')).toBe("it's a prompt")
@@ -80,7 +80,7 @@ describe('argv', () => {
   })
 
   test('there is no --dangerously-skip-permissions on any shape', async () => {
-    for (const extra of [{}, { resumeFrom: 'C-old' }, { forkFrom: { claudeSessionId: 'C-parent' } }]) {
+    for (const extra of [{}, { continuation: { kind: 'resume-claude', claudeSessionId: 'C-old' } }, { continuation: { kind: 'fork-claude', claudeSessionId: 'C-parent' } }]) {
       expect(await launch(extra)).not.toContain('--dangerously-skip-permissions')
     }
   })
@@ -107,7 +107,7 @@ describe('argv', () => {
     const keep = { k: process.env.FAKE_SERVER_KEY, o: process.env.FAKE_OTHER_KEY }
     try {
       sourceEnvFiles([join(dir, '.env')])
-      for (const extra of [{}, { resumeFrom: 'C-old' }, { forkFrom: { claudeSessionId: 'C-parent' } }]) {
+      for (const extra of [{}, { continuation: { kind: 'resume-claude', claudeSessionId: 'C-old' } }, { continuation: { kind: 'fork-claude', claudeSessionId: 'C-parent' } }]) {
         const cmd = await launch(extra)
         expect(cmd).toContain('unset FAKE_OTHER_KEY FAKE_SERVER_KEY && ')
         expect(cmd.indexOf('unset FAKE_OTHER_KEY')).toBeLessThan(cmd.indexOf('export HYDRA_SESSION_ID'))
@@ -152,9 +152,9 @@ describe("in launch(), the folder, the flags and the env come from the launch po
       expect(claudeCd(await launch(extra))).toBe('/work/ops')
     }
     // A fork that asked for a worktree starts where the caller's spawn dir is: for a restricted session that is its workdir too.
-    expect(claudeCd(await launch({ cwd: '/wt/x', originalCwd: '/operator/spawn', worktreePath: '/wt/x', forkFromOriginalCwd: true, forkFrom: { claudeSessionId: 'C-parent' } }))).toBe('/work/ops')
-    expect(claudeCd(await launch({ cwd: '/operator/spawn', originalCwd: '/operator/spawn', resumeFrom: 'C-old' }))).toBe('/work/ops')
-    expect(claudeCd(await launch({ cwd: '/operator/spawn', originalCwd: '/operator/spawn', forkFrom: { claudeSessionId: 'C-parent' } }))).toBe('/work/ops')
+    expect(claudeCd(await launch({ cwd: '/wt/x', originalCwd: '/operator/spawn', worktreePath: '/wt/x', forkFromOriginalCwd: true, continuation: { kind: 'fork-claude', claudeSessionId: 'C-parent' } }))).toBe('/work/ops')
+    expect(claudeCd(await launch({ cwd: '/operator/spawn', originalCwd: '/operator/spawn', continuation: { kind: 'resume-claude', claudeSessionId: 'C-old' } }))).toBe('/work/ops')
+    expect(claudeCd(await launch({ cwd: '/operator/spawn', originalCwd: '/operator/spawn', continuation: { kind: 'fork-claude', claudeSessionId: 'C-parent' } }))).toBe('/work/ops')
   })
   test('with no policy, the caller\'s cwd rules, as it always has', async () => {
     expect(claudeCd(await launch({ policy: undefined, sessionType: 'thread_owner', cwd: '/elsewhere', originalCwd: '/elsewhere' }))).toBe('/elsewhere')
