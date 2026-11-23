@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeEach, afterAll, afterEach } from 'bun:test'
+import type { CLIResponseView } from '../../shared/cli-protocol.js'
 import { spawn } from 'child_process'
 import { existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync, closeSync } from 'fs'
 import { homedir, tmpdir } from 'os'
@@ -954,7 +955,7 @@ describe('jobs run', () => {
   })
 
   test('Ctrl-C before the daemon answers cancels nothing: the CLI just exits', async () => {
-    let answer!: (v: Record<string, unknown>) => void
+    let answer!: (v: CLIResponseView) => void
     runIO.send = () => new Promise(r => { answer = r })
     const run = jobsRun('test', 'sweep', dir, 0)
     await Bun.sleep(0)

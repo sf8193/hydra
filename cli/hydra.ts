@@ -4,6 +4,7 @@ import { spawnSync } from 'child_process'
 import { randomUUID } from 'crypto'
 import { join, resolve } from 'path'
 import { resolveConfig, resolveSocket, sendRequest, printResponse } from './helpers.js'
+import type { CLIResponse } from '../shared/cli-protocol.js'
 import {
   lifecycleUp, lifecycleDown, lifecycleRestart,
   lifecycleWatchdog, lifecyclePreflight,
@@ -474,7 +475,7 @@ async function main(): Promise<void> {
     }
 
     case 'health': {
-      let response: Record<string, unknown>
+      let response: CLIResponse
       try {
         response = await sendRequest(socketPath(), { type: 'cli', command: 'health', id: randomUUID(), params: {} })
       } catch (err) {
