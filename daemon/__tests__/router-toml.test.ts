@@ -26,7 +26,7 @@ beforeAll(async () => {
   spies.push(spyOn(gateway, 'react').mockImplementation((async (...a: any[]) => { reacted.push(a) }) as any))
   spies.push(spyOn(gateway, 'startThreadOnMessage').mockImplementation((async (...a: any[]) => { threads.push(a); throw new Error('stop here') }) as any))
   spies.push(spyOn(registry, 'getByThread').mockImplementation((() => 'sess') as any))
-  await import('../../app/router.js')
+  ;(await import('../../app/router.js')).bindRouter()
 })
 afterAll(() => { for (const s of spies) s.mockRestore() })
 beforeEach(() => { reacted.length = 0; threads.length = 0; _setHydraConfigForTesting(config()) })

@@ -112,6 +112,7 @@ startBridgeServer()
 
 bindDeliveryNotice()
 bindCodexRuntime()
+bindRouter()
 // Start each engine over its persisted records. Not awaited; each start logs its own outcome.
 // Codex has no start of its own: its sweep (startCodexRuntime) reconnects its sessions to their app-server sockets.
 for (const adapter of Object.values(engines)) {
@@ -170,8 +171,7 @@ if ('homeSpawnHandler' in gateway) {
   ;(gateway as any).homeSpawnHandler = runHomeSpawnAction
 }
 
-// Importing router wires up gateway.onMessage / onThreadDelete / onMessageDelete
-import './app/router.js'
+import { bindRouter } from './app/router.js'
 import { restoreHeld } from './app/specialist-thread.js'
 import { startPrWatcher } from './connectors/github/pr-watch.js'
 import { startConversationTable, stopConversationTable, startSlackListener, bindSlackDelivery } from './connectors/slack/runtime.js'

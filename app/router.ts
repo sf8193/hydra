@@ -361,11 +361,6 @@ async function deliverToSession(msg: InboundMessage, targetSessionId: string, be
 }
 
 // A held message lands in the started session as any message in its thread does; one restored at boot lands the same way.
-setHeldDelivery(async (msg, info) => {
-  info.lastActive = Date.now()
-  registry.debouncedPersist()
-  await enqueueUserMessage(msg, info.sessionId, info.threadId)
-})
 
 /**
  * Reserve the session's ingress slot synchronously, then enrich and deliver
@@ -389,33 +384,6 @@ function enqueueUserMessage(msg: InboundMessage, targetSessionId: string, chatId
 // Event handlers
 // ---------------------------------------------------------------------------
 
-gateway.onThreadDelete(threadId => {
-  const sessionId = registry.getByThread(threadId)
-  if (!sessionId) return
-  const info = registry.get(sessionId)
-  if (!info) return
-  process.stderr.write(`daemon: thread ${threadId} deleted, killing session ${info.tmuxName}\n`)
-  void killSession(info, 'thread deleted', { ended: 'killed & destroyed' })
-})
-
-gateway.onMessageDelete((messageId, threadId) => {
-  if (!threadId) return
-  const sessionId = registry.getByThread(threadId)
-  if (!sessionId) return
-  const info = registry.get(sessionId)
-  if (!info) return
-  if (info.anchorMessageId && messageId === info.anchorMessageId) {
-    process.stderr.write(`daemon: anchor message deleted, killing session ${info.tmuxName}\n`)
-    void killSession(info, 'anchor message deleted', { ended: 'killed' })
-  } else {
-    if (info.lastReplyId === messageId) {
-      info.lastReplyId = undefined
-      info.lastReplyAt = undefined
-      registry.persist()
-    }
-  }
-})
-
 // ---------------------------------------------------------------------------
 // Reaction-based message deletion (:hocho: on bot messages)
 // ---------------------------------------------------------------------------
@@ -438,755 +406,795 @@ if (gateway.onReaction) {
 // Inbound message routing
 // ---------------------------------------------------------------------------
 
-gateway.onMessage(async (inbound: InboundMessage) => {
-  if (inbound.isBot) return
+// ---------------------------------------------------------------------------
+// Binding — daemon.ts calls bindRouter() once at boot
+// ---------------------------------------------------------------------------
 
-  // The one chokepoint: nothing below, operator command or not, acts in a place this daemon is not allowed in.
-  if (!channelAllowed(inbound) && !(await admitTaggedChannel(inbound))) return
-  const senderId = inbound.authorId
-  const isAllowed = operatorIds().includes(senderId)
-  // The operator's tagged command is the command: the command handlers see it without the tag. Everything after them
-  // (thread delivery, the gate) reads the message as it came, tag included: Slack finds the tag in the text.
-  const bare = withoutLeadingTag(inbound.content, gateway.botId)
-  let msg = isAllowed && COMMAND_RE.test(bare) ? { ...inbound, content: bare } : inbound
+/** Registers the router's gateway handlers and the held-message delivery. */
+export function bindRouter(): void {
+  setHeldDelivery(async (msg, info) => {
+    info.lastActive = Date.now()
+    registry.debouncedPersist()
+    await enqueueUserMessage(msg, info.sessionId, info.threadId)
+  })
 
-  if (!isAllowed && COMMAND_RE.test(msg.content)) {
-    process.stderr.write(`daemon: command-shaped message from non-allowlisted sender ${senderId} ignored — only the operator may use commands\n`)
-  }
+  gateway.onThreadDelete(threadId => {
+    const sessionId = registry.getByThread(threadId)
+    if (!sessionId) return
+    const info = registry.get(sessionId)
+    if (!info) return
+    process.stderr.write(`daemon: thread ${threadId} deleted, killing session ${info.tmuxName}\n`)
+    void killSession(info, 'thread deleted', { ended: 'killed & destroyed' })
+  })
 
-  if (isAllowed) {
-    // Pane-probe intercept for non-thread messages (byte plan-mode posts to root channel)
-    if (!msg.isThread) {
-      const intercept = getThreadIntercept(msg.channelId)
-      if (intercept) {
-        const lower = msg.content.trim().toLowerCase()
-        if (intercept.kind === 'plan_mode' && (lower === 'approve' || lower === 'reject')) {
-          void intercept.handler(msg.content, msg.channelId, msg.id)
+  gateway.onMessageDelete((messageId, threadId) => {
+    if (!threadId) return
+    const sessionId = registry.getByThread(threadId)
+    if (!sessionId) return
+    const info = registry.get(sessionId)
+    if (!info) return
+    if (info.anchorMessageId && messageId === info.anchorMessageId) {
+      process.stderr.write(`daemon: anchor message deleted, killing session ${info.tmuxName}\n`)
+      void killSession(info, 'anchor message deleted', { ended: 'killed' })
+    } else {
+      if (info.lastReplyId === messageId) {
+        info.lastReplyId = undefined
+        info.lastReplyAt = undefined
+        registry.persist()
+      }
+    }
+  })
+
+  gateway.onMessage(async (inbound: InboundMessage) => {
+    if (inbound.isBot) return
+
+    // The one chokepoint: nothing below, operator command or not, acts in a place this daemon is not allowed in.
+    if (!channelAllowed(inbound) && !(await admitTaggedChannel(inbound))) return
+    const senderId = inbound.authorId
+    const isAllowed = operatorIds().includes(senderId)
+    // The operator's tagged command is the command: the command handlers see it without the tag. Everything after them
+    // (thread delivery, the gate) reads the message as it came, tag included: Slack finds the tag in the text.
+    const bare = withoutLeadingTag(inbound.content, gateway.botId)
+    let msg = isAllowed && COMMAND_RE.test(bare) ? { ...inbound, content: bare } : inbound
+
+    if (!isAllowed && COMMAND_RE.test(msg.content)) {
+      process.stderr.write(`daemon: command-shaped message from non-allowlisted sender ${senderId} ignored — only the operator may use commands\n`)
+    }
+
+    if (isAllowed) {
+      // Pane-probe intercept for non-thread messages (byte plan-mode posts to root channel)
+      if (!msg.isThread) {
+        const intercept = getThreadIntercept(msg.channelId)
+        if (intercept) {
+          const lower = msg.content.trim().toLowerCase()
+          if (intercept.kind === 'plan_mode' && (lower === 'approve' || lower === 'reject')) {
+            void intercept.handler(msg.content, msg.channelId, msg.id)
+            return
+          }
+        }
+      }
+
+      // "spawn codex: topic" / "spawn codex gpt-5.5: topic" — codex engine with optional model
+      const spawnCodexMatch = msg.content.match(SPAWN_CODEX_RE)
+      if (spawnCodexMatch) {
+        const topic = spawnCodexMatch[2].trim()
+        if (topic) {
+          void handleSpawnIntercept(msg, topic, spawnCodexMatch[1] || undefined, 'codex')
           return
         }
       }
-    }
 
-    // "spawn codex: topic" / "spawn codex gpt-5.5: topic" — codex engine with optional model
-    const spawnCodexMatch = msg.content.match(SPAWN_CODEX_RE)
-    if (spawnCodexMatch) {
-      const topic = spawnCodexMatch[2].trim()
-      if (topic) {
-        void handleSpawnIntercept(msg, topic, spawnCodexMatch[1] || undefined, 'codex')
-        return
+      // "spawn sol: topic", "spawn omp-sonnet: topic", "spawn neon: topic" — an alias selects both model and engine.
+      for (const { engine, spawn } of ENGINE_ALIAS_FORMS) {
+        const aliasMatch = msg.content.match(spawn)
+        const topic = aliasMatch?.[2].trim()
+        if (aliasMatch && topic) {
+          void handleSpawnIntercept(msg, topic, resolveEngineAlias(engine, aliasMatch[1]), engine)
+          return
+        }
       }
-    }
 
-    // "spawn sol: topic", "spawn omp-sonnet: topic", "spawn neon: topic" — an alias selects both model and engine.
-    for (const { engine, spawn } of ENGINE_ALIAS_FORMS) {
-      const aliasMatch = msg.content.match(spawn)
-      const topic = aliasMatch?.[2].trim()
-      if (aliasMatch && topic) {
-        void handleSpawnIntercept(msg, topic, resolveEngineAlias(engine, aliasMatch[1]), engine)
-        return
+      // "spawn sonnet: topic" / "new session haiku: topic" — model alias before colon
+      const spawnModelMatch = msg.content.match(SPAWN_MODEL_RE)
+      if (spawnModelMatch) {
+        const topic = spawnModelMatch[2].trim()
+        if (topic) {
+          void handleSpawnIntercept(msg, topic, spawnModelMatch[1])
+          return
+        }
       }
-    }
 
-    // "spawn sonnet: topic" / "new session haiku: topic" — model alias before colon
-    const spawnModelMatch = msg.content.match(SPAWN_MODEL_RE)
-    if (spawnModelMatch) {
-      const topic = spawnModelMatch[2].trim()
-      if (topic) {
-        void handleSpawnIntercept(msg, topic, spawnModelMatch[1])
-        return
-      }
-    }
-
-    // "spawn +mod: topic" — spawn applying a template modifier.
-    const spawnModMatch = msg.content.match(/^(?:new session|spawn)\s+((?:\+\w+\s*)+):\s*([\s\S]+)/i)
-    if (spawnModMatch) {
-      const modNames = [...spawnModMatch[1].matchAll(/\+(\w+)/g)].map(m => m[1].toLowerCase())
-      const { template: templateMod, ignored } = partitionSpawnModifiers(modNames)
-      const topic = spawnModMatch[2].trim()
-      if (!templateMod) {
-        void gateway.send(msg.channelId, `_No spawn template matched \`${modNames.map(n => `+${n}`).join(' ')}\`. There are no template modifiers._`, { replyTo: msg.id }).catch(() => {})
-        return
-      }
-      const template = getTemplate(templateMod.templateName)
-      if (!template) {
-        void gateway.send(msg.channelId, `_Template \`${templateMod.templateName}\` is registered as a modifier but missing from the template registry._`, { replyTo: msg.id }).catch(() => {})
-        return
-      }
-      if (ignored.length > 0) {
-        void gateway.send(msg.channelId, `_Ignored ${ignored.map(n => `\`+${n}\``).join(' ')} — a spawn applies a single template modifier._`, { replyTo: msg.id }).catch(() => {})
-      }
-      void handleTemplateSpawn(msg, templateMod.templateName, topic, template)
-      return
-    }
-
-    const spawnMatch = msg.content.match(SPAWN_RE)
-    if (spawnMatch) {
-      const topic = spawnMatch[1].trim()
-      // Catch "spawn sonnet:" (alias without topic) — don't spawn with "sonnet:" as topic
-      const bareAlias = topic.match(BARE_ALIAS_RE) || ENGINE_ALIAS_FORMS.map(({ bare }) => topic.match(bare)).find(Boolean) || topic.match(BARE_CODEX_RE)
-      if (bareAlias) {
-        const alias = bareAlias[1] || 'codex'
-        void gateway.send(msg.channelId, `_\`spawn ${alias}:\` needs a topic — e.g. \`spawn ${alias}: describe the task\`_`, { replyTo: msg.id })
-        return
-      }
-      if (topic) {
-        void handleSpawnIntercept(msg, topic)
-        return
-      }
-    }
-
-    // spawn-wt sonnet: repo_name topic — worktree spawn with model alias
-    const spawnWtModelMatch = msg.content.match(SPAWN_WT_MODEL_RE)
-    if (spawnWtModelMatch) {
-      const [, alias, repo, topic] = spawnWtModelMatch
-      if (repo && topic.trim()) {
-        void handleSpawnIntercept(msg, `wt:${repo.trim()} ${topic.trim()}`, alias)
-        return
-      }
-    }
-
-    for (const { engine, spawnWt } of ENGINE_ALIAS_FORMS) {
-      const wtMatch = msg.content.match(spawnWt)
-      if (wtMatch && wtMatch[2] && wtMatch[3].trim()) {
-        void handleSpawnIntercept(msg, `wt:${wtMatch[2].trim()} ${wtMatch[3].trim()}`, resolveEngineAlias(engine, wtMatch[1]), engine)
-        return
-      }
-    }
-
-    // spawn-wt: repo_name topic — shorthand for worktree spawns
-    const spawnWtMatch = msg.content.match(SPAWN_WT_RE)
-    if (spawnWtMatch) {
-      const repo = spawnWtMatch[1].trim()
-      const topic = spawnWtMatch[2].trim()
-      if (repo && topic) {
-        void handleSpawnIntercept(msg, `wt:${repo} ${topic}`)
-        return
-      }
-    }
-
-    // The negative lookahead keeps the thread variants — `/kill!`,
-    // `/kill --cascade`, `/kill +d` — out of the kill-by-name path, so `+d` is
-    // read as a modifier rather than as the name of a session to kill. They are
-    // matched further
-    // down, not sessions named "!" or "--cascade".
-    const killMatch = msg.content.match(KILL_RE)
-    if (killMatch) {
-      void handleKillIntercept(msg, killMatch[1].trim())
-      return
-    }
-
-    const listMatch = msg.content.match(LIST_RE)
-    if (listMatch) {
-      void handleListIntercept(msg)
-      return
-    }
-
-    const templatesMatch = msg.content.match(/^(?:\/templates|templates)\s*$/i)
-    if (templatesMatch) {
-      const templates = listTemplates()
-      if (templates.length === 0) {
-        void gateway.send(msg.channelId, 'No templates configured.', { replyTo: msg.id })
-      } else {
-        const lines = templates.map(t => {
-          const actionTag = t.action ? ` _(+ ${t.action} protocol)_` : ''
-          const modelTag = t.model ? ` \`[${t.model}]\`` : ''
-          return `**${t.name}**${actionTag}${modelTag} — ${t.prompt.slice(0, 80)}${t.prompt.length > 80 ? '...' : ''}`
-        })
-        void gateway.send(msg.channelId, `**Spawn Templates**\n${lines.join('\n')}`, { replyTo: msg.id })
-      }
-      return
-    }
-
-    const restartMatch = msg.content.match(RESTART_RE)
-    if (restartMatch) {
-      void handleRestartIntercept(msg)
-      return
-    }
-
-    const healthMatch = msg.content.match(HEALTH_RE)
-    if (healthMatch) {
-      void handleHealthIntercept(msg)
-      return
-    }
-
-    const protocolsMatch = msg.content.match(/^(?:\/protocols|protocols)\s*$/i)
-    if (protocolsMatch) {
-      void handleProtocolsIntercept(msg)
-      return
-    }
-
-    const historyMatch = msg.content.match(/^(?:\/history|history)\s*$/i)
-    if (historyMatch) {
-      void handleHistoryIntercept(msg)
-      return
-    }
-
-    const reconnectMatch = msg.content.match(RECONNECT_RE)
-    if (reconnectMatch) {
-      void handleReconnectIntercept(msg)
-      return
-    }
-
-    const recoverMatch = msg.content.match(/^(?:recover|\/recover)(?:\s+(.+))?$/i)
-    if (recoverMatch) {
-      void handleRecoverIntercept(msg, recoverMatch[1]?.trim() || undefined)
-      return
-    }
-
-    const commandsMatch = msg.content.match(COMMANDS_RE)
-    if (commandsMatch) {
-      void handleCommandsIntercept(msg)
-      return
-    }
-
-    // `kill!` / `kill --cascade` still parse (so they never read as a session name) and kill the session.
-    // `+d` / `+destroy` appends the `destroy` step, collapsing the two-command
-    // sequence `destroy` itself demands (it refuses while a session is alive).
-    // The modifiers compose: `kill! +d` cascades, kills, then deletes the thread.
-    const threadKillMatch = msg.content.match(THREAD_KILL_RE)
-    if (threadKillMatch && msg.isThread) {
-      void handleThreadKillIntercept(msg, { cascade: !!threadKillMatch[1], destroy: !!threadKillMatch[2] })
-      return
-    }
-
-    const destroyMatch = msg.content.match(DESTROY_RE)
-    if (destroyMatch && msg.isThread) {
-      void handleDestroyIntercept(msg)
-      return
-    }
-
-    // "respawn" / "respawn: topic" / "respawn +mod:" — the optional `+mods` group applies a template to the respawn.
-    const respawnMatch = msg.content.match(RESPAWN_RE)
-    if (respawnMatch) {
-      const selection = resolveProtocolModel(respawnMatch[1], msg.channelId, msg.id)
-      if (selection === false) return
-      const respawnModNames = respawnMatch[2] ? [...respawnMatch[2].matchAll(/\+(\w+)/g)].map(m => m[1].toLowerCase()) : []
-      const respawnTopic = respawnMatch[3]?.trim() || undefined
-      if (respawnModNames.length > 0) {
-        const { template: respawnTemplateMod, ignored } = partitionSpawnModifiers(respawnModNames)
-        if (!respawnTemplateMod) {
-          void gateway.send(msg.channelId, `_No template matched \`${respawnModNames.map(n => `+${n}`).join(' ')}\`. There are no template modifiers._`, { replyTo: msg.id }).catch(() => {})
+      // "spawn +mod: topic" — spawn applying a template modifier.
+      const spawnModMatch = msg.content.match(/^(?:new session|spawn)\s+((?:\+\w+\s*)+):\s*([\s\S]+)/i)
+      if (spawnModMatch) {
+        const modNames = [...spawnModMatch[1].matchAll(/\+(\w+)/g)].map(m => m[1].toLowerCase())
+        const { template: templateMod, ignored } = partitionSpawnModifiers(modNames)
+        const topic = spawnModMatch[2].trim()
+        if (!templateMod) {
+          void gateway.send(msg.channelId, `_No spawn template matched \`${modNames.map(n => `+${n}`).join(' ')}\`. There are no template modifiers._`, { replyTo: msg.id }).catch(() => {})
+          return
+        }
+        const template = getTemplate(templateMod.templateName)
+        if (!template) {
+          void gateway.send(msg.channelId, `_Template \`${templateMod.templateName}\` is registered as a modifier but missing from the template registry._`, { replyTo: msg.id }).catch(() => {})
           return
         }
         if (ignored.length > 0) {
-          void gateway.send(msg.channelId, `_Ignored ${ignored.map(n => `\`+${n}\``).join(' ')} — a respawn applies a single template modifier._`, { replyTo: msg.id }).catch(() => {})
+          void gateway.send(msg.channelId, `_Ignored ${ignored.map(n => `\`+${n}\``).join(' ')} — a spawn applies a single template modifier._`, { replyTo: msg.id }).catch(() => {})
         }
-        void handleRespawnIntercept(msg, respawnTopic, respawnTemplateMod.templateName, selection)
-      } else {
-        void handleRespawnIntercept(msg, respawnTopic, undefined, selection)
+        void handleTemplateSpawn(msg, templateMod.templateName, topic, template)
+        return
       }
-      return
-    }
 
-    // "handoff [model][: note]" — fresh session in this thread, optionally on another model
-    const handoffCmd = parseHandoffCommand(msg.content)
-    if (handoffCmd && isForMain(msg)) {
-      void handleMainHandoffIntercept(msg, handoffCmd)
-      return
-    }
-    if (handoffCmd && msg.isThread) {
-      const selection = resolveProtocolModel(handoffCmd.model, msg.channelId, msg.id)
-      if (selection === false) return
-      void handleHandoffIntercept(msg, selection, handoffCmd.note)
-      return
-    }
-    if (msg.isThread && isHandoffNearMiss(msg.content)) {
-      void gateway.send(msg.channelId, `_Not run as a handoff. To hand off with a note: \`handoff: <note>\` (or \`handoff <model>: <note>\`)._`, { replyTo: msg.id }).catch(() => {})
-    }
-
-    const resumeMatch = msg.content.match(/^(?:resume|\/resume)(?:\s+([\w-]+))?\s*$/i)
-    if (resumeMatch) {
-      void handleResumeIntercept(msg, resumeMatch[1])
-      return
-    }
-
-    const usageMatch = msg.content.match(USAGE_RE)
-    if (usageMatch) {
-      void handleUsageIntercept(msg)
-      return
-    }
-
-    const peekMatch = msg.content.match(/^(?:peek|\/peek|screenshot|\/screenshot)(?:\s+(\S+))?\s*$/i)
-    if (peekMatch) {
-      void handlePeekIntercept(msg, peekMatch[1])
-      return
-    }
-
-    // Template as first-class command: "review: topic", "design: topic", etc.
-    // Placed AFTER all hardcoded commands so new commands naturally take priority.
-    // Skip in active session threads — let thread-scoped commands (design, review, build) handle it.
-    {
-      const resolvedThread = registry.resolveThreadId(msg)
-      const activeSession = registry.getByThread(resolvedThread)
-      const activeInfo = activeSession ? registry.get(activeSession) : undefined
-      const liveInThread = activeInfo ? occupied(occupancy(activeInfo)) : false
-
-      if (!liveInThread) {
-        const colonIdx = msg.content.indexOf(':')
-        if (colonIdx > 0) {
-          const candidateName = msg.content.slice(0, colonIdx).trim().toLowerCase()
-          const template = getTemplate(candidateName)
-          if (template) {
-            const candidateTopic = msg.content.slice(colonIdx + 1).trim()
-            void handleTemplateSpawn(msg, candidateName, candidateTopic, template)
-            return
-          }
-          // "review sonnet: topic" — template name + model alias before colon
-          const spaceIdx = candidateName.indexOf(' ')
-          if (spaceIdx > 0) {
-            const tplName = candidateName.slice(0, spaceIdx)
-            const modelAlias = candidateName.slice(spaceIdx + 1)
-            const tpl = getTemplate(tplName)
-            if (tpl && resolveModelAlias(modelAlias)) {
-              const candidateTopic = msg.content.slice(colonIdx + 1).trim()
-              void handleTemplateSpawn(msg, tplName, candidateTopic, tpl, modelAlias)
-              return
-            }
-          }
+      const spawnMatch = msg.content.match(SPAWN_RE)
+      if (spawnMatch) {
+        const topic = spawnMatch[1].trim()
+        // Catch "spawn sonnet:" (alias without topic) — don't spawn with "sonnet:" as topic
+        const bareAlias = topic.match(BARE_ALIAS_RE) || ENGINE_ALIAS_FORMS.map(({ bare }) => topic.match(bare)).find(Boolean) || topic.match(BARE_CODEX_RE)
+        if (bareAlias) {
+          const alias = bareAlias[1] || 'codex'
+          void gateway.send(msg.channelId, `_\`spawn ${alias}:\` needs a topic — e.g. \`spawn ${alias}: describe the task\`_`, { replyTo: msg.id })
+          return
         }
-      }
-    }
-
-    if (msg.isThread) {
-      // "fork sonnet: topic" / "fork sol: topic" / "fork neon: topic" — fork with model (+ engine) override
-      const forkModelMatch = msg.content.match(FORK_MODEL_RE)
-      if (forkModelMatch) {
-        const sel = resolveAnyEngineAlias(forkModelMatch[1])!
-        void handleForkIntercept(msg, forkModelMatch[2].trim(), sel.model, { engine: sel.engine })
-        return
-      }
-
-      const forkEphMatch = msg.content.match(/^(?:fork-e|\/fork-e)(?::\s*([\s\S]+))?$/i)
-      if (forkEphMatch) {
-        void handleForkIntercept(msg, forkEphMatch[1]?.trim(), undefined, { ephemeral: true })
-        return
-      }
-
-      const forkMatch = msg.content.match(FORK_RE)
-      if (forkMatch) {
-        void handleForkIntercept(msg, forkMatch[1]?.trim())
-        return
-      }
-
-      const forksMatch = msg.content.match(FORKS_RE)
-      if (forksMatch) {
-        void handleForksIntercept(msg)
-        return
-      }
-
-      // One review command — `review` / `/review` (with the `review_v2` suffix
-      // still accepted for backwards compat). Parses an optional model alias,
-      // round count, topic, and `+modifier` lenses (e.g. `+s` for security).
-      const reviewMatch = msg.content.match(REVIEW_RE)
-      if (reviewMatch) {
-        const preModel = resolveProtocolModel(reviewMatch[1]?.toLowerCase(), msg.channelId, msg.id)
-        if (preModel === false) return
-        const postModel = resolveProtocolModel(reviewMatch[3]?.toLowerCase(), msg.channelId, msg.id)
-        if (postModel === false) return
-        const selection = preModel ?? postModel
-        const rounds = parseInt(reviewMatch[2] ?? String(DEFAULT_REVIEW_ROUNDS))
-        let topic: string | undefined = reviewMatch[4]?.trim()
-        if (!selection && topic) {
-          const hint = misplacedModelHint('review', topic)
-          if (hint) {
-            void gateway.send(msg.channelId, hint, { replyTo: msg.id }).catch(() => {})
-            return
-          }
-        }
-        const modKeys = listModifierKeys()
-        let modifiers: string[] = []
-        if (modKeys.length > 0 && topic) {
-          const modRe = new RegExp(`\\+(${modKeys.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\b`, 'g')
-          modifiers = [...topic.matchAll(modRe)].map(m => m[1])
-          if (modifiers.length > 0) {
-            topic = topic.replace(modRe, '').replace(/\s{2,}/g, ' ').trim() || undefined
-          }
-        }
-        void handleReviewIntercept(msg, rounds, topic, selection?.model, modifiers.length > 0 ? modifiers : undefined, selection?.engine)
-        return
-      }
-
-      const cancelReviewMatch = msg.content.match(/^(?:kill review|kill review_v2)\s*$/i)
-      if (cancelReviewMatch) {
-        void handleCancelReviewIntercept(msg)
-        return
-      }
-
-      const buildV2Match = msg.content.match(BUILD_RE)
-      if (buildV2Match) {
-        const preModel = resolveProtocolModel(buildV2Match[1]?.toLowerCase(), msg.channelId, msg.id)
-        if (preModel === false) return
-        const postModel = resolveProtocolModel(buildV2Match[3]?.toLowerCase(), msg.channelId, msg.id)
-        if (postModel === false) return
-        const v2Rounds = parseInt(buildV2Match[2] ?? '3')
-        const v2Task = buildV2Match[4]?.trim()
-        const selection = preModel ?? postModel
-        if (!selection && v2Task) {
-          const hint = misplacedModelHint('build', v2Task)
-          if (hint) {
-            void gateway.send(msg.channelId, hint, { replyTo: msg.id }).catch(() => {})
-            return
-          }
-        }
-        void handleBuildV2Intercept(msg, v2Rounds, v2Task, selection?.model, selection?.engine)
-        return
-      }
-
-      const delegateQuickMatch = msg.content.match(/^(?:\/delegate!|delegate!)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
-      if (delegateQuickMatch) {
-        const preModel = resolveProtocolModel(delegateQuickMatch[1]?.toLowerCase(), msg.channelId, msg.id)
-        if (preModel === false) return
-        const postModel = resolveProtocolModel(delegateQuickMatch[3]?.toLowerCase(), msg.channelId, msg.id)
-        if (postModel === false) return
-        const dRounds = parseInt(delegateQuickMatch[2] ?? '1')
-        const dTask = delegateQuickMatch[4]?.trim()
-        const selection = preModel ?? postModel
-        void handleDelegatedBuildIntercept(msg, dRounds, dTask, selection?.model, selection?.engine, { skipClarify: true })
-        return
-      }
-
-      const delegateMatch = msg.content.match(/^(?:\/delegate|delegate)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
-      if (delegateMatch) {
-        const preModel = resolveProtocolModel(delegateMatch[1]?.toLowerCase(), msg.channelId, msg.id)
-        if (preModel === false) return
-        const postModel = resolveProtocolModel(delegateMatch[3]?.toLowerCase(), msg.channelId, msg.id)
-        if (postModel === false) return
-        const dRounds = parseInt(delegateMatch[2] ?? '3')
-        const dTask = delegateMatch[4]?.trim()
-        const selection = preModel ?? postModel
-        void handleDelegatedBuildIntercept(msg, dRounds, dTask, selection?.model, selection?.engine)
-        return
-      }
-
-      const cancelDelegateMatch = msg.content.match(/^(?:kill delegate|kill delegated-build)\s*$/i)
-      if (cancelDelegateMatch) {
-        void gateway.react(msg.channelId, msg.id, '🛑').catch(() => {})
-        const threadId = registry.resolveThreadId(msg)
-        const run = getRunByThread(threadId)
-        if (!run) { await gateway.send(msg.channelId, `No delegated build in progress.`, { replyTo: msg.id }); return }
-        await cancelRun(run, 'cancelled by user')
-        return
-      }
-
-      const cancelBuildMatch = msg.content.match(/^(?:kill build|kill build_v2)\s*$/i)
-      if (cancelBuildMatch) {
-        void handleCancelBuildV2Intercept(msg)
-        return
-      }
-
-      // spike only exists as v2 — the unversioned name routes through the generic runner
-      const spikeV2Match = msg.content.match(/^(?:\/spike_v2|spike_v2|\/spike|spike)\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
-      if (spikeV2Match) {
-        const spikeModel = resolveProtocolModel(spikeV2Match[1]?.toLowerCase(), msg.channelId, msg.id)
-        if (spikeModel === false) return
-        const spikeTopic = spikeV2Match[2]?.trim()
-        void handleSpikeV2Intercept(msg, spikeTopic, spikeModel?.model, spikeModel?.engine)
-        return
-      }
-
-      const cancelSpikeMatch = msg.content.match(/^(?:kill spike|kill spike_v2)\s*$/i)
-      if (cancelSpikeMatch) {
-        const threadId = registry.resolveThreadId(msg)
-        const occupied = isThreadOccupied(threadId)
-        if (occupied === 'spike_v2') {
-          void handleCancelSpikeV2Intercept(msg)
-        } else if (!occupied) {
-          void gateway.send(msg.channelId, `No spike in progress in this thread.`, { replyTo: msg.id }).catch(() => {})
-        } else {
-          void gateway.send(msg.channelId, `A ${occupied} is running, not a spike.`, { replyTo: msg.id }).catch(() => {})
-        }
-        return
-      }
-
-      const watchCmd = parseWatchCommand(msg.content)
-      if (watchCmd) {
-        void handleWatchIntercept(msg, watchCmd.url, { notifyGreen: watchCmd.notifyGreen })
-        return
-      }
-
-      const unwatchMatch = msg.content.match(/^(?:\/unwatch|unwatch)\s+<?(?:(https:\/\/[^\s|>]+)(?:\|[^>]*)?)>?\s*$/i)
-      if (unwatchMatch) {
-        void handleUnwatchIntercept(msg, unwatchMatch[1].trim())
-        return
-      }
-
-      const watchesMatch = msg.content.match(/^(?:\/watches|watches)\s*$/i)
-      if (watchesMatch) {
-        void handleWatchesIntercept(msg)
-        return
-      }
-
-    }
-
-    msg = inbound
-
-    if (msg.isThread) {
-      const resolvedThreadId = registry.resolveThreadId(msg)
-
-      const letIn = PERMISSION_REPLY_RE.test(msg.content) ? [] : acknowledged(resolvedThreadId, msg.content)
-      if (letIn.length) {
-        threadRegistry.allowSenders(resolvedThreadId, letIn)
-        void gateway.send(resolvedThreadId, `Listening to ${letIn.map(id => `<@${id}>`).join(', ')} in this thread.`, { replyTo: msg.id }).catch(() => {})
-      }
-
-      // Behind an answer already held for this thread's specialist: the started session may already be registered, and
-      // this one still goes after the held one.
-      const holding = holdingFor(resolvedThreadId)
-      if (holding) {
-        holdForSpecialist(resolvedThreadId, holding, msg)
-        return
-      }
-
-      // Pane-probe temporary intercept: "approve" / "reject" for plan-mode stuck sessions.
-      // Gated on the operator — sending keystrokes to a tmux pane is a privileged action.
-      const intercept = getThreadIntercept(resolvedThreadId)
-      if (intercept && isAllowed) {
-        const lower = msg.content.trim().toLowerCase()
-        if (intercept.kind === 'plan_mode' && (lower === 'approve' || lower === 'reject')) {
-          void intercept.handler(msg.content, msg.channelId, msg.id)
+        if (topic) {
+          void handleSpawnIntercept(msg, topic)
           return
         }
       }
 
-      const mappedSession = registry.getByThread(resolvedThreadId)
-      process.stderr.write(`daemon: thread routing: channelId=${msg.channelId} effectiveThreadId=${msg.effectiveThreadId} resolvedThreadId=${resolvedThreadId} mappedSession=${mappedSession ?? 'none'} threadToSession keys=[${[...registry.threadToSession.keys()].join(',')}]\n`)
-      if (mappedSession) {
-        const info = registry.get(mappedSession)
-        if (info && occupied(occupancy(info))) {
-          // Someone is talking to it: an ephemeral session's idle window starts over.
-          touchIdleLimit(mappedSession)
-          const listenMatch = msg.content.match(LISTEN_RE)
-          if (listenMatch) {
-            info.listening = listenMatch[1].toLowerCase() === 'listen'
-            registry.persist()
-            const thread = threadRegistry.get(resolvedThreadId)
-            if (thread) {
-              thread.listenOverride = info.listening
-              threadRegistry.persist()
-            }
-            void gateway.react(msg.channelId, msg.id, info.listening ? '👂' : '🔇').catch(() => {})
+      // spawn-wt sonnet: repo_name topic — worktree spawn with model alias
+      const spawnWtModelMatch = msg.content.match(SPAWN_WT_MODEL_RE)
+      if (spawnWtModelMatch) {
+        const [, alias, repo, topic] = spawnWtModelMatch
+        if (repo && topic.trim()) {
+          void handleSpawnIntercept(msg, `wt:${repo.trim()} ${topic.trim()}`, alias)
+          return
+        }
+      }
+
+      for (const { engine, spawnWt } of ENGINE_ALIAS_FORMS) {
+        const wtMatch = msg.content.match(spawnWt)
+        if (wtMatch && wtMatch[2] && wtMatch[3].trim()) {
+          void handleSpawnIntercept(msg, `wt:${wtMatch[2].trim()} ${wtMatch[3].trim()}`, resolveEngineAlias(engine, wtMatch[1]), engine)
+          return
+        }
+      }
+
+      // spawn-wt: repo_name topic — shorthand for worktree spawns
+      const spawnWtMatch = msg.content.match(SPAWN_WT_RE)
+      if (spawnWtMatch) {
+        const repo = spawnWtMatch[1].trim()
+        const topic = spawnWtMatch[2].trim()
+        if (repo && topic) {
+          void handleSpawnIntercept(msg, `wt:${repo} ${topic}`)
+          return
+        }
+      }
+
+      // The negative lookahead keeps the thread variants — `/kill!`,
+      // `/kill --cascade`, `/kill +d` — out of the kill-by-name path, so `+d` is
+      // read as a modifier rather than as the name of a session to kill. They are
+      // matched further
+      // down, not sessions named "!" or "--cascade".
+      const killMatch = msg.content.match(KILL_RE)
+      if (killMatch) {
+        void handleKillIntercept(msg, killMatch[1].trim())
+        return
+      }
+
+      const listMatch = msg.content.match(LIST_RE)
+      if (listMatch) {
+        void handleListIntercept(msg)
+        return
+      }
+
+      const templatesMatch = msg.content.match(/^(?:\/templates|templates)\s*$/i)
+      if (templatesMatch) {
+        const templates = listTemplates()
+        if (templates.length === 0) {
+          void gateway.send(msg.channelId, 'No templates configured.', { replyTo: msg.id })
+        } else {
+          const lines = templates.map(t => {
+            const actionTag = t.action ? ` _(+ ${t.action} protocol)_` : ''
+            const modelTag = t.model ? ` \`[${t.model}]\`` : ''
+            return `**${t.name}**${actionTag}${modelTag} — ${t.prompt.slice(0, 80)}${t.prompt.length > 80 ? '...' : ''}`
+          })
+          void gateway.send(msg.channelId, `**Spawn Templates**\n${lines.join('\n')}`, { replyTo: msg.id })
+        }
+        return
+      }
+
+      const restartMatch = msg.content.match(RESTART_RE)
+      if (restartMatch) {
+        void handleRestartIntercept(msg)
+        return
+      }
+
+      const healthMatch = msg.content.match(HEALTH_RE)
+      if (healthMatch) {
+        void handleHealthIntercept(msg)
+        return
+      }
+
+      const protocolsMatch = msg.content.match(/^(?:\/protocols|protocols)\s*$/i)
+      if (protocolsMatch) {
+        void handleProtocolsIntercept(msg)
+        return
+      }
+
+      const historyMatch = msg.content.match(/^(?:\/history|history)\s*$/i)
+      if (historyMatch) {
+        void handleHistoryIntercept(msg)
+        return
+      }
+
+      const reconnectMatch = msg.content.match(RECONNECT_RE)
+      if (reconnectMatch) {
+        void handleReconnectIntercept(msg)
+        return
+      }
+
+      const recoverMatch = msg.content.match(/^(?:recover|\/recover)(?:\s+(.+))?$/i)
+      if (recoverMatch) {
+        void handleRecoverIntercept(msg, recoverMatch[1]?.trim() || undefined)
+        return
+      }
+
+      const commandsMatch = msg.content.match(COMMANDS_RE)
+      if (commandsMatch) {
+        void handleCommandsIntercept(msg)
+        return
+      }
+
+      // `kill!` / `kill --cascade` still parse (so they never read as a session name) and kill the session.
+      // `+d` / `+destroy` appends the `destroy` step, collapsing the two-command
+      // sequence `destroy` itself demands (it refuses while a session is alive).
+      // The modifiers compose: `kill! +d` cascades, kills, then deletes the thread.
+      const threadKillMatch = msg.content.match(THREAD_KILL_RE)
+      if (threadKillMatch && msg.isThread) {
+        void handleThreadKillIntercept(msg, { cascade: !!threadKillMatch[1], destroy: !!threadKillMatch[2] })
+        return
+      }
+
+      const destroyMatch = msg.content.match(DESTROY_RE)
+      if (destroyMatch && msg.isThread) {
+        void handleDestroyIntercept(msg)
+        return
+      }
+
+      // "respawn" / "respawn: topic" / "respawn +mod:" — the optional `+mods` group applies a template to the respawn.
+      const respawnMatch = msg.content.match(RESPAWN_RE)
+      if (respawnMatch) {
+        const selection = resolveProtocolModel(respawnMatch[1], msg.channelId, msg.id)
+        if (selection === false) return
+        const respawnModNames = respawnMatch[2] ? [...respawnMatch[2].matchAll(/\+(\w+)/g)].map(m => m[1].toLowerCase()) : []
+        const respawnTopic = respawnMatch[3]?.trim() || undefined
+        if (respawnModNames.length > 0) {
+          const { template: respawnTemplateMod, ignored } = partitionSpawnModifiers(respawnModNames)
+          if (!respawnTemplateMod) {
+            void gateway.send(msg.channelId, `_No template matched \`${respawnModNames.map(n => `+${n}`).join(' ')}\`. There are no template modifiers._`, { replyTo: msg.id }).catch(() => {})
             return
           }
-
-          const permReplyMatch = msg.content.match(/^(allow|deny)\s*$/i)
-          if (permReplyMatch) {
-            const behavior = permReplyMatch[1].toLowerCase() === 'allow' ? 'allow' : 'deny'
-            // Find the most recent pending permission for this session
-            let foundId: string | undefined
-            for (const [reqId, perm] of pendingPermissions) {
-              if (perm.sessionId === mappedSession) foundId = reqId
-            }
-            if (foundId) {
-              const targetBridge = transport.get(mappedSession)
-              if (targetBridge) {
-                transport.sendToBridge(targetBridge, {
-                  type: 'permission_response',
-                  request_id: foundId,
-                  behavior,
-                })
-              }
-              pendingPermissions.delete(foundId)
-              void gateway.react(msg.channelId, msg.id, behavior === 'allow' ? '✅' : '❌').catch(() => {})
-            } else {
-              void gateway.send(msg.channelId, '_No pending permission for this session._', { replyTo: msg.id }).catch(() => {})
-            }
-            return
+          if (ignored.length > 0) {
+            void gateway.send(msg.channelId, `_Ignored ${ignored.map(n => `\`+${n}\``).join(' ')} — a respawn applies a single template modifier._`, { replyTo: msg.id }).catch(() => {})
           }
+          void handleRespawnIntercept(msg, respawnTopic, respawnTemplateMod.templateName, selection)
+        } else {
+          void handleRespawnIntercept(msg, respawnTopic, undefined, selection)
+        }
+        return
+      }
 
-          const pauseMatch = msg.content.match(PAUSE_RE)
-          if (pauseMatch) {
-            if (pauseMatch[1].toLowerCase() === 'pause') {
-              const occupied = isThreadOccupied(resolvedThreadId)
-              if (occupied) {
-                void reportError(msg.channelId, msg.id, 'pause', `a ${occupied} is active in this thread`, `Cancel the active ${occupied} first.`)
+      // "handoff [model][: note]" — fresh session in this thread, optionally on another model
+      const handoffCmd = parseHandoffCommand(msg.content)
+      if (handoffCmd && isForMain(msg)) {
+        void handleMainHandoffIntercept(msg, handoffCmd)
+        return
+      }
+      if (handoffCmd && msg.isThread) {
+        const selection = resolveProtocolModel(handoffCmd.model, msg.channelId, msg.id)
+        if (selection === false) return
+        void handleHandoffIntercept(msg, selection, handoffCmd.note)
+        return
+      }
+      if (msg.isThread && isHandoffNearMiss(msg.content)) {
+        void gateway.send(msg.channelId, `_Not run as a handoff. To hand off with a note: \`handoff: <note>\` (or \`handoff <model>: <note>\`)._`, { replyTo: msg.id }).catch(() => {})
+      }
+
+      const resumeMatch = msg.content.match(/^(?:resume|\/resume)(?:\s+([\w-]+))?\s*$/i)
+      if (resumeMatch) {
+        void handleResumeIntercept(msg, resumeMatch[1])
+        return
+      }
+
+      const usageMatch = msg.content.match(USAGE_RE)
+      if (usageMatch) {
+        void handleUsageIntercept(msg)
+        return
+      }
+
+      const peekMatch = msg.content.match(/^(?:peek|\/peek|screenshot|\/screenshot)(?:\s+(\S+))?\s*$/i)
+      if (peekMatch) {
+        void handlePeekIntercept(msg, peekMatch[1])
+        return
+      }
+
+      // Template as first-class command: "review: topic", "design: topic", etc.
+      // Placed AFTER all hardcoded commands so new commands naturally take priority.
+      // Skip in active session threads — let thread-scoped commands (design, review, build) handle it.
+      {
+        const resolvedThread = registry.resolveThreadId(msg)
+        const activeSession = registry.getByThread(resolvedThread)
+        const activeInfo = activeSession ? registry.get(activeSession) : undefined
+        const liveInThread = activeInfo ? occupied(occupancy(activeInfo)) : false
+
+        if (!liveInThread) {
+          const colonIdx = msg.content.indexOf(':')
+          if (colonIdx > 0) {
+            const candidateName = msg.content.slice(0, colonIdx).trim().toLowerCase()
+            const template = getTemplate(candidateName)
+            if (template) {
+              const candidateTopic = msg.content.slice(colonIdx + 1).trim()
+              void handleTemplateSpawn(msg, candidateName, candidateTopic, template)
+              return
+            }
+            // "review sonnet: topic" — template name + model alias before colon
+            const spaceIdx = candidateName.indexOf(' ')
+            if (spaceIdx > 0) {
+              const tplName = candidateName.slice(0, spaceIdx)
+              const modelAlias = candidateName.slice(spaceIdx + 1)
+              const tpl = getTemplate(tplName)
+              if (tpl && resolveModelAlias(modelAlias)) {
+                const candidateTopic = msg.content.slice(colonIdx + 1).trim()
+                void handleTemplateSpawn(msg, tplName, candidateTopic, tpl, modelAlias)
                 return
               }
             }
-            info.paused = pauseMatch[1].toLowerCase() === 'pause'
-            registry.persist()
-            void gateway.react(msg.channelId, msg.id, info.paused ? '⏸' : '▶️').catch(() => {})
-            refreshSessionVisual(resolvedThreadId)
-            return
           }
+        }
+      }
 
-          const keysMatch = msg.content.match(KEYS_RE)
-          if (keysMatch) {
-            if (info.paused) {
-              void gateway.react(msg.channelId, msg.id, '⏸').catch(() => {})
-              return
-            }
-            // Collapse multiline to single line — CC slash commands are single-line
-            const text = keysMatch[1].replace(/\n/g, ' ').trim()
-            if (text) {
-              try {
-                const adapter = info.adapter
-                const target = adapter.surface(info)
-                if (target === null) throw new Error(`interactive surface is unavailable`)
-                const tokens = text.split(/\s+/)
-                const resolved = tokens.map(resolveTmuxKey)
-                const allKeyNames = resolved.every((r): r is string => r !== null)
-                let action: TmuxKeyAction = allKeyNames
-                  ? { target, mode: 'raw', keys: resolved }
-                  : { target, mode: 'literal', text }
-                // Trailing key detection: if the last token is a recognized key
-                // name (e.g. "enter", "escape"), split it off so it's sent as a
-                // key press rather than typed literally.
-                if (!allKeyNames && tokens.length > 1) {
-                  const lastToken = tokens[tokens.length - 1]
-                  const trailingKey = TMUX_KEY_MAP.get(lastToken.toLowerCase())
-                  if (trailingKey) {
-                    action = { target, mode: 'literal', text: tokens.slice(0, -1).join(' '), trailingKey }
-                  }
-                }
-                const keyOpts = allKeyNames
-                  ? { raw: true }
-                  : action.mode === 'literal' && 'trailingKey' in action ? { trailingKey: action.trailingKey } : undefined
-                const keyText = allKeyNames ? resolved.join(' ') : (action.mode === 'literal' ? action.text ?? text : text)
-                const result = await adapter.sendKeys(info, keyText, keyOpts)
-                if (result.queued) {
-                  void gateway.react(msg.channelId, msg.id, '⏳').catch(() => {})
-                  process.stderr.write(`daemon: queued keys for ${info.tmuxName}: ${text.slice(0, 100)}\n`)
-                } else {
-                  void gateway.react(msg.channelId, msg.id, '⌨️').catch(() => {})
-                  process.stderr.write(`daemon: sent keys to ${info.tmuxName}: ${text.slice(0, 100)}\n`)
-                  setTimeout(() => { void handlePeekIntercept(msg) }, 1000)
-                }
-              } catch (err) {
-                void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
-                process.stderr.write(`daemon: send-keys failed for ${info.tmuxName}: ${err instanceof Error ? err.message : err}\n`)
-              }
-              return
-            }
-          }
-
-          if (msg.content.startsWith('!') && msg.content.length > 1) {
-            const stripped = msg.content.slice(1).trim()
-            if (stripped) {
-              void gateway.react(msg.channelId, msg.id, '⚡').catch(() => {})
-              // Capture the interrupt synchronously, before this message's
-              // ingress slot, so later messages cannot overtake it.
-              let interrupted: Promise<unknown>
-              try {
-                const interruptAdapter = info.adapter
-                interruptAdapter.surface(info)
-                // 50ms lets a TUI-keystroke interrupt (Claude) land before delivery.
-                interrupted = interruptAdapter.interrupt(info).then(() => new Promise(r => setTimeout(r, 50)))
-                process.stderr.write(`daemon: interrupt requested for ${info.tmuxName} via ! prefix\n`)
-              } catch (err) {
-                interrupted = Promise.reject(err)
-              }
-              msg.content = stripped
-              info.lastActive = Date.now()
-              registry.debouncedPersist()
-              void deliverToSession(msg, mappedSession, interrupted)
-              return
-            }
-          }
-
-          if (heardWithoutAsking(info, msg) || await mentionsUs(msg)) {
-            info.lastActive = Date.now()
-            registry.debouncedPersist()
-            void deliverToSession(msg, mappedSession)
-            return
-          }
-
+      if (msg.isThread) {
+        // "fork sonnet: topic" / "fork sol: topic" / "fork neon: topic" — fork with model (+ engine) override
+        const forkModelMatch = msg.content.match(FORK_MODEL_RE)
+        if (forkModelMatch) {
+          const sel = resolveAnyEngineAlias(forkModelMatch[1])!
+          void handleForkIntercept(msg, forkModelMatch[2].trim(), sel.model, { engine: sel.engine })
           return
         }
+
+        const forkEphMatch = msg.content.match(/^(?:fork-e|\/fork-e)(?::\s*([\s\S]+))?$/i)
+        if (forkEphMatch) {
+          void handleForkIntercept(msg, forkEphMatch[1]?.trim(), undefined, { ephemeral: true })
+          return
+        }
+
+        const forkMatch = msg.content.match(FORK_RE)
+        if (forkMatch) {
+          void handleForkIntercept(msg, forkMatch[1]?.trim())
+          return
+        }
+
+        const forksMatch = msg.content.match(FORKS_RE)
+        if (forksMatch) {
+          void handleForksIntercept(msg)
+          return
+        }
+
+        // One review command — `review` / `/review` (with the `review_v2` suffix
+        // still accepted for backwards compat). Parses an optional model alias,
+        // round count, topic, and `+modifier` lenses (e.g. `+s` for security).
+        const reviewMatch = msg.content.match(REVIEW_RE)
+        if (reviewMatch) {
+          const preModel = resolveProtocolModel(reviewMatch[1]?.toLowerCase(), msg.channelId, msg.id)
+          if (preModel === false) return
+          const postModel = resolveProtocolModel(reviewMatch[3]?.toLowerCase(), msg.channelId, msg.id)
+          if (postModel === false) return
+          const selection = preModel ?? postModel
+          const rounds = parseInt(reviewMatch[2] ?? String(DEFAULT_REVIEW_ROUNDS))
+          let topic: string | undefined = reviewMatch[4]?.trim()
+          if (!selection && topic) {
+            const hint = misplacedModelHint('review', topic)
+            if (hint) {
+              void gateway.send(msg.channelId, hint, { replyTo: msg.id }).catch(() => {})
+              return
+            }
+          }
+          const modKeys = listModifierKeys()
+          let modifiers: string[] = []
+          if (modKeys.length > 0 && topic) {
+            const modRe = new RegExp(`\\+(${modKeys.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\b`, 'g')
+            modifiers = [...topic.matchAll(modRe)].map(m => m[1])
+            if (modifiers.length > 0) {
+              topic = topic.replace(modRe, '').replace(/\s{2,}/g, ' ').trim() || undefined
+            }
+          }
+          void handleReviewIntercept(msg, rounds, topic, selection?.model, modifiers.length > 0 ? modifiers : undefined, selection?.engine)
+          return
+        }
+
+        const cancelReviewMatch = msg.content.match(/^(?:kill review|kill review_v2)\s*$/i)
+        if (cancelReviewMatch) {
+          void handleCancelReviewIntercept(msg)
+          return
+        }
+
+        const buildV2Match = msg.content.match(BUILD_RE)
+        if (buildV2Match) {
+          const preModel = resolveProtocolModel(buildV2Match[1]?.toLowerCase(), msg.channelId, msg.id)
+          if (preModel === false) return
+          const postModel = resolveProtocolModel(buildV2Match[3]?.toLowerCase(), msg.channelId, msg.id)
+          if (postModel === false) return
+          const v2Rounds = parseInt(buildV2Match[2] ?? '3')
+          const v2Task = buildV2Match[4]?.trim()
+          const selection = preModel ?? postModel
+          if (!selection && v2Task) {
+            const hint = misplacedModelHint('build', v2Task)
+            if (hint) {
+              void gateway.send(msg.channelId, hint, { replyTo: msg.id }).catch(() => {})
+              return
+            }
+          }
+          void handleBuildV2Intercept(msg, v2Rounds, v2Task, selection?.model, selection?.engine)
+          return
+        }
+
+        const delegateQuickMatch = msg.content.match(/^(?:\/delegate!|delegate!)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
+        if (delegateQuickMatch) {
+          const preModel = resolveProtocolModel(delegateQuickMatch[1]?.toLowerCase(), msg.channelId, msg.id)
+          if (preModel === false) return
+          const postModel = resolveProtocolModel(delegateQuickMatch[3]?.toLowerCase(), msg.channelId, msg.id)
+          if (postModel === false) return
+          const dRounds = parseInt(delegateQuickMatch[2] ?? '1')
+          const dTask = delegateQuickMatch[4]?.trim()
+          const selection = preModel ?? postModel
+          void handleDelegatedBuildIntercept(msg, dRounds, dTask, selection?.model, selection?.engine, { skipClarify: true })
+          return
+        }
+
+        const delegateMatch = msg.content.match(/^(?:\/delegate|delegate)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
+        if (delegateMatch) {
+          const preModel = resolveProtocolModel(delegateMatch[1]?.toLowerCase(), msg.channelId, msg.id)
+          if (preModel === false) return
+          const postModel = resolveProtocolModel(delegateMatch[3]?.toLowerCase(), msg.channelId, msg.id)
+          if (postModel === false) return
+          const dRounds = parseInt(delegateMatch[2] ?? '3')
+          const dTask = delegateMatch[4]?.trim()
+          const selection = preModel ?? postModel
+          void handleDelegatedBuildIntercept(msg, dRounds, dTask, selection?.model, selection?.engine)
+          return
+        }
+
+        const cancelDelegateMatch = msg.content.match(/^(?:kill delegate|kill delegated-build)\s*$/i)
+        if (cancelDelegateMatch) {
+          void gateway.react(msg.channelId, msg.id, '🛑').catch(() => {})
+          const threadId = registry.resolveThreadId(msg)
+          const run = getRunByThread(threadId)
+          if (!run) { await gateway.send(msg.channelId, `No delegated build in progress.`, { replyTo: msg.id }); return }
+          await cancelRun(run, 'cancelled by user')
+          return
+        }
+
+        const cancelBuildMatch = msg.content.match(/^(?:kill build|kill build_v2)\s*$/i)
+        if (cancelBuildMatch) {
+          void handleCancelBuildV2Intercept(msg)
+          return
+        }
+
+        // spike only exists as v2 — the unversioned name routes through the generic runner
+        const spikeV2Match = msg.content.match(/^(?:\/spike_v2|spike_v2|\/spike|spike)\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
+        if (spikeV2Match) {
+          const spikeModel = resolveProtocolModel(spikeV2Match[1]?.toLowerCase(), msg.channelId, msg.id)
+          if (spikeModel === false) return
+          const spikeTopic = spikeV2Match[2]?.trim()
+          void handleSpikeV2Intercept(msg, spikeTopic, spikeModel?.model, spikeModel?.engine)
+          return
+        }
+
+        const cancelSpikeMatch = msg.content.match(/^(?:kill spike|kill spike_v2)\s*$/i)
+        if (cancelSpikeMatch) {
+          const threadId = registry.resolveThreadId(msg)
+          const occupied = isThreadOccupied(threadId)
+          if (occupied === 'spike_v2') {
+            void handleCancelSpikeV2Intercept(msg)
+          } else if (!occupied) {
+            void gateway.send(msg.channelId, `No spike in progress in this thread.`, { replyTo: msg.id }).catch(() => {})
+          } else {
+            void gateway.send(msg.channelId, `A ${occupied} is running, not a spike.`, { replyTo: msg.id }).catch(() => {})
+          }
+          return
+        }
+
+        const watchCmd = parseWatchCommand(msg.content)
+        if (watchCmd) {
+          void handleWatchIntercept(msg, watchCmd.url, { notifyGreen: watchCmd.notifyGreen })
+          return
+        }
+
+        const unwatchMatch = msg.content.match(/^(?:\/unwatch|unwatch)\s+<?(?:(https:\/\/[^\s|>]+)(?:\|[^>]*)?)>?\s*$/i)
+        if (unwatchMatch) {
+          void handleUnwatchIntercept(msg, unwatchMatch[1].trim())
+          return
+        }
+
+        const watchesMatch = msg.content.match(/^(?:\/watches|watches)\s*$/i)
+        if (watchesMatch) {
+          void handleWatchesIntercept(msg)
+          return
+        }
+
       }
-    }
-  }
 
-  const strangerThread = !isAllowed && msg.isThread ? registry.resolveThreadId(msg) : undefined
-  const result = strangerThread && threadRegistry.isSenderAllowed(strangerThread, senderId)
-    ? { action: 'deliver' as const }
-    : await gate(msg)
+      msg = inbound
 
-  if (result.action === 'drop') {
-    if (strangerThread && registry.getByThread(strangerThread) && flagStranger(strangerThread, senderId)) {
-      const operator = operatorIds()[0]
-      void gateway.send(strangerThread, `Stranger danger: <@${senderId}> is not the operator. <@${operator}>, reply "yes" and I'll listen to them in this thread.`, { replyTo: msg.id }).catch(() => {})
-    }
-    return
-  }
+      if (msg.isThread) {
+        const resolvedThreadId = registry.resolveThreadId(msg)
 
-  // A muted thread stays muted for an admitted stranger: who may speak is settled above; whether this message is meant
-  // for the session is the same question for every sender.
-  if (strangerThread) {
-    const heldBy = registry.getByThread(strangerThread)
-    const held = heldBy ? registry.get(heldBy) : undefined
-    if (held && occupied(occupancy(held)) && !heardWithoutAsking(held, msg) && !(await mentionsUs(msg))) return
-  }
+        const letIn = PERMISSION_REPLY_RE.test(msg.content) ? [] : acknowledged(resolvedThreadId, msg.content)
+        if (letIn.length) {
+          threadRegistry.allowSenders(resolvedThreadId, letIn)
+          void gateway.send(resolvedThreadId, `Listening to ${letIn.map(id => `<@${id}>`).join(', ')} in this thread.`, { replyTo: msg.id }).catch(() => {})
+        }
 
-  let chat_id = registry.resolveThreadId(msg)
+        // Behind an answer already held for this thread's specialist: the started session may already be registered, and
+        // this one still goes after the held one.
+        const holding = holdingFor(resolvedThreadId)
+        if (holding) {
+          holdForSpecialist(resolvedThreadId, holding, msg)
+          return
+        }
 
-  if (!msg.isDM && !msg.isThread) {
-    const policy = channelPolicy(msg)
-    if (policy?.threadReply) {
-      const preview = msg.content.slice(0, 50).replace(/<@!?\d+>\s*/g, '').trim() || 'Thread'
-      const archiveDuration = 1440
+        // Pane-probe temporary intercept: "approve" / "reject" for plan-mode stuck sessions.
+        // Gated on the operator — sending keystrokes to a tmux pane is a privileged action.
+        const intercept = getThreadIntercept(resolvedThreadId)
+        if (intercept && isAllowed) {
+          const lower = msg.content.trim().toLowerCase()
+          if (intercept.kind === 'plan_mode' && (lower === 'approve' || lower === 'reject')) {
+            void intercept.handler(msg.content, msg.channelId, msg.id)
+            return
+          }
+        }
 
-      const existingSessionId = msg.hasExistingThread && msg.existingThreadId
-        && registry.getByThread(msg.existingThreadId)
-      if (msg.hasExistingThread && msg.existingThreadId && !existingSessionId) {
-        chat_id = msg.existingThreadId
-      } else {
-        const threadId = await gateway.startThreadOnMessage(msg, preview, archiveDuration)
-        if (threadId) {
-          chat_id = threadId
+        const mappedSession = registry.getByThread(resolvedThreadId)
+        process.stderr.write(`daemon: thread routing: channelId=${msg.channelId} effectiveThreadId=${msg.effectiveThreadId} resolvedThreadId=${resolvedThreadId} mappedSession=${mappedSession ?? 'none'} threadToSession keys=[${[...registry.threadToSession.keys()].join(',')}]\n`)
+        if (mappedSession) {
+          const info = registry.get(mappedSession)
+          if (info && occupied(occupancy(info))) {
+            // Someone is talking to it: an ephemeral session's idle window starts over.
+            touchIdleLimit(mappedSession)
+            const listenMatch = msg.content.match(LISTEN_RE)
+            if (listenMatch) {
+              info.listening = listenMatch[1].toLowerCase() === 'listen'
+              registry.persist()
+              const thread = threadRegistry.get(resolvedThreadId)
+              if (thread) {
+                thread.listenOverride = info.listening
+                threadRegistry.persist()
+              }
+              void gateway.react(msg.channelId, msg.id, info.listening ? '👂' : '🔇').catch(() => {})
+              return
+            }
+
+            const permReplyMatch = msg.content.match(/^(allow|deny)\s*$/i)
+            if (permReplyMatch) {
+              const behavior = permReplyMatch[1].toLowerCase() === 'allow' ? 'allow' : 'deny'
+              // Find the most recent pending permission for this session
+              let foundId: string | undefined
+              for (const [reqId, perm] of pendingPermissions) {
+                if (perm.sessionId === mappedSession) foundId = reqId
+              }
+              if (foundId) {
+                const targetBridge = transport.get(mappedSession)
+                if (targetBridge) {
+                  transport.sendToBridge(targetBridge, {
+                    type: 'permission_response',
+                    request_id: foundId,
+                    behavior,
+                  })
+                }
+                pendingPermissions.delete(foundId)
+                void gateway.react(msg.channelId, msg.id, behavior === 'allow' ? '✅' : '❌').catch(() => {})
+              } else {
+                void gateway.send(msg.channelId, '_No pending permission for this session._', { replyTo: msg.id }).catch(() => {})
+              }
+              return
+            }
+
+            const pauseMatch = msg.content.match(PAUSE_RE)
+            if (pauseMatch) {
+              if (pauseMatch[1].toLowerCase() === 'pause') {
+                const occupied = isThreadOccupied(resolvedThreadId)
+                if (occupied) {
+                  void reportError(msg.channelId, msg.id, 'pause', `a ${occupied} is active in this thread`, `Cancel the active ${occupied} first.`)
+                  return
+                }
+              }
+              info.paused = pauseMatch[1].toLowerCase() === 'pause'
+              registry.persist()
+              void gateway.react(msg.channelId, msg.id, info.paused ? '⏸' : '▶️').catch(() => {})
+              refreshSessionVisual(resolvedThreadId)
+              return
+            }
+
+            const keysMatch = msg.content.match(KEYS_RE)
+            if (keysMatch) {
+              if (info.paused) {
+                void gateway.react(msg.channelId, msg.id, '⏸').catch(() => {})
+                return
+              }
+              // Collapse multiline to single line — CC slash commands are single-line
+              const text = keysMatch[1].replace(/\n/g, ' ').trim()
+              if (text) {
+                try {
+                  const adapter = info.adapter
+                  const target = adapter.surface(info)
+                  if (target === null) throw new Error(`interactive surface is unavailable`)
+                  const tokens = text.split(/\s+/)
+                  const resolved = tokens.map(resolveTmuxKey)
+                  const allKeyNames = resolved.every((r): r is string => r !== null)
+                  let action: TmuxKeyAction = allKeyNames
+                    ? { target, mode: 'raw', keys: resolved }
+                    : { target, mode: 'literal', text }
+                  // Trailing key detection: if the last token is a recognized key
+                  // name (e.g. "enter", "escape"), split it off so it's sent as a
+                  // key press rather than typed literally.
+                  if (!allKeyNames && tokens.length > 1) {
+                    const lastToken = tokens[tokens.length - 1]
+                    const trailingKey = TMUX_KEY_MAP.get(lastToken.toLowerCase())
+                    if (trailingKey) {
+                      action = { target, mode: 'literal', text: tokens.slice(0, -1).join(' '), trailingKey }
+                    }
+                  }
+                  const keyOpts = allKeyNames
+                    ? { raw: true }
+                    : action.mode === 'literal' && 'trailingKey' in action ? { trailingKey: action.trailingKey } : undefined
+                  const keyText = allKeyNames ? resolved.join(' ') : (action.mode === 'literal' ? action.text ?? text : text)
+                  const result = await adapter.sendKeys(info, keyText, keyOpts)
+                  if (result.queued) {
+                    void gateway.react(msg.channelId, msg.id, '⏳').catch(() => {})
+                    process.stderr.write(`daemon: queued keys for ${info.tmuxName}: ${text.slice(0, 100)}\n`)
+                  } else {
+                    void gateway.react(msg.channelId, msg.id, '⌨️').catch(() => {})
+                    process.stderr.write(`daemon: sent keys to ${info.tmuxName}: ${text.slice(0, 100)}\n`)
+                    setTimeout(() => { void handlePeekIntercept(msg) }, 1000)
+                  }
+                } catch (err) {
+                  void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
+                  process.stderr.write(`daemon: send-keys failed for ${info.tmuxName}: ${err instanceof Error ? err.message : err}\n`)
+                }
+                return
+              }
+            }
+
+            if (msg.content.startsWith('!') && msg.content.length > 1) {
+              const stripped = msg.content.slice(1).trim()
+              if (stripped) {
+                void gateway.react(msg.channelId, msg.id, '⚡').catch(() => {})
+                // Capture the interrupt synchronously, before this message's
+                // ingress slot, so later messages cannot overtake it.
+                let interrupted: Promise<unknown>
+                try {
+                  const interruptAdapter = info.adapter
+                  interruptAdapter.surface(info)
+                  // 50ms lets a TUI-keystroke interrupt (Claude) land before delivery.
+                  interrupted = interruptAdapter.interrupt(info).then(() => new Promise(r => setTimeout(r, 50)))
+                  process.stderr.write(`daemon: interrupt requested for ${info.tmuxName} via ! prefix\n`)
+                } catch (err) {
+                  interrupted = Promise.reject(err)
+                }
+                msg.content = stripped
+                info.lastActive = Date.now()
+                registry.debouncedPersist()
+                void deliverToSession(msg, mappedSession, interrupted)
+                return
+              }
+            }
+
+            if (heardWithoutAsking(info, msg) || await mentionsUs(msg)) {
+              info.lastActive = Date.now()
+              registry.debouncedPersist()
+              void deliverToSession(msg, mappedSession)
+              return
+            }
+
+            return
+          }
         }
       }
     }
-  }
 
-  const permMatch = PERMISSION_REPLY_RE.exec(msg.content)
-  if (permMatch && isAllowed) {
-    const requestId = permMatch[2]!.toLowerCase()
-    const pending = pendingPermissions.get(requestId)
-    const targetSessionId = pending?.sessionId ?? 'main'
-    const targetBridge = transport.get(targetSessionId)
-    if (targetBridge) {
-      transport.sendToBridge(targetBridge, {
-        type: 'permission_response',
-        request_id: requestId,
-        behavior: permMatch[1]!.toLowerCase().startsWith('y') ? 'allow' : 'deny',
-      })
-    }
-    pendingPermissions.delete(requestId)
-    const emoji = permMatch[1]!.toLowerCase().startsWith('y') ? '✅' : '❌'
-    void gateway.react(msg.channelId, msg.id, emoji).catch(() => {})
-    return
-  }
+    const strangerThread = !isAllowed && msg.isThread ? registry.resolveThreadId(msg) : undefined
+    const result = strangerThread && threadRegistry.isSenderAllowed(strangerThread, senderId)
+      ? { action: 'deliver' as const }
+      : await gate(msg)
 
-  void gateway.typing(msg.channelId).catch(() => {})
-
-  const ack = ackReactionOf()
-  if (ack) {
-    void gateway.react(msg.channelId, msg.id, ack).catch(() => {})
-  }
-
-  let targetSessionId = 'main'
-  let effectiveChatId = chat_id
-
-  if (msg.isThread) {
-    const rtid = registry.resolveThreadId(msg)
-    const mappedSession = registry.getByThread(rtid)
-    if (mappedSession && registry.has(mappedSession)) {
-      const info = registry.get(mappedSession)!
-      if (occupied(occupancy(info))) {
-        targetSessionId = mappedSession
-        info.lastActive = Date.now()
-        registry.debouncedPersist()
-        effectiveChatId = info.threadId
+    if (result.action === 'drop') {
+      if (strangerThread && registry.getByThread(strangerThread) && flagStranger(strangerThread, senderId)) {
+        const operator = operatorIds()[0]
+        void gateway.send(strangerThread, `Stranger danger: <@${senderId}> is not the operator. <@${operator}>, reply "yes" and I'll listen to them in this thread.`, { replyTo: msg.id }).catch(() => {})
       }
-    }
-    // A specialist's own thread with nobody home: the operator's answer is the specialist's, never main's. It is held
-    // and the specialist is started by the rule; the message then lands in its thread like any other.
-    const owner = targetSessionId === 'main' && isAllowed ? specialistForThread(rtid) : undefined
-    if (owner) {
-      holdForSpecialist(rtid, owner, msg)
       return
     }
-  }
-  if (targetSessionId === 'main' && !msg.isThread) noteMainChannel(msg.channelId)
-  await enqueueUserMessage(msg, targetSessionId, effectiveChatId)
-})
+
+    // A muted thread stays muted for an admitted stranger: who may speak is settled above; whether this message is meant
+    // for the session is the same question for every sender.
+    if (strangerThread) {
+      const heldBy = registry.getByThread(strangerThread)
+      const held = heldBy ? registry.get(heldBy) : undefined
+      if (held && occupied(occupancy(held)) && !heardWithoutAsking(held, msg) && !(await mentionsUs(msg))) return
+    }
+
+    let chat_id = registry.resolveThreadId(msg)
+
+    if (!msg.isDM && !msg.isThread) {
+      const policy = channelPolicy(msg)
+      if (policy?.threadReply) {
+        const preview = msg.content.slice(0, 50).replace(/<@!?\d+>\s*/g, '').trim() || 'Thread'
+        const archiveDuration = 1440
+
+        const existingSessionId = msg.hasExistingThread && msg.existingThreadId
+          && registry.getByThread(msg.existingThreadId)
+        if (msg.hasExistingThread && msg.existingThreadId && !existingSessionId) {
+          chat_id = msg.existingThreadId
+        } else {
+          const threadId = await gateway.startThreadOnMessage(msg, preview, archiveDuration)
+          if (threadId) {
+            chat_id = threadId
+          }
+        }
+      }
+    }
+
+    const permMatch = PERMISSION_REPLY_RE.exec(msg.content)
+    if (permMatch && isAllowed) {
+      const requestId = permMatch[2]!.toLowerCase()
+      const pending = pendingPermissions.get(requestId)
+      const targetSessionId = pending?.sessionId ?? 'main'
+      const targetBridge = transport.get(targetSessionId)
+      if (targetBridge) {
+        transport.sendToBridge(targetBridge, {
+          type: 'permission_response',
+          request_id: requestId,
+          behavior: permMatch[1]!.toLowerCase().startsWith('y') ? 'allow' : 'deny',
+        })
+      }
+      pendingPermissions.delete(requestId)
+      const emoji = permMatch[1]!.toLowerCase().startsWith('y') ? '✅' : '❌'
+      void gateway.react(msg.channelId, msg.id, emoji).catch(() => {})
+      return
+    }
+
+    void gateway.typing(msg.channelId).catch(() => {})
+
+    const ack = ackReactionOf()
+    if (ack) {
+      void gateway.react(msg.channelId, msg.id, ack).catch(() => {})
+    }
+
+    let targetSessionId = 'main'
+    let effectiveChatId = chat_id
+
+    if (msg.isThread) {
+      const rtid = registry.resolveThreadId(msg)
+      const mappedSession = registry.getByThread(rtid)
+      if (mappedSession && registry.has(mappedSession)) {
+        const info = registry.get(mappedSession)!
+        if (occupied(occupancy(info))) {
+          targetSessionId = mappedSession
+          info.lastActive = Date.now()
+          registry.debouncedPersist()
+          effectiveChatId = info.threadId
+        }
+      }
+      // A specialist's own thread with nobody home: the operator's answer is the specialist's, never main's. It is held
+      // and the specialist is started by the rule; the message then lands in its thread like any other.
+      const owner = targetSessionId === 'main' && isAllowed ? specialistForThread(rtid) : undefined
+      if (owner) {
+        holdForSpecialist(rtid, owner, msg)
+        return
+      }
+    }
+    if (targetSessionId === 'main' && !msg.isThread) noteMainChannel(msg.channelId)
+    await enqueueUserMessage(msg, targetSessionId, effectiveChatId)
+  })
+}

@@ -23,7 +23,7 @@ beforeAll(async () => {
   spies.push(spyOn(thread, 'handleHandoffIntercept').mockImplementation((async (...args: any[]) => { handoffs.push(args) }) as any))
   spies.push(spyOn(thread, 'handleRespawnIntercept').mockImplementation((async (...args: any[]) => { respawns.push(args) }) as any))
   spies.push(spyOn(thread, 'handleForkIntercept').mockImplementation((async (...args: any[]) => { forks.push(args) }) as any))
-  await import('../../app/router.js')
+  ;(await import('../../app/router.js')).bindRouter()
 })
 afterAll(() => { for (const s of spies) s.mockRestore() })
 beforeEach(() => { spawns.length = 0; handoffs.length = 0; respawns.length = 0; forks.length = 0; sent.length = 0 })
