@@ -832,11 +832,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (!p || !t) continue
     if (has(places, placeKey(p))) { error(path, `${placeKey(p)} is already set: places compare without case on GitHub`); continue }
     unknownKeys(t, [...CONNECTOR_KEYS, 'thread_reply', 'access', 'bots'], path)
-    // `bots` was removed. `bots = false` is the old default, still in configs copied from the example: it loads, with a warning. Anything else asked for something now said another way.
-    if (Object.hasOwn(t, 'bots')) {
-      if (t.bots === false) warn(join2(path, 'bots'), 'was removed and `false` was its default: delete the line')
-      else error(join2(path, 'bots'), 'was removed: another app is heard when hydra.toml declares it as a person. Give the app a [people] entry (addresses = ["<platform>:<its user id>"]) and delete this line')
-    }
+    // `bots` was removed; `bots = false` (the old default, in configs copied from the example) loads with a warning.
+    if (Object.hasOwn(t, 'bots')) { if (t.bots === false) warn(join2(path, 'bots'), 'was removed and `false` was its default: delete the line'); else error(join2(path, 'bots'), 'was removed: another app is heard when hydra.toml declares it as a person. Give the app a [people] entry (addresses = ["<platform>:<its user id>"]) and delete this line') }
     const ack = str(t, 'ack', path)
     const ackWhy = ack === undefined ? undefined : reactionNameProblem(ack)
     if (ackWhy) error(join2(path, 'ack'), ackWhy)

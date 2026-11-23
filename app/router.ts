@@ -7,7 +7,7 @@ import { refreshDashboard } from './dashboard.js'
 import { registry, threadRegistry, type SessionInfo } from '../sessions/registry.js'
 import { flagStranger, acknowledged } from './stranger.js'
 import { transport } from '../sessions/bridge-transport.js'
-import { operatorIds, gate, channelAllowed, channelPolicy, admitTaggedChannel, ackReactionOf, mentionsUs, heardApp } from '../sessions/access.js'
+import { operatorIds, gate, channelAllowed, channelPolicy, admitTaggedChannel, ackReactionOf, mentionsUs, droppedApp } from '../sessions/access.js'
 import type { DownloadedFile } from '../gateways/gateway.js'
 import type { InboundMessage } from '../gateways/gateway.js'
 import { transcribeDownloads, mergeTranscripts } from '../infra/transcription.js'
@@ -435,11 +435,7 @@ export function bindRouter(): void {
 
   // Inbound message routing
   gateway.onMessage(async (inbound: InboundMessage) => {
-    // Another app's message is heard when hydra.toml declares it as a person, and then judged as one; an undeclared app is dropped, said when it tags us (its sender would otherwise wait on silence).
-    if (inbound.isBot && !heardApp(inbound)) {
-      if (channelAllowed(inbound) && inbound.authorId !== gateway.botId && await mentionsUs(inbound)) process.stderr.write(`daemon: dropped a message that tags this bot, from another app (${gateway.platform}:${inbound.authorId}) in ${inbound.channelId}: hydra.toml's [people] does not declare it\n`)
-      return
-    }
+    if (inbound.isBot && await droppedApp(inbound)) return   // another app is heard only when hydra.toml declares it as a person
 
     // The one chokepoint: nothing below, operator command or not, acts in a place this daemon is not allowed in.
     if (!channelAllowed(inbound) && !(await admitTaggedChannel(inbound))) return
