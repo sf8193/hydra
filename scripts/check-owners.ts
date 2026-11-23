@@ -133,7 +133,6 @@ export const RULES: Rule[] = [
       'app/protocol-runner.ts': 11,
       'app/reply-guard.ts': 4,
       'app/session-health.ts': 1,
-      'app/session-lifecycle.ts': 1,
       'cli/boot-refusal-alert.ts': 1,
       'cli/helpers.ts': 2,
       'cli/lifecycle.ts': 1,

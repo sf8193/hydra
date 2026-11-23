@@ -832,79 +832,59 @@ function refuseSpawnInto(threadId: string, opts: SpawnOpts | undefined): boolean
   return ownsLineage(opts.askedBy, threadId)
 }
 
-export async function doSpawnSession(topic: string, chatId?: string, messageId?: string, opts?: SpawnOpts): Promise<SpawnResult> {
-  // Before a thread is opened: a working dir that has gone away fails the spawn without leaving an empty thread.
-  if (opts?.cwd && !existsSync(opts.cwd)) throw new Error(`working directory ${opts.cwd} does not exist`)
-  // One place decides the engine and the model it runs: a caller's explicit engine, else the one its model alias names (a specialist's
-  // `model`, `hydra spawn --model`, a recipe), else claude. Alias or full id: an explicit engine reads the alias in its own table.
-  const selected = opts?.model ? resolveLaunchSelection(opts.model, opts.engine) : undefined
-  const engine = opts?.engine ?? selected?.engine ?? 'claude'
+type SpawnCarry = {
+  artifacts?: string[]
+  contextLinks?: string[]
+  description?: string
+  predecessor?: Predecessor
+  launchCwd?: string
+  disallowedTools?: string[]
+  parentId?: string | null
+  initiator?: string
+  replacedName?: string
+  reuseWorktree?: SessionWorktree
+  actingRecords: Array<Pick<SessionInfo, 'policy' | 'kickoffHash'> | undefined>
+}
+
+type ResolvedThread = {
+  threadId: string
+  anchorMessageId?: string
+  anchorChannelId?: string
+  parentChannelId?: string
+  hydraMadeThread: boolean
+  ownerSpawnsInto: boolean
+  rehomedFrom?: string
+  respawnCount: number
+  resumeCount: number
+  chatId?: string
+}
+
+type SpawnOriginType = 'spawn' | 'fork' | 'handoff' | 'resurrect'
+
+/** Stage 1 of doSpawnSession: resolve/create the target thread, check Codex home ownership, clean up any dead occupant, and snapshot carry-over state. */
+async function resolveOrCreateThread(
+  params: {
+    chatId?: string
+    messageId?: string
+    tmuxName: string
+    threadName: string
+    originType: SpawnOriginType
+    originFrom?: string
+    worktreeTarget?: string
+    isJoin: boolean
+    isResume: boolean
+  },
+  carry: SpawnCarry,
+  opts: SpawnOpts | undefined,
+): Promise<ResolvedThread> {
+  let { chatId } = params
+  const { messageId, tmuxName, threadName, originType, originFrom, worktreeTarget, isJoin, isResume } = params
   let threadId: string | undefined
   let anchorMessageId: string | undefined
+  let anchorChannelId: string | undefined
   let hydraMadeThread = false
   // The asker of a spawn into an ended thread owns that thread's lineage (refuseSpawnInto): its session continues the lineage.
   let ownerSpawnsInto = false
-  let anchorChannelId: string | undefined
-
-  // Lossless respawn: deliverables/description re-applied after the new record is
-  // created (killSession discards the dead record). Seeded from an explicit
-  // opts.carryOver (fallback tiers, where the record is gone), else snapshotted off
-  // the replaced record in the existing-thread branch below.
-  let carriedArtifacts: string[] | undefined = opts?.carryOver?.artifacts
-  let carriedContextLinks: string[] | undefined = opts?.carryOver?.contextLinks
-  let carriedDescription: string | undefined = opts?.carryOver?.description
-  // A handoff names it; a recovered successor keeps the one its dead record had.
-  let carriedPredecessor: Predecessor | undefined = opts?.predecessor ?? opts?.carryOver?.predecessor
-  // Launch options a resumed or recovered session must keep: where it starts, what it may not edit.
-  let launchCwd: string | undefined = opts?.launchCwd ?? opts?.carryOver?.launchCwd
-  let disallowedTools: string[] | undefined = opts?.disallowedTools ?? opts?.carryOver?.disallowedTools
-  // Authority: the spawner, or (resume/recovery/handoff) the dead record's parent, carried.
-  let carriedParentId: string | null | undefined = opts?.parentId ?? opts?.carryOver?.parentId
-  let carriedInitiator: string | undefined = opts?.initiator ?? opts?.carryOver?.initiator
-  // The launch policy of the conversation this start continues or replaces (resume, fork): see restricted.ts.
-  // The records it continues or replaces, for resolvePolicy: what a recovery carries, then the record in the thread.
-  const actingRecords: Array<Pick<SessionInfo, 'policy' | 'kickoffHash'> | undefined> = [opts?.carryOver]
-  let replacedName: string | undefined = opts?.carryOver?.sessionName   // the record's own session name, for the remedy a refusal ends with
-  // Recovery: reuse the dead session's on-disk worktree rather than recreate one.
-  // An explicit descriptor (opts.reuseWorktree) wins so fallback tiers can adopt it
-  // even after the record it came from was deleted.
-  let reuseWorktree: SessionWorktree | undefined = opts?.reuseWorktree
-  // The recovery orchestrator (recoverOne) reserves the predecessor's name in
-  // registry.reservedNames across the whole cascade — protecting the preserved worktree
-  // branch from a concurrent spawn's `branch -D` during the kill→persist window — so
-  // doSpawnSession doesn't manage the reservation itself.
-
-  // Flags come off before the topic becomes a thread name; opts beat the flag.
-  const rawTopic = topic || 'session'
-  const parsed = parseSpawnTopic(rawTopic)
-  topic = parsed.topic || 'session'
-  const worktreeTarget: string | undefined = opts?.worktree ?? parsed.worktree
-  // rawTopic, not topic — the flag has been stripped out of the latter by here.
-  const labelFields = resolveSpawnLabel(rawTopic, opts?.label, opts?.inheritedLabel)
-  const sessionLabel = labelFields.label
-  const phaseBudgetMs = opts?.phaseBudgetMs ?? parsed.budgetMs
-
-  const sessionId = randomUUID()
-  // A handoff is the same session continuing: its killed predecessor's name is free, so the successor keeps it.
-  const replacing = opts?.existingThreadId ? registry.getByThread(opts.existingThreadId) : undefined
-  const tmuxName = opts?.handedOffFrom ?? (opts?.name
-    ? registry.claimSessionName(opts.name, replacing, s => occupancy(s) === 'dead')
-    : registry.pickSessionName(opts?.reuseName && replacing ? { name: opts.reuseName, replacing } : undefined, threadRegistry.lastUsedByName()))
-  // NOTE: the freshly-picked name is intentionally NOT held in registry.reservedNames.
-  // The pick→registry.set window is short (recoverOne resolves slow worktree ops up front,
-  // so nothing lengthy runs here) and shorter than the recovery wave's STAGGER, so same-wave
-  // recoveries don't collide; and a genuine collision is self-healing — `tmux new-session`
-  // fails cleanly on a duplicate name, the tier returns null, and recovery retries. Reserving
-  // it here would instead leak the name on any throw before registry.set (no try/finally on
-  // this large function), which is worse than the self-healing collision it would prevent.
-  const cleanTopic = topic.replace(/\*\*/g, '').replace(/\*/g, '').replace(/[\[\]<>]/g, '').replace(/\s+/g, ' ').trim()
-  const threadName = `${emojiOf({ tmuxName }, opts?.specialist)} ${cleanTopic || tmuxName} · ${tmuxName}`.slice(0, 100)
-  const isFork = !!opts?.forkFrom
-  const isHandoff = !!opts?.handedOffFrom
-  const isResume = !!opts?.resumeFrom
-  const isResurrect = !!opts?.resurrectFrom
-  const originType: 'spawn' | 'fork' | 'handoff' | 'resurrect' = isFork ? 'fork' : isHandoff ? 'handoff' : isResurrect ? 'resurrect' : 'spawn'
-  const originFrom = opts?.forkFrom?.parentName ?? opts?.handedOffFrom ?? opts?.resurrectFrom
 
   // A thread to sit in again (resume, respawn, handoff, revive). A record that stored an id the gateway cannot address (a session id where a
   // thread id belongs) has no thread to go back to: its replacement gets a fresh one, under its parent's channel. Never a refusal: by now the
@@ -915,11 +895,8 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     else rehomedFrom = opts.existingThreadId
   }
 
-  // Join an existing thread as a member (skip thread creation entirely)
-  const isJoin = !!opts?.joinThread
   let respawnCount = 0
-  let resumeCount = 0
-  if (isResume) resumeCount = nextResumeCount(registry.values(), opts!.resumeFrom!)
+  const resumeCount = isResume ? nextResumeCount(registry.values(), opts!.resumeFrom!) : 0
   if (isJoin) {
     // Nothing is made yet, and nothing can be: a guest cannot join a thread the gateway cannot address.
     if (!gateway.isThreadId(opts!.joinThread!)) throw new Error(notAThreadId(opts!.joinThread!))
@@ -929,7 +906,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   if (rehomedFrom) {
     process.stderr.write(`daemon: spawn ${tmuxName}: "${rehomedFrom}" is not a ${gateway.platform} thread id; a fresh thread replaces it\n`)
     // Under the channel its parent's thread is in, else the default one (resolveSpawnChannel).
-    chatId ??= (carriedParentId ? registry.get(carriedParentId)?.anchorChannelId : undefined)
+    chatId ??= (carry.parentId ? registry.get(carry.parentId)?.anchorChannelId : undefined)
   }
 
   // Determine where to create the thread
@@ -953,17 +930,15 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       const existingId = registry.getByThread(threadId)
       if (existingId) {
         const existing = registry.get(existingId)
-        if (existing) {
-          if (!occupied(occupancy(existing))) {
-            respawnCount = (existing.respawnCount ?? 0) + 1
-            // Lossless respawn (mirror the existingThreadId branch): carry the dead
-            // record's deliverables/description to the replacement. Worktree destruction
-            // stays — a fresh non-recovery spawn onto a dead thread is a real replacement.
-            carriedArtifacts ??= existing.artifacts
-            carriedContextLinks ??= existing.contextLinks
-            carriedDescription ??= existing.description
-            await killSession(existing, 'replaced by new spawn', { ended: 'killed by hydra', keepScratch: isResume || !!opts?.forkFrom, keepWatches: true })
-          }
+        if (existing && !occupied(occupancy(existing))) {
+          respawnCount = (existing.respawnCount ?? 0) + 1
+          // Lossless respawn (mirror the existingThreadId branch): carry the dead
+          // record's deliverables/description to the replacement. Worktree destruction
+          // stays — a fresh non-recovery spawn onto a dead thread is a real replacement.
+          carry.artifacts ??= existing.artifacts
+          carry.contextLinks ??= existing.contextLinks
+          carry.description ??= existing.description
+          await killSession(existing, 'replaced by new spawn', { ended: 'killed by hydra', keepScratch: isResume || !!opts?.forkFrom, keepWatches: true })
         }
       }
     }
@@ -979,10 +954,10 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
           threadId = thread.id
           anchorMessageId = messageId
           anchorChannelId = targetChannelId!
-        } catch (err: any) {
+        } catch (err: unknown) {
           // If thread already exists on this message, join it.
           // Discord thread IDs equal the parent message ID when created via startThread on a message.
-          if (err?.code === 'MessageExistingThread') {
+          if ((err as { code?: unknown } | null)?.code === 'MessageExistingThread') {
             threadId = messageId
             anchorMessageId = messageId
             anchorChannelId = targetChannelId!
@@ -1045,25 +1020,25 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
         // Carry the dead record's deliverables/description to the replacement — killSession
         // deletes the record, so snapshot before it runs (fixes lost PR/artifact links).
         // Explicit opts.carryOver (fallback tiers, where the record is already gone) wins.
-        carriedArtifacts ??= existing.artifacts
-        carriedContextLinks ??= existing.contextLinks
-        carriedDescription ??= existing.description
-        actingRecords.push(existing)
-        replacedName ??= existing.tmuxName
+        carry.artifacts ??= existing.artifacts
+        carry.contextLinks ??= existing.contextLinks
+        carry.description ??= existing.description
+        carry.actingRecords.push(existing)
+        carry.replacedName ??= existing.tmuxName
         // A resume continues the dead session itself. Other tiers (fork, respawn) name it
         // via carryOver; any other replacement has a different predecessor.
         if (opts?.resumeFrom || opts?.resumeCodex || opts?.resumeSession) {
-          carriedPredecessor ??= existing.predecessor
-          launchCwd ??= existing.launchCwd
-          disallowedTools ??= existing.disallowedTools
-          if (carriedParentId === undefined) carriedParentId = authorityId(existing)
-          carriedInitiator ??= existing.initiator
+          carry.predecessor ??= existing.predecessor
+          carry.launchCwd ??= existing.launchCwd
+          carry.disallowedTools ??= existing.disallowedTools
+          if (carry.parentId === undefined) carry.parentId = authorityId(existing)
+          carry.initiator ??= existing.initiator
         }
         // Recovery reuses the existing worktree in place; skip destruction so unpushed
         // work survives and --resume can find the transcript under the same CWD.
         // An explicit opts.reuseWorktree (fallback tiers) already covers this — only
         // derive from the record when one wasn't passed.
-        if (!reuseWorktree && opts?.preserveWorktree && existing.worktree && !worktreeTarget) reuseWorktree = existing.worktree
+        if (!carry.reuseWorktree && opts?.preserveWorktree && existing.worktree && !worktreeTarget) carry.reuseWorktree = existing.worktree
         await killSession(existing, 'replaced by new spawn', { skipWorktreeDestroy: !!opts?.preserveWorktree, keepScratch: isResume || !!opts?.forkFrom, keepWatches: true })
       }
     }
@@ -1089,13 +1064,41 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     }
   }
 
+  return {
+    threadId: threadId!, anchorMessageId, anchorChannelId, parentChannelId,
+    hydraMadeThread, ownerSpawnsInto, rehomedFrom, respawnCount, resumeCount, chatId,
+  }
+}
+
+type RestrictedPolicy = Extract<LaunchPolicy, { restricted: true }>
+type WriteConfinedPolicy = LaunchPolicy & { canOnlyWriteTo: NonNullable<LaunchPolicy['canOnlyWriteTo']> }
+
+type ResolvedSpawnPolicy = {
+  policy?: LaunchPolicy
+  restrictedPolicy?: RestrictedPolicy
+  writeConfinedPolicy?: WriteConfinedPolicy
+  kickoffHash?: string
+  sessionName: string
+}
+
+/** Stage 2 of doSpawnSession: resolve and validate LaunchPolicy (drift, engine capability, macOS sandbox gate) and derive kickoffHash. */
+async function resolveSpawnPolicy(params: {
+  threadId: string
+  tmuxName: string
+  engine: ProviderId
+  isJoin: boolean
+  isHandoff: boolean
+  continuing: boolean
+  carry: SpawnCarry
+  opts: SpawnOpts | undefined
+}): Promise<ResolvedSpawnPolicy> {
+  const { threadId, tmuxName, engine, isJoin, isHandoff, continuing, carry, opts } = params
   // The launch policy: decided once, at birth, from hydra.toml; a continuation (resume, fork) keeps the one its conversation was born with.
   // A start that cannot read or satisfy it refuses, in the thread, naming the cause and the fix: never the operator's account or spawn dir.
-  const continuing = isResume || isFork || !!opts?.resumeCodex || !!opts?.resumeSession
   let policy: LaunchPolicy | undefined
-  const sessionName = replacedName ?? tmuxName
+  const sessionName = carry.replacedName ?? tmuxName
   try {
-    const r = resolvePolicy({ named: opts?.specialist, records: actingRecords, sessionName, ...(!isJoin && { sits: { threadId, tmuxName } }) })
+    const r = resolvePolicy({ named: opts?.specialist, records: carry.actingRecords, sessionName, ...(!isJoin && { sits: { threadId, tmuxName } }) })
     if (continuing && r.drift.length) {
       // Not posted: the revive that asked moves on to the respawn tier, which is a new birth under hydra.toml as it is now.
       throw new Error(`specialist ${r.specialistId}: this conversation was born with ${describePolicy(r.stored)} and hydra.toml now says ${describePolicy(r.current)} (changed: ${r.drift.join('; ')}), so it is not resumed or forked. ${remedy(sessionName)}`)
@@ -1117,11 +1120,27 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   }
   const restrictedPolicy = isRestrictedPolicy(policy) ? policy : undefined
   // `can_only_write_to`: the operator's account with writes confined to the workdir. Not a restricted session, but it starts in its folder, is checked, and takes no message until it passes.
-  const writeConfinedPolicy = !restrictedPolicy && policy?.canOnlyWriteTo ? { ...policy, canOnlyWriteTo: policy.canOnlyWriteTo } : undefined
+  const writeConfinedPolicy: WriteConfinedPolicy | undefined = !restrictedPolicy && policy?.canOnlyWriteTo ? { ...policy, canOnlyWriteTo: policy.canOnlyWriteTo } : undefined
   // The kickoff the conversation was born under: a fresh start names its own; a resume or fork keeps the one it continues, and a
   // handoff successor keeps its predecessor's (it learns its role from the predecessor's letter, which is the old definition).
-  const kickoffHash = continuing || isHandoff ? actingRecords.find(r => r?.kickoffHash !== undefined)?.kickoffHash : opts?.kickoffHash
+  const kickoffHash = continuing || isHandoff ? carry.actingRecords.find(r => r?.kickoffHash !== undefined)?.kickoffHash : opts?.kickoffHash
+  return { policy, restrictedPolicy, writeConfinedPolicy, kickoffHash, sessionName }
+}
 
+/** Stage 3 of doSpawnSession: enforce restricted/write-confined workdir checks and resolve effectiveCwd, launchCwd, and git worktree. */
+async function prepareSpawnWorkspace(params: {
+  threadId: string
+  tmuxName: string
+  sessionName: string
+  continuing: boolean
+  worktreeTarget?: string
+  reuseWorktree?: SessionWorktree
+  initialLaunchCwd?: string
+  restrictedPolicy?: RestrictedPolicy
+  writeConfinedPolicy?: WriteConfinedPolicy
+  opts: SpawnOpts | undefined
+}): Promise<{ spawnCwd: string; effectiveCwd: string; launchCwd?: string; worktree?: SessionWorktree }> {
+  const { threadId, tmuxName, sessionName, continuing, worktreeTarget, reuseWorktree, restrictedPolicy, writeConfinedPolicy, opts } = params
   const spawnCwd = process.env.SPAWN_CWD
   if (!spawnCwd) throw new Error('SPAWN_CWD env var is required -- set it to the working directory for spawned sessions')
 
@@ -1129,7 +1148,8 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   let effectiveCwd = spawnCwd
   // Only a fork or a resume continues a transcript filed under launchCwd. A fresh launch
   // (respawn) starts as usual — the dir may be a worktree that died with its session.
-  if (!isFork && !isResume && !opts?.resumeCodex && !opts?.resumeSession) launchCwd = undefined
+  let launchCwd = continuing ? params.initialLaunchCwd : undefined
+
   // A restricted session runs in its policy's workdir and nowhere else, whatever the caller passed or left out: its file tools reach
   // exactly the folder it starts in, so any other start (the operator's spawn dir, a worktree) would widen them. launch() holds
   // the same line; this keeps the record and the metadata telling the truth.
@@ -1217,7 +1237,28 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     if (!broad) preApproveClaudeTrust([opts.cwd], `workdir ${opts.cwd}`)
   }
 
-  const promptParams = { sessionId, tmuxName, threadId: threadId!, topic, topicIsRequest: opts?.topicIsRequest }
+  return { spawnCwd, effectiveCwd, launchCwd, worktree }
+}
+
+/** Stage 4 of doSpawnSession: build the initial prompt (handoff, fork, resurrect, custom, or fresh spawn) and determine armFirstReply. */
+function buildInitialPrompt(params: {
+  sessionId: string
+  tmuxName: string
+  threadId: string
+  topic: string
+  engine: ProviderId
+  effectiveCwd: string
+  worktree?: SessionWorktree
+  originFrom?: string
+  carriedPredecessor?: Predecessor
+  isHandoff: boolean
+  isFork: boolean
+  isResurrect: boolean
+  isResume: boolean
+  opts: SpawnOpts | undefined
+}): { prompt: string; armFirstReply: boolean } {
+  const { sessionId, tmuxName, threadId, topic, engine, effectiveCwd, worktree, originFrom, carriedPredecessor, isHandoff, isFork, isResurrect, isResume, opts } = params
+  const promptParams = { sessionId, tmuxName, threadId, topic, topicIsRequest: opts?.topicIsRequest }
   let prompt: string
   let armFirstReply = false
   if (opts?.promptBuilder) {
@@ -1239,171 +1280,114 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   if (opts?.promptPrefix) {
     prompt = `${opts.promptPrefix}\n\n${prompt}`
   }
-  prompt = hydraPrompt(prompt)
+  return { prompt: hydraPrompt(prompt), armFirstReply }
+}
 
-  // Central model resolution (see `selected` above): callers can pass raw aliases (e.g. "sonnet", "astra") or full IDs.
-  // Codex with no model picks its own default (it asks its app-server); the spawn default is a Claude id, which Codex cannot run. agy is given its
-  // flash model (the one agy itself starts on, and every plan has it): it needs a model named, and the Claude spawn default is not one it should run.
-  const { defaultModel, aliases } = engineProfile(engine)
-  const model = selected?.model ?? (defaultModel === 'own' ? undefined : defaultModel === 'spawn' ? withContextSuffix(spawnModel()) : aliases[defaultModel.alias])
-
-
-  // --- Launch via engine adapter ---
-  // Private protocol children use this hook to install their fail-closed policy
-  // before the process receives its prompt or can connect to bridge tools.
-  opts?.beforeInitialTurn?.(sessionId)
-  // The records a claimed name replaces are dead: stamp them, and stop their clocks, before the name runs again, or its
-  // new execution reads as theirs and a reaper of theirs ends it.
-  if (opts?.name && !opts.handedOffFrom) {
-    for (const s of registry.values()) {
-      if (s.tmuxName !== tmuxName || occupancy(s) !== 'dead') continue
-      markDead(s)
-      clearIdleLimit(s.sessionId)
-      clearPhaseBudget(s.sessionId)
-    }
-  }
-  const adapter = resolveEngine(engine)
-  const spawnType: SessionType = restrictedPolicy ? 'thread_owner' : opts?.sessionType ?? (isJoin ? 'thread_guest' : 'thread_owner')
-  // Its token for the hydra CLI (cli-caller.ts): the session gets the token, its record only the hash.
-  const issued = issueSessionToken()
-  const launched = await adapter.launch({
-    sessionId, tmuxName, cwd: effectiveCwd, originalCwd: spawnCwd, model,
-    // A restricted kickoff starts with hydra's fixed preamble: a prompt, not a control. Operator and non-specialist kickoffs are untouched.
-    prompt: restrictedPolicy ? `${RESTRICTED_PREAMBLE} ${prompt}` : prompt, sessionToken: issued.token,
-    worktreePath: worktree?.path, forkFromOriginalCwd: !!worktreeTarget,
-    tools: opts?.tools, disallowedTools,
-    forkFrom: opts?.forkFrom, resumeFrom: opts?.resumeFrom, resumeCodex: opts?.resumeCodex, resumeSession: opts?.resumeSession,
-    threadId, sessionType: spawnType, ...(policy && { policy }),
-  }).catch(async (err: unknown) => {
-    // A refusal the launch itself makes (an old Claude Code, a folder it cannot make) is told to the thread, as the checks above are.
-    if (writeConfinedPolicy && err instanceof PolicyRefusal && threadId) await tellThread(threadId, err.message)
-    throw err
-  })
-
-  const now = Date.now()
-  const sessionMetadata = {
-    role: 'worker' as const,
-    tools: spawnToolNames(adapter, restrictedPolicy ? 'restricted' : spawnType),
-    model: launched.model,
-    cwd: effectiveCwd,
-    platform: PLATFORM,
-  }
-  const url = await gateway.getThreadUrl(threadId!)
-
-  if (restrictedPolicy || writeConfinedPolicy) startVerifying(sessionId)   // the record below is refused every message until its start passes (restricted.ts `unverified`)
-  registry.set(sessionId, {
-    sessionId, topic, threadId: threadId!, anchorMessageId, anchorChannelId, createdAt: now, lastActive: now,
-    tmuxName, listening: resolveListenState(threadId!, chatId), originType, originFrom, sessionMetadata,
-    sessionType: spawnType,
-    ...(policy && { policy }),
-    ...(kickoffHash !== undefined && { kickoffHash }),
-    ...labelFields,
-    threadUrl: url || undefined,
-    engine,
-    ...launched.identity,
-    ...(respawnCount > 0 ? { respawnCount } : {}),
-    ...(resumeCount > 0 ? { resumeCount } : {}),
-    ...(worktree && { worktree }),
-    ...(launched.spawnLogPath ? { spawnLogPath: launched.spawnLogPath } : {}),
-    ...(launched.exitFilePath ? { exitFilePath: launched.exitFilePath } : {}),
-    ...(launched.stderrLogPath ? { stderrLogPath: launched.stderrLogPath } : {}),
-    ...(launched.debugLogPath ? { debugLogPath: launched.debugLogPath } : {}),
-    ...(launched.channelNote ? { channelNote: launched.channelNote } : {}),
-    ...(engineProfile(engine).losesFirstTurnToExpiredLogin ? { spawnPrompt: prompt } : {}),
-    initiator: carriedInitiator,
-    sessionTokenHash: issued.hash,
-    parentId: carriedParentId ?? null,
-    ephemeral: opts?.ephemeral,
-    ...(opts?.ephemeral && opts.idleTtlMs ? { idleTtlMs: opts.idleTtlMs } : {}),
-    forceWorktreeCleanup: opts?.forceWorktreeCleanup,
-    ...(phaseBudgetMs ? { budgetDeadline: now + phaseBudgetMs } : {}),
-    ...(carriedPredecessor ? { predecessor: carriedPredecessor } : {}),
-    ...(launchCwd ? { launchCwd } : {}),
-    ...(disallowedTools?.length ? { disallowedTools } : {}),
-    adapter,
-  })
-  // A claimed name took over from dead records of that name in other threads (a specialist that moved): retire them,
-  // so a lookup by name finds this session, and boot recovery does not revive them into threads left behind.
-  if (opts?.name) {
-    for (const s of [...registry.values()]) {
-      if (s.sessionId === sessionId || s.tmuxName !== tmuxName || occupancy(s) !== 'dead') continue
-      registry.delete(s.sessionId)
-      if (registry.getByThread(s.threadId) === s.sessionId) registry.deleteThread(s.threadId)
-    }
-    registry.persist()
-  }
-  // A restricted session is checked against its policy from its own debug file, before its thread is handed to it (below: setThread):
-  // no message reaches it through the thread until what it loaded is known to be what hydra.toml gives it. One that loaded anything
-  // else, or whose file cannot be read, is stopped here (this launch's own session, by its id) and the start refuses.
-  if (restrictedPolicy) {
-    // The adapter says what its engine loaded; an engine that cannot say cannot run a restricted session (it is refused at the engine check above).
-    let verdict: { ok: true } | { ok: false; why: string }
-    try {
-      verdict = adapter.verifyLaunch ? await adapter.verifyLaunch(restrictedPolicy, launched) : { ok: false, why: `the ${engine} engine cannot check what it loaded` }
-    } catch (err) {
-      // A check that cannot run is a check that did not pass: the session is stopped like any other refused start.
-      process.stderr.write(`daemon: spawn ${tmuxName}: launch verification threw: ${err}\n`)
-      verdict = { ok: false, why: 'the check itself failed to run, so what it loaded is unknown' }
-    } finally { endVerifying(sessionId) }
-    if (!verdict.ok) {
-      keepRefusal(verifyKey(restrictedPolicy.specialist, threadId, sessionName), verifyBackoff.now(), verdict.why)
-      process.stderr.write(`daemon: spawn ${tmuxName}: launch verification refused: ${verdict.why}\n`)
-      const created = registry.get(sessionId)
-      if (created && created.sessionId === sessionId) await killSession(created, 'stopped: it did not load what its launch policy allows', { ended: 'killed by hydra', keepWatches: true }).catch((err: unknown) => process.stderr.write(`daemon: spawn ${tmuxName}: could not stop the unverified session ${sessionId}: ${err}\n`))
-      await refuseStart(threadId, verifyRefusal(restrictedPolicy.specialist, sessionName, verdict.why))
-    }
-    // The marker the delivery gate reads: persisted, so a restart keeps a verified session reachable and leaves an unfinished one not.
+/** Stage 5 of doSpawnSession: verify a restricted or write-confined launch from its debug log before routing messages to it. */
+async function verifyPolicyLaunch(params: {
+  mode: 'restricted' | 'write-confined'
+  specialist: string
+  sessionId: string
+  tmuxName: string
+  threadId: string
+  sessionName: string
+  debugLogPath?: string
+  runCheck: () => Promise<{ ok: true } | { ok: false; why: string }>
+}): Promise<void> {
+  const { mode, specialist, sessionId, tmuxName, threadId, sessionName, debugLogPath, runCheck } = params
+  const words = mode === 'restricted'
+    ? {
+        checkLabel: 'launch verification',
+        verb: 'loaded',
+        killReason: 'stopped: it did not load what its launch policy allows',
+        killOpts: { ended: 'killed by hydra' as const, keepWatches: true },
+        sessionAdj: 'unverified',
+        refusal: (why: string) => verifyRefusal(specialist, sessionName, why),
+        successLine: `daemon: spawn ${tmuxName}: launch verified against its policy from ${debugLogPath}\n`,
+      }
+    : {
+        checkLabel: 'confinement check',
+        verb: 'applied',
+        killReason: 'stopped: it did not apply the write confinement its launch policy gives',
+        killOpts: { keepWatches: true },
+        sessionAdj: 'unchecked',
+        refusal: (why: string) => confinementRefusal(specialist, sessionName, why),
+        successLine: `daemon: spawn ${tmuxName}: write confinement applied, from ${debugLogPath}\n`,
+      }
+  let verdict: { ok: true } | { ok: false; why: string }
+  try {
+    verdict = await runCheck()
+  } catch (err) {
+    // A check that cannot run is a check that did not pass: the session is stopped like any other refused start.
+    process.stderr.write(`daemon: spawn ${tmuxName}: ${words.checkLabel} threw: ${err}\n`)
+    verdict = { ok: false, why: `the check itself failed to run, so what it ${words.verb} is unknown` }
+  } finally { endVerifying(sessionId) }
+  if (!verdict.ok) {
+    keepRefusal(verifyKey(specialist, threadId, sessionName), verifyBackoff.now(), verdict.why)
+    process.stderr.write(`daemon: spawn ${tmuxName}: ${words.checkLabel} refused: ${verdict.why}\n`)
     const created = registry.get(sessionId)
-    if (created && created.sessionId === sessionId) { created.verified = true; registry.persist() }
-    clearRefusals(restrictedPolicy.specialist)   // it starts now: health no longer reports a refusal for it
-    process.stderr.write(`daemon: spawn ${tmuxName}: launch verified against its policy from ${launched.debugLogPath}\n`)
-  }
-  // A write-confined session is checked too, on what its settings should have applied (claude-verify.ts `verifyConfinement`): no message reaches it until
-  // Claude Code's own record shows the rules, and one that does not show them is stopped and the start refuses with the cause.
-  if (writeConfinedPolicy) {
-    let verdict: { ok: true } | { ok: false; why: string }
-    try {
-      verdict = adapter.verifyConfinement ? await adapter.verifyConfinement(writeConfinedPolicy, launched) : { ok: false, why: `the ${engine} engine cannot check what it applied` }
-    } catch (err) {
-      process.stderr.write(`daemon: spawn ${tmuxName}: confinement check threw: ${err}\n`)
-      verdict = { ok: false, why: 'the check itself failed to run, so what it applied is unknown' }
-    } finally { endVerifying(sessionId) }
-    if (!verdict.ok) {
-      keepRefusal(verifyKey(writeConfinedPolicy.specialist, threadId, sessionName), verifyBackoff.now(), verdict.why)
-      process.stderr.write(`daemon: spawn ${tmuxName}: confinement check refused: ${verdict.why}\n`)
-      const created = registry.get(sessionId)
-      if (created && created.sessionId === sessionId) await killSession(created, 'stopped: it did not apply the write confinement its launch policy gives', { keepWatches: true }).catch((err: unknown) => process.stderr.write(`daemon: spawn ${tmuxName}: could not stop the unchecked session ${sessionId}: ${err}\n`))
-      await refuseStart(threadId, confinementRefusal(writeConfinedPolicy.specialist, sessionName, verdict.why))
+    if (created && created.sessionId === sessionId) {
+      await killSession(created, words.killReason, words.killOpts).catch((err: unknown) =>
+        process.stderr.write(`daemon: spawn ${tmuxName}: could not stop the ${words.sessionAdj} session ${sessionId}: ${err}\n`),
+      )
     }
-    const created = registry.get(sessionId)
-    if (created && created.sessionId === sessionId) { created.verified = true; registry.persist() }
-    clearRefusals(writeConfinedPolicy.specialist)
-    process.stderr.write(`daemon: spawn ${tmuxName}: write confinement applied, from ${launched.debugLogPath}\n`)
+    await refuseStart(threadId, words.refusal(verdict.why))
   }
+  // The marker the delivery gate reads: persisted, so a restart keeps a verified session reachable and leaves an unfinished one not.
+  const created = registry.get(sessionId)
+  if (created && created.sessionId === sessionId) { created.verified = true; registry.persist() }
+  clearRefusals(specialist) // it starts now: health no longer reports a refusal for it
+  process.stderr.write(words.successLine)
+}
+
+/** Stage 6 of doSpawnSession: start timers, claim thread ownership, apply lossless carry-over, record thread history, and post announcements. */
+function recordAndAnnounceSpawn(params: {
+  sessionId: string
+  tmuxName: string
+  topic: string
+  engine: ProviderId
+  adapter: EngineAdapter
+  launched: Awaited<ReturnType<EngineAdapter['launch']>>
+  url: string
+  sessionLabel?: SessionLabel
+  phaseBudgetMs?: number
+  originType: SpawnOriginType
+  originFrom?: string
+  isJoin: boolean
+  armFirstReply: boolean
+  thread: ResolvedThread
+  carry: SpawnCarry
+  policy?: LaunchPolicy
+  kickoffHash?: string
+  opts: SpawnOpts | undefined
+}): void {
+  const { sessionId, tmuxName, topic, engine, adapter, launched, url, sessionLabel, phaseBudgetMs, originType, originFrom, isJoin, armFirstReply, thread, carry, policy, kickoffHash, opts } = params
+  const { threadId, anchorMessageId, anchorChannelId, parentChannelId, hydraMadeThread, ownerSpawnsInto, rehomedFrom, respawnCount, chatId } = thread
+
   if (phaseBudgetMs) startPhaseBudget(sessionId)
   if (opts?.ephemeral) resumeIdleLimit(sessionId)
   // A bridge that registered before the record existed was given the tools of a session without a predecessor.
-  if (carriedPredecessor && adapter.channel === 'bridge') pushToolSurface(sessionId)
+  if (carry.predecessor && adapter.channel === 'bridge') pushToolSurface(sessionId)
   // Thread ownership: setThread claims the thread for message routing. Only the
   // thread OWNER calls setThread — join members (protocol critics, guest agents)
   // use addMember and must never touch the mapping, or they'd hijack routing.
   if (!isJoin) {
-    registry.setThread(threadId!, sessionId)
+    registry.setThread(threadId, sessionId)
     // The spawn prompt is a request like any user message: a text-only first answer must still reach the thread.
-    if (armFirstReply && anchorMessageId) notePendingReply(sessionId, { chat_id: threadId!, message_id: anchorMessageId, user: opts?.initiator ?? '' })
-  } else if (isJoin) {
-    registry.addMember(threadId!, sessionId, opts?.memberLabel)
+    if (armFirstReply && anchorMessageId) notePendingReply(sessionId, { chat_id: threadId, message_id: anchorMessageId, user: opts?.initiator ?? '' })
+  } else {
+    registry.addMember(threadId, sessionId, opts?.memberLabel)
   }
 
   // Lossless respawn: re-apply the replaced record's deliverables/description so
   // the dashboard row keeps its PR/artifact links across respawns. Reset
   // artifactsBackfilled so a later boot's history-rescan re-derives links.
-  if (carriedArtifacts?.length || carriedContextLinks?.length || carriedDescription) {
+  if (carry.artifacts?.length || carry.contextLinks?.length || carry.description) {
     const created = registry.get(sessionId)
     if (created) {
-      if (carriedArtifacts?.length) created.artifacts = carriedArtifacts
-      if (carriedContextLinks?.length) created.contextLinks = carriedContextLinks
-      if (carriedDescription && !created.description) created.description = carriedDescription
+      if (carry.artifacts?.length) created.artifacts = carry.artifacts
+      if (carry.contextLinks?.length) created.contextLinks = carry.contextLinks
+      if (carry.description && !created.description) created.description = carry.description
       delete created.artifactsBackfilled
     }
   }
@@ -1415,10 +1399,10 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     // A start that continues the thread's session (handoff, resurrect) whose spawner's record is gone keeps what the thread already says.
     const continues = originType === 'handoff' || originType === 'resurrect'
     // A guest in a thread has no thread of its own to answer from (its record's threadId is its host's): its children name none.
-    const spawner = carriedParentId ? registry.get(carriedParentId) : undefined
+    const spawner = carry.parentId ? registry.get(carry.parentId) : undefined
     const spawnerThread = (spawner && spawner.sessionType !== 'thread_guest' ? spawner.threadId : undefined)
-      ?? (continues ? threadRegistry.get(threadId!)?.sessionHistory.findLast(h => h.spawnerThreadId)?.spawnerThreadId : undefined)
-    threadRegistry.recordSpawn(threadId!, {
+      ?? (continues ? threadRegistry.get(threadId)?.sessionHistory.findLast(h => h.spawnerThreadId)?.spawnerThreadId : undefined)
+    threadRegistry.recordSpawn(threadId, {
       anchorMessageId, anchorChannelId, threadUrl: url || undefined, topic, respawnCount,
       sessionId, tmuxName, originType, originFrom, model: launched.model, parentChannelId,
       label: sessionLabel,
@@ -1445,10 +1429,10 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     initiator: opts?.initiator,
   })
 
-  refreshSessionVisual(threadId!, { state: respawnCount > 0 ? 'respawned_session' : 'live' })
+  refreshSessionVisual(threadId, { state: respawnCount > 0 ? 'respawned_session' : 'live' })
 
   const guestNote = isJoin ? '\n_↳ guest agent in thread_' : ''
-  void safeSend(threadId!, spawnLine + guestNote).then(ids => {
+  void safeSend(threadId, spawnLine + guestNote).then(ids => {
     if (ids.length > 0) {
       const info = registry.get(sessionId)
       if (info) info.spawnAnnounceId = ids[0]
@@ -1460,8 +1444,230 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   if (chatId && chatId !== threadId && (registry.getByThread(chatId) || threadRegistry.get(chatId))) {
     void safeSend(chatId, spawnLine)
   }
+}
 
-  return { name: tmuxName, sessionId, threadId: threadId!, url }
+export async function doSpawnSession(topic: string, chatId?: string, messageId?: string, opts?: SpawnOpts): Promise<SpawnResult> {
+  // Before a thread is opened: a working dir that has gone away fails the spawn without leaving an empty thread.
+  if (opts?.cwd && !existsSync(opts.cwd)) throw new Error(`working directory ${opts.cwd} does not exist`)
+  // One place decides the engine and the model it runs: a caller's explicit engine, else the one its model alias names (a specialist's
+  // `model`, `hydra spawn --model`, a recipe), else claude. Alias or full id: an explicit engine reads the alias in its own table.
+  const selected = opts?.model ? resolveLaunchSelection(opts.model, opts.engine) : undefined
+  const engine = opts?.engine ?? selected?.engine ?? 'claude'
+
+  // Lossless respawn: deliverables/description re-applied after the new record is
+  // created (killSession discards the dead record). Seeded from an explicit
+  // opts.carryOver (fallback tiers, where the record is gone), else snapshotted off
+  // the replaced record in resolveOrCreateThread.
+  const carry: SpawnCarry = {
+    artifacts: opts?.carryOver?.artifacts,
+    contextLinks: opts?.carryOver?.contextLinks,
+    description: opts?.carryOver?.description,
+    // A handoff names it; a recovered successor keeps the one its dead record had.
+    predecessor: opts?.predecessor ?? opts?.carryOver?.predecessor,
+    // Launch options a resumed or recovered session must keep: where it starts, what it may not edit.
+    launchCwd: opts?.launchCwd ?? opts?.carryOver?.launchCwd,
+    disallowedTools: opts?.disallowedTools ?? opts?.carryOver?.disallowedTools,
+    // Authority: the spawner, or (resume/recovery/handoff) the dead record's parent, carried.
+    parentId: opts?.parentId ?? opts?.carryOver?.parentId,
+    initiator: opts?.initiator ?? opts?.carryOver?.initiator,
+    // The record's own session name, for the remedy a refusal ends with.
+    replacedName: opts?.carryOver?.sessionName,
+    // Recovery: reuse the dead session's on-disk worktree rather than recreate one.
+    // An explicit descriptor (opts.reuseWorktree) wins so fallback tiers can adopt it
+    // even after the record it came from was deleted.
+    reuseWorktree: opts?.reuseWorktree,
+    // The launch policy of the conversation this start continues or replaces (resume, fork): see restricted.ts.
+    // The records it continues or replaces, for resolvePolicy: what a recovery carries, then the record in the thread.
+    actingRecords: [opts?.carryOver],
+  }
+  // The recovery orchestrator (recoverOne) reserves the predecessor's name in
+  // registry.reservedNames across the whole cascade — protecting the preserved worktree
+  // branch from a concurrent spawn's `branch -D` during the kill→persist window — so
+  // doSpawnSession doesn't manage the reservation itself.
+
+  // Flags come off before the topic becomes a thread name; opts beat the flag.
+  const rawTopic = topic || 'session'
+  const parsed = parseSpawnTopic(rawTopic)
+  topic = parsed.topic || 'session'
+  const worktreeTarget: string | undefined = opts?.worktree ?? parsed.worktree
+  // rawTopic, not topic — the flag has been stripped out of the latter by here.
+  const labelFields = resolveSpawnLabel(rawTopic, opts?.label, opts?.inheritedLabel)
+  const sessionLabel = labelFields.label
+  const phaseBudgetMs = opts?.phaseBudgetMs ?? parsed.budgetMs
+
+  const sessionId = randomUUID()
+  // A handoff is the same session continuing: its killed predecessor's name is free, so the successor keeps it.
+  const replacing = opts?.existingThreadId ? registry.getByThread(opts.existingThreadId) : undefined
+  const tmuxName = opts?.handedOffFrom ?? (opts?.name
+    ? registry.claimSessionName(opts.name, replacing, s => occupancy(s) === 'dead')
+    : registry.pickSessionName(opts?.reuseName && replacing ? { name: opts.reuseName, replacing } : undefined, threadRegistry.lastUsedByName()))
+  // NOTE: the freshly-picked name is intentionally NOT held in registry.reservedNames.
+  // The pick→registry.set window is short (recoverOne resolves slow worktree ops up front,
+  // so nothing lengthy runs here) and shorter than the recovery wave's STAGGER, so same-wave
+  // recoveries don't collide; and a genuine collision is self-healing — `tmux new-session`
+  // fails cleanly on a duplicate name, the tier returns null, and recovery retries. Reserving
+  // it here would instead leak the name on any throw before registry.set (no try/finally on
+  // this large function), which is worse than the self-healing collision it would prevent.
+  const cleanTopic = topic.replace(/\*\*/g, '').replace(/\*/g, '').replace(/[\[\]<>]/g, '').replace(/\s+/g, ' ').trim()
+  const threadName = `${emojiOf({ tmuxName }, opts?.specialist)} ${cleanTopic || tmuxName} · ${tmuxName}`.slice(0, 100)
+  const isFork = !!opts?.forkFrom
+  const isHandoff = !!opts?.handedOffFrom
+  const isResume = !!opts?.resumeFrom
+  const isResurrect = !!opts?.resurrectFrom
+  const isJoin = !!opts?.joinThread
+  const originType: SpawnOriginType = isFork ? 'fork' : isHandoff ? 'handoff' : isResurrect ? 'resurrect' : 'spawn'
+  const originFrom = opts?.forkFrom?.parentName ?? opts?.handedOffFrom ?? opts?.resurrectFrom
+  const continuing = isResume || isFork || !!opts?.resumeCodex || !!opts?.resumeSession
+
+  // Stage 1: resolve/create thread and clean up any dead occupant.
+  const thread = await resolveOrCreateThread(
+    { chatId, messageId, tmuxName, threadName, originType, originFrom, worktreeTarget, isJoin, isResume },
+    carry,
+    opts,
+  )
+
+  // Stage 2: resolve launch policy and enforce engine/macOS sandbox gates.
+  const { policy, restrictedPolicy, writeConfinedPolicy, kickoffHash, sessionName } = await resolveSpawnPolicy({
+    threadId: thread.threadId, tmuxName, engine, isJoin, isHandoff, continuing, carry, opts,
+  })
+
+  // Stage 3: validate policy workdirs and prepare effectiveCwd / git worktree.
+  const { spawnCwd, effectiveCwd, launchCwd, worktree } = await prepareSpawnWorkspace({
+    threadId: thread.threadId, tmuxName, sessionName, continuing, worktreeTarget,
+    reuseWorktree: carry.reuseWorktree, initialLaunchCwd: carry.launchCwd,
+    restrictedPolicy, writeConfinedPolicy, opts,
+  })
+
+  // Stage 4: build initial prompt and resolve model.
+  const { prompt, armFirstReply } = buildInitialPrompt({
+    sessionId, tmuxName, threadId: thread.threadId, topic, engine, effectiveCwd, worktree,
+    originFrom, carriedPredecessor: carry.predecessor, isHandoff, isFork, isResurrect, isResume, opts,
+  })
+  // Central model resolution (see `selected` above): callers can pass raw aliases (e.g. "sonnet", "astra") or full IDs.
+  // Codex with no model picks its own default (it asks its app-server); the spawn default is a Claude id, which Codex cannot run. agy is given its
+  // flash model (the one agy itself starts on, and every plan has it): it needs a model named, and the Claude spawn default is not one it should run.
+  const { defaultModel, aliases } = engineProfile(engine)
+  const model = selected?.model ?? (defaultModel === 'own' ? undefined : defaultModel === 'spawn' ? withContextSuffix(spawnModel()) : aliases[defaultModel.alias])
+
+  // --- Launch via engine adapter ---
+  // Private protocol children use this hook to install their fail-closed policy
+  // before the process receives its prompt or can connect to bridge tools.
+  opts?.beforeInitialTurn?.(sessionId)
+  // The records a claimed name replaces are dead: stamp them, and stop their clocks, before the name runs again, or its
+  // new execution reads as theirs and a reaper of theirs ends it.
+  if (opts?.name && !opts.handedOffFrom) {
+    for (const s of registry.values()) {
+      if (s.tmuxName !== tmuxName || occupancy(s) !== 'dead') continue
+      markDead(s)
+      clearIdleLimit(s.sessionId)
+      clearPhaseBudget(s.sessionId)
+    }
+  }
+  const adapter = resolveEngine(engine)
+  const spawnType: SessionType = restrictedPolicy ? 'thread_owner' : opts?.sessionType ?? (isJoin ? 'thread_guest' : 'thread_owner')
+  // Its token for the hydra CLI (cli-caller.ts): the session gets the token, its record only the hash.
+  const issued = issueSessionToken()
+  const launched = await adapter.launch({
+    sessionId, tmuxName, cwd: effectiveCwd, originalCwd: spawnCwd, model,
+    // A restricted kickoff starts with hydra's fixed preamble: a prompt, not a control. Operator and non-specialist kickoffs are untouched.
+    prompt: restrictedPolicy ? `${RESTRICTED_PREAMBLE} ${prompt}` : prompt, sessionToken: issued.token,
+    worktreePath: worktree?.path, forkFromOriginalCwd: !!worktreeTarget,
+    tools: opts?.tools, disallowedTools: carry.disallowedTools,
+    forkFrom: opts?.forkFrom, resumeFrom: opts?.resumeFrom, resumeCodex: opts?.resumeCodex, resumeSession: opts?.resumeSession,
+    threadId: thread.threadId, sessionType: spawnType, ...(policy && { policy }),
+  }).catch(async (err: unknown) => {
+    // A refusal the launch itself makes (an old Claude Code, a folder it cannot make) is told to the thread, as the checks above are.
+    if (writeConfinedPolicy && err instanceof PolicyRefusal && thread.threadId) await tellThread(thread.threadId, err.message)
+    throw err
+  })
+
+  const now = Date.now()
+  const sessionMetadata = {
+    role: 'worker' as const,
+    tools: spawnToolNames(adapter, restrictedPolicy ? 'restricted' : spawnType),
+    model: launched.model,
+    cwd: effectiveCwd,
+    platform: PLATFORM,
+  }
+  const url = await gateway.getThreadUrl(thread.threadId)
+
+  if (restrictedPolicy || writeConfinedPolicy) startVerifying(sessionId)   // the record below is refused every message until its start passes (restricted.ts `unverified`)
+  registry.set(sessionId, {
+    sessionId, topic, threadId: thread.threadId, anchorMessageId: thread.anchorMessageId, anchorChannelId: thread.anchorChannelId,
+    createdAt: now, lastActive: now,
+    tmuxName, listening: resolveListenState(thread.threadId, thread.chatId), originType, originFrom, sessionMetadata,
+    sessionType: spawnType,
+    ...(policy && { policy }),
+    ...(kickoffHash !== undefined && { kickoffHash }),
+    ...labelFields,
+    threadUrl: url || undefined,
+    engine,
+    ...launched.identity,
+    ...(thread.respawnCount > 0 ? { respawnCount: thread.respawnCount } : {}),
+    ...(thread.resumeCount > 0 ? { resumeCount: thread.resumeCount } : {}),
+    ...(worktree && { worktree }),
+    ...(launched.spawnLogPath ? { spawnLogPath: launched.spawnLogPath } : {}),
+    ...(launched.exitFilePath ? { exitFilePath: launched.exitFilePath } : {}),
+    ...(launched.stderrLogPath ? { stderrLogPath: launched.stderrLogPath } : {}),
+    ...(launched.debugLogPath ? { debugLogPath: launched.debugLogPath } : {}),
+    ...(launched.channelNote ? { channelNote: launched.channelNote } : {}),
+    ...(engineProfile(engine).losesFirstTurnToExpiredLogin ? { spawnPrompt: prompt } : {}),
+    initiator: carry.initiator,
+    sessionTokenHash: issued.hash,
+    parentId: carry.parentId ?? null,
+    ephemeral: opts?.ephemeral,
+    ...(opts?.ephemeral && opts.idleTtlMs ? { idleTtlMs: opts.idleTtlMs } : {}),
+    forceWorktreeCleanup: opts?.forceWorktreeCleanup,
+    ...(phaseBudgetMs ? { budgetDeadline: now + phaseBudgetMs } : {}),
+    ...(carry.predecessor ? { predecessor: carry.predecessor } : {}),
+    ...(launchCwd ? { launchCwd } : {}),
+    ...(carry.disallowedTools?.length ? { disallowedTools: carry.disallowedTools } : {}),
+    adapter,
+  })
+  // A claimed name took over from dead records of that name in other threads (a specialist that moved): retire them,
+  // so a lookup by name finds this session, and boot recovery does not revive them into threads left behind.
+  if (opts?.name) {
+    for (const s of [...registry.values()]) {
+      if (s.sessionId === sessionId || s.tmuxName !== tmuxName || occupancy(s) !== 'dead') continue
+      registry.delete(s.sessionId)
+      if (registry.getByThread(s.threadId) === s.sessionId) registry.deleteThread(s.threadId)
+    }
+    registry.persist()
+  }
+
+  // Stage 5: verify restricted or write-confined launch before routing messages to the thread.
+  // A restricted session is checked against its policy from its own debug file, before its thread is handed to it (below: setThread):
+  // no message reaches it through the thread until what it loaded is known to be what hydra.toml gives it. One that loaded anything
+  // else, or whose file cannot be read, is stopped here (this launch's own session, by its id) and the start refuses.
+  if (restrictedPolicy) {
+    // The adapter says what its engine loaded; an engine that cannot say cannot run a restricted session (it is refused at the engine check above).
+    await verifyPolicyLaunch({
+      mode: 'restricted', specialist: restrictedPolicy.specialist,
+      sessionId, tmuxName, threadId: thread.threadId, sessionName, debugLogPath: launched.debugLogPath,
+      runCheck: () => adapter.verifyLaunch
+        ? adapter.verifyLaunch(restrictedPolicy, launched)
+        : Promise.resolve({ ok: false as const, why: `the ${engine} engine cannot check what it loaded` }),
+    })
+  }
+  // A write-confined session is checked too, on what its settings should have applied (claude-verify.ts `verifyConfinement`): no message reaches it until
+  // Claude Code's own record shows the rules, and one that does not show them is stopped and the start refuses with the cause.
+  if (writeConfinedPolicy) {
+    await verifyPolicyLaunch({
+      mode: 'write-confined', specialist: writeConfinedPolicy.specialist,
+      sessionId, tmuxName, threadId: thread.threadId, sessionName, debugLogPath: launched.debugLogPath,
+      runCheck: () => adapter.verifyConfinement
+        ? adapter.verifyConfinement(writeConfinedPolicy, launched)
+        : Promise.resolve({ ok: false as const, why: `the ${engine} engine cannot check what it applied` }),
+    })
+  }
+
+  // Stage 6: start timers, claim thread, apply carry-over, record history, and announce.
+  recordAndAnnounceSpawn({
+    sessionId, tmuxName, topic, engine, adapter, launched, url, sessionLabel, phaseBudgetMs,
+    originType, originFrom, isJoin, armFirstReply, thread, carry, policy, kickoffHash, opts,
+  })
+
+  return { name: tmuxName, sessionId, threadId: thread.threadId, url }
 }
 
 // ---------------------------------------------------------------------------
