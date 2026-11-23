@@ -389,7 +389,7 @@ describe('persisted queues at boot', () => {
     const singleton = daemon.indexOf('another daemon is already listening')
     expect(singleton).toBeGreaterThan(-1)
     expect(restore).toBeGreaterThan(singleton)
-    expect(restore).toBeLessThan(daemon.indexOf('\nstartBridgeServer()'))
+    expect(restore).toBeLessThan(daemon.search(/^  startBridgeServer\(\)$/m))
   })
 })
 
