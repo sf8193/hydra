@@ -117,6 +117,7 @@ const isTest = (path: string) => /(^|\/)__tests__\//.test(path) || /\.test\.ts$/
 
 // One line per source line (so offsets map back), each with tokens separated by single spaces.
 export function normalize(text: string): { flat: string; lines: string[]; lineAt: (offset: number) => number } {
+  // Strip /* ... */ blocks (anchored to start-of-line/whitespace so string globs like 'a/**/*.ts' stay intact), keeping newlines for line numbers.
   const noBlocks = text.replace(/(^|\s)\/\*[\s\S]*?\*\//gm, m => m.replace(/[^\n]/g, ' '))
   const lines = noBlocks.split('\n').map(l => l.replace(/(^|\s)\/\/.*$/, '$1').replace(/['"`,()[\]{}]/g, ' ').replace(/\s+/g, ' ').trim())
   const starts: number[] = []
@@ -133,17 +134,17 @@ export function violations(files: Array<{ path: string; text: string }>): string
     const raw = text.split('\n')
     for (const r of RULES) {
       if (r.allowed.includes(path) || (!r.tests && isTest(path)) || (r.ts && !path.endsWith('.ts'))) continue
-      const hits = [...flat.matchAll(r.pattern)].filter(m => !r.okAt?.(flat, m.index!)).map(m => lineAt(m.index!)).filter(n => !r.skipLine?.(lines[n - 1]))
+      const hitLines = [...new Set([...flat.matchAll(r.pattern)].filter(m => !r.okAt?.(flat, m.index!)).map(m => lineAt(m.index!)).filter(n => !r.skipLine?.(lines[n - 1])))]
       const limit = r.max?.[path]
       if (limit !== undefined) {
-        if (hits.length > limit) {
-          out.push(`${path}: ${hits.length} occurrences of ${r.name} (max ${limit}, lines ${[...new Set(hits)].join(', ')}) — ${r.why}`)
-        } else if (hits.length < limit) {
-          out.push(`${path}: ${hits.length} occurrences of ${r.name} (cap is ${limit} — lower the cap in scripts/check-owners.ts to ${hits.length}${hits.length === 0 ? ' or remove the file' : ''})`)
+        if (hitLines.length > limit) {
+          out.push(`${path}: ${hitLines.length} occurrences of ${r.name} (max ${limit}, lines ${hitLines.join(', ')}) — ${r.why}`)
+        } else if (hitLines.length < limit) {
+          out.push(`${path}: ${hitLines.length} occurrences of ${r.name} (cap is ${limit} — lower the cap in scripts/check-owners.ts to ${hitLines.length})`)
         }
         continue
       }
-      for (const n of new Set(hits)) out.push(`${path}:${n}: ${r.name} — ${r.why}\n    ${raw[n - 1]?.trim()}`)
+      for (const n of hitLines) out.push(`${path}:${n}: ${r.name} — ${r.why}\n    ${raw[n - 1]?.trim()}`)
     }
   }
   return out

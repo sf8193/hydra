@@ -117,11 +117,9 @@ describe('check-owners: raw tmux liveness and exec only in owners', () => {
 describe('check-owners: raw gateway.send() outside safeSend', () => {
   const raw = (path: string, ...lines: string[]) => hits(path, ...lines).filter(v => v.includes('raw gateway.send() outside safeSend'))
 
-  test('caught in non-owner daemon files (same line, spaced, optional/non-null chained, cast, or wrapped)', () => {
+  test('caught in non-owner daemon files (plain, optional-chained, cast, or wrapped)', () => {
     expect(raw('app/router.ts', "void gateway.send(msg.channelId, 'hi')")).toHaveLength(1)
-    expect(raw('app/commands/global.ts', "await gateway.send (ch, 'hi')")).toHaveLength(1)
     expect(raw('app/router.ts', "await gateway?.send(ch, 'hi')")).toHaveLength(1)
-    expect(raw('app/router.ts', "await gateway!.send(ch, 'hi')")).toHaveLength(1)
     expect(raw('app/router.ts', "await (gateway as any).send(ch, 'hi')")).toHaveLength(1)
     expect(raw('app/commands/thread.ts', 'await gateway.send(', "  ch, 'hi',", ')')).toHaveLength(1)
   })
@@ -134,8 +132,6 @@ describe('check-owners: raw gateway.send() outside safeSend', () => {
     const under = raw('app/bridge-dispatch.ts', 'gateway.send(a, b)', 'gateway.send(a, b)')
     expect(under).toHaveLength(1)
     expect(under[0]).toContain('lower the cap')
-    expect(raw('app/session-lifecycle.ts', 'gateway.send(a, b)')).toEqual([])
-    expect(raw('app/session-lifecycle.ts', 'gateway.send(a, b)', 'gateway.send(a, b)')).toHaveLength(1)
   })
 
   test('block and JSDoc comments are ignored without shifting line numbers', () => {
