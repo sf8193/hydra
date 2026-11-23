@@ -136,8 +136,13 @@ test.skipIf(!tmuxUp)('a message already shown on the screen is not taken as land
   Bun.spawnSync(['tmux', 'new-session', '-d', '-s', shown, '-x', '200', '-y', '50', `printf '<channel source="hydra">\\nhi\\n</channel>\\n'; stty -icanon -echo; cat > /dev/null`])
   try {
     for (let i = 0; i < 200 && !Bun.spawnSync(['tmux', 'capture-pane', '-p', '-t', shown]).stdout.toString().includes('</channel>'); i++) await Bun.sleep(10)
-    const r = await fastRejectEngine.deliver({ sessionId: 'deliver-7', tmuxName: shown } as any, { type: 'notification', content: 'hi' })
+    const write = process.stderr.write.bind(process.stderr); let err = ''
+    process.stderr.write = ((s: string) => { err += s; return true }) as any
+    let r: Awaited<ReturnType<typeof fastRejectEngine.deliver>>
+    try { r = await fastRejectEngine.deliver({ sessionId: 'deliver-7', tmuxName: shown } as any, { type: 'notification', content: 'hi' }) } finally { process.stderr.write = write }
     expect(r).toMatchObject({ status: 'rejected', retryable: false })
+    expect(err).toMatch(new RegExp(`agy ${shown} paste not seen: agy=\\S+ head=\\d+ tail=\\d+ before=\\d+`))   // the rejection leaves counts in the log
+    expect(err).not.toContain('</channel>')   // and no pane text
   } finally { Bun.spawnSync(['tmux', 'kill-session', '-t', shown]) }
 }, 20_000)
 
