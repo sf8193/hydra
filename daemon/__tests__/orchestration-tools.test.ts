@@ -4,6 +4,7 @@ import { executeTool } from '../../app/bridge-dispatch.js'
 import { registry } from '../../sessions/registry.js'
 import { withFakeTmux } from './fake-tmux.js'
 import { fakeAdapter } from './test-harness.js'
+import './arm-gate.js'
 
 // Suppress stderr
 process.stderr.write = (() => true) as any

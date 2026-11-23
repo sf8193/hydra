@@ -13,6 +13,7 @@ import { setSpecialist, removeSpecialist } from '../../../sessions/specialists.j
 import { killSession } from '../../../app/session-lifecycle.js'
 import { gateway } from '../../../infra/config.js'
 import { reviveThreadForDelivery, reviveDeps } from '../../../app/recovery.js'
+import '../../../daemon/__tests__/arm-gate.js'
 
 process.stderr.write = (() => true) as any
 

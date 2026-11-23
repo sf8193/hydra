@@ -16,6 +16,7 @@ import review from '../../protocols/review.js'
 import build from '../../protocols/build.js'
 import spike from '../../protocols/spike.js'
 import delegatedBuild from '../../protocols/delegated-build.js'
+import './arm-gate.js'
 
 let h: TestHarness
 

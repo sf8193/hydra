@@ -18,6 +18,7 @@ import { STATE_DIR } from '../../infra/config.js'
 import { on } from '../../infra/event-bus.js'
 import { fakeCodexAdapter } from './test-harness.js'
 import { CodexPiggyback } from '../../sessions/codex-piggyback.js'
+import './arm-gate.js'
 
 // Suppress stderr
 process.stderr.write = (() => true) as any

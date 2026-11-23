@@ -11,7 +11,7 @@ import { engines } from '../../sessions/engine-instances.js'
 import { CodexEngineAdapter } from '../../engines/codex-engine-adapter.js'
 import { _setHydraConfigForTesting } from '../../infra/hydra-config.js'
 import type { LaunchPolicy } from '../../shared/launch-policy.js'
-import '../../app/restricted.js'   // sets the delivery gate, as app/bridge-server.ts does in the daemon
+import './arm-gate.js'
 import { threadNotices } from '../../shared/notice-limit.js'
 import type { HydraConfig, Specialist } from '../../config/types.js'
 import { codexAdapter } from './codex-adapter.js'

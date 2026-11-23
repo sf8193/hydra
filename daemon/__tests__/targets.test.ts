@@ -19,6 +19,7 @@ import { fakeAdapter } from '../../daemon/__tests__/test-harness.js'
 import { _setDaemonStartedAtForTesting } from '../../sessions/occupancy.js'
 import * as targetsModule from '../../app/targets.js'
 import { bindSlackDelivery } from '../../connectors/slack/runtime.js'
+import './arm-gate.js'
 bindSlackDelivery(targetsModule)
 
 process.stderr.write = (() => true) as any

@@ -10,6 +10,7 @@ import { emit } from '../../infra/event-bus.js'
 import { getIdempotencyEntry } from '../../infra/idempotency.js'
 import { _setDaemonStartedAtForTesting } from '../../sessions/occupancy.js'
 import { targetDeps } from '../../app/targets.js'
+import './arm-gate.js'
 
 // Suppress stderr from daemon modules
 process.stderr.write = (() => true) as any

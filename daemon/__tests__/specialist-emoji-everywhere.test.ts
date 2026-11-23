@@ -28,6 +28,7 @@ import { onRunAdvance, __test as protocolTest } from '../../app/protocol-runner.
 import { setSpecialistThread, _reloadSpecialists } from '../../sessions/specialists.js'
 import { fakeAdapter } from './test-harness.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
+import './arm-gate.js'
 
 process.stderr.write = (() => true) as any
 

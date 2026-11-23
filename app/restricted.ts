@@ -24,7 +24,6 @@ import { hydraLoadEnv, onHydraConfigLoad } from '../infra/hydra-config.js'
 import type { SessionInfo } from '../sessions/registry.js'
 import { isRestricted, isRestrictedPolicy } from '../shared/policy-record.js'
 import { refusalNoticeKey, threadNotices } from '../shared/notice-limit.js'
-import { setDeliveryGate } from '../sessions/bridge-transport.js'
 import { safeSend } from '../infra/util.js'
 import { type PolicyServer, type ConfinementServer, type ConfinementPolicy, type LaunchPolicy, type RestrictedPolicy, remedy, PolicyRefusal } from '../shared/launch-policy.js'
 
@@ -310,5 +309,3 @@ export function deliveryRefusal(info: SessionInfo): string | undefined {
   return reason
 }
 
-// What was queued for a session is held to the same rule when it is flushed (bridge-transport.ts).
-setDeliveryGate(deliveryRefusal)

@@ -9,7 +9,7 @@ import { registry } from '../../sessions/registry.js'
 import { engines } from '../../sessions/engine-instances.js'
 import { ORPHAN_GRACE_MS, _setDaemonStartedAtForTesting } from '../../sessions/occupancy.js'
 import { fakeCodexAdapter } from './test-harness.js'
-import '../../app/restricted.js'
+import './arm-gate.js'
 
 process.stderr.write = (() => true) as any
 _setDaemonStartedAtForTesting(0)

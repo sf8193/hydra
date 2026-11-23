@@ -11,7 +11,6 @@ import { pendingPermissions } from './permission.js'
 import { discoverClaudeSessionId, killSession } from './session-lifecycle.js'
 import { operatorIds } from '../sessions/access.js'
 import { dispatchReconnect, dispatchSessionReply, dispatchDisconnect } from '../sessions/protocol-registry.js'
-import './restricted.js'   // registers the delivery gate on the transport
 import { advertiseTools, isToolAllowed, noteDeclaredRestrictions, refusalText } from '../sessions/tool-surface.js'
 import { getProtocolContext } from './protocol-runner.js'
 import { maybeNudgeMissingAdvance } from './advance-nudge.js'

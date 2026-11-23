@@ -21,6 +21,7 @@ import { fakeAdapter } from '../../daemon/__tests__/test-harness.js'
 import { getIdempotencyEntry } from '../../infra/idempotency.js'
 import { _setDaemonStartedAtForTesting } from '../../sessions/occupancy.js'
 import { _setHydraConfigForTesting, currentHydraConfig } from '../../infra/hydra-config.js'
+import './arm-gate.js'
 
 process.stderr.write = (() => true) as any
 

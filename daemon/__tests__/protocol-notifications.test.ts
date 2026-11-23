@@ -2,6 +2,7 @@ import { describe, test, expect, afterEach } from 'bun:test'
 import { TestHarness } from './test-harness.js'
 import review from '../../protocols/review.js'
 import { protocol } from '../../protocols/dsl.js'
+import './arm-gate.js'
 
 let h: TestHarness
 

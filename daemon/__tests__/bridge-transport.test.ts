@@ -8,6 +8,7 @@ import { on } from '../../infra/event-bus.js'
 import { engines } from '../../sessions/engine-instances.js'
 import { ClaudeEngine } from '../../engines/claude-engine.js'
 import { fakeAdapter, fakeCodexAdapter } from './test-harness.js'
+import './arm-gate.js'
 
 // Suppress stderr
 process.stderr.write = (() => true) as any
