@@ -227,20 +227,20 @@ export async function boot(): Promise<void> {
   bindSlackDelivery({ deliverToTarget, conversationSessionName, conversationSessionRunning, placesFree })
 
   if ('operators' in gateway) {
-    (gateway as any).operators = operatorIds
+    gateway.operators = operatorIds
   }
   if ('homeTabHandler' in gateway) {
-    (gateway as any).homeTabHandler = async (_userId: string) => {
+    gateway.homeTabHandler = async (_userId: string) => {
       refreshDashboardNow()
     }
   }
 
   if ('homeStatusHandler' in gateway) {
-    ;(gateway as any).homeStatusHandler = runHomeStatusAction
+    gateway.homeStatusHandler = runHomeStatusAction
   }
 
   if ('homeSpawnHandler' in gateway) {
-    ;(gateway as any).homeSpawnHandler = runHomeSpawnAction
+    gateway.homeSpawnHandler = runHomeSpawnAction
   }
 
   gateway.onReconnectAfterOutage = sendRecoveryReport

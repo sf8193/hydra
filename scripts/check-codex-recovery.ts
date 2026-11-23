@@ -2,6 +2,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from 'fs'
 import { join } from 'path'
 import { execFileSync, spawnSync } from 'child_process'
 import assert from 'assert/strict'
+import type { InboundMessage } from '../gateways/gateway.js'
+import type { CodexConn } from '../engines/codex-engine.js'
 // Opt-in acceptance test: real app-server processes and two short model turns.
 // All registry state, homes, and tmux surfaces are isolated. Credentials are
 // read through a symlink to the existing shared login; no login is performed.
@@ -43,11 +45,21 @@ bindCodexRuntime()
 const { codexEngine } = await import(repo + '/sessions/engine-instances.ts')
 const { handleResumeIntercept, handleRespawnIntercept } = await import(repo + '/app/commands/thread.ts')
 const { codexHomeDir, stopCodexAppServer } = await import(repo + '/engines/codex-process.ts')
+type CodexEngineInternals = {
+  connections: Map<string, CodexConn>
+  request: (conn: CodexConn, method: string, params: Record<string, unknown>) => Promise<unknown>
+}
+const engineInternals = codexEngine as unknown as CodexEngineInternals
 const starts: {id: string, text: string}[] = []
 // Real app-server lifecycle/RPC, but no model turns for command checks.
 const startTurn = codexEngine.startTurn.bind(codexEngine)
 codexEngine.startTurn = async (id: string, text: string) => { starts.push({id,text}) }
-const msg = (threadId: string) => ({ channelId: threadId, effectiveThreadId: threadId, isThread: true, id: 'test', content: '', parentChannelId: 'parent' } as any)
+const msg = (threadId: string): InboundMessage => ({
+  id: 'test', channelId: threadId, authorId: 'test', authorUsername: 'test', content: '',
+  isDM: false, isThread: true, isBot: false, parentChannelId: 'parent',
+  hasExistingThread: false, existingThreadId: null, referenceMessageId: null,
+  effectiveThreadId: threadId, attachments: [], createdAt: new Date(),
+})
 console.log('Isolated live state:', root)
 try {
  const parent = await doSpawnSession('parity test', undefined, undefined, { engine: 'codex', promptBuilder: () => 'Reply only OK.' })
@@ -73,27 +85,27 @@ try {
  })
  await startTurn(parent.sessionId, 'Remember the marker PARITY_CEDAR_482. Reply only OK. Do not use tools.')
  await done
- const conn = (codexEngine as any).connections.get(parent.sessionId)
- const before = await (codexEngine as any).request(conn, 'thread/read', { threadId: identity.threadId, includeTurns: true })
+ const conn = engineInternals.connections.get(parent.sessionId)!
+ const before = await engineInternals.request(conn, 'thread/read', { threadId: identity.threadId, includeTurns: true })
  assert(JSON.stringify(before).includes('PARITY_CEDAR_482'))
  // Simulate a lost completion during socket replacement with a queued handoff.
  conn.deferredTurnQueue.push('ROUND_2: acknowledge the saved marker.')
  codexEngine.disconnect(parent.sessionId)
  assert(await reconnectCodexAfterDisconnect(parent.sessionId))
  assert.equal(starts.filter(s => s.text.startsWith('ROUND_2')).length, 1)
- const restored = (codexEngine as any).connections.get(parent.sessionId)
+ const restored = engineInternals.connections.get(parent.sessionId)!
  assert.equal(restored.threadId, identity.threadId)
  console.log('PASS reconnect resumes same thread and drains a missed-completion handoff once')
  // A queued third round must be removed by retirement, never executed afterward.
  await startTurn(parent.sessionId, 'Write a long explanation of prime numbers. Do not use tools.')
  await Bun.sleep(500)
  restored.deferredTurnQueue.push('ROUND_3: must be cancelled')
- const retiring = (codexEngine as any).connections.get(parent.sessionId)
+ const retiring = engineInternals.connections.get(parent.sessionId)
  console.log('Cancellation probe:', retiring?.currentTurnId, 'connected:', !!retiring)
- const request = (codexEngine as any).request.bind(codexEngine)
- ;(codexEngine as any).request = async (...args: any[]) => {
-   try { return await request(...args) }
-   catch (err) { console.error('RPC failed:', args[1], String(err)); throw err }
+ const request = engineInternals.request.bind(codexEngine)
+ engineInternals.request = async (c, method, params) => {
+   try { return await request(c, method, params) }
+   catch (err) { console.error('RPC failed:', method, String(err)); throw err }
  }
  const { resolveEngine: providerFor } = await import(repo + '/sessions/engine-instances.ts')
  assert(await providerFor('codex').interruptExecution(providerFor('codex').executionRef(info)))
@@ -105,8 +117,8 @@ try {
  const ci = registry.get(child.sessionId)!
  assert.notEqual(ci.codexThreadId, identity.threadId)
  assert.notEqual(ci.codexHomeName, identity.homeName)
- const cc = (codexEngine as any).connections.get(child.sessionId)
- const inherited = await (codexEngine as any).request(cc, 'thread/read', { threadId: ci.codexThreadId, includeTurns: true })
+ const cc = engineInternals.connections.get(child.sessionId)!
+ const inherited = await engineInternals.request(cc, 'thread/read', { threadId: ci.codexThreadId, includeTurns: true })
  assert(JSON.stringify(inherited).includes('PARITY_CEDAR_482'))
  await killSession(ci, 'isolated parity cleanup')
  assert(await codexEngine.isSocketLive(join(codexHomeDir(identity.homeName), 'app-server-control/app-server-control.sock')))

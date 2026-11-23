@@ -543,7 +543,7 @@ export class SessionRegistry {
       let pruned = 0
       for (const info of data) {
         // Migrate renamed fields from pre-rename persisted sessions
-        const raw = info as any
+        const raw = info as unknown as Record<string, unknown>
         if (raw.capabilities && !Array.isArray(raw.capabilities) && !raw.sessionMetadata) {
           raw.sessionMetadata = raw.capabilities
           delete raw.capabilities
@@ -561,7 +561,7 @@ export class SessionRegistry {
           delete raw.toolDescriptionOverrides
         }
 
-        migrateWorktree(raw)
+        migrateWorktree(info)
 
         // Backfill explicit engine for pre-adapter sessions
         if (!raw.engine) raw.engine = 'claude'

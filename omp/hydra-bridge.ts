@@ -7,9 +7,18 @@ import { SESSION_INSTRUCTIONS, formatNotification } from '../shared/constants.js
 import { parseDaemonToBridgeMessage, type BridgeToDaemonMessage, type BridgeToolContent, type BridgeToolDef } from '../shared/bridge-protocol.js'
 
 // The part of omp's ExtensionAPI this file uses (omp is not a hydra dependency, so its types are not imported).
+type OmpToolDefinition = {
+  name: string
+  label: string
+  description: string
+  parameters: Record<string, unknown>
+  execute(id: string, params: unknown): Promise<{ content: BridgeToolContent[]; details: Record<string, unknown>; isError?: boolean }>
+}
+
 type ExtensionAPI = {
-  registerTool(tool: any): void
-  on(event: string, handler: (e: any) => unknown): void
+  registerTool(tool: OmpToolDefinition): void
+  on(event: 'session_start', handler: () => unknown): void
+  on(event: 'before_agent_start', handler: (e: { systemPrompt: string[] }) => unknown): void
   getActiveTools(): string[]
   sendUserMessage(text: string, options?: { deliverAs?: 'aside' }): void
 }
@@ -22,10 +31,11 @@ const POLL_MS = 100
 const SINGLETON = Symbol.for('hydra.omp.bridge')
 
 export default function (pi: ExtensionAPI) {
-  if (!SOCK || !SESSION_ID || (globalThis as any)[SINGLETON]) return
+  const globalState = globalThis as Record<symbol, boolean | undefined>
+  if (!SOCK || !SESSION_ID || globalState[SINGLETON]) return
   const sockPath = SOCK
   const sessionId = SESSION_ID
-  ;(globalThis as any)[SINGLETON] = true
+  globalState[SINGLETON] = true
 
   let sock: Socket | null = null
   let buf = ''
@@ -57,7 +67,7 @@ export default function (pi: ExtensionAPI) {
       toolNames.push(t.name)
       pi.registerTool({
         name: t.name, label: t.name, description: t.description ?? t.name,
-        parameters: (t.inputSchema ?? { type: 'object', properties: {} }) as any,
+        parameters: t.inputSchema ?? { type: 'object', properties: {} },
         async execute(_id: string, params: unknown) {
           if (!sock) return { content: [{ type: 'text', text: `${t.name} failed: not connected to daemon` }], details: {}, isError: true }
           const id = randomUUID()
@@ -69,7 +79,7 @@ export default function (pi: ExtensionAPI) {
           })
           return { content: result.content, details: {}, ...(result.isError ? { isError: true } : {}) }
         },
-      } as any)
+      })
     }
   }
 

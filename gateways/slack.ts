@@ -969,6 +969,11 @@ export class SlackGateway implements ChatGateway {
     })
   }
 
+  async openDMChannel(userId: string): Promise<string | null> {
+    const ch = await this.app?.client?.conversations?.open({ users: userId })
+    return ch?.channel?.id ?? null
+  }
+
   /** An app_mention as an InboundMessage (it has no files, and no thread of its own), delivered to the daemon. */
   private async deliverMention(event: { ts: string; channel: string; user?: string; text?: string; thread_ts?: string; bot_id?: string }, client: webApi.WebClient): Promise<void> {
     const handler = this.messageHandler

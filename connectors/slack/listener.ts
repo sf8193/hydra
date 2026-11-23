@@ -107,7 +107,12 @@ export const MEMBERSHIP_WAIT_MS = 5_000
 export type PostOptions = { unfurl?: false }
 
 /** The chat.postMessage arguments for one reply: the thread when there is one, and unfurling off exactly when asked. */
-export function postPayload(channel: string, threadTs: string | undefined, text: string, opts?: PostOptions): Record<string, unknown> {
+export function postPayload(
+  channel: string,
+  threadTs: string | undefined,
+  text: string,
+  opts?: PostOptions,
+): { channel: string; text: string; thread_ts?: string; unfurl_links?: false; unfurl_media?: false } {
   return { channel, text, ...(threadTs && { thread_ts: threadTs }), ...unfurlFields(opts?.unfurl === false) }
 }
 
@@ -1009,7 +1014,7 @@ export function boltApp(tokens: { app: string; bot: string; user?: string }): Sl
     },
     react: async (channel, ts, name) => { await client.reactions.add({ token: tokens.bot, channel, timestamp: ts, name }) },
     post: async (channel, threadTs, text, opts) => {
-      const r = await poster.chat.postMessage(postPayload(channel, threadTs, text, opts) as any).catch(e => { throw explainSlackError(e) })
+      const r = await poster.chat.postMessage(postPayload(channel, threadTs, text, opts)).catch(e => { throw explainSlackError(e) })
       if (!r.ts) throw new Error('Slack accepted the message but returned no ts')
       return r.ts
     },

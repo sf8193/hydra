@@ -289,8 +289,13 @@ export interface ChatGateway {
   // Session lifecycle visual — platform-specific rendering of lifecycle state
   updateSessionVisual?(threadId: string, opts: SessionVisualOpts): Promise<void>
 
-  // Home tab dashboard (optional — Slack App Home)
+  // Home tab dashboard & operator DM (optional — Slack App Home)
+  operators?: () => string[]
+  homeTabHandler?: ((userId: string) => Promise<void>) | null
+  homeSpawnHandler?: ((topic: string, userId: string) => Promise<void>) | null
+  homeStatusHandler?: ((sessionId: string, shown: string) => Promise<void>) | null
   publishHomeTab?(userId: string, blocks: HomeTabBlock[]): Promise<void>
+  openDMChannel?(userId: string): Promise<string | null>
 
   // Thread structure
   getThreadAnchor(threadId: string): { channelId: string; messageId: string } | null

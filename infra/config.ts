@@ -111,13 +111,11 @@ export async function resolveDefaultChannel(operators: string[]): Promise<void> 
   try {
     const userId = operators[0]
     if (!userId) return
-    if ('sendDM' in gateway) {
-      const ch = await (gateway as any).app?.client?.conversations?.open({ users: userId })
-      if (ch?.channel?.id) {
-        DEFAULT_SESSION_CHANNEL = ch.channel.id
-        process.stderr.write(`daemon: auto-resolved DEFAULT_SESSION_CHANNEL=${DEFAULT_SESSION_CHANNEL} (DM with ${userId})\n`)
-        return
-      }
+    const channelId = await gateway.openDMChannel?.(userId)
+    if (channelId) {
+      DEFAULT_SESSION_CHANNEL = channelId
+      process.stderr.write(`daemon: auto-resolved DEFAULT_SESSION_CHANNEL=${DEFAULT_SESSION_CHANNEL} (DM with ${userId})\n`)
+      return
     }
   } catch (err) {
     process.stderr.write(`daemon: failed to auto-resolve DEFAULT_SESSION_CHANNEL: ${err}\n`)
