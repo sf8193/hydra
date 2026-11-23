@@ -65,8 +65,8 @@ const readJson = (p: string) => JSON.parse(readFileSync(p, 'utf8'))
 describe('every way a session starts gets the settings', () => {
   test.each([
     ['a fresh start', {}],
-    ['a resume', { resumeFrom: 'C-old' }],
-    ['a fork', { forkFrom: { claudeSessionId: 'C-parent' } }],
+    ['a resume', { continuation: { kind: 'resume-claude', claudeSessionId: 'C-old' } }],
+    ['a fork', { continuation: { kind: 'fork-claude', claudeSessionId: 'C-parent' } }],
     ['a start that asked for a worktree', { cwd: '/wt/x', worktreePath: '/wt/x', forkFromOriginalCwd: true }],
   ])('%s: starts in the workdir, with --settings and --mcp-config after the prompt, and the operator\'s flags', async (_name, extra) => {
     const cmd = await launch(extra)
@@ -92,7 +92,7 @@ describe('every way a session starts gets the settings', () => {
     const narrowed = await launch({ tools: ['Bash', 'Read'] }, policyOf({ tools: ['Read', 'Grep'] }))
     expect(narrowed).toContain(" --tools 'Read' --settings ")
     expect((narrowed.match(/--tools /g) ?? []).length).toBe(1)
-    for (const extra of [{ resumeFrom: 'C-old' }, { forkFrom: { claudeSessionId: 'C-parent' } }]) expect(await launch(extra, policyOf({ tools: ['Read'] }))).toContain(" --tools 'Read' --settings ")
+    for (const extra of [{ continuation: { kind: 'resume-claude', claudeSessionId: 'C-old' } }, { continuation: { kind: 'fork-claude', claudeSessionId: 'C-parent' } }]) expect(await launch(extra, policyOf({ tools: ['Read'] }))).toContain(" --tools 'Read' --settings ")
     expect(await launch({}, policyOf())).not.toContain('--tools')
   })
 
@@ -103,7 +103,7 @@ describe('every way a session starts gets the settings', () => {
   })
 
   test('every start tells its bridge it is write-confined (HYDRA_WRITE_CONFINED), so a record that is gone cannot widen it; no other launch does', async () => {
-    for (const extra of [{}, { resumeFrom: 'C-old' }, { forkFrom: { claudeSessionId: 'C-parent' } }]) expect(await launch(extra)).toContain("export HYDRA_WRITE_CONFINED=1")
+    for (const extra of [{}, { continuation: { kind: 'resume-claude', claudeSessionId: 'C-old' } }, { continuation: { kind: 'fork-claude', claudeSessionId: 'C-parent' } }]) expect(await launch(extra)).toContain("export HYDRA_WRITE_CONFINED=1")
     expect(await launch({}, null)).not.toContain('HYDRA_WRITE_CONFINED')
   })
 
@@ -113,7 +113,7 @@ describe('every way a session starts gets the settings', () => {
     const was = process.env.FAKE_SERVER_KEY
     try {
       sourceEnvFiles([join(dir, '.env')])
-      for (const extra of [{}, { resumeFrom: 'C-old' }, { forkFrom: { claudeSessionId: 'C-parent' } }]) expect(await launch(extra)).toContain('unset FAKE_SERVER_KEY && ')
+      for (const extra of [{}, { continuation: { kind: 'resume-claude', claudeSessionId: 'C-old' } }, { continuation: { kind: 'fork-claude', claudeSessionId: 'C-parent' } }]) expect(await launch(extra)).toContain('unset FAKE_SERVER_KEY && ')
       expect(await launch({}, null)).not.toContain('unset FAKE_SERVER_KEY')
     } finally {
       if (was === undefined) delete process.env.FAKE_SERVER_KEY; else process.env.FAKE_SERVER_KEY = was

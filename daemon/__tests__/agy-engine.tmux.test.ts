@@ -109,7 +109,7 @@ test.skipIf(!run)('a resumed agy session continues the dead session\'s conversat
     await must(() => engine.turn(first, 0).live === 'idle', 60_000)
     await engine.stop(first)
 
-    await engine.launch({ ...base, sessionId: second.sessionId, tmuxName: second.tmuxName, resumeSession: { fromSessionId: first.sessionId },
+    await engine.launch({ ...base, sessionId: second.sessionId, tmuxName: second.tmuxName, continuation: { kind: 'resume-session', fromSessionId: first.sessionId },
       prompt: 'What was the secret word? Call the reply tool with chat_id "1" and just that word as the text.' })
     await must(() => replies().some(t => t.toUpperCase().includes('MANGO')), 120_000)
   } finally {

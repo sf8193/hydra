@@ -58,7 +58,7 @@ describe('CodexEngineAdapter.launch', () => {
   test('resumeCodex: resumes the original thread in the original home', async () => {
     const engine = fakeEngine(), proc = fakeProc()
     const adapter = codexAdapter(engine as any, proc as any)
-    const r = await adapter.launch({ ...baseInput, resumeCodex: { threadId: 'T-orig', homeName: 'oldhome' } })
+    const r = await adapter.launch({ ...baseInput, continuation: { kind: 'resume-codex', threadId: 'T-orig', homeName: 'oldhome' } })
 
     expect(engine.calls).toEqual([
       'queue new-sid P0', // #374: launch prompt is FIFO item zero, queued before the thread is attached
@@ -76,7 +76,7 @@ describe('CodexEngineAdapter.launch', () => {
     const adapter = codexAdapter(engine as any, proc as any) as any
     const seen: any[] = []
     adapter.surface = (info: any) => { seen.push({ home: info.codexHomeName ?? info.tmuxName, thread: info.codexThreadId }); return `${info.tmuxName}:hydra-chat` }
-    await adapter.launch({ ...baseInput, resumeCodex: { threadId: 'T-orig', homeName: 'oldhome' } })
+    await adapter.launch({ ...baseInput, continuation: { kind: 'resume-codex', threadId: 'T-orig', homeName: 'oldhome' } })
     expect(seen).toEqual([{ home: 'oldhome', thread: 'T-orig' }])
   })
 
@@ -121,20 +121,21 @@ function fakeAdapter(provider: 'claude' | 'codex' | 'omp') {
       launches.push({ provider, input })
       // Inside the kill→launch→persist window: the dead record is gone, the new one not yet set.
       pickedDuringLaunch = registry.pickSessionName()
-      if (provider === 'codex' && input.resumeCodex && failCodexResume) throw new Error('no rollout found for thread id (code -32600)')
-      if (provider === 'claude' && input.resumeFrom && failClaudeResume) throw new Error('resume failed')
+      const cont = input.continuation
+      if (provider === 'codex' && cont?.kind === 'resume-codex' && failCodexResume) throw new Error('no rollout found for thread id (code -32600)')
+      if (provider === 'claude' && cont?.kind === 'resume-claude' && failClaudeResume) throw new Error('resume failed')
       connected.add(input.sessionId)
       if (provider === 'codex') {
         return {
           provider, model: 'gpt',
           identity: {
-            codexThreadId: input.resumeCodex?.threadId ?? (input.forkFrom?.codexThreadId ? 'forked-thread' : 'fresh-thread'),
-            ...(input.resumeCodex ? { codexHomeName: input.resumeCodex.homeName } : {}),
+            codexThreadId: cont?.kind === 'resume-codex' ? cont.threadId : (cont?.kind === 'fork-codex' ? 'forked-thread' : 'fresh-thread'),
+            ...(cont?.kind === 'resume-codex' ? { codexHomeName: cont.homeName } : {}),
           },
         }
       }
       if (provider === 'omp') return { provider, model: 'omp-x', identity: {} }
-      return { provider, model: 'claude-x', identity: claudeLearnsNoId ? {} : { claudeSessionId: input.resumeFrom ?? 'new-claude' } }
+      return { provider, model: 'claude-x', identity: claudeLearnsNoId ? {} : { claudeSessionId: cont?.kind === 'resume-claude' ? cont.claudeSessionId : 'new-claude' } }
     },
     stop: async (info: SessionInfo) => {
       stops.push({ tmuxName: info.tmuxName, home: info.codexHomeName })
@@ -242,7 +243,7 @@ describe('handleResumeIntercept — Codex', () => {
     await handleResumeIntercept(msg())
 
     expect(launches).toHaveLength(1)
-    expect(launches[0].input.resumeCodex).toEqual({ threadId: dead.codexThreadId!, homeName: 'r16home' })
+    expect(launches[0].input.continuation).toEqual({ kind: 'resume-codex', threadId: dead.codexThreadId!, homeName: 'r16home' })
     const live = registry.get(registry.getByThread(THREAD)!)!
     expect(live.codexThreadId).toBe(dead.codexThreadId!)
     expect(live.codexHomeName).toBe('r16home') // stop/isAlive/reconnect/resume keep targeting the adopted home
@@ -261,7 +262,7 @@ describe('handleResumeIntercept — Codex', () => {
   test('home defaults to the dead tmuxName when no codexHomeName was recorded', async () => {
     const dead = seedDead('codex')
     await handleResumeIntercept(msg())
-    expect(launches[0].input.resumeCodex).toEqual({ threadId: dead.codexThreadId!, homeName: dead.tmuxName })
+    expect(launches[0].input.continuation).toEqual({ kind: 'resume-codex', threadId: dead.codexThreadId!, homeName: dead.tmuxName })
   })
 
   test('tier 1 failure falls to fork (tier 2) and never claims full context', async () => {
@@ -269,8 +270,8 @@ describe('handleResumeIntercept — Codex', () => {
     const dead = seedDead('codex', { codexHomeName: 'r16home' })
     await handleResumeIntercept(msg())
 
-    expect(launches.map(l => l.input.resumeCodex ? 'resume' : l.input.forkFrom ? 'fork' : 'fresh')).toEqual(['resume', 'fork'])
-    expect(launches[1].input.forkFrom?.codexThreadId).toBe(dead.codexThreadId!)
+    expect(launches.map(l => l.input.continuation?.kind === 'resume-codex' ? 'resume' : l.input.continuation?.kind === 'fork-codex' ? 'fork' : 'fresh')).toEqual(['resume', 'fork'])
+    expect(launches[1].input.continuation).toEqual({ kind: 'fork-codex', codexThreadId: dead.codexThreadId! })
     expect(announced()).toContain('forked from dead session')
     expect(announced()).not.toContain('full context restored')
     expect(registry.reservedNames.has('r16home')).toBe(false)
@@ -286,7 +287,7 @@ describe('handleResumeIntercept — Codex', () => {
     await handleResumeIntercept(msg())
 
     // The owner-guard throws before launch, so tier 1 never reaches the adapter.
-    expect(launches.some(l => l.input.resumeCodex)).toBe(false)
+    expect(launches.some(l => l.input.continuation?.kind === 'resume-codex')).toBe(false)
     // Tier 2 still kills the dead record (whose home names r16owner): its stop
     // must not tear down the app-server the live owner holds.
     expect(stops.map(s => s.home ?? s.tmuxName)).toContain('r16owner')
@@ -298,7 +299,7 @@ describe('handleResumeIntercept — Codex', () => {
     const next = registry.pickSessionName() // the name a concurrent spawn would take
     seedDead('codex', { codexHomeName: next })
     await handleResumeIntercept(msg())
-    expect(launches[0].input.resumeCodex?.homeName).toBe(next)
+    expect(launches[0].input.continuation).toEqual({ kind: 'resume-codex', threadId: expect.any(String), homeName: next })
     expect(pickedDuringLaunch).toBeDefined()
     expect(pickedDuringLaunch).not.toBe(next)
   })
@@ -331,7 +332,7 @@ describe('handleResumeIntercept — omp', () => {
 
     expect(launches).toHaveLength(1)
     expect(launches[0].provider).toBe('omp')
-    expect(launches[0].input.resumeSession).toEqual({ fromSessionId: dead.sessionId })
+    expect(launches[0].input.continuation).toEqual({ kind: 'resume-session', fromSessionId: dead.sessionId })
     expect(launches[0].input.cwd).toBe(tmpdir())
     const live = registry.get(registry.getByThread(THREAD)!)!
     expect(live.engine).toBe('omp')
@@ -368,7 +369,7 @@ describe('handleResumeIntercept — Claude (pinned, unchanged)', () => {
       try {
         seedDead('claude')
         await handleResumeIntercept(msg())
-        expect(launches.at(-1)!.input[tier === 'resume' ? 'resumeFrom' : 'forkFrom']).toBeDefined()
+        expect(launches.at(-1)!.input.continuation?.kind).toBe(tier === 'resume' ? 'resume-claude' : 'fork-claude')
         expect(asked).toEqual([])
       } finally { spy.mockRestore() }
     })
@@ -380,8 +381,7 @@ describe('handleResumeIntercept — Claude (pinned, unchanged)', () => {
 
     expect(launches).toHaveLength(1)
     expect(launches[0].provider).toBe('claude')
-    expect(launches[0].input.resumeFrom).toBe(dead.claudeSessionId!)
-    expect(launches[0].input.resumeCodex).toBeUndefined()
+    expect(launches[0].input.continuation).toEqual({ kind: 'resume-claude', claudeSessionId: dead.claudeSessionId! })
     expect(announced()).toContain('resumed — full context restored')
   })
 
@@ -411,8 +411,8 @@ describe('handleResumeIntercept — Claude (pinned, unchanged)', () => {
     const dead = seedDead('claude')
     await handleResumeIntercept(msg())
 
-    expect(launches.map(l => l.input.resumeFrom ? 'resume' : l.input.forkFrom ? 'fork' : 'fresh')).toEqual(['resume', 'fork'])
-    expect(launches[1].input.forkFrom?.claudeSessionId).toBe(dead.claudeSessionId!)
+    expect(launches.map(l => l.input.continuation?.kind === 'resume-claude' ? 'resume' : l.input.continuation?.kind === 'fork-claude' ? 'fork' : 'fresh')).toEqual(['resume', 'fork'])
+    expect(launches[1].input.continuation).toEqual({ kind: 'fork-claude', claudeSessionId: dead.claudeSessionId! })
     expect(announced()).toContain('forked from dead session')
   })
 })

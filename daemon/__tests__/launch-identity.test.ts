@@ -13,7 +13,7 @@ test('Claude: a fresh launch assigns claudeSessionId; resume and fork learn none
     const claude = new ClaudeEngine({} as any)
     const fresh = await claude.launch(input)
     expect(fresh.identity.claudeSessionId).toMatch(/^[0-9a-f-]{36}$/)
-    for (const extra of [{ resumeFrom: 'C-old' }, { forkFrom: { claudeSessionId: 'C-parent' } }]) {
+    for (const extra of [{ continuation: { kind: 'resume-claude' as const, claudeSessionId: 'C-old' } }, { continuation: { kind: 'fork-claude' as const, claudeSessionId: 'C-parent' } }]) {
       const r = await claude.launch({ ...input, ...extra })
       expect(r.identity).toEqual({})
       expect('claudeSessionId' in r.identity).toBe(false)

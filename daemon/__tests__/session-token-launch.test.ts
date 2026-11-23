@@ -37,7 +37,7 @@ async function claudeCommand(extra: Record<string, unknown> = {}): Promise<strin
 }
 
 describe('Claude: by launch file, exported then removed by the pane', () => {
-  for (const [kind, extra] of [['an operator session', {}], ['a restricted specialist', { policy: restricted }], ['a resume', { resumeFrom: 'C-old' }]] as const) {
+  for (const [kind, extra] of [['an operator session', {}], ['a restricted specialist', { policy: restricted }], ['a resume', { continuation: { kind: 'resume-claude', claudeSessionId: 'C-old' } }]] as const) {
     test(kind, async () => {
       const cmd = await claudeCommand(extra)
       expect(cmd).not.toContain(TOKEN)
