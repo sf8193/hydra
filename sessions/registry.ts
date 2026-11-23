@@ -116,7 +116,7 @@ export type SessionInfo = {
  */
 export type SessionWorktree = { repo: string; path: string; branch: string }
 
-/** The fields a build before SessionWorktree stored. Written beside `worktree` for one release, so a rollback finds the worktree. */
+/** The fields a build before SessionWorktree stored. Read on load only (`migrateWorktree`); never written. */
 type LegacyWorktreeFields = { worktreeRepo?: string; worktreePath?: string; worktreeBranch?: string }
 
 /**
@@ -131,12 +131,6 @@ export function migrateWorktree<T extends LegacyWorktreeFields & { worktree?: Se
   delete raw.worktreePath
   delete raw.worktreeBranch
   return raw
-}
-
-/** The record as persisted: SessionWorktree, and the legacy fields beside it so a build from before it still finds the worktree. */
-export function withLegacyWorktree<T extends { worktree?: SessionWorktree }>(rec: T): T & LegacyWorktreeFields {
-  const w = rec.worktree
-  return w ? { ...rec, worktreeRepo: w.repo, worktreePath: w.path, worktreeBranch: w.branch } : rec
 }
 
 export function addCapability(info: SessionInfo, cap: Capability): void {
@@ -452,7 +446,7 @@ export class SessionRegistry {
 
   persist(): void {
     try {
-      const data = [...this.sessions.values()].map(({ adapter, ...rest }) => withLegacyWorktree(rest))
+      const data = [...this.sessions.values()].map(({ adapter, ...rest }) => rest)
       atomicWriteFileSync(this.sessionsFile, JSON.stringify(data, null, 2) + '\n')
     } catch (err) {
       process.stderr.write(`daemon: failed to persist sessions: ${err}\n`)

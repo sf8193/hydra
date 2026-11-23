@@ -70,6 +70,22 @@ describe('SessionRegistry', () => {
     } finally { if (saved === null) rmSync(file, { force: true }); else writeFileSync(file, saved) }
   })
 
+  test('a record with the three old worktree fields loads as one `worktree`; saved, it carries `worktree` alone', () => {
+    const file = join(STATE_DIR, 'sessions.json')
+    const saved = existsSync(file) ? readFileSync(file, 'utf8') : null
+    try {
+      const old = { worktreeRepo: '/r', worktreePath: '/p', worktreeBranch: 'wt/b' }
+      writeFileSync(file, JSON.stringify([{ ...makeInfo({ sessionId: 'test-wt-old', tmuxName: 'test-wt-old' }), ...old }]))
+      const reg = new SessionRegistry()
+      expect(reg.get('test-wt-old')!.worktree).toEqual({ repo: '/r', path: '/p', branch: 'wt/b' })
+      reg.persist()
+      const written = JSON.parse(readFileSync(file, 'utf8')).find((r: SessionInfo) => r.sessionId === 'test-wt-old')
+      expect(written.worktree).toEqual({ repo: '/r', path: '/p', branch: 'wt/b' })
+      for (const k of Object.keys(old)) expect(written).not.toHaveProperty(k)
+      expect(new SessionRegistry().get('test-wt-old')!.worktree).toEqual(written.worktree)   // the loader (unchanged from main) reads `worktree` first
+    } finally { if (saved === null) rmSync(file, { force: true }); else writeFileSync(file, saved) }
+  })
+
   test('a tmux that does not answer at load leaves each record as it was saved: a dead one stays dead', () => {
     const file = join(STATE_DIR, 'sessions.json')
     const saved = existsSync(file) ? readFileSync(file, 'utf8') : null
