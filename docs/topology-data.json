@@ -344,6 +344,10 @@
     ],
     [
       "daemon",
+      "infra_tmux"
+    ],
+    [
+      "daemon",
       "connectors_clock_jobs-clock"
     ],
     [

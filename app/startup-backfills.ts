@@ -1,6 +1,5 @@
 import { gateway } from '../infra/config.js'
 import { registry } from '../sessions/registry.js'
-import { tmuxHasSession } from '../infra/tmux.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from '../infra/artifacts.js'
 import { backfillTitles, fetchPrTitle, parsePrUrl } from '../connectors/github/pr-watch.js'
 import { refreshDashboardNow } from './dashboard.js'
@@ -29,12 +28,12 @@ export async function backfillLastReplyIds(): Promise<void> {
 // Backfill artifacts from each live session's own recent thread posts, so
 // deliverables produced before this feature existed appear without waiting for a
 // new reply. Idempotent (mergeArtifacts dedupes), so it's safe to run every boot.
-export async function backfillArtifacts(): Promise<void> {
+export async function backfillArtifacts(hasTmuxSession: (tmuxName: string) => boolean): Promise<void> {
   if (!gateway.fetchMessages) return
   let changedCount = 0
   let dirty = false
   for (const s of registry.values()) {
-    if (!tmuxHasSession(s.tmuxName)) continue
+    if (!hasTmuxSession(s.tmuxName)) continue
     if (s.artifactsBackfilled) continue  // one-time scan — avoids a fetch-burst on every restart
     try {
       const msgs = await gateway.fetchMessages(s.threadId, 100)

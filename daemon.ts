@@ -68,6 +68,7 @@ import { announceRestartComplete } from './app/commands/global.js'
 import { deliverWatchdogAlert } from './app/watchdog-alert.js'
 import { autoRecoverAfterBoot } from './app/recovery.js'
 import { sendRecoveryReport } from './app/recovery-report.js'
+import { tmuxHasSession } from './infra/tmux.js'
 import { backfillLastReplyIds, backfillArtifacts, startBackgroundBackfills } from './app/startup-backfills.js'
 import { startJobsClock, stopJobsClock, realDeps } from './connectors/clock/jobs-clock.js'
 import { deliverToTarget, targetDeps, conversationSessionName, conversationSessionRunning, placesFree } from './app/targets.js'
@@ -265,7 +266,7 @@ async function startGateway(attempt = 0): Promise<void> {
 
 void startGateway().then(async () => {
   await backfillLastReplyIds()
-  await backfillArtifacts()
+  await backfillArtifacts(tmuxHasSession)
   // Opt-in (HYDRA_AUTO_RECOVER=1): revive dead workers after a reboot. Runs after
   // the gateway is up (respawns post to their threads). No-op otherwise.
   await autoRecoverAfterBoot(startupGapMs ?? undefined).catch(err =>
