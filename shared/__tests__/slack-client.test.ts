@@ -6,7 +6,7 @@ import { SLACK_CLIENT_PING_TIMEOUT_MS } from '../constants.js'
 const built: { token: string; receiver: unknown; socketMode: boolean; logLevel: unknown }[] = []
 class FakeApp { receiver: unknown; constructor(opts: (typeof built)[number]) { built.push(opts); this.receiver = opts.receiver } }
 mock.module('@slack/bolt', () => ({ ...bolt, App: FakeApp }))
-const { buildSocketApp, messageBody, MARKDOWN_TEXT_MAX, parseAuth, slackSyntax, unfurlFields } = await import('../slack-client.js')
+const { buildSocketApp, messageBody, MARKDOWN_TEXT_MAX, parseAuth, unfurlFields } = await import('../slack-client.js')
 
 describe('buildSocketApp', () => {
   test('builds a Socket Mode receiver with the keepalive headroom and an App on it', () => {
@@ -38,15 +38,6 @@ describe('messageBody', () => {
   test('the cap: at the limit still markdown_text, one past it classic text', () => {
     expect(messageBody('x'.repeat(MARKDOWN_TEXT_MAX))).toHaveProperty('markdown_text')
     expect(messageBody('x'.repeat(MARKDOWN_TEXT_MAX + 1))).toHaveProperty('text')
-  })
-})
-
-describe('slackSyntax', () => {
-  test('tags, special mentions and channel links are Slack syntax', () => {
-    for (const t of ['<@U1>', '<@W1|name>', '<!here>', '<!channel>', '<!everyone>', '<!subteam^S1>', '<#C1|dev>']) expect(slackSyntax(`hi ${t} there`)).toBe(true)
-  })
-  test('links of either form, markdown and a lone < are not: they render under markdown_text', () => {
-    for (const t of ['**b** [x](https://x.co)', '<https://x.co>', '<https://x.co|x>', '<HTTP://x.co|x>', '<mailto:a@b.co|a>', '[x](<https://x.co>)', 'a < b > c', 'x <= 2', '']) expect(slackSyntax(t)).toBe(false)
   })
 })
 

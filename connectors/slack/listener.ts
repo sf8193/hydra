@@ -12,7 +12,7 @@ import { SLACK_APP_NEEDS, NO_SLACK_APP, appKey, appName, appSuffix, type Apps, t
 import { ConnectedApps } from './apps.js'
 import { timed } from '../../shared/loop-watch.js'
 import { awakeSince, suspendedSince, describeCause, type ResumeDetector } from '../../shared/resume.js'
-import { buildSocketApp, messageBody, parseAuth, slackSyntax, unfurlFields } from '../../shared/slack-client.js'
+import { buildSocketApp, messageBody, parseAuth, unfurlFields } from '../../shared/slack-client.js'
 
 /**
  * The Slack connector for one app: one Socket Mode connection that feeds `message` events to the watcher, and the catch-up pass
@@ -107,11 +107,22 @@ export const MEMBERSHIP_WAIT_MS = 5_000
 export type PostOptions = { unfurl?: false }
 
 /**
- * The chat.postMessage arguments for one reply: the text as the gateway sends it (`messageBody`, so markdown renders) unless it carries a tag
- * (`slackSyntax`: a tag must still reach the tagged app; links stay markdown), the thread when there is one, and unfurling off exactly when asked.
+ * The chat.postMessage arguments for one reply: the body from `replyBody` (`markdown_text`, so markdown renders; classic `text` when the text tags
+ * someone or is past the cap), the thread when there is one, and unfurling off exactly when asked. Tagged text differs from the gateway here:
+ * the gateway's `applyMessageBody` keeps classic `text` only for buttons, so its tagged replies go as `markdown_text`.
  */
 export function postPayload(channel: string, threadTs: string | undefined, text: string, opts?: PostOptions): Record<string, unknown> {
   return { channel, ...replyBody(text), ...(threadTs && { thread_ts: threadTs }), ...unfurlFields(opts?.unfurl === false) }
+}
+
+/**
+ * True when the text carries a Slack tag or reference: a tag (`<@U…>`), a special mention or user group (`<!here>`, `<!channel>`, `<!everyone>`,
+ * `<!subteam^…>`), or a channel link (`<#C…>`). A post tagging another app sent as `markdown_text` never reached that app (#948, reverted in #953),
+ * and nothing shows mentions or channel links work there, so such text keeps going as classic `text`. A labelled link (`<url|label>`) is not one:
+ * under `markdown_text` it renders as a link, as `[label](url)` does (seen live, 23 Nov).
+ */
+export function slackSyntax(text: string): boolean {
+  return /<[@!#]/.test(text)
 }
 
 /** A connector reply's or edit's body field: `markdown_text`, or classic `text` when it carries a tag or is past the cap. */

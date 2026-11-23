@@ -7,7 +7,7 @@ import { alsoHeard, hydra as load, hydra, oneListener, view, BASE } from './slac
 import { EMPTY_CONFIG } from '../../../config/load.js'
 import { mustParsePlace, type HydraConfig } from '../../../config/types.js'
 import { MARKDOWN_TEXT_MAX } from '../../../shared/slack-client.js'
-import { SlackListener, DM_LIST_BACKOFF_MS, postPayload, DOWN_ALERT_AFTER_MS, implicitScopeOptions, scopesNeeded, type ToldScopes, CATCH_UP_STALE_AFTER_MS, EVENTS_OFF_AFTER_PASSES, explainSlackError, readReplies, READ_MAX_PAGES, type SlackAppLike, type RawEvent } from '../listener.js'
+import { SlackListener, DM_LIST_BACKOFF_MS, postPayload, slackSyntax, DOWN_ALERT_AFTER_MS, implicitScopeOptions, scopesNeeded, type ToldScopes, CATCH_UP_STALE_AFTER_MS, EVENTS_OFF_AFTER_PASSES, explainSlackError, readReplies, READ_MAX_PAGES, type SlackAppLike, type RawEvent } from '../listener.js'
 import type { SlackApi, RawMessage } from '../catchup.js'
 import type { SocketEmitter } from '../../../shared/socket-supervisor.js'
 import { createResumeDetector, type LastSleep } from '../../../shared/resume.js'
@@ -1084,5 +1084,14 @@ describe('reading a conversation through the connection (fetch_messages)', () =>
     await t.listener.start()
     expect((await t.listener.read(CH, undefined, 2, false)).map(m => [m.ts, m.author])).toEqual([['1002.000001', 'me'], ['1003.000001', 'Bea B']])
     expect((await t.listener.read(CH, undefined, 100, false)).map(m => m.ts)).toEqual(['1001.000001', '1002.000001', '1003.000001'])
+  })
+})
+
+describe('slackSyntax', () => {
+  test('tags, special mentions and channel links are Slack syntax', () => {
+    for (const t of ['<@U1>', '<@W1|name>', '<!here>', '<!channel>', '<!everyone>', '<!subteam^S1>', '<#C1|dev>']) expect(slackSyntax(`hi ${t} there`)).toBe(true)
+  })
+  test('links of either form, markdown and a lone < are not: they render under markdown_text', () => {
+    for (const t of ['**b** [x](https://x.co)', '<https://x.co>', '<https://x.co|x>', '<HTTP://x.co|x>', '<mailto:a@b.co|a>', '[x](<https://x.co>)', 'a < b > c', 'x <= 2', '']) expect(slackSyntax(t)).toBe(false)
   })
 })
