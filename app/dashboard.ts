@@ -240,7 +240,7 @@ function buildHomeBlocks(sessions: SessionRow[], recent: RecentRow[] = []): any[
 }
 
 function homeTabUser(): string | null {
-  if (PLATFORM !== 'slack' || !('publishHomeTab' in gateway)) return null
+  if (!('publishHomeTab' in gateway)) return null
   return operatorIds()[0] ?? null
 }
 

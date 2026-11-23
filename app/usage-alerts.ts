@@ -14,7 +14,7 @@
 
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { STATE_DIR, PLATFORM, DEFAULT_SESSION_CHANNEL } from '../infra/config.js'
+import { STATE_DIR, gateway, DEFAULT_SESSION_CHANNEL } from '../infra/config.js'
 import { atomicWriteFileSync, formatDuration, safeSend } from '../infra/util.js'
 
 export type UsageKind = 'five_hour' | 'seven_day'
@@ -48,7 +48,8 @@ export type UsageAlertsIO = {
   send: (text: string) => void
   log: (line: string) => void
   now: () => number
-  platform: string
+  /** The time as text the chat draws itself (live, in the reader's timezone), where the gateway can; absent: the alert writes the time out. */
+  relativeTime: (at: Date) => string | undefined
   load: () => State
   save: (state: State) => void
 }
@@ -60,7 +61,7 @@ const defaultIO: UsageAlertsIO = {
   send: text => { if (DEFAULT_SESSION_CHANNEL) void safeSend(DEFAULT_SESSION_CHANNEL, text) },
   log: line => { process.stderr.write(`daemon: usage-alerts: ${line}\n`) },
   now: () => Date.now(),
-  platform: PLATFORM,
+  relativeTime: at => gateway.relativeTime?.(at),
   load: () => {
     try { return JSON.parse(readFileSync(PERSIST_FILE, 'utf8')) as State } catch { return {} }
   },
@@ -105,8 +106,8 @@ function resetsText(r: UsageReading): string {
   if (r.source === 'pane') return ` · resets ${r.resetsAt}`
   const at = Date.parse(r.resetsAt)
   if (Number.isNaN(at)) return ''
-  // Discord draws <t:…:R> live, in the reader's own timezone.
-  if (io.platform === 'discord') return ` · resets <t:${Math.floor(at / 1000)}:R>`
+  const drawn = io.relativeTime(new Date(at))
+  if (drawn) return ` · resets ${drawn}`
   return ` · resets in ${formatDuration(Math.max(0, at - io.now()))}`
 }
 

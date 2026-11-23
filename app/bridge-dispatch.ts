@@ -34,6 +34,7 @@ import { SEND_TYPES, type SendType } from '../shared/tool-definitions.js'
 import { onRunExtend } from './protocol-runner.js'
 import { ASK_PREDECESSOR_TIMEOUT_MS, engineOfModel, MAX_ATTACHMENT_BYTES, normalizeReviewRounds } from '../shared/constants.js'
 import { ENGINE_PROFILES, type EngineName } from '../shared/engines/index.js'
+import { gatewayProfile } from '../shared/gateways/index.js'
 import { isRestrictedSession, isToolAllowed, isWriteConfinedSession, predecessorAsker, refusalText } from '../sessions/tool-surface.js'
 import { deliveryRefusal } from './restricted.js'
 import { parseRateLimits, reportUsage } from './usage-alerts.js'
@@ -406,7 +407,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       }
 
       case 'react': {
-        if (gateway.platform === 'slack') return { content: [{ type: 'text', text: 'no-op on Slack (reactions disabled)' }] }
+        if (!gateway.postsReactions) return { content: [{ type: 'text', text: `no-op on ${gatewayProfile(gateway.platform).label} (reactions disabled)` }] }
         await retrySend(() => gateway.react(args.chat_id as string, args.message_id as string, args.emoji as string))
         return { content: [{ type: 'text', text: 'reacted' }] }
       }

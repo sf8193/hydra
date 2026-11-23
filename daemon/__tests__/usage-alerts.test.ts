@@ -1,3 +1,4 @@
+import { DiscordGateway } from '../../gateways/discord.js'
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { reportUsage, parseRateLimits, _setUsageAlertsIO, _resetUsageAlertsIO, type UsageReading } from '../../app/usage-alerts.js'
 
@@ -12,12 +13,14 @@ let logs: string[] = []
 let saved: unknown = undefined
 let stored: Record<string, unknown> = {}
 
-function install(platform = 'discord') {
+// Each gateway's own answer: Discord draws the time, Slack leaves it to be written out.
+const relativeTimeOf = { discord: (at: Date) => DiscordGateway.prototype.relativeTime(at), slack: () => undefined }
+function install(platform: 'discord' | 'slack' = 'discord') {
   _setUsageAlertsIO({
     send: t => sent.push(t),
     log: l => logs.push(l),
     now: () => now,
-    platform,
+    relativeTime: relativeTimeOf[platform],
     load: () => structuredClone(stored) as any,
     save: s => { saved = structuredClone(s); stored = structuredClone(s) as any },
   })

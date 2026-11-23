@@ -956,7 +956,7 @@ describe('probeAllSessions', () => {
   it('alerts once per weekly-usage threshold from byte\'s footer, re-arming after a reset', async () => {
     const alerts: string[] = []
     const readings: UsageReading[] = []
-    _setUsageAlertsIO({ send: t => alerts.push(t), log: () => {}, now: () => T0, platform: 'discord', load: () => ({}), save: () => {} })
+    _setUsageAlertsIO({ send: t => alerts.push(t), log: () => {}, now: () => T0, relativeTime: () => undefined, load: () => ({}), save: () => {} })
     _setIO({ ...makeTestIO(), reportUsage: r => { readings.push(r); reportUsage(r) } })
     try {
       const footer = (pct: number, resets = 'Oct 2, 6am (America/Los_Angeles)') => `❯ \n─────\n  options_bot git:(main) claude-sonnet-5[1m] ctx:8%        You've used ${pct}% of your weekly limit · resets ${resets}\n  ⏵⏵ bypass permissions on`

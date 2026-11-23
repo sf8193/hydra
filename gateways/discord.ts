@@ -27,6 +27,7 @@ import type { InboxLimits } from '../config/write-confinement.js'
 import { GatewayHealth } from '../infra/gateway-health.js'
 import { planReactionReconciliation } from '../shared/reaction-reconcile.js'
 import { linkPreviewsOff } from '../shared/link-previews.js'
+import { DISCORD_DM_ID } from '../shared/gateways/discord.js'
 import { customEmojiId } from '../shared/slack-lines.js'
 import type {
   ChatGateway,
@@ -128,6 +129,7 @@ export class DiscordGateway implements ChatGateway {
   readonly platform = 'discord' as const
   readonly canThreadInDM = false
   readonly dmThreadsAreExclusive = false
+  readonly postsReactions = true
   readonly healthCheckUrl = 'https://discord.com/api/v10/gateway'
   readonly maxMessageLength = 2000 // Discord API hard limit
   readonly maxAttachments = 10
@@ -317,6 +319,11 @@ export class DiscordGateway implements ChatGateway {
 
   onReaction(handler: (event: ReactionEvent) => Promise<void>): void {
     this.reactionHandler = handler
+  }
+
+  // The client draws `<t:…:R>` live, in the reader's own timezone.
+  relativeTime(at: Date): string {
+    return `<t:${Math.floor(at.getTime() / 1000)}:R>`
   }
 
   canRenderEmoji(emoji: string): boolean {
@@ -567,7 +574,7 @@ export class DiscordGateway implements ChatGateway {
       )
       payload.components = [row]
     }
-    await user.send(this.previewPolicy(payload, ['dm'], text))
+    await user.send(this.previewPolicy(payload, [DISCORD_DM_ID], text))
   }
 
   async isMentioned(msg: InboundMessage, extraPatterns?: string[]): Promise<boolean> {
@@ -811,7 +818,7 @@ export class DiscordGateway implements ChatGateway {
 
   /** The ids a channel is a place by: itself, and for a thread its parent channel (the place a thread belongs to). */
   private previewIds(ch: { id: string; isThread?: () => boolean; isDMBased?: () => boolean; parentId?: string | null }): string[] {
-    return [ch.id, ...(ch.isThread?.() && ch.parentId ? [ch.parentId] : []), ...(ch.isDMBased?.() ? ['dm'] : [])]
+    return [ch.id, ...(ch.isThread?.() && ch.parentId ? [ch.parentId] : []), ...(ch.isDMBased?.() ? [DISCORD_DM_ID] : [])]
   }
 
   /**

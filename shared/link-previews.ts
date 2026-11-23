@@ -5,6 +5,7 @@
 // gateway), so the daemon registers where the config and Slack's channel names come from.
 
 import { EVERY, optionsOf, placeOf, type ChatPlatform, type HydraConfig, type Place } from '../config/types.js'
+import { gatewayProfile } from './gateways/index.js'
 
 type Source = {
   config: () => Pick<HydraConfig, 'places'> | undefined
@@ -26,12 +27,12 @@ export type PreviewSources = { config?: Pick<HydraConfig, 'places'>; slackName?:
 /** The places a channel goes by: its id (a Discord thread and its parent channel both count), and a Slack channel's `#name`. A DM is the one DM place of the app that sends: a Discord DM is the id `dm`, a Slack DM an id starting with `D`. */
 export function placesFor(platform: ChatPlatform, ids: readonly string[], slackName: (channel: string) => string | undefined = source.slackName, app?: string): Place[] {
   const at: Place[] = []
+  const profile = gatewayProfile(platform)
   for (const id of ids) {
-    if (platform === 'discord' && id === 'dm') { at.push(placeOf('discord', 'app-dm', EVERY)); continue }
-    if (platform === 'slack' && id.startsWith('D')) { at.push(placeOf('slack', 'app-dm', app ?? EVERY)); continue }
+    if (profile.isDmId(id)) { at.push(placeOf(platform, 'app-dm', profile.perAppDms ? app ?? EVERY : EVERY)); continue }
     at.push(placeOf(platform, 'channel', id))
-    const name = platform === 'slack' ? slackName(id) : undefined
-    if (name) at.push(placeOf('slack', 'channel', `#${name}`))
+    const name = profile.channelNames ? slackName(id) : undefined
+    if (name) at.push(placeOf(platform, 'channel', `#${name}`))
   }
   return at
 }
@@ -49,15 +50,16 @@ export function linkPreviewsOff(platform: ChatPlatform, ids: readonly string[], 
 }
 
 /**
- * How many different links in `text` the platform would preview. Code (fenced or inline) previews nothing on either. A markdown link counts on Slack, and on Discord unless its URL is wrapped in `<…>`. Slack previews
+ * How many different links in `text` the platform would preview. Code (fenced or inline) previews nothing on either. A markdown link counts on a platform that previews wrapped links (`previewsWrappedLinks`: Slack), and elsewhere (Discord) unless its URL is wrapped in `<…>`. Slack previews
  * `<url>` and `<url|label>` and a bare URL it links itself; Discord previews a bare URL (a markdown link's too) but not one wrapped in `<…>`.
  */
 export function linksPreviewed(platform: ChatPlatform, text: string): number {
   const urls = new Set<string>()
+  const wrappedShows = gatewayProfile(platform).previewsWrappedLinks
   let rest = text.replace(/```[\s\S]*?```/g, ' ').replace(/`[^`\n]*`/g, ' ')
   // A markdown link first, so two that touch are two and its `)` does not run into the next URL.
-  rest = rest.replace(/\[[^\]]*\]\((<)?(https?:\/\/[^\s)>]+)>?\)/g, (_m, wrapped: string | undefined, url: string) => { if (platform === 'slack' || !wrapped) urls.add(url); return ' ' })
-  rest = rest.replace(/<(https?:\/\/[^\s<>|]+)(?:\|[^>]*)?>/gi, (_m, url: string) => { if (platform === 'slack') urls.add(url); return ' ' })
+  rest = rest.replace(/\[[^\]]*\]\((<)?(https?:\/\/[^\s)>]+)>?\)/g, (_m, wrapped: string | undefined, url: string) => { if (wrappedShows || !wrapped) urls.add(url); return ' ' })
+  rest = rest.replace(/<(https?:\/\/[^\s<>|]+)(?:\|[^>]*)?>/gi, (_m, url: string) => { if (wrappedShows) urls.add(url); return ' ' })
   for (const m of rest.matchAll(/https?:\/\/[^\s<>|",[\]]+/gi)) urls.add(m[0].replace(/[.;:!?)'*_~]+$/, ''))
   return urls.size
 }
