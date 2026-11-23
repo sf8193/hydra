@@ -409,7 +409,8 @@ export async function safeSend(
           })
           sentIds.push(sent.id)
         } catch (err) {
-          process.stderr.write(`daemon: safeSend failed on chunk ${i + 1}/${chunks.length} for ${channelId}: ${String(err)}\n`)
+          const btnNote = opts?.buttons?.length ? ' (buttons not delivered)' : ''
+          process.stderr.write(`daemon: safeSend failed on chunk ${i + 1}/${chunks.length} for ${channelId}${btnNote}: ${String(err)}\n`)
           if (sentIds.length > 0 && i < chunks.length - 1) {
             try { await gateway.send(channelId, '_[message truncated]_') } catch {}
           }

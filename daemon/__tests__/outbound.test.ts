@@ -157,6 +157,19 @@ test('safeSend never throws when shapeOutbound fails, logs channelId, and return
   expect(logged.some(l => l.includes('ob-chan') && l.includes('ENOSPC'))).toBe(true)
 })
 
+test('safeSend logs when a later chunk carrying buttons fails', async () => {
+  const logged: string[] = []
+  process.stderr.write = ((s: string) => { logged.push(s); return true }) as any
+  let calls = 0
+  ;(spies[0] as any).mockImplementation(async (channel: string) => {
+    if (++calls === 2) throw new Error('500')
+    return { id: `m${calls}`, channelId: channel }
+  })
+  const buttons: ButtonDef[] = [{ id: 'perm:allow:1', label: 'Allow', style: 'success' }]
+  expect(await safeSend('ob-chan', 'x'.repeat(gateway.maxMessageLength + 10), { buttons })).toEqual(['m1'])
+  expect(logged.some(l => l.includes('ob-chan') && l.includes('buttons not delivered'))).toBe(true)
+})
+
 test('an edit cannot add files: safeEdit asks for no room', async () => {
   let edited = ''
   ;(gateway as any).edit = async (_c: string, _m: string, text: string) => { edited = text; return 'm1' }

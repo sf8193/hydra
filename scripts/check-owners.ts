@@ -92,8 +92,9 @@ export const RULES: Rule[] = [
   },
   {
     name: 'raw gateway.send() outside safeSend',
-    pattern: /\bgateway(?:\??\.send|\s+as\s+\w+\s*\.send)\b/g,
-    // infra/util.ts owns safeSend. Every other file below is capped at its exact sanctioned count so no new raw send can enter:
+    pattern: /\bgateway(?:[!?]?\.send|\s+as\s+\w+\s*\.send)\b/g,
+    // infra/util.ts owns safeSend. Every other file below is pinned to its exact sanctioned count so no new raw send can enter
+    // and removals tighten the cap:
     // - app/bridge-dispatch.ts (3): MCP reply, loud send_to_thread, and quiet-send subtext helper (all wrap raw gateway.send in retrySend and propagate errors/IDs)
     // - app/session-lifecycle.ts (1): thread anchor creation must throw on failure and return anchor.id
     // - connectors/slack/runtime.ts (1): bindNotice catches failure to fall back to toOperatorDm
@@ -116,7 +117,8 @@ const isTest = (path: string) => /(^|\/)__tests__\//.test(path) || /\.test\.ts$/
 
 // One line per source line (so offsets map back), each with tokens separated by single spaces.
 export function normalize(text: string): { flat: string; lines: string[]; lineAt: (offset: number) => number } {
-  const lines = text.split('\n').map(l => l.replace(/(^|\s)\/\/.*$/, '$1').replace(/['"`,()[\]{}]/g, ' ').replace(/\s+/g, ' ').trim())
+  const noBlocks = text.replace(/(^|\s)\/\*[\s\S]*?\*\//gm, m => m.replace(/[^\n]/g, ' '))
+  const lines = noBlocks.split('\n').map(l => l.replace(/(^|\s)\/\/.*$/, '$1').replace(/['"`,()[\]{}]/g, ' ').replace(/\s+/g, ' ').trim())
   const starts: number[] = []
   let flat = ''
   for (const l of lines) { starts.push(flat.length); flat += l + ' ' }
@@ -134,7 +136,11 @@ export function violations(files: Array<{ path: string; text: string }>): string
       const hits = [...flat.matchAll(r.pattern)].filter(m => !r.okAt?.(flat, m.index!)).map(m => lineAt(m.index!)).filter(n => !r.skipLine?.(lines[n - 1]))
       const limit = r.max?.[path]
       if (limit !== undefined) {
-        if (hits.length > limit) out.push(`${path}: ${hits.length} occurrences of ${r.name} (max ${limit}) — ${r.why}`)
+        if (hits.length > limit) {
+          out.push(`${path}: ${hits.length} occurrences of ${r.name} (max ${limit}, lines ${[...new Set(hits)].join(', ')}) — ${r.why}`)
+        } else if (hits.length < limit) {
+          out.push(`${path}: ${hits.length} occurrences of ${r.name} (cap is ${limit} — lower the cap in scripts/check-owners.ts to ${hits.length}${hits.length === 0 ? ' or remove the file' : ''})`)
+        }
         continue
       }
       for (const n of new Set(hits)) out.push(`${path}:${n}: ${r.name} — ${r.why}\n    ${raw[n - 1]?.trim()}`)
