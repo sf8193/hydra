@@ -122,7 +122,8 @@ export class AgyEngine implements EngineAdapter {
     }
     // A busy agy queues the message and draws only its first line, so the head counts as landed too.
     const flat = collapse(text), tail = flat.slice(-40), head = flat.slice(0, 40)
-    const seen = () => { const pane = collapse(this.peek(info, 200)); return pane.split(tail).length + pane.split(head).length - 2 }
+    const pane = () => collapse(this.peek(info, 200)), hits = (needle: string, p: string) => p.split(needle).length - 1
+    const seen = () => { const p = pane(); return hits(tail, p) + hits(head, p) }
     const before = seen()
     mkdirSync(PASTE_DIR, { recursive: true, mode: 0o700 })
     const file = join(PASTE_DIR, `${info.sessionId}.txt`)
@@ -143,6 +144,9 @@ export class AgyEngine implements EngineAdapter {
     for (const start = Date.now(); Date.now() - start < landedWaitMs; await Bun.sleep(pollMs)) {
       if (seen() > before) return { status: 'accepted', via: 'tmux-paste' }
     }
+    const last = pane()
+    // Counts and agy's state only, never pane text (it holds users' messages): enough to tell queued, lost and drawn-differently apart.
+    process.stderr.write(`daemon: agy ${info.tmuxName} paste not seen: agy=${this.turn(info, 0).live ?? 'no-event'} head=${hits(head, last)} tail=${hits(tail, last)} before=${before} chars=${text.length}\n`)
     return { status: 'rejected', retryable: false, reason: `the message was pasted into ${info.tmuxName} but the pane never showed it, so it may or may not have been sent` }
   }
   isConnected(info: SessionInfo): boolean { return this.claude.isAlive(info) }
