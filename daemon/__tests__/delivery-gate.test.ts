@@ -131,7 +131,7 @@ describe('every engine is held to it: a Codex session in a specialist\'s thread'
     configure(); watch()
     const info = { ...session('cx1', { engine: 'codex' }), adapter }
     flip()
-    const r = await deliverToAdapter(info as any, { type: 'notification', content: 'hello' }, true)
+    const r = await deliverToAdapter(info as any, { type: 'notification', content: 'hello' }, { connected: true })
     expect(r).toMatchObject({ status: 'rejected', retryable: false })
     expect((r as any).reason).toContain(REMEDY(info.tmuxName))
     expect((r as any).reason).toContain('restricted: false -> true')

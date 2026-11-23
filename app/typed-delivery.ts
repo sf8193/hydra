@@ -10,7 +10,7 @@
 //   paste: working session -> type into the pane; idle -> channel.
 //   hold:  working session -> keep the message and send it through the channel once the
 //          session is idle; past a max hold it is pasted instead.
-// A message is never dropped: every failure falls back to the channel path.
+// A message is never dropped silently: every failure falls back to the channel path, where a session that cannot take it (orphaned, dead) refuses it out loud. A bridge that just dropped is booting, not orphaned, so a held message waits.
 
 import { typedDeliveryUserIds, typedDeliveryMode, typedDeliveryHoldMaxMs, PLATFORM, type TypedDeliveryMode } from '../infra/config.js'
 import { occupancy } from '../sessions/session-reachability.js'

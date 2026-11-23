@@ -11,7 +11,7 @@ export function occupancy(
   now = Date.now(),
   records: Iterable<OccupancySubject> = registry.values(),
 ): Occupancy {
-  return occupancyOf(info, !!info && transport.has(info.sessionId), now, records)
+  return occupancyOf(info, info ? transport.bridgeState(info.sessionId) : { connected: false }, now, records)
 }
 
 // ---------------------------------------------------------------------------

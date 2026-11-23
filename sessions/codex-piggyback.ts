@@ -141,7 +141,7 @@ export class CodexPiggyback {
       if (outcome.status !== 'accepted') reportDeliveryFailure(sessionId, outcome)
     }
     try {
-      void deliverToAdapter(info, { type: 'notification', content: prefix.items.join('\n\n'), meta, deferUntilTurnComplete: true }, transport.has(sessionId)).then(complete, err => {
+      void deliverToAdapter(info, { type: 'notification', content: prefix.items.join('\n\n'), meta, deferUntilTurnComplete: true }, transport.bridgeState(sessionId)).then(complete, err => {
         complete({ status: 'unknown', reason: String(err) })
       })
     } catch (err) {

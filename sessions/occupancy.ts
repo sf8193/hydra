@@ -48,6 +48,9 @@ export type Occupancy =
   /** Not running, or replaced: a successor holds its name (see nameHeldByAnother). Nothing of its own to tear down. */
   | 'dead'
 
+/** What the transport knows of a session's bridge: connected now, and when it last dropped (a drop restarts the grace window). */
+export type BridgeState = { connected: boolean; droppedAt?: number }
+
 export type OccupancySubject = {
   sessionId: string
   tmuxName: string
@@ -68,22 +71,23 @@ export function classifyOccupancy(input: {
 }
 
 /**
- * The occupancy of a record whose bridge is `connected` or not. The execution is the adapter's call (Claude: tmux; Codex: the
+ * The occupancy of a record, given its bridge. A bridge that dropped seconds ago (it retries after a few) is as much "starting" as a
+ * new session: the grace window runs from the later of the record's start, the daemon's start and the last drop. The execution is the adapter's call (Claude: tmux; Codex: the
  * app-server socket, since its tmux is a replaceable anchor). A connected bridge answers first, with no fork.
  */
 export function occupancyOf(
   info: OccupancySubject | undefined,
-  connected: boolean,
+  bridge: BridgeState,
   now = Date.now(),
   records: Iterable<OccupancySubject> = registry.values(),
 ): Occupancy {
   if (!info) return 'none'
-  if (connected) return 'connected'
+  if (bridge.connected) return 'connected'
   if (nameHeldByAnother(info, records)) return 'dead'
   return classifyOccupancy({
     running: info.adapter ? info.adapter.isAlive(info) : tmuxHasSession(info.tmuxName),
     connected: false,
-    waitMs: bridgeWaitMs(info.createdAt, now),
+    waitMs: bridgeWaitMs(Math.max(info.createdAt, bridge.droppedAt ?? 0), now),
     givenUp: !!info.deadAt,
   })
 }

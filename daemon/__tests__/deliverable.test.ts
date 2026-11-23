@@ -2,6 +2,8 @@
 // out loud, not acked and queued; a booting or connected one takes it. Every engine's adapter is asked the same way.
 import { afterEach, describe, expect, test } from 'bun:test'
 import { on } from '../../infra/event-bus.js'
+import { threadNotices } from '../../shared/notice-limit.js'
+import { gateway } from '../../infra/config.js'
 import { transport, deliverToAdapter } from '../../sessions/bridge-transport.js'
 import { ORPHAN_GRACE_MS, _setDaemonStartedAtForTesting } from '../../sessions/occupancy.js'
 import { registry } from '../../sessions/registry.js'
@@ -51,6 +53,40 @@ describe('transport.deliver asks the one answer', () => {
   })
   test('the same holds on the path that bypasses the transport entry (deliverToAdapter)', async () => {
     const info = session('o2', { alive: true, ageMs: ORPHAN_GRACE_MS * 2 })
-    expect((await deliverToAdapter(info, text('o2'), false)).status).toBe('rejected')
+    expect((await deliverToAdapter(info, text('o2'), { connected: false })).status).toBe('rejected')
+  })
+})
+
+describe('a bridge that dropped is booting for the grace window, not an orphan', () => {
+  const socket = () => ({ sessionId: '', buf: '', socket: { write: () => true, end() {}, destroyed: false } as any })
+  test('a mid-life drop (old session, daemon up for an hour) queues for the bridge that retries; after the grace it refuses', async () => {
+    _setDaemonStartedAtForTesting(Date.now() - 3600_000)
+    try {
+      session('bl1', { alive: true, ageMs: 600_000 })
+      transport.set('bl1', { ...socket(), sessionId: 'bl1' })
+      expect((await transport.deliver('bl1', text('bl1'))).status).toBe('accepted')
+      transport.delete('bl1')                                   // socket close
+      expect(await transport.deliver('bl1', text('bl1'))).toMatchObject({ status: 'accepted', via: 'queued' })
+      expect(transport.messageQueues.get('bl1')).toHaveLength(1)
+      ;(transport as any).droppedAt.set('bl1', Date.now() - ORPHAN_GRACE_MS - 1)   // it never came back
+      expect((await transport.deliver('bl1', text('bl1'))).status).toBe('rejected')
+      transport.set('bl1', { ...socket(), sessionId: 'bl1' })   // registering again clears the drop
+      expect((transport as any).droppedAt.has('bl1')).toBe(false)
+    } finally { _setDaemonStartedAtForTesting(0) }
+  })
+})
+
+describe('the refusal notice is limited', () => {
+  test('three messages to an orphan post one ⚠️ in its thread, not three', async () => {
+    const real = gateway.send
+    const posted: string[] = []
+    threadNotices.clear()
+    ;(gateway as any).send = async (_c: string, t: string) => { posted.push(t); return { id: 'm' } }
+    try {
+      session('n1', { alive: true, ageMs: ORPHAN_GRACE_MS * 2 })
+      for (let i = 0; i < 3; i++) await transport.deliver('n1', text('n1'))
+      await Bun.sleep(30)
+      expect(posted.filter(t => t.includes('orphaned'))).toHaveLength(1)
+    } finally { ;(gateway as any).send = real; threadNotices.clear() }
   })
 })

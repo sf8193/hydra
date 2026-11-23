@@ -148,7 +148,7 @@ export async function deliverToSession(info: SessionInfo, text: string, opts: { 
   }
   let result: DeliveryResult
   try {
-    result = await deliverToAdapter(info, notification, transport.has(info.sessionId))
+    result = await deliverToAdapter(info, notification, transport.bridgeState(info.sessionId))
   } catch (err) {
     result = { status: 'unknown', reason: String(err) }
   }

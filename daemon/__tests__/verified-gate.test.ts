@@ -47,7 +47,7 @@ afterEach(() => {
   rmSync(join(STATE_DIR, 'message-queue.json'), { force: true })
 })
 const note = { type: 'notification', content: 'hello', meta: { message_id: 'm1' } } as any
-const deliver = (id: string) => deliverToAdapter(registry.get(id)!, note, true)
+const deliver = (id: string) => deliverToAdapter(registry.get(id)!, note, { connected: true })
 
 describe('while the start is being verified, nothing reaches the session', () => {
   test('a delivery by session record is refused, and says the session is still being checked', async () => {
