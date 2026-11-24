@@ -2,8 +2,7 @@ import { LogLevel } from '@slack/bolt'
 import { WebClient } from '@slack/web-api'
 import { SocketSupervisor, START_TIMEOUT_MS, type SocketEmitter } from '../../shared/socket-supervisor.js'
 import { catchUp, toEvent, BIND_SKEW_S, type CatchUpResult, type Page, type RawMessage, type SlackApi } from './catchup.js'
-import { mkdirSync, openSync, writeSync, closeSync, renameSync, rmSync } from 'fs'
-import { dirname } from 'path'
+import { downloadSlackFile, uploadSlackFiles, type Upload, type UploadResult } from './files.js'
 import { linkPreviewsOff } from '../../shared/link-previews.js'
 import { routedChannels, hearsDms, dmsDeclared, namedChannels, unresolvedPlaces, isDm, type SlackReactionEvent, mentionedApps, NOT_A_MEMBER, OPERATOR_TOKEN_REFUSED, NO_DIRECTORY, SLACK_LIMITS, type AppConversations, type DmOtherParty, type SlackDirectory, type ConversationConfig, type ConversationTable } from './watch.js'
 import { DEFAULT_SLACK_APP, mustParsePlace, placeCovers, placeKey, isChannelName, placeOf, placesAnsweredBy, samePlace, type HydraConfig, type SlackApp } from '../../config/types.js'
@@ -147,6 +146,8 @@ export type SlackAppLike = {
   react(channel: string, ts: string, name: string): Promise<void>
   /** A file's bytes, to `dest` at mode 0600 (its directory 0700). Throws past `maxBytes`. */
   download(url: string, dest: string, maxBytes: number): Promise<void>
+  /** Shares checked files into a channel (in a thread when `threadTs` is given), as the bot. Absent: not offered. */
+  upload?(channel: string, threadTs: string | undefined, files: readonly Upload[]): Promise<UploadResult>
   api: SlackApi
 }
 
@@ -410,6 +411,13 @@ export class SlackListener {
     // The same predicate the gateway asks (shared/link-previews.ts), with this app's own view of hydra.toml and channel names.
     const unfurl = linkPreviewsOff('slack', [channel], { config: this.d.hydra(), slackName: id => this.directory.nameOf(id), app: this.id }, text) ? { unfurl: false as const } : undefined
     return this.app.post(channel, threadTs, text, unfurl)
+  }
+
+  /** A specialist's reply's files, into its conversation after its text. Throws when Slack isn't connected. */
+  async upload(channel: string, threadTs: string | undefined, files: readonly Upload[]): Promise<UploadResult> {
+    const app = this.live()
+    if (!app.upload) throw new Error(`files are not posted through this Slack connection${this.appSuffix()}`)
+    return app.upload(channel, threadTs, files)
   }
 
   private live(): SlackAppLike {
@@ -1018,40 +1026,9 @@ export function boltApp(tokens: { app: string; bot: string; user?: string }): Sl
       if (!r.ts) throw new Error('Slack accepted the message but returned no ts')
       return r.ts
     },
-    download: async (url, dest, maxBytes) => {
-      // Only Slack's own hosts ever get the bot token, including across redirects.
-      const slackHost = (u: string) => { try { const h = new URL(u); return h.protocol === 'https:' && (h.hostname === 'slack.com' || h.hostname.endsWith('.slack.com')) } catch { return false } }
-      let res: Response | undefined
-      for (let hop = 0; hop < 3; hop++) {
-        if (!slackHost(url)) throw new Error('not a Slack file URL')
-        res = await fetch(url, { headers: { Authorization: `Bearer ${tokens.bot}` }, redirect: 'manual', signal: AbortSignal.timeout(60_000) })
-        const next = res.status >= 300 && res.status < 400 ? res.headers.get('location') : null
-        if (!next) break
-        url = new URL(next, url).toString()
-      }
-      if (!res?.ok || !res.body) throw new Error(`HTTP ${res?.status}`)
-      if (Number(res.headers.get('content-length') ?? 0) > maxBytes) throw new Error(`over ${maxBytes / 1024 / 1024} MB`)
-      // Without files:read Slack answers with its login page, not an error. Saving that under the file's name would be a quiet lie.
-      if (/^text\/html/i.test(res.headers.get('content-type') ?? '') && !/\.html?$/i.test(dest)) throw new Error('Slack sent a web page instead of the file; does the bot token have files:read?')
-      // Streamed to disk, never held whole; a partial file never takes the real name.
-      mkdirSync(dirname(dest), { recursive: true, mode: 0o700 })
-      const part = `${dest}.part`
-      const fd = openSync(part, 'w', 0o600)
-      try {
-        let size = 0
-        for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
-          size += chunk.length
-          if (size > maxBytes) throw new Error(`over ${maxBytes / 1024 / 1024} MB`)
-          writeSync(fd, chunk)
-        }
-        closeSync(fd)
-        renameSync(part, dest)
-      } catch (err) {
-        try { closeSync(fd) } catch {}
-        rmSync(part, { force: true })
-        throw err
-      }
-    },
+    download: (url, dest, maxBytes) => downloadSlackFile(tokens.bot, url, dest, maxBytes),
+    // Through the poster: no retry behind the caller's back, as for a post.
+    upload: (channel, threadTs, files) => uploadSlackFiles(poster, channel, threadTs, files),
     userName: async id => {
       const r = await client.users.info({ token: tokens.bot, user: id })
       return r.user?.profile?.display_name || r.user?.real_name || r.user?.name || undefined

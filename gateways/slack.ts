@@ -13,7 +13,7 @@ import type { InboxLimits } from '../config/write-confinement.js'
 import { SocketSupervisor, type SocketEmitter } from '../shared/socket-supervisor.js'
 import { ThrottledQueue } from '../throttled-queue.js'
 import { HOME_STATUS_ACTION_PREFIX, MAX_ATTACHMENT_BYTES } from '../shared/constants.js'
-import { buildSocketApp, messageBody, parseAuth, unfurlFields } from '../shared/slack-client.js'
+import { buildSocketApp, messageBody, parseAuth, unfurlFields, uploadFile } from '../shared/slack-client.js'
 import { parseHomeStatusClick } from '../infra/home-status.js'
 import { linkPreviewsOff } from '../shared/link-previews.js'
 import { gatewayProfile } from '../shared/gateways/index.js'
@@ -494,14 +494,7 @@ export class SlackGateway implements ChatGateway {
     if (opts?.files?.length) {
       for (const filePath of opts.files) {
         try {
-          const content = readFileSync(filePath)
-          const fileName = filePath.split('/').pop() ?? 'file'
-          const uploadThreadTs = opts?.replyTo ?? parsed.threadTs
-          await this.app.client.files.uploadV2(
-            uploadThreadTs
-              ? { channel_id: parsed.channel, file: content, filename: fileName, thread_ts: uploadThreadTs }
-              : { channel_id: parsed.channel, file: content, filename: fileName },
-          )
+          await uploadFile(this.app.client, parsed.channel, opts?.replyTo ?? parsed.threadTs, readFileSync(filePath), filePath.split('/').pop() ?? 'file')
         } catch (err) {
           process.stderr.write(`slack gateway: file upload failed for ${filePath}: ${err}\n`)
         }
@@ -689,14 +682,7 @@ export class SlackGateway implements ChatGateway {
     if (opts?.files?.length) {
       for (const filePath of opts.files) {
         try {
-          const content = readFileSync(filePath)
-          const fileName = filePath.split('/').pop() ?? 'file'
-          await this.app.client.files.uploadV2({
-            channel_id: channel,
-            file: content,
-            filename: fileName,
-            thread_ts: threadTs,
-          })
+          await uploadFile(this.app.client, channel, threadTs, readFileSync(filePath), filePath.split('/').pop() ?? 'file')
         } catch (err) {
           process.stderr.write(`slack gateway: thread file upload failed: ${err}\n`)
         }

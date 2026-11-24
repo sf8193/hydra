@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach, jest } from 'bun:test'
-import { rmSync } from 'fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
 import { join } from 'path'
 import { STATE_DIR, gateway } from '../../../infra/config.js'
 import { noteMainChannel } from '../../../sessions/main.js'
@@ -7,9 +8,10 @@ import { registry } from '../../../sessions/registry.js'
 import { setSpecialistThread, _reloadSpecialists } from '../../../sessions/specialists.js'
 import { _setHydraConfigForTesting } from '../../../infra/hydra-config.js'
 import {
-  getConversationTable, TOOL_BIND_MAX, bindConversation, unbindConversation, formatConversations, formatConversationsFor, operatorBind, slackConversationHealth, slackTokens, slackRuntimeDeps, placeFileFor, parseConversation, replyInConversation, targetFor, startConversationTable, stopConversationTable,
+  getConversationTable, TOOL_BIND_MAX, bindConversation, unbindConversation, formatConversations, formatConversationsFor, operatorBind, slackConversationHealth, slackRuntimeDeps, placeFileFor, parseConversation, replyInConversation, targetFor, startConversationTable, stopConversationTable,
 } from '../runtime.js'
 import { heldBySession } from '../watch.js'
+import { slackTokens } from '../connections.js'
 import { readEvents } from '../../../cli/events.js'
 import { sessionCapabilities, isSpecialistOccupant, isToolAllowed, advertiseTools } from '../../../sessions/tool-surface.js'
 import { emit } from '../../../infra/event-bus.js'
@@ -65,6 +67,7 @@ const req = (command: string, params: Record<string, unknown>) => ({ type: 'cli'
 
 const sessionIds: string[] = []
 const realPost = slackRuntimeDeps.post
+const realUpload = slackRuntimeDeps.upload
 const posts: string[] = []
 const fakePost = (fail?: number) => { posts.length = 0; let n = 0; slackRuntimeDeps.post = async (c, t, text) => { if (++n === fail) throw new Error('ratelimited'); posts.push(`${c}|${t ?? '-'}|${text}`); return `${n}.000001` } }
 const session = (id: string, threadId: string) => {
@@ -85,6 +88,7 @@ afterEach(() => {
   _reloadSpecialists()
   slackRuntimeDeps.view = () => null
   slackRuntimeDeps.post = realPost
+  slackRuntimeDeps.upload = realUpload
   rmSync(join(STATE_DIR, 'slack-watches.json'), { force: true })
 })
 
@@ -558,6 +562,21 @@ describe('replies: posted only into the conversation they answer', () => {
     expect(getConversationTable().get('C7', '300.000001')).toMatchObject({ specialist: FOOD, mentionedBy: 'home' })
   })
 
+  test("a home_place reply's files go into the thread its text opens", async () => {
+    session('r-food', FOOD_THREAD)
+    configure(TOML.replace(`workdir = "/w/food"`, `workdir = "/w/food"\nhome_place = "slack:C7"`))
+    const dir = mkdtempSync(join(tmpdir(), 'slack-home-files-'))
+    try {
+      const pdf = join(dir, 'weekly.pdf')
+      writeFileSync(pdf, '%PDF')
+      slackRuntimeDeps.post = async () => '300.000001'
+      let into = ''
+      slackRuntimeDeps.upload = async (channel, thread, files) => { into = `${channel}|${thread}|${files.map(f => f.name)}`; return { shared: ['weekly.pdf'], failed: [] } }
+      expect(await replyInConversation('r-food', 'slack:C7', 'the weekly report', [pdf])).toBe(`posted to ${FOOD}'s home_place (slack:C7); attached 1 file (weekly.pdf); replies in its thread come back to ${FOOD}`)
+      expect(into).toBe('C7|300.000001|weekly.pdf')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
   test("a home_place thread the bot's own post already opened is still bound by hand, and counted: event order does not decide whether it is held", async () => {
     session('r-food', FOOD_THREAD)
     configure(TOML.replace(`workdir = "/w/food"`, `workdir = "/w/food"\nhome_place = "slack:C7"`), { maxConversations: 50 })
@@ -621,7 +640,7 @@ describe('replies: posted only into the conversation they answer', () => {
     expect(await replyInConversation('r-food', 'slack:C1:8.000001', 'still mine')).toContain('posted 1')
   })
 
-  test('long text is split under Slack\'s limit; a failure says how far it got; attachments and empty text are refused', async () => {
+  test('long text is split under Slack\'s limit; a failure says how far it got; empty text is refused', async () => {
     session('r-food', FOOD_THREAD)
     getConversationTable().bind('C1', '9.000001', FOOD)
     fakePost()
@@ -629,8 +648,37 @@ describe('replies: posted only into the conversation they answer', () => {
     expect(posts.every(p => p.length < 4000)).toBe(true)
     fakePost(2)
     await expect(replyInConversation('r-food', 'slack:C1:9.000001', 'para one\n\n'.repeat(800))).rejects.toThrow('reply failed after 1 of 3 message(s) posted to slack:C1:9.000001: ratelimited. Part 2 did not post; send from there.')
-    await expect(replyInConversation('r-food', 'slack:C1:9.000001', 'see file', ['/tmp/x.pdf'])).rejects.toThrow('attachments are not posted to Slack yet')
     await expect(replyInConversation('r-food', 'slack:C1:9.000001', '  ')).rejects.toThrow('the text is empty')
+  })
+
+  test('files go after the text, into the same thread; a failed file says why and the text stands', async () => {
+    session('r-food', FOOD_THREAD)
+    getConversationTable().bind('C1', '9.000001', FOOD)
+    const dir = mkdtempSync(join(tmpdir(), 'slack-reply-files-'))
+    const pdf = join(dir, 'report.pdf'), png = join(dir, 'chart.png')
+    writeFileSync(pdf, '%PDF-1.4'); writeFileSync(png, 'png')
+    try {
+      fakePost()
+      const order: string[] = []
+      const realPostNow = slackRuntimeDeps.post
+      slackRuntimeDeps.post = async (...a) => { order.push('text'); return realPostNow(...a) }
+      slackRuntimeDeps.upload = async (channel, thread, files) => { order.push(`files ${channel}|${thread}|${files.map(f => f.name).join(',')}`); return { shared: ['report.pdf'], failed: [{ name: 'chart.png', why: 'An API error occurred: missing_scope (the app needs the files:write bot scope)' }] } }
+      expect(await replyInConversation('r-food', 'slack:C1:9.000001', 'see files', [pdf, png])).toBe('posted 1 message to slack:C1:9.000001; attached 1 file (report.pdf); chart.png did not attach: An API error occurred: missing_scope (the app needs the files:write bot scope)')
+      expect(order).toEqual(['text', 'files C1|9.000001|report.pdf,chart.png'])
+      // Slack down for the files: the text still stands, and the result says so in one line.
+      slackRuntimeDeps.upload = async () => { throw new Error('Slack is not connected\nretry later') }
+      expect(await replyInConversation('r-food', 'slack:C1:9.000001', 'again', [pdf])).toBe('posted 1 message to slack:C1:9.000001; the files did not attach: Slack is not connected retry later')
+      // Checked before anything posts: too many, a relative path, a folder, a missing file.
+      posts.length = 0
+      await expect(replyInConversation('r-food', 'slack:C1:9.000001', 'x', Array(11).fill(pdf))).rejects.toThrow('nothing was posted: 11 files is over the 10')
+      await expect(replyInConversation('r-food', 'slack:C1:9.000001', 'x', ['report.pdf'])).rejects.toThrow('nothing was posted: report.pdf is not an absolute path')
+      await expect(replyInConversation('r-food', 'slack:C1:9.000001', 'x', [dir])).rejects.toThrow('is not a file')
+      await expect(replyInConversation('r-food', 'slack:C1:9.000001', 'x', [join(dir, 'gone.pdf')])).rejects.toThrow('cannot be read')
+      const state = join(STATE_DIR, 'reply-files-state.json')
+      writeFileSync(state, '{}')
+      await expect(replyInConversation('r-food', 'slack:C1:9.000001', 'x', [state])).rejects.toThrow('refusing to send channel state')
+      expect(posts).toEqual([])
+    } finally { rmSync(dir, { recursive: true, force: true }); rmSync(join(STATE_DIR, 'reply-files-state.json'), { force: true }) }
   })
 
   test('the reply tool routes a slack: chat_id here, without Discord\'s allowlist', async () => {

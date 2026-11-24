@@ -1,9 +1,10 @@
 // What the Slack gateway (gateways/slack.ts) and the Slack connector (connectors/slack/) set up the same way, so the two differ only in behaviour.
 //
-// Shared: the Socket Mode connection, the link-preview fields, how a message's text is sent (`messageBody`), and reading auth.test. Not shared: how each posts, throttles,
+// Shared: the Socket Mode connection, the link-preview fields, how a message's text is sent (`messageBody`), how a file is uploaded (`uploadFile`), and reading auth.test. Not shared: how each posts, throttles,
 // retries, reads or downloads. Those differ on purpose, and a helper only one side uses does not belong here.
 
 import { App, LogLevel, SocketModeReceiver } from '@slack/bolt'
+import type { WebClient } from '@slack/web-api'
 import { SLACK_CLIENT_PING_TIMEOUT_MS } from './constants.js'
 
 /**
@@ -35,6 +36,15 @@ export const MARKDOWN_TEXT_MAX = 12000
  */
 export function messageBody(text: string, mrkdwn = false): { text: string } | { markdown_text: string } {
   return mrkdwn || text.length > MARKDOWN_TEXT_MAX ? { text } : { markdown_text: text }
+}
+
+/**
+ * One file into a conversation, in `threadTs`'s thread when given, as the client's bot: files.uploadV2, which is Slack's external upload
+ * (files.getUploadURLExternal, the bytes to the URL it gives, files.completeUploadExternal) and needs files:write. It takes the bytes, not a path:
+ * which files may be read is the caller's to decide.
+ */
+export async function uploadFile(client: Pick<WebClient, 'files'>, channel: string, threadTs: string | undefined, file: Buffer, filename: string): Promise<void> {
+  await client.files.uploadV2(threadTs ? { channel_id: channel, file, filename, thread_ts: threadTs } : { channel_id: channel, file, filename })
 }
 
 /** The bot's identity in an auth.test response; a field Slack left out is absent. */
