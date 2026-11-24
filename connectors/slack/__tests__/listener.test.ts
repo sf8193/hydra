@@ -32,7 +32,7 @@ afterEach(() => { for (const l of listeners.splice(0)) l.stop(); for (const d of
 
 type Lister = { channel: string; user?: string }[] | Error | (() => Promise<{ channel: string; user?: string }[]>)
 const lister = (name: string, calls: string[], l: Lister | undefined) => l && (async () => { calls.push(name); if (l instanceof Error) throw l; return typeof l === 'function' ? l() : l })
-function setup(over: { tokens?: { app?: string; bot?: string }; toml?: string | null; failStart?: boolean; firstRetryBaseMs?: number; scopes?: string[]; historyError?: string; history?: RawMessage[]; threads?: Record<string, RawMessage[]>; duringStart?: (deliverLive: (e: RawEvent) => void) => void; channels?: { id: string; name: string }[]; channelsError?: string; told?: ToldScopes; otherParties?: Lister; dms?: Lister; operatorId?: string; repliesPage?: number } = {}) {
+function setup(over: { tokens?: { app?: string; bot?: string }; toml?: string | null; failStart?: boolean; firstRetryBaseMs?: number; scopes?: string[]; historyError?: string; history?: RawMessage[]; threads?: Record<string, RawMessage[]>; duringStart?: (deliverLive: (e: RawEvent) => void) => void; channels?: { id: string; name: string }[]; channelsError?: string; told?: ToldScopes; otherParties?: Lister; dms?: Lister; operatorId?: string; repliesPage?: number; upload?: boolean } = {}) {
   const toml = over.toml === undefined ? TOML : over.toml
   const h: HydraConfig = toml === null ? EMPTY_CONFIG : load(toml)
   const dir = mkdtempSync(join(tmpdir(), 'slack-listener-'))
@@ -98,6 +98,7 @@ function setup(over: { tokens?: { app?: string; bot?: string }; toml?: string | 
         operatorUserId: async () => over.operatorId,
         post: async (c, thread, text, opts) => { rec.apiCalls.push(`post:${c}:${thread ?? '-'}:${text}${opts ? `:${JSON.stringify(opts)}` : ''}`); return '9999.000001' },
         download: async (url, dest) => { rec.apiCalls.push(`download:${url}`); mkdirSync(dirname(dest), { recursive: true }); writeFileSync(dest, 'bytes', { mode: 0o600 }) },
+        ...(over.upload && { upload: async (c: string, thread: string | undefined, files: readonly { name: string }[]) => { rec.apiCalls.push(`upload:${c}:${thread ?? '-'}:${files.map(f => f.name)}`); return { shared: files.map(f => f.name), failed: [] } } }),
         api,
       } as SlackAppLike
     },
@@ -153,9 +154,9 @@ describe('inbound reactions through the connection', () => {
 
 describe('diagnosing a refused token', () => {
   test('the scopes the token has are logged, and a token that can read no history is called out', async () => {
-    const ok = setup({ scopes: ['channels:history', 'users:read', 'im:history', 'im:read', 'reactions:write', 'chat:write'] })
+    const ok = setup({ scopes: ['channels:history', 'users:read', 'im:history', 'im:read', 'reactions:write', 'chat:write', 'files:write'] })
     await ok.listener.start()
-    expect(ok.logs.join()).toContain('bot token scopes: channels:history, users:read, im:history, im:read, reactions:write, chat:write')
+    expect(ok.logs.join()).toContain('bot token scopes: channels:history, users:read, im:history, im:read, reactions:write, chat:write, files:write')
     expect(ok.logs.join()).not.toContain('WARN')
     const bad = setup({ scopes: ['chat:write', 'reactions:write'] })
     await bad.listener.start()
@@ -320,6 +321,19 @@ describe('posting', () => {
     expect(await t.listener.post(CH, '1.000001', 'in the thread')).toBe('9999.000001')
     await t.listener.post('D0A', undefined, 'top level')
     expect(t.apps[0].apiCalls.filter(c => c.startsWith('post:'))).toEqual([`post:${CH}:1.000001:in the thread`, 'post:D0A:-:top level'])
+  })
+
+  test("a reply's files go through the connection once it is up; a connection that cannot upload says so", async () => {
+    const files = [{ path: '/x/a.pdf', name: 'a.pdf', size: 1 }]
+    const t = setup({ upload: true })
+    await expect(t.listener.upload(CH, '1.000001', files)).rejects.toThrow('Slack is not connected')
+    await t.listener.start()
+    expect(await t.listener.upload(CH, '1.000001', files)).toEqual({ shared: ['a.pdf'], failed: [] })
+    expect(await t.listener.upload('D0A', undefined, files)).toEqual({ shared: ['a.pdf'], failed: [] })
+    expect(t.apps[0].apiCalls.filter(c => c.startsWith('upload:'))).toEqual([`upload:${CH}:1.000001:a.pdf`, 'upload:D0A:-:a.pdf'])
+    const none = setup()
+    await none.listener.start()
+    await expect(none.listener.upload(CH, undefined, files)).rejects.toThrow('files are not posted through this Slack connection')
   })
 })
 
@@ -723,7 +737,7 @@ describe('readReplies: the bot first, the operator where the bot is not a member
 })
 
 describe('an old single-app config runs unchanged', () => {
-  const ALL = ['channels:history', 'users:read', 'im:history', 'im:read', 'reactions:write', 'chat:write']
+  const ALL = ['channels:history', 'users:read', 'im:history', 'im:read', 'reactions:write', 'chat:write', 'files:write']
   test('routes: a tag in the listened channel goes to its specialist, and the conversation id has no app in it', async () => {
     const t = setup({ scopes: ALL })
     await t.listener.start()
@@ -783,7 +797,7 @@ describe('an old single-app config runs unchanged', () => {
 })
 
 describe('the scope check alerts for what was declared, once per episode', () => {
-  const FULL = ['channels:history', 'users:read', 'im:history', 'im:read', 'reactions:write', 'chat:write']
+  const FULL = ['channels:history', 'users:read', 'im:history', 'im:read', 'reactions:write', 'chat:write', 'files:write']
   const without = (...gone: string[]) => FULL.filter(sc => !gone.includes(sc))
   const memory = (): ToldScopes => { const m = new Map<string, string>(); return { get: a => m.get(a), set: (a, k) => { if (k === null) m.delete(a); else m.set(a, k) } } }
 
@@ -794,8 +808,16 @@ describe('the scope check alerts for what was declared, once per episode', () =>
     expect(t.alerts).toEqual([])
     expect(t.listener.health().missingScopes?.map(m => m.any[0])).toEqual(['im:history', 'im:read'])
     expect(t.logs.join()).toContain('WARN dms needs im:history')
-    expect(implicitScopeOptions(t.listener.view()!.hydra)).toEqual(['dms', 'catching up DMs opened while disconnected'])
+    expect(implicitScopeOptions(t.listener.view()!.hydra)).toEqual(['dms', 'catching up DMs opened while disconnected', 'reply attachments'])
     expect(slackHealthLines({ listener: t.listener.health(), conversations: 0, readAsOperator: 0, owed: 0, oldestOwedAgeMin: null })[0]).toContain('· missing im:history (dms); im:read (catching up DMs opened while disconnected)')
+  })
+
+  test('a token without files:write (an app installed before replies could attach files): no alert, and health says reply attachments need it', async () => {
+    const t = setup({ scopes: without('files:write') })
+    await t.listener.start()
+    expect(t.alerts).toEqual([])
+    expect(t.listener.health().missingScopes).toEqual([{ option: 'reply attachments', any: ['files:write'] }])
+    expect(slackHealthLines({ listener: t.listener.health(), conversations: 0, readAsOperator: 0, owed: 0, oldestOwedAgeMin: null })[0]).toContain('· missing files:write (reply attachments)')
   })
 
   test('the same DM scopes, when a specialist names slack:app-dm:*, are declared: they alert', async () => {

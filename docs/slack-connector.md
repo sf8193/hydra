@@ -128,6 +128,8 @@ A DM, or a top-level message where `messages = "all"`, has no thread ts. Copy th
 
 Replies leave through the app that heard the message. A post that answers no message (a specialist's `home_place`, a new thread) uses the specialist's `speaks_as`, an app it is pinned to; with several apps and none named `default`, a specialist with a Slack `home_place` must set it.
 
+A reply may attach files: at most 10, each an absolute path to a plain file of at most 25 MB. They are checked before anything posts, so a refused file posts nothing, then sent after the text into the same place: the conversation's thread, the thread a `home_place` post or `reply_to` opens, or a DM's top level. A reply needs its text: files alone are refused. Uploading needs the bot scope `files:write`: an app installed without it still posts the text, each file's line says why it did not attach, and health lists the scope (`hydra slack manifest <app>`, reinstall) without alerting. A file Slack gave no clear answer for (a timeout, a 5xx) may be there already, and its line says to check before sending it again. When the bot is not in the channel and the answer goes to the operator's DM, the text goes alone. A restricted session sends no files; a write-confined one sends daemon-owned copies of files it may read.
+
 ### Slack lines in a session's thread
 
 A session bound to a Slack conversation shows its Slack traffic in its own chat thread as one quiet line, never posted into Slack: `📨 from <emoji> [sam](<permalink>) → <summary>` when someone in `[people]` tags the app, and `📤 to <emoji> [thread](<permalink>) → <summary>` when the session replies. `[slack] line_emoji` sets the emoji (default 💬).

@@ -820,7 +820,7 @@ describe('per-channel queues', () => {
 
 // -- Health is per app ---------------------------------------------------------------------------------------------------
 
-const ALL_SCOPES = ['channels:history', 'channels:read', 'users:read', 'im:history', 'im:read', 'reactions:write', 'chat:write']
+const ALL_SCOPES = ['channels:history', 'channels:read', 'users:read', 'im:history', 'im:read', 'reactions:write', 'chat:write', 'files:write']
 const perApp = (text: string, app: string) => (a: string) => a.includes(text) && a.includes(` for ${app}`)
 
 describe('health is per app: A down while B is fine', () => {

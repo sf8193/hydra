@@ -6,6 +6,7 @@ import type { HydraConfig, SlackApp } from '../../config/types.js'
 import type { ConnectedApps } from './apps.js'
 import type { ListenerHealth, SlackListener } from './listener.js'
 import { appKey, appName, appSuffix, type Apps } from './app.js'
+import { ENV_NAME_RE, capturedSpawnVars, scrubbedSpawnVars, tokenVarRefusal } from '../../shared/spawn-env.js'
 
 /** Where an app's connection is: `pending` (not yet up), `up`, `down` (lost, or never possible: no tokens), `gaveUp` (its first connection failed and was let go, or the supervisor ran out of reconnect attempts). */
 export type AppConnection = 'pending' | 'up' | 'down' | 'gaveUp'
@@ -159,4 +160,24 @@ export class SlackConnections {
       return [id, { ...l, name: appName(this.d.hydra().slackApps, id), tokens: r.tokens, connection: r.connection, ...(r.probeError && { probeError: r.probeError }) }]
     }))
   }
+}
+
+/**
+ * One app's tokens, each read from the variable the app names for it. A token is read only from a variable the daemon
+ * keeps from every session it starts: a token anywhere else would reach them all. hydra.toml's loader rejects a name
+ * that is not one, and the daemon adds the ones it names to those; a name still not kept is refused here, saying which
+ * key and why, and that app stays off.
+ */
+export function slackTokens(app: SlackApp, env: Readonly<Record<string, string>> = capturedSpawnVars(), warn: (line: string) => void = line => { process.stderr.write(line) }): { app?: string; bot?: string; user?: string } {
+  const read = (key: 'bot_token_env' | 'socket_token_env' | 'operator_token_env', name: string | undefined): string | undefined => {
+    if (!name) return undefined
+    if (!scrubbedSpawnVars().includes(name)) {
+      const why = !ENV_NAME_RE.test(name) ? 'is not an environment variable name' : tokenVarRefusal(name) ?? 'is not among the variables kept from sessions (the daemon adds the ones hydra.toml names when it loads it)'
+      warn(`daemon: slack connector: refusing to read the token in ${name}, the ${appKey({ [app.id]: app }, app.id, key)}: it ${why}, so a token there would reach every session hydra starts. Name a variable only the daemon needs, like CONNECTOR_SLACK_BOT_TOKEN.\n`)
+      return undefined
+    }
+    return env[name]
+  }
+  const user = read('operator_token_env', app.operatorTokenEnv)
+  return { bot: read('bot_token_env', app.botTokenEnv), app: read('socket_token_env', app.socketTokenEnv), ...(user && { user }) }
 }

@@ -15,9 +15,8 @@ let delivery!: Delivery
 export function bindSlackDelivery(d: Delivery): void { delivery = d }
 import { on } from '../../infra/event-bus.js'
 import { SlackListener, boltApp, POST_TIMEOUT_MS, OWED_LATE_AFTER_MS, type ToldScopes, type MessageAuthor, type Writer, type ReadMessage } from './listener.js'
-import { SlackConnections, type AppHealth } from './connections.js'
+import { SlackConnections, slackTokens, type AppHealth } from './connections.js'
 import { STATE_DIR } from '../../infra/config.js'
-import { ENV_NAME_RE, capturedSpawnVars, scrubbedSpawnVars, tokenVarRefusal } from '../../shared/spawn-env.js'
 import { join } from 'path'
 import { existsSync, readFileSync } from 'fs'
 import { safeSend, atomicWriteFileSync } from '../../infra/util.js'
@@ -31,15 +30,17 @@ import { MAIN, currentId, isSessionThread, slackSpecialistsOf } from '../../rout
 import { chunk } from '../../infra/util.js'
 import { resolveLineEmoji, postedLine } from './lines.js'
 import { routeThreadId } from '../../sessions/thread-route.js'
-import { DEFAULT_SLACK_APP, coversAny, homePlaceOf, isChannelName, isRouter, routerOf, placeKey, placeOf, placesAnsweredBy, samePlace, slackConfigured, type Place, type HydraConfig, type SlackApp } from '../../config/types.js'
+import { DEFAULT_SLACK_APP, coversAny, homePlaceOf, isChannelName, isRouter, routerOf, placeKey, placeOf, placesAnsweredBy, samePlace, slackConfigured, type Place, type HydraConfig } from '../../config/types.js'
 import { speaksAsOf, noSuchApp } from '../../config/pins.js'
 import { notServedBy } from '../../routing/route.js'
-import { NO_SLACK_APP, SLACK_APP_NEEDS, appKey, appName, notConnected } from './app.js'
+import { NO_SLACK_APP, SLACK_APP_NEEDS, appName, notConnected } from './app.js'
 import { timed } from '../../shared/loop-watch.js'
 import { registerSlackChannelNames } from '../../shared/link-previews.js'
 import { bareOf, readTarget } from '../../shared/target-kind.js'
 import { placeInInbox } from '../../infra/confined-inbox.js'
 import { oneLine } from '../../shared/untrusted-text.js'
+import { checkUploads, uploadLine, type Upload, type UploadResult } from './files.js'
+import { outcomeUnknown } from './outcome.js'
 
 const log = (line: string) => { process.stderr.write(line) }
 
@@ -56,6 +57,11 @@ export const slackRuntimeDeps = {
     const l = connections.listener(app)
     if (!l) return Promise.reject(new Error(notConnected(hydraConfig().slackApps, app)))
     return l.post(channel, threadTs, text)
+  },
+  /** A reply's checked files, shared into a conversation after its text, through one app. */
+  upload: (channel: string, threadTs: string | undefined, files: readonly Upload[], app: string = DEFAULT_SLACK_APP): Promise<UploadResult> => {
+    const l = connections.listener(app)
+    return l ? l.upload(channel, threadTs, files) : Promise.reject(new Error(notConnected(hydraConfig().slackApps, app)))
   },
   /** Whose a message is, to one app: its own bot's, the operator's, or someone else's. Read from Slack. */
   author: (channel: string, ts: string, threadTs: string | undefined, app: string = DEFAULT_SLACK_APP): Promise<MessageAuthor> => {
@@ -268,26 +274,6 @@ const connections = new SlackConnections({
 })
 // A place named `slack:#name` is found by the names the connected apps have read (shared/link-previews.ts).
 registerSlackChannelNames(channel => { for (const [, l] of connections.listeners()) { const n = l.view()?.directory.nameOf(channel); if (n) return n } return undefined })
-
-/**
- * One app's tokens, each read from the variable the app names for it. A token is read only from a variable the daemon
- * keeps from every session it starts: a token anywhere else would reach them all. hydra.toml's loader rejects a name
- * that is not one, and the daemon adds the ones it names to those; a name still not kept is refused here, saying which
- * key and why, and that app stays off.
- */
-export function slackTokens(app: SlackApp, env: Readonly<Record<string, string>> = capturedSpawnVars(), warn: (line: string) => void = log): { app?: string; bot?: string; user?: string } {
-  const read = (key: 'bot_token_env' | 'socket_token_env' | 'operator_token_env', name: string | undefined): string | undefined => {
-    if (!name) return undefined
-    if (!scrubbedSpawnVars().includes(name)) {
-      const why = !ENV_NAME_RE.test(name) ? 'is not an environment variable name' : tokenVarRefusal(name) ?? 'is not among the variables kept from sessions (the daemon adds the ones hydra.toml names when it loads it)'
-      warn(`daemon: slack connector: refusing to read the token in ${name}, the ${appKey({ [app.id]: app }, app.id, key)}: it ${why}, so a token there would reach every session hydra starts. Name a variable only the daemon needs, like CONNECTOR_SLACK_BOT_TOKEN.\n`)
-      return undefined
-    }
-    return env[name]
-  }
-  const user = read('operator_token_env', app.operatorTokenEnv)
-  return { bot: read('bot_token_env', app.botTokenEnv), app: read('socket_token_env', app.socketTokenEnv), ...(user && { user }) }
-}
 
 /**
  * Connects to Slack, one connection per app hydra.toml declares, and begins feeding the watcher. Called once boot recovery
@@ -518,8 +504,6 @@ export function unbindConversation(caller: Partial<Pick<SessionInfo, 'threadId' 
 
 /** Slack's own advice is to keep a message under 4,000 characters; longer ones are split. */
 const SLACK_CHUNK = 3900
-/** Errors that say a post did not happen: a platform refusal (`An API error occurred: …`), a rate limit, no connection. */
-const CLEANLY_REFUSED = /An API error occurred|rate.?limit|not connected/i
 /** A backstop past the posting client's own deadline (it neither retries nor waits longer). */
 const POST_BACKSTOP_MS = POST_TIMEOUT_MS + 5_000
 
@@ -695,7 +679,6 @@ async function amendInConversation(callerSessionId: string | undefined, conversa
  * the answer goes to the operator's DM with a link, as main's does.
  */
 export async function replyInConversation(callerSessionId: string | undefined, conversation: unknown, text: string, files: string[] = [], replyTo?: string): Promise<string> {
-  if (files.length) throw new Error('attachments are not posted to Slack yet; reply with text (a link works)')
   if (!text.trim()) throw new Error('nothing to post: the text is empty')
   const h = hydraConfig()
   const me = callerSessionId === 'main' ? MAIN : boundAs(callerSessionId ? registry.get(callerSessionId) : undefined, h)
@@ -712,11 +695,15 @@ export async function replyInConversation(callerSessionId: string | undefined, c
     // Its thread is a conversation bound to it as soon as the first part lands (whatever becomes of the rest).
     let unbound: string | undefined
     const bindThread = (ts: string) => { unbound = bindOpenedThread(h, me!, homePlaceId, ts, speaks, 'post to its home_place', 'home') }
-    await postParts(speaks!, homePlaceId, undefined, text, where, true, () => homePlaceChannel(hydraConfig(), me!, speaks) === homePlaceId, bindThread)
-    return unbound ? `posted to ${where}, but its thread is not bound to ${me}: ${unbound}` : `posted to ${where}; replies in its thread come back to ${me}`
+    const stillHome = () => homePlaceChannel(hydraConfig(), me!, speaks) === homePlaceId
+    const uploads = checkUploads(files)
+    const { first } = await postParts(speaks!, homePlaceId, undefined, text, where, true, stillHome, bindThread)
+    const filed = await attachFiles(uploads, speaks!, homePlaceId, first, stillHome)
+    return unbound ? `posted to ${where}${filed}, but its thread is not bound to ${me}: ${unbound}` : `posted to ${where}${filed}; replies in its thread come back to ${me}`
   }
   // Who it is bound to, which `stillMine` holds it to before every part.
   const { c, app, id, caller, bound, plain } = assertOwnConversation(h, callerSessionId, conversation, 'a reply')
+  const uploads = checkUploads(files)
   // Which thread the post goes in. A thread conversation is its one thread (Slack threads are flat: no message inside one can be answered on its own);
   // a top-level conversation (only a DM has one) is answered in the thread of the message `reply_to` names, else at its top level.
   let thread = c.threadTs === TOP_LEVEL ? undefined : c.threadTs
@@ -751,7 +738,7 @@ export async function replyInConversation(callerSessionId: string | undefined, c
   } catch (err) {
     // A restricted specialist's words go only where its conversation is: never to the operator's DM in its place.
     if (!(err instanceof NotInChannel) || (me !== MAIN && h.specialists[me ?? '']?.restricted)) throw err
-    return toOperatorDm(app, id, err.message, text, stillMine, `From ${me === MAIN ? 'main' : me && isSessionThread(me) ? sessionNameIn(me) ?? `the session in thread ${me}` : me ?? 'a session'}`)
+    return `${await toOperatorDm(app, id, err.message, text, stillMine, `From ${me === MAIN ? 'main' : me && isSessionThread(me) ? sessionNameIn(me) ?? `the session in thread ${me}` : me ?? 'a session'}`)}${uploads.length ? '; the files were not attached anywhere' : ''}`
   }
   if (posted) {
     getConversationTable().touch(c.channel, c.threadTs, app)
@@ -760,8 +747,15 @@ export async function replyInConversation(callerSessionId: string | undefined, c
     const link = slackConversationLink(id)
     if (own) showLine(own, emoji => postedLine(emoji, link, text))
   }
-  const said = `posted ${posted} message${posted === 1 ? '' : 's'} to ${id}${how}`
+  const said = `posted ${posted} message${posted === 1 ? '' : 's'} to ${id}${how}${await attachFiles(uploads, app, c.channel, thread, stillMine)}`
   return opened ? (unbound ? `${said}; its thread is not bound to ${me}: ${unbound}, so replies in it go to whoever the rules name here` : `${said}; replies in it come back to ${me}`) : said
+}
+
+/** A reply's files (checked before its text), shared after it into the same place while `allowed()` holds: the result's part for them. A failed file never takes the text with it. */
+async function attachFiles(uploads: readonly Upload[], app: string, channel: string, thread: string | undefined, allowed: () => boolean): Promise<string> {
+  if (!uploads.length) return ''
+  if (!allowed()) return '; the files were not attached: it is no longer yours to answer'
+  return `; ${await slackRuntimeDeps.upload(channel, thread, uploads, app).then(uploadLine, (err: unknown) => `the files did not attach: ${oneLine(err instanceof Error ? err.message : String(err), 300)}`)}`
 }
 
 /**
@@ -859,10 +853,7 @@ async function postParts(app: string, channel: string, thread: string | undefine
       // Nothing of it posted, and Slack said why: the caller may take the words elsewhere.
       if (err instanceof NotInChannel && posted === 0) throw err
       const why = err instanceof Error ? err.message : String(err)
-      // Only an answer that says it didn't post counts as not posted: Slack refusing it outright, a rate limit, or no
-      // connection at all. Anything else (fatal_error, a 5xx, a timeout, a dropped socket) may have half succeeded.
-      const unknown = !CLEANLY_REFUSED.test(why) || /fatal_error/.test(why)
-      throw new Error(unknown
+      throw new Error(outcomeUnknown(why)
         ? `${posted} of ${parts.length} message(s) posted to ${where}; part ${posted + 1}'s outcome is unknown (no answer from Slack: it may have posted). Check ${where} before sending the rest.`
         : `reply failed after ${posted} of ${parts.length} message(s) posted to ${where}: ${why}. Part ${posted + 1} did not post; send from there.`)
     }
