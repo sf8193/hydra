@@ -22,6 +22,7 @@ export const SLACK_APP_NEEDS = {
     reactions: { option: 'ack and 🚫 reactions', any: ['reactions:write'] },
     reactionsRead: { option: 'reactions (a place with reactions on)', any: ['reactions:read'] },
     replies: { option: 'replies', any: ['chat:write'] },
+    replyFiles: { option: 'reply attachments', any: ['files:write'] },
   } as const satisfies Record<string, ScopeNeed>,
   /**
    * With `operator_token_env`: hearing every channel, DM and group DM the operator is in, and reading threads in channels the bot isn't in;

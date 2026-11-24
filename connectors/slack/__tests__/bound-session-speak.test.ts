@@ -3,7 +3,7 @@
 // thread says, per message, whether the app was tagged and who sent it (the operator, someone declared in [people], anyone else), and one
 // hydra line on what that likely means. Speaking is the session's judgment: nothing in the rule reads the tag.
 import { describe, test, expect, afterEach, beforeEach } from 'bun:test'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { STATE_DIR } from '../../../infra/config.js'
@@ -44,6 +44,7 @@ const session = (id: string, threadId: string, over: Record<string, unknown> = {
 describe("reply in a thread bound to a session's own thread", () => {
   const realPost = slackRuntimeDeps.post
   const realView = slackRuntimeDeps.view
+  const realUpload = slackRuntimeDeps.upload
   const posts: string[] = []
   /** `member`: the channels the bot is in; a post anywhere else is refused as Slack refuses it. A user id is that person's DM with the app. */
   const slack = (member = new Set([ELSEWHERE])) => {
@@ -58,7 +59,7 @@ describe("reply in a thread bound to a session's own thread", () => {
   afterEach(() => {
     for (const e of getConversationTable().list()) getConversationTable().unwatch(e.channel, e.threadTs, e.app)
     for (const id of ids.splice(0)) registry.delete(id)
-    slackRuntimeDeps.post = realPost; slackRuntimeDeps.view = realView
+    slackRuntimeDeps.post = realPost; slackRuntimeDeps.view = realView; slackRuntimeDeps.upload = realUpload
     _setHydraConfigForTesting(undefined)
     rmSync(join(STATE_DIR, 'slack-watches.json'), { force: true })
   })
@@ -125,6 +126,24 @@ describe("reply in a thread bound to a session's own thread", () => {
     expect(posts).toHaveLength(1)
     expect(posts[0]).toStartWith('default|UOP|-|From sw-mine, not posted in https://x.slack.com/archives/C0ELSE/p1000000001: ')
     expect(posts[0]).toEndWith('on it')
+  })
+
+  test("the operator's DM carries the text only: the files go nowhere, and the result says so", async () => {
+    session('sw-mine', MINE)
+    getConversationTable().bind(ELSEWHERE, TS, MINE, 'cli')
+    slack(new Set())
+    const uploads: string[] = []
+    slackRuntimeDeps.upload = async c => { uploads.push(c); return { shared: [], failed: [] } }
+    const dir = mkdtempSync(join(tmpdir(), 'bound-files-'))
+    try {
+      const pdf = join(dir, 'r.pdf')
+      writeFileSync(pdf, '%PDF')
+      const out = await replyInConversation('sw-mine', CONV, 'on it', [pdf])
+      expect(out).toStartWith(`not posted to ${CONV}: the bot isn't in that channel`)
+      expect(out).toEndWith('; the files were not attached anywhere')
+      expect(posts).toHaveLength(1)
+      expect(uploads).toEqual([])
+    } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 })
 

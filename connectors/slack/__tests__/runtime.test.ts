@@ -662,23 +662,44 @@ describe('replies: posted only into the conversation they answer', () => {
       const order: string[] = []
       const realPostNow = slackRuntimeDeps.post
       slackRuntimeDeps.post = async (...a) => { order.push('text'); return realPostNow(...a) }
-      slackRuntimeDeps.upload = async (channel, thread, files) => { order.push(`files ${channel}|${thread}|${files.map(f => f.name).join(',')}`); return { shared: ['report.pdf'], failed: [{ name: 'chart.png', why: 'An API error occurred: missing_scope (the app needs the files:write bot scope)' }] } }
+      slackRuntimeDeps.upload = async (channel, thread, files) => { order.push(`files ${channel}|${thread}|${files.map(f => f.name).join(',')}`); return { shared: ['report.pdf'], failed: [{ name: 'chart.png', why: 'An API error occurred: missing_scope (the app needs the files:write bot scope)', unknown: false }] } }
       expect(await replyInConversation('r-food', 'slack:C1:9.000001', 'see files', [pdf, png])).toBe('posted 1 message to slack:C1:9.000001; attached 1 file (report.pdf); chart.png did not attach: An API error occurred: missing_scope (the app needs the files:write bot scope)')
       expect(order).toEqual(['text', 'files C1|9.000001|report.pdf,chart.png'])
       // Slack down for the files: the text still stands, and the result says so in one line.
       slackRuntimeDeps.upload = async () => { throw new Error('Slack is not connected\nretry later') }
       expect(await replyInConversation('r-food', 'slack:C1:9.000001', 'again', [pdf])).toBe('posted 1 message to slack:C1:9.000001; the files did not attach: Slack is not connected retry later')
-      // Checked before anything posts: too many, a relative path, a folder, a missing file.
+      // Checked before anything posts: too many, a relative path, a folder, a missing file, hydra's own state.
       posts.length = 0
-      await expect(replyInConversation('r-food', 'slack:C1:9.000001', 'x', Array(11).fill(pdf))).rejects.toThrow('nothing was posted: 11 files is over the 10')
+      await expect(replyInConversation('r-food', 'slack:C1:9.000001', 'x', Array(11).fill(pdf))).rejects.toThrow('nothing was posted: max 10 attachments per message')
       await expect(replyInConversation('r-food', 'slack:C1:9.000001', 'x', ['report.pdf'])).rejects.toThrow('nothing was posted: report.pdf is not an absolute path')
       await expect(replyInConversation('r-food', 'slack:C1:9.000001', 'x', [dir])).rejects.toThrow('is not a file')
-      await expect(replyInConversation('r-food', 'slack:C1:9.000001', 'x', [join(dir, 'gone.pdf')])).rejects.toThrow('cannot be read')
+      await expect(replyInConversation('r-food', 'slack:C1:9.000001', 'x', [join(dir, 'gone.pdf')])).rejects.toThrow('nothing was posted: ENOENT')
       const state = join(STATE_DIR, 'reply-files-state.json')
       writeFileSync(state, '{}')
       await expect(replyInConversation('r-food', 'slack:C1:9.000001', 'x', [state])).rejects.toThrow('refusing to send channel state')
       expect(posts).toEqual([])
     } finally { rmSync(dir, { recursive: true, force: true }); rmSync(join(STATE_DIR, 'reply-files-state.json'), { force: true }) }
+  })
+
+  test('a conversation that stops being yours between the text and the files gets the text only', async () => {
+    session('r-food', FOOD_THREAD)
+    getConversationTable().bind('C1', '14.000001', FOOD)
+    const dir = mkdtempSync(join(tmpdir(), 'slack-reply-files-'))
+    try {
+      const pdf = join(dir, 'report.pdf')
+      writeFileSync(pdf, '%PDF')
+      slackRuntimeDeps.post = async () => { getConversationTable().bind('C1', '14.000001', OPS); return '1.000001' }
+      let uploaded = false
+      slackRuntimeDeps.upload = async () => { uploaded = true; return { shared: ['report.pdf'], failed: [] } }
+      expect(await replyInConversation('r-food', 'slack:C1:14.000001', 'here', [pdf])).toBe('posted 1 message to slack:C1:14.000001; the files were not attached: it is no longer yours to answer')
+      expect(uploaded).toBe(false)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  test('whose the conversation is is said before anything about the files', async () => {
+    session('r-food', FOOD_THREAD)
+    getConversationTable().bind('C2', '15.000001', OPS)
+    await expect(replyInConversation('r-food', 'slack:C2:15.000001', 'x', ['not-absolute.pdf'])).rejects.toThrow(`is bound to ${OPS}, not ${FOOD}`)
   })
 
   test('the reply tool routes a slack: chat_id here, without Discord\'s allowlist', async () => {
@@ -1092,6 +1113,22 @@ describe('reply_to answers in the thread of one message', () => {
     fakePost()
     await expect(replyInConversation('main', `slack:D0OP:${MSG}`, 'x')).rejects.toThrow('is not an open conversation')
     expect(posts).toEqual([])
+  })
+
+  test("a DM's files go where its text went: the thread reply_to opens, else the DM's top level", async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'slack-dm-files-'))
+    try {
+      const pdf = join(dir, 'a.pdf')
+      writeFileSync(pdf, '%PDF')
+      fakePost()
+      const into: string[] = []
+      slackRuntimeDeps.upload = async (channel, thread, files) => { into.push(`${channel}|${thread ?? '-'}|${files.map(f => f.name)}`); return { shared: ['a.pdf'], failed: [] } }
+      getConversationTable().bind('D0OP', '0.000000', 'main')
+      expect(await replyInConversation('main', DM, 'in thread', [pdf], MSG)).toBe(`posted 1 message to ${DM}, in the thread of message ${MSG}; attached 1 file (a.pdf); replies in it come back to main`)
+      expect(await replyInConversation('main', DM, 'top level', [pdf])).toBe(`posted 1 message to ${DM}; attached 1 file (a.pdf)`)
+      expect(posts).toEqual([`D0OP|${MSG}|in thread`, 'D0OP|-|top level'])
+      expect(into).toEqual([`D0OP|${MSG}|a.pdf`, 'D0OP|-|a.pdf'])
+    } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 
   test('a specialist answering a DM bound to it opens a thread bound to it', async () => {

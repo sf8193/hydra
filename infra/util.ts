@@ -1,9 +1,9 @@
-import { realpathSync } from 'fs'
-import { join, sep } from 'path'
+import { realpathSync, statSync } from 'fs'
+import { isAbsolute, join, sep } from 'path'
 import { gateway, STATE_DIR, STATE_WRITABLE } from './config.js'
 import { isUnder } from './path-containment.js'
 import type { ButtonDef, Outbound } from '../gateways/gateway.js'
-import { parseSessionLabel, type SessionLabel } from '../shared/constants.js'
+import { MAX_ATTACHMENT_BYTES, parseSessionLabel, type SessionLabel } from '../shared/constants.js'
 
 import { atomicWriteFileSync as writeAtomically } from '../shared/atomic-write.js'
 
@@ -304,6 +304,23 @@ export function assertSendable(f: string): void {
   if (real.startsWith(stateReal + sep) && !real.startsWith(inbox + sep)) {
     throw new Error(`refusing to send channel state: ${f}`)
   }
+}
+
+/**
+ * The files a session attaches to one send, checked before anything is sent, or why not: each an absolute path (the tools' contract) to a plain file,
+ * never hydra's own state (assertSendable), at most MAX_ATTACHMENT_BYTES; and at most `maxFiles` of them, the most the place they go takes.
+ */
+export function checkSendable(files: readonly string[], maxFiles: number): { path: string; size: number }[] {
+  const checked = files.map(f => {
+    if (!isAbsolute(f)) throw new Error(`${f} is not an absolute path`)
+    assertSendable(f)
+    const st = statSync(f)
+    if (!st.isFile()) throw new Error(`${f} is not a file`)
+    if (st.size > MAX_ATTACHMENT_BYTES) throw new Error(`file too large: ${f} (${(st.size / 1024 / 1024).toFixed(1)}MB, max ${MAX_ATTACHMENT_BYTES / 1024 / 1024}MB)`)
+    return { path: f, size: st.size }
+  })
+  if (files.length > maxFiles) throw new Error(`max ${maxFiles} attachments per message`)
+  return checked
 }
 
 export async function reportError(

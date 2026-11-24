@@ -12,7 +12,7 @@ import { getSpecialist } from '../sessions/specialists.js'
 import { ensureSpecialist } from './specialist-deliver.js'
 import { envelopeFor, sendToThread, sendsToRefusal } from './sends-to.js'
 import { READ_ONLY_DISALLOWED_TOOLS, claudeLaunchCwd, doSpawnSession, handOff, handoffNoteFate, killSession, predecessorOf, runPreHandoffHook, sessionDir, type PreHandoffVerdict } from './session-lifecycle.js'
-import { fallbackDescription, formatDuration, chunk, assertSendable, parseDuration, safeSend, withOutbound } from '../infra/util.js'
+import { fallbackDescription, formatDuration, chunk, checkSendable, parseDuration, safeSend, withOutbound } from '../infra/util.js'
 import { tmuxHasSession } from '../infra/tmux.js'
 import { occupancy, resolveSendTarget } from '../sessions/session-reachability.js'
 import { deliverable, occupied } from '../sessions/occupancy.js'
@@ -33,7 +33,7 @@ import { fetchPrTitle, parsePrUrl } from '../connectors/github/pr-watch.js'
 import { SEND_TYPES, type SendType } from '../shared/tool-definitions.js'
 import { parseToolCall } from '../shared/tool-args.js'
 import { onRunExtend } from './protocol-runner.js'
-import { ASK_PREDECESSOR_TIMEOUT_MS, engineOfModel, MAX_ATTACHMENT_BYTES, normalizeReviewRounds } from '../shared/constants.js'
+import { ASK_PREDECESSOR_TIMEOUT_MS, engineOfModel, normalizeReviewRounds } from '../shared/constants.js'
 import { ENGINE_PROFILES, type EngineName } from '../shared/engines/index.js'
 import { gatewayProfile } from '../shared/gateways/index.js'
 import { isRestrictedSession, isToolAllowed, isWriteConfinedSession, predecessorAsker, refusalText } from '../sessions/tool-surface.js'
@@ -311,14 +311,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           }
         }
 
-        for (const f of files) {
-          assertSendable(f)
-          const st = statSync(f)
-          if (st.size > MAX_ATTACHMENT_BYTES) {
-            throw new Error(`file too large: ${f} (${(st.size / 1024 / 1024).toFixed(1)}MB, max 25MB)`)
-          }
-        }
-        if (files.length > gateway.maxAttachments) throw new Error(`max ${gateway.maxAttachments} attachments per message`)
+        checkSendable(files, gateway.maxAttachments)
 
         // The gateway shapes the text first (its pictures go beside the session's own files) and keeps any files it
         // made until this whole send, retries included, has settled.
@@ -830,14 +823,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           process.stderr.write(`daemon: send_to_thread: ${resolved.replaced} is gone — redirected to ${targetSession.tmuxName}\n`)
         }
 
-        for (const f of files) {
-          assertSendable(f)
-          const st = statSync(f)
-          if (st.size > MAX_ATTACHMENT_BYTES) {
-            throw new Error(`file too large: ${f} (${(st.size / 1024 / 1024).toFixed(1)}MB, max 25MB)`)
-          }
-        }
-        if (files.length > gateway.maxAttachments) throw new Error(`max ${gateway.maxAttachments} attachments per message`)
+        checkSendable(files, gateway.maxAttachments)
 
         const sendLimit = maxChunkLimit()
         const senderName = callerSessionId ? registry.get(callerSessionId)?.tmuxName ?? callerSessionId : 'unknown'

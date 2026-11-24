@@ -30,16 +30,17 @@ import { MAIN, currentId, isSessionThread, slackSpecialistsOf } from '../../rout
 import { chunk } from '../../infra/util.js'
 import { resolveLineEmoji, postedLine } from './lines.js'
 import { routeThreadId } from '../../sessions/thread-route.js'
-import { DEFAULT_SLACK_APP, coversAny, homePlaceOf, isChannelName, isRouter, routerOf, placeKey, placeOf, placesAnsweredBy, samePlace, slackConfigured, type Place, type HydraConfig, type SlackApp } from '../../config/types.js'
+import { DEFAULT_SLACK_APP, coversAny, homePlaceOf, isChannelName, isRouter, routerOf, placeKey, placeOf, placesAnsweredBy, samePlace, slackConfigured, type Place, type HydraConfig } from '../../config/types.js'
 import { speaksAsOf, noSuchApp } from '../../config/pins.js'
 import { notServedBy } from '../../routing/route.js'
-import { NO_SLACK_APP, SLACK_APP_NEEDS, appKey, appName, notConnected } from './app.js'
+import { NO_SLACK_APP, SLACK_APP_NEEDS, appName, notConnected } from './app.js'
 import { timed } from '../../shared/loop-watch.js'
 import { registerSlackChannelNames } from '../../shared/link-previews.js'
 import { bareOf, readTarget } from '../../shared/target-kind.js'
 import { placeInInbox } from '../../infra/confined-inbox.js'
 import { oneLine } from '../../shared/untrusted-text.js'
 import { checkUploads, uploadLine, type Upload, type UploadResult } from './files.js'
+import { outcomeUnknown } from './outcome.js'
 
 const log = (line: string) => { process.stderr.write(line) }
 
@@ -503,8 +504,6 @@ export function unbindConversation(caller: Partial<Pick<SessionInfo, 'threadId' 
 
 /** Slack's own advice is to keep a message under 4,000 characters; longer ones are split. */
 const SLACK_CHUNK = 3900
-/** Errors that say a post did not happen: a platform refusal (`An API error occurred: …`), a rate limit, no connection. */
-const CLEANLY_REFUSED = /An API error occurred|rate.?limit|not connected/i
 /** A backstop past the posting client's own deadline (it neither retries nor waits longer). */
 const POST_BACKSTOP_MS = POST_TIMEOUT_MS + 5_000
 
@@ -681,10 +680,6 @@ async function amendInConversation(callerSessionId: string | undefined, conversa
  */
 export async function replyInConversation(callerSessionId: string | undefined, conversation: unknown, text: string, files: string[] = [], replyTo?: string): Promise<string> {
   if (!text.trim()) throw new Error('nothing to post: the text is empty')
-  // Checked before anything posts; shared after the text, in the same place, and a file that fails says why without taking the text with it.
-  const uploads = checkUploads(files)
-  const attach = async (app: string, channel: string, thread: string | undefined, allowed: () => boolean) => !uploads.length ? '' : !allowed() ? '; the files were not attached: it is no longer yours to answer'
-    : `; ${await slackRuntimeDeps.upload(channel, thread, uploads, app).then(uploadLine, (err: unknown) => `the files did not attach: ${oneLine(err instanceof Error ? err.message : String(err), 300)}`)}`
   const h = hydraConfig()
   const me = callerSessionId === 'main' ? MAIN : boundAs(callerSessionId ? registry.get(callerSessionId) : undefined, h)
   // Its own `home_place` (a schedule's reply has no conversation): a new thread there, bound to it, so answers come back to it.
@@ -701,12 +696,14 @@ export async function replyInConversation(callerSessionId: string | undefined, c
     let unbound: string | undefined
     const bindThread = (ts: string) => { unbound = bindOpenedThread(h, me!, homePlaceId, ts, speaks, 'post to its home_place', 'home') }
     const stillHome = () => homePlaceChannel(hydraConfig(), me!, speaks) === homePlaceId
+    const uploads = checkUploads(files)
     const { first } = await postParts(speaks!, homePlaceId, undefined, text, where, true, stillHome, bindThread)
-    const filed = await attach(speaks!, homePlaceId, first, stillHome)
+    const filed = await attachFiles(uploads, speaks!, homePlaceId, first, stillHome)
     return unbound ? `posted to ${where}${filed}, but its thread is not bound to ${me}: ${unbound}` : `posted to ${where}${filed}; replies in its thread come back to ${me}`
   }
   // Who it is bound to, which `stillMine` holds it to before every part.
   const { c, app, id, caller, bound, plain } = assertOwnConversation(h, callerSessionId, conversation, 'a reply')
+  const uploads = checkUploads(files)
   // Which thread the post goes in. A thread conversation is its one thread (Slack threads are flat: no message inside one can be answered on its own);
   // a top-level conversation (only a DM has one) is answered in the thread of the message `reply_to` names, else at its top level.
   let thread = c.threadTs === TOP_LEVEL ? undefined : c.threadTs
@@ -741,8 +738,7 @@ export async function replyInConversation(callerSessionId: string | undefined, c
   } catch (err) {
     // A restricted specialist's words go only where its conversation is: never to the operator's DM in its place.
     if (!(err instanceof NotInChannel) || (me !== MAIN && h.specialists[me ?? '']?.restricted)) throw err
-    const dm = await toOperatorDm(app, id, err.message, text, stillMine, `From ${me === MAIN ? 'main' : me && isSessionThread(me) ? sessionNameIn(me) ?? `the session in thread ${me}` : me ?? 'a session'}`)
-    return uploads.length ? `${dm}; the files were not attached anywhere` : dm
+    return `${await toOperatorDm(app, id, err.message, text, stillMine, `From ${me === MAIN ? 'main' : me && isSessionThread(me) ? sessionNameIn(me) ?? `the session in thread ${me}` : me ?? 'a session'}`)}${uploads.length ? '; the files were not attached anywhere' : ''}`
   }
   if (posted) {
     getConversationTable().touch(c.channel, c.threadTs, app)
@@ -751,8 +747,15 @@ export async function replyInConversation(callerSessionId: string | undefined, c
     const link = slackConversationLink(id)
     if (own) showLine(own, emoji => postedLine(emoji, link, text))
   }
-  const said = `posted ${posted} message${posted === 1 ? '' : 's'} to ${id}${how}${await attach(app, c.channel, thread, stillMine)}`
+  const said = `posted ${posted} message${posted === 1 ? '' : 's'} to ${id}${how}${await attachFiles(uploads, app, c.channel, thread, stillMine)}`
   return opened ? (unbound ? `${said}; its thread is not bound to ${me}: ${unbound}, so replies in it go to whoever the rules name here` : `${said}; replies in it come back to ${me}`) : said
+}
+
+/** A reply's files (checked before its text), shared after it into the same place while `allowed()` holds: the result's part for them. A failed file never takes the text with it. */
+async function attachFiles(uploads: readonly Upload[], app: string, channel: string, thread: string | undefined, allowed: () => boolean): Promise<string> {
+  if (!uploads.length) return ''
+  if (!allowed()) return '; the files were not attached: it is no longer yours to answer'
+  return `; ${await slackRuntimeDeps.upload(channel, thread, uploads, app).then(uploadLine, (err: unknown) => `the files did not attach: ${oneLine(err instanceof Error ? err.message : String(err), 300)}`)}`
 }
 
 /**
@@ -850,10 +853,7 @@ async function postParts(app: string, channel: string, thread: string | undefine
       // Nothing of it posted, and Slack said why: the caller may take the words elsewhere.
       if (err instanceof NotInChannel && posted === 0) throw err
       const why = err instanceof Error ? err.message : String(err)
-      // Only an answer that says it didn't post counts as not posted: Slack refusing it outright, a rate limit, or no
-      // connection at all. Anything else (fatal_error, a 5xx, a timeout, a dropped socket) may have half succeeded.
-      const unknown = !CLEANLY_REFUSED.test(why) || /fatal_error/.test(why)
-      throw new Error(unknown
+      throw new Error(outcomeUnknown(why)
         ? `${posted} of ${parts.length} message(s) posted to ${where}; part ${posted + 1}'s outcome is unknown (no answer from Slack: it may have posted). Check ${where} before sending the rest.`
         : `reply failed after ${posted} of ${parts.length} message(s) posted to ${where}: ${why}. Part ${posted + 1} did not post; send from there.`)
     }

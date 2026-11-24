@@ -1,15 +1,19 @@
 // Files in and out of Slack, through one app's bot: the download of a file a message carries, and the files a specialist's reply attaches,
 // uploaded as the gateway uploads its own (shared/slack-client.ts uploadFile).
-import { mkdirSync, openSync, writeSync, closeSync, renameSync, rmSync, readFileSync, statSync } from 'fs'
-import { basename, dirname, isAbsolute } from 'path'
-import { assertSendable } from '../../infra/util.js'
+import { mkdirSync, openSync, writeSync, closeSync, renameSync, rmSync, readFileSync } from 'fs'
+import { basename, dirname } from 'path'
+import { assertSendable, checkSendable } from '../../infra/util.js'
 import { uploadFile } from '../../shared/slack-client.js'
 import { MAX_ATTACHMENT_BYTES } from '../../shared/constants.js'
+import { outcomeUnknown } from './outcome.js'
 import type { WebClient } from '@slack/web-api'
 
-/** At most this many files on one reply (as many as the Slack gateway attaches to a message), each at most the attachment limit every send holds to. */
+/** At most this many files on one reply: as many as the Slack gateway attaches to a message. */
 export const UPLOAD_MAX_FILES = 10
-const UPLOAD_MAX_BYTES = MAX_ATTACHMENT_BYTES
+/** The uploading client's deadline for each of its requests: the bytes' one is up to 25 MB, about 100 s at 2 Mbit/s. */
+export const UPLOAD_TIMEOUT_MS = 120_000
+/** A backstop past that client's own deadlines (it neither retries nor waits longer): an upload is three requests in a row. */
+const UPLOAD_BACKSTOP_MS = 3 * UPLOAD_TIMEOUT_MS + 5_000
 
 /** Only Slack's own hosts ever get the bot token or a file's bytes, including across redirects. */
 const slackHost = (u: string) => { try { const h = new URL(u); return h.protocol === 'https:' && (h.hostname === 'slack.com' || h.hostname.endsWith('.slack.com')) } catch { return false } }
@@ -53,51 +57,52 @@ export type Upload = { path: string; name: string; size: number }
 
 /**
  * The files a reply attaches, checked before anything is posted, or why not. A write-confined session's paths have already been checked against what it may read
- * and swapped for daemon-owned copies (app/bridge-dispatch.ts); a restricted session attaches none. What is left to hold here is what any session may send:
- * a plain file, never hydra's own state (assertSendable), at most UPLOAD_MAX_FILES of them, each at most UPLOAD_MAX_BYTES.
+ * and swapped for daemon-owned copies (app/bridge-dispatch.ts); a restricted session attaches none. The rest is what any send holds to (checkSendable),
+ * with as many files as a Slack message takes.
  */
 export function checkUploads(files: readonly string[]): Upload[] {
-  if (files.length > UPLOAD_MAX_FILES) throw new Error(`nothing was posted: ${files.length} files is over the ${UPLOAD_MAX_FILES} a Slack reply may attach`)
-  return files.map(f => {
-    if (!isAbsolute(f)) throw new Error(`nothing was posted: ${f} is not an absolute path`)
-    assertSendable(f)
-    let st
-    try { st = statSync(f) } catch { throw new Error(`nothing was posted: ${f} cannot be read`) }
-    if (!st.isFile()) throw new Error(`nothing was posted: ${f} is not a file`)
-    if (st.size > UPLOAD_MAX_BYTES) throw new Error(`nothing was posted: ${f} is ${(st.size / 1024 / 1024).toFixed(1)} MB, over the ${UPLOAD_MAX_BYTES / 1024 / 1024} MB a Slack reply may attach`)
-    return { path: f, name: basename(f), size: st.size }
-  })
+  try {
+    return checkSendable(files, UPLOAD_MAX_FILES).map(f => ({ ...f, name: basename(f.path) }))
+  } catch (err) { throw new Error(`nothing was posted: ${err instanceof Error ? err.message : String(err)}`) }
 }
 
-/** How each file of a reply ended: shared into the conversation, or why not, in one line. */
-export type UploadResult = { shared: string[]; failed: { name: string; why: string }[] }
+/** How each file of a reply ended: shared into the conversation, or why not in one line, and whether it may have been shared all the same. */
+export type UploadResult = { shared: string[]; failed: { name: string; why: string; unknown: boolean }[] }
 
 const why = (err: unknown) => (err instanceof Error ? err.message : String(err)).split('\n')[0]!
 
 /**
  * Uploads `files` one by one into `channel` (in `threadTs`'s thread when given). One that fails is listed with why, in one line, and the rest still go.
- * Nothing is retried: a retry after an unknown outcome could share a file twice.
+ * Nothing is retried: a retry after an unknown outcome could share a file twice. A file read again is checked again (its path may lead elsewhere by now).
  */
 export async function uploadSlackFiles(client: Pick<WebClient, 'files'>, channel: string, threadTs: string | undefined, files: readonly Upload[]): Promise<UploadResult> {
   const out: UploadResult = { shared: [], failed: [] }
   for (const f of files) {
+    let bytes: Buffer
     try {
-      const bytes = readFileSync(f.path)
-      if (bytes.length > UPLOAD_MAX_BYTES) throw new Error(`it grew past ${UPLOAD_MAX_BYTES / 1024 / 1024} MB after it was checked`)
-      await uploadFile(client, channel, threadTs, bytes, f.name)
+      assertSendable(f.path)
+      bytes = readFileSync(f.path)
+      if (bytes.length > MAX_ATTACHMENT_BYTES) throw new Error(`it grew past ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB after it was checked`)
+    } catch (err) { out.failed.push({ name: f.name, why: why(err), unknown: false }); continue }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([
+        uploadFile(client, channel, threadTs, bytes, f.name),
+        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('timeout')), UPLOAD_BACKSTOP_MS) }),
+      ]).finally(() => clearTimeout(timer))
       out.shared.push(f.name)
     } catch (err) {
       const w = why(err)
-      out.failed.push({ name: f.name, why: /missing_scope/.test(w) ? `${w} (the app needs the files:write bot scope)` : w })
+      out.failed.push({ name: f.name, why: /missing_scope/.test(w) ? `${w} (the app needs the files:write bot scope)` : w, unknown: outcomeUnknown(w) })
     }
   }
   return out
 }
 
-/** The result's line for the files: what was shared, and each failure with why. */
+/** The result's line for the files: what was shared, and each failure with why; one Slack gave no clear answer for may be in the conversation already. */
 export function uploadLine(r: UploadResult): string {
   const parts: string[] = []
   if (r.shared.length) parts.push(`attached ${r.shared.length} file${r.shared.length === 1 ? '' : 's'} (${r.shared.join(', ')})`)
-  for (const f of r.failed) parts.push(`${f.name} did not attach: ${f.why}`)
+  for (const f of r.failed) parts.push(f.unknown ? `${f.name} may have attached (no clear answer from Slack: ${f.why}); check before resending it` : `${f.name} did not attach: ${f.why}`)
   return parts.join('; ')
 }

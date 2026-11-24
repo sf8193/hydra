@@ -22,7 +22,7 @@ export const ALLOWED: Readonly<Record<string, number>> = {
   'connectors/slack/listener.ts': 1064,
   'gateways/slack.ts': 1034,
   'connectors/slack/runtime.ts': 1007,
-  'app/bridge-dispatch.ts': 996,
+  'app/bridge-dispatch.ts': 982,
   'engines/codex-engine.ts': 980,
   'connectors/github/pr-watch.ts': 960,
   'app/pane-probe.ts': 939,

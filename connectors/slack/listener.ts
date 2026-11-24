@@ -2,7 +2,7 @@ import { LogLevel } from '@slack/bolt'
 import { WebClient } from '@slack/web-api'
 import { SocketSupervisor, START_TIMEOUT_MS, type SocketEmitter } from '../../shared/socket-supervisor.js'
 import { catchUp, toEvent, BIND_SKEW_S, type CatchUpResult, type Page, type RawMessage, type SlackApi } from './catchup.js'
-import { downloadSlackFile, uploadSlackFiles, type Upload, type UploadResult } from './files.js'
+import { downloadSlackFile, uploadSlackFiles, UPLOAD_TIMEOUT_MS, type Upload, type UploadResult } from './files.js'
 import { linkPreviewsOff } from '../../shared/link-previews.js'
 import { routedChannels, hearsDms, dmsDeclared, namedChannels, unresolvedPlaces, isDm, type SlackReactionEvent, mentionedApps, NOT_A_MEMBER, OPERATOR_TOKEN_REFUSED, NO_DIRECTORY, SLACK_LIMITS, type AppConversations, type DmOtherParty, type SlackDirectory, type ConversationConfig, type ConversationTable } from './watch.js'
 import { DEFAULT_SLACK_APP, mustParsePlace, placeCovers, placeKey, isChannelName, placeOf, placesAnsweredBy, samePlace, type HydraConfig, type SlackApp } from '../../config/types.js'
@@ -155,7 +155,7 @@ export type SlackAppLike = {
  * The scopes the options of one app need (from `SLACK_APP_NEEDS`), so a missing one is a read at startup rather than a guess later.
  * Each app is asked only for what it does (`reachableBy`): channel history when it reads a named channel, serves a rule for any
  * place, or serves a specialist that hears no place (it answers only threads bound to it); DMs when something it serves names
- * `slack:app-dm:<app>` or `slack:app-dm:*`, or the operator has a Slack address; files when a place it reaches has them; the private-channel read only when one of
+ * `slack:app-dm:<app>` or `slack:app-dm:*`, or the operator has a Slack address; files when a place it reaches has them; reply attachments always (never alerted); the private-channel read only when one of
  * its places is private. One app's missing scope is never another's.
  */
 export function scopesNeeded(h: HydraConfig, app: string = DEFAULT_SLACK_APP): ScopeNeed[] {
@@ -181,19 +181,19 @@ export function scopesNeeded(h: HydraConfig, app: string = DEFAULT_SLACK_APP): S
     ...(slackOpts.some(o => o.files) ? [s.files] : []),
     s.reactions,
     ...(slackOpts.some(o => o.reactions !== 'off') ? [s.reactionsRead] : []),
-    s.replies,
+    s.replies, s.replyFiles,
     ...(several && channels ? [SLACK_APP_NEEDS.membership.public, ...(places.some(p => p.ref.startsWith('G')) ? [SLACK_APP_NEEDS.membership.private] : [])] : []),
   ]
 }
 
 /**
- * The options of `scopesNeeded` that only the operator's own Slack address asks for (their DMs to `main`), because nothing
- * declares a DM with the bot (`slack:app-dm:…`). A token without them still runs everything that was declared, so they are shown in health, never alerted:
+ * The options of `scopesNeeded` nothing in hydra.toml declares: the operator's own Slack address (their DMs to `main`) when nothing declares a DM with the bot
+ * (`slack:app-dm:…`), and the files a reply attaches. A token without them still runs everything that was declared, so they are shown in health, never alerted:
  * a hydra.toml that ran before must not start paging for an option nobody asked for.
  */
 export function implicitScopeOptions(h: HydraConfig, app: string = DEFAULT_SLACK_APP): string[] {
   const view = { hydra: h, app }
-  return hearsDms(view) && !dmsDeclared(view) ? [SLACK_APP_NEEDS.botScopes.dms.option, SLACK_APP_NEEDS.botScopes.dmCatchUp.option] : []
+  return [...(hearsDms(view) && !dmsDeclared(view) ? [SLACK_APP_NEEDS.botScopes.dms.option, SLACK_APP_NEEDS.botScopes.dmCatchUp.option] : []), SLACK_APP_NEEDS.botScopes.replyFiles.option]
 }
 
 /** What a listener remembers across daemon restarts about what it has told the operator: per app, the scopes it said were missing. */
@@ -956,9 +956,10 @@ export function boltApp(tokens: { app: string; bot: string; user?: string }): Sl
     const bot = body.authorizations?.[0]?.is_bot
     wire(event, bot === undefined ? 'unknown' : bot ? 'bot' : 'user')
   })
-  // Posting never retries behind the caller's back, and gives up at a hard deadline: a retry landing after the caller
-  // was told "unknown" would post twice. Reading keeps the SDK's patient retries.
+  // Posting and uploading never retry behind the caller's back, and give up at a hard deadline: a retry landing after the caller
+  // was told "unknown" would post twice. Reading keeps the SDK's patient retries. An upload's deadline is longer: its bytes are up to 25 MB.
   const poster = new WebClient(tokens.bot, { retryConfig: { retries: 0 }, timeout: POST_TIMEOUT_MS, logLevel: LogLevel.ERROR })
+  const uploader = new WebClient(tokens.bot, { retryConfig: { retries: 0 }, timeout: UPLOAD_TIMEOUT_MS, logLevel: LogLevel.ERROR })
   // The operator writes (edit, delete) only through this one: reading with the user token stays in `readReplies`, and nothing posts with it.
   const operator = tokens.user ? new WebClient(tokens.user, { retryConfig: { retries: 0 }, timeout: POST_TIMEOUT_MS, logLevel: LogLevel.ERROR }) : undefined
   const writer = (as: Writer): WebClient => { const w = as === 'operator' ? operator : poster; if (!w) throw new Error('this app has no operator token (operator_token_env)'); return w }
@@ -1027,8 +1028,7 @@ export function boltApp(tokens: { app: string; bot: string; user?: string }): Sl
       return r.ts
     },
     download: (url, dest, maxBytes) => downloadSlackFile(tokens.bot, url, dest, maxBytes),
-    // Through the poster: no retry behind the caller's back, as for a post.
-    upload: (channel, threadTs, files) => uploadSlackFiles(poster, channel, threadTs, files),
+    upload: (channel, threadTs, files) => uploadSlackFiles(uploader, channel, threadTs, files),
     userName: async id => {
       const r = await client.users.info({ token: tokens.bot, user: id })
       return r.user?.profile?.display_name || r.user?.real_name || r.user?.name || undefined
