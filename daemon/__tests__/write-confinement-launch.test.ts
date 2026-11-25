@@ -11,8 +11,9 @@ import { PolicyRefusal, type LaunchPolicy } from '../../shared/launch-policy.js'
 import { confinementIdFor } from '../../app/restricted.js'
 import { removeRestrictedFiles, restrictedDir } from '../../infra/restricted-files.js'
 import { confinementShortfall, confinementSurplus, readLoaded, verifyConfinement, verifyDeps } from '../../engines/claude-verify.js'
-import { bridgeServerCommands, claudeSettingsProblems, MIN_CLAUDE_VERSION, claudeVersion, claudeVersionRefusal, confinementMcp, confinementRules, confinementSettings } from '../../engines/write-confinement.js'
+import { bridgeServerCommands, claudeSettingsProblems, MIN_CLAUDE_VERSION, claudeBuiltins, claudeVersion, claudeVersionRefusal, confinementMcp, confinementRules, confinementSettings } from '../../engines/write-confinement.js'
 import { EMPTY_CONFIG } from '../../config/load.js'
+import { builtinPluginsOff } from '../../infra/plugin-manifest.js'
 import { readDenyRoots } from '../../config/write-confinement.js'
 import { hydraLoadEnv } from '../../infra/hydra-config.js'
 import type { HydraConfig } from '../../config/types.js'
@@ -25,6 +26,7 @@ process.stderr.write = (() => true) as any
 let work: string
 let fake: FakeTmux
 let savedVersion: string | undefined
+let savedBuiltins: typeof claudeBuiltins.cache
 const saved: Record<string, string | undefined> = {}
 beforeEach(() => {
   work = mkdtempSync(join(tmpdir(), 'write-confinement-'))
@@ -33,6 +35,8 @@ beforeEach(() => {
   fake = withFakeTmux()
   savedVersion = claudeVersion.cache
   claudeVersion.cache = '2.1.326'
+  savedBuiltins = claudeBuiltins.cache
+  claudeBuiltins.cache = { key: claudeBuiltins.binary(), ids: ['cc-plugin-easel@builtin', 'cc-plugin-telemetry@builtin', 'cc-plugin-new-tools@builtin'] }
   for (const k of ['BR_TOKEN']) saved[k] = process.env[k]
   process.env.BR_TOKEN = 'br-secret'
   mkdirSync(join(STATE_DIR, 'mods', 'personal'), { recursive: true }); writeFileSync(join(STATE_DIR, 'mods', 'personal', 'plugin.json'), '{}')
@@ -40,6 +44,7 @@ beforeEach(() => {
 afterEach(() => {
   fake.restore()
   claudeVersion.cache = savedVersion
+  claudeBuiltins.cache = savedBuiltins
   for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
   rmSync(work, { recursive: true, force: true })
 })
@@ -144,11 +149,41 @@ describe('the settings', () => {
   test('pinned exactly: the sandbox on, no unsandboxed retry, no unsandboxed commands, the write block, the deny list', async () => {
     await launch()
     expect(readJson(settingsFile())).toEqual({
+      enabledPlugins: { 'cc-plugin-easel@builtin': false, 'cc-plugin-new-tools@builtin': false },
       allowedMcpServers: [{ serverCommand: ['/usr/local/bin/browser-mcp', '--user-data-dir', join(work, '.browser', 'profile'), `--downloads=${join(work, '.browser', 'downloads')}`] }, ...[...new Map([bridgeCmd(), bridgeCmd(true)].map(c => [c.join('\0'), { serverCommand: c }])).values()]],
       disableClaudeAiConnectors: true,
       sandbox: { enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, excludedCommands: [], filesystem: { disabled: false, denyRead: ['/home/op/.ssh', '/home/op/other'] }, enableWeakerNestedSandbox: false, autoAllowBashIfSandboxed: true },
       permissions: { blockWritesOutsideWorkingDirectories: true, allow: ['WebFetch(domain:*)'], deny: ['Read(//home/op/.ssh/**)', 'Read(//home/op/other/**)', 'Bash(rm -rf *)'] },
     })
+  })
+
+  // 25 Nov 2026: Claude Code 2.1.332's easel served a server no write-confined policy lists, and the start check refused every start.
+  test('Claude Code\'s built-ins are off unless known to serve no tools: easel always, and one a later Claude Code adds', () => {
+    expect(builtinPluginsOff()).toEqual({ 'cc-plugin-easel@builtin': false })
+    expect(builtinPluginsOff(['cc-plugin-easel@builtin', 'cc-plugin-privacy@builtin', 'cc-plugin-next@builtin', 'discord@claude-plugins-official'])).toEqual({ 'cc-plugin-easel@builtin': false, 'cc-plugin-next@builtin': false })
+    expect((confinementSettings({ denyCommands: [], cannotRead: [], builtins: ['cc-plugin-next@builtin'] }) as any).enabledPlugins).toEqual({ 'cc-plugin-easel@builtin': false, 'cc-plugin-next@builtin': false })
+  })
+
+  test('the built-in list is read again when the `claude` on PATH becomes another file (an auto-update under a running daemon)', () => {
+    const bin = mkdtempSync(join(tmpdir(), 'claude-bin-'))
+    const savedPath = process.env.PATH, savedCache = claudeBuiltins.cache
+    try {
+      // It answers only in the launch's own config folder: which built-ins Claude Code lists depends on that folder.
+      writeFileSync(join(bin, 'claude'), `#!/bin/sh\n[ "$CLAUDE_CONFIG_DIR" = '${CLAUDE_CONFIG}' ] || { echo '[]'; exit 0; }\necho '[{"id":"cc-plugin-a@builtin"},{"id":"discord@claude-plugins-official"}]'\n`); chmodSync(join(bin, 'claude'), 0o755)
+      process.env.PATH = `${bin}:${savedPath}`
+      claudeBuiltins.cache = { key: '/old/claude', ids: ['cc-plugin-old@builtin'] }
+      const savedDir = process.env.CLAUDE_CONFIG_DIR; process.env.CLAUDE_CONFIG_DIR = join(bin, 'another-folder')   // the daemon's own folder may differ
+      try { expect(claudeBuiltins.list()).toEqual(['cc-plugin-a@builtin']) } finally { if (savedDir === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = savedDir }
+      writeFileSync(join(bin, 'claude'), '#!/bin/sh\nexit 1\n')   // same file: the cached list stands, nothing is run
+      expect(claudeBuiltins.list()).toEqual(['cc-plugin-a@builtin'])
+
+      // A list that could not be read is not kept: the next launch tries again.
+      claudeBuiltins.cache = undefined
+      expect(claudeBuiltins.list()).toEqual([])
+      expect(claudeBuiltins.cache).toBeUndefined()
+      writeFileSync(join(bin, 'claude'), '#!/bin/sh\necho \'[{"id":"cc-plugin-b@builtin"}]\'\n')
+      expect(claudeBuiltins.list()).toEqual(['cc-plugin-b@builtin'])
+    } finally { process.env.PATH = savedPath; claudeBuiltins.cache = savedCache; rmSync(bin, { recursive: true, force: true }) }
   })
 
   // Each setting is the only thing standing between the session and one way out; a mutation check names which.
@@ -160,12 +195,12 @@ describe('the settings', () => {
     ['no command is excluded from the sandbox by name', (s: any) => s.sandbox.excludedCommands, []],
     ['Edit, Write and NotebookEdit refuse paths outside the workdir in every permission mode', (s: any) => s.permissions.blockWritesOutsideWorkingDirectories, true],
   ])('%s', (_what, pick, want) => {
-    expect(pick(confinementSettings({ denyCommands: [], cannotRead: [] }))).toEqual(want)
+    expect(pick(confinementSettings({ denyCommands: [], cannotRead: [], builtins: [] }))).toEqual(want)
   })
 
   test('the allowlist is each listed server and the bridge by the exact command it runs (never a `serverName`, never a `plugin:` key)', () => {
     const cmd = ['bun', 'run', '--cwd', '/cfg/plugins/cache/claude-plugins-official/discord/0.0.4', '--shell=bun', '--silent', 'start']
-    const s: any = confinementSettings({ denyCommands: [], cannotRead: [], workdir: '/w', servers: [server], bridgeCommands: [cmd] })
+    const s: any = confinementSettings({ denyCommands: [], cannotRead: [], workdir: '/w', servers: [server], bridgeCommands: [cmd], builtins: [] })
     expect(s.allowedMcpServers).toEqual([{ serverCommand: ['/usr/local/bin/browser-mcp', '--user-data-dir', '/w/.browser/profile', '--downloads=/w/.browser/downloads'] }, { serverCommand: cmd }])
     expect(claudeSettingsProblems(s)).toEqual([])
     expect(s.disableClaudeAiConnectors).toBe(true)
@@ -175,7 +210,7 @@ describe('the settings', () => {
   test('the allowlist admits the MCP config it ships with: every server\'s command, as the config runs it, is an entry', () => {
     const policy = { specialist: 's', workdir: '/w', denyCommands: [], cannotRead: [], servers: [server, { ...server, name: 'second', command: 'npx', profileArgs: ['-y', 'pkg', '--out', '{download_dir}'] }], browserProfile: '/w/p1' }
     const mcp: any = confinementMcp(policy, { BR_TOKEN: 't' }, {})
-    const entries = new Set(((confinementSettings({ ...policy, bridgeCommands: [['bun', 'run', 'x']] }) as any).allowedMcpServers as any[]).map(e => JSON.stringify(e.serverCommand)))
+    const entries = new Set(((confinementSettings({ ...policy, bridgeCommands: [['bun', 'run', 'x']], builtins: [] }) as any).allowedMcpServers as any[]).map(e => JSON.stringify(e.serverCommand)))
     expect(Object.keys(mcp.mcpServers)).toEqual(['browser', 'second'])
     for (const [name, c] of Object.entries<any>(mcp.mcpServers)) expect([name, entries.has(JSON.stringify([c.command, ...c.args]))]).toEqual([name, true])
     expect(entries.has(JSON.stringify(['/usr/local/bin/browser-mcp', '--user-data-dir', '/w/p1', '--downloads=/w/p1-downloads']))).toBe(true)
@@ -183,7 +218,7 @@ describe('the settings', () => {
 
   test('with no servers listed the allowlist is the bridge alone', () => {
     const cmd = ['bun', 'run', '--cwd', '/x', '--shell=bun', '--silent', 'start']
-    expect((confinementSettings({ denyCommands: [], cannotRead: [], bridgeCommands: [cmd] }) as any).allowedMcpServers).toEqual([{ serverCommand: cmd }])
+    expect((confinementSettings({ denyCommands: [], cannotRead: [], bridgeCommands: [cmd], builtins: [] }) as any).allowedMcpServers).toEqual([{ serverCommand: cmd }])
   })
 
   // The regression: the first allowlist named the bridge `plugin:discord:discord`. Claude Code's schema is ^[a-zA-Z0-9_-]+$ for serverName; it stopped at an interactive
@@ -238,14 +273,14 @@ describe('the settings', () => {
   })
 
   test('no extra writable folders are granted: no allowWrite and no additionalDirectories, and the only allow rule is the one for the network', () => {
-    const s: any = confinementSettings({ denyCommands: [], cannotRead: [] })
+    const s: any = confinementSettings({ denyCommands: [], cannotRead: [], builtins: [] })
     expect(s.sandbox.filesystem.allowWrite).toBeUndefined()
     expect(s.permissions.additionalDirectories).toBeUndefined()
     expect(s.permissions.allow).toEqual(['WebFetch(domain:*)'])   // the one allow rule: it opens the sandbox proxy to any host (a bare `*` in allowedDomains is refused by Claude Code)
   })
 
   test('the same places are denied to the shell (sandbox denyRead, as paths) and to Read (permission rules, `//` + the absolute path), nothing more', () => {
-    const s: any = confinementSettings({ denyCommands: [], cannotRead: ['/Users/op/.aws', '/Users/op/work b'] })
+    const s: any = confinementSettings({ denyCommands: [], cannotRead: ['/Users/op/.aws', '/Users/op/work b'], builtins: [] })
     expect(s.sandbox.filesystem.denyRead).toEqual(['/Users/op/.aws', '/Users/op/work b'])
     expect(s.permissions.deny).toEqual(['Read(//Users/op/.aws/**)', 'Read(//Users/op/work b/**)'])
   })
@@ -529,7 +564,7 @@ describe('what Claude Code 2.1.326 writes for the allowlist, from a real `claude
 describe('a listed server\'s deny_tools', () => {
   const a = { workdir: '/w', denyCommands: [] as string[], cannotRead: ['/s'] }
   const rule = 'mcp__browser__browser_run_code_unsafe'
-  const denies = (servers: any[]) => ((confinementSettings({ ...a, servers }) as any).permissions.deny as string[])
+  const denies = (servers: any[]) => ((confinementSettings({ ...a, servers, builtins: [] }) as any).permissions.deny as string[])
   test('each becomes a permissions.deny rule mcp__<server>__<tool>, beside the read and command rules; none without it', () => {
     expect(denies([{ ...server, denyTools: ['browser_run_code_unsafe'] }])).toContain(rule)
     expect(denies([{ ...server, denyTools: ['browser_run_code_unsafe'] }]).filter(r => r.startsWith('mcp__'))).toEqual([rule])

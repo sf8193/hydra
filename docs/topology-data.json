@@ -912,6 +912,10 @@
     ],
     [
       "app_lifecycle_spawn-stages",
+      "sessions_access"
+    ],
+    [
+      "app_lifecycle_spawn-stages",
       "sessions_registry"
     ],
     [

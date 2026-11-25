@@ -27,7 +27,7 @@ import { defaultTurnSources } from './codex-observation.js'
 import { CLAUDE_CONFIG, SOCK_PATH, PLATFORM, SPAWN_LOGS_DIR, STATE_DIR } from '../infra/config.js'
 import { SESSION_IDENTITY_VARS, capturedSpawnVars, stateEnvUnsets, scrubbedSpawnEnv, withRaisedFdLimit } from '../shared/spawn-env.js'
 import { modsExport } from '../infra/mods.js'
-import { BRIDGE_CHANNEL_FLAG, BRIDGE_MCP_SERVER_KEY, BRIDGE_PLUGIN_ID, BRIDGE_TOOLS_PERMISSION, BUILTIN_TOOL_PLUGIN_IDS } from '../infra/plugin-manifest.js'
+import { BRIDGE_CHANNEL_FLAG, BRIDGE_MCP_SERVER_KEY, BRIDGE_PLUGIN_ID, BRIDGE_TOOLS_PERMISSION, builtinPluginsOff } from '../infra/plugin-manifest.js'
 import { type LaunchPolicy, PolicyRefusal, remedy, type RestrictedPolicy } from '../shared/launch-policy.js'
 import { RESTRICTED_MODS, serverToolRule } from './claude-names.js'
 import { verifyConfinement as verifyConfinementLoaded, verifyLaunch as verifyLoaded, type Verdict } from './claude-verify.js'
@@ -37,7 +37,7 @@ import { sandboxedServer, sandboxIssues } from '../config/server-sandbox.js'
 import { currentHydraConfig, hydraLoadEnv } from '../infra/hydra-config.js'
 import { offLimitRoots, type PrivateRoot } from '../config/restricted-workdir.js'
 import type { HydraConfig, LoadEnv } from '../config/types.js'
-import { bridgeServerCommands, claudeSettingsProblems, claudeVersionRefusal, confinementRules, confinementServers, makeBrowserDirs, confinementLogLine, confinementMcp, confinementSettings } from './write-confinement.js'
+import { bridgeServerCommands, claudeBuiltins, claudeSettingsProblems, claudeVersionRefusal, confinementRules, confinementServers, makeBrowserDirs, confinementLogLine, confinementMcp, confinementSettings } from './write-confinement.js'
 import { syncDaemonBridge } from './bridge-sync.js'
 import { clearNeedsAuthEntry, describeSetAt, NEEDS_AUTH_CLEARED_NOTE } from './claude-needs-auth.js'
 import { isRestricted, isRestrictedPolicy } from '../shared/policy-record.js'
@@ -69,9 +69,11 @@ export type RestrictedConfigInput = {
   /** The folder every restricted server's folder sits in, and one server's own folder in it. */
   tmpRoot: string
   tmp: (server: string) => string
+  /** Claude Code's built-in plugin ids (claudeBuiltins.list): each not known to serve no tools is turned off. Required: leaving it out would turn off only the known tool servers. */
+  builtins: readonly string[]
 }
 
-export function restrictedConfig({ policy, env, held, sessionName, load, roots, tmpRoot, tmp }: RestrictedConfigInput): { settings: object; mcp: object } {
+export function restrictedConfig({ policy, env, held, sessionName, load, roots, tmpRoot, tmp, builtins }: RestrictedConfigInput): { settings: object; mcp: object } {
   // Listed servers run under sandbox-exec (config/server-sandbox.ts): where that cannot be set up none starts, and the launch says why.
   // The same check hydra.toml's load makes; both run in the daemon. A failure while building a profile (the temp path) is a refusal too.
   const refuse = (why: string): never => { throw new PolicyRefusal(`specialist ${policy.specialist}: ${why}. No session starts until that is fixed; after you fix it, ${remedy(sessionName)}`) }
@@ -82,7 +84,7 @@ export function restrictedConfig({ policy, env, held, sessionName, load, roots, 
   }
   return {
     settings: {
-      enabledPlugins: { [BRIDGE_PLUGIN_ID]: true, ...Object.fromEntries(BUILTIN_TOOL_PLUGIN_IDS.map(id => [id, false])) },
+      enabledPlugins: { [BRIDGE_PLUGIN_ID]: true, ...builtinPluginsOff(builtins) },
       permissions: { allow: [BRIDGE_TOOLS_PERMISSION, ...policy.servers.flatMap(s => s.tools.map(t => serverToolRule(s.name, t)))] },
     },
     mcp: {
@@ -110,7 +112,7 @@ function writeRestrictedConfig(policy: RestrictedPolicy, tmuxName: string, sessi
   }
   try {
     const { env: load, roots } = sandboxInputs()
-    const { settings, mcp } = restrictedConfig({ policy, env: process.env, held: capturedSpawnVars(), sessionName: tmuxName, load, roots, tmpRoot: serverTmpRoot(), tmp: server => serverTmpDir(tmuxName, sessionId, server) })
+    const { settings, mcp } = restrictedConfig({ policy, env: process.env, held: capturedSpawnVars(), sessionName: tmuxName, load, roots, tmpRoot: serverTmpRoot(), tmp: server => serverTmpDir(tmuxName, sessionId, server), builtins: claudeBuiltins.list() })
     return writeRestrictedFiles(tmuxName, sessionId, { settings, mcp })
   } catch (err) {
     removeRestrictedFiles({ tmuxName, sessionId }, true)   // a refused launch leaves no folder behind
@@ -130,7 +132,7 @@ function writeConfinementConfig(w: NonNullable<LaunchPolicy['canOnlyWriteTo']>, 
   // The bridge is allowed by the exact command it runs, one per synced plugin folder: with none, the session could never reach its thread, so nothing starts.
   const bridgeCommands = bridgeServerCommands(CLAUDE_CONFIG)
   if (bridgeCommands.length === 0) throw new PolicyRefusal(`specialist ${specialist}: hydra's bridge plugin is not synced under ${CLAUDE_CONFIG}/plugins/cache/claude-plugins-official/discord/, so a session's server allowlist could not admit it and it would have no way to its thread. No session starts until the daemon has synced it (it does at boot); then ${remedy(tmuxName)}`)
-  const settings = confinementSettings({ ...policy, bridgeCommands })
+  const settings = confinementSettings({ ...policy, bridgeCommands, builtins: claudeBuiltins.list() })
   // An entry Claude Code's schema rejects makes it stop at an interactive "Settings Warning" and never start: refused here, never written.
   const invalid = claudeSettingsProblems(settings as { allowedMcpServers?: unknown })
   if (invalid.length) throw new PolicyRefusal(`specialist ${specialist}: the launch settings hold an entry Claude Code would reject (${invalid.join('; ')}), which stops it at a dialog and never starts the session, so no session starts. ${remedy(tmuxName)}`)

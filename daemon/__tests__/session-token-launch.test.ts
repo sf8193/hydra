@@ -18,6 +18,7 @@ import { codexSpawnEnv, SESSION_IDENTITY_VARS } from '../../shared/spawn-env.js'
 import { macLike } from './sandbox-host.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import { codexAdapter } from './codex-adapter.js'
+import { claudeBuiltins } from '../../engines/write-confinement.js'
 
 process.stderr.write = (() => true) as any
 
@@ -28,8 +29,10 @@ const base = { sessionId: SID, tmuxName: 'tok-t', cwd: '/tmp', originalCwd: '/tm
 const tokenFile = join(sessionTokenDir(), `tok-t-${SID}.token`)
 
 let fake: FakeTmux
-beforeEach(() => { fake = withFakeTmux(); _setLoadEnvForTesting(macLike()) })
-afterEach(() => { fake.restore(); _setLoadEnvForTesting(undefined); removeLaunchFiles({ tmuxName: 'tok-t', sessionId: SID }) })
+// A restricted launch reads Claude Code's built-in list: fixed here, so the real `claude plugin list` is never run.
+let savedBuiltins: typeof claudeBuiltins.cache
+beforeEach(() => { fake = withFakeTmux(); _setLoadEnvForTesting(macLike()); savedBuiltins = claudeBuiltins.cache; claudeBuiltins.cache = { key: claudeBuiltins.binary(), ids: [] } })
+afterEach(() => { fake.restore(); _setLoadEnvForTesting(undefined); claudeBuiltins.cache = savedBuiltins; removeLaunchFiles({ tmuxName: 'tok-t', sessionId: SID }) })
 
 async function claudeCommand(extra: Record<string, unknown> = {}): Promise<string> {
   await new ClaudeEngine({} as any).launch({ ...base, ...extra } as any)

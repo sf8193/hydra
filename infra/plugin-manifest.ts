@@ -31,11 +31,26 @@ export const BRIDGE_MCP_SERVER_KEY = `plugin:${BRIDGE_PLUGIN}:${BRIDGE_SERVER_NA
 export const BRIDGE_PLUGIN_ID = `${BRIDGE_PLUGIN}@${BRIDGE_MARKETPLACE}`
 /**
  * Claude Code's built-in plugins that serve tools of their own, as an MCP server the session connects to.
- * A restricted specialist's launch turns these off: its policy lists every server it may start, and the
+ * A restricted or write-confined launch turns these off: its policy lists every server it may start, and the
  * launch check refuses any other (claude-verify.ts), so one left on stops every restricted session from starting.
  * `cc-plugin-easel` arrived with Claude Code 2.1.327 (18 Nov 2026) and serves `mcp__easel__chart`.
  */
 export const BUILTIN_TOOL_PLUGIN_IDS = ['cc-plugin-easel@builtin'] as const
+/**
+ * Claude Code's built-ins seen to serve no tool server (Claude Code 2.1.332, 25 Nov 2026): a policy launch leaves these as the user has them.
+ * Every other built-in Claude Code lists is turned off (`builtinPluginsOff`), so one a Claude Code update adds arrives off in a restricted or
+ * write-confined launch instead of starting a server the launch check refuses (2.1.332 brought easel into write-confined launches, which never
+ * turned it off: three write-confined specialists could not start for ~17 min). Add one here only once it is known to serve no tools.
+ * Only what Claude Code lists can be turned off this way: 2.1.331 lists no built-in, and 2.1.332 lists them per config folder (claudeBuiltins).
+ */
+export const NO_TOOL_BUILTIN_PLUGIN_IDS: readonly string[] = [
+  'cc-plugin-agents-md@builtin', 'cc-plugin-plugin-authoring@builtin', 'cc-plugin-privacy@builtin', 'cc-plugin-telemetry@builtin', 'cc-plugin-you-should-know@builtin',
+]
+/** The `enabledPlugins` entries that turn built-ins off in a policy launch: the known tool servers always, and every listed built-in not known to serve no tools. */
+export function builtinPluginsOff(listed: readonly string[] = []): Record<string, false> {
+  const off = new Set<string>([...BUILTIN_TOOL_PLUGIN_IDS, ...listed.filter(id => id.endsWith('@builtin') && !NO_TOOL_BUILTIN_PLUGIN_IDS.includes(id))])
+  return Object.fromEntries([...off].map(id => [id, false as const]))
+}
 /** The permission rule that allows the bridge's tools: Claude Code names them `mcp__<server key with ':' as '_'>__<tool>`. */
 export const BRIDGE_TOOLS_PERMISSION = `mcp__${BRIDGE_MCP_SERVER_KEY.replaceAll(':', '_')}__*`
 
