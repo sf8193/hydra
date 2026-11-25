@@ -26,7 +26,7 @@ process.stderr.write = (() => true) as any
 let work: string
 let fake: FakeTmux
 let savedVersion: string | undefined
-let savedBuiltins: typeof claudeBuiltins.cache
+const realList = claudeBuiltins.list
 const saved: Record<string, string | undefined> = {}
 beforeEach(() => {
   work = mkdtempSync(join(tmpdir(), 'write-confinement-'))
@@ -35,8 +35,7 @@ beforeEach(() => {
   fake = withFakeTmux()
   savedVersion = claudeVersion.cache
   claudeVersion.cache = '2.1.326'
-  savedBuiltins = claudeBuiltins.cache
-  claudeBuiltins.cache = { key: claudeBuiltins.binary(), ids: ['cc-plugin-easel@builtin', 'cc-plugin-telemetry@builtin', 'cc-plugin-new-tools@builtin'] }
+  claudeBuiltins.list = () => ['cc-plugin-easel@builtin', 'cc-plugin-telemetry@builtin', 'cc-plugin-new-tools@builtin']   // the real `claude` is never run
   for (const k of ['BR_TOKEN']) saved[k] = process.env[k]
   process.env.BR_TOKEN = 'br-secret'
   mkdirSync(join(STATE_DIR, 'mods', 'personal'), { recursive: true }); writeFileSync(join(STATE_DIR, 'mods', 'personal', 'plugin.json'), '{}')
@@ -44,7 +43,7 @@ beforeEach(() => {
 afterEach(() => {
   fake.restore()
   claudeVersion.cache = savedVersion
-  claudeBuiltins.cache = savedBuiltins
+  claudeBuiltins.list = realList
   for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
   rmSync(work, { recursive: true, force: true })
 })
@@ -164,26 +163,32 @@ describe('the settings', () => {
     expect((confinementSettings({ denyCommands: [], cannotRead: [], builtins: ['cc-plugin-next@builtin'] }) as any).enabledPlugins).toEqual({ 'cc-plugin-easel@builtin': false, 'cc-plugin-next@builtin': false })
   })
 
-  test('the built-in list is read again when the `claude` on PATH becomes another file (an auto-update under a running daemon)', () => {
-    const bin = mkdtempSync(join(tmpdir(), 'claude-bin-'))
-    const savedPath = process.env.PATH, savedCache = claudeBuiltins.cache
+  test('the built-in list is kept per `claude` file and version: an update behind a wrapper is read again, a failed read is not kept', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'claude-bin-'))
+    const bin = join(dir, 'claude')
+    // A wrapper's stand-in, not on PATH: it says its version and, only in the launch's own config folder, its list.
+    writeFileSync(bin, `#!/bin/sh\n[ "$1" = --version ] && { cat '${dir}/version'; exit 0; }\n[ "$CLAUDE_CONFIG_DIR" = '${CLAUDE_CONFIG}' ] || { echo '[]'; exit 0; }\ncat '${dir}/list' || exit 1\n`); chmodSync(bin, 0o755)
+    const set = (version: string, list?: string) => { writeFileSync(join(dir, 'version'), `${version} (Claude Code)\n`); if (list === undefined) rmSync(join(dir, 'list'), { force: true }); else writeFileSync(join(dir, 'list'), list) }
+    const savedBinary = claudeBuiltins.binary, savedCache = claudeBuiltins.cache, savedDir = process.env.CLAUDE_CONFIG_DIR
+    claudeBuiltins.list = realList; claudeBuiltins.binary = () => realpathSync(bin); claudeBuiltins.cache = undefined
+    process.env.CLAUDE_CONFIG_DIR = join(dir, 'another-folder')   // the daemon's own folder may differ from the launch's
     try {
-      // It answers only in the launch's own config folder: which built-ins Claude Code lists depends on that folder.
-      writeFileSync(join(bin, 'claude'), `#!/bin/sh\n[ "$CLAUDE_CONFIG_DIR" = '${CLAUDE_CONFIG}' ] || { echo '[]'; exit 0; }\necho '[{"id":"cc-plugin-a@builtin"},{"id":"discord@claude-plugins-official"}]'\n`); chmodSync(join(bin, 'claude'), 0o755)
-      process.env.PATH = `${bin}:${savedPath}`
-      claudeBuiltins.cache = { key: '/old/claude', ids: ['cc-plugin-old@builtin'] }
-      const savedDir = process.env.CLAUDE_CONFIG_DIR; process.env.CLAUDE_CONFIG_DIR = join(bin, 'another-folder')   // the daemon's own folder may differ
-      try { expect(claudeBuiltins.list()).toEqual(['cc-plugin-a@builtin']) } finally { if (savedDir === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = savedDir }
-      writeFileSync(join(bin, 'claude'), '#!/bin/sh\nexit 1\n')   // same file: the cached list stands, nothing is run
-      expect(claudeBuiltins.list()).toEqual(['cc-plugin-a@builtin'])
-
-      // A list that could not be read is not kept: the next launch tries again.
-      claudeBuiltins.cache = undefined
+      set('2.1.331', '[{"id":"cc-plugin-a@builtin"},{"id":"discord@claude-plugins-official"}]')
+      expect(claudeBuiltins.list()).toEqual(['cc-plugin-a@builtin'])   // the file the key names ran (the PATH's claude would not answer so), in the launch's folder
+      set('2.1.331', '[{"id":"cc-plugin-b@builtin"}]')
+      expect(claudeBuiltins.list()).toEqual(['cc-plugin-a@builtin'])   // same file, same version: the kept list
+      set('2.1.332', '[{"id":"cc-plugin-b@builtin"}]')
+      expect(claudeBuiltins.list()).toEqual(['cc-plugin-b@builtin'])   // same path, new version (an update behind a wrapper): read again
+      set('2.1.333')   // the list cannot be read
       expect(claudeBuiltins.list()).toEqual([])
-      expect(claudeBuiltins.cache).toBeUndefined()
-      writeFileSync(join(bin, 'claude'), '#!/bin/sh\necho \'[{"id":"cc-plugin-b@builtin"}]\'\n')
-      expect(claudeBuiltins.list()).toEqual(['cc-plugin-b@builtin'])
-    } finally { process.env.PATH = savedPath; claudeBuiltins.cache = savedCache; rmSync(bin, { recursive: true, force: true }) }
+      expect((claudeBuiltins.cache as typeof savedCache)?.key).toContain('2.1.332')   // not kept: the next launch tries again
+      set('2.1.333', '[{"id":"cc-plugin-c@builtin"}]')
+      expect(claudeBuiltins.list()).toEqual(['cc-plugin-c@builtin'])
+    } finally {
+      claudeBuiltins.binary = savedBinary; claudeBuiltins.cache = savedCache
+      if (savedDir === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = savedDir
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   // Each setting is the only thing standing between the session and one way out; a mutation check names which.

@@ -31,11 +31,10 @@ const base = { sessionId: '11111111-1111-4111-8111-111111111111', tmuxName: 'sc-
 
 let fake: FakeTmux
 const saved: Record<string, string | undefined> = {}
-let savedBuiltins: typeof claudeBuiltins.cache
+const realList = claudeBuiltins.list
 beforeEach(() => {
-  // Claude Code's built-in list as a launch reads it, fixed here: the real `claude plugin list` is never run, and its version does not change the result.
-  savedBuiltins = claudeBuiltins.cache
-  claudeBuiltins.cache = { key: claudeBuiltins.binary(), ids: ['cc-plugin-easel@builtin', 'cc-plugin-telemetry@builtin', 'cc-plugin-new-tools@builtin'] }
+  // Claude Code's built-in list as a launch reads it, fixed here: the real `claude` is never run, and its version does not change the result.
+  claudeBuiltins.list = () => ['cc-plugin-easel@builtin', 'cc-plugin-telemetry@builtin', 'cc-plugin-new-tools@builtin']
   rmSync(restrictedDir(), { recursive: true, force: true })
   rmSync(serverTmpRoot(), { recursive: true, force: true })
   fake = withFakeTmux()
@@ -46,7 +45,7 @@ beforeEach(() => {
   mkdirSync(join(STATE_DIR, 'mods', 'personal'), { recursive: true }); writeFileSync(join(STATE_DIR, 'mods', 'personal', 'plugin.json'), '{}')
 })
 afterEach(() => {
-  claudeBuiltins.cache = savedBuiltins
+  claudeBuiltins.list = realList
   for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
   fake.restore()
   _setLoadEnvForTesting(undefined)

@@ -30,9 +30,9 @@ const tokenFile = join(sessionTokenDir(), `tok-t-${SID}.token`)
 
 let fake: FakeTmux
 // A restricted launch reads Claude Code's built-in list: fixed here, so the real `claude plugin list` is never run.
-let savedBuiltins: typeof claudeBuiltins.cache
-beforeEach(() => { fake = withFakeTmux(); _setLoadEnvForTesting(macLike()); savedBuiltins = claudeBuiltins.cache; claudeBuiltins.cache = { key: claudeBuiltins.binary(), ids: [] } })
-afterEach(() => { fake.restore(); _setLoadEnvForTesting(undefined); claudeBuiltins.cache = savedBuiltins; removeLaunchFiles({ tmuxName: 'tok-t', sessionId: SID }) })
+const realList = claudeBuiltins.list
+beforeEach(() => { fake = withFakeTmux(); _setLoadEnvForTesting(macLike()); claudeBuiltins.list = () => [] })
+afterEach(() => { fake.restore(); _setLoadEnvForTesting(undefined); claudeBuiltins.list = realList; removeLaunchFiles({ tmuxName: 'tok-t', sessionId: SID }) })
 
 async function claudeCommand(extra: Record<string, unknown> = {}): Promise<string> {
   await new ClaudeEngine({} as any).launch({ ...base, ...extra } as any)

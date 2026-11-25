@@ -113,9 +113,11 @@ export const claudeVersion = {
 }
 
 /**
- * The built-in plugins (`name@builtin`) of the Claude Code a launch will run, from `claude plugin list --json`. Read again whenever the
- * `claude` on PATH resolves to another file (an auto-update swaps it under a running daemon), else once; a list that cannot be read is
- * empty for that launch and read again at the next, which leaves the known tool servers off and nothing else (builtinPluginsOff). A test seam: `claudeBuiltins.list`.
+ * The built-in plugins (`name@builtin`) of the Claude Code a launch will run, from `claude plugin list --json`. Kept per `claude` file on PATH
+ * and the version it reports (`claude --version`, ~50 ms, asked at every policy launch): an auto-update swaps the binary under a running daemon,
+ * and a wrapper script first on PATH keeps its path when Claude Code updates behind it, so the path alone would keep a stale list. A list that
+ * cannot be read is empty for that launch and read again at the next, which leaves the known tool servers off and nothing else (builtinPluginsOff).
+ * A test seam: `claudeBuiltins.list`, `claudeBuiltins.binary`.
  */
 export const claudeBuiltins = {
   cache: undefined as { key: string; ids: string[] } | undefined,
@@ -127,14 +129,18 @@ export const claudeBuiltins = {
     return ''
   },
   list(): string[] {
-    const key = this.binary()
+    // In the launch's own config folder: which built-ins Claude Code lists depends on it (2.1.332 left easel out of a fresh folder's list).
+    const env = { ...process.env, CLAUDE_CONFIG_DIR: CLAUDE_CONFIG }
+    const bin = this.binary()
+    if (!bin) { process.stderr.write(`daemon: no \`claude\` on PATH to list Claude Code's built-in plugins (only the known tool servers are turned off in this launch)\n`); return [] }
+    // The very file the key names runs both commands, so the list and its key always describe the same Claude Code.
+    const version = /\d+\.\d+\.\d+/.exec(spawnSync(bin, ['--version'], { encoding: 'utf8', timeout: 10_000, env }).stdout ?? '')?.[0]
+    if (!version) { process.stderr.write(`daemon: ${bin} --version gave no version, so its built-in plugins are not listed (only the known tool servers are turned off in this launch)\n`); return [] }
+    const key = `${bin} ${version}`
     if (this.cache?.key === key) return this.cache.ids
     // Only a list that was read is kept (as claudeVersion.read): a failed or timed-out one is tried again at the next launch.
     try {
-      // In the launch's own config folder: which built-ins Claude Code lists depends on it (2.1.332 left easel out of a fresh folder's list).
-      // The very file the cache is keyed on, so the list and its key always name the same Claude Code.
-      if (!key) throw new Error('no `claude` on PATH')
-      const r = spawnSync(key, ['plugin', 'list', '--json'], { encoding: 'utf8', timeout: 15_000, env: { ...process.env, CLAUDE_CONFIG_DIR: CLAUDE_CONFIG } })
+      const r = spawnSync(bin, ['plugin', 'list', '--json'], { encoding: 'utf8', timeout: 15_000, env })
       const parsed: unknown = JSON.parse(r.stdout ?? '')
       if (!Array.isArray(parsed)) throw new Error('its output is not a list')
       const ids = parsed.map(p => (p as { id?: unknown })?.id).filter((id): id is string => typeof id === 'string' && id.endsWith('@builtin'))
