@@ -133,8 +133,9 @@ export const claudeBuiltins = {
     const env = { ...process.env, CLAUDE_CONFIG_DIR: CLAUDE_CONFIG }
     const bin = this.binary()
     if (!bin) { process.stderr.write(`daemon: no \`claude\` on PATH to list Claude Code's built-in plugins (only the known tool servers are turned off in this launch)\n`); return [] }
-    // The very file the key names runs both commands, so the list and its key always describe the same Claude Code.
-    const version = /\d+\.\d+\.\d+/.exec(spawnSync(bin, ['--version'], { encoding: 'utf8', timeout: 10_000, env }).stdout ?? '')?.[0]
+    // The very file the key names runs both commands, so the list and its key always describe the same Claude Code. Both block the daemon:
+    // --version answers in ~50 ms, so 2 s bounds a hung one; the list runs only when the version is new.
+    const version = /\d+\.\d+\.\d+/.exec(spawnSync(bin, ['--version'], { encoding: 'utf8', timeout: 2_000, env }).stdout ?? '')?.[0]
     if (!version) { process.stderr.write(`daemon: ${bin} --version gave no version, so its built-in plugins are not listed (only the known tool servers are turned off in this launch)\n`); return [] }
     const key = `${bin} ${version}`
     if (this.cache?.key === key) return this.cache.ids
