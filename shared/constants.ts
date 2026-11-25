@@ -319,6 +319,15 @@ export function isDeleteReaction(emoji: string): boolean {
   return DELETE_REACTIONS.includes(normalizeReaction(emoji))
 }
 
+const THUMBS_UP = ['+1', 'thumbsup', '👍']
+const THUMBS_DOWN = ['-1', 'thumbsdown', '👎']
+
+/** True for a 👍, false for a 👎, undefined for any other reaction. */
+export function thumbOf(emoji: string): boolean | undefined {
+  const e = normalizeReaction(emoji)
+  return THUMBS_UP.includes(e) ? true : THUMBS_DOWN.includes(e) ? false : undefined
+}
+
 export const SESSION_LABELS = ['review', 'build', 'investigate'] as const
 
 export const isSessionLabel = (name: string): name is SessionLabel =>

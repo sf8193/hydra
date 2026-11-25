@@ -5,7 +5,7 @@ import { cacheSlackChannel, cacheSlackThread, cachedSlackChannel } from '../infr
 import { parseArchiveUrl } from '../shared/slack-conversation.js'
 import { refreshDashboard } from './dashboard.js'
 import { registry, threadRegistry, type SessionInfo } from '../sessions/registry.js'
-import { flagStranger, acknowledged } from './stranger.js'
+import { flagStranger, notePrompt, decide } from './stranger.js'
 import { transport } from '../sessions/bridge-transport.js'
 import { operatorIds, gate, channelAllowed, channelPolicy, admitTaggedChannel, ackReactionOf, mentionsUs, droppedApp } from '../sessions/access.js'
 import type { DownloadedFile } from '../gateways/gateway.js'
@@ -14,7 +14,7 @@ import { transcribeDownloads, mergeTranscripts } from '../infra/transcription.js
 
 import { handleSpawnIntercept, handleTemplateSpawn, handleKillIntercept, handleRestartIntercept, handleReconnectIntercept, handleCommandsIntercept } from './commands/global.js'
 import { handleRecoverIntercept } from './recovery.js'
-import { resolveModelAlias, resolveEngineAlias, resolveAnyEngineAlias, engineAliasPattern, extractModelPrefix, isDeleteReaction, MODEL_ALIAS_PATTERN, ENGINE_ALIAS_KEYS, ALL_ENGINE_ALIAS_PATTERN, DEFAULT_REVIEW_ROUNDS } from '../shared/constants.js'
+import { resolveModelAlias, resolveEngineAlias, resolveAnyEngineAlias, engineAliasPattern, extractModelPrefix, isDeleteReaction, thumbOf, MODEL_ALIAS_PATTERN, ENGINE_ALIAS_KEYS, ALL_ENGINE_ALIAS_PATTERN, DEFAULT_REVIEW_ROUNDS } from '../shared/constants.js'
 import { ENGINES } from '../shared/engines/index.js'
 import { isForMain, noteMainChannel } from '../sessions/main.js'
 import { handleMainHandoffIntercept } from './main-handoff.js'
@@ -421,6 +421,15 @@ export function bindRouter(): void {
   // Reaction-based message deletion (:hocho: on bot messages)
   if (gateway.onReaction) {
     gateway.onReaction(async (event) => {
+      const thumb = thumbOf(event.emoji)
+      if (thumb !== undefined) {
+        if (!operatorIds().includes(event.userId) || !channelAllowed(event)) return
+        const who = decide(event.messageId, thumb)
+        if (!who) return
+        if (thumb) threadRegistry.allowSenders(who.threadId, [who.senderId])
+        void safeSend(who.threadId, thumb ? `Listening to <@${who.senderId}> in this thread.` : `Ignoring <@${who.senderId}> in this thread.`)
+        return
+      }
       if (!isDeleteReaction(event.emoji)) return
       if (!operatorIds().includes(event.userId)) return
       if (!channelAllowed(event)) return
@@ -918,12 +927,6 @@ export function bindRouter(): void {
       if (msg.isThread) {
         const resolvedThreadId = registry.resolveThreadId(msg)
 
-        const letIn = PERMISSION_REPLY_RE.test(msg.content) ? [] : acknowledged(resolvedThreadId, msg.content)
-        if (letIn.length) {
-          threadRegistry.allowSenders(resolvedThreadId, letIn)
-          void safeSend(resolvedThreadId, `Listening to ${letIn.map(id => `<@${id}>`).join(', ')} in this thread.`, { replyTo: msg.id })
-        }
-
         // Behind an answer already held for this thread's specialist: the started session may already be registered, and
         // this one still goes after the held one.
         const holding = holdingFor(resolvedThreadId)
@@ -1098,8 +1101,8 @@ export function bindRouter(): void {
 
     if (result.action === 'drop') {
       if (strangerThread && registry.getByThread(strangerThread) && flagStranger(strangerThread, senderId)) {
-        const operator = operatorIds()[0]
-        void safeSend(strangerThread, `Stranger danger: <@${senderId}> is not the operator. <@${operator}>, reply "yes" and I'll listen to them in this thread.`, { replyTo: msg.id })
+        void safeSend(strangerThread, `Stranger danger: <@${senderId}> is not the operator. React 👍 to this message and I'll listen to them in this thread, or 👎 to ignore them.`, { replyTo: msg.id })
+          .then(ids => { for (const id of ids) notePrompt(id, strangerThread, senderId) })
       }
       return
     }
