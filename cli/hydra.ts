@@ -14,6 +14,7 @@ import {
 import { peek } from './peek.js'
 import { ROUTE_USAGE, routeFlags } from '../routing/route-request.js'
 import { migrateCommand } from './migrate.js'
+import { initPlatform, type InitOptions } from './init.js'
 import { browserMain } from './browser.js'
 import { peopleCommand } from './people.js'
 import { configAddCommand } from './config-add.js'
@@ -38,6 +39,11 @@ const BIND_REQUEST_TIMEOUT_MS = 120_000
 const USAGE = `hydra — manage hydra daemons and sessions
 
 Setup:
+  hydra init <discord|slack>           Guided first-time setup (tokens, operator pairing, .env, hydra.toml, install)
+    --name <bot>                       Bot name for the Slack manifest
+    --cwd <path>                       Working directory for spawned sessions
+    --config-dir <path>                Claude config dir (default: ~/.claude)
+    --operator <user id>               Skip DM pairing and set your user ID directly
   hydra install <platform>             Generate launchd watchdog + run preflight
     --cwd <path>                       Working directory for spawned sessions
     --config-dir <path>                Claude config dir (default: ~/.claude)
@@ -272,6 +278,38 @@ async function main(): Promise<void> {
   if (command === 'slack') {
     if (daemonName) { console.error('error: slack takes --state-dir <dir>, not --daemon'); process.exit(1) }
     process.exit(slackCommand(filtered.slice(1), stateDirOpt))
+  }
+
+  if (command === 'init') {
+    const platform = filtered[1]
+    if (platform !== 'discord' && platform !== 'slack') {
+      console.error('error: platform must be discord or slack (e.g. hydra init discord)')
+      process.exit(1)
+    }
+    if (stateDirOpt) {
+      console.error(`error: init acts on the ${platform} daemon's default state dir and launchd job, so --state-dir cannot apply to it`)
+      process.exit(1)
+    }
+    if (daemonName) {
+      console.error(`error: init acts on the ${platform} daemon's default state dir and launchd job, so --daemon cannot apply to it`)
+      process.exit(1)
+    }
+    const initOpts: InitOptions = {}
+    const seen = new Set<string>()
+    const flags = new Map<string, keyof InitOptions>([
+      ['--name', 'name'], ['--cwd', 'cwd'], ['--config-dir', 'configDir'], ['--operator', 'operator'],
+    ])
+    for (let i = 2; i < filtered.length; i++) {
+      const flag = filtered[i]
+      const key = flags.get(flag)
+      if (!key) { console.error(`error: unknown option "${flag}"`); process.exit(1) }
+      if (seen.has(flag)) { console.error(`error: ${flag} may only be given once`); process.exit(1) }
+      const val = filtered[++i]
+      if (!val || val.startsWith('-')) { console.error(`error: ${flag} requires a value`); process.exit(1) }
+      seen.add(flag)
+      initOpts[key] = val
+    }
+    process.exit(await initPlatform(platform, initOpts))
   }
 
   if (command === 'migrate') {

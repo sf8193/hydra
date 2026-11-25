@@ -20,6 +20,23 @@ Steps 1–6 below set up the gateway. [Apps in hydra.toml](slack-connector.md#ap
 - `bun`, `tmux`, and the `claude` CLI on your PATH
 - A Slack workspace where you can create an app (or an admin who can approve one)
 
+## Fast path: `hydra init slack`
+
+For the **Slack gateway**, one command walks through the whole setup:
+
+```bash
+bun install
+bun cli/hydra.ts init slack
+```
+
+`hydra init slack` prints a pre-filled 1-click Slack App Manifest link (and raw YAML fallback), verifies both your `xapp-` and `xoxb-` tokens live, pairs you as operator via a 6-digit DM code (or pasted member ID), writes `.env` and `hydra.toml`, installs the bridge plugin and launchd watchdog, and runs `hydra preflight slack`. On claude.ai Team/Enterprise plans, also check the `channelsEnabled` note in step 5. Then start:
+
+```bash
+hydra up slack
+```
+
+Use steps 1–6 below for manual setup.
+
 ## 1. Create the Slack app
 
 *Slack gateway.* Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From a manifest**, pick your workspace, and paste this JSON. **Give it a unique name** (app names must be unique in a workspace):
@@ -130,7 +147,8 @@ claude plugin install discord@claude-plugins-official
 bun install
 bun cli/hydra.ts install slack --cwd ~/work   # launchd watchdog, `hydra` CLI, preflight
 hydra migrate slack --operator UXXXXXXXX       # writes hydra.toml with you as operator
-hydra up slack                                  # daemon + bot
+hydra preflight slack                          # verify deployment is ready
+hydra up slack                                 # daemon + bot
 ```
 
 Fix every ✗ that preflight reports before `hydra up`. `hydra preflight slack` re-runs the checks. See [ONBOARDING_TIPS.md](ONBOARDING_TIPS.md) for the gotcha behind each step.
