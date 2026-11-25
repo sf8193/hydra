@@ -10,6 +10,7 @@ import { browserProfileProblem, managedMcpNameClashes, unreadableWorkdir } from 
 import { confinementRefusal, describePolicy, endVerifying, macosRefusal, missingTokenRefusal, resolvePolicy, verifyBackoff, verifyRefusal } from '../restricted.js'
 import { PolicyRefusal, remedy, type LaunchPolicy } from '../../shared/launch-policy.js'
 import { refusalNoticeKey, threadNotices } from '../../shared/notice-limit.js'
+import { notifyOperator } from '../../sessions/access.js'
 import { currentHydraConfig, hydraLoadEnv } from '../../infra/hydra-config.js'
 import { workdirRestrictionIssues } from '../../config/restricted-workdir.js'
 import { capturedSpawnVars } from '../../shared/spawn-env.js'
@@ -53,6 +54,11 @@ const verifyKey = (specialist: string, threadId: string | undefined, sessionName
 function clearRefusals(specialist: string): void { for (const k of [...verifyRefused.keys()]) if (k.startsWith(`${specialist}\n`)) verifyRefused.delete(k) }
 /** How long a refused launch stays on record for `hydra health`. Older ones go when the next is kept, so the map holds at most a day's refusals. */
 const REFUSAL_KEEP_MS = 24 * 3_600_000
+/** Whether a start of this specialist was refused since it last started (in any thread), within the time a refusal is kept. */
+function refusedSince(specialist: string, now: number): boolean {
+  for (const [k, r] of verifyRefused) if (k.startsWith(`${specialist}\n`) && now - r.at <= REFUSAL_KEEP_MS) return true
+  return false
+}
 function keepRefusal(key: string, at: number, why: string): void {
   for (const [k, r] of verifyRefused) if (at - r.at > REFUSAL_KEEP_MS) verifyRefused.delete(k)
   verifyRefused.set(key, { at, why })
@@ -592,7 +598,13 @@ export async function verifyPolicyLaunch(params: {
     verdict = { ok: false, why: `the check itself failed to run, so what it ${words.verb} is unknown` }
   } finally { endVerifying(sessionId) }
   if (!verdict.ok) {
-    keepRefusal(verifyKey(specialist, threadId, sessionName), verifyBackoff.now(), verdict.why)
+    // The first refusal since the specialist last started also goes to the operator: the thread that hears it is often a staff one, and a
+    // cause outside hydra.toml (a Claude Code update) refuses every start until someone acts (25 Nov 2026: three Slack bots down ~17 min).
+    const at = verifyBackoff.now()
+    const firstRefusal = !refusedSince(specialist, at)
+    keepRefusal(verifyKey(specialist, threadId, sessionName), at, verdict.why)
+    if (firstRefusal) void notifyOperator(`⚠️ **${specialist} cannot start**: hydra stopped its new session (${sessionName}) because its ${words.checkLabel} refused: ${verdict.why}. Until the cause is fixed, its starts are likely refused. \`hydra health\` lists it; it clears at the next start that passes.`)
+      .then(sent => { if (!sent) process.stderr.write(`daemon: spawn ${tmuxName}: the operator could not be told about the refused start\n`) })
     process.stderr.write(`daemon: spawn ${tmuxName}: ${words.checkLabel} refused: ${verdict.why}\n`)
     const created = registry.get(sessionId)
     if (created && created.sessionId === sessionId) {

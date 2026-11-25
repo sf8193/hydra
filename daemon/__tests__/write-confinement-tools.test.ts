@@ -49,7 +49,7 @@ describe('the surface of a write-confined session', () => {
 
 describe('what the settings give its shell', () => {
   test('sandbox settings allow no unix socket, so its Bash cannot reach the daemon\'s (the live test shows connect() fails; this pins that nothing here opens it)', () => {
-    const s = confinementSettings({ denyCommands: [], cannotRead: ['/s'] }) as { sandbox: { network?: unknown } }
+    const s = confinementSettings({ denyCommands: [], cannotRead: ['/s'], builtins: [] }) as { sandbox: { network?: unknown } }
     expect(s.sandbox.network).toBeUndefined()
     expect(JSON.stringify(s)).not.toContain('allowUnixSockets')
   })

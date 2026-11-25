@@ -10,7 +10,7 @@ import { transport } from '../../sessions/bridge-transport.js'
 import { engines } from '../../sessions/engine-instances.js'
 import type { LaunchInput } from '../../engines/engine-adapter.js'
 import { _setHydraConfigForTesting, _setLoadEnvForTesting } from '../../infra/hydra-config.js'
-import { bornPolicy, deliveryRefusal, unverified } from '../../app/restricted.js'
+import { bornPolicy, deliveryRefusal, unverified, verifyBackoff } from '../../app/restricted.js'
 import { PolicyRefusal, type LaunchPolicy } from '../../shared/launch-policy.js'
 import { confinementRules, confinementServers } from '../../engines/write-confinement.js'
 import { verifyConfinement, verifyDeps } from '../../engines/claude-verify.js'
@@ -247,6 +247,44 @@ describe('the start check', () => {
     await expect(start()).rejects.toThrow(/did not show the write confinement/)
     expect(stops).toContain(launches[0].sessionId)
     expect(told.join('\n')).toMatch(/started MCP servers the policy does not give it: `plugin:slack:slack`/)
+  })
+
+  // 25 Nov 2026: a Claude Code update refused every start of three staff-facing bots, and only their threads were told.
+  test('the first refused start also tells the operator; another refusal before a start passes does not, and one after does, or one after a day', async () => {
+    const dms: string[] = []
+    const savedDM = (gateway as any).sendDM, savedNow = verifyBackoff.now
+    let now = 1_000_000
+    const fresh = () => { for (const s of [...registry.values()]) if (s.threadId === THREAD) registry.delete(s.sessionId); registry.deleteThread(THREAD); threadRegistry.threads.delete(THREAD); launches.length = 0; seedDead(); now += verifyBackoff.ms + 1 }   // (a launched session's bridge reads as up in this file)
+    ;(gateway as any).sendDM = async (_user: string, text: string) => { dms.push(text) }
+    verifyBackoff.now = () => now
+    try {
+      debugText = p => applied(p) + '2026-11-13T04:34:18.000Z [DEBUG] MCP server "easel": Starting connection with timeout of 30000ms\n'
+      seedDead()
+      await expect(start()).rejects.toThrow(/did not show the write confinement/)
+      await Bun.sleep(0)
+      expect(dms).toHaveLength(1)
+      expect(dms[0]).toMatch(/gem cannot start/)
+      expect(dms[0]).toMatch(/started MCP servers the policy does not give it: `easel`/)
+
+      fresh()   // past the back-off: the next message starts another session, refused the same way
+      await expect(start()).rejects.toThrow(/did not show the write confinement/)
+      await Bun.sleep(0)
+      expect(dms).toHaveLength(1)
+
+      debugText = undefined; fresh()
+      await start()   // passes: the specialist is starting again
+      debugText = p => applied(p) + '2026-11-13T04:34:18.000Z [DEBUG] MCP server "easel": Starting connection with timeout of 30000ms\n'
+      fresh()
+      await expect(start()).rejects.toThrow(/did not show the write confinement/)
+      await Bun.sleep(0)
+      expect(dms).toHaveLength(2)
+
+      // Refused, idle past the day a refusal is kept, refused again: that is news again.
+      fresh(); now += 24 * 3_600_000 + 1
+      await expect(start()).rejects.toThrow(/did not show the write confinement/)
+      await Bun.sleep(0)
+      expect(dms).toHaveLength(3)
+    } finally { (gateway as any).sendDM = savedDM; verifyBackoff.now = savedNow }
   })
 
   test('a file that never appears refuses: no news is not good news', async () => {

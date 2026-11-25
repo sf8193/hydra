@@ -19,7 +19,7 @@ export const withoutSandbox = (): LoadEnv => macLike({ isCommand: c => c !== SAN
 
 /** A restrictedConfig input with the sandbox's three injected parts filled from a LoadEnv; a test overrides what it checks. */
 export const configInput = (over: Partial<RestrictedConfigInput> & Pick<RestrictedConfigInput, 'policy'>, env: LoadEnv = macLike(), operatorRoots: string[] = []): RestrictedConfigInput => ({
-  env: {}, held: {}, sessionName: 's', load: env, roots: offLimitRoots(env, operatorRoots), tmpRoot: '/srv/tmp', tmp: t => `/srv/tmp/${t}`, ...over,
+  env: {}, held: {}, sessionName: 's', load: env, roots: offLimitRoots(env, operatorRoots), tmpRoot: '/srv/tmp', tmp: t => `/srv/tmp/${t}`, builtins: [], ...over,
 })
 
 export const rootsOf = (env: LoadEnv = macLike(), operatorRoots: string[] = []) => offLimitRoots(env, operatorRoots)

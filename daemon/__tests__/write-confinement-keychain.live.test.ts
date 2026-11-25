@@ -59,7 +59,7 @@ describe.skipIf(!LIVE)('the Bash tool of a write-confined session and a keychain
     next = { command, extra }
     unlock()
     const settings = join(fake, `settings-${Math.random().toString(36).slice(2)}.json`)
-    writeFileSync(settings, JSON.stringify(confinementSettings({ denyCommands: [], cannotRead })))
+    writeFileSync(settings, JSON.stringify(confinementSettings({ denyCommands: [], cannotRead, builtins: [] })))
     const p = Bun.spawn(['claude', '-p', 'go', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions', '--settings', settings], {
       cwd: workdir, stdout: 'pipe', stderr: 'pipe', stdin: 'ignore',
       env: { ...env(), ANTHROPIC_BASE_URL: `http://127.0.0.1:${api.port}`, ANTHROPIC_API_KEY: 'sk-ant-fake', CLAUDE_CONFIG_DIR: configDir },

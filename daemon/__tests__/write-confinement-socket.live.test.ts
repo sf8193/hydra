@@ -47,7 +47,7 @@ describe.skipIf(!LIVE)('the Bash tool of a write-confined session and a unix soc
   async function bash(command: string, cannotRead: string[], allowUnixSockets: string[] = []): Promise<string> {
     next = command
     const settings = join(fake, `settings-${Math.random().toString(36).slice(2)}.json`)
-    const base = confinementSettings({ denyCommands: [], cannotRead }) as { sandbox: Record<string, unknown> }
+    const base = confinementSettings({ denyCommands: [], cannotRead, builtins: [] }) as { sandbox: Record<string, unknown> }
     if (allowUnixSockets.length) base.sandbox.network = { allowUnixSockets }
     writeFileSync(settings, JSON.stringify(base))
     const p = Bun.spawn(['claude', '-p', 'go', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions', '--settings', settings], {

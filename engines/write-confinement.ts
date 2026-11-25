@@ -16,9 +16,9 @@ import { basename, join } from 'path'
 import { browserDownloadDir, browserProfileDir, fileRefusal, fileSendDecision, fillProfile, readDenyRule } from '../config/write-confinement.js'
 import { CONFINED_TOOLS, MAX_ATTACHMENT_BYTES } from '../shared/constants.js'
 import { UNIVERSAL_TOOLS } from '../shared/tool-definitions.js'
-import { STATE_DIR } from '../infra/config.js'
+import { CLAUDE_CONFIG, STATE_DIR } from '../infra/config.js'
 import { expectedServerNames } from './claude-verify.js'
-import { bridgeCommand } from '../infra/plugin-manifest.js'
+import { bridgeCommand, builtinPluginsOff } from '../infra/plugin-manifest.js'
 import { readdirSync, readFileSync } from 'fs'
 import { PolicyRefusal, remedy, type ConfinementPolicy, type ConfinementServer, type LaunchPolicy } from '../shared/launch-policy.js'
 import { serverToolRule } from './claude-names.js'
@@ -37,8 +37,10 @@ export const confinementServers = (policy: Pick<ConfinementPolicy, 'servers'>): 
 export const confinementServerCommand = (policy: Pick<ConfinementPolicy, 'workdir' | 'browserProfile'>, s: Pick<ConfinementServer, 'command' | 'profileArgs'>): string[] =>
   [s.command, ...s.profileArgs.map(a => fillProfile(a, policy.workdir, policy.browserProfile))]
 
-export function confinementSettings(policy: Pick<ConfinementPolicy, 'denyCommands' | 'cannotRead'> & ({ servers?: undefined } | Pick<ConfinementPolicy, 'servers' | 'workdir' | 'browserProfile'>) & { bridgeCommands?: readonly string[][] }): object {
+export function confinementSettings(policy: Pick<ConfinementPolicy, 'denyCommands' | 'cannotRead'> & ({ servers?: undefined } | Pick<ConfinementPolicy, 'servers' | 'workdir' | 'browserProfile'>) & { bridgeCommands?: readonly string[][]; builtins: readonly string[] }): object {
   return {
+    // Claude Code's built-ins that serve tools (or may: any it lists that is not known to serve no tools) are off. allowedMcpServers does not drop easel's server, and the start check refuses any server the policy does not list (plugin-manifest.ts builtinPluginsOff).
+    enabledPlugins: builtinPluginsOff(policy.builtins),
     // Claude Code's own allowlist, which governs user/project/local config, --mcp-config, plugins and claude.ai connectors alike (not --strict-mcp-config: shown against the real Claude Code to drop a plugin's server, and the bridge is one; write-confinement-mcp.live.test.ts).
     // Every server by the exact command it runs: the listed ones with their folders filled in, the bridge once per plugin folder. Not by `serverName`: once any `serverCommand` entry exists (the bridge's), Claude Code 2.1.326 matches a stdio server by its full command only and a `serverName` entry no longer admits it (the server is dropped as "blocked by enterprise policy"; write-confinement-mcp.live.test.ts, Claude Code 2.1.326, #772). A name entry would also be dead weight. All servers here are stdio (`confinementMcp`), so there is no `serverUrl` case.
     allowedMcpServers: [...(policy.servers ?? []).map(s => ({ serverCommand: confinementServerCommand(policy as Pick<ConfinementPolicy, 'workdir' | 'browserProfile'>, s) })), ...(policy.bridgeCommands ?? []).map(serverCommand => ({ serverCommand: [...serverCommand] }))],
@@ -70,7 +72,7 @@ export function confinementSettings(policy: Pick<ConfinementPolicy, 'denyCommand
 
 /** The permission rules the settings carry, as the start check expects to see Claude Code apply them. */
 export function confinementRules(policy: Pick<ConfinementPolicy, 'denyCommands' | 'cannotRead'> & ({ servers?: undefined } | Pick<ConfinementPolicy, 'servers' | 'workdir' | 'browserProfile'>)): { allow: string[]; deny: string[] } {
-  const p = (confinementSettings(policy) as { permissions: { allow: string[]; deny: string[] } }).permissions
+  const p = (confinementSettings({ ...policy, builtins: [] }) as { permissions: { allow: string[]; deny: string[] } }).permissions
   return { allow: p.allow, deny: p.deny }
 }
 
@@ -107,6 +109,48 @@ export const claudeVersion = {
     const v = /\d+\.\d+\.\d+/.exec(r.stdout ?? '')?.[0]
     if (v) this.cache = v
     return v
+  },
+}
+
+/**
+ * The built-in plugins (`name@builtin`) of the Claude Code a launch will run, from `claude plugin list --json`. Kept per `claude` file on PATH
+ * and the version it reports (`claude --version`, ~50 ms, asked at every policy launch): an auto-update swaps the binary under a running daemon,
+ * and a wrapper script first on PATH keeps its path when Claude Code updates behind it, so the path alone would keep a stale list. A list that
+ * cannot be read is empty for that launch and read again at the next, which leaves the known tool servers off and nothing else (builtinPluginsOff).
+ * A test seam: `claudeBuiltins.list`, `claudeBuiltins.binary`.
+ */
+export const claudeBuiltins = {
+  cache: undefined as { key: string; ids: string[] } | undefined,
+  binary(): string {
+    for (const dir of (process.env.PATH ?? '').split(':')) {
+      if (!dir) continue
+      try { return realpathSync(join(dir, 'claude')) } catch { /* not in this folder */ }
+    }
+    return ''
+  },
+  list(): string[] {
+    // In the launch's own config folder: which built-ins Claude Code lists depends on it (2.1.332 left easel out of a fresh folder's list).
+    const env = { ...process.env, CLAUDE_CONFIG_DIR: CLAUDE_CONFIG }
+    const bin = this.binary()
+    if (!bin) { process.stderr.write(`daemon: no \`claude\` on PATH to list Claude Code's built-in plugins (only the known tool servers are turned off in this launch)\n`); return [] }
+    // The very file the key names runs both commands, so the list and its key always describe the same Claude Code. Both block the daemon:
+    // --version answers in ~50 ms, so 2 s bounds a hung one; the list runs only when the version is new.
+    const version = /\d+\.\d+\.\d+/.exec(spawnSync(bin, ['--version'], { encoding: 'utf8', timeout: 2_000, env }).stdout ?? '')?.[0]
+    if (!version) { process.stderr.write(`daemon: ${bin} --version gave no version, so its built-in plugins are not listed (only the known tool servers are turned off in this launch)\n`); return [] }
+    const key = `${bin} ${version}`
+    if (this.cache?.key === key) return this.cache.ids
+    // Only a list that was read is kept (as claudeVersion.read): a failed or timed-out one is tried again at the next launch.
+    try {
+      const r = spawnSync(bin, ['plugin', 'list', '--json'], { encoding: 'utf8', timeout: 15_000, env })
+      const parsed: unknown = JSON.parse(r.stdout ?? '')
+      if (!Array.isArray(parsed)) throw new Error('its output is not a list')
+      const ids = parsed.map(p => (p as { id?: unknown })?.id).filter((id): id is string => typeof id === 'string' && id.endsWith('@builtin'))
+      this.cache = { key, ids }
+      return ids
+    } catch (err) {
+      process.stderr.write(`daemon: could not list Claude Code's built-in plugins (only the known tool servers are turned off in this launch): ${err}\n`)
+      return []
+    }
   },
 }
 
