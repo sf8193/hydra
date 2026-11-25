@@ -423,11 +423,9 @@ export function bindRouter(): void {
     gateway.onReaction(async (event) => {
       const thumb = thumbOf(event.emoji)
       if (thumb !== undefined) {
-        if (!operatorIds().includes(event.userId) || !channelAllowed(event)) return
-        const who = decide(event.messageId, thumb)
-        if (!who) return
-        if (thumb) threadRegistry.allowSenders(who.threadId, [who.senderId])
-        void safeSend(who.threadId, thumb ? `Listening to <@${who.senderId}> in this thread.` : `Ignoring <@${who.senderId}> in this thread.`)
+        const who = operatorIds().includes(event.userId) && channelAllowed(event) ? decide(event.messageId, thumb) : undefined
+        if (who && thumb) threadRegistry.allowSenders(who.threadId, [who.senderId])
+        if (who) void safeSend(who.threadId, `${thumb ? 'Listening to' : 'Ignoring'} <@${who.senderId}> in this thread.`)
         return
       }
       if (!isDeleteReaction(event.emoji)) return
@@ -1101,8 +1099,7 @@ export function bindRouter(): void {
 
     if (result.action === 'drop') {
       if (strangerThread && registry.getByThread(strangerThread) && flagStranger(strangerThread, senderId)) {
-        void safeSend(strangerThread, `Stranger danger: <@${senderId}> is not the operator. React 👍 to this message and I'll listen to them in this thread, or 👎 to ignore them.`, { replyTo: msg.id })
-          .then(ids => { for (const id of ids) notePrompt(id, strangerThread, senderId) })
+        void safeSend(strangerThread, `Stranger danger: <@${senderId}> is not the operator. React 👍 to this message and I'll listen to them in this thread, or 👎 to ignore them.`, { replyTo: msg.id }).then(ids => { for (const id of ids) notePrompt(id, strangerThread, senderId) })
       }
       return
     }
