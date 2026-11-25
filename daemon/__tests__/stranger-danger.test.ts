@@ -6,13 +6,15 @@ import { transport } from '../../sessions/bridge-transport.js'
 import { pendingPermissions } from '../../app/permission.js'
 import { fakeAdapter } from './test-harness.js'
 
-// A non-operator in a session thread is flagged once; the operator's "yes" lets them in for that thread only.
+// A non-operator in a session thread is flagged once; the operator's 👍 on that prompt lets them in for that thread only, 👎 leaves them ignored.
 let onMessage: (msg: any) => Promise<void>
+let onReaction: (e: any) => Promise<void>
 const sent: string[] = []
 const spies: Array<{ mockRestore(): void }> = []
 
 beforeAll(async () => {
   spies.push(spyOn(gateway, 'onMessage').mockImplementation(((cb: any) => { onMessage = cb }) as any))
+  spies.push(spyOn(gateway, 'onReaction').mockImplementation(((cb: any) => { onReaction = cb }) as any))
   spies.push(spyOn(gateway, 'send').mockImplementation((async (_c: string, text: string) => { sent.push(text); return { id: 'x' } }) as any))
   spies.push(spyOn(gateway, 'isMentioned').mockImplementation((async (m: any, pats?: string[]) => m.content.includes('@@') || !!pats?.some(p => m.content.includes(p))) as any))
   spies.push(setHydra({ operators: ['op'], channels: { ch: { onlyOperators: true } } }))
@@ -26,6 +28,8 @@ beforeEach(() => {
   for (const id of ['ch:T1', 'ch:T2']) threadRegistry.threads.set(id, { threadId: id } as any)
 })
 
+const flush = async () => { for (let i = 0; i < 20; i++) await new Promise(r => setImmediate(r)) } // the prompt's id is noted once its send resolves
+const react = async (userId: string, emoji: string, messageId = 'x') => { await flush(); await onReaction({ channelId: 'ch', messageId, userId, emoji, isDM: false, parentChannelId: null }) }
 const say = (authorId: string, thread: string, content: string) => onMessage({
   id: 'm1', channelId: 'ch', authorId, authorUsername: 'u', content, isBot: false, attachments: [], createdAt: new Date(),
   isDM: false, isThread: true, parentChannelId: 'ch', effectiveThreadId: thread, referenceMessageId: null, hasExistingThread: false, existingThreadId: null,
@@ -39,13 +43,26 @@ test('a stranger is flagged once per thread, tagging the operator', async () => 
   expect(sent[0]).toContain('<@op>')
 })
 
-test("the operator's yes lets the stranger in that thread only", async () => {
+test("a 👍 from the operator on the prompt lets the stranger in that thread only", async () => {
   await say('s2', 'ch:T1', 'hi')
-  await say('op', 'ch:T1', 'yes')
+  await react('op', '+1')
   expect(threadRegistry.isSenderAllowed('ch:T1', 's2')).toBe(true)
   expect(threadRegistry.isSenderAllowed('ch:T2', 's2')).toBe(false)
   sent.length = 0
   await say('s2', 'ch:T1', 'thanks')
+  expect(sent).toHaveLength(0)
+})
+
+// Regression: a typed yes meant for another comment admitted every flagged stranger.
+test("a typed yes, or a 👍 from a non-operator, lets nobody in; a 👎 leaves the stranger ignored and unprompted", async () => {
+  await say('s7', 'ch:T1', 'hi')
+  await say('op', 'ch:T1', 'yes')
+  await react('s7', '+1')
+  expect(threadRegistry.isSenderAllowed('ch:T1', 's7')).toBe(false)
+  await react('op', '-1')
+  sent.length = 0
+  await say('s7', 'ch:T1', 'hello?')
+  expect(threadRegistry.isSenderAllowed('ch:T1', 's7')).toBe(false)
   expect(sent).toHaveLength(0)
 })
 

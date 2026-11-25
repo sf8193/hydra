@@ -1099,7 +1099,7 @@ export function bindRouter(): void {
 
     if (result.action === 'drop') {
       if (strangerThread && registry.getByThread(strangerThread) && flagStranger(strangerThread, senderId)) {
-        void safeSend(strangerThread, `Stranger danger: <@${senderId}> is not the operator. React 👍 to this message and I'll listen to them in this thread, or 👎 to ignore them.`, { replyTo: msg.id }).then(ids => { for (const id of ids) notePrompt(id, strangerThread, senderId) })
+        void safeSend(strangerThread, `Stranger danger: <@${senderId}> is not the operator. <@${operatorIds()[0]}>, react 👍 to this message and I'll listen to them in this thread, or 👎 to ignore them.`, { replyTo: msg.id }).then(ids => { for (const id of ids) notePrompt(id, strangerThread, senderId) })
       }
       return
     }
